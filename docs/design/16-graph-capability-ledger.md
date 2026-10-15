@@ -70,6 +70,11 @@ Rules:
 | [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
 | [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | No ref: the PolicyGate reconciler reads AgentIdentities (actor policy, #1843) | None filed |
 | [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | Not needed while AgentIdentities are read by the PolicyGate reconciler (G18) | None filed; related to G5 |
+| [G21](#g21-two-graphs-cannot-claim-from-one-shared-budget) | Two Graphs cannot claim from one shared budget: `includeWhen` and the wave filter evaluate a snapshot | Medium | Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main): the PromotionStep holds until the budget reconciler grants it | None filed |
+| [G22](#g22-a-graph-cannot-count-across-namespaces-without-reading-every-namespace) | A Graph cannot count objects across namespaces without its identity reading every namespace | Low | Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main): the budget reconciler counts and writes `AgentIdentity.status.usage` | None filed |
+| [G23](#g23-graph-cel-has-no-path-glob) | Graph CEL has no path glob (`path.glob`), and adopters cannot add one | Low | Planned: `path.glob` in the PolicyGate CEL environment only ([25-change-risk.md](25-change-risk.md#5-pathglob), not on main) | None filed |
+| [G25](#g25-a-ref-cannot-be-optional) | A `ref` to a missing object or an unserved kind holds every node that reads it; a gate cannot decide what "absent" means | Low | Not needed: the error-budget gate reads Prometheus through MetricCheck ([26-error-budget-gate.md](26-error-budget-gate.md)) | None filed |
+| [G26](#g26-a-missing-key-in-an-untyped-field-reads-as-data-pending) | A missing key in an untyped (`x-kubernetes-preserve-unknown-fields`) field reads as data pending, so a bad output reference waits forever without an error | Medium | Planned in the StepTemplate spec (`docs/design/27-step-templates.md` §8.3, not on main): the translator checks every output reference against the template's schema; generated expressions copy whole `outputs` objects | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -454,14 +459,18 @@ Every row writes its result to its own CRD status; a new row needs the owner's a
 | Health on a later synced or applied commit: does it contain the promoted one (#1575) | `descends` in `pkg/reconciler/promotionstep/pr_rebase.go`, passed to the argocd and flux adapters as `CheckOptions.RevisionContains` | A git read of an external repository (the commit graph near the branch head), which a Graph node cannot make; the answer feeds the health check, which stays in the reconciler (row above) | None needed. A network read in the health path, approved by the coordinator as the owner's delegate (2026-10-09) because it is bounded: one `ls-remote` per repository per 30 s and one graph read per head and depth (20, then 500 commits), cached and shared by concurrent checks (singleflight), under a 30 s timeout. The cache holds no promotion state; the decision is written to the step's `status.message` |
 | Asking Argo CD or Flux to sync a promotion's commit (`health.refresh`) | `requestRefresh` in `pkg/reconciler/promotionstep/refresh.go`, `RequestRefresh` in `pkg/health/refresh.go`, on the first HealthChecking reconcile once the commit is in git | A Graph applies only objects it owns: a ref node is read-only, and an owned Application or Kustomization node would make kro the owner of the user's object. The request is a merge patch of one annotation (`argocd.argoproj.io/refresh`, `reconcile.fluxcd.io/requestedAt`) on the object the health check reads, not a status write. The step writes `status.refreshRequestedAt` (the time sent to Flux), `refreshRevision` and `refreshMessage` before it patches, so it asks at most once, and a failure only records why and leaves the step to the tool's poll. The `patch` the chart grants for it is confined to that annotation by the `<fullname>-gitops-writes` admission policy unless the controller may also `update` the object. Approved by the coordinator as the owner's delegate (2026-10-11), after Kargo's argocd-update | A patch-only node kind that sets metadata on an existing object without owning it. No ask: one annotation per promotion does not justify a primitive |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
-| Holding an existing PromotionStep: pause (freeze gate), freezes (a ChangeWindow with `spec.freeze`, #1843) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused`, `holdIfFrozen` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. A freeze must also hold Graphs built before it existed, and its start, end and exemption expiry are times kro CEL cannot compare; a selector ref on ChangeWindows would need a cluster-wide grant for every Graph identity (G19). `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
+| Holding an existing PromotionStep: pause (freeze gate), freezes (a ChangeWindow with `spec.freeze`, #1843), agent budgets (planned, [24-agent-budgets.md](24-agent-budgets.md)) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused`, `holdIfFrozen`, `holdForBudget` (planned, not on main) and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. A freeze must also hold Graphs built before it existed, and its start, end and exemption expiry are times kro CEL cannot compare; a selector ref on ChangeWindows would need a cluster-wide grant for every Graph identity (G19). `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
+| Change risk scoring (planned, [25-change-risk.md](25-change-risk.md), not on main; approved by the coordinator as the owner's delegate, 2026-10-15) | ChangeRisk reconciler and its Job (`kardinal-render risk`) | Reads two commits of an external git repository and diffs them, which a Graph node cannot do; kro only applies Kubernetes objects. The Job is owned by the ChangeRisk (the RenderRun shape, so G12 does not apply), runs without Kubernetes credentials, and returns the diff in its termination message; the reconciler scores it from the RiskProfile, the Bundle's actor and the Pipeline's retained Bundles (`status.risk`), and writes only ChangeRisk status. Gates read the result as `risk.*` (the cross-CRD reads row) | None needed: an owned run CRD is the shape |
 | Auto-rollback Bundle creation | `createAutoRollback` in `pkg/reconciler/promotionstep/lifecycle.go`, built by `pkg/lifecycle`; the decision is `RollbackPolicy` `status.shouldRollback` | Creating a Bundle is a new Graph root, not a node of the failing Bundle's Graph | None needed |
 | Skip permissions (`intent.skip`) | `ValidateSkipPermissions` in `pkg/graph/skip.go`, when the Graph is built | The check decides which nodes exist; only the gate expressions run on the Graph | `includeWhen` over a SkipPermission ref, once G2 is solved |
 | PolicyGate re-evaluation timer | PolicyGate reconciler requeues at `recheckInterval` (default 5m); ScheduleClock ticks add re-evaluation | No time-based requeue in kro (see time, above) | KREP-025 |
-| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses, sibling Bundles and the version's AgentIdentity (`agent.*`, #1843) | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate`; the AgentIdentity read in `buildContext` | See the PolicyGate CEL row. The AgentIdentity would be a named `ref` node, but a cluster-scoped ref costs every Graph identity a cluster-wide grant and loses drift detection without a whole-kind watch (G18, G19) | Selector refs (KREP-003) cover the reads; time does not. For `agent.*`: the G18 and G19 fixes |
+| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses, sibling Bundles and the version's AgentIdentity (`agent.*`, #1843; `budget.*` from its `status.usage`, planned in [24-agent-budgets.md](24-agent-budgets.md)) | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate`; the AgentIdentity read in `buildContext` | See the PolicyGate CEL row. The AgentIdentity would be a named `ref` node, but a cluster-scoped ref costs every Graph identity a cluster-wide grant and loses drift detection without a whole-kind watch (G18, G19) | Selector refs (KREP-003) cover the reads; time does not. For `agent.*`: the G18 and G19 fixes |
 | PR merge polling | PRStatus reconciler polls the SCM every 30 s; SCM webhooks only shorten the wait | External I/O | Out of scope for kro |
 | Agent index for admission (actors, #1834) | `pkg/reconciler/agentindex` writes the AgentIndex status that the `<release>-actor` ValidatingAdmissionPolicy reads as params | A ValidatingAdmissionPolicy cannot look up objects, so the registry must be one params object. A Graph could build it (selector `ref` plus `transformMapEntry`), but one conflicting AgentIdentity would fail the whole expression, and revocation would wait in kro's single Graph queue (G13). Planned in #1834 (not on main) | None needed: first-wins folding is not a Graph concern |
+| Agent budgets: rolling windows, the grant ledger and grants (planned, [24-agent-budgets.md](24-agent-budgets.md), not on main) | `pkg/reconciler/agentbudget` writes `AgentIdentity.status.usage`; the PromotionStep reconciler holds a step until its grant is listed | An agent's usage spans every Graph in every namespace, a claim must be taken by one writer (G21), counting across namespaces from a Graph needs a cluster-wide read (G22), and the windows need a clock (time row). The reconciler reads the clock only to write `evaluatedAt`, the window boundaries and `nextEvaluationAt`, and requeues; steps and gates compare stored fields | None: a cross-Graph claim is not a Graph concern (G21) |
 | AuditEvent retention | `pkg/reconciler/auditretention` reads the clock to delete records older than `--audit-retention-max-age` | Housekeeping like `historyLimit`: no promotion decision reads it, and AuditEvents have no owner whose change could trigger it, so it is a leader Runnable | None needed |
+| Per-actor deployment log (planned in [28-actor-analytics.md](28-actor-analytics.md), not on main; approved by the coordinator as the owner's delegate, 2026-10-15) | `pkg/reconciler/deploymentlog` writes `DeploymentLog.status` from the Pipeline's Bundles and PromotionSteps | A Graph is per Bundle and is retired or deleted with it (G15); the log must outlive every Bundle. Display data: no promotion decision reads it | None needed |
+| Promotion identity checks (planned in [28-actor-analytics.md](28-actor-analytics.md), not on main; approved by the coordinator as the owner's delegate, 2026-10-15) | `pkg/identity`: SubjectAccessReviews as the Pipeline's ServiceAccount in the Pipeline, PromotionStep, HookRun and RenderRun reconcilers, written to their own status | kro authorizes only its own applies; the controller's reads for a Pipeline and its Jobs are the reconcilers' | None needed while Jobs cannot be kro nodes (G12) |
 
 **Upstream work: time.**
 
@@ -471,7 +480,7 @@ Every row writes its result to its own CRD status; a new row needs the owner's a
 | [kro#1434](https://github.com/kubernetes-sigs/kro/pull/1434) KREP-025 implementation | Draft | Partial | Only the RGD instance controller requeues at the flip (`rt.TimeRequeueAfter()`); the Graph controller does not, so a time-based `includeWhen` stays false until an unrelated event and a time-based `readyWhen` opens up to ~5 minutes late. The author confirmed on 2026-10-02 (Slack) that this is a gap in the draft, not the design, and the finished implementation should requeue Graphs too. The per-instance rate limiter is not implemented yet. Reserves `time` as a node ID. |
 | Calendar and timezone helpers | Deferred to a follow-up KREP (author, 2026-10-02); nothing filed | None | We suggested a predicate, `time.now().inWindow(days, start, end, tz)`, that also records its next flip, in our feedback on kro#1434. |
 
-**Upstream work: CEL functions and data.** Nothing helps, and nothing is needed beyond time.
+**Upstream work: CEL functions and data.** Nothing helps. Beyond time, the only function kardinal would add to Graph CEL is a path glob ([G23](#g23-graph-cel-has-no-path-glob)).
 
 | Item | State | Coverage | Why |
 |------|-------|----------|-----|
@@ -1024,6 +1033,196 @@ parent informer already does.
 
 ---
 
+## G21: Two Graphs cannot claim from one shared budget
+
+**Need.** An agent may have at most `maxConcurrent` promotions in flight in prod, counted over
+every Pipeline and namespace it works in ([24-agent-budgets.md](24-agent-budgets.md)). When two
+of its versions become ready for prod at once with one place left, exactly one PromotionStep may
+start. Each version has its own Graph.
+
+**kro today.** A Graph can test a shared value, but it cannot take a share of it:
+
+- A scalar `ref` is one GET at reconcile time, a snapshot of that moment
+  (`pkg/graphengine/executor/simple.go:1209-1216`). A ref is read-only: kro never writes to it
+  (`simple.go:1220-1227` for selector refs; the scalar path at `1180-1217` only reads).
+- The Graph controller reconciles several Graphs at once (`MaxConcurrentReconciles`,
+  `pkg/controller/graph/controller.go:782-786`; kardinal installs 8 workers). Two Graphs read the
+  same remaining count in parallel and both admit.
+- With one worker the result is the same: the second Graph reads the shared object before
+  anything has recorded the first Graph's admission, because no Graph can write that record.
+- `readyWhen` holds nothing in a standalone Graph (G1) and may reference only its own node (G3),
+  so it cannot serialise either.
+
+**Minimal Graph that shows it.** Two Graphs in two namespaces, each with a `ref` to the
+ConfigMap `budget` (`data.remaining: "1"`) and a ConfigMap node with
+`includeWhen: ["${int(budget.data.remaining) > 0}"]`. Create both Graphs at once: both create
+their ConfigMap.
+
+**kardinal workaround.** Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main). The
+PromotionStep is the request: it holds in Pending (`holdForBudget`) until the AgentIdentity's
+`status.usage.<release>.grants` lists it. One budget reconciler per agent grants requests in
+order and writes the ledger with an optimistic lock, so a grant computed from a stale ledger is
+refused by the API server. The translator also folds the agent's `maxConcurrent` and
+`maxUnavailable` into each fleet target's DAG entry, so the Graph creates no more steps than the
+budget could grant.
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** None that fits kro's model: a claim is a write to a
+shared object, and kro's nodes either own an object or only read it. A "lease" node kind that
+takes one of N slots of a shared object would make kro a scheduler. Not worth asking: the
+reconciler that owns the budget is the intended shape (an owned object whose controller writes
+status).
+
+---
+
+## G22: A Graph cannot count across namespaces without reading every namespace
+
+**Need.** An agent's usage is the count of its promotions in every tenant namespace. A Graph in
+one tenant's namespace would need that count, but must not see the other tenants' objects.
+
+**kro today.** A selector `ref` with an empty `metadata.namespace` lists across all namespaces
+(`pkg/graphengine/executor/simple.go:1228-1233`, `1263-1266`, `1288-1292`), as the Graph's
+impersonated ServiceAccount (`pkg/controller/graph/impersonation.go`, G16). That identity then
+needs `list` and `watch` on PromotionSteps and Bundles in every namespace (a ClusterRoleBinding,
+G19), and the listed objects, whole, enter the Graph's CEL scope. kro has no read that returns
+only a count or a projection, and no way to read with an identity other than the Graph's.
+
+**Minimal Graph that shows it.** A Graph in namespace `team-a` with a selector `ref` on
+PromotionSteps, `namespace: ""` and `matchLabels: {kardinal.io/pipeline: checkout}`, and a `def`
+node `${size(steps)}`. It works only once `team-a`'s Graph ServiceAccount may list PromotionSteps
+cluster-wide, after which `team-a`'s Graph can read every tenant's steps.
+
+**kardinal workaround.** Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main). The
+budget reconciler, which already runs with the controller's cluster-wide read, counts and writes
+only the counts and a ledger of Bundle UIDs (no tenant names) to `AgentIdentity.status.usage`.
+No Graph reads it (G18, G19, G20 make a ref costly; G21 makes it insufficient).
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** None worth asking: aggregating other tenants' objects
+is not a Graph concern. If kro ever offers a read identity for `ref` targets (G19's ask), it
+would not remove the tenant exposure, only the RBAC plumbing.
+## G23: Graph CEL has no path glob
+**Need.** Match repository paths against shell-style globs in CEL: "does this change touch
+`db/migrations/**`", "is every changed path under `docs/**`". The change-risk design
+([25-change-risk.md §5](25-change-risk.md#5-pathglob)) needs it in PolicyGate expressions
+(`risk.paths.exists(p, path.glob("db/**", p))`), and it must agree with the globs kardinal already
+matches in Go (Subscription `pathGlob`, `pkg/source/git_remote.go:470-497`, doublestar v4, and the
+RiskProfile path classes). A Graph needs the same when an `includeWhen` or a template reads a path
+field. Not needed by any kardinal Graph today: gate CEL runs in the PolicyGate reconciler (G8).
+**kro today.** No glob function in the Graph environment. `coreDeclarations`
+(`pkg/cel/environment.go:128-156`) registers cel-go `ext.TwoVarComprehensions`, `ext.Lists`,
+`ext.Strings`, `ext.Bindings`, `ext.Encoders`, the Kubernetes libraries (lists, URLs, regex,
+quantity, IP, CIDR, semver) and kro's own `pkg/cel/library` (random, maps, json, hash, lists, omit;
+runtime when enabled). None matches paths; standard CEL `matches()` (RE2) can express a glob only
+as a hand-written regex (`^charts/(?:[^/]+/)*values-prod\.yaml$` for `charts/**/values-prod.yaml`).
+The environment is fixed, so an adopter cannot register a function: `WithCustomDeclarations` is an
+internal option ([10-graph-first-architecture.md](10-graph-first-architecture.md), Q3) and
+[kro#361](https://github.com/kubernetes-sigs/kro/issues/361) (custom functions) is closed. kro's
+library functions declare no cost estimators, and the controller runs without a CEL cost limit by
+default (`--cel-cost-limit` 0, `cmd/controller/main.go:149-152`), so a new function must bound its
+own cost.
+**Minimal Graph that shows it.** A `ref` node `cm` on a ConfigMap and a `def` node
+`{docsOnly: ${cm.data.paths.split(",").all(p, path.glob("docs/**", p))}}`: the Graph fails to
+compile (undeclared reference to `path`).
+**kardinal workaround.** None in the Graph. Planned: kardinal registers `path.glob` in its own
+PolicyGate CEL environment (`pkg/cel/library/path.go`, backed by `pkg/pathglob`), the only place
+its gates evaluate. Not on main.
+**Smallest change, no upstream work yet.** A `Path()` library in `pkg/cel/library`, shaped like
+`Hash()` (`pkg/cel/library/hash.go:79-100`, with a version option), registered in
+`coreDeclarations`:
+- `path.glob(pattern string, path string) -> bool`, whole-path match, `/`-separated: `*`, `?`,
+  `[...]`, `**` as a whole segment, `\` escapes; no `{a,b}` alternatives (doublestar expands them
+  recursively, `doublestar/v4/match.go:403-430`, which is exponential in nesting).
+- Errors: invalid pattern, pattern over 256 bytes, path over 4096 bytes.
+- Cost: O(len(pattern) × len(path)) with one backtrack point each for `*` and `**`; declared with
+  `checker.OverloadCostEstimate` and `interpreter.OverloadCostTracker`, as cel-go's network library
+  does (`ext/network.go:309,337`).
+- Implementation: doublestar v4 is already in kro's module graph (`go.mod:42`, indirect).
+Draft upstream issue (not posted):
+> **feat(cel): add a `path.glob()` function to the CEL library**
+>
+> *What kardinal-promoter observed.* Graph and RGD authors who select on path-shaped strings
+> (repository paths, config keys) must write RE2 regexes for shell globs, which reviewers misread
+> (`**/` and `*` not crossing `/`). kardinal adds `path.glob` to its own CEL environment for policy
+> expressions; a Graph cannot use it, because kro's environment is fixed.
+>
+> *Root cause (from source reading).* No glob function in `coreDeclarations`
+> (`pkg/cel/environment.go:128-156`) or `pkg/cel/library`; no extension point for adopters.
+>
+> *Suggested fix.* A `Path()` library with `path.glob(pattern, path)`, doublestar semantics without
+> `{}` alternatives, length limits, and cost estimators; a docs entry in
+> `concepts/expressions/02-cel-libraries.md`. kardinal offers the PR.
+## G25: A ref cannot be optional
+**Need.** The error-budget gate ([26-error-budget-gate.md §3](26-error-budget-gate.md#3-where-the-budget-comes-from-options))
+compared reading an SLO object (Sloth `PrometheusServiceLevel`, Pyrra `ServiceLevelObjective`)
+through a `ref` node. A gate that reads such an object must decide for itself what a missing SLO
+means: fail closed for prod, fail open for a team that has not written its SLO yet. The Graph would
+have to publish "absent" instead of holding the nodes that read it.
+**kro today.** A scalar `ref` whose object is not found returns `ErrNotReady`
+(`pkg/graphengine/executor/simple.go:1211-1214`); the executor records the node Unresolved and
+requeues (`simple.go:428-431`), and every node whose template reads it is data-pending. A dynamic-GVK
+`ref` whose kind is not served gets `errSchemaNotReady` from `mappingFor` (`simple.go:1402-1406`)
+and is Unresolved the same way (`simple.go:424-427`); a literal GVK that is not served fails the
+compile of the whole Graph (`pkg/graphengine/compiler/context.go:266-279`, G4). There is no field
+that makes a `ref` publish `null` or an empty object when absent. A selector `ref` comes close: an
+empty collection is ready (`pkg/graphengine/runtime/node.go:249-252`), so a dependent could test
+`size(slos) == 0`. It needs a label on the object (a label selector cannot select by name), and it
+does not help with an unserved kind.
+**Minimal Graph that shows it.**
+```yaml
+nodes:
+  - id: slo
+    ref: {apiVersion: pyrra.dev/v1alpha1, kind: ServiceLevelObjective, metadata: {name: absent}}
+  - id: gate
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: {name: gate}
+      data: {sloKnown: '${has(slo.metadata) ? "true" : "false"}'}
+```
+`gate` is never applied while `slo` is missing; there is no way to write `"false"`.
+**kardinal workaround.** None needed. Neither tool writes the budget into its CR's status (Sloth
+v0.16.0 `pkg/kubernetes/api/sloth/v1/types.go:220-234`, Pyrra v0.10.2
+`kubernetes/api/v1alpha1/servicelevelobjective_types.go:243-247`), so the gate reads Prometheus
+through a MetricCheck preset, whose reconciler reports "no data" in its own status and lets the gate
+decide in CEL.
+**Smallest change, no upstream work yet.** An opt-in on a scalar `ref`, for example
+`ref.optional: true`, that publishes the node as `null` (or `{}`) when the object is NotFound or its
+kind is not served, marks the node ready, and keeps the watch (or the SchemaWatcher re-enqueue) so a
+later create reconciles the Graph. Templates test it with `has()`. Only worth asking for if a
+kardinal feature needs a ref to an object the user may not have created.
+## G26: A missing key in an untyped field reads as data pending
+**Need.** A custom step (`docs/design/27-step-templates.md`, v0.14) reports outputs whose shape
+is given by its StepTemplate's schema, which differs per template. The run object's
+`status.outputs` is therefore an `x-kubernetes-preserve-unknown-fields` object. Later nodes read
+fields of it (`${r.status.outputs.p99Ms}`). A reference to an output the template does not have,
+or to an optional output the step did not report, should be an error the Graph shows.
+**kro today.** kro types an unknown field of a preserve-unknown object as `dyn`
+(`pkg/cel/types.go:228-238`), so the reference compiles whatever the schema. At run time a
+missing map key fails with "no such key", which kro classifies as data not yet available
+(`pkg/graphengine/runtime/errors.go:37-49`, `celDataPendingPatterns`), and a node whose
+expression is data pending stays Unresolved and is retried, with no error condition
+(`pkg/graphengine/runtime/node.go:360-368`). kro cannot tell "the controller has not written
+it yet" from "it will never be written": the run is terminal and its outputs are final, but the
+dependent waits forever.
+**Minimal Graph that shows it.** A `ref` node on a custom resource whose status is a
+preserve-unknown object `{"outputs": {"a": 1}}`, and a `def` node with
+`${run.status.outputs.b}`: the Graph never reports an error for the def, it stays Unresolved.
+**kardinal workaround.** Planned in the StepTemplate spec (§8.3, not on main): the translator
+resolves every output reference against the source template's `outputs` schema before it
+builds the Graph and refuses an unknown one; the expressions it generates copy the whole
+`outputs` object as a value (never a field path), so no generated expression is data pending on
+an output key; the consumer reconciler (StepRun inputs, PolicyGate `steps.*`) reports a missing
+optional output by name.
+**Smallest change, no upstream work yet.** Either (a) let a Graph give a node's preserve-unknown
+field a schema (`schemaHints` on the node, used by the type checker so a bad path fails at
+compile), or (b) treat "no such key" on an object whose node is ready (its `readyWhen` true) as a
+hard error with a condition naming the path, instead of data pending.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -1181,6 +1380,11 @@ blocks above.
 | G18 ref watch check | Put the ref's name in the watch access review | Yes, small fix |
 | G19 cluster-scoped refs | A read identity for `ref` targets, or kinds kro reads as itself | Yes, with G5 |
 | G20 ref wakes on every write | Opt-in generation-only wake for a scalar `ref` | Yes: the pause would read the Pipeline instead of rebuilding the Graph |
+| G21 cross-Graph claim | None that fits kro (a slot-taking node would make kro a scheduler) | No: the budget reconciler is the intended shape |
+| G22 cross-namespace counts | None (a count-only read would still read every tenant) | No |
+| G23 path glob in Graph CEL | A `Path()` library with `path.glob` and cost estimators | Yes, small; kardinal offers the PR |
+| G25 optional ref | `ref.optional: true` publishes `null` for a missing object or unserved kind | Not now: no kardinal feature needs it (the error-budget gate reads Prometheus) |
+| G26 missing key in an untyped field | Schema hints for preserve-unknown fields, or "no such key" on a ready node as a hard error | Yes, once custom steps ship: it turns a silent wait into an error |
 
 ### Hazards found
 
