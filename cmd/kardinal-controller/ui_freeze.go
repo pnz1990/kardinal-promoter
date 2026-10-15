@@ -113,6 +113,9 @@ func (s *uiAPIServer) handleFreeze(w http.ResponseWriter, r *http.Request) {
 			"or use kardinal freeze", http.StatusForbidden)
 		return
 	}
+	if !s.inScope(w, req.Namespace) {
+		return
+	}
 	name := lifecycle.FreezeName(req.Actors, req.Namespace)
 	if _, ok := s.stampFor(w, r, actor.Where{Namespace: auditNamespace(req.Namespace)},
 		accesslog.AuditTarget{Route: "/api/v1/ui/freeze", Environment: "*",
@@ -175,6 +178,9 @@ func (s *uiAPIServer) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	if len(cw.Spec.Freeze.Namespaces) == 1 {
 		ns = cw.Spec.Freeze.Namespaces[0] // a namespace freeze is lifted with that namespace's rights
 	}
+	if !s.inScope(w, ns) {
+		return
+	}
 	if _, ok := s.stampFor(w, r, actor.Where{Namespace: auditNamespace(ns)},
 		accesslog.AuditTarget{Route: "/api/v1/ui/unfreeze", Environment: "*", Message: "unfreeze " + req.Name}); !ok {
 		return
@@ -192,6 +198,22 @@ func (s *uiAPIServer) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	msg := "lifted freeze " + req.Name
 	auditDone(r, "", msg)
 	writeJSON(w, uiMessageResponse{Message: msg})
+}
+
+// inScope refuses, with 403, a freeze write beyond the namespace this
+// controller watches (--watch-namespace): a cluster-wide freeze, or another
+// namespace's. It reports whether the write may go on.
+func (s *uiAPIServer) inScope(w http.ResponseWriter, ns string) bool {
+	if s.scopeNamespace == "" || ns == s.scopeNamespace {
+		return true
+	}
+	where := "every namespace"
+	if ns != "" {
+		where = "namespace " + ns
+	}
+	http.Error(w, fmt.Sprintf("forbidden: this controller watches namespace %s only, so its UI cannot freeze %s",
+		s.scopeNamespace, where), http.StatusForbidden)
+	return false
 }
 
 // auditNamespace is where the API write AuditEvent of a freeze goes: its

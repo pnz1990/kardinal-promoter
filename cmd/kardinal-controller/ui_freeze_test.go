@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -80,4 +81,87 @@ func TestUIFreeze(t *testing.T) {
 	require.NoError(t, c.List(context.Background(), &all))
 	require.Len(t, all.Items, 1)
 	assert.Equal(t, "holiday", all.Items[0].Name)
+}
+
+// freezeAccess is an access reviewer that grants, per user, verbs on
+// resource[/subresource] in a namespace ("" is cluster scope, "*" any).
+type freezeAccess struct {
+	rules map[string]map[string][]string // user -> namespace -> "verb resource[/sub]"
+}
+
+func (a *freezeAccess) Allowed(_ context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	want := attrs.Verb + " " + attrs.Resource
+	if attrs.Subresource != "" {
+		want += "/" + attrs.Subresource
+	}
+	for _, ns := range []string{attrs.Namespace, "*"} {
+		for _, r := range a.rules[u.Username][ns] {
+			if r == want || r == attrs.Verb+" *" {
+				return true, "", nil
+			}
+		}
+	}
+	return false, "", nil
+}
+
+// TestUIFreeze_TokenReviewAuth runs the freeze routes behind the real UI
+// handler in TokenReview mode: no or a bad token is 401; a viewer, a
+// namespace freezer acting cluster-wide or in another namespace, and anyone
+// while ui.freezeControls is off get 403; and with --watch-namespace a
+// freeze beyond the namespace is 403. Every refusal writes nothing.
+func TestUIFreeze_TokenReviewAuth(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{
+		"viewer": "viewer", "team-a": "alice", "cluster": "ic",
+	}}
+	access := &freezeAccess{rules: map[string]map[string][]string{
+		"viewer": {"*": {"get *", "list *"}},
+		"alice":  {"*": {"get *", "list *"}, "team-a": {"update changewindows/freeze"}},
+		"ic":     {"*": {"get *", "list *"}, "": {"update changewindows/freeze"}},
+	}}
+	cases := []struct {
+		name, token, path, body string
+		controls                bool
+		scope                   string
+		want                    int
+	}{
+		{"no token", "", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, true, "", http.StatusUnauthorized},
+		{"bad token", "Bearer nope", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, true, "", http.StatusUnauthorized},
+		{"no token reads nothing", "", "/api/v1/ui/freezes", "", true, "", http.StatusUnauthorized},
+		{"a viewer reads the freezes", "Bearer viewer", "/api/v1/ui/freezes", "", true, "", http.StatusOK},
+		{"a viewer cannot freeze", "Bearer viewer", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, true, "", http.StatusForbidden},
+		{"a viewer cannot unfreeze", "Bearer viewer", "/api/v1/ui/unfreeze", `{"name":"kardinal-freeze-everyone"}`, true, "", http.StatusForbidden},
+		{"a namespace freezer cannot freeze the cluster", "Bearer team-a", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, true, "", http.StatusForbidden},
+		{"a namespace freezer cannot freeze another namespace", "Bearer team-a", "/api/v1/ui/freeze",
+			`{"actors":"agents","namespace":"team-b","reason":"r"}`, true, "", http.StatusForbidden},
+		{"a namespace freezer cannot lift a cluster freeze", "Bearer team-a", "/api/v1/ui/unfreeze", `{"name":"kardinal-freeze-everyone"}`, true, "", http.StatusForbidden},
+		{"a namespace freezer freezes its namespace", "Bearer team-a", "/api/v1/ui/freeze",
+			`{"actors":"agents","namespace":"team-a","reason":"r"}`, true, "", http.StatusOK},
+		{"a cluster freezer freezes the cluster", "Bearer cluster", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, true, "", http.StatusOK},
+		{"controls off", "Bearer cluster", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, false, "", http.StatusForbidden},
+		{"beyond the watched namespace", "Bearer cluster", "/api/v1/ui/freeze", `{"actors":"agents","reason":"r"}`, true, "team-a", http.StatusForbidden},
+		{"another namespace than the watched one", "Bearer cluster", "/api/v1/ui/freeze",
+			`{"actors":"agents","namespace":"team-b","reason":"r"}`, true, "team-a", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-everyone"},
+				Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(), Reason: "r",
+					Freeze: &v1alpha1.ChangeWindowFreeze{Actors: "everyone", CreatedBy: "ic"}}}
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(existing).Build()
+			h := newUIHandler(c, nil, nil, uiAuthConfig{tokens: tokens, access: access, freezeControls: tc.controls,
+				scopeNamespace: tc.scope}, "", nil, zerolog.Nop())
+			method := http.MethodPost
+			if tc.body == "" {
+				method = http.MethodGet
+			}
+			rec := uiAuthDo(t, h, method, tc.path, tc.token, tc.body)
+			require.Equal(t, tc.want, rec.Code, rec.Body.String())
+			var list v1alpha1.ChangeWindowList
+			require.NoError(t, c.List(context.Background(), &list))
+			if tc.want != http.StatusOK || method == http.MethodGet {
+				require.Len(t, list.Items, 1, "a refused or read-only call writes nothing")
+				assert.Equal(t, "kardinal-freeze-everyone", list.Items[0].Name)
+			}
+		})
+	}
 }
