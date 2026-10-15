@@ -37,7 +37,9 @@ type goSource struct {
 // module (fragments.Dir), filepath.Join and path.Join of such constants, and
 // calls of a function of the module whose body names the docs (a helper that
 // returns the docs root). It evaluates constants from the source, as go/types
-// would for these forms, without type-checking the module.
+// would for these forms, without type-checking the module. Not found: a path
+// assembled at runtime from values that are not constants, a method that
+// returns the docs root, or a helper outside the module.
 type docsRefs struct {
 	files  []*goSource
 	consts map[string]map[string]constRef // dir -> name -> its expression
