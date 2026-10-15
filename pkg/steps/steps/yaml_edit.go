@@ -28,6 +28,10 @@ import (
 type yamlDoc struct {
 	doc        yaml.Node
 	compactSeq bool
+	// raw and orig are the file as read and an unedited parse of it, for
+	// spliceEncode; orig is nil when the document cannot be spliced.
+	raw  []byte
+	orig *yaml.Node
 }
 
 // parseYAMLMapping parses raw as a YAML document whose top level is a mapping.
@@ -69,6 +73,11 @@ func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
 	}
 	if len(trailing) > 0 {
 		d.doc.FootComment = strings.Join(append(nonEmpty(d.doc.FootComment), trailing...), "\n\n")
+	} else if len(d.doc.Content[0].Content) > 0 {
+		var orig yaml.Node
+		if err := yaml.Unmarshal(raw, &orig); err == nil {
+			d.raw, d.orig = raw, &orig
+		}
 	}
 	return d, nil
 }
@@ -119,7 +128,19 @@ func (d *yamlDoc) root() *yaml.Node { return d.doc.Content[0] }
 
 // encode serialises the document with two-space indentation, keeping the
 // sequence indentation style of the original file.
+//
+// When it can, it writes only what an edit changed (spliceEncode, #1907):
+// the file's other bytes stay as they were. Otherwise, or when the splice
+// would not read back as the edited document, the whole document is
+// encoded.
 func (d *yamlDoc) encode() ([]byte, error) {
+	if d.orig != nil {
+		if out, ok := spliceEncode(d.raw, d.orig, &d.doc, d.compactSeq); ok {
+			if same, err := sameData(out, &d.doc); err == nil && same {
+				return out, nil
+			}
+		}
+	}
 	keepFlowNulls(&d.doc, false)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -133,8 +154,18 @@ func (d *yamlDoc) encode() ([]byte, error) {
 	if err := enc.Close(); err != nil {
 		return nil, err
 	}
+	// The encoder does not round-trip every scalar (a folded block scalar
+	// with more-indented lines, #1907): refuse to write a file whose other
+	// values would change, rather than change them.
+	if same, err := sameData(buf.Bytes(), &d.doc); err != nil || !same {
+		return nil, errReencodeChanges
+	}
 	return buf.Bytes(), nil
 }
+
+var errReencodeChanges = errors.New("writing the file back would change or break values: the YAML encoder " +
+	"cannot reproduce the document as edited (a folded block scalar with more-indented lines, or a value it " +
+	"cannot write as valid YAML); rewrite the file in a plainer style")
 
 // keepFlowNulls spells out the empty nulls inside flow collections. The
 // parser reads the value of "{a}" or "{a: }" as a null with no text, and the
