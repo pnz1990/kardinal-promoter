@@ -225,9 +225,9 @@ func (t *Translator) Translate(ctx context.Context,
 	// still reads every recorded namespace, nothing can go and the
 	// namespace's Graphs are not listed (MayNeedPrune).
 	if t.identity != nil && t.identity.MayNeedPrune(ctx, result.Graph.Namespace, result.Graph) {
-		if graphs, err := t.graphClient.List(ctx, result.Graph.Namespace); err != nil {
-			log.Warn().Err(err).Msg("graph identity: list graphs for prune")
-		} else if err := t.identity.Prune(ctx, result.Graph.Namespace, graphs); err != nil {
+		if reads, err := t.graphClient.Readers(ctx, result.Graph.Namespace); err != nil {
+			log.Warn().Err(err).Msg("graph identity: read graphs for prune")
+		} else if err := t.identity.Prune(ctx, result.Graph.Namespace, reads); err != nil {
 			log.Warn().Err(err).Msg("graph identity: prune reader rolebindings")
 		}
 	}

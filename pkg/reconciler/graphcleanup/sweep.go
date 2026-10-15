@@ -37,7 +37,7 @@ const SweepInterval = 10 * time.Minute
 type Sweep struct {
 	// APIReader lists RoleBindings from the API server.
 	APIReader client.Reader
-	// Graphs lists the Graphs of a namespace.
+	// Graphs says which namespaces the Graphs of a namespace read.
 	Graphs GraphLister
 	// Identity recognizes and prunes reader RoleBindings.
 	Identity *graph.IdentityProvisioner
@@ -111,9 +111,9 @@ func (s *Sweep) Run(ctx context.Context) error {
 // prune prunes the reader bindings for graphNS, looking in namespaces too.
 func (s *Sweep) prune(ctx context.Context, graphNS string, namespaces []string) error {
 	defer s.Identity.LockNamespace(graphNS)()
-	graphs, err := s.Graphs.List(ctx, graphNS)
+	reads, err := s.Graphs.Readers(ctx, graphNS)
 	if err != nil {
-		return fmt.Errorf("list graphs: %w", err)
+		return fmt.Errorf("read graphs: %w", err)
 	}
-	return s.Identity.PruneIn(ctx, graphNS, graphs, namespaces)
+	return s.Identity.PruneIn(ctx, graphNS, reads, namespaces)
 }

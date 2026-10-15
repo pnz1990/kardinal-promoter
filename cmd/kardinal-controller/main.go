@@ -42,6 +42,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -1359,7 +1360,11 @@ func newGraphClient(cfg *rest.Config, log zerolog.Logger) *graphpkg.GraphClient 
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph checker")
 	}
-	return graphpkg.NewGraphClient(dynClient, log)
+	metaClient, err := metadata.NewForConfig(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("unable to create metadata client for graph checker")
+	}
+	return graphpkg.NewGraphClient(dynClient, log).WithMetadata(metaClient)
 }
 
 // splitCSV splits a comma-separated string into a trimmed slice.

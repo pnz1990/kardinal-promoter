@@ -51,6 +51,14 @@ Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it b
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
+A controller older than this release does not know the reader labels this release puts on
+Graphs (`reads.kardinal.io/<namespace>` and `kardinal.io/reader-labels`), and keeps them when it
+updates a Graph. If it then adds a ref node that reads another namespace, the labels no longer
+name every namespace the Graph reads, and after you upgrade again a reader RoleBinding that
+Graph needs could be pruned until its next translation binds it again. Before you upgrade again
+after a downgrade, remove the marker, so the controller reads those Graphs in full:
+`kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
+
 ## Upgrading from v0.11.0
 
 !!! note "v0.12.0 is not released yet"

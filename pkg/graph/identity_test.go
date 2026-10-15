@@ -273,7 +273,7 @@ func TestIdentityProvisioner_LeavesUnmanagedBindings(t *testing.T) {
 		assert.Equal(t, []rbacv1.Subject{admin, ours}, got.Subjects)
 
 		// Not recorded, so Prune never deletes it.
-		require.NoError(t, p.Prune(context.Background(), "team-a", nil))
+		require.NoError(t, p.Prune(context.Background(), "team-a", graph.ReadersOf(nil)))
 		require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rb), &got))
 	})
 
@@ -304,24 +304,24 @@ func TestIdentityProvisioner_Prune(t *testing.T) {
 	assert.ElementsMatch(t, []string{"argocd", "flux-system", "prod", "team-a"}, readerBindings(t, c, "team-a"))
 
 	// Both Graphs still exist: nothing is pruned.
-	require.NoError(t, p.Prune(ctx, "team-a", []*graph.Graph{older, newer}))
+	require.NoError(t, p.Prune(ctx, "team-a", graph.ReadersOf([]*graph.Graph{older, newer})))
 	assert.ElementsMatch(t, []string{"argocd", "flux-system", "prod", "team-a"}, readerBindings(t, c, "team-a"))
 
 	// The older Graph is gone: flux-system is no longer read.
-	require.NoError(t, p.Prune(ctx, "team-a", []*graph.Graph{newer}))
+	require.NoError(t, p.Prune(ctx, "team-a", graph.ReadersOf([]*graph.Graph{newer})))
 	assert.ElementsMatch(t, []string{"argocd", "prod", "team-a"}, readerBindings(t, c, "team-a"))
 	var applier rbacv1.RoleBinding
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: graph.DefaultApplierClusterRole}, &applier))
 	assert.Equal(t, "argocd,prod,team-a", applier.Annotations[graph.AnnotationReaderNamespaces])
 
 	// No Graphs left.
-	require.NoError(t, p.Prune(ctx, "team-a", nil))
+	require.NoError(t, p.Prune(ctx, "team-a", graph.ReadersOf(nil)))
 	assert.Empty(t, readerBindings(t, c, "team-a"))
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: graph.DefaultApplierClusterRole}, &applier))
 	assert.NotContains(t, applier.Annotations, graph.AnnotationReaderNamespaces)
 
 	// Idempotent.
-	require.NoError(t, p.Prune(ctx, "team-a", nil))
+	require.NoError(t, p.Prune(ctx, "team-a", graph.ReadersOf(nil)))
 }
 
 // TestIdentityProvisioner_PruneWithoutApplierBinding covers B46: when the
@@ -366,9 +366,9 @@ func TestIdentityProvisioner_PruneWithoutApplierBinding(t *testing.T) {
 			}
 
 			if tt.pruneIn == nil {
-				require.NoError(t, p.Prune(ctx, "team-a", nil))
+				require.NoError(t, p.Prune(ctx, "team-a", graph.ReadersOf(nil)))
 			} else {
-				require.NoError(t, p.PruneIn(ctx, "team-a", nil, tt.pruneIn))
+				require.NoError(t, p.PruneIn(ctx, "team-a", graph.ReadersOf(nil), tt.pruneIn))
 			}
 			assert.ElementsMatch(t, tt.wantLeft, readerBindings(t, c, "team-a"))
 		})
@@ -407,7 +407,7 @@ func TestIdentityProvisioner_PruneKeepsUnreadableRecord(t *testing.T) {
 			})
 			p.Reader = reader
 
-			err = p.Prune(ctx, "team-a", nil)
+			err = p.Prune(ctx, "team-a", graph.ReadersOf(nil))
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
@@ -448,7 +448,7 @@ func TestIdentityProvisioner_PruneOnlyNamespace(t *testing.T) {
 	})
 	p.OnlyNamespace = "team-a"
 
-	require.NoError(t, p.Prune(ctx, "team-a", nil))
+	require.NoError(t, p.Prune(ctx, "team-a", graph.ReadersOf(nil)))
 	assert.Empty(t, readerBindings(t, api, "team-a"), "the binding in the watch namespace is pruned")
 	for _, ns := range read {
 		assert.Equal(t, "team-a", ns, "no read outside the watch namespace")
@@ -473,7 +473,7 @@ func TestIdentityProvisioner_PruneLeavesForeignBindings(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(identityScheme(t)).WithObjects(unlabeled, otherRole).Build()
 	p := &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}
 
-	require.NoError(t, p.Prune(context.Background(), "team-a", nil))
+	require.NoError(t, p.Prune(context.Background(), "team-a", graph.ReadersOf(nil)))
 	assert.ElementsMatch(t, []string{"argocd", "flux-system"}, readerBindings(t, c, "team-a"))
 }
 
@@ -537,8 +537,8 @@ func TestIdentityProvisioner_NilSafe(t *testing.T) {
 	unbound, err := p.Ensure(context.Background(), refGraph("default"))
 	assert.NoError(t, err)
 	assert.Empty(t, unbound)
-	assert.NoError(t, p.Prune(context.Background(), "default", nil))
-	assert.NoError(t, p.PruneIn(context.Background(), "default", nil, []string{"argocd"}))
+	assert.NoError(t, p.Prune(context.Background(), "default", graph.ReadersOf(nil)))
+	assert.NoError(t, p.PruneIn(context.Background(), "default", graph.ReadersOf(nil), []string{"argocd"}))
 	assert.True(t, p.MayRead("default", "kube-system"), "no provisioner: identity is managed outside the controller")
 }
 
