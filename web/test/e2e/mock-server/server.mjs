@@ -50,6 +50,8 @@ function resolveTimes(data, now = Date.now()) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(__dirname, '../../../dist')
 const PORT = parseInt(process.env.KARDINAL_E2E_PORT ?? '3001', 10)
+// Loopback only: the mock server serves fixtures to the local browser and nothing else.
+const HOST = process.env.KARDINAL_E2E_HOST ?? '127.0.0.1'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -351,7 +353,7 @@ const server = http.createServer(async (req, res) => {
   res.end('Not found')
 })
 
-server.listen(PORT, () => {
-  console.log(`[mock-server] Kardinal E2E mock server running on http://localhost:${PORT}`)
-  console.log(`[mock-server] UI available at http://localhost:${PORT}/ui/`)
+server.listen(PORT, HOST, () => {
+  console.log(`[mock-server] Kardinal E2E mock server running on http://${HOST}:${PORT}`)
+  console.log(`[mock-server] UI available at http://${HOST}:${PORT}/ui/`)
 })
