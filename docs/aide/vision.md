@@ -142,7 +142,7 @@ The UI is not read-only. It can create a Bundle, promote, pause, resume and roll
 
 ### F8: CLI
 
-Single static Go binary. Commands include `init`, `get pipelines/steps/bundles/subscriptions/auditevents`, `create bundle`, `promote`, `explain` (with `--watch`), `rollback`, `pause`, `resume`, `override`, `history`, `policy list/test/simulate`, `diff`, `validate`, `doctor`, `version`. All commands create or read CRDs. `rollback --emergency` is being deprecated (#1288).
+Single static Go binary. Commands include `quickstart`, `init`, `ship`, `get pipelines/steps/bundles/subscriptions/auditevents`, `create bundle`, `promote`, `why` and `explain`, `status`, `inbox`, `approve`, `verify`, `rollback`, `hold`/`unhold`, `pause`/`resume`, `freeze`/`unfreeze`, `override`, `history`, `policy list/test/simulate`, `diff`, `validate`, `doctor`, `audit export`, `mcp` (a local MCP server for agents) and `version`. All commands create or read CRDs; `kardinal --help` lists them all.
 
 ### F9: Config-Only Promotions
 
