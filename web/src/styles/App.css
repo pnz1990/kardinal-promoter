@@ -371,6 +371,14 @@
 }
 /* The fleet board's or the map's place while its code loads: the whole view, so nothing moves. */
 .app-view-loading { inline-size: 100%; block-size: 100%; min-block-size: var(--k-space-12); }
+/* While a stage drawer column is open, or its placeholder holds the column
+   (stage/drawerColumn.ts), the page gives up the column's width. In the entry
+   chunk's styles, not StageDrawer.css: the placeholder sets the class before
+   the drawer's chunk and its styles arrive, and the page must not move when
+   they do (#1914). */
+.k-stage-drawer-open #main-content > :not(.app-topbar) {
+  margin-inline-end: var(--k-layout-drawer);
+}
 /* The stage drawer's place while its code loads: its column, where the drawer
    column will be (StageDrawer.css), which the page already gives up. */
 .app-drawer-loading {

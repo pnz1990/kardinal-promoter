@@ -60,6 +60,25 @@ test.describe('Journey 024 — split views load without a layout shift', () => {
     await axe(page)
   })
 
+  // The pipeline list arrives after the first paint, as on a loaded runner
+  // or a slow API (#1914): the header is painted before the pipeline, and the
+  // drawer's column must already be given up then.
+  test('an /env/ link whose pipeline arrives late', async ({ page }) => {
+    let release!: () => void
+    const arrived = new Promise<void>(r => { release = r })
+    await page.route('**/api/v1/ui/pipelines', async route => {
+      await arrived
+      await route.continue()
+    })
+    await page.goto('/ui/#/p/default/payments-service/env/prod')
+    await expect(page.locator('.app-pipeline-head__title')).toBeVisible()
+    await expect(page.locator('.app-drawer-loading')).toBeVisible()
+    release()
+    await expect(page.getByTestId('stage-drawer')).toBeVisible()
+    await expect(page.locator('.station-map')).toBeVisible()
+    expect(await shift(page)).toBeLessThan(MAX_SHIFT)
+  })
+
   test('an /env/ link: the map and the stage drawer', async ({ page }) => {
     await page.goto('/ui/#/p/default/payments-service/env/prod')
     await expect(page.getByTestId('stage-drawer')).toBeVisible()

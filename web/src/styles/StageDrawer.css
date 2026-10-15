@@ -37,9 +37,9 @@
   box-shadow: var(--k-elev-2);
 }
 
-.k-stage-drawer-open #main-content > :not(.app-topbar) {
-  margin-inline-end: var(--k-layout-drawer);
-}
+/* The page giving up the column (.k-stage-drawer-open) is in App.css, the
+   entry chunk's styles: the drawer's placeholder sets the class before this
+   file arrives (#1914). */
 
 .stage-drawer__scrim {
   position: fixed;
