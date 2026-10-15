@@ -142,6 +142,13 @@ func (k *Key) SignLegacy(payload []byte) ([]byte, error) {
 // (name.Insecure for a plain-HTTP registry).
 func PushBundle(ctx context.Context, sigRepo, digest string, bundleJSON []byte,
 	nameOpts []name.Option, opts ...remote.Option) error {
+	return PushBundleAnnotated(ctx, sigRepo, digest, bundleJSON, nil, nameOpts, opts...)
+}
+
+// PushBundleAnnotated is PushBundle with manifest annotations (for example
+// dev.sigstore.bundle.predicateType).
+func PushBundleAnnotated(ctx context.Context, sigRepo, digest string, bundleJSON []byte, annotations map[string]string,
+	nameOpts []name.Option, opts ...remote.Option) error {
 	subject, err := v1.NewHash(digest)
 	if err != nil {
 		return err
@@ -155,6 +162,9 @@ func PushBundle(ctx context.Context, sigRepo, digest string, bundleJSON []byte,
 	// The referrer's artifact type is its config media type when the
 	// manifest has no artifactType (OCI image spec 1.1).
 	img = mutate.ConfigMediaType(img, types.MediaType(BundleMediaType))
+	if len(annotations) > 0 {
+		img = mutate.Annotations(img, annotations).(v1.Image)
+	}
 	img = mutate.Subject(img, v1.Descriptor{MediaType: types.OCIImageIndex, Digest: subject, Size: 1}).(v1.Image)
 	d, err := img.Digest()
 	if err != nil {

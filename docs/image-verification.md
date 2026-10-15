@@ -70,7 +70,10 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
   `--new-bundle-format`. Key and keyless. The bundle must be a cosign image signature: a DSSE
   in-toto statement with predicate type `https://sigstore.dev/cosign/sign/v1` whose subject is the
   image digest. Attestations (SBOM, provenance) and plain message signatures attached to the same
-  image are not signatures of it, whoever signed them.
+  image are not signatures of it, whoever signed them. Up to 32 bundles are read per image; a
+  referrer whose `dev.sigstore.bundle.predicateType` annotation names another predicate is
+  skipped before it counts, so attestations attached to the image cannot crowd out its
+  signatures.
 - **Legacy cosign signatures** in the `sha256-<digest>.sig` tag (cosign v2's default): key
   authorities only. A keyless signature must be a Sigstore bundle.
 
