@@ -461,7 +461,7 @@ kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
 - **Gate instances keep their old expression.** A Bundle's gate instances are copied from the PolicyGate templates when the controller builds the Bundle's Graph, so editing a template after the upgrade doesn't change the instances of Bundles already in flight. To release a Bundle held by such a gate, override it:
 
     ```bash
-    kardinal override <pipeline> --stage <env> --gate <gate> --reason "<why>" --expires-in 1h
+    kardinal override <pipeline> --env <env> --gate <gate> --reason "<why>" --expires-in 1h
     ```
 
 - **Check that Verified environments have the image.** v0.8.1 can report an environment Verified without writing a commit. If an environment branch has no kardinal commit for a Bundle that v0.8.1 reported Verified, create a new Bundle for the same image after the upgrade.

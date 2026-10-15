@@ -30,7 +30,7 @@ EOF
 
 ```text
 prod is held by gate uat-soak.
-  Version  main (demo-q8m4t)
+  Version  main (demo-q8m4t), by kubernetes-admin
   Why      prod waits until the version has been live in uat for 5 minutes
   Rule     upstream.uat.soakMinutes >= 5
   Now      soak 1.2 of 5 min in uat
@@ -444,7 +444,7 @@ it soaked and, when the comparison is the whole expression, when it opens:
 ```
 $ kardinal why demo prod
 prod is held by gate uat-soak-before-prod.
-  Version  sha-9349a3f (demo-kzwhs)
+  Version  sha-9349a3f (demo-kzwhs), by kubernetes-admin
   Rule     bundle.upstreamSoakMinutes >= 3
   Now      soak 0.4 of 3 min in uat
   Opens    by itself in about 2m36s; rechecked every 30s

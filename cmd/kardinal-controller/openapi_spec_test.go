@@ -128,7 +128,7 @@ var apiRoutes = []apiRoute{
 			"The controller writes spec.rejected with the caller as the rejecting user.",
 		request: uiRejectRequest{}, status: 200, response: uiMessageResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},
 	{method: "POST", path: "/api/v1/ui/override", server: serverUI, tag: "UI", id: "overridePipelineGate",
-		summary: "Override a gate in one environment of a Pipeline for a while (kardinal override --stage)",
+		summary: "Override a gate in one environment of a Pipeline for a while (kardinal override --env)",
 		desc: "Records the override on the instances of the gate that the Pipeline's in-progress Bundles have in the environment. " +
 			"Needs update on policygates/override for each of them (TokenReview mode), checked before any is written.",
 		request: uiPipelineOverrideRequest{}, status: 200, response: uiPipelineOverrideResponse{}, errors: []int{400, 401, 403, 404, 409, 500}, security: "uiAuth"},

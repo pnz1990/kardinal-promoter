@@ -204,7 +204,7 @@ Force-pass the blocking gate with [`kardinal override`](overrides.md). It record
 expiry and your verified Kubernetes username on the gate:
 
 ```bash
-kardinal override <pipeline> --stage prod --gate <gate-name> \
+kardinal override <pipeline> --env prod --gate <gate-name> \
   --reason "hotfix for INC-123" --expires-in 1h
 ```
 

@@ -405,7 +405,7 @@ A rollback version has no gate exemption unless it was created with `--hold` ([R
 To let a rollback through a blocking gate, use a break-glass override. It is time-limited and recorded in the audit trail:
 
 ```bash
-kardinal override my-app --stage prod --gate no-weekend-deploys \
+kardinal override my-app --env prod --gate no-weekend-deploys \
   --reason "Rollback of v1.29.0 — incident #4521" --expires-in 1h
 ```
 

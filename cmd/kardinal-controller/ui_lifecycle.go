@@ -608,7 +608,7 @@ func (s *uiAPIServer) handleReject(w http.ResponseWriter, r *http.Request) {
 
 // handlePipelineOverride handles POST /api/v1/ui/override: it overrides a
 // gate template in one environment of a Pipeline, as kardinal override
-// --stage does, on the gate instances its in-progress Bundles have
+// --env does, on the gate instances its in-progress Bundles have
 // (lifecycle.OverrideTargets). In TokenReview mode the caller needs the
 // override action (policygates/override) on every one of them, checked
 // before any is written; the controller writes the overrides, recording the

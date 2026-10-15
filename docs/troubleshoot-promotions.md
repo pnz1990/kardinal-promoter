@@ -19,7 +19,7 @@ kardinal why my-app prod
 
 ```text
 prod is held by gate no-weekend-deploys.
-  Version  1.5.0 (my-app-b)
+  Version  1.5.0 (my-app-b), by alice@example.com
   Why      Production deployments are blocked on weekends
   Rule     !schedule.isWeekend
   Now      !schedule.isWeekend = false

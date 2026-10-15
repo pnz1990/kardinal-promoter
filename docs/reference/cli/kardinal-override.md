@@ -19,8 +19,8 @@ kardinal override <pipeline> [<env>] --gate <gate> --reason <text> [flags]
 ```
   kardinal override my-app prod --gate no-weekend-deploys --reason "P0 hotfix, incident 4521"
 
-  # longer window; --stage is the older name of the environment flag
-  kardinal override my-app --stage prod --gate change-freeze --reason "approved by CAB" --expires-in 4h
+  # a longer window
+  kardinal override my-app --env prod --gate change-freeze --reason "approved by CAB" --expires-in 4h
 ```
 
 ### Options

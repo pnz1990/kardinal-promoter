@@ -27,6 +27,8 @@ github        1.37        -
 chart         1.37        -
 delivery      1.37        -
 ui            1.37        -
+docs-walkthrough 1.35     -
+docs-walkthrough 1.37     -
 # The spoke boots test/e2e/kind-config.yaml's node image; the hub runs the
 # same minor.
 multi-cluster 1.36        -

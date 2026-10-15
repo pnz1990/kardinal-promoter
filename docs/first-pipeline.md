@@ -138,6 +138,7 @@ each environment follows the one before it, at `environments/<name>` on `main`, 
 kustomize, and prod waits for its PR to be merged:
 
 ```bash
+# --repo is your fork of pnz1990/kardinal-demo
 kardinal init --name kardinal-test-app --repo https://github.com/pnz1990/kardinal-demo \
   --envs test,uat,prod -n default --apply
 # Found Argo CD Application argocd/kardinal-test-app-test: test checks health with it
@@ -161,7 +162,7 @@ metadata:
   namespace: default
 spec:
   git:
-    url: https://github.com/pnz1990/kardinal-demo
+    url: https://github.com/pnz1990/kardinal-demo   # your fork
     secretRef:
       name: github-token
   environments:
@@ -308,7 +309,7 @@ The promotion is complete.
 To add a no-weekend-deploys gate to prod, create a PolicyGate in the platform-policies namespace:
 
 ```bash
-kubectl create namespace platform-policies 2>/dev/null
+kubectl create namespace platform-policies 2>/dev/null || true  # it may exist already
 
 cat <<EOF | kubectl apply -f -
 apiVersion: kardinal.io/v1alpha1
@@ -326,14 +327,30 @@ spec:
 EOF
 ```
 
-The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and `kardinal explain` shows the gate with the controller's latest evaluation, the Bundle it belongs to, and the Bundle still deployed in prod:
+The next version promoted to prod has this gate in its Graph. Ship it, `main`:
+
+```bash
+kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
+```
+
+On a weekend the gate blocks it before prod, and `kardinal explain` shows the gate with the
+controller's latest evaluation, the version it belongs to, and the version still deployed in prod:
 
 ```bash
 kardinal explain kardinal-test-app --env prod
-# ENVIRONMENT   VERSION                                 TYPE         NAME                 STATE      EXPRESSION            REASON
-# prod          sha-abc1234 (kardinal-test-app-9tptr)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (!schedule.isWeekend = false; version sha-abc1234)
+# ENVIRONMENT   VERSION                          TYPE         NAME                 STATE      EXPRESSION            REASON
+# prod          main (kardinal-test-app-wcfzk)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (!schedule.isWeekend = false; version main)
 #
-# prod   deployed: sha-1a2b3c4 (kardinal-test-app-7qvsr)
+# prod   deployed: sha-9349a3f (kardinal-test-app-x7k2p)
+```
+
+On a weekday the gate's STATE is `Passing`, and prod starts promoting `main`. To see what a
+weekend would do on any day, simulate it:
+
+```bash
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm"
+# RESULT: BLOCKED
+# Blocked by: no-weekend-deploys
 ```
 
 ## Adding to your CI pipeline

@@ -165,7 +165,7 @@ kardinal rollback kardinal-test-app --env prod
 # Override the weekend gate for the Bundle waiting on it in prod (requires reason).
 # --gate is the name of the org gate in platform-policies; the command finds the
 # Bundle's instance of it in the Pipeline's namespace.
-kardinal override kardinal-test-app --stage prod \
+kardinal override kardinal-test-app --env prod \
   --gate no-weekend-deploys \
   --reason "P0 hotfix: payment service down"
 ```

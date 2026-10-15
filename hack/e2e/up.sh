@@ -34,6 +34,11 @@
 #           (kardinal-v0110.sh): the TestUpgradeV0110_ test builds an
 #           estate of 30 Pipelines in 5 namespaces and follows "Upgrading
 #           from v0.11.0"; one run per cluster too
+#   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
+#           blocks of the getting-started and how-to pages in order
+#           (quickstart, approvals, rollback, policy gates, pause and fleets,
+#           connect an agent, your first pipeline) and holds their output to
+#           the pages'
 #   shard   Forgejo + Argo CD and two controllers that split the namespaces
 #           (--namespace-shard): the main release is shard "default",
 #           components/shard.sh installs shard "b"
@@ -95,6 +100,9 @@ case "$SUITE" in
   # auth (reached through kubectl port-forward; the browser also uses the
   # allowed host kardinal-ui.test), plus the auth, CORS and TLS releases of
   # components/ui.sh.
+  # The docs' command blocks, run as a new user runs them (quickstart's
+  # demo in default, its ApplicationSet and kardinal-test-app-<env>).
+  docs-walkthrough) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) RUN='^TestDocs_' ;;
   ui) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(ui.sh) RUN='^TestUI_'
     HELM_ARGS='--set ui.allowedHosts={kardinal-ui.test}' ;;
   # Flux health checks, MetricChecks against Prometheus, and the chart's

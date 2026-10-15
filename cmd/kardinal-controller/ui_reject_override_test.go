@@ -86,7 +86,7 @@ func TestUIHandler_Reject(t *testing.T) {
 }
 
 // TestUIHandler_PipelineOverride: POST /api/v1/ui/override overrides a gate
-// template in one environment of a Pipeline, as kardinal override --stage
+// template in one environment of a Pipeline, as kardinal override --env
 // does: on the instances its in-progress Bundles have there, not those of a
 // finished Bundle or another environment. The caller needs
 // policygates/override on each instance, checked before any is written,

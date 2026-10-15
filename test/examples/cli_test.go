@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sigyaml "sigs.k8s.io/yaml"
@@ -197,6 +198,9 @@ func parseInvocation(args []string) error {
 	if err := sub.ParseFlags(rest); err != nil {
 		return fmt.Errorf("%s: %w", sub.CommandPath(), err)
 	}
+	if err := hiddenFlagUsed(sub, rest); err != nil {
+		return err
+	}
 	if err := sub.ValidateRequiredFlags(); err != nil {
 		return fmt.Errorf("%s: %w", sub.CommandPath(), err)
 	}
@@ -272,6 +276,27 @@ func parseCommandAndFlags(args []string) error {
 	// exists, which is what this checks.
 	if err := sub.ParseFlags(rest); err != nil && !strings.HasPrefix(err.Error(), "flag needs an argument") {
 		return fmt.Errorf("%s: %w", sub.CommandPath(), err)
+	}
+	return hiddenFlagUsed(sub, rest)
+}
+
+// hiddenFlagUsed fails a documented command that sets a hidden flag: an
+// older name the CLI still takes (--stage for --env), which the docs should
+// not teach. args are the command's flag arguments.
+func hiddenFlagUsed(cmd *cobra.Command, args []string) error {
+	var hidden []string
+	for _, a := range args {
+		name, ok := strings.CutPrefix(a, "--")
+		if !ok {
+			continue
+		}
+		name, _, _ = strings.Cut(name, "=")
+		if f := cmd.Flags().Lookup(name); f != nil && f.Hidden {
+			hidden = append(hidden, "--"+name)
+		}
+	}
+	if len(hidden) > 0 {
+		return fmt.Errorf("%s: %s is a hidden, older flag name; use the one --help lists", cmd.CommandPath(), strings.Join(hidden, ", "))
 	}
 	return nil
 }

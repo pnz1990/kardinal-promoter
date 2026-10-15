@@ -156,6 +156,106 @@ func guideBlock(t *testing.T, guide, contains string) string {
 	return found[0]
 }
 
+// pageBlock is one fenced code block of a docs page: its language and its
+// lines, each trimmed of the block's indent.
+type pageBlock struct{ lang, body string }
+
+func pageBlocks(t *testing.T, page string) []pageBlock {
+	t.Helper()
+	var blocks []pageBlock
+	var cur []string
+	lang, indent, in := "", "", false
+	for _, line := range strings.Split(readPage(t, page), "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		switch {
+		case !in && strings.HasPrefix(trimmed, "```"):
+			in, lang, indent, cur = true, strings.TrimPrefix(trimmed, "```"), line[:len(line)-len(trimmed)], nil
+		case in && strings.TrimSpace(trimmed) == "```":
+			in = false
+			blocks = append(blocks, pageBlock{lang, strings.Join(cur, "\n") + "\n"})
+		case in:
+			cur = append(cur, strings.TrimPrefix(line, indent))
+		}
+	}
+	return blocks
+}
+
+// PageBashBlocks is every bash block of docs/<page>, in order, dedented.
+func PageBashBlocks(t *testing.T, page string) []string {
+	t.Helper()
+	var out []string
+	for _, b := range pageBlocks(t, page) {
+		if b.lang == "bash" {
+			out = append(out, b.body)
+		}
+	}
+	return out
+}
+
+// pageBlockIndex is the index of the n-th (from 0) bash block of page that
+// contains contains; with n < 0 the only one.
+func pageBlockIndex(t *testing.T, blocks []pageBlock, page, contains string, n int) int {
+	t.Helper()
+	var found []int
+	for i, b := range blocks {
+		if b.lang == "bash" && strings.Contains(b.body, contains) {
+			found = append(found, i)
+		}
+	}
+	switch {
+	case n < 0 && len(found) != 1:
+		t.Fatalf("docs/%s has %d bash blocks containing %q, want 1", page, len(found), contains)
+	case n >= len(found):
+		t.Fatalf("docs/%s has %d bash blocks containing %q, want at least %d", page, len(found), contains, n+1)
+	case n < 0:
+		return found[0]
+	}
+	return found[n]
+}
+
+// PageBlock is the one bash code block of docs/<page> (for example
+// "quickstart.md") that contains contains, dedented. It fails the test
+// unless exactly one block matches.
+func PageBlock(t *testing.T, page, contains string) string {
+	t.Helper()
+	return PageBlockAt(t, page, contains, -1)
+}
+
+// PageBlockAt is the n-th (from 0) bash block of docs/<page> that contains
+// contains, for a page that runs the same command twice; n < 0 is PageBlock.
+func PageBlockAt(t *testing.T, page, contains string, n int) string {
+	t.Helper()
+	blocks := pageBlocks(t, page)
+	return blocks[pageBlockIndex(t, blocks, page, contains, n)].body
+}
+
+// PageSample is the ```text block that follows, with no other bash block
+// between them, the bash block PageBlockAt(page, contains, n) returns: the
+// output the page shows for that command.
+func PageSample(t *testing.T, page, contains string, n int) string {
+	t.Helper()
+	blocks := pageBlocks(t, page)
+	for _, b := range blocks[pageBlockIndex(t, blocks, page, contains, n)+1:] {
+		if b.lang == "bash" {
+			break
+		}
+		if b.lang == "text" {
+			return b.body
+		}
+	}
+	t.Fatalf("docs/%s shows no text block after the block containing %q", page, contains)
+	return ""
+}
+
+func readPage(t *testing.T, page string) string {
+	t.Helper()
+	doc, err := os.ReadFile(filepath.Join(RepoRoot(t), "docs", page))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(doc)
+}
+
 // GuideFix is the command in the Fix column of the upgrade guide's table of
 // step 1 findings, on the row whose Finding cell is finding (as written,
 // backticks included).
@@ -275,6 +375,14 @@ type ShellRun struct {
 // are the ones under test.
 func (e *Env) Shell(t *testing.T, script string) ShellRun {
 	t.Helper()
+	return e.ShellEnv(t, nil, script)
+}
+
+// ShellEnv is Shell with env (NAME=value) added to the script's environment:
+// a secret the script reads ("$GITHUB_TOKEN") reaches it without appearing
+// in the logged script.
+func (e *Env) ShellEnv(t *testing.T, env []string, script string) ShellRun {
+	t.Helper()
 	kubeconfig := e.contextKubeconfig(t)
 	path := os.Getenv("PATH")
 	if h := os.Getenv(EnvHelm); h != "" {
@@ -293,7 +401,7 @@ export -f kubectl helm kardinal
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", prelude+script)
 	cmd.Dir = RepoRoot(t)
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig, "E2E_CONTEXT="+e.Context, "PATH="+path)
+	cmd.Env = append(append(os.Environ(), "KUBECONFIG="+kubeconfig, "E2E_CONTEXT="+e.Context, "PATH="+path), env...)
 	out, err := cmd.CombinedOutput()
 	run := ShellRun{Output: string(out)}
 	var exit *exec.ExitError

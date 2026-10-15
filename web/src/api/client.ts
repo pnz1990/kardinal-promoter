@@ -226,7 +226,7 @@ export const api = {
   rejectBundle: (bundle: string, reason: string, namespace = 'default') =>
     post<{ message: string }>('/reject', { bundle, namespace, reason }),
   /** Override a gate in one environment of a pipeline, on its in-progress
-   *  Bundles' instances (kardinal override --stage). Needs policygates/override. */
+   *  Bundles' instances (kardinal override --env). Needs policygates/override. */
   overrideGate: (req: { pipeline: string; gate: string; environment: string; reason: string; expiresInMinutes?: number; namespace?: string }) =>
     post<{ message: string; gates: string[]; expiresAt: string }>('/override', req),
   /** Pause a pipeline — sets spec.paused=true (#506); with environment, only
