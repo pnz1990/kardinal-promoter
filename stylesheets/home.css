@@ -63,6 +63,21 @@
   color: var(--k-ink-2);
 }
 
+.k-hero__proof {
+  max-width: var(--k-layout-measure);
+  margin: var(--k-space-6) 0 0;
+  padding-inline-start: var(--k-space-6);
+  font-size: var(--k-text-md);
+  line-height: var(--k-leading-md);
+  color: var(--k-ink-2);
+}
+.k-hero__proof li + li {
+  margin-block-start: var(--k-space-2);
+}
+.k-hero__proof strong {
+  color: var(--k-ink);
+}
+
 .k-hero__actions {
   display: flex;
   flex-wrap: wrap;
