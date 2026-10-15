@@ -38,6 +38,8 @@ export interface Pipeline {
   topologyResolved?: boolean
   /** What the active Bundle ships: its image tag, or "config <sha>" (fleet board). */
   activeBundleVersion?: string
+  /** Who shipped the active Bundle (the Agents filter); absent when not known. */
+  activeBundleActor?: ActorRef
   /** Per environment, the Bundle it runs (fleet board). Absent: never deployed. */
   deployed?: Record<string, DeployedRelease>
   /** Pipeline.status.deploymentMetrics, computed by the controller (DORA). */
@@ -113,6 +115,17 @@ export interface DeployedRelease {
   /** Under a config Bundle: the last Bundle that deployed images here, and their tags. */
   imagesFrom?: string
   imagesVersion?: string
+  /** Who shipped bundle; absent when not known. */
+  actor?: ActorRef
+}
+
+/** Who shipped a version, in short (the UI API's uiActorRef). */
+export interface ActorRef {
+  kind: 'human' | 'agent' | 'bot' | 'controller'
+  agent?: string
+  sponsor?: string
+  /** The actor as one sentence ("agent fixer for alice"). */
+  text: string
 }
 
 /** Pipeline.status.deploymentMetrics: DORA metrics for the last environment. */

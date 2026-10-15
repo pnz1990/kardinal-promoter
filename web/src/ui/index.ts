@@ -16,3 +16,4 @@ export { CodeInline, CodeBlock, Kbd, Stack, type CodeBlockProps, type StackProps
 export { TONES, toneVars, type Tone } from './tone'
 export { cx } from './cx'
 export { Skeleton, type SkeletonProps } from './Skeleton'
+export { ActorBadge, type ActorBadgeProps } from './ActorBadge'

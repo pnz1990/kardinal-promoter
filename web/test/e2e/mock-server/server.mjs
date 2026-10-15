@@ -91,6 +91,8 @@ const PIPELINES = [
     blockerCount: 2,
     failedStepCount: 0,
     activeBundleVersion: '6.14.1',
+    // An agent shipped 6.14.1 (docs/actors.md, #1908): the Agents filter, the map's mark.
+    activeBundleActor: { kind: 'agent', agent: 'fixer', sponsor: 'alice', text: 'agent fixer for alice' },
     environmentTopology: [{ name: 'staging' }, { name: 'prod', upstreams: ['staging'] }],
     // status.conditions (#1727, #1506): its git Secret is not labelled referenceable.
     conditions: [
@@ -120,6 +122,8 @@ const BUNDLES = {
       version: 'sha-9f8e7d6',
       pipeline: 'kardinal-test-app',
       createdAt: ago(7_200_000),
+      actor: { kind: 'human', principal: 'bob', via: 'ui' },
+      actorText: 'bob via the UI',
     },
     {
       name: 'kardinal-test-app-cfg9',
@@ -140,6 +144,9 @@ const BUNDLES = {
       version: '6.14.1',
       pipeline: 'payments-service',
       createdAt: ago(120_000),
+      actor: { kind: 'agent', principal: 'system:serviceaccount:agents:fixer', agent: 'fixer', sponsor: 'alice', via: 'api' },
+      actorText: 'agent fixer for alice',
+      actorAsserted: 'model claude-opus-5 (asserted)',
     },
     {
       name: 'payments-service-rej77',

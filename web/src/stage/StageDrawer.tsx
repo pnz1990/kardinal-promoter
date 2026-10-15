@@ -14,7 +14,8 @@ import { api } from '../api/client'
 import CopyButton from '../components/CopyButton'
 import { displayState, type Tone } from '../displayStates.gen'
 import { formatElapsedSince } from '../timeFormat'
-import { StatusChip } from '../ui'
+import { ActorBadge, StatusChip } from '../ui'
+import { actorOfBundle, actorOfUser } from '../actor'
 import { CELBlock } from '../components/CELBlock'
 import EventsPanel from '../components/EventsPanel'
 import { StepProgress } from '../components/StepProgress'
@@ -173,8 +174,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
               <div><dt>Running</dt><dd>{view.running ? <Version {...view.running} /> : 'nothing yet'}
                 {view.running?.verifiedAt && <span className="stage-muted"> · live {formatElapsedSince(view.running.verifiedAt, now)}</span>}</dd></div>
               {view.incoming && <div><dt>Incoming</dt><dd><Version {...view.incoming} /></dd></div>}
-              {(() => { const b = data.bundles.find(x => x.name === (view.incoming ?? view.running)?.bundle); const by = shipper(b)
-                return by && <div><dt>Shipped by</dt><dd>{by}{b?.actorAsserted && <span className="stage-muted"> · {b.actorAsserted}</span>}</dd></div> })()}
+              <ShippedBy bundle={data.bundles.find(x => x.name === (view.incoming ?? view.running)?.bundle)} />
             </dl>
           </div>
 
@@ -200,8 +200,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
 
           <section className="stage-section" data-section="history" ref={el => { sectionRefs.current.history = el }} aria-labelledby={`${headingId}-history`}>
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
-            {(() => { const b = data.bundles.find(x => x.name === view.step?.bundle); const by = shipper(b)
-              return by && <p className="stage-muted" data-testid="shipped-by">{b?.version ?? b?.name} shipped by {by}.</p> })()}
+            <ShippedByLine bundle={data.bundles.find(x => x.name === view.step?.bundle)} />
             <History namespace={namespace} step={view.step} />
           </section>
 
@@ -218,10 +217,25 @@ function StateChip({ label, tone, glyph, changed }: { label: string; tone: Tone;
   return <StatusChip tone={tone} label={label} glyph={glyph} className={`stage-chip stage-chip--${tone}`} data-changed={changed || undefined} />
 }
 
-/** A version as people know it (the tag), with the Bundle name after it only when it says something more. */
-/** Who shipped b (docs/actors.md), or undefined when that is not known. */
-const shipper = (b?: Bundle) => b?.actorText && b.actorText !== 'unknown' ? b.actorText : undefined
+/** Who shipped the version the drawer is about (docs/actors.md), with what
+ *  its client asserted; nothing when that is not known. */
+function ShippedBy({ bundle }: { bundle?: Bundle }) {
+  const by = actorOfBundle(bundle)
+  if (!by) return null
+  return (
+    <div><dt>Shipped by</dt><dd><ActorBadge actor={by} />
+      {by.asserted && <span className="stage-muted"> · {by.asserted}</span>}</dd></div>
+  )
+}
 
+/** The history's first line: who shipped the step's version. */
+function ShippedByLine({ bundle }: { bundle?: Bundle }) {
+  const by = actorOfBundle(bundle)
+  if (!by || !bundle) return null
+  return <p className="stage-muted" data-testid="shipped-by">{bundle.version ?? bundle.name} shipped by <ActorBadge actor={by} />.</p>
+}
+
+/** A version as people know it (the tag), with the Bundle name after it only when it says something more. */
 function Version({ version, bundle }: { version: string; bundle: string }) {
   return (
     <>
@@ -252,7 +266,7 @@ function WhyItem({ reason: w, now, primary, cli, onAct, onUpstream, upstreams, r
       {w.detail && <p className="stage-why__detail">{w.detail}</p>}
       {w.kind === 'approval' && w.gate?.approval?.decisions && w.gate.approval.decisions.length > 0 && (
         <ul className="stage-decisions">{w.gate.approval.decisions.map((d, i) => (
-          <li key={i}>{d.user} {d.decision === 'approve' ? 'approved' : 'rejected'}{d.counted ? '' : ` (not counted: ${d.reason ?? 'not allowed'})`}</li>
+          <li key={i}><ActorBadge actor={actorOfUser(d.user)!} compact /> {d.decision === 'approve' ? 'approved' : 'rejected'}{d.counted ? '' : ` (not counted: ${d.reason ?? 'not allowed'})`}</li>
         ))}</ul>
       )}
       {cli && !signInNote && (

@@ -7,6 +7,8 @@
 // waiting on someone else and why. The wait leads each row: it is what an
 // approver clears first. j and k move between rows, a approves the row in
 // focus (App routes the keys here through the handle).
+import { ActorBadge } from '../ui/ActorBadge'
+import { actorOfUser } from '../actor'
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useAccessIn } from '../access/access'
 import { actionCheck, restriction } from '../access/actionAccess'
@@ -168,7 +170,8 @@ function Row({ item, now, approveReason, declineReason, onDecide }: {
               <span key={i} className={i < item.approved ? 'appr-seat appr-seat--filled' : 'appr-seat'} />
             ))}
           </Stack>
-          <span>{item.approved} of {item.required}{approvers.length > 0 ? ` · ${approvers.join(', ')} approved` : ''}</span>
+          <span>{item.approved} of {item.required}{approvers.length > 0 && <> · {approvers.map((u, i) => (
+            <span key={u}>{i > 0 && ', '}<ActorBadge actor={actorOfUser(u)!} compact /></span>))} approved</>}</span>
         </Stack>
         {item.notMine && <p className="appr__muted">{item.notMine}</p>}
       </Stack>

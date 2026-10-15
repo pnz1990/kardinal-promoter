@@ -87,6 +87,23 @@
 .k-chip--pending, .k-chip--unknown { color: var(--k-ink-3); border-color: var(--k-status-pending-ring); }
 .k-chip--degraded { color: var(--k-status-failed-fg); border-color: var(--k-status-failed-fg); }
 
+/* ActorBadge: who made a change. The glyph and the words say the kind; an
+   agent's sponsor is quieter. Ink, not status colors: an actor is not a state. */
+.k-actor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--k-space-1);
+  max-inline-size: 100%;
+  color: var(--k-ink);
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-sm);
+  white-space: nowrap;
+}
+.k-actor__glyph { flex-shrink: 0; color: var(--k-ink-3); }
+.k-actor--agent .k-actor__glyph { color: var(--k-ink); }
+.k-actor__name { overflow: hidden; text-overflow: ellipsis; font-weight: var(--k-weight-semibold); }
+.k-actor__sponsor { color: var(--k-ink-3); }
+
 .k-badge {
   display: inline-flex;
   align-items: center;

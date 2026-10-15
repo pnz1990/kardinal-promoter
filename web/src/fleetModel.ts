@@ -5,7 +5,7 @@
 // out as stations in promotion order, what each runs, and where the active
 // Bundle is on its way. Pure functions; FleetBoard draws the result.
 
-import type { EnvironmentFleet, EnvironmentNode, Pipeline } from './types'
+import type { EnvironmentFleet, EnvironmentNode, Pipeline, ActorRef } from './types'
 import { humanDuration, secondsSince } from './timeFormat'
 
 /** Where the active Bundle is relative to one environment. */
@@ -29,6 +29,8 @@ export interface Station {
   alsoRuns?: string
   /** The Bundle alsoRuns comes from. */
   alsoFrom?: string
+  /** Who shipped the version it runs (docs/actors.md), when known. */
+  actor?: ActorRef
   state: StationState
   /** The active Bundle's step state here, when it has one. */
   incomingState?: string
@@ -223,7 +225,7 @@ export function fleetRow(p: Pipeline): FleetRow {
     else state = d ? 'settled' : 'empty'
     const alsoRuns = d?.configVersion || d?.imagesVersion || undefined
     const alsoFrom = d?.configVersion ? d.configFrom : d?.imagesVersion ? d.imagesFrom : undefined
-    return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, alsoRuns, alsoFrom, state, incomingState: incoming }
+    return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, alsoRuns, alsoFrom, actor: d?.actor, state, incomingState: incoming }
   }))
 
   let liveGroup = groups.findIndex(g => g.some(s => s.state === 'failed'))

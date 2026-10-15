@@ -8,6 +8,7 @@ import { forwardRef, type SVGProps } from 'react'
 export type IconName =
   | 'close' | 'chevron' | 'check' | 'cross' | 'clock' | 'gate' | 'pin' | 'pause' | 'play'
   | 'rollback' | 'promote' | 'copy' | 'external' | 'search' | 'person' | 'pr' | 'warning' | 'menu'
+  | 'agent' | 'bot' | 'controller'
 
 /** 16×16 drawings; strokes unless noted. */
 const PATHS: Record<IconName, string[]> = {
@@ -29,6 +30,12 @@ const PATHS: Record<IconName, string[]> = {
   pr: ['M4.5 2.5v11', 'M11.5 7v6.5', 'M11.5 7a2.5 2.5 0 0 0-2.5-2.5H6.5', 'M8 3l-1.5 1.5L8 6'],
   warning: ['M8 2.5l6 11H2z', 'M8 6.5v3', 'M8 11.5v.01'],
   menu: ['M2.5 4.5h11', 'M2.5 8h11', 'M2.5 11.5h11'],
+  // An agent: a person's head with an antenna, square-cornered like the logo's legs.
+  agent: ['M8 1.5v2', 'M4.5 3.5h7v5h-7z', 'M6.5 6h.01', 'M9.5 6h.01', 'M3 13.5c.6-2.5 2.6-4 5-4s4.4 1.5 5 4'],
+  // A bot (an automation account): a box with a gear's spokes.
+  bot: ['M3.5 4.5h9v8h-9z', 'M6 2.5v2', 'M10 2.5v2', 'M6 8.5h.01', 'M10 8.5h.01', 'M6.5 10.5h3'],
+  // The controller: kardinal's diamond.
+  controller: ['M8 2l6 6-6 6-6-6z', 'M8 5.5l2.5 2.5L8 10.5 5.5 8z'],
 }
 
 const FILLED: ReadonlySet<IconName> = new Set(['play'])

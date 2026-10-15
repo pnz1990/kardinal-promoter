@@ -15,6 +15,7 @@
 // FR-505-01: Aggregate pipeline health across the fleet.
 // FR-505-02: Clickable filter badges that drive the pipeline list filter.
 // FR-505-04: Empty state when zero pipelines loaded.
+import { isAgent } from '../actor'
 import type { Pipeline } from '../types'
 import { pipelineState, type PipelineCategory } from '../pipelineState'
 import '../styles/FleetHealthBar.css'
@@ -32,6 +33,8 @@ export interface FleetHealthSummary {
   promoting: number
   /** Paused pipelines. */
   paused: number
+  /** Pipelines where an agent shipped what runs or what is on its way (shippedByAgent). */
+  agents: number
 }
 
 /**
@@ -42,13 +45,21 @@ export interface FleetHealthSummary {
  */
 export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
   const n = (c: PipelineCategory) => pipelines.filter(p => pipelineState(p).category === c).length
-  return { total: pipelines.length, healthy: n('healthy'), blocked: n('blocked'), ciRed: n('failed'), promoting: n('promoting'), paused: n('paused') }
+  return { total: pipelines.length, healthy: n('healthy'), blocked: n('blocked'), ciRed: n('failed'), promoting: n('promoting'), paused: n('paused'),
+    agents: pipelines.filter(shippedByAgent).length }
 }
 
-export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting' | 'paused'
+/** Whether an agent shipped the pipeline's active version or a version one of
+ *  its environments runs (docs/actors.md): the Agents filter. Not a state, so a
+ *  pipeline is also in its state's bucket. */
+export function shippedByAgent(p: Pipeline): boolean {
+  return isAgent(p.activeBundleActor) || Object.values(p.deployed ?? {}).some(d => isAgent(d.actor))
+}
 
-const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting', 'paused']
-const CATEGORY: Record<Exclude<FleetFilter, 'all'>, PipelineCategory> = { healthy: 'healthy', blocked: 'blocked', 'ci-red': 'failed', promoting: 'promoting', paused: 'paused' }
+export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting' | 'paused' | 'agents'
+
+const FLEET_FILTERS: readonly string[] = ['all', 'healthy', 'blocked', 'ci-red', 'promoting', 'paused', 'agents']
+const CATEGORY: Record<Exclude<FleetFilter, 'all' | 'agents'>, PipelineCategory> = { healthy: 'healthy', blocked: 'blocked', 'ci-red': 'failed', promoting: 'promoting', paused: 'paused' }
 
 /** Whether value is a fleet filter (the URL's filter=). */
 export function isFleetFilter(value: string | undefined): value is FleetFilter {
@@ -60,11 +71,13 @@ export function filterPipelines(
   pipelines: Pipeline[],
   filter: FleetFilter,
 ): Pipeline[] {
-  return filter === 'all' ? pipelines : pipelines.filter(p => pipelineState(p).category === CATEGORY[filter])
+  if (filter === 'all') return pipelines
+  if (filter === 'agents') return pipelines.filter(shippedByAgent)
+  return pipelines.filter(p => pipelineState(p).category === CATEGORY[filter])
 }
 
 /** The colour of a badge's count: a status bucket, or the code colour for promoting. */
-type BadgeTone = 'verified' | 'blocked' | 'failed' | 'code' | 'paused'
+type BadgeTone = 'verified' | 'blocked' | 'failed' | 'code' | 'paused' | 'agent'
 
 interface SummaryBadgeProps {
   label: string
@@ -190,6 +203,17 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
           aria-label={`${s.paused} paused pipeline${s.paused === 1 ? '' : 's'}`}
         />
       )}
+      {s.agents > 0 && (<>
+        <span className="fleet-health__divider">|</span>
+        <SummaryBadge
+          label="Agents"
+          count={s.agents}
+          tone="agent"
+          active={activeFilter === 'agents'}
+          onClick={toggle('agents')}
+          aria-label={`${s.agents} pipeline${s.agents === 1 ? '' : 's'} running or receiving a version an agent shipped`}
+        />
+      </>)}
     </div>
   )
 }

@@ -8,6 +8,7 @@
 // one cardinal-red thread. Three semantic zoom levels (Overview, Map,
 // Detail), a minimap, an attention strip and search.
 
+import { isAgent } from '../actor'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { GateMark, Group, Station, StationMapModel, ThreadSegment } from './model'
 import { edgeGateLabel, edgeGateSummary, gatesOn, gridOrder, groupSummary, stationLabel } from './model'
@@ -686,6 +687,9 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
   )
 }
 
+/** After a version an agent shipped (docs/actors.md). */
+export const AGENT_MARK = ' · agent'
+
 /** The words a station shows at a level: its name, and its lines under the dot. */
 function stationText(st: Station, level: ZoomLevel, model: StationMapModel, p: Placed, focused: boolean): { name?: string; lines: Array<{ cls: string; text: string }> } {
   const tone = st.display.tone
@@ -698,13 +702,14 @@ function stationText(st: Station, level: ZoomLevel, model: StationMapModel, p: P
   const upVersion = st.upstreams.length ? model.stations.get(st.upstreams[0])?.running?.version : undefined
   const showVersion = level === 'detail' || st.running?.version !== upVersion
   const age = ageOf(st.running?.verifiedAt)
-  if (showVersion && st.running) lines.push({ cls: 'station__sub', text: `${st.running.version}${age ? ` · ${age}` : ''}` })
+  // An agent's version says so in words (AGENT_MARK), never by color alone.
+  if (showVersion && st.running) lines.push({ cls: 'station__sub', text: `${st.running.version}${isAgent(st.running.actor) ? AGENT_MARK : ''}${age ? ` · ${age}` : ''}` })
   else if (!st.running && level === 'detail') lines.push({ cls: 'station__sub', text: 'nothing deployed' })
   if (level !== 'detail') return { name: st.env, lines }
   const chars = detailChars(p)
   // What is on its way, with its PR first (so it is never the part an ellipsis drops), then its state.
   const pr = st.incoming?.prURL ? prNumberFromURL(st.incoming.prURL) : null
-  if (st.incoming) lines.push({ cls: 'station__incoming', text: wrapWords(`→ ${st.incoming.version}${pr ? ` · PR ${pr}` : ''}`, chars, 1)[0] })
+  if (st.incoming) lines.push({ cls: 'station__incoming', text: wrapWords(`→ ${st.incoming.version}${isAgent(st.incoming.actor) ? AGENT_MARK : ''}${pr ? ` · PR ${pr}` : ''}`, chars, 1)[0] })
   if (st.incoming || (tone !== 'verified' && tone !== 'pending')) {
     for (const t of wrapWords(st.display.label, chars, 2)) lines.push({ cls: 'station__incoming', text: t })
   }

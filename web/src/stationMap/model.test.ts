@@ -398,4 +398,14 @@ describe('edge gates', () => {
     // It sorts a copy: the station's own list keeps its order.
     expect(gates.map(g => g.name)).toEqual(['business-hours', 'change-ticket', 'sign-off', 'uat-soak'])
   })
+
+  it('names who shipped what a station runs and what is on its way (#1908)', () => {
+    const p = threeEnvs({ deployed: {
+      test: { bundle: 'app-v2', version: '1.4.2', verifiedAt: '2026-10-11T09:00:00Z', actor: { kind: 'agent' as const, agent: 'fixer', sponsor: 'alice', text: 'agent fixer for alice' } },
+      uat: { bundle: 'app-v2', version: '1.4.2' }, prod: { bundle: 'app-v1', version: '1.4.1' } } })
+    const m = buildModel(p, undefined)
+    expect(m.stations.get('test')!.running?.actor?.kind).toBe('agent')
+    expect(stationLabel(m.stations.get('test')!, () => '')).toBe('test — Live, runs 1.4.2, shipped by agent fixer for alice')
+    expect(stationLabel(m.stations.get('prod')!, () => '')).not.toContain('shipped by')
+  })
 })

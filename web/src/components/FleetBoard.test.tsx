@@ -212,4 +212,15 @@ describe('FleetBoard — keyboard', () => {
     expect(within(plate).getByText('149 environments')).toBeInTheDocument()
     expect(within(plate).getByText('env-001 … env-149')).toBeInTheDocument()
   })
+
+  it('marks a version an agent shipped and names who shipped it (#1908)', () => {
+    const p: Pipeline = {
+      name: 'ag', namespace: 'team-a', phase: 'Ready', environmentCount: 1, environmentTopology: [{ name: 'prod' }],
+      deployed: { prod: { bundle: 'ag-2', version: '2.0.0', actor: { kind: 'agent' as const, agent: 'fixer', sponsor: 'alice', text: 'agent fixer for alice' } } },
+    }
+    render(<FleetBoard pipelines={[p]} total={1} onSelect={() => {}} now={now} />)
+    const st = screen.getByRole('button', { name: /^ag prod: 2\.0\.0, shipped by agent fixer for alice,/ })
+    expect(st.querySelector('.fleet-station__agent')).toBeInTheDocument()
+    expect(st.querySelector('.fleet-station__version')).toHaveAttribute('title', 'ag-2, shipped by agent fixer for alice')
+  })
 })

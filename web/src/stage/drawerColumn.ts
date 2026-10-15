@@ -26,12 +26,18 @@ export function useWide(): boolean {
   return wide
 }
 
+/** How many mounted callers want the column: the route's reservation, the
+ *  placeholder and the drawer overlap while one hands over to the next. */
+let holders = 0
+
 /** Has the page give up the drawer column while the caller is mounted. A
- *  layout effect, so the placeholder handing over to the drawer never paints
- *  a frame without it. */
+ *  layout effect, so the column is taken before the frame paints, and a
+ *  count, so one caller unmounting while another still holds it keeps it. */
 export function useDrawerColumn() {
   useLayoutEffect(() => {
-    document.documentElement.classList.add(OPEN_CLASS)
-    return () => document.documentElement.classList.remove(OPEN_CLASS)
+    if (holders++ === 0) document.documentElement.classList.add(OPEN_CLASS)
+    return () => {
+      if (--holders === 0) document.documentElement.classList.remove(OPEN_CLASS)
+    }
   }, [])
 }

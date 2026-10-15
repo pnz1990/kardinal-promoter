@@ -15,3 +15,16 @@ function Column({ env }: { env: string }) {
 export function DrawerPlaceholder({ env }: { env: string }) {
   return useWide() ? <Column env={env} /> : null
 }
+
+function Reserve() {
+  useDrawerColumn()
+  return null
+}
+
+/** Takes the drawer column from the first render of a route that names an
+ *  environment, before the pipeline, the map or the drawer's code arrives, so
+ *  the page never narrows after it has painted (#1859, journey 024). */
+export function DrawerColumnReserve({ active }: { active: boolean }) {
+  const wide = useWide()
+  return active && wide ? <Reserve /> : null
+}

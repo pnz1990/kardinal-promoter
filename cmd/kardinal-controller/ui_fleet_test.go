@@ -64,3 +64,32 @@ func TestPipelineListResponse_Fleet(t *testing.T) {
 	got = pipelineListResponse([]v1alpha1.Pipeline{p}, []v1alpha1.Bundle{b}, steps, nil, time.Now(), nil)
 	assert.Equal(t, &uiFleet{Targets: []string{}, Message: "list Applications: forbidden"}, got[0].EnvironmentTopology[1].Fleet)
 }
+
+// TestPipelineListResponse_Actors (#1908): the pipeline list says who shipped
+// the active Bundle and each environment's Bundle, in short, for the fleet
+// board, the Agents filter and the station map; a Bundle without an actor
+// stamp has none.
+func TestPipelineListResponse_Actors(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC))
+	p := v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team"}}
+	p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}
+	agent := &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: "system:serviceaccount:ci:fixer", Agent: "fixer", Sponsor: "alice"}
+	b1 := v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "team", CreationTimestamp: at},
+		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "web", Images: []v1alpha1.ImageRef{{Repository: "r/web", Tag: "1.0.0"}}},
+		Status: v1alpha1.BundleStatus{Phase: "Verified"}}
+	b2 := v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "web-2", Namespace: "team", CreationTimestamp: metav1.NewTime(at.Add(time.Hour))},
+		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "web", Actor: agent, Images: []v1alpha1.ImageRef{{Repository: "r/web", Tag: "2.0.0"}}},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting", Environments: []v1alpha1.EnvironmentStatus{{Name: "test", Phase: "Verified"}}}}
+	step := func(b, env string) v1alpha1.PromotionStep {
+		return v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: b + "-" + env, Namespace: "team", CreationTimestamp: at},
+			Spec:   v1alpha1.PromotionStepSpec{PipelineName: "web", BundleName: b, Environment: env},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue, LastTransitionTime: at}}}}
+	}
+	got := pipelineListResponse([]v1alpha1.Pipeline{p}, []v1alpha1.Bundle{b1, b2},
+		[]v1alpha1.PromotionStep{step("web-1", "prod"), step("web-2", "test")}, nil, time.Now(), nil)
+	require.Len(t, got, 1)
+	want := &uiActorRef{Kind: "agent", Agent: "fixer", Sponsor: "alice", Text: "agent fixer for alice"}
+	assert.Equal(t, want, got[0].ActiveBundleActor)
+	assert.Equal(t, want, got[0].Deployed["test"].Actor)
+	assert.Nil(t, got[0].Deployed["prod"].Actor, "a Bundle without an actor stamp")
+}

@@ -85,3 +85,6 @@
 /* #784: skeleton while the versions load. */
 .bundle-timeline__skeleton-row { display: flex; gap: var(--k-space-2); padding-block: var(--k-space-2); }
 .bundle-chip-skeleton { inline-size: var(--k-space-12); block-size: var(--k-space-6); border-radius: var(--k-radius-1); background: var(--k-surface-sunken); }
+
+/* A version an agent shipped (docs/actors.md): its glyph, quiet, beside the type badge. */
+.bundle-chip__agent { flex-shrink: 0; color: var(--k-ink-3); }
