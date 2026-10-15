@@ -101,6 +101,89 @@ the PR. The scripts download the kind, kubectl and helm versions CI uses
 into `bin/e2e` (`make e2e-tools`). [test/e2e/README.md](test/e2e/README.md)
 lists the suites.
 
+### Release gate
+
+Before a release is tagged, `make release-gate` gathers its evidence on one
+host and writes `test/e2e/results/release-gate/<commit>/report.md`. The
+report has:
+
+- a pass or fail row for each area;
+- test totals, and every skipped test by name;
+- the coverage proof;
+- durations;
+- the commit, the tool versions, and the IDs of the images the live suites
+  ran and trivy scanned;
+- a link to each step's log.
+
+It covers:
+
+- every live suite, its upgrade suites included, on exactly the oldest
+  supported and the newest Kubernetes (the lowest and highest
+  `KIND_NODE_1_<minor>` in `hack/tool-versions.env`, now 1.35 and 1.37);
+- the upgrade from the previous release;
+- the scale suite's `full` and `soak` profiles;
+- `go test -race -count=3`, every fuzz target, the scenario matrix and the
+  enterprise scenario;
+- govulncheck, golangci-lint, `make hygiene`, trivy on the images, the
+  strict docs build with check-site-offline, and the bundle size budget;
+- helm lint and template of every values profile in
+  `hack/release-gate/profiles`, and envtest: every CRD and the chart's
+  admission policies on the same two Kubernetes versions.
+
+The verdict is GO only when everything is proven:
+
+- **A step passes** only when it exits 0 and leaves its log and test output.
+  The output must record at least the step's minimum number of tests, with
+  no more skips than the step allows. A green CI job with no artifact is not
+  a pass.
+- **Every covered `test/e2e/coverage.tsv` row** must have run and passed in
+  the gate's live suites. An exception is a line in
+  `hack/release-gate/coverage-allow.txt`, with its reason.
+- **Missing evidence is NO-GO.** Examples are an upgrade suite from the
+  previous release that does not exist, or no node image for a minor.
+- **INCOMPLETE** means a step could not run here, such as the github suite
+  without a token.
+
+A pass is reused when the gate runs again, so a second run re-runs only what
+failed. It is reused only for the same commit, the same inputs (the step's
+scripts and thresholds, the options, `hack/tool-versions.env`) and its
+evidence still in place. A tree with uncommitted changes reuses nothing, and
+its results are marked and never reused. `-fresh` runs everything. Pass the
+options in `RELEASE_GATE_ARGS`:
+
+```bash
+make release-gate RELEASE_GATE_ARGS='-lock /path/to/LOADLOCK -slots /path/to/CLUSTER-SLOTS -clusters 3'
+make release-gate RELEASE_GATE_ARGS='-live ci -lock ...'              # live suites in e2e-live.yml
+make release-gate RELEASE_GATE_ARGS='-list'                           # the steps
+make release-gate RELEASE_GATE_ARGS='-only ^e2e-core -fuzztime 1m'    # some steps
+make release-gate RELEASE_GATE_ARGS='-report'                         # the report only
+```
+
+The host rules are on by default:
+
+- **Heavy steps need the lock.** These are the scale profiles, the
+  `-race -count=3` run, the enterprise scenario and fuzzing over a minute.
+  They need the host's heavy-load lock: `-lock DIR` or `$RELEASE_GATE_LOCK`,
+  a directory made with mkdir. They take it one at a time.
+- **Cluster steps need slots.** A step that starts kind clusters needs the
+  host's shared slots (`-slots DIR` or `$RELEASE_GATE_SLOTS`), one per
+  cluster.
+- **Opting out.** On a host of your own, pass `-no-lock` or `-no-slots`.
+  Without them, the gate refuses to start.
+- **Cluster budget and load.** At most `-clusters` kind clusters run at once,
+  and gitlab, multi-cluster and scale count as two. A new cluster starts
+  only while the one-minute load is at most `-max-load` (default 64) and
+  `-min-mem` GB (default 20) are free.
+- **Cleanup.** Interrupting the gate (Ctrl-C) deletes the clusters it
+  created; every cluster's name starts with `kp-rg-`.
+
+With `-live ci`, the live suites run as one dispatch of `e2e-live.yml` on
+the pushed branch, every suite on both minors (its `minors` input). Each
+job's result, log and artifact become a step, and the run's image IDs go
+into the report. Running the gate again on the same commit waits for that
+run, and re-runs only its failed jobs. The scale profiles stay on the host:
+a runner is too small for them.
+
 ## How to Contribute
 
 ### Bug Reports

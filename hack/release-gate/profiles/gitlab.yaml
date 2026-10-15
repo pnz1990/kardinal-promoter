@@ -1,0 +1,8 @@
+# Release gate values profile: a self-hosted GitLab.
+scm:
+  provider: gitlab
+  apiURL: https://gitlab.example.com/api/v4
+  secretRef:
+    name: gitlab-token
+  allowedRepositories:
+    - gitlab.example.com/platform/**

@@ -1,0 +1,7 @@
+# hack/release-gate/coverage-allow.txt
+#
+# test/e2e/coverage.tsv rows that make release-gate may leave unproven (a
+# proof result of failed, missing or not run) without a NO-GO: one per line,
+# "<row id> <the reason>". Every other covered row must have run and passed
+# in this gate's live suites. Keep it empty unless a row truly cannot run on
+# the gate's host or in CI, and say why.

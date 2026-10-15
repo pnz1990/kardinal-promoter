@@ -27,7 +27,7 @@ IMG      ?= $(IMG_REPO):$(IMG_TAG)
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
         lint lint-local vet vuln hygiene hygiene-go hygiene-web envtest generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all changelog-release \
+        install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all changelog-release release-gate \
         tools help
 
 all: generate build test lint
@@ -194,6 +194,9 @@ changelog-release: ## Before tagging VERSION (vX.Y.Z): write docs/changelog.d in
 
 e2e-all: ## Run every live suite on this host, JOBS clusters at a time, and prove the coverage (hack/e2e/all.sh)
 	JOBS=$(JOBS) COUNT=$(COUNT) bash hack/e2e/all.sh
+
+release-gate: ## A release's whole evidence on this host, one report (hack/release-gate); re-runs only what failed. RELEASE_GATE_ARGS, e.g. -clusters 3 -lock DIR
+	$(GO) run ./hack/release-gate $(RELEASE_GATE_ARGS)
 
 ## Tools
 $(LOCALBIN):
