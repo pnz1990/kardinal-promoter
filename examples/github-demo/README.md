@@ -14,7 +14,7 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 | PolicyGate: bundle metadata | `bundle.provenance.author != "dependabot[bot]"` |
 | `kardinal explain` | Shows all three gates, CEL expressions, and current values |
 | `kardinal policy simulate` | Simulate gate results for any time/context |
-| Emergency override | `kardinal override github-demo --stage prod --gate no-weekend-deploys --reason "..."` |
+| Emergency override | `kardinal override github-demo --env prod --gate no-weekend-deploys --reason "..."` |
 | Auto-rollback | `onHealthFailure: rollback` opens rollback PR if prod health fails |
 | Rollback PR | `kardinal rollback github-demo --env prod` opens PR with `kardinal/rollback` label |
 
@@ -124,7 +124,7 @@ When a hotfix must be deployed despite a failing gate:
 ```bash
 # Force-pass the failing gate for the Bundle waiting on it; creates an audit record.
 # --gate is the name of the PolicyGate you applied (as `kardinal explain` shows it).
-kardinal override github-demo --stage prod --gate no-weekend-deploys \
+kardinal override github-demo --env prod --gate no-weekend-deploys \
   --reason "Critical security fix CVE-2026-1234 — approved by on-call lead"
 
 # The override is recorded in spec.overrides of the Bundle's instance of the gate.

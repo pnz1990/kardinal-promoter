@@ -130,7 +130,7 @@ kardinal why demo prod
 
 ```text
 prod is waiting for your approval.
-  Version  sha-9349a3f (demo-zhxk2)
+  Version  sha-9349a3f (demo-zhxk2), by kubernetes-admin
   Gate     prod-approval · 0 of 1 approvals
   Next     kardinal approve demo prod
 ```
@@ -204,15 +204,22 @@ kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355
 
 ```text
 Shipped main as demo-q8m4t; following it (Ctrl-C stops following, the promotion goes on)
-  test: Promoting
-  test: Checking health
-  test: Live
-  uat: Promoting
-  uat: Checking health
-  uat: Live
-  prod: Held by gate prod-approval
+      +2s  test: Promoting
+      +4s  test: Checking health
+      +9s  test: Live
+     +11s  uat: Promoting
+     +13s  uat: Checking health
+     +18s  uat: Live
+     +18s  prod: Held by gate prod-approval
+Summary after 20s:
+  test   Live                         took 9s
+  uat    Live                         took 7s
+  prod   Held by gate prod-approval   for 2s
 Version main (demo-q8m4t) stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)
 ```
+
+Each line starts with the time since the version was shipped. The summary gives each
+environment's last state, with how long its promotion took or how long it has waited.
 
 In the UI, the version moves along the map as the lines print: through test and uat, then
 stopped at the gate before prod. Select prod: its details say why it is waiting, with

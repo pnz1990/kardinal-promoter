@@ -2937,7 +2937,7 @@
           },
           {}
         ],
-        "summary": "Override a gate in one environment of a Pipeline for a while (kardinal override --stage)",
+        "summary": "Override a gate in one environment of a Pipeline for a while (kardinal override --env)",
         "tags": [
           "UI"
         ]
