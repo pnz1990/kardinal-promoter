@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"golang.org/x/mod/semver"
@@ -193,7 +195,11 @@ func (w *OCIWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 	res := &WatchResult{Digest: digest, Tag: tag, Changed: changed}
 	if changed {
 		// Best effort: a version is made without it.
-		res.SourceCommit, _ = s.imageRevision(ctx, digest)
+		var rerr error
+		if res.SourceCommit, rerr = s.imageRevision(ctx, digest); rerr != nil {
+			zerolog.Ctx(ctx).Debug().Err(rerr).Str("registry", w.Registry).Str("digest", digest).
+				Msg("could not read the image's " + revisionKey + "; the version has no provenance commit")
+		}
 	}
 	return res, nil
 }
@@ -202,8 +208,11 @@ func (w *OCIWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 // revision an image was built from.
 const revisionKey = "org.opencontainers.image.revision"
 
-// commitPattern is what a Bundle's provenance.commitSHA accepts as a commit.
-var commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
+// commitPattern is a full git commit name: SHA-1 (40) or SHA-256 (64) hex,
+// lowercase. Build tools (docker/metadata-action, buildx, ko) record the full
+// commit in the revision; a short one, a tag such as sha-1a2b3c4 or a build
+// number is not taken for a commit.
+var commitPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // imageRevision is the commit the image at digest was built from: the
 // org.opencontainers.image.revision annotation of its manifest (or of the
@@ -247,12 +256,16 @@ func (s *registrySession) imageRevision(ctx context.Context, digest string) (str
 	return commitOrEmpty(cfg.Config.Labels[revisionKey]), nil
 }
 
-// commitOrEmpty is r when it is a commit SHA, else "".
+// commitOrEmpty is r, lowercased, when it is a full commit SHA
+// (commitPattern) and not all digits (a build number); else "". Nothing
+// around the hex is trimmed: a value with a prefix, a suffix or a newline is
+// not a commit.
 func commitOrEmpty(r string) string {
-	if commitPattern.MatchString(r) {
-		return r
+	c := strings.ToLower(r)
+	if !commitPattern.MatchString(c) || strings.Trim(c, "0123456789") == "" {
+		return ""
 	}
-	return ""
+	return c
 }
 
 func (w *OCIWatcher) client() *http.Client {

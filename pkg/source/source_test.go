@@ -820,6 +820,21 @@ func TestOCIWatcher_SourceCommit(t *testing.T) {
 		{"a revision that is not a commit", testImage{annotation: "v1.2.3"}, ""},
 		{"a branch name", testImage{label: "main"}, ""},
 		{"none", testImage{}, ""},
+		{"uppercase is lowercased", testImage{annotation: strings.ToUpper(sha)}, sha},
+		{"a SHA-256 commit", testImage{label: strings.Repeat("ab", 32)}, strings.Repeat("ab", 32)},
+		// Hostile or wrong values must not pass as commits (#1987 QA).
+		{"a prefix (metadata-action tag style)", testImage{annotation: "sha-1a2b3c4"}, ""},
+		{"a prefix before a full SHA", testImage{annotation: "sha-" + sha}, ""},
+		{"a suffix", testImage{annotation: sha + "<script>"}, ""},
+		{"a shell suffix", testImage{label: "1a2b3c4d; rm -rf /"}, ""},
+		{"a trailing newline", testImage{annotation: sha + "\n"}, ""},
+		{"a short SHA", testImage{annotation: "1a2b3c4"}, ""},
+		{"6 hex", testImage{annotation: "1a2b3c"}, ""},
+		{"39 hex", testImage{annotation: sha[:39]}, ""},
+		{"41 hex", testImage{annotation: sha + "a"}, ""},
+		{"65 hex", testImage{annotation: strings.Repeat("ab", 32) + "c"}, ""},
+		{"all digits (a build number)", testImage{label: strings.Repeat("2026101501", 4)}, ""},
+		{"not hex", testImage{annotation: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0g"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			img := tc.img

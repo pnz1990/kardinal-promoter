@@ -84,11 +84,15 @@ spec:
 ```
 
 `provenance.commitSHA` is the source commit the image's build recorded in
-`org.opencontainers.image.revision`: an annotation of its manifest (for a multi-architecture
-index, of the linux/amd64 image's) or a label of its image config, as `docker buildx --label`
-and the OCI metadata actions write it. An image without one, or with a revision that is not a
-commit SHA, gets no `provenance`, and its PR evidence shows `—` for the commit. The digest is
-in `images[0].digest` only.
+`org.opencontainers.image.revision`, as `docker buildx --label` and the OCI metadata actions
+write it. kardinal looks, in order, at the annotation of the image's manifest; for a
+multi-architecture index, at the index's own annotation, then the annotation of its
+`linux/amd64` image (or of the first platform when there is none); and then at the label of
+that image's config. The first revision found decides. It counts only when it is a full commit
+SHA, 40 or 64 hex characters (lowercased); a tag such as `sha-1a2b3c4`, a short SHA, a build
+number or a branch is not a commit. An image without one gets no `provenance`, and its PR
+evidence shows `—` for the commit. The digest is in `images[0].digest` only. Versions created
+before v0.12.0 may still hold the digest in `provenance.commitSHA`.
 
 Version names are lowercased and made DNS-safe (`Build_42` becomes `build-42`) and are
 at most 63 characters. The digest suffix means a re-pushed mutable tag (`latest`,
