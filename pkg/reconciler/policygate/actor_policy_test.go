@@ -93,7 +93,7 @@ func TestActorContext(t *testing.T) {
 	}{
 		{"agent kind", fixerStamp(), "actor.kind == 'agent' && actor.agent == 'fixer' && actor.sponsor == 'alice'", true},
 		{"verified", fixerStamp(), "actor.verified && actor.principal == 'system:serviceaccount:ci:fixer'", true},
-		{"asserted model", fixerStamp(), "actor.asserted.model == 'claude-opus-5' && actor.asserted.session == ''", true},
+		{"no asserted text reaches a gate", fixerStamp(), "!('asserted' in actor)", true},
 		{"human", &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "bob", Via: "ui"},
 			"actor.kind == 'human' && actor.via == 'ui' && actor.agent == ''", true},
 		{"no stamp reads unknown with created-by", nil, "actor.kind == 'unknown' && actor.principal == 'ci-bot' && !actor.verified", true},

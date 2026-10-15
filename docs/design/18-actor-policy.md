@@ -48,7 +48,6 @@ The PolicyGate reconciler adds two variables to the CEL context it builds in `bu
 | `actor.agent`, `actor.sponsor` | string | the stamp; `""` unless the kind is `agent` |
 | `actor.via` | string | the stamp; `""` |
 | `actor.verified` | bool | true when the Bundle has a stamp |
-| `actor.asserted.model`, `.session`, `.client` | string | the stamp; `""` |
 | `agent.registered` | bool | the Bundle's agent has an AgentIdentity whose `status.ready` is true for its current generation, and an entry in this release's AgentIndex |
 | `agent.name` | string | `actor.agent` |
 | `agent.sponsor` | string | the agent's AgentIndex entry now (`sponsor`); `""` when not registered |
@@ -62,7 +61,9 @@ entries), never computed from a spec: an admin who suspends an
 agent or tightens its autonomy changes the gates of its in-flight versions. For a Bundle whose
 actor is not an agent, `agent` is `{registered: false, name: "", sponsor: "", autonomy: "",
 suspended: false}`. Every key is always present, so `agent.autonomy == 'auto'` evaluates (false)
-instead of failing with "no such key". `bundle.createdBy` stays, an alias of `actor.principal`
+instead of failing with "no such key". The asserted fields (`model`, `session`, `client`) are not in the context: they are text the client
+writes, and the untrusted-input guarantee (no attacker-written text reaches a gate) keeps them out.
+`bundle.createdBy` stays, an alias of `actor.principal`
 for one release.
 
 `approvals.*` gains `approvals.met` (bool: the approval policy is met, section 3) next to

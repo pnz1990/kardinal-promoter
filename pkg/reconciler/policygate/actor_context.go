@@ -18,12 +18,10 @@ import (
 // actorContext is the actor CEL variable: the Bundle's actor stamp
 // (docs/design/18-actor-policy.md section 2.1), or for a Bundle without one
 // {kind: unknown, principal: kardinal.io/created-by}. Every key is always
-// present.
+// present. Only the verified fields are in it: the asserted ones (model,
+// session, client) are text the client writes, and no such text reaches a
+// gate (the untrusted-input guarantee, GATE-UNTRUSTED-01).
 func actorContext(stamp *kardinalv1alpha1.Actor, author kardinalv1alpha1.Actor) map[string]interface{} {
-	asserted := map[string]interface{}{"model": "", "session": "", "client": ""}
-	if a := author.Asserted; a != nil {
-		asserted = map[string]interface{}{"model": a.Model, "session": a.Session, "client": a.Client}
-	}
 	return map[string]interface{}{
 		"kind":      author.Kind,
 		"principal": author.Principal,
@@ -31,7 +29,6 @@ func actorContext(stamp *kardinalv1alpha1.Actor, author kardinalv1alpha1.Actor) 
 		"sponsor":   author.Sponsor,
 		"via":       author.Via,
 		"verified":  stamp != nil,
-		"asserted":  asserted,
 	}
 }
 

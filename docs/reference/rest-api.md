@@ -40,6 +40,9 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/approvals` | Approve, reject or revoke a Bundle for an environment's approval gates, as the UI user (TokenReview mode only) |
 | `POST` | `/api/v1/ui/pause` | Pause a Pipeline, or one fleet (`environment`) |
 | `POST` | `/api/v1/ui/resume` | Resume a Pipeline, or one fleet (`environment`) |
+| `GET` | `/api/v1/ui/freezes` | List the freezes (the UI's banner) |
+| `POST` | `/api/v1/ui/freeze` | Freeze agents, or stop the line for everyone, as the UI user (TokenReview mode only; as `kardinal freeze`) |
+| `POST` | `/api/v1/ui/unfreeze` | Lift a freeze, as the UI user (TokenReview mode only; as `kardinal unfreeze`) |
 | `POST` | `/api/v1/ui/access` | Which of the given actions the caller may take, and the role that grants each (the UI hides or disables the rest) |
 | `POST` | `/api/v1/ui/validate-cel` | Compile a PolicyGate CEL expression |
 | `GET` | `/api/v1/ui/steps/{namespace}/{step}/events` | The Kubernetes Events of a PromotionStep |
