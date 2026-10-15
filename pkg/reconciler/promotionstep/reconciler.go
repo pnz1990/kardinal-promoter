@@ -1971,6 +1971,15 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		ps.Status.TargetUpdatedAt = &checkedAt
 	}
 
+	// A step with no changes waits for a head another writer pushed: when
+	// the tool has not applied it, ask it to sync now (#1910).
+	if r.noChangesRefreshWanted(ps, env, adapter.Name(), opts.ExpectedRevision, result) {
+		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision); err != nil {
+			return ctrl.Result{}, err
+		}
+		base = ps.DeepCopy()
+	}
+
 	// A terminal result (ProgressDeadlineExceeded, Flagger canary Failed) will
 	// not recover, bake or not.
 	if result.Terminal {

@@ -261,9 +261,15 @@ func TestRefreshNotRequested(t *testing.T) {
 				status: pushed, objs: []client.Object{healthyDeployment("p", "test")}}},
 		{name: "already asked (a re-run after a crash once the request was recorded)",
 			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: argo}, status: asked, dynObjs: app}},
-		{name: "no changes",
+		{name: "no changes, and the Application already synced the head",
 			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: argo},
-				status: v1alpha1.PromotionStepStatus{Outputs: map[string]string{"noChanges": "true", "commitSHA": newSHA}}, dynObjs: app}},
+				status: noChanges, dynObjs: []runtime.Object{argoApplication("p-test", newSHA)}}},
+		{name: "no changes, health.refresh: false",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "argocd", Refresh: &off}},
+				status: noChanges, dynObjs: app}},
+		{name: "no changes and no head read",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Health: argo},
+				status: v1alpha1.PromotionStepStatus{Outputs: map[string]string{"noChanges": "true"}}, dynObjs: app}},
 		{name: "no commit and no PR (update.strategy argocd)",
 			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: argo}, dynObjs: app}},
 		{name: "merge commit not recorded yet",
@@ -282,6 +288,54 @@ func TestRefreshNotRequested(t *testing.T) {
 			for _, e := range g.events() {
 				assert.NotContains(t, e, "GitOpsRefresh")
 			}
+		})
+	}
+}
+
+// noChanges is a step whose git-commit found nothing to commit: it waits for
+// the branch head it cloned, which another writer pushed (#1669).
+var noChanges = v1alpha1.PromotionStepStatus{Outputs: map[string]string{"noChanges": "true", "commitSHA": newSHA}}
+
+// TestRefreshNoChanges: a step with no changes asks the GitOps object to sync
+// the branch head it waits for when the health check finds the object on
+// another revision (#1910), once, and not when it already synced the head
+// (TestRefreshNotRequested). Covers HEALTH-REFRESH-06.
+func TestRefreshNoChanges(t *testing.T) {
+	for _, tt := range []struct {
+		name, healthType string
+		dynObjs          []runtime.Object
+		wantPatches      []string
+	}{
+		{name: "argocd", healthType: "argocd", dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)},
+			wantPatches: []string{"applications argocd/p-test"}},
+		{name: "flux", healthType: "flux", dynObjs: []runtime.Object{
+			fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "repo", ""), gitRepository("flux-system", "repo")},
+			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations flux-system/p-test"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			g := refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: tt.healthType}},
+				status: noChanges, dynObjs: tt.dynObjs}.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches())
+			got := getStep(t, g.c, "step")
+			require.NotNil(t, got.Status.RefreshRequestedAt)
+			assert.Equal(t, newSHA, got.Status.RefreshRevision)
+			assert.Contains(t, got.Status.RefreshMessage, "refresh requested: ")
+			assert.Equal(t, "HealthChecking", got.Status.State)
+			assert.Contains(t, got.Status.Message, "waiting for "+tt.healthType)
+			require.NotNil(t, got.Status.LastHealthCheckAt, "the health check result is recorded with the request")
+			ev := g.events()
+			require.Len(t, ev, 1)
+			assert.Contains(t, ev[0], "Normal "+promotionstep.ReasonRefreshRequested)
+
+			for range 2 {
+				got = getStep(t, g.c, "step")
+				got.Status.LastHealthCheckAt = nil
+				require.NoError(t, g.c.Status().Update(context.Background(), &got))
+				require.NoError(t, g.reconcile(t))
+			}
+			assert.Equal(t, tt.wantPatches, g.patches(), "asked once")
+			assert.Empty(t, g.events())
 		})
 	}
 }
