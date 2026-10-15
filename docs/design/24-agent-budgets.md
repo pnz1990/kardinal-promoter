@@ -469,8 +469,11 @@ rely on it.
 
 **Triggers.** AgentIdentity spec changes (generation, including exemptions); PromotionSteps whose
 `status.budget` or `status.state` changes and that carry `status.budget.agent` (mapped to that
-agent); Pipeline `status.environments` changes for Pipelines with an unavailable grant (a cache
-index on the AgentIdentity, keyed by namespace and Pipeline, built from status); its own requeue.
+agent); Pipeline `status.environments` changes, mapped to the agents that hold an unavailable
+grant (a cache index on AgentIdentities with any `unavailable: true` grant; the ledger has no
+Pipeline names, C12, so the mapping enqueues those few agents and their reconcile resolves the
+Bundle UIDs); its own requeue, and a resync every 5 minutes while seeded grants are unsettled
+(17.2), because a seeded step has no `status.budget` and so sends no event the mapping sees.
 
 ### 7.4 What this does not hold
 
