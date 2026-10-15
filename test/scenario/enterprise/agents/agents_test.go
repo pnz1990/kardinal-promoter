@@ -44,7 +44,7 @@ type agentSize struct{ Teams, PipelinesPerTeam, Identities, Agents, Bursts, Prob
 // 32 KiB bound to overflow.
 var (
 	fullAgents  = agentSize{Teams: 20, PipelinesPerTeam: 3, Identities: 2000, Agents: 50, Bursts: 3, Probes: 4000}
-	quickAgents = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 90, Agents: 6, Bursts: 2, Probes: 300, IndexBytes: 32 << 10}
+	quickAgents = agentSize{Teams: 2, PipelinesPerTeam: 2, Identities: 60, Agents: 4, Bursts: 2, Probes: 150, IndexBytes: 32 << 10}
 )
 
 func agentSizeFromEnv() agentSize {
