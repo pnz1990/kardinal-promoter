@@ -532,7 +532,10 @@ func onlyTopKeyChanged(orig, out []byte, key string) (same, ok bool) {
 	if !ok1 {
 		return false, false
 	}
-	if _, ok2 := topEntries(out); !ok2 {
+	// The output must parse; its keys may be written another way (an
+	// explicit "? key" for a long one), so its entries are not compared.
+	var parsed yaml.Node
+	if err := yaml.Unmarshal(out, &parsed); err != nil {
 		return false, true
 	}
 	ol, nl := splitLines(orig), splitLines(out)
