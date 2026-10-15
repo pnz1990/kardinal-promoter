@@ -6,7 +6,7 @@
 # stdin, and prints which areas of CI they touch, as GitHub Actions outputs:
 #
 #   go=true|false        Go code, tests and what they read (examples, demo,
-#                        hack/, test/, Makefile, the embedded web/dist), the
+#                        hack/, test/, Makefile, the embedded web/dist and its embed.go), the
 #                        lint and git configs, Dockerfiles, and shell scripts
 #                        (shellcheck runs in the e2e stubs job)
 #   web=true|false       the UI (web/), its token generator (scripts/)
@@ -31,7 +31,7 @@ while IFS= read -r f || [ -n "$f" ]; do
     go.mod | go.sum) go=true all=1 ;;
   esac
   case "$f" in
-    *.go | *.sh | Makefile | hack/* | test/* | examples/* | demo/* | api/* | cmd/* | pkg/* | web/dist/* | web/embed.go) go=true ;;
+    *.go | *.sh | Makefile | hack/* | test/* | examples/* | demo/* | api/* | cmd/* | pkg/* | web/dist/*) go=true ;;
     .golangci.yml | .gitignore | .gitattributes | .dockerignore | Dockerfile | *.Dockerfile) go=true ;;
   esac
   case "$f" in
