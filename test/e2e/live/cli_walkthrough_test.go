@@ -78,7 +78,7 @@ func TestCLI_WalkthroughGates(t *testing.T) {
 	// why: the approval first, then the soak and when it opens.
 	r = c.Run(a.ns, "why", pipelineName, "prod")
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Contains(t, r.Stdout, "  Gate     prod-approval · 0 of 1 approvals\n  Next     kardinal approve "+pipelineName+" prod\n")
+	assert.Contains(t, r.Stdout, "  Gate     prod-approval · 0 of 1 approvals\n  Next     kardinal approve "+pipelineName+" prod -n "+a.ns+"\n")
 	assert.Regexp(t, `(?m)^  Also +gate uat-soak: soak \d+\.\d of 2 min in uat, opens by itself (in about \S+|at its next check)$`, r.Stdout)
 
 	r = c.Run(a.ns, "approve", pipelineName, "prod")
@@ -90,8 +90,8 @@ func TestCLI_WalkthroughGates(t *testing.T) {
 	require.Equal(t, 0, r.Code, r.Output())
 	if strings.Contains(r.Stdout, "is held by gate uat-soak") {
 		assert.Regexp(t, `(?m)^  Now +soak \d+\.\d of 2 min in uat$`, r.Stdout)
-		assert.Regexp(t, `(?m)^  Next +wait: it opens by itself (in about \S+|at its next check) \(kardinal status `+pipelineName+` -w follows it\)$`, r.Stdout)
-		assert.Regexp(t, `(?m)^  Or +kardinal override `+pipelineName+` prod --gate uat-soak --reason <why>$`, r.Stdout)
+		assert.Regexp(t, `(?m)^  Next +wait: it opens by itself (in about \S+|at its next check) \(kardinal status `+pipelineName+` -n `+a.ns+` -w follows it\)$`, r.Stdout)
+		assert.Regexp(t, `(?m)^  Or +kardinal override `+pipelineName+` prod --gate uat-soak --reason <why> -n `+a.ns+`$`, r.Stdout)
 		assert.NotRegexp(t, `(?m)^  Next +kardinal override`, r.Stdout)
 	} else {
 		// The soak opened before why asked: it is never an override first.
