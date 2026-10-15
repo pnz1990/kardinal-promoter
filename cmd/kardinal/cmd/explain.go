@@ -216,6 +216,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		})
 	}
 
+	windows := changeWindows(ctx, c, gates.Items)
 	for _, g := range gates.Items {
 		env := g.Labels["kardinal.io/environment"]
 		if envFilter != "" && env != envFilter {
@@ -239,6 +240,9 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 			if opens != "" {
 				progress += ", opens " + opens
 			}
+		} else if at := windowOpens(&g, windows, explainNow()); at != "" && !g.Status.Ready {
+			// A ChangeWindow gate opens when its window does (#1940).
+			progress, opens = "ChangeWindow "+windowOfGate(&g)+" blocks, opens "+at, at
 		}
 		rows = append(rows, explainRow{
 			environment: env,
@@ -255,15 +259,15 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		// gate that opens by itself is waited for; its override comes as
 		// the alternative.
 		if !g.Status.Ready && g.Status.LastEvaluatedAt != nil {
-			override := fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", pipeline, env, gateDisplayName(g))
+			override := fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>%s", pipeline, env, gateDisplayName(g), nsArg(ns))
 			hints := []string{"Override: " + override}
 			switch {
 			case g.Spec.Approval != nil:
-				hints = []string{fmt.Sprintf("Approve: kardinal approve %s %s", pipeline, env)}
+				hints = []string{fmt.Sprintf("Approve: kardinal approve %s %s%s", pipeline, env, nsArg(ns))}
 			case opens != "":
-				hints = []string{fmt.Sprintf("Wait: %s opens by itself %s (kardinal status %s -w)", gateDisplayName(g), opens, pipeline), "Or: " + override}
+				hints = []string{fmt.Sprintf("Wait: %s opens by itself %s (kardinal status %s%s -w)", gateDisplayName(g), opens, pipeline, nsArg(ns)), "Or: " + override}
 			case rechecks(&g):
-				hints = []string{fmt.Sprintf("Wait: %s opens by itself when its expression passes (kardinal status %s -w)", gateDisplayName(g), pipeline), "Or: " + override}
+				hints = []string{fmt.Sprintf("Wait: %s opens by itself when its expression passes (kardinal status %s%s -w)", gateDisplayName(g), pipeline, nsArg(ns)), "Or: " + override}
 			}
 			for _, hint := range hints {
 				if !slices.Contains(unblock, hint) {
@@ -445,18 +449,18 @@ func writeExplainHolds(w io.Writer, p *v1alpha1.Pipeline, envFilter string, byNa
 			if st.BundleMissingSince != nil {
 				since = " since " + st.BundleMissingSince.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(&buf, "%s: held on %s by %s (%s), but that version does not exist%s. The hold stays in effect: no other version promotes here. Release with: kardinal unhold %s %s, then hold again if wanted\n",
-				h.Environment, h.Bundle, by, h.Reason, since, p.Name, h.Environment)
+			fmt.Fprintf(&buf, "%s: held on %s by %s (%s), but that version does not exist%s. The hold stays in effect: no other version promotes here. Release with: kardinal unhold %s %s%s, then hold again if wanted\n",
+				h.Environment, h.Bundle, by, h.Reason, since, p.Name, h.Environment, nsArg(p.Namespace))
 			continue
 		}
 		b := byName[h.Bundle]
 		if b != nil && isRollbackBundle(*b) {
-			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other versions do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal unhold %s %s\n",
-				h.Environment, versionLabel(versionOf(byName, h.Bundle), h.Bundle), by, h.Reason, p.Name, h.Environment)
+			fmt.Fprintf(&buf, "%s: held on rollback %s by %s (%s); other versions do not promote here, and its gates here pass as EXEMPT while the controller verifies it. Release with: kardinal unhold %s %s%s\n",
+				h.Environment, versionLabel(versionOf(byName, h.Bundle), h.Bundle), by, h.Reason, p.Name, h.Environment, nsArg(p.Namespace))
 			continue
 		}
-		fmt.Fprintf(&buf, "%s: held on %s by %s (%s); other versions do not promote here. Release with: kardinal unhold %s %s\n",
-			h.Environment, versionLabel(versionOf(byName, h.Bundle), h.Bundle), by, h.Reason, p.Name, h.Environment)
+		fmt.Fprintf(&buf, "%s: held on %s by %s (%s); other versions do not promote here. Release with: kardinal unhold %s %s%s\n",
+			h.Environment, versionLabel(versionOf(byName, h.Bundle), h.Bundle), by, h.Reason, p.Name, h.Environment, nsArg(p.Namespace))
 	}
 	if buf.Len() == 0 {
 		return nil

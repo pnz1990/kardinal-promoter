@@ -29,11 +29,15 @@ policy cannot be met. These come from the server's own tally of the gate's
 Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation
 (for a soak gate, how far the version soaked: "soak 0.4 of 3 min in uat"),
 Opens when it opens and how often it is rechecked ("by itself in about
-2m36s" for a soak gate); Next: kardinal approve; for a gate that opens by
+2m36s" for a soak gate; "by itself at Thursday 04:25 UTC, in about 18m" for
+a gate that only reads a ChangeWindow); Next: kardinal approve; for a gate that opens by
 itself, wait, with kardinal override only as Or; else kardinal override); its PR waits to be merged (PR and its URL); the version
 failed (Why the step's message; Next: kardinal logs, or roll back); it is
-promoting; it waits for an upstream environment; it has no version yet; or
-nothing is waiting ("prod runs 1.5.0 and nothing is waiting.").
+promoting; it waits for an upstream environment; it has no version yet; a
+newer version is on its way, still upstream ("prod runs 1.4.0; 1.5.0 is on
+its way (live in test)."); or nothing is waiting ("prod runs 1.5.0 and
+nothing is waiting."). Every command names -n <namespace> when the
+pipeline's namespace is not the kubeconfig context's.
 
 why shows the gates the version started with. A version gets its gates when
 it starts promoting, so a gate created or edited later applies to the

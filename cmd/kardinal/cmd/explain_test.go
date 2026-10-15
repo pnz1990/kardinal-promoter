@@ -687,3 +687,27 @@ func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
 		since.UTC().Format(time.RFC3339)+". The hold stays in effect")
 	assert.Contains(t, out, "Release with: kardinal unhold demo prod, then hold again if wanted")
 }
+
+// TestExplain_ChangeWindowGateOpens (#1940): explain says when a ChangeWindow
+// gate opens, to the minute, and its hint waits for it instead of overriding.
+func TestExplain_ChangeWindowGateOpens(t *testing.T) {
+	now := time.Date(2026, 10, 15, 4, 7, 0, 0, time.UTC)
+	prev := explainNow
+	explainNow = func() time.Time { return now }
+	t.Cleanup(func() { explainNow = prev })
+	p := policyPipeline("demo", "test", "prod")
+	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+		IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"prod-hours"}}}
+	b := explainBundle("demo-b", "Promoting", now.Add(-time.Hour))
+	g := explainGateInstance("demo", "demo-b", "prod", "prod-hours", `changewindow.isAllowed("prod-hours")`, false, true,
+		`changewindow.isAllowed("prod-hours") = false`)
+	cw := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "prod-hours"},
+		Spec: v1alpha1.ChangeWindowSpec{Type: "recurring", Schedule: &v1alpha1.ChangeWindowSchedule{AllowedHours: "04:25-24:00"}}}
+	var out, errb bytes.Buffer
+	prevErr := errOut
+	errOut = &errb
+	t.Cleanup(func() { errOut = prevErr })
+	require.NoError(t, explainHinted(&out, policyClient(t, p, b, g, cw), "default", "demo", "prod", false))
+	assert.Contains(t, out.String(), "ChangeWindow prod-hours blocks, opens at Thursday 04:25 UTC, in about 18m")
+	assert.Contains(t, errb.String(), "Wait: prod-hours opens by itself at Thursday 04:25 UTC, in about 18m")
+}

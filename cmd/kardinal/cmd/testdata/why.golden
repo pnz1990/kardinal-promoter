@@ -185,6 +185,19 @@ prod waits for uat to be live first.
 == nothing waits (kardinal why demo prod)
 prod runs 1.5.0 and nothing is waiting.
 
+== nothing waits here, a newer version is on its way (kardinal why demo prod)
+prod runs 1.4.0; 1.5.0 (demo-b) is on its way (live in test).
+  Follow  kardinal status demo -w
+
+== a ChangeWindow gate (kardinal why demo prod)
+prod is held by gate prod-hours.
+  Version  1.5.0 (demo-b)
+  Rule     changewindow.isAllowed("prod-hours")
+  Now      changewindow.isAllowed("prod-hours") = false
+  Opens    by itself at Sunday 09:30 UTC, in about 27m, when ChangeWindow prod-hours allows it; rechecked every 5m
+  Next     wait: it opens by itself at Sunday 09:30 UTC, in about 27m (kardinal status demo -w follows it)
+  Or       kardinal override demo prod --gate prod-hours --reason <why>
+
 == no version yet (kardinal why demo prod)
 prod has no version yet.
   Next  kardinal ship demo --image <ref>

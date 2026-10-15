@@ -54,7 +54,7 @@ Before it ships or promotes, an agent can ask whether the gates would let a vers
 ```
 
 The answer evaluates each gate of `prod` as the controller would, writes nothing, and for each
-blocking gate says what it waits for and the next hour it would pass with the same inputs:
+blocking gate says what it waits for and the next time it would pass with the same inputs (a whole hour, or the minute a ChangeWindow changes):
 
 ```json
 {"result": {"pipeline": "my-app", "environment": "prod", "bundle": "my-app-x7k2p",
