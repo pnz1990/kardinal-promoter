@@ -308,7 +308,7 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 	} else if r.Change.Commit != "" {
 		_, _ = fmt.Fprintf(w, "  change:      commit %s\n", r.Change.Commit)
 	}
-	var approvers []string
+	var approvers, verifiers []string
 	for _, g := range r.Gates {
 		line := fmt.Sprintf("  gate %s: %s", g.Name, g.Result)
 		if g.Reason != "" {
@@ -323,6 +323,11 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 				approvers = append(approvers, a.User)
 			}
 		}
+		for _, v := range g.Verdicts {
+			if v.Counted && v.Result == "pass" {
+				verifiers = append(verifiers, v.Verifier)
+			}
+		}
 	}
 	if r.OmittedGates > 0 {
 		_, _ = fmt.Fprintf(w, "  (%d more gates not in the receipt)\n", r.OmittedGates)
@@ -332,6 +337,9 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 	}
 	if len(approvers) > 0 {
 		_, _ = fmt.Fprintf(w, "  approved by: %s\n", strings.Join(approvers, ", "))
+	}
+	if len(verifiers) > 0 {
+		_, _ = fmt.Fprintf(w, "  verified by: %s\n", strings.Join(verifiers, ", "))
 	}
 	_, _ = fmt.Fprintf(w, "  levels:      %s\n", strings.Join(p.VerifiedLevels, ", "))
 	if d := p.Policy.Digest["sha256"]; d != "" {

@@ -1489,6 +1489,19 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].templateDigest` | string |  | TemplateDigest is sha256:&lt;hex&gt; of the template's canonical spec. |
 | `status.decision.gates[].templateGeneration` | integer (int64) |  | TemplateGeneration is the template's metadata.generation. |
 | `status.decision.gates[].templateUID` | string |  | TemplateUID is the template's UID. |
+| `status.decision.gates[].verdicts` | []object |  | Verdicts are the gate's status.verdicts. |
+| `status.decision.gates[].verdicts[].attempt` | integer |  |  |
+| `status.decision.gates[].verdicts[].counted` | boolean | yes | Counted reports whether the verdict is a vote. |
+| `status.decision.gates[].verdicts[].createdAt` | string (date-time) |  | CreatedAt is when the Verdict was created. |
+| `status.decision.gates[].verdicts[].evidenceURL` | string |  | EvidenceURL is the verifier's evidence link. |
+| `status.decision.gates[].verdicts[].findings` | integer |  | Findings is how many findings the Verdict lists. |
+| `status.decision.gates[].verdicts[].name` | string | yes | Name is the Verdict's name. |
+| `status.decision.gates[].verdicts[].reason` | string |  | Reason says why a verdict does not count, or what it waits for. |
+| `status.decision.gates[].verdicts[].result` | string | yes | Result is pass, fail or inconclusive. |
+| `status.decision.gates[].verdicts[].run` | integer |  | Run and Attempt are the AgentRun's run and attempt numbers. |
+| `status.decision.gates[].verdicts[].summary` | string |  | Summary is the verifier's summary. |
+| `status.decision.gates[].verdicts[].verifier` | string | yes | Verifier names the writer (an actor sentence). |
+| `status.decision.gates[].verifyRequired` | boolean |  | VerifyRequired is true for a verify gate (spec.verify). |
 | `status.decision.omittedGates` | integer |  | OmittedGates counts the gates past MaxDecisionGates. |
 | `status.decision.pipelineGeneration` | integer (int64) |  | PipelineGeneration is the Pipeline's metadata.generation. |
 | `status.decision.pipelineSpecHash` | string |  | PipelineSpecHash is the Bundle's status.pipelineSpecHash. |

@@ -267,6 +267,13 @@ type DecisionGate struct {
 	// +kubebuilder:validation:MaxItems=101
 	// +optional
 	Approvals []GateApprovalStatus `json:"approvals,omitempty"`
+	// VerifyRequired is true for a verify gate (spec.verify).
+	// +optional
+	VerifyRequired bool `json:"verifyRequired,omitempty"`
+	// Verdicts are the gate's status.verdicts.
+	// +kubebuilder:validation:MaxItems=101
+	// +optional
+	Verdicts []GateVerdictStatus `json:"verdicts,omitempty"`
 }
 
 // DecisionOverride is the override a gate passed by.

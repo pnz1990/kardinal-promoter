@@ -54,6 +54,8 @@ const (
 	LevelApproved    = "KARDINAL_APPROVED"
 	LevelHealthy     = "KARDINAL_HEALTHY"
 	LevelOverridden  = "KARDINAL_OVERRIDDEN"
+	// LevelVerifiedByAgent: a verify gate counted a passing Verdict.
+	LevelVerifiedByAgent = "KARDINAL_VERIFIED_BY_AGENT"
 )
 
 // Statement is an in-toto v1 statement with the VSA predicate.
@@ -144,6 +146,20 @@ type Gate struct {
 	ApprovalRequired   bool              `json:"approvalRequired"`
 	Approvals          []Approval        `json:"approvals"`
 	ApprovalsOmitted   int               `json:"approvalsOmitted,omitempty"`
+	VerifyRequired     bool              `json:"verifyRequired,omitempty"`
+	Verdicts           []Verdict         `json:"verdicts,omitempty"`
+	VerdictsOmitted    int               `json:"verdictsOmitted,omitempty"`
+}
+
+// Verdict is one Verdict a verify gate counted or refused.
+type Verdict struct {
+	Name        string `json:"name"`
+	Verifier    string `json:"verifier,omitempty"`
+	Result      string `json:"result"`
+	Counted     bool   `json:"counted"`
+	Reason      string `json:"reason,omitempty"`
+	EvidenceURL string `json:"evidenceURL,omitempty"`
+	Findings    int    `json:"findings,omitempty"`
 }
 
 // Override is the override a gate passed by.
@@ -435,6 +451,11 @@ func gate(g *v1alpha1.DecisionGate) Gate {
 	for _, a := range g.Approvals {
 		out.Approvals = append(out.Approvals, Approval{User: a.User, Actor: a.Actor, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason})
 	}
+	out.VerifyRequired = g.VerifyRequired
+	for _, v := range g.Verdicts {
+		out.Verdicts = append(out.Verdicts, Verdict{Name: v.Name, Verifier: v.Verifier, Result: v.Result, Counted: v.Counted,
+			Reason: v.Reason, EvidenceURL: v.EvidenceURL, Findings: v.Findings})
+	}
 	return out
 }
 
@@ -482,7 +503,7 @@ func checks(in Input) Checks {
 // record does not show.
 func levels(rec Record) []string {
 	out := []string{}
-	passed, approved, overridden := len(rec.Gates) > 0, false, false
+	passed, approved, overridden, verified := len(rec.Gates) > 0, false, false, false
 	for _, g := range rec.Gates {
 		if g.Result != "pass" {
 			passed = false
@@ -495,12 +516,20 @@ func levels(rec Record) []string {
 				approved = true
 			}
 		}
+		for _, v := range g.Verdicts {
+			if v.Counted && v.Result == "pass" {
+				verified = true
+			}
+		}
 	}
 	if passed {
 		out = append(out, LevelGatesPassed)
 	}
 	if approved {
 		out = append(out, LevelApproved)
+	}
+	if verified {
+		out = append(out, LevelVerifiedByAgent)
 	}
 	if rec.Checks.Health != nil && rec.Checks.Health.Result == "Healthy" {
 		out = append(out, LevelHealthy)
@@ -516,7 +545,7 @@ func levels(rec Record) []string {
 const maxCutField = 1024
 
 // fit marshals st, cutting it to MaxReceiptStatementBytes: first the
-// approvals that did not count, then long gate texts, then the gates past
+// approvals and Verdicts that did not count, then long gate texts, then the gates past
 // the first and the metrics; each cut is counted and sets truncated. The
 // verifiedLevels stay those of the full record.
 func fit(st *Statement) ([]byte, error) {
@@ -533,6 +562,15 @@ func fit(st *Statement) ([]byte, error) {
 					}
 				}
 				g.Approvals = kept
+				counted := g.Verdicts[:0]
+				for _, v := range g.Verdicts {
+					if v.Counted {
+						counted = append(counted, v)
+					} else {
+						g.VerdictsOmitted++
+					}
+				}
+				g.Verdicts = counted
 			}
 		},
 		func(r *Record) {

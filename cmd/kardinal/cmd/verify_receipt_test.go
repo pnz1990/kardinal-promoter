@@ -59,7 +59,8 @@ func signedReceipt(t *testing.T) (*v1alpha1.PromotionReceipt, *v1alpha1.Bundle, 
 			{Name: "health-check", State: v1alpha1.StepExecutionCompleted}}},
 	}
 	gates := []v1alpha1.DecisionGate{{Name: "approve", Ready: true, Reason: "1 of 1", ApprovalRequired: true,
-		Approvals: []v1alpha1.GateApprovalStatus{{User: "carol@example.com", Decision: "approve", Counted: true}}}}
+		Approvals:      []v1alpha1.GateApprovalStatus{{User: "carol@example.com", Decision: "approve", Counted: true}},
+		VerifyRequired: true, Verdicts: []v1alpha1.GateVerdictStatus{{Name: "v1", Verifier: "agent qa for alice", Result: "pass", Counted: true}}}}
 	stmt, digest, err := receipt.Build(receipt.Input{Name: "checkout-1-5-0-prod", ClusterID: "c1", Now: time.Now(),
 		Bundle: b, Step: ps, Snapshot: true, Decision: &v1alpha1.PromotionDecision{Gates: gates, PolicyDigest: receipt.PolicyDigest(1, "h", gates)},
 		PR: &receipt.PR{URL: "https://github.com/acme/deploy/pull/412", Number: 412}})
@@ -105,7 +106,8 @@ func TestVerifyReceipt_FromCluster(t *testing.T) {
 		"change:      https://github.com/acme/deploy/pull/412",
 		"gate approve: pass (1 of 1)",
 		"approved by: carol@example.com",
-		"levels:      KARDINAL_GATES_PASSED, KARDINAL_APPROVED, KARDINAL_HEALTHY",
+		"verified by: agent qa for alice",
+		"levels:      KARDINAL_GATES_PASSED, KARDINAL_APPROVED, KARDINAL_VERIFIED_BY_AGENT, KARDINAL_HEALTHY",
 		"policy:      sha256:",
 	} {
 		assert.Contains(t, out, want)
@@ -144,7 +146,7 @@ func TestVerifyReceipt_Tampered(t *testing.T) {
 		"not signed": {func(rc *v1alpha1.PromotionReceipt, _ *v1alpha1.Bundle) {
 			rc.Status.Bundle, rc.Status.Phase = "", v1alpha1.ReceiptPending
 		}, nil, "is not signed (phase Pending)"},
-		"level missing": {nil, []string{"--require", "VERIFIED_BY_AGENT"}, "KARDINAL_VERIFIED_BY_AGENT is required"},
+		"level missing": {nil, []string{"--require", "OVERRIDDEN"}, "KARDINAL_OVERRIDDEN is required"},
 		"no identity":   {nil, []string{"--key", ""}, "either a public key or a certificate identity"},
 	}
 	for name, tc := range cases {

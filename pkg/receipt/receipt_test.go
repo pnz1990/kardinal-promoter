@@ -185,8 +185,9 @@ func TestBuild_Record(t *testing.T) {
 
 // TestBuild_Levels: verifiedLevels claim only what the record shows: an
 // overridden gate adds OVERRIDDEN, a gate that did not pass removes
-// GATES_PASSED, approvals that did not count do not make APPROVED, and a
-// rollback names the Bundle it restores.
+// GATES_PASSED, approvals that did not count do not make APPROVED, a
+// counted passing Verdict makes VERIFIED_BY_AGENT and one that did not count
+// does not, and a rollback names the Bundle it restores.
 //
 // Covers RECEIPT-STATEMENT-02.
 func TestBuild_Levels(t *testing.T) {
@@ -205,6 +206,16 @@ func TestBuild_Levels(t *testing.T) {
 			in.Decision.Gates[0].Approvals = in.Decision.Gates[0].Approvals[1:]
 		}, []string{LevelGatesPassed, LevelHealthy}},
 		"no gates": {func(in *Input) { in.Decision = nil }, []string{LevelHealthy}},
+		"verified by an agent": {func(in *Input) {
+			in.Decision.Gates[0].VerifyRequired = true
+			in.Decision.Gates[0].Verdicts = []v1alpha1.GateVerdictStatus{
+				{Name: "v1", Verifier: "agent qa for alice", Result: "pass", Counted: true},
+				{Name: "v2", Verifier: "agent fixer for alice", Result: "pass", Counted: false, Reason: "the author's agent"},
+			}
+		}, []string{LevelGatesPassed, LevelApproved, LevelVerifiedByAgent, LevelHealthy}},
+		"a verdict that did not count": {func(in *Input) {
+			in.Decision.Gates[0].Verdicts = []v1alpha1.GateVerdictStatus{{Name: "v2", Result: "pass", Counted: false}}
+		}, []string{LevelGatesPassed, LevelApproved, LevelHealthy}},
 		"unhealthy": {func(in *Input) {
 			in.Step.Status.Steps[0].State = v1alpha1.StepExecutionFailed
 		}, []string{LevelGatesPassed, LevelApproved}},

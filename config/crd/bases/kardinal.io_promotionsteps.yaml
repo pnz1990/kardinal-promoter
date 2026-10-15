@@ -744,6 +744,61 @@ spec:
                         templateUID:
                           description: TemplateUID is the template's UID.
                           type: string
+                        verdicts:
+                          description: Verdicts are the gate's status.verdicts.
+                          items:
+                            description: GateVerdictStatus records how the gate counted
+                              one Verdict.
+                            properties:
+                              attempt:
+                                type: integer
+                              counted:
+                                description: Counted reports whether the verdict is
+                                  a vote.
+                                type: boolean
+                              createdAt:
+                                description: CreatedAt is when the Verdict was created.
+                                format: date-time
+                                type: string
+                              evidenceURL:
+                                description: EvidenceURL is the verifier's evidence
+                                  link.
+                                type: string
+                              findings:
+                                description: Findings is how many findings the Verdict
+                                  lists.
+                                type: integer
+                              name:
+                                description: Name is the Verdict's name.
+                                type: string
+                              reason:
+                                description: Reason says why a verdict does not count,
+                                  or what it waits for.
+                                type: string
+                              result:
+                                description: Result is pass, fail or inconclusive.
+                                type: string
+                              run:
+                                description: Run and Attempt are the AgentRun's run
+                                  and attempt numbers.
+                                type: integer
+                              summary:
+                                description: Summary is the verifier's summary.
+                                type: string
+                              verifier:
+                                description: Verifier names the writer (an actor sentence).
+                                type: string
+                            required:
+                            - counted
+                            - name
+                            - result
+                            - verifier
+                            type: object
+                          maxItems: 101
+                          type: array
+                        verifyRequired:
+                          description: VerifyRequired is true for a verify gate (spec.verify).
+                          type: boolean
                       required:
                       - name
                       - ready

@@ -45,10 +45,10 @@ the extension field `kardinalPromotion`, which those tools ignore.
 | `resourceUri` | `kardinal://<cluster>/namespaces/<ns>/pipelines/<pipeline>/environments/<env>`. The cluster is the `kube-system` Namespace UID (or `receipts.clusterID`), so two clusters' `prod` never match. |
 | `policy` | The Pipeline generation, and a digest of the policy set: the Pipeline's spec hash and each gate template's UID, generation and spec digest. A template's status writes do not change it. |
 | `verificationResult` | Always `PASSED`: a receipt exists only for a promotion that landed. |
-| `verifiedLevels` | What the record shows, and nothing more: `KARDINAL_GATES_PASSED` (every required gate passed), `KARDINAL_APPROVED` (at least one counted approval), `KARDINAL_HEALTHY` (the health check passed), `KARDINAL_OVERRIDDEN` (a gate passed by override). |
+| `verifiedLevels` | What the record shows, and nothing more: `KARDINAL_GATES_PASSED` (every required gate passed), `KARDINAL_APPROVED` (at least one counted approval), `KARDINAL_VERIFIED_BY_AGENT` (a verify gate counted a passing Verdict), `KARDINAL_HEALTHY` (the health check passed), `KARDINAL_OVERRIDDEN` (a gate passed by override). |
 | `kardinalPromotion.version` | The Bundle: name, UID, version, type, images, config commit, provenance. |
 | `kardinalPromotion.actor` | Who made the version and for whom ([the actor](actors.md#the-actor)); asserted fields stay under `asserted`. |
-| `kardinalPromotion.gates` | Each required gate **as it was when the step started**: expression, result, reason, when it was evaluated, the override in effect (with its actor and whether it was verified), and its approvals with whether each counted. |
+| `kardinalPromotion.gates` | Each required gate **as it was when the step started**: expression, result, reason, when it was evaluated, the override in effect (with its actor and whether it was verified), its approvals and, for a verify gate, its Verdicts, with whether each counted. |
 | `kardinalPromotion.checks` | The per-promotion MetricCheck results, the ImageVerification result per image, and the health check. |
 | `kardinalPromotion.change` | The environment and the PR (URL, number, merge commit), or the commit pushed for `approval: auto`. |
 | `kardinalPromotion.rollbackOf` | The version a rollback restores. |
@@ -66,8 +66,8 @@ read when the step was verified".
 
 ### Size
 
-A receipt is at most 256 KiB. Past that, the approvals that did not count are dropped first
-(counted in `approvalsOmitted`), then long gate texts are cut, then the gates after the first
+A receipt is at most 256 KiB. Past that, the approvals and Verdicts that did not count are dropped
+first (counted in `approvalsOmitted` and `verdictsOmitted`), then long gate texts are cut, then the gates after the first
 and the metrics. `truncated: true` says so. The levels are those of the full record.
 
 ## Turn receipts on

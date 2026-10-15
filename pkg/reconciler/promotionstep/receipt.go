@@ -86,6 +86,10 @@ func (r *Reconciler) decisionGate(ctx context.Context, ps *v1alpha1.PromotionSte
 	if len(out.Approvals) > 101 {
 		out.Approvals = out.Approvals[:101]
 	}
+	out.VerifyRequired, out.Verdicts = g.Spec.Verify != nil, g.Status.Verdicts
+	if len(out.Verdicts) > 101 {
+		out.Verdicts = out.Verdicts[:101]
+	}
 	if strings.HasPrefix(g.Status.Reason, gateOverridden) {
 		out.Override = activeOverride(g, ps.Spec.Environment)
 	}
