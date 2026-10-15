@@ -180,18 +180,6 @@ func pageBlocks(t *testing.T, page string) []pageBlock {
 	return blocks
 }
 
-// PageBashBlocks is every bash block of docs/<page>, in order, dedented.
-func PageBashBlocks(t *testing.T, page string) []string {
-	t.Helper()
-	var out []string
-	for _, b := range pageBlocks(t, page) {
-		if b.lang == "bash" {
-			out = append(out, b.body)
-		}
-	}
-	return out
-}
-
 // pageBlockIndex is the index of the n-th (from 0) bash block of page that
 // contains contains; with n < 0 the only one.
 func pageBlockIndex(t *testing.T, blocks []pageBlock, page, contains string, n int) int {
