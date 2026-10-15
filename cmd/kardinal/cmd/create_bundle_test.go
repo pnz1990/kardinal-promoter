@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -316,7 +317,7 @@ func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
 // TestCreateBundle_ConfigAndProvenanceFlagsRegistered pins the #1285 flags.
 func TestCreateBundle_ConfigAndProvenanceFlagsRegistered(t *testing.T) {
 	cmd := newCreateBundleCmd()
-	for _, name := range []string{"config-repo", "config-commit", "commit", "author", "ci-run-url"} {
+	for _, name := range []string{"config-repo", "config-commit", "commit", "author", "ci-run-url", "commit-time"} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "--%s", name)
 	}
 }
@@ -464,4 +465,20 @@ func TestCreateBundle_DryRun_CompactShape(t *testing.T) {
 			createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc1234"}, Type: "image", CompactAbove: tc.above}))
 		assert.Contains(t, buf.String(), tc.want)
 	}
+}
+
+// TestCreateBundle_CommitTime (#1942): --commit-time sets
+// spec.provenance.commitTime, where the lead time metrics start; a value that
+// is not RFC 3339 is refused before anything is created.
+func TestCreateBundle_CommitTime(t *testing.T) {
+	spec, err := createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image",
+		CommitTime: "2026-10-15T03:44:26+02:00"}.bundleSpec("app")
+	require.NoError(t, err)
+	require.NotNil(t, spec.Provenance)
+	require.NotNil(t, spec.Provenance.CommitTime)
+	assert.True(t, spec.Provenance.CommitTime.Equal(&metav1.Time{Time: time.Date(2026, 10, 15, 1, 44, 26, 0, time.UTC)}))
+
+	_, err = createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image", CommitTime: "yesterday"}.bundleSpec("app")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--commit-time")
 }

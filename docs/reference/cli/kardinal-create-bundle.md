@@ -6,7 +6,8 @@ Create a Bundle to trigger promotion through a Pipeline
 
 Create a Bundle: the version to promote through <pipeline>. An image Bundle
 needs --image; a config Bundle --config-commit; a mixed one both. --commit,
---author and --ci-run-url record its provenance for the PR body and the UI.
+--author and --ci-run-url record its provenance for the PR body and the UI;
+--commit-time, when the commit was made, starts the lead time metrics.
 --dry-run shows the promotion graph and creates nothing.
 
 The pipeline name is a required positional argument; the Pipeline must exist.
@@ -32,7 +33,8 @@ kardinal create bundle <pipeline> [flags]
 
 ```
   kardinal create bundle my-app --image ghcr.io/org/my-app:sha-abc1234 \
-    --commit abc1234 --author "$GITHUB_ACTOR" --ci-run-url "$RUN_URL"
+    --commit abc1234 --commit-time "$(git show -s --format=%cI)" \
+    --author "$GITHUB_ACTOR" --ci-run-url "$RUN_URL"
   kardinal create bundle my-app --type config --config-commit 9f8e7d6
 ```
 
@@ -42,6 +44,7 @@ kardinal create bundle <pipeline> [flags]
       --author string             Author or CI actor of the build (provenance)
       --ci-run-url string         Absolute http(s) URL of the CI run that built the Bundle (provenance)
       --commit string             Source commit SHA that produced the Bundle (provenance)
+      --commit-time string        When the source commit was made, RFC 3339 (provenance; lead time starts at it, e.g. "$(git show -s --format=%cI)")
       --config-commit string      Commit SHA of the config repository to promote; required for config and mixed Bundles
       --config-repo string        Git URL of the config repository (default: the Pipeline's git.url)
       --dry-run                   Preview the promotion graph without creating any cluster resources

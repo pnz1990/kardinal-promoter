@@ -219,8 +219,9 @@ Kargo Enterprise fan-out to fleets of targets with a concurrency limit. GitOps P
 `Bundle.status.metrics` records `commitToProductionMinutes`, `bakeResets` and `operatorInterventions`
 (the `kardinal override` entries on the Bundle's gates) for every promotion.
 `Pipeline.status.deploymentMetrics` adds rollouts in the last 30 days, p50 and p90 lead time,
-the auto-rollback and operator intervention rates, and the change failure rate and mean time to
-restore over the last 30 deployments to the last environment. Lead time starts when the Bundle is created.
+the automatic and overall rollback rates, the operator intervention rate, and the change failure
+rate and mean time to restore over the last 30 deployments to the last environment. Lead time
+starts at the commit when CI sets `provenance.commitTime`, else when the Bundle is created.
 The `kardinal metrics` CLI surfaces these per pipeline. Kargo v1.12 added operational Prometheus
 metrics, not DORA metrics; GitOps Promoter lists DORA metrics on its roadmap.
 

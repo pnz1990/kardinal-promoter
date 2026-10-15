@@ -157,7 +157,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	// Compute metrics.
 	var deployCount int
 	var totalLeadTime time.Duration
-	var leadTimeSamples int
+	var leadTimeSamples, leadFromCommit int
 	var failCount int
 	var rollbackCount int
 
@@ -179,10 +179,14 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	// Lead time and other bundle-level metrics.
 	for _, b := range pipelineBundles {
 		if vt, ok := verifiedAt[stepKey{b.Name, env}]; ok && !vt.IsZero() {
-			lead := vt.Sub(b.CreationTimestamp.UTC())
+			start, fromCommit := lifecycle.LeadTimeStart(&b)
+			lead := vt.Sub(start)
 			if lead > 0 {
 				totalLeadTime += lead
 				leadTimeSamples++
+				if fromCommit {
+					leadFromCommit++
+				}
 			}
 		}
 		if b.Status.Phase == "Failed" {
@@ -217,8 +221,8 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	_, _ = fmt.Fprintf(tw, "deployment_frequency\t%.2f/day\t(%d verified in target env)\n", deployFreq, deployCount)
 
 	if leadTimeSamples > 0 {
-		_, _ = fmt.Fprintf(tw, "lead_time_avg\t%s\t(creation to %s verified, %d samples)\n",
-			formatDuration(avgLead), env, leadTimeSamples)
+		_, _ = fmt.Fprintf(tw, "lead_time_avg\t%s\t(%s to %s verified, %d samples)\n",
+			formatDuration(avgLead), leadStartNote(leadFromCommit, leadTimeSamples), env, leadTimeSamples)
 	} else {
 		_, _ = fmt.Fprintf(tw, "lead_time_avg\t-\t(no completed promotions to %s in window)\n", env)
 	}
@@ -245,6 +249,20 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
+// leadStartNote says where n lead times start: from the commit
+// (spec.provenance.commitTime) for fromCommit of them, from the Bundle's
+// creation for the others.
+func leadStartNote(fromCommit, n int) string {
+	switch {
+	case fromCommit == 0:
+		return "from Bundle creation"
+	case fromCommit >= n:
+		return "from the commit"
+	default:
+		return fmt.Sprintf("from the commit for %d, Bundle creation for %d", fromCommit, n-fromCommit)
+	}
+}
+
 // renderFromCRD renders the pre-computed PipelineDeploymentMetrics from CRD status.
 // Used when Pipeline.status.deploymentMetrics is populated by the PipelineReconciler.
 func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env string,
@@ -256,14 +274,17 @@ func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env 
 	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
 	_, _ = fmt.Fprintf(tw, "rollouts_last_30d\t%d\t\n", dm.RolloutsLast30Days)
 	if dm.SampleSize > 0 {
-		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
-		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t\n", dm.P90CommitToProdMinutes)
+		from := "(" + leadStartNote(dm.LeadTimeFromCommit, dm.SampleSize) + ")"
+		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t%s\n", dm.P50CommitToProdMinutes, from)
+		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t%s\n", dm.P90CommitToProdMinutes, from)
 	} else {
 		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t-\t(nothing Verified yet)\n")
 		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t-\t(nothing Verified yet)\n")
 	}
-	_, _ = fmt.Fprintf(tw, "auto_rollback_rate\t%.1f%%\t(%d per thousand)\n",
+	_, _ = fmt.Fprintf(tw, "auto_rollback_rate\t%.1f%%\t(%d per thousand, started by the controller)\n",
 		float64(dm.AutoRollbackRateMillis)/10, dm.AutoRollbackRateMillis)
+	_, _ = fmt.Fprintf(tw, "rollback_rate\t%.1f%%\t(%d per thousand, automatic or by a person)\n",
+		float64(dm.RollbackRateMillis)/10, dm.RollbackRateMillis)
 	_, _ = fmt.Fprintf(tw, "operator_intervention_rate\t%.1f%%\t(%d per thousand)\n",
 		float64(dm.OperatorInterventionRateMillis)/10, dm.OperatorInterventionRateMillis)
 	if dm.SampleSize > 0 {
@@ -292,14 +313,16 @@ their PromotionSteps in the environment:
 
     bundles_total          Bundles created in the window
     deployment_frequency   steps Verified in the environment per day
-    lead_time_avg          mean time from Bundle creation to Verified
+    lead_time_avg          mean time from the commit (spec.provenance.commitTime,
+                           else the Bundle's creation) to Verified
     change_fail_rate       Failed Bundles / bundles_total
     rollback_count         rollback Bundles in the window
 
 When the environment is the pipeline's last one and --days is 30 (the
 defaults, whether the flags are given or not), the controller's metrics from
 Pipeline.status.deploymentMetrics are shown instead when present:
-rollouts_last_30d, p50/p90_commit_to_prod, auto_rollback_rate,
+rollouts_last_30d, p50/p90_commit_to_prod, auto_rollback_rate (rollbacks
+the controller started), rollback_rate (every rollback),
 operator_intervention_rate and stale_prod_days, over the last 30 Bundles
 Verified in the last environment, and change_failure_rate and time_to_restore
 (DORA stability) over the last 30 deployments to it.`

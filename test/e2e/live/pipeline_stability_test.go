@@ -14,7 +14,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -67,7 +69,8 @@ func assertStepTimings(t *testing.T, ps *v1alpha1.PromotionStep) {
 // one-environment Pipeline (prod) gets: V2 Verified; a Bundle of a missing
 // image whose health check times out (a failed deployment); V3 Verified,
 // which restores it; then `kardinal rollback`, which rolls back from V3 (a
-// second failure) and restores it when the rollback is Verified. The rate,
+// second failure) and restores it when the rollback is Verified. Once the
+// Graphs of the finished Bundles are retired, the numbers stay the same. The rate,
 // and the mean time from each failed change reaching prod to the next
 // Verified deployment, are what the step timestamps give.
 // A Verified step records every step's timing in status.steps.
@@ -164,4 +167,37 @@ func TestPipeline_StabilityMetrics(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the UI API lists %s/%s", a.ns, pipelineName)
+
+	// Retire the Graphs of every finished Bundle but the newest: their steps
+	// live on only in status.retiredSteps. The metrics must not change
+	// (#1944: a retired Bundle stopped counting as a deployment).
+	e.Kubectl(t, a.ns, "", "annotate", "pipeline", pipelineName, "kardinal.io/graph-retire-after=5s")
+	for _, b := range []string{b1, broken, b3} {
+		waitGraphRetired(t, e, a.ns, b)
+	}
+	m = metricsWith(3, 2)
+	assert.Equal(t, 666, m.ChangeFailureRateMillis, "after the retirement")
+	assert.Equal(t, 2, m.RestoredFailures, "after the retirement")
+	assert.Equal(t, int64(mean.Minutes()), m.MeanTimeToRestoreMinutes, "after the retirement")
+}
+
+// waitGraphRetired waits for bundle's Graph to be retired: GraphRetired is
+// True with reason Retired and the Graph is gone.
+func waitGraphRetired(t *testing.T, e *framework.Env, ns, bundle string) {
+	t.Helper()
+	framework.Eventually(t, 3*time.Minute, bundle+" retired", func(ctx context.Context) (bool, string) {
+		var b v1alpha1.Bundle
+		if err := e.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: bundle}, &b); err != nil {
+			return false, err.Error()
+		}
+		c := meta.FindStatusCondition(b.Status.Conditions, "GraphRetired")
+		if c == nil || c.Reason != "Retired" {
+			return false, fmt.Sprintf("GraphRetired %+v", c)
+		}
+		gl := graphList()
+		if err := e.Client.List(ctx, gl, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}); err != nil {
+			return false, err.Error()
+		}
+		return len(gl.Items) == 0, fmt.Sprintf("%d Graph(s) left", len(gl.Items))
+	})
 }

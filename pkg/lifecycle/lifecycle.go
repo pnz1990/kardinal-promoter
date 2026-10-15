@@ -33,8 +33,12 @@ const (
 	LabelEnvironment = "kardinal.io/environment"
 	LabelRollback    = "kardinal.io/rollback"
 	LabelReason      = "kardinal.io/reason"
-	LabelScope       = "kardinal.io/scope"
-	LabelFreeze      = "kardinal.io/freeze"
+	// ReasonAutoRollback is the LabelReason of a rollback Bundle the
+	// controller started on its own (onHealthFailure: rollback, a
+	// RollbackPolicy).
+	ReasonAutoRollback = "AutoRollback"
+	LabelScope         = "kardinal.io/scope"
+	LabelFreeze        = "kardinal.io/freeze"
 
 	// AnnotationCreatedAt is the RFC 3339 creation time, with nanoseconds,
 	// stamped by the component that creates a Bundle. The API server's

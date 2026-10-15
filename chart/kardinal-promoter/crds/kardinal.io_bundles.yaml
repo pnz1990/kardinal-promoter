@@ -269,6 +269,15 @@ spec:
                       pattern still accepts so they stay valid.
                     pattern: ^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$
                     type: string
+                  commitTime:
+                    description: |-
+                      CommitTime is when the source commit (CommitSHA) was made, for CI to
+                      set (`kardinal create bundle --commit-time`). The lead time metrics
+                      (status.metrics.commitToProductionMinutes, the Pipeline's
+                      deploymentMetrics) start at it; without it they start at the Bundle's
+                      creation, which leaves out the build.
+                    format: date-time
+                    type: string
                   rollbackOf:
                     description: RollbackOf is the name of the Bundle this Bundle
                       rolls back (if any).
@@ -552,8 +561,9 @@ spec:
                     type: integer
                   commitToProductionMinutes:
                     description: |-
-                      CommitToProductionMinutes is the time from Bundle creation to the last
-                      environment reaching Verified. Indicates total promotion pipeline latency.
+                      CommitToProductionMinutes is the time from the commit
+                      (spec.provenance.commitTime, else the Bundle's creation) to the last
+                      environment's health check passing.
                     format: int64
                     type: integer
                   operatorInterventions:
@@ -918,6 +928,13 @@ spec:
                       description: CreatedAt is the PromotionStep's creationTimestamp.
                       format: date-time
                       type: string
+                    deployedAt:
+                      description: |-
+                        DeployedAt is when the step's change reached its environment: the
+                        start of its health-check step. The deployment metrics count a retired
+                        Bundle from it. Records written before this field have none.
+                      format: date-time
+                      type: string
                     environment:
                       description: Environment is the PromotionStep's spec.environment.
                       type: string
@@ -943,6 +960,11 @@ spec:
                     name:
                       description: Name is the PromotionStep's name.
                       type: string
+                    noChanges:
+                      description: |-
+                        NoChanges is the step's status.outputs.noChanges: the environment
+                        already had the change, so the step deployed nothing.
+                      type: boolean
                     prURL:
                       description: PRURL is the PromotionStep's status.prURL.
                       maxLength: 2048

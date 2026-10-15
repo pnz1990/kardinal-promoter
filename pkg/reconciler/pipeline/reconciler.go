@@ -890,6 +890,8 @@ func deploymentMetricsEqual(a, b *kardinalv1alpha1.PipelineDeploymentMetrics) bo
 		a.P50CommitToProdMinutes == b.P50CommitToProdMinutes &&
 		a.P90CommitToProdMinutes == b.P90CommitToProdMinutes &&
 		a.AutoRollbackRateMillis == b.AutoRollbackRateMillis &&
+		a.RollbackRateMillis == b.RollbackRateMillis &&
+		a.LeadTimeFromCommit == b.LeadTimeFromCommit &&
 		a.OperatorInterventionRateMillis == b.OperatorInterventionRateMillis &&
 		a.StaleProdDays == b.StaleProdDays &&
 		a.SampleSize == b.SampleSize &&

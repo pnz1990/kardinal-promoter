@@ -1358,23 +1358,40 @@ type PipelineDeploymentMetrics struct {
 	// +optional
 	RolloutsLast30Days int `json:"rolloutsLast30Days,omitempty"`
 
-	// P50CommitToProdMinutes is the median time (minutes) from Bundle creation
-	// to the final environment reaching Verified, over the sample window.
+	// P50CommitToProdMinutes is the median time (minutes) from the commit to
+	// the final environment reaching Verified, over the sample window. A
+	// Bundle's commit time is spec.provenance.commitTime when CI set it;
+	// otherwise the Bundle's creation, which leaves out the build
+	// (LeadTimeFromCommit counts the Bundles measured from the commit).
 	// +optional
 	P50CommitToProdMinutes int64 `json:"p50CommitToProdMinutes,omitempty"`
 
-	// P90CommitToProdMinutes is the 90th-percentile time (minutes) from Bundle
-	// creation to the final environment reaching Verified, over the sample window.
+	// P90CommitToProdMinutes is the 90th-percentile time (minutes) from the
+	// commit (as for P50CommitToProdMinutes) to the final environment
+	// reaching Verified, over the sample window.
 	// +optional
 	P90CommitToProdMinutes int64 `json:"p90CommitToProdMinutes,omitempty"`
 
+	// LeadTimeFromCommit is how many of the sampled Bundles' lead times
+	// start at spec.provenance.commitTime; the others start at the Bundle's
+	// creation. Rollback Bundles always start at their creation.
+	// +optional
+	LeadTimeFromCommit int `json:"leadTimeFromCommit,omitempty"`
+
 	// AutoRollbackRateMillis is the fraction of sampled Bundles that are
-	// rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal
-	// rollback`, the UI) or automatic, expressed as integer thousandths
-	// (e.g. 83 = 8.3%).
+	// rollbacks the controller started on its own (onHealthFailure: rollback,
+	// a RollbackPolicy: label kardinal.io/reason=AutoRollback), expressed as
+	// integer thousandths (e.g. 83 = 8.3%). Rollbacks a person started
+	// (`kardinal rollback`, the UI) count in RollbackRateMillis only.
 	// Stored as integer to avoid floating-point in CRD YAML.
 	// +optional
 	AutoRollbackRateMillis int `json:"autoRollbackRateMillis,omitempty"`
+
+	// RollbackRateMillis is the fraction of sampled Bundles that are
+	// rollbacks of any kind (spec.provenance.rollbackOf is set): automatic
+	// or started by a person, in integer thousandths.
+	// +optional
+	RollbackRateMillis int `json:"rollbackRateMillis,omitempty"`
 
 	// OperatorInterventionRateMillis is the fraction of sampled Bundles that had
 	// at least one PolicyGate override applied, expressed as integer thousandths.

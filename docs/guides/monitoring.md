@@ -164,7 +164,10 @@ versions by default (`spec.historyLimit`), so busy Pipelines show a short window
 When `--env` is the Pipeline's last environment and `--days` is 30 (the defaults, whether
 the flags are given or not), the command prints the controller's own figures from
 `Pipeline.status.deploymentMetrics` instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
-`p90_commit_to_prod`, `auto_rollback_rate`, `operator_intervention_rate` and
+`p90_commit_to_prod` (from the commit when the version's `provenance.commitTime` is set, else from
+its creation; the row says which), `auto_rollback_rate` (rollbacks the controller started:
+`onHealthFailure: rollback` or a RollbackPolicy), `rollback_rate` (every rollback, also
+`kardinal rollback`), `operator_intervention_rate` and
 `stale_prod_days`, over the last 30 versions Verified in the last environment, and
 `change_failure_rate` and `time_to_restore` over the last 30 deployments to it (see
 [Change failure rate and time to restore](#change-failure-rate-and-time-to-restore)).
@@ -183,6 +186,11 @@ environment nothing depends on (one for a chain, several for a fan-out such as `
 | `changeFailureRateMillis` | `failedDeployments / deployments` in thousandths (`250` = 25%) |
 | `meanTimeToRestoreMinutes` | Mean whole minutes from each failed deployment reaching a final environment (its health check started: when users got the change) to the first later version Verified in every final environment it targets: all of them, or, for a rollback of one environment, that one. Every one of its steps there (all regions) must be Verified; the last gives the time. A region of the failed version itself, or an older version, never restores it |
 | `restoredFailures` | Failures counted in `meanTimeToRestoreMinutes`; one not restored yet is left out |
+
+A version whose Graph was retired counts as well: its record in `status.retiredSteps` keeps
+when its change reached the environment (`deployedAt`) and `noChanges`. A record written by an
+earlier release has neither; it counts as deployed at its step's creation when its health
+check had started (`healthCheckExpiry`), and not at all otherwise.
 
 `deploymentMetrics` is set once a version has been Verified in the last environment, or a
 deployment there has failed. While every deployment has failed, it holds only the stability

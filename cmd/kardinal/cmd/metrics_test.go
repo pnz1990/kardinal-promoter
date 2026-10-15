@@ -133,3 +133,27 @@ func TestRenderFromCRD_NothingVerified(t *testing.T) {
 	}
 	assert.Equal(t, "100.0%", metricValue(out, "change_failure_rate"))
 }
+
+// TestRenderFromCRD_LeadTimeAndRollbacks (#1942): the lead time rows say
+// where they start, and the automatic and overall rollback rates are two
+// rows.
+func TestRenderFromCRD_LeadTimeAndRollbacks(t *testing.T) {
+	tests := []struct {
+		fromCommit int
+		note       string
+	}{
+		{0, "(from Bundle creation)"},
+		{4, "(from the commit)"},
+		{1, "(from the commit for 1, Bundle creation for 3)"},
+	}
+	for _, tc := range tests {
+		var buf bytes.Buffer
+		dm := v1alpha1.PipelineDeploymentMetrics{SampleSize: 4, P50CommitToProdMinutes: 7, LeadTimeFromCommit: tc.fromCommit,
+			AutoRollbackRateMillis: 0, RollbackRateMillis: 250}
+		require.NoError(t, renderFromCRD(&buf, "demo", "prod", &dm, time.Now()))
+		out := buf.String()
+		assert.Contains(t, out, tc.note)
+		assert.Equal(t, "0.0%", metricValue(out, "auto_rollback_rate"))
+		assert.Equal(t, "25.0%", metricValue(out, "rollback_rate"))
+	}
+}

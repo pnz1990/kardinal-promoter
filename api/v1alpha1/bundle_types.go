@@ -213,6 +213,14 @@ type BundleProvenance struct {
 	// +optional
 	Timestamp metav1.Time `json:"timestamp,omitempty"`
 
+	// CommitTime is when the source commit (CommitSHA) was made, for CI to
+	// set (`kardinal create bundle --commit-time`). The lead time metrics
+	// (status.metrics.commitToProductionMinutes, the Pipeline's
+	// deploymentMetrics) start at it; without it they start at the Bundle's
+	// creation, which leaves out the build.
+	// +optional
+	CommitTime *metav1.Time `json:"commitTime,omitempty"`
+
 	// RollbackOf is the name of the Bundle this Bundle rolls back (if any).
 	// +optional
 	RollbackOf string `json:"rollbackOf,omitempty"`
@@ -366,6 +374,17 @@ type RetiredStep struct {
 	// +optional
 	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
 
+	// DeployedAt is when the step's change reached its environment: the
+	// start of its health-check step. The deployment metrics count a retired
+	// Bundle from it. Records written before this field have none.
+	// +optional
+	DeployedAt *metav1.Time `json:"deployedAt,omitempty"`
+
+	// NoChanges is the step's status.outputs.noChanges: the environment
+	// already had the change, so the step deployed nothing.
+	// +optional
+	NoChanges bool `json:"noChanges,omitempty"`
+
 	// MarkerDigest is the marker digest of the step's render (layout:
 	// branch): status.outputs.markerDigest. Later renders of the
 	// environment accept it as kardinal's after the RenderRun that wrote it
@@ -382,8 +401,9 @@ type RetiredStep struct {
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle.
 type BundleMetrics struct {
-	// CommitToProductionMinutes is the time from Bundle creation to the last
-	// environment reaching Verified. Indicates total promotion pipeline latency.
+	// CommitToProductionMinutes is the time from the commit
+	// (spec.provenance.commitTime, else the Bundle's creation) to the last
+	// environment's health check passing.
 	// +optional
 	CommitToProductionMinutes int64 `json:"commitToProductionMinutes,omitempty"`
 

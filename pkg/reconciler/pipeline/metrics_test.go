@@ -169,32 +169,47 @@ func TestComputeDeploymentMetrics_StaleProdDays(t *testing.T) {
 	assert.Equal(t, 5, result.StaleProdDays, "stale prod = 5 days")
 }
 
+// TestComputeDeploymentMetrics_RollbackRateMillis (#1942): of 4 sampled
+// Bundles one is a rollback. RollbackRateMillis counts it either way;
+// AutoRollbackRateMillis only when the controller started it (labels
+// kardinal.io/rollback=true, kardinal.io/reason=AutoRollback), not a
+// `kardinal rollback` (live: a manual prod rollback reported 20%).
 func TestComputeDeploymentMetrics_RollbackRateMillis(t *testing.T) {
 	now := time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC)
 	p := makePipelineWithEnvs("app", "default", "prod")
-
-	// 4 bundles: 1 is a rollback (25% → 250 millis)
-	rollbackBundle := makeVerifiedBundle("app-v2", "default", "app", now.Add(-1*time.Hour))
-	rollbackBundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{RollbackOf: "app-v1"}
-
-	bundles := []kardinalv1alpha1.Bundle{
-		*makeVerifiedBundle("app-v1", "default", "app", now.Add(-4*time.Hour)),
-		*rollbackBundle,
-		*makeVerifiedBundle("app-v3", "default", "app", now.Add(-2*time.Hour)),
-		*makeVerifiedBundle("app-v4", "default", "app", now.Add(-3*time.Hour)),
+	tests := []struct {
+		name      string
+		labels    map[string]string
+		auto, all int
+	}{
+		{"kardinal rollback", map[string]string{"kardinal.io/rollback": "true"}, 0, 250},
+		{"onHealthFailure or RollbackPolicy", map[string]string{"kardinal.io/rollback": "true", "kardinal.io/reason": "AutoRollback"}, 250, 250},
+		{"a reason without the rollback label", map[string]string{"kardinal.io/reason": "AutoRollback"}, 0, 250},
 	}
-	steps := []kardinalv1alpha1.PromotionStep{
-		*makeVerifiedStep("app-v1", "app", "prod", "default", now.Add(-3*time.Hour+30*time.Minute)),
-		*makeVerifiedStep("app-v2", "app", "prod", "default", now.Add(-30*time.Minute)),
-		*makeVerifiedStep("app-v3", "app", "prod", "default", now.Add(-90*time.Minute)),
-		*makeVerifiedStep("app-v4", "app", "prod", "default", now.Add(-2*time.Hour+30*time.Minute)),
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rollbackBundle := makeVerifiedBundle("app-v2", "default", "app", now.Add(-1*time.Hour))
+			rollbackBundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{RollbackOf: "app-v1"}
+			rollbackBundle.Labels = tc.labels
+			bundles := []kardinalv1alpha1.Bundle{
+				*makeVerifiedBundle("app-v1", "default", "app", now.Add(-4*time.Hour)),
+				*rollbackBundle,
+				*makeVerifiedBundle("app-v3", "default", "app", now.Add(-2*time.Hour)),
+				*makeVerifiedBundle("app-v4", "default", "app", now.Add(-3*time.Hour)),
+			}
+			steps := []kardinalv1alpha1.PromotionStep{
+				*makeVerifiedStep("app-v1", "app", "prod", "default", now.Add(-3*time.Hour+30*time.Minute)),
+				*makeVerifiedStep("app-v2", "app", "prod", "default", now.Add(-30*time.Minute)),
+				*makeVerifiedStep("app-v3", "app", "prod", "default", now.Add(-90*time.Minute)),
+				*makeVerifiedStep("app-v4", "app", "prod", "default", now.Add(-2*time.Hour+30*time.Minute)),
+			}
+			result := pipeline.ComputeDeploymentMetrics(p, bundles, steps, now)
+			require.NotNil(t, result)
+			assert.Equal(t, 4, result.SampleSize)
+			assert.Equal(t, tc.auto, result.AutoRollbackRateMillis, "automatic rollbacks")
+			assert.Equal(t, tc.all, result.RollbackRateMillis, "every rollback")
+		})
 	}
-
-	result := pipeline.ComputeDeploymentMetrics(p, bundles, steps, now)
-	require.NotNil(t, result)
-	assert.Equal(t, 4, result.SampleSize)
-	// 1/4 = 250 millis
-	assert.Equal(t, 250, result.AutoRollbackRateMillis, "1/4 bundles are rollbacks = 250 millis")
 }
 
 func TestComputeDeploymentMetrics_BundlesForOtherPipelineExcluded(t *testing.T) {

@@ -191,7 +191,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		FromBundle:  ps.Spec.BundleName,
 		Actor:       autoRollbackActor,
 		Name:        name,
-		Reason:      "AutoRollback",
+		Reason:      lifecycle.ReasonAutoRollback,
 		Automatic:   true,
 		// time.Now() here stamps the created-at annotation of the Bundle this
 		// reconciler creates: a CRD write, like the other Bundle creators.
