@@ -82,6 +82,15 @@ func wantCreatedBy(a string) string {
 	panic("no line for " + a)
 }
 
+// qaIdentity is QAAgent, the verify gates' agent, sponsored by QASponsor.
+// Its runs vote as their own ServiceAccounts; its subject is the
+// ServiceAccount it verifies with from outside the cluster.
+func qaIdentity(ns string) *v1alpha1.AgentIdentity {
+	a := AgentIdentityOf(QAAgent, []v1alpha1.AgentSubject{saSubject(QAAgent)}, []string{ns}, false)
+	a.Spec.Sponsor.User = QASponsor
+	return a
+}
+
 // AgentIdentityOf is a registered agent.
 func AgentIdentityOf(name string, subjects []v1alpha1.AgentSubject, namespaces []string, suspended bool) *v1alpha1.AgentIdentity {
 	return &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -109,6 +118,7 @@ func agentFixture(ns string) []client.Object {
 		AgentIdentityOf("second", []v1alpha1.AgentSubject{saSubject("shared"), saSubject("second")}, []string{ns}, false),
 		AgentIdentityOf("nowhere", []v1alpha1.AgentSubject{saSubject("nowhere")}, nil, false),
 		AgentIdentityOf("dual", []v1alpha1.AgentSubject{{Kind: "User", Name: dualUser}}, []string{ns}, false),
+		qaIdentity(ns),
 	}
 }
 

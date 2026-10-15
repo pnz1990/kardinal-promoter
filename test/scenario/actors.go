@@ -211,11 +211,13 @@ func (w *World) admitPatched(ctx context.Context, c client.WithWatch, sub string
 		return nil
 	}
 	old.SetResourceVersion(o.GetResourceVersion())
-	restore := c.Update(ctx, old)
+	var rerr error
 	if sub != "" {
-		restore = c.SubResource(sub).Update(ctx, old)
+		rerr = c.SubResource(sub).Update(ctx, old)
+	} else {
+		rerr = c.Update(ctx, old)
 	}
-	if rerr := restore; rerr != nil {
+	if rerr != nil {
 		return fmt.Errorf("restore %s %s after a refused patch: %w", objKind(o), o.GetName(), rerr)
 	}
 	return err

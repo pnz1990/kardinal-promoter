@@ -23,6 +23,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -45,6 +47,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	airec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
+	arrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 	bundlerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	cwrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	mcrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
@@ -54,6 +57,7 @@ import (
 	prsrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	rrrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/renderrun"
 	rbprec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
+	strec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/steptemplate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
@@ -89,6 +93,7 @@ func Scheme() (*k8sruntime.Scheme, error) {
 	s := k8sruntime.NewScheme()
 	for _, add := range []func(*k8sruntime.Scheme) error{
 		corev1.AddToScheme, appsv1.AddToScheme, batchv1.AddToScheme, rbacv1.AddToScheme, v1alpha1.AddToScheme,
+		networkingv1.AddToScheme, discoveryv1.AddToScheme,
 	} {
 		if err := add(s); err != nil {
 			return nil, fmt.Errorf("scheme: %w", err)
@@ -189,11 +194,19 @@ type World struct {
 	index       *airec.IndexReconciler
 	indexDirty  atomic.Bool
 	indexPaused atomic.Bool
-	store       client.WithWatch
-	mapper      apimeta.RESTMapper
+	agentRuns   *arrec.Reconciler
+	templates   *strec.Reconciler
+	// agentRefusals are agents' Verdicts admission refused.
+	agentRefusals []AgentVerdictRefusal
+	store         client.WithWatch
+	mapper        apimeta.RESTMapper
 
 	// Metrics are the fake metric backend's values by query.
 	Metrics *FakeMetrics
+
+	// Agents are the in-cluster verifiers by StepTemplate: what each attempt
+	// of an AgentRun does (default: write a pass).
+	Agents map[string]Agent
 
 	// Actors run at the start of every round: the people and systems
 	// around kardinal (reviewers, approvers, CI).
@@ -259,6 +272,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		&v1alpha1.PRStatus{}, &v1alpha1.ChangeWindow{}, &v1alpha1.MetricCheck{}, &v1alpha1.RollbackPolicy{},
 		&v1alpha1.RenderRun{}, &v1alpha1.HookRun{}, &v1alpha1.ScheduleClock{}, &appsv1.Deployment{}, &batchv1.Job{},
 		&corev1.Pod{}, &v1alpha1.AuditEvent{}, &v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{},
+		&v1alpha1.AgentRun{}, &v1alpha1.StepTemplate{}, &v1alpha1.Verdict{},
 	}
 	for _, gvk := range []schema.GroupVersionKind{GraphGVK, ApplicationGVK, RolloutGVK, KustomizationGVK, GitRepositoryGVK, CanaryGVK} {
 		u := &unstructured.Unstructured{}
@@ -281,9 +295,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			return nil
 		}).
 		WithInterceptorFuncs(interceptor.Funcs{
-			// The API server sets a UID and generation 1 on create and
-			// moves the generation when the spec changes; the fake client
-			// does neither.
+			// The API server sets a UID, the creation time and generation
+			// 1 on create and moves the generation when the spec changes;
+			// the fake client does none of it.
 			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) (err error) {
 				defer func() {
 					if err == nil {
@@ -295,6 +309,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				if o.GetGeneration() == 0 {
 					o.SetGeneration(1)
+				}
+				if ts := o.GetCreationTimestamp(); ts.IsZero() {
+					o.SetCreationTimestamp(metav1.NewTime(w.Now()))
 				}
 				if err := w.admitWrite(ctx, c, admission.Create, o, nil); err != nil {
 					return err
@@ -465,6 +482,15 @@ func NewWorld(t testing.TB, opts Options) *World {
 		AuthorName: "kardinal-promoter", AuthorEmail: "kardinal@kardinal.io", NowFn: now, Timeout: time.Hour}
 	if opts.Actors {
 		w.startActors(opts.MaxIndexBytes)
+		w.agentRuns = &arrec.Reconciler{Client: rc, APIReader: c, WriterClusterRole: Release + "-agentrun-writer",
+			ReaderClusterRole: Release + "-agentrun-reader", ControllerNamespace: ReleaseNamespace, NowFn: now}
+		w.templates = &strec.Reconciler{Client: rc}
+		// The API server's own EndpointSlice: an AgentRun's NetworkPolicy
+		// allows egress to it.
+		if err := c.Create(w.Ctx, &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
+			AddressType: discoveryv1.AddressTypeIPv4, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.96.0.1"}}}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return w
 }
@@ -545,6 +571,8 @@ func (w *World) kinds() []reconcileKind {
 		registry = []reconcileKind{
 			{"AgentIdentity", &v1alpha1.AgentIdentityList{}, w.identities.Reconcile},
 			{"AgentIndex", nil, w.index.Reconcile},
+			{"StepTemplate", &v1alpha1.StepTemplateList{}, w.templates.Reconcile},
+			{"AgentRun", &v1alpha1.AgentRunList{}, w.agentRuns.Reconcile},
 		}
 	}
 	return append(registry, []reconcileKind{

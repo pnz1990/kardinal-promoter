@@ -171,6 +171,20 @@ func (w *World) Describe(ns string) string {
 		}
 		fmt.Fprintf(&b, "gate %s ready=%v reason=%q\n", g.Name, g.Status.Ready, g.Status.Reason)
 	}
+	var runs v1alpha1.AgentRunList
+	_ = w.Client.List(w.Ctx, &runs, client.InNamespace(ns))
+	for _, r := range runs.Items {
+		fmt.Fprintf(&b, "agentrun %s template=%s run=%d attempt=%d phase=%s msg=%q\n", r.Name, r.Spec.Template, r.Spec.Run,
+			r.Spec.Attempt, r.Status.Phase, r.Status.Message)
+	}
+	var verdicts v1alpha1.VerdictList
+	_ = w.Client.List(w.Ctx, &verdicts, client.InNamespace(ns))
+	for _, v := range verdicts.Items {
+		fmt.Fprintf(&b, "verdict %s by=%s result=%s env=%s check=%s\n", v.Name, v.Spec.By, v.Spec.Result, v.Spec.Environment, v.Spec.Check)
+	}
+	for _, r := range w.AgentVerdictRefusals() {
+		fmt.Fprintf(&b, "agent verdict refused %s: %v\n", r.Run, r.Reasons)
+	}
 	graphs := &unstructured.UnstructuredList{}
 	graphs.SetGroupVersionKind(GraphGVK.GroupVersion().WithKind("GraphList"))
 	_ = w.Client.List(w.Ctx, graphs, client.InNamespace(ns))

@@ -476,7 +476,9 @@ func unitSteps(r *Repo, o Options) []Step {
 	steps = append(steps, Step{
 		ID: "scenario-matrix", Area: areaUnit, Title: "scenario matrix (test/scenario)", Tests: "tests.json",
 		MinTests: 40, // 48 pairwise combinations
-		Script:   `go test -race -count=1 -timeout 30m -json -run '^TestScenarioMatrix$' ./test/scenario/ > "$STEP_DIR/tests.json"`,
+		// The matrix runs in three packages since #1960; before, in test/scenario.
+		Script: `pkgs=./test/scenario/; if [ -d test/scenario/matrix ]; then pkgs=./test/scenario/matrix/...; fi; ` +
+			`go test -race -count=1 -timeout 30m -json -run '^TestScenarioMatrix$' $pkgs > "$STEP_DIR/tests.json"`,
 	})
 	ent := Step{ID: "scenario-enterprise", Area: areaUnit, Title: "enterprise scenario at full size", Heavy: true, Tests: "tests.json",
 		MinTests: 2,

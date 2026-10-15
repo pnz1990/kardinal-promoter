@@ -71,6 +71,9 @@ github.com/kardinal-promoter/kardinal-promoter/test/examples 2.7
 github.com/kardinal-promoter/kardinal-promoter/test/hack 13.6
 github.com/kardinal-promoter/kardinal-promoter/test/helm 22.5
 github.com/kardinal-promoter/kardinal-promoter/test/kindcontext 1.0
-github.com/kardinal-promoter/kardinal-promoter/test/scenario 45.0
+github.com/kardinal-promoter/kardinal-promoter/test/scenario 30.0
+github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part1 40.0
+github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part2 40.0
+github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part3 40.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise 90.0
 github.com/kardinal-promoter/kardinal-promoter/web/tokens 1.0

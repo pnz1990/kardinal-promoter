@@ -54,6 +54,17 @@ func RunCombo(t *testing.T, c Combo) {
 	if c.Delivery == "pr-review" {
 		w.Actors = append(w.Actors, Reviewer)
 	}
+	if c.Gate == "verify" {
+		// The agent passes, but while the gate is closed it finds nothing
+		// either way.
+		result := v1alpha1.VerdictPass
+		if block {
+			result = v1alpha1.VerdictInconclusive
+		}
+		w.Agents = map[string]Agent{QAAgent: func(v1alpha1.AgentRun) AgentResult {
+			return AgentResult{Result: result, Summary: "explored the checkout"}
+		}}
+	}
 	if c.Gate == "approval" && !block {
 		w.Actors = append(w.Actors, func(w *World) error { return w.ApproveAll() })
 	}
@@ -179,6 +190,9 @@ func RunCombo(t *testing.T, c Combo) {
 	}
 	CheckInvariants(t, w, p)
 	p.checkActors(t, w)
+	if c.Gate == "verify" && c.Outcome == "success" {
+		p.checkVerified(t, w, v1.Name)
+	}
 	t.Logf("%d rounds, reconciles %v", w.Rounds(), w.Reconciles())
 }
 

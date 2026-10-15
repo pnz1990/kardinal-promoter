@@ -36,7 +36,7 @@ const (
 var Dimensions = []Dimension{
 	DimUpdate:   {Name: "update", Values: []string{"kustomize", "helm", "yaml", "argocd", "rendered"}},
 	DimHealth:   {Name: "health", Values: []string{"deployment", "resource", "argocd", "flux", "argoRollouts", "flagger"}},
-	DimGate:     {Name: "gate", Values: []string{"cel", "approval", "metric", "changewindow", "soak", "upstream"}},
+	DimGate:     {Name: "gate", Values: []string{"cel", "approval", "metric", "changewindow", "soak", "upstream", "verify"}},
 	DimTopology: {Name: "topology", Values: []string{"linear", "fanout", "fanin", "waves", "fleet"}},
 	DimDelivery: {Name: "delivery", Values: []string{"pr-review", "direct"}},
 	DimSCM:      {Name: "scm", Values: []string{SCMGitHub, SCMGitLab, SCMForgejo}},
@@ -296,6 +296,15 @@ func gateObjects(c Combo, p *Plan, now time.Time, block bool) (*v1alpha1.PolicyG
 		gate.Spec.Expression = fmt.Sprintf("upstream[%q].soakMinutes >= %d", p.Upstream, soak)
 	case "upstream":
 		gate.Spec.Expression = fmt.Sprintf("bundle.upstreamSoakMinutes >= %d", soak)
+	case "verify":
+		// An in-cluster agent verifies the version upstream; while the
+		// gate is closed its run is inconclusive (held), and a QA lead's
+		// pass opens it.
+		gate.Spec.Expression = "true"
+		gate.Spec.Verify = &v1alpha1.GateVerifyPolicy{Check: VerifyCheck, Environment: p.Upstream,
+			AllowedAgents: []string{QAAgent}, AllowedUsers: []string{QALead}, OnInconclusive: "hold",
+			Run: &v1alpha1.GateVerifyRun{Template: QAAgent, Count: 1}}
+		extra = append(extra, QATemplate())
 	}
 	return gate, extra
 }
@@ -325,6 +334,8 @@ func (p *Plan) Open(w *World, bundles ...string) error {
 		}
 	case "soak", "upstream":
 		w.Advance(time.Duration(blockingSoak+1) * time.Minute)
+	case "verify":
+		return w.VerifyAll(QALead, v1alpha1.VerdictPass, bundles...)
 	}
 	return nil
 }

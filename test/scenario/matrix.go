@@ -4,9 +4,12 @@
 package scenario
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
 // MatrixRows returns the scenario matrix: the pairwise rows of Dimensions
@@ -33,17 +36,39 @@ func MatrixRows(t *testing.T) [][]string {
 	return rows
 }
 
-// TestScenarioMatrix runs the scenario matrix (MatrixRows), each row in a
-// World of its own and in parallel (RunCombo). Covers SCEN-MATRIX-01,
-// SCEN-REJECT-01, SCEN-ACTOR-01.
-func TestScenarioMatrix(t *testing.T) {
+// MatrixParts is how many packages the matrix runs in
+// (test/scenario/matrix/part1..3): each is a go test process of its own, so
+// CI's shards spread the matrix and each part stays within a shard's
+// two-minute budget under -race.
+const MatrixParts = 3
+
+// RunMatrix runs part (1-based) of MatrixRows: every MatrixParts-th row,
+// each in a World of its own and in parallel (RunCombo).
+func RunMatrix(t *testing.T, part int) {
 	rows := MatrixRows(t)
+	n := 0
 	for i, row := range rows {
+		if i%MatrixParts != part-1 {
+			continue
+		}
+		n++
 		c := ComboOf(row, i%2 == 1)
 		t.Run(c.Name(), func(t *testing.T) {
 			t.Parallel()
 			RunCombo(t, c)
 		})
 	}
-	t.Logf("%d combinations", len(rows))
+	t.Logf("%d of %d combinations", n, len(rows))
+}
+
+// MainWithRenderJobs is a scenario package's TestMain: it marks the process
+// as a render Job (steps.RenderJobEnv), as the kardinal-render image does,
+// since the World's kubelet runs render Jobs in this process
+// (World.runJobs). The controller's own step sequences never contain
+// render-manifests, so the mark changes nothing for them.
+func MainWithRenderJobs(m *testing.M) {
+	if err := os.Setenv(steps.RenderJobEnv, "1"); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
 }
