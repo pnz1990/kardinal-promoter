@@ -406,3 +406,74 @@ func TestWhy_HintsNameTheNamespace(t *testing.T) {
 		}
 	}
 }
+
+// TestWhy_StatusLagsTheSteps (#2022): the controller writes a step's move
+// between running states into status.environments up to 2 seconds late
+// (#1719). why answers from the steps it reads, so in that window it never
+// says an environment that is promoting has no version, or runs an older
+// one with nothing waiting. An environment without a step keeps its status
+// entry (a fleet's targets are the controller's).
+func TestWhy_StatusLagsTheSteps(t *testing.T) {
+	stubIdentity(t, Identity{Username: "kubernetes-admin"})
+	prev := contextNamespace
+	contextNamespace = func() string { return "default" }
+	t.Cleanup(func() { contextNamespace = prev })
+	at := time.Now().Add(-time.Hour)
+	agentBundle := func() *v1alpha1.Bundle {
+		b := whyBundle("demo-b", "1.5.0")
+		b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: "system:serviceaccount:ci:fixer",
+			Agent: "fixer", Sponsor: "alice"}
+		return b
+	}
+	cases := []struct {
+		name   string
+		status []v1alpha1.PipelineEnvironmentStatus
+		objs   func() []sigs_client.Object
+		want   []string
+		reject string
+	}{
+		{name: "the PR opened, status not written yet",
+			status: []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-b", Version: "1.5.0", State: "Verified"}, {Name: "prod"}},
+			objs: func() []sigs_client.Object {
+				pr := explainStep("demo", "demo-b", "prod", "WaitingForMerge", "", at)
+				pr.Status.PRURL = "https://github.com/acme/gitops/pull/1"
+				return []sigs_client.Object{agentBundle(), explainStep("demo", "demo-b", "test", "Verified", "", at), pr}
+			},
+			want:   []string{"prod waits for PR #1 to merge.", "1.5.0 (demo-b), by agent fixer for alice"},
+			reject: "has no version yet"},
+		{name: "promoting over an older version, status says it runs it",
+			status: []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}, {Name: "prod"}},
+			objs: func() []sigs_client.Object {
+				old := whyBundle("demo-a", "1.4.0")
+				old.CreationTimestamp = metav1.NewTime(at.Add(-time.Hour))
+				old.Status.Phase = "Verified"
+				return []sigs_client.Object{old, agentBundle(),
+					explainStep("demo", "demo-a", "test", "Verified", "", at.Add(-time.Hour)),
+					explainStep("demo", "demo-b", "test", "HealthChecking", "", at)}
+			},
+			want:   []string{"test is promoting 1.5.0 (demo-b): checking health."},
+			reject: "nothing is waiting"},
+		{name: "an environment without a step keeps its status entry",
+			status: []v1alpha1.PipelineEnvironmentStatus{{Name: "test", Bundle: "demo-b", Version: "1.5.0", State: "Verified"},
+				{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}},
+			objs: func() []sigs_client.Object {
+				return []sigs_client.Object{agentBundle(), explainStep("demo", "demo-b", "test", "Verified", "", at)}
+			},
+			want: []string{"prod runs 1.4.0"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := policyPipeline("demo", "test", "prod")
+			p.Status.Environments = tc.status
+			c := policyClient(t, append([]sigs_client.Object{p}, tc.objs()...)...)
+			var out bytes.Buffer
+			require.NoError(t, whyFn(context.Background(), &out, c, "default", "demo", ""))
+			for _, w := range tc.want {
+				assert.Contains(t, out.String(), w)
+			}
+			if tc.reject != "" {
+				assert.NotContains(t, out.String(), tc.reject)
+			}
+		})
+	}
+}
