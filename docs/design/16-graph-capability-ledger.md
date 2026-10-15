@@ -70,6 +70,7 @@ Rules:
 | [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
 | [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | No ref: the PolicyGate reconciler reads AgentIdentities (actor policy, #1843) | None filed |
 | [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | Not needed while AgentIdentities are read by the PolicyGate reconciler (G18) | None filed; related to G5 |
+| [G26](#g26-a-missing-key-in-an-untyped-field-reads-as-data-pending) | A missing key in an untyped (`x-kubernetes-preserve-unknown-fields`) field reads as data pending, so a bad output reference waits forever without an error | Medium | Planned in the StepTemplate spec (`docs/design/27-step-templates.md` §8.3, not on main): the translator checks every output reference against the template's schema; generated expressions copy whole `outputs` objects | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -1024,6 +1025,43 @@ parent informer already does.
 
 ---
 
+## G26: A missing key in an untyped field reads as data pending
+
+**Need.** A custom step (`docs/design/27-step-templates.md`, v0.14) reports outputs whose shape
+is given by its StepTemplate's schema, which differs per template. The run object's
+`status.outputs` is therefore an `x-kubernetes-preserve-unknown-fields` object. Later nodes read
+fields of it (`${r.status.outputs.p99Ms}`). A reference to an output the template does not have,
+or to an optional output the step did not report, should be an error the Graph shows.
+
+**kro today.** kro types an unknown field of a preserve-unknown object as `dyn`
+(`pkg/cel/types.go:228-238`), so the reference compiles whatever the schema. At run time a
+missing map key fails with "no such key", which kro classifies as data not yet available
+(`pkg/graphengine/runtime/errors.go:37-49`, `celDataPendingPatterns`), and a node whose
+expression is data pending stays Unresolved and is retried, with no error condition
+(`pkg/graphengine/runtime/node.go:360-368`). kro cannot tell "the controller has not written
+it yet" from "it will never be written": the run is terminal and its outputs are final, but the
+dependent waits forever.
+
+**Minimal Graph that shows it.** A `ref` node on a custom resource whose status is a
+preserve-unknown object `{"outputs": {"a": 1}}`, and a `def` node with
+`${run.status.outputs.b}`: the Graph never reports an error for the def, it stays Unresolved.
+
+**kardinal workaround.** Planned in the StepTemplate spec (§8.3, not on main): the translator
+resolves every output reference against the source template's `outputs` schema before it
+builds the Graph and refuses an unknown one; the expressions it generates copy the whole
+`outputs` object as a value (never a field path), so no generated expression is data pending on
+an output key; the consumer reconciler (StepRun inputs, PolicyGate `steps.*`) reports a missing
+optional output by name.
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** Either (a) let a Graph give a node's preserve-unknown
+field a schema (`schemaHints` on the node, used by the type checker so a bad path fails at
+compile), or (b) treat "no such key" on an object whose node is ready (its `readyWhen` true) as a
+hard error with a condition naming the path, instead of data pending.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -1181,6 +1219,7 @@ blocks above.
 | G18 ref watch check | Put the ref's name in the watch access review | Yes, small fix |
 | G19 cluster-scoped refs | A read identity for `ref` targets, or kinds kro reads as itself | Yes, with G5 |
 | G20 ref wakes on every write | Opt-in generation-only wake for a scalar `ref` | Yes: the pause would read the Pipeline instead of rebuilding the Graph |
+| G26 missing key in an untyped field | Schema hints for preserve-unknown fields, or "no such key" on a ready node as a hard error | Yes, once custom steps ship: it turns a silent wait into an error |
 
 ### Hazards found
 
