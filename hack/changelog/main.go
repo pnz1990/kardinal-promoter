@@ -104,7 +104,7 @@ func run(root string, args []string, stdout io.Writer) error {
 		if len(args) < 2 || len(args) > 3 {
 			return errors.New(usage)
 		}
-		cmd := exec.Command("git", "diff", "--name-only", args[1]+"...HEAD")
+		cmd := exec.Command("git", "diff", "--no-renames", "--name-only", args[1]+"...HEAD")
 		cmd.Dir = root
 		out, err := cmd.Output()
 		if err != nil {
@@ -117,7 +117,11 @@ func run(root string, args []string, stdout io.Writer) error {
 		if _, err := fragments.Read(root); err != nil {
 			return err
 		}
-		if why := fragments.Check(strings.Fields(string(out)), labels); why != "" {
+		exists := func(f string) bool {
+			_, err := os.Stat(filepath.Join(root, f))
+			return err == nil
+		}
+		if why := fragments.Check(strings.Fields(string(out)), labels, exists); why != "" {
 			return errors.New(why)
 		}
 		_, err = fmt.Fprintln(stdout, "changelog: ok")

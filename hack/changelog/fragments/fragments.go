@@ -217,8 +217,9 @@ func UserFacing(f string) bool {
 }
 
 // Check returns "" when the changed files need no fragment or add one, else
-// why the change needs one.
-func Check(changed []string, labels []string) string {
+// why the change needs one. exists says whether a changed file is still
+// there: a deleted fragment adds nothing.
+func Check(changed []string, labels []string, exists func(string) bool) string {
 	for _, l := range labels {
 		if l == SkipLabel {
 			return ""
@@ -226,7 +227,7 @@ func Check(changed []string, labels []string) string {
 	}
 	var facing []string
 	for _, f := range changed {
-		if path.Dir(f) == Dir && strings.HasSuffix(f, ".md") && path.Base(f) != "README.md" {
+		if path.Dir(f) == Dir && strings.HasSuffix(f, ".md") && path.Base(f) != "README.md" && exists(f) {
 			return ""
 		}
 		if UserFacing(f) {

@@ -186,10 +186,12 @@ func TestCheck(t *testing.T) {
 		{"the UI", []string{"web/src/App.tsx"}, nil, "web/src/App.tsx"},
 		{"a README in changelog.d is not a fragment", []string{"api/v1alpha1/x.go", "docs/changelog.d/README.md"}, nil, "api/v1alpha1/x.go"},
 		{"many files", []string{"pkg/1.go", "pkg/2.go", "pkg/3.go", "pkg/4.go", "pkg/5.go", "pkg/6.go"}, nil, "pkg/5.go, ..."},
+		// git rm of another change's fragment is not this change's entry.
+		{"a deleted fragment", []string{"pkg/a.go", "docs/changelog.d/1850-gone.md"}, nil, "touches what users see (pkg/a.go)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Check(tt.changed, tt.labels)
+			got := Check(tt.changed, tt.labels, func(f string) bool { return !strings.HasSuffix(f, "-gone.md") })
 			if tt.wantMsg == "" {
 				assert.Empty(t, got)
 				return

@@ -368,6 +368,26 @@ const rc1UpgradeNotes = "### Upgrade\n\n" +
 	"~~~\n## [v0.7.9] — not a heading\n---\n~~~\n\n" +
 	"- after the code blocks"
 
+// TestReleaseRefusesUnreleasedFragments (#1894): a tag whose
+// docs/changelog.d still has entries fails before its notes are read; the
+// README there, or no directory, passes.
+func TestReleaseRefusesUnreleasedFragments(t *testing.T) {
+	script := preflightScript(t, "No unreleased changelog fragments")
+	dir := t.TempDir()
+	out, _, err := runReleaseStep(t, dir, script)
+	require.NoError(t, err, "no docs/changelog.d: %s", out)
+	frag := filepath.Join(dir, "docs", "changelog.d")
+	require.NoError(t, os.MkdirAll(frag, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(frag, "README.md"), []byte("how to\n"), 0o600))
+	out, _, err = runReleaseStep(t, dir, script)
+	require.NoError(t, err, "only the README: %s", out)
+	require.NoError(t, os.WriteFile(filepath.Join(frag, "12-x.md"), []byte("---\nsection: Added\n---\n- **X** — x\n"), 0o600))
+	out, _, err = runReleaseStep(t, dir, script)
+	require.Error(t, err)
+	assert.Contains(t, out, "docs/changelog.d still has entries; run make changelog-release")
+	assert.Contains(t, out, "12-x.md")
+}
+
 func TestReleaseNotesFromChangelog(t *testing.T) {
 	script := preflightScript(t, "Release notes from docs/changelog.md")
 	dir := t.TempDir()
@@ -513,7 +533,7 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 		for _, s := range preflight.Steps {
 			names = append(names, s.Name)
 		}
-		require.Len(t, names, 6)
+		require.Len(t, names, 7)
 		assert.True(t, strings.HasPrefix(preflight.Steps[0].Uses, "actions/checkout@"))
 		assert.Equal(t, "Check that the tagged commit is on main", names[1])
 		for name, job := range jobs {

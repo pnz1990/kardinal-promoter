@@ -100,6 +100,20 @@ jobs:
       # They go to the release job as a file (the release-notes artifact),
       # not as a job output: v0.10.0's notes, about 99 KB, did not arrive
       # through the output, and the release was created without them.
+      # A tag whose docs/changelog.d still holds entries was not prepared
+      # with make changelog-release: its notes would leave them out, and the
+      # site would keep listing them under [Unreleased].
+      - name: No unreleased changelog fragments
+        run: |
+          left=
+          if [ -d docs/changelog.d ]; then
+            left=$(find docs/changelog.d -maxdepth 1 -name '*.md' ! -name README.md | sort)
+          fi
+          if [ -n "$left" ]; then
+            echo "::error::docs/changelog.d still has entries; run make changelog-release VERSION=<version> before tagging:"
+            echo "$left"
+            exit 1
+          fi
       - name: Release notes from docs/changelog.md
         id: notes
         env:
