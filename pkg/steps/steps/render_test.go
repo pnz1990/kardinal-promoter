@@ -78,8 +78,15 @@ func seedRemote(t *testing.T, files map[string]string) (string, string) {
 	writeFiles(t, seed, files)
 	require.NoError(t, c.CommitAll(ctx, seed, "seed", "t", "t@example.com"))
 	remote := t.TempDir()
-	_, err = gogit.PlainClone(remote, true, &gogit.CloneOptions{URL: seed})
+	bare, err := gogit.PlainClone(remote, true, &gogit.CloneOptions{URL: seed})
 	require.NoError(t, err)
+	// git-receive-pack would start a detached `git maintenance run --auto`
+	// after each push, which can still hold objects/maintenance.lock when
+	// t.TempDir removes the remote (#2004).
+	cfg, err := bare.Config()
+	require.NoError(t, err)
+	cfg.Raw.Section("receive").SetOption("autogc", "false")
+	require.NoError(t, bare.SetConfig(cfg))
 	repo, err := gogit.PlainOpen(seed)
 	require.NoError(t, err)
 	_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{"file://" + remote}})
@@ -732,4 +739,26 @@ func TestRenderBranch_RetriedJobAdoptsItsOwnPush(t *testing.T) {
 	_, res, err := attempt()
 	require.Error(t, err, "its marker is for another DRY commit")
 	assert.Contains(t, res.Message, "is not one kardinal wrote")
+}
+
+// TestSeedRemote_NoBackgroundMaintenance (#2004): a push to seedRemote's
+// remote starts no detached git maintenance. git-receive-pack (which go-git
+// runs for file:// remotes) otherwise starts `git maintenance run --auto
+// --detach`, which takes objects/maintenance.lock in the remote while
+// t.TempDir removes it: "unlinkat .../objects: directory not empty".
+func TestSeedRemote_NoBackgroundMaintenance(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace) // git writes its trace to an absolute path
+	url, _ := seedRemote(t, map[string]string{"a.txt": "a\n"})
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, c.Clone(ctx, url, "main", work, scm.GitAuth{}))
+	writeFiles(t, work, map[string]string{"b.txt": "b\n"})
+	require.NoError(t, c.CommitAll(ctx, work, "b", "t", "t@example.com"))
+	require.NoError(t, c.Push(ctx, work, "origin", "main", scm.GitAuth{}, false))
+	got, err := os.ReadFile(trace)
+	require.NoError(t, err, "git-receive-pack ran and traced")
+	require.Contains(t, string(got), "receive-pack", "the push went through git-receive-pack")
+	assert.False(t, strings.Contains(string(got), "maintenance run"), "no background maintenance in the remote")
 }
