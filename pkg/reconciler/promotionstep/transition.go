@@ -191,6 +191,16 @@ func (r *Reconciler) auditEntries(ctx context.Context, ps *v1alpha1.PromotionSte
 		add(action, AuditOutcomeFailure, message)
 	case StateRollingBack:
 		add(AuditActionRollbackStarted, AuditOutcomePending, message)
+	case StateHealthChecking:
+		if auditAction == AuditActionPRMerged {
+			// The merge of a pr-review PR is that environment's approval: the
+			// record names who merged it, when, how kardinal learned of it,
+			// and the merge commit (#1939). It belongs to the merger, an SCM
+			// user, not to the version's author: no actor stamp.
+			if e, ok := auditEntry(ps, AuditActionPRMerged, AuditOutcomeSuccess, prMergedMessage(ps, message), at, nil); ok {
+				out = append(out, e)
+			}
+		}
 	}
 	return out, nil
 }
@@ -329,4 +339,37 @@ func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) stepObservation
 		}
 	}
 	return closed
+}
+
+// AuditActionPRMerged is written once when a step's pull request is merged
+// (#1939).
+const AuditActionPRMerged = "PRMerged"
+
+// OutputPRMergedBy is the status.outputs key of the SCM user who merged the
+// step's PR.
+const OutputPRMergedBy = "prMergedBy"
+
+// outputPRMergedVia is how kardinal learned of the merge: webhook or poll.
+const outputPRMergedVia = "prMergedVia"
+
+// prMergedMessage is the PRMerged record's message: the transition message
+// (PR #n merged) with who merged it, how kardinal learned of it and the
+// merge commit, from the step's outputs and its PRStatus.
+func prMergedMessage(ps *v1alpha1.PromotionStep, message string) string {
+	o := ps.Status.Outputs
+	by := o[OutputPRMergedBy]
+	if by == "" {
+		by = "(the SCM did not say who)"
+	}
+	msg := message + " by " + by
+	if via := o[outputPRMergedVia]; via != "" {
+		msg += " (seen by " + via + ")"
+	}
+	if sha := o["mergeCommitSHA"]; sha != "" {
+		msg += " as " + sha
+	}
+	if url := ps.Status.PRURL; url != "" {
+		msg += ": " + url
+	}
+	return msg
 }

@@ -565,6 +565,7 @@ and turn it on after the export.
 | `FreezeStarted` / `FreezeLifted` | A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
 | `FreezeExempted` | A step went on through a freeze under an exemption (`kardinal override --freeze`), once per freeze, naming who made it |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
+| `PRMerged` | A promotion step's pull request (a `pr-review` environment's) was merged: who merged it as the SCM reports it (the webhook's payload, or the SCM API when polling found the merge), whether the webhook or polling saw it, and the merge commit; the step's `status.outputs.prMergedBy` names the merger too |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 | `APIWrite` | A write through the UI API or the Bundle API (promote, roll back, create a version, approve, override, pause, resume, reject, release a hold), refused ones included (outcome `Failure`), naming the caller and the route ([API writes](#api-writes)) |

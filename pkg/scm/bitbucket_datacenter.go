@@ -331,6 +331,33 @@ func (b *BitbucketDCProvider) GetPRMergeCommit(ctx context.Context, repo string,
 	return pr.Properties.MergeCommit.ID, nil
 }
 
+// GetPRMerger implements PRMergerGetter: the user of the pull request's
+// MERGED activity (the newest activities come first; the merge is among the
+// last few once a PR is merged).
+func (b *BitbucketDCProvider) GetPRMerger(ctx context.Context, repo string, prNumber int) (string, error) {
+	path, err := b.prPath(repo)
+	if err != nil {
+		return "", err
+	}
+	var page struct {
+		Values []struct {
+			Action string `json:"action"`
+			User   struct {
+				Name string `json:"name"`
+			} `json:"user"`
+		} `json:"values"`
+	}
+	if err := b.do(ctx, http.MethodGet, fmt.Sprintf("%s/%d/activities?limit=25", path, prNumber), nil, &page); err != nil {
+		return "", fmt.Errorf("get Bitbucket Data Center PR merger %s#%d: %w", repo, prNumber, err)
+	}
+	for _, a := range page.Values {
+		if a.Action == "MERGED" {
+			return a.User.Name, nil
+		}
+	}
+	return "", nil
+}
+
 // AddLabelsToPR is a no-op: Bitbucket Data Center pull requests have no
 // labels, so kardinal's PRs there get none (find rollbacks by their
 // "[kardinal] Rollback" title).
@@ -388,6 +415,10 @@ func (b *BitbucketDCProvider) parseWebhookEvent(payload []byte, signature, event
 				} `json:"mergeCommit"`
 			} `json:"properties"`
 		} `json:"pullRequest"`
+		// Actor is who triggered the event: for pr:merged, the merger.
+		Actor struct {
+			Name string `json:"name"`
+		} `json:"actor"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return WebhookEvent{}, fmt.Errorf("parse Bitbucket Data Center webhook payload: %w", err)
@@ -406,6 +437,7 @@ func (b *BitbucketDCProvider) parseWebhookEvent(payload []byte, signature, event
 		if mc := pr.Properties.MergeCommit; mc != nil {
 			ev.MergeCommitSHA = mc.ID
 		}
+		ev.MergedBy = raw.Actor.Name
 		return ev, nil
 	}
 	return WebhookEvent{EventType: raw.EventKey, PRNumber: pr.ID, RepoFullName: repo, Action: strings.ToLower(pr.State)}, nil
@@ -473,6 +505,7 @@ var (
 	_ SCMProvider       = (*BitbucketDCProvider)(nil)
 	_ BranchDeleter     = (*BitbucketDCProvider)(nil)
 	_ MergeCommitGetter = (*BitbucketDCProvider)(nil)
+	_ PRMergerGetter    = (*BitbucketDCProvider)(nil)
 	_ eventTypeParser   = (*BitbucketDCProvider)(nil)
 )
 

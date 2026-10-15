@@ -116,7 +116,7 @@ func TestReconciler_BitbucketCloudPolling(t *testing.T) {
 		wantMerged, wantOpen bool
 		wantGets             int
 	}{
-		{state: "MERGED", mergeCommit: "9f8e7d6c5b4a", wantMerged: true, wantGets: 3},
+		{state: "MERGED", mergeCommit: "9f8e7d6c5b4a", wantMerged: true, wantGets: 4}, // + who merged it (#1939)
 		{state: "OPEN", wantOpen: true, wantGets: 2},
 		{state: "DECLINED", wantGets: 2},
 	}
@@ -134,7 +134,7 @@ func TestReconciler_BitbucketCloudPolling(t *testing.T) {
 					assert.Equal(t, !tt.wantMerged && !tt.wantOpen, got.Status.ClosedAt != nil, "closed")
 					assert.True(t, got.Status.Approved)
 					assert.Equal(t, 1, got.Status.ApprovalCount)
-					assert.Equal(t, tt.wantGets, calls()["GET "+path]-before, "status, reviews and, once merged, the merge commit")
+					assert.Equal(t, tt.wantGets, calls()["GET "+path]-before, "status, reviews and, once merged, the merge commit and the merger")
 				})
 			}
 		})
@@ -163,7 +163,7 @@ func TestReconciler_AzureDevOpsPolling(t *testing.T) {
 		wantSHA              string
 		wantPRGets           int
 	}{
-		{status: "completed", wantMerged: true, wantSHA: sha, wantPRGets: 2},
+		{status: "completed", wantMerged: true, wantSHA: sha, wantPRGets: 3}, // + who merged it (#1939)
 		{status: "active", wantOpen: true, wantPRGets: 1},
 		{status: "abandoned", wantPRGets: 1},
 	}
@@ -185,7 +185,7 @@ func TestReconciler_AzureDevOpsPolling(t *testing.T) {
 					assert.True(t, got.Status.Approved)
 					assert.Equal(t, 1, got.Status.ApprovalCount)
 					after := calls()
-					assert.Equal(t, tt.wantPRGets, after["GET "+path]-before["GET "+path], "status and, once merged, the merge commit")
+					assert.Equal(t, tt.wantPRGets, after["GET "+path]-before["GET "+path], "status and, once merged, the merge commit and the merger")
 					assert.Equal(t, 1, after["GET "+reviewers]-before["GET "+reviewers])
 				})
 			}

@@ -358,7 +358,8 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 			continue
 		}
 		if prstatus.DescribesSpec(prs) && prs.Status.Merged &&
-			(prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
+			(prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") &&
+			(prs.Status.MergedBy != "" || event.MergedBy == "") {
 			// Already marked merged, and nothing to add — idempotent skip.
 			continue
 		}
@@ -383,6 +384,12 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 			prs.Status.Merged = true
 			prs.Status.Open = false
 			prs.Status.LastCheckedAt = &now
+			prs.Status.MergedVia = v1alpha1.PRMergedViaWebhook
+		}
+		if prs.Status.MergedBy == "" && event.MergedBy != "" {
+			// Who merged it, for the PRMerged AuditEvent (#1939).
+			prs.Status.MergedBy = event.MergedBy
+			prs.Status.MergedByUnavailable = false
 		}
 		if prs.Status.MergeCommitSHA == "" && event.MergeCommitSHA != "" {
 			// Written with merged, so the health check knows the commit from

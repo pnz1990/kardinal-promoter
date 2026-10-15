@@ -230,6 +230,10 @@ func (g *GitLabProvider) parseWebhookEvent(payload []byte, signature, eventType 
 		Project struct {
 			PathWithNamespace string `json:"path_with_namespace"`
 		} `json:"project"`
+		// User is who triggered the event: for the merge, the merger.
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return WebhookEvent{}, fmt.Errorf("parse GitLab webhook payload: %w", err)
@@ -239,6 +243,7 @@ func (g *GitLabProvider) parseWebhookEvent(payload []byte, signature, eventType 
 		event := mergedPREvent(raw.Project.PathWithNamespace, raw.ObjectAttr.IID)
 		// null for a fast-forward merge; the PRStatus reconciler then asks the API.
 		event.MergeCommitSHA = raw.ObjectAttr.MergeCommitSHA
+		event.MergedBy = raw.User.Username
 		return event, nil
 	}
 	if raw.ObjectKind != "" {

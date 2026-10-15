@@ -290,6 +290,9 @@ func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType
 			Merged         bool   `json:"merged"`
 			State          string `json:"state"`
 			MergeCommitSHA string `json:"merge_commit_sha"`
+			MergedBy       *struct {
+				Login string `json:"login"`
+			} `json:"merged_by"`
 		} `json:"pull_request"`
 		Repository struct {
 			FullName string `json:"full_name"`
@@ -310,6 +313,9 @@ func (f *ForgejoProvider) parseWebhookEvent(payload []byte, signature, eventType
 	if eventType == "pull_request" && raw.PullRequest.Merged && raw.Action == "closed" {
 		event := mergedPREvent(raw.Repository.FullName, number)
 		event.MergeCommitSHA = raw.PullRequest.MergeCommitSHA
+		if m := raw.PullRequest.MergedBy; m != nil {
+			event.MergedBy = m.Login
+		}
 		return event, nil
 	}
 	return WebhookEvent{

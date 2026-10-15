@@ -93,6 +93,26 @@ type PRStatusStatus struct {
 	// +optional
 	MergeCommitUnavailable bool `json:"mergeCommitUnavailable,omitempty"`
 
+	// MergedBy is the SCM user who merged the PR, as the SCM reports it: the
+	// merged-PR webhook's payload, or the SCM API when the merge was found by
+	// polling. The PRMerged AuditEvent names them. Empty when the SCM did not
+	// say.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	MergedBy string `json:"mergedBy,omitempty"`
+
+	// MergedVia is how kardinal learned of the merge: webhook or poll
+	// (PRMergedViaWebhook, PRMergedViaPoll).
+	// +kubebuilder:validation:Enum=webhook;poll
+	// +kubebuilder:validation:MaxLength=8
+	// +optional
+	MergedVia string `json:"mergedVia,omitempty"`
+
+	// MergedByUnavailable is true once the PR is merged and the SCM could
+	// not name the merger, so the reconciler stops asking.
+	// +optional
+	MergedByUnavailable bool `json:"mergedByUnavailable,omitempty"`
+
 	// PollError is the SCM API error of the last poll when a retry cannot fix
 	// it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep
 	// waiting for this PR fails with it. Cleared by the next successful poll.
@@ -160,3 +180,9 @@ type PRStatusList struct {
 func init() {
 	SchemeBuilder.Register(&PRStatus{}, &PRStatusList{})
 }
+
+// How kardinal learned of a PR's merge (PRStatusStatus.MergedVia).
+const (
+	PRMergedViaWebhook = "webhook"
+	PRMergedViaPoll    = "poll"
+)

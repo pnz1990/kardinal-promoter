@@ -185,6 +185,28 @@ spec:
                   Merged is true when the pull request has been merged.
                   A PromotionStep in WaitingForMerge watches this field.
                 type: boolean
+              mergedBy:
+                description: |-
+                  MergedBy is the SCM user who merged the PR, as the SCM reports it: the
+                  merged-PR webhook's payload, or the SCM API when the merge was found by
+                  polling. The PRMerged AuditEvent names them. Empty when the SCM did not
+                  say.
+                maxLength: 253
+                type: string
+              mergedByUnavailable:
+                description: |-
+                  MergedByUnavailable is true once the PR is merged and the SCM could
+                  not name the merger, so the reconciler stops asking.
+                type: boolean
+              mergedVia:
+                description: |-
+                  MergedVia is how kardinal learned of the merge: webhook or poll
+                  (PRMergedViaWebhook, PRMergedViaPoll).
+                enum:
+                - webhook
+                - poll
+                maxLength: 8
+                type: string
               observedGeneration:
                 description: |-
                   ObservedGeneration is the metadata.generation of the spec this status

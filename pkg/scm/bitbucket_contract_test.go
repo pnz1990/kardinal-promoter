@@ -405,11 +405,11 @@ func TestBitbucketCloudContract_ParseWebhookEvent(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "pullrequest:fulfilled is merged", event: "pullrequest:fulfilled", body: merged, sig: sign(secret, merged),
-			want: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 7, RepoFullName: "acme/web-app"}},
+			want: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 7, RepoFullName: "acme/web-app", MergedBy: "Ana Reviewer"}},
 		{name: "pullrequest:rejected is not merged", event: "pullrequest:rejected", body: declined, sig: sign(secret, declined),
 			want: scm.WebhookEvent{EventType: "pullrequest", Action: "declined", PRNumber: 7, RepoFullName: "acme/web-app"}},
 		{name: "repository from the PR destination", event: "pullrequest:fulfilled", body: noRepository, sig: sign(secret, noRepository),
-			want: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 7, RepoFullName: "acme/web-app"}},
+			want: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 7, RepoFullName: "acme/web-app", MergedBy: "Ana Reviewer"}},
 		{name: "wrong secret", event: "pullrequest:fulfilled", body: merged, sig: sign("guess", merged), wantErr: true},
 		{name: "signature of another body", event: "pullrequest:fulfilled", body: merged, sig: sign(secret, declined), wantErr: true},
 		{name: "no signature", event: "pullrequest:fulfilled", body: merged, wantErr: true},

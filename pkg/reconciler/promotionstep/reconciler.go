@@ -1665,6 +1665,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			}
 			ps.Status.Outputs["mergeCommitSHA"] = prs.Status.MergeCommitSHA
 		}
+		if prs.Status.MergedBy != "" {
+			// Who released this environment (#1939), for kardinal history.
+			if ps.Status.Outputs == nil {
+				ps.Status.Outputs = map[string]string{}
+			}
+			ps.Status.Outputs[OutputPRMergedBy] = prs.Status.MergedBy
+		}
+		if prs.Status.MergedVia != "" {
+			if ps.Status.Outputs == nil {
+				ps.Status.Outputs = map[string]string{}
+			}
+			ps.Status.Outputs[outputPRMergedVia] = prs.Status.MergedVia
+		}
 		ps.Status.WaitForMergeExpiry = nil // clear expiry on successful transition
 		// PR duration: from the PR opening to the merge seen here. Not from
 		// the PRStatus creationTimestamp: the Graph creates the PRStatus with
@@ -1674,7 +1687,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		// a later reconcile, and a deleted step does not transition.
 		opened, openedKnown := prOpenedAt(ps)
 		moved, err := r.transitionClosing(ctx, base, ps, StateHealthChecking,
-			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber), "", nil)
+			fmt.Sprintf("PR #%d merged", prs.Spec.PRNumber), AuditActionPRMerged, nil)
 		if err != nil {
 			return ctrl.Result{}, err
 		}

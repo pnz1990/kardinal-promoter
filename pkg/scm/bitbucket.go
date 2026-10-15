@@ -286,6 +286,12 @@ func (b *BitbucketProvider) ParseWebhookEvent(payload []byte, signature string) 
 		Repository struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
+		// Actor is who triggered the event: for pullrequest:fulfilled, the
+		// merger.
+		Actor struct {
+			Nickname    string `json:"nickname"`
+			DisplayName string `json:"display_name"`
+		} `json:"actor"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return WebhookEvent{}, fmt.Errorf("parse Bitbucket webhook payload: %w", err)
@@ -297,7 +303,9 @@ func (b *BitbucketProvider) ParseWebhookEvent(payload []byte, signature string) 
 		repo = pr.Destination.Repository.FullName
 	}
 	if pr.State == "MERGED" {
-		return mergedPREvent(repo, pr.ID), nil
+		ev := mergedPREvent(repo, pr.ID)
+		ev.MergedBy = firstNonEmpty(raw.Actor.Nickname, raw.Actor.DisplayName)
+		return ev, nil
 	}
 	// Bitbucket doesn't embed an "action" in the body; report the state.
 	return WebhookEvent{

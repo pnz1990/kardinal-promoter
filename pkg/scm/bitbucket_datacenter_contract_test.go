@@ -227,7 +227,7 @@ func TestBitbucketDCContract_Webhook(t *testing.T) {
 	h.Set("X-Hub-Signature", dcSign(secret, merged))
 	ev, err := scm.ParseWebhookRequest(p, merged, h)
 	require.NoError(t, err)
-	assert.Equal(t, scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, RepoFullName: "PLAT/web-app", PRNumber: 12, MergeCommitSHA: dcMerge}, ev)
+	assert.Equal(t, scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, RepoFullName: "PLAT/web-app", PRNumber: 12, MergeCommitSHA: dcMerge, MergedBy: "alice"}, ev)
 	for _, pipelineURL := range []string{"https://git.example.com/bitbucket/scm/PLAT/web-app.git", "ssh://git@git.example.com:7999/plat/web-app.git"} {
 		repo, err := scm.RepoFromURL(pipelineURL)
 		require.NoError(t, err)

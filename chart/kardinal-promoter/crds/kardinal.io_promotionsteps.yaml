@@ -652,6 +652,7 @@ spec:
                           - PipelineResumed
                           - FreezeStarted
                           - FreezeLifted
+                          - PRMerged
                           type: string
                         actor:
                           description: |-
