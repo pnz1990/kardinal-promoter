@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
@@ -27,6 +28,7 @@ const (
 	DimDelivery
 	DimSCM
 	DimOutcome
+	DimActor
 )
 
 // Dimensions are the scenario matrix: every way kardinal is configured or a
@@ -39,11 +41,15 @@ var Dimensions = []Dimension{
 	DimDelivery: {Name: "delivery", Values: []string{"pr-review", "direct"}},
 	DimSCM:      {Name: "scm", Values: []string{SCMGitHub, SCMGitLab, SCMForgejo}},
 	DimOutcome:  {Name: "outcome", Values: []string{"success", "healthfail", "gateblock", "superseded", "rejected", "rollback"}},
+	// Who creates the versions (ActorIdentities): a person, an
+	// unregistered ServiceAccount, an agent by its ServiceAccount and an
+	// agent by a group; the refused actors are ActorRefusals.
+	DimActor: {Name: "actor", Values: []string{"human", "bot", "agent", "agent-group"}},
 }
 
 // Combo is one row of the matrix.
 type Combo struct {
-	Update, Health, Gate, Topology, Delivery, SCM, Outcome string
+	Update, Health, Gate, Topology, Delivery, SCM, Outcome, Actor string
 	// Org puts the gate in the org policy namespace instead of the
 	// Pipeline's.
 	Org bool
@@ -52,7 +58,7 @@ type Combo struct {
 // ComboOf maps a row of Dimensions to a Combo.
 func ComboOf(row []string, org bool) Combo {
 	return Combo{Update: row[DimUpdate], Health: row[DimHealth], Gate: row[DimGate], Topology: row[DimTopology],
-		Delivery: row[DimDelivery], SCM: row[DimSCM], Outcome: row[DimOutcome], Org: org}
+		Delivery: row[DimDelivery], SCM: row[DimSCM], Outcome: row[DimOutcome], Actor: row[DimActor], Org: org}
 }
 
 // Name is the combo's subtest name.
@@ -61,7 +67,7 @@ func (c Combo) Name() string {
 	if c.Org {
 		scope = "org"
 	}
-	return strings.Join([]string{c.Update, c.Health, c.Gate + "." + scope, c.Topology, c.Delivery, c.SCM, c.Outcome}, "/")
+	return strings.Join([]string{c.Update, c.Health, c.Gate + "." + scope, c.Topology, c.Delivery, c.SCM, c.Outcome, c.Actor}, "/")
 }
 
 // Rejection is a combination the API server refuses, with the CRD rule's
@@ -346,8 +352,13 @@ func (w *World) ApproveAll(bundles ...string) error {
 			continue
 		}
 		seen[key] = true
-		_, _, err := lifecycle.RecordApproval(w.Ctx, w.Client, lifecycle.ApprovalRequest{Namespace: g.Namespace, Bundle: b,
-			Environment: env, User: Approver, Decision: lifecycle.DecisionApprove, Comment: "scenario"})
+		id := Identity{Username: Approver, Groups: []string{"system:authenticated"}}
+		stamp, err := w.StampFor(id, actor.Where{Namespace: g.Namespace, Environment: env})
+		if err != nil {
+			return fmt.Errorf("approve %s: %w", key, err)
+		}
+		_, _, err = lifecycle.RecordApproval(w.CtxOf(id), w.Client, lifecycle.ApprovalRequest{Namespace: g.Namespace, Bundle: b,
+			Environment: env, User: Approver, Decision: lifecycle.DecisionApprove, Comment: "scenario", Actor: stamp})
 		if err != nil && !strings.Contains(err.Error(), "never promotes again") {
 			return fmt.Errorf("approve %s: %w", key, err)
 		}

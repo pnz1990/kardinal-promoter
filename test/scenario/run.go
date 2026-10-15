@@ -34,7 +34,7 @@ func RunCombo(t *testing.T, c Combo) {
 	t.Helper()
 	ns := "team-a"
 	block := c.Outcome == "gateblock" || c.Outcome == "superseded" || c.Outcome == "rejected"
-	w := NewWorld(t, Options{SCM: c.SCM, PolicyNamespaces: []string{PolicyNS}})
+	w := NewWorld(t, Options{SCM: c.SCM, PolicyNamespaces: []string{PolicyNS}, Actors: true, MaxIndexBytes: matrixIndexBytes})
 	p := BuildPlan(c, ns, w.Now(), block)
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -46,6 +46,7 @@ func RunCombo(t *testing.T, c Combo) {
 		}
 	})
 	require.NoError(t, p.Setup(w))
+	w.MustApply(agentFixture(ns)...)
 	w.Metrics.Set(MetricQuery, metricPassing)
 	if block && c.Gate == "metric" {
 		w.Metrics.Set(MetricQuery, metricFailing)
@@ -71,10 +72,15 @@ func RunCombo(t *testing.T, c Combo) {
 		t.Helper()
 		t.Fatalf("%s after %d rounds: %s\n%s", c.Name(), w.Rounds(), fmt.Sprintf(format, args...), w.Describe(ns))
 	}
+	if r := ActorRefusalOf(c.Actor); r != nil {
+		RunActorRefusal(t, w, p, r, fail)
+		CheckInvariants(t, w, p)
+		return
+	}
 	v1 := ImageBundle(ns, PipelineName, "1.1.0")
 	switch c.Outcome {
 	case "success":
-		w.MustApply(v1)
+		p.Ship(t, w, v1)
 		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
 			fail("bundle %s not Verified", v1.Name)
 		}
@@ -85,7 +91,7 @@ func RunCombo(t *testing.T, c Combo) {
 		for _, e := range p.GateEnvs {
 			w.GitOps.Fail(ns, e, "1.1.0")
 		}
-		w.MustApply(v1)
+		p.Ship(t, w, v1)
 		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Failed" }) {
 			fail("bundle %s not Failed", v1.Name)
 		}
@@ -102,7 +108,7 @@ func RunCombo(t *testing.T, c Combo) {
 		assert.Positive(t, failed, "a step failed its health check")
 		p.expectRunning(t, w, "1.1.0", p.upstreamOf(p.GateEnvs)...)
 	case "gateblock":
-		w.MustApply(v1)
+		p.Ship(t, w, v1)
 		p.runBlocked(t, w, v1.Name, fail)
 		require.NoError(t, p.Open(w, v1.Name))
 		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
@@ -110,10 +116,10 @@ func RunCombo(t *testing.T, c Combo) {
 		}
 		p.expectRunning(t, w, "1.1.0", p.Envs...)
 	case "superseded":
-		w.MustApply(v1)
+		p.Ship(t, w, v1)
 		p.runBlocked(t, w, v1.Name, fail)
 		v2 := ImageBundle(ns, PipelineName, "1.2.0")
-		w.MustApply(v2)
+		p.Ship(t, w, v2)
 		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Superseded" }) {
 			fail("bundle %s not Superseded by %s", v1.Name, v2.Name)
 		}
@@ -128,9 +134,9 @@ func RunCombo(t *testing.T, c Combo) {
 			assert.False(t, ok && s.Status.State == "Verified", "superseded %s promoted %s", v1.Name, e)
 		}
 	case "rejected":
-		w.MustApply(v1)
+		p.Ship(t, w, v1)
 		p.runBlocked(t, w, v1.Name, fail)
-		_, err := lifecycle.Reject(w.Ctx, w.Client, ns, v1.Name, "scenario: bad build", "oncall@example.com", w.Now())
+		_, err := lifecycle.Reject(AsUser(w.Ctx, "oncall@example.com"), w.Client, ns, v1.Name, "scenario: bad build", "oncall@example.com", w.Now())
 		require.NoError(t, err)
 		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Rejected" }) {
 			fail("bundle %s not Rejected", v1.Name)
@@ -146,7 +152,7 @@ func RunCombo(t *testing.T, c Combo) {
 			assert.NotEqual(t, "1.1.0", p.Running(w)[e], "%s runs the rejected version", e)
 		}
 	case "rollback":
-		w.MustApply(v1)
+		p.Ship(t, w, v1)
 		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
 			fail("bundle %s not Verified", v1.Name)
 		}
@@ -154,7 +160,7 @@ func RunCombo(t *testing.T, c Combo) {
 		for _, e := range p.GateEnvs {
 			w.GitOps.Fail(ns, e, "1.2.0")
 		}
-		w.MustApply(v2)
+		p.Ship(t, w, v2)
 		rolledBack := func() bool {
 			run := p.Running(w)
 			for _, e := range p.GateEnvs {
@@ -172,6 +178,7 @@ func RunCombo(t *testing.T, c Combo) {
 		t.Fatalf("unknown outcome %q", c.Outcome)
 	}
 	CheckInvariants(t, w, p)
+	p.checkActors(t, w)
 	t.Logf("%d rounds, reconciles %v", w.Rounds(), w.Reconciles())
 }
 
@@ -189,7 +196,7 @@ func rollbackVerified(w *World, ns string) bool {
 func rowOf(c Combo) []string {
 	row := make([]string, len(Dimensions))
 	row[DimUpdate], row[DimHealth], row[DimGate], row[DimTopology] = c.Update, c.Health, c.Gate, c.Topology
-	row[DimDelivery], row[DimSCM], row[DimOutcome] = c.Delivery, c.SCM, c.Outcome
+	row[DimDelivery], row[DimSCM], row[DimOutcome], row[DimActor] = c.Delivery, c.SCM, c.Outcome, c.Actor
 	return row
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,8 +73,10 @@ type Kro struct {
 	applied map[string]map[string]map[objKey]bool
 	// programs caches compiled expressions per Graph spec.
 	programs map[string]*graphPrograms
-	// errs are the hard errors seen, deduplicated.
-	errs map[string]bool
+	// errs are the hard errors seen, deduplicated; expected, the parts of
+	// the ones a scenario causes on purpose.
+	errs     map[string]bool
+	expected []string
 	// Version, when set, counts the cluster's writes: a Sync that finds no
 	// write since the last Sync that changed nothing does nothing, as kro
 	// only reconciles a Graph when something it watches changed.
@@ -99,16 +102,27 @@ func NewKro(c client.Client) *Kro {
 	return &Kro{c: c, applied: map[string]map[string]map[objKey]bool{}, programs: map[string]*graphPrograms{}, errs: map[string]bool{}}
 }
 
-// Errors returns the hard errors kro would have reported, sorted.
+// Errors returns the hard errors kro would have reported, sorted, but the
+// expected ones (Expect).
 func (k *Kro) Errors() []string {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	out := make([]string, 0, len(k.errs))
 	for e := range k.errs {
-		out = append(out, e)
+		if !slices.ContainsFunc(k.expected, func(x string) bool { return strings.Contains(e, x) }) {
+			out = append(out, e)
+		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Expect makes the errors that contain msg expected: a scenario that
+// refuses kro's writes on purpose.
+func (k *Kro) Expect(msg string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.expected = append(k.expected, msg)
 }
 
 func (k *Kro) hardError(g *graph.Graph, err error) {
@@ -767,6 +781,8 @@ func (k *Kro) delete(ctx context.Context, key objKey) (bool, error) {
 // apply runs one pass of g. Hard errors are recorded (Errors) and leave the
 // Graph degraded; API errors are returned.
 func (k *Kro) apply(ctx context.Context, g *graph.Graph, raw *unstructured.Unstructured) (int, error) {
+	// kro applies a Graph's objects as the Graph's ServiceAccount.
+	ctx = AsUser(ctx, GraphUser(raw.GetNamespace()))
 	gp, err := k.compile(g)
 	if err != nil {
 		k.hardError(g, err)

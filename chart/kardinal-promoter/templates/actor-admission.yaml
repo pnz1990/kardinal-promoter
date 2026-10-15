@@ -124,9 +124,10 @@ spec:
       reason: Forbidden
     # An agent stays in its scope: the namespace always, the Bundle's
     # Pipeline, the Approval's environment, the gate's Pipeline and environment.
+    # An entry scoped nowhere has no namespaces (the index omits an empty list).
     - expression: >-
         !variables.check || !variables.agent || (
-          variables.entry.namespaces.exists(p, p == '*' || p == request.namespace ||
+          (has(variables.entry.namespaces) ? variables.entry.namespaces : []).exists(p, p == '*' || p == request.namespace ||
             (p.endsWith('*') && request.namespace.startsWith(p.substring(0, size(p) - 1)))) &&
           (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline ||
             (p.endsWith('*') && variables.pipeline.startsWith(p.substring(0, size(p) - 1))))) &&

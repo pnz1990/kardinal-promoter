@@ -11,7 +11,8 @@ import (
 
 // MatrixRows returns the scenario matrix: the pairwise rows of Dimensions
 // that the API server admits, then one row per Rejection, which it must
-// refuse.
+// refuse, then one row per ActorRefusal, whose version it must refuse until
+// the cluster is put right.
 func MatrixRows(t *testing.T) [][]string {
 	rows := Pairwise(Dimensions, func(row []string) bool { return Rejected(row) != nil })
 	require.Empty(t, Covers(Dimensions, rows, func(row []string) bool { return Rejected(row) != nil }),
@@ -24,12 +25,17 @@ func MatrixRows(t *testing.T) [][]string {
 		require.True(t, rej.Matches(row), "the example of %q", rej.Message)
 		rows = append(rows, row)
 	}
+	for _, r := range ActorRefusals {
+		row := append([]string(nil), rows[0]...)
+		row[DimActor], row[DimOutcome] = r.Actor, "success"
+		rows = append(rows, row)
+	}
 	return rows
 }
 
 // TestScenarioMatrix runs the scenario matrix (MatrixRows), each row in a
 // World of its own and in parallel (RunCombo). Covers SCEN-MATRIX-01,
-// SCEN-REJECT-01.
+// SCEN-REJECT-01, SCEN-ACTOR-01.
 func TestScenarioMatrix(t *testing.T) {
 	rows := MatrixRows(t)
 	for i, row := range rows {

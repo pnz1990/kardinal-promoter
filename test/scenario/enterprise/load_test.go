@@ -224,7 +224,7 @@ func TestEnterprise_MultiTenantLoad(t *testing.T) {
 
 	checkPhases(t, w, sz, newest)
 	checkIsolation(t, w, sz)
-	checkBounded(t, w)
+	checkBounded(t, w, maxPerObject)
 	n, last := w.Errors()
 	assert.Empty(t, n, "reconcile errors: %v", last)
 	assert.Empty(t, w.Kro.Errors())
@@ -364,11 +364,11 @@ func checkIsolation(t *testing.T, w *scenario.World, sz size) {
 	}
 }
 
-// checkBounded: no object is reconciled more than maxPerObject times
-// while the load runs, whatever the number of tenants and versions, and
+// checkBounded: no object is reconciled more than bound times while the
+// load runs, whatever the number of tenants and versions, and
 // once every version settled and the writes stopped, quietRounds more
 // rounds reconcile nothing: nothing spins.
-func checkBounded(t *testing.T, w *scenario.World) {
+func checkBounded(t *testing.T, w *scenario.World, bound int) {
 	t.Helper()
 	maxOf := map[string]int{}
 	worst := map[string]string{}
@@ -380,7 +380,7 @@ func checkBounded(t *testing.T, w *scenario.World) {
 	}
 	for _, kind := range []string{"Bundle", "PromotionStep", "PolicyGate", "Pipeline", "PRStatus"} {
 		t.Logf("%s: at most %d reconciles per object (%s)", kind, maxOf[kind], worst[kind])
-		assert.LessOrEqual(t, maxOf[kind], maxPerObject, "%s reconciled %d times", worst[kind], maxOf[kind])
+		assert.LessOrEqual(t, maxOf[kind], bound, "%s reconciled %d times", worst[kind], maxOf[kind])
 	}
 	// The last writes of the load (Graph and Pipeline status) settle
 	// within a few rounds of the last Verified.
@@ -409,7 +409,8 @@ func checkBounded(t *testing.T, w *scenario.World) {
 	}
 }
 
-// maxPerObject bounds the reconciles of one object over the whole load;
+// maxPerObject bounds the reconciles of one object over a load of versions
+// created at once;
 // the measured maximum is in the test log. quietRounds are the rounds after
 // the load settled that must reconcile nothing.
 const (

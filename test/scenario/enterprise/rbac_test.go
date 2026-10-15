@@ -6,87 +6,21 @@ package enterprise
 import (
 	"context"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"helm.sh/helm/v4/pkg/chart/common"
-	chartutil "helm.sh/helm/v4/pkg/chart/common/util"
-	"helm.sh/helm/v4/pkg/chart/v2/loader"
-	"helm.sh/helm/v4/pkg/engine"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
-	"sigs.k8s.io/yaml"
 
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario"
 )
 
-const release = "kardinal-promoter"
-
-// chartObjects renders the chart in process (helm.sh/helm/v4, the engine
-// helm template uses) with its default values and returns the ClusterRoles
-// and ValidatingAdmissionPolicies by name.
-// chart is what the rendered chart holds of RBAC and admission.
-type chart struct {
-	roles    map[string]*rbacv1.ClusterRole
-	crbs     []rbacv1.ClusterRoleBinding
-	vaps     map[string]*admissionregistrationv1.ValidatingAdmissionPolicy
-	bindings map[string]*admissionregistrationv1.ValidatingAdmissionPolicyBinding
-}
-
-func chartObjects(t *testing.T) chart {
-	t.Helper()
-	chrt, err := loader.Load(filepath.Join(scenario.RepoRoot(), "chart", "kardinal-promoter"))
-	require.NoError(t, err)
-	vals, err := chartutil.ToRenderValues(chrt, map[string]any{}, common.ReleaseOptions{Name: release, Namespace: "kardinal-system",
-		IsInstall: true}, common.DefaultCapabilities)
-	require.NoError(t, err)
-	files, err := engine.Render(chrt, vals)
-	require.NoError(t, err)
-	roles := map[string]*rbacv1.ClusterRole{}
-	vaps := map[string]*admissionregistrationv1.ValidatingAdmissionPolicy{}
-	var crbs []rbacv1.ClusterRoleBinding
-	vapbs := map[string]*admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
-	for name, content := range files {
-		if !strings.HasSuffix(name, ".yaml") {
-			continue
-		}
-		for _, doc := range strings.Split(content, "\n---") {
-			var head struct {
-				Kind string `json:"kind"`
-			}
-			if err := yaml.Unmarshal([]byte(doc), &head); err != nil || head.Kind == "" {
-				continue
-			}
-			switch head.Kind {
-			case "ClusterRole":
-				var r rbacv1.ClusterRole
-				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &r), name)
-				roles[r.Name] = &r
-			case "ClusterRoleBinding":
-				var b rbacv1.ClusterRoleBinding
-				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &b), name)
-				crbs = append(crbs, b)
-			case "ValidatingAdmissionPolicyBinding":
-				var b admissionregistrationv1.ValidatingAdmissionPolicyBinding
-				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &b), name)
-				vapbs[b.Name] = &b
-			case "ValidatingAdmissionPolicy":
-				var v admissionregistrationv1.ValidatingAdmissionPolicy
-				require.NoError(t, utilyaml.Unmarshal([]byte(doc), &v), name)
-				vaps[v.Name] = &v
-			}
-		}
-	}
-	return chart{roles: roles, crbs: crbs, vaps: vaps, bindings: vapbs}
-}
+const release = scenario.Release
 
 func rm(i int) (string, []string) {
 	return fmt.Sprintf("rm-%02d@corp.example.com", i), []string{team(i) + "-release", "system:authenticated"}
@@ -162,16 +96,17 @@ func tenancyViolations(authz authorizer.Authorizer, teams int) []string {
 // bindings, or with Audit-only bindings, it refuses none.
 // Covers SCEN-TENANT-RBAC-01.
 func TestEnterprise_TenantRBAC(t *testing.T) {
-	c := chartObjects(t)
+	c, err := scenario.RenderChart()
+	require.NoError(t, err)
 	for _, name := range []string{"-viewer", "-approver", "-promoter"} {
-		require.Contains(t, c.roles, release+name)
+		require.Contains(t, c.Roles, release+name)
 	}
 	// The chart binds cluster-wide only its own ServiceAccounts, and the
 	// agent directory (docs/actors.md): every authenticated user reads the
 	// cluster-scoped agent registry, and nothing else.
-	for _, b := range c.crbs {
+	for _, b := range c.CRBs {
 		if b.Name == release+"-agent-directory-reader" {
-			role := c.roles[b.RoleRef.Name]
+			role := c.Roles[b.RoleRef.Name]
 			require.NotNil(t, role, b.RoleRef.Name)
 			for _, r := range role.Rules {
 				assert.ElementsMatch(t, []string{"agentidentities", "agentindexes"}, r.Resources)
@@ -184,13 +119,13 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 		}
 	}
 	teams := full.Teams
-	authz := &rbacAuthorizer{clusterRoles: c.roles, clusterRoleBindings: c.crbs, roleBindings: teamBindings(teams)}
+	authz := &rbacAuthorizer{clusterRoles: c.Roles, clusterRoleBindings: c.CRBs, roleBindings: teamBindings(teams)}
 	assert.Empty(t, tenancyViolations(authz, teams))
 
 	// The same check with one cluster-wide binding of the approver role:
 	// team-01's release managers approve everywhere.
 	leaky := *authz
-	leaky.clusterRoleBindings = append(append([]rbacv1.ClusterRoleBinding(nil), c.crbs...), rbacv1.ClusterRoleBinding{
+	leaky.clusterRoleBindings = append(append([]rbacv1.ClusterRoleBinding(nil), c.CRBs...), rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "leak"}, RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: release + "-approver"},
 		Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: team(1) + "-release"}}})
 	assert.NotEmpty(t, tenancyViolations(&leaky, teams), "a cluster-wide approver binding must show as a tenancy violation")
@@ -221,23 +156,23 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 	policies := []string{release + "-approvals", release + "-bundle-rejection"}
 	cases := []struct {
 		name string
-		run  func(s *admissionServer) error
+		run  func(s *scenario.APIServer) error
 		deny bool
 	}{
-		{"an Approval in your own name", func(s *admissionServer) error {
-			return s.admit(admission.Create, approvalsGVR, approval(u1, g1[:1]), nil, u1, g1)
+		{"an Approval in your own name", func(s *scenario.APIServer) error {
+			return s.Admit(admission.Create, scenario.GVR("approvals"), approval(u1, g1[:1]), nil, &user.DefaultInfo{Name: u1, Groups: g1})
 		}, false},
-		{"an Approval in another user's name", func(s *admissionServer) error {
-			return s.admit(admission.Create, approvalsGVR, approval(u2, g2[:1]), nil, u1, g1)
+		{"an Approval in another user's name", func(s *scenario.APIServer) error {
+			return s.Admit(admission.Create, scenario.GVR("approvals"), approval(u2, g2[:1]), nil, &user.DefaultInfo{Name: u1, Groups: g1})
 		}, true},
-		{"an Approval with another team's group", func(s *admissionServer) error {
-			return s.admit(admission.Create, approvalsGVR, approval(u1, g2[:1]), nil, u1, g1)
+		{"an Approval with another team's group", func(s *scenario.APIServer) error {
+			return s.Admit(admission.Create, scenario.GVR("approvals"), approval(u1, g2[:1]), nil, &user.DefaultInfo{Name: u1, Groups: g1})
 		}, true},
-		{"a rejection in your own name", func(s *admissionServer) error {
-			return s.admit(admission.Update, bundlesGVR, bundle(u1), bundle(""), u1, g1)
+		{"a rejection in your own name", func(s *scenario.APIServer) error {
+			return s.Admit(admission.Update, scenario.GVR("bundles"), bundle(u1), bundle(""), &user.DefaultInfo{Name: u1, Groups: g1})
 		}, false},
-		{"a rejection in another user's name", func(s *admissionServer) error {
-			return s.admit(admission.Update, bundlesGVR, bundle(u2), bundle(""), u1, g1)
+		{"a rejection in another user's name", func(s *scenario.APIServer) error {
+			return s.Admit(admission.Update, scenario.GVR("bundles"), bundle(u2), bundle(""), &user.DefaultInfo{Name: u1, Groups: g1})
 		}, true},
 	}
 	for _, setup := range []struct {
@@ -253,11 +188,13 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 		}, false},
 	} {
 		t.Run(setup.name, func(t *testing.T) {
-			bindings := c.bindings
+			served := c
 			if !setup.bindings {
-				bindings = nil
+				served.Bindings = nil
 			}
-			s := newAdmissionServer(t, policyObjects(namespaces, c.vaps, bindings, policies, setup.edit), authz)
+			s, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(namespaces, served, policies, setup.edit), authz)
+			require.NoError(t, err)
+			t.Cleanup(stop)
 			for _, tc := range cases {
 				err := tc.run(s)
 				if tc.deny && setup.enforced {
