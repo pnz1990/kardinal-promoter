@@ -66,6 +66,8 @@ var apiResources = []struct {
 	{"kardinal.io", "renderruns", "RenderRun", false}, {"kardinal.io", "imageverifications", "ImageVerification", false},
 	{"kardinal.io", "metricchecks", "MetricCheck", false},
 	{"kardinal.io", "agentidentities", "AgentIdentity", true}, {"kardinal.io", "agentindexes", "AgentIndex", true},
+	{"kardinal.io", "changewindows", "ChangeWindow", true}, {"kardinal.io", "verdicts", "Verdict", false},
+	{"kardinal.io", "agentruns", "AgentRun", false}, {"kardinal.io", "steptemplates", "StepTemplate", true},
 	{"argoproj.io", "applications", "Application", false}, {"argoproj.io", "analysisruns", "AnalysisRun", false},
 	{"kustomize.toolkit.fluxcd.io", "kustomizations", "Kustomization", false},
 	{"helm.toolkit.fluxcd.io", "helmreleases", "HelmRelease", false},
