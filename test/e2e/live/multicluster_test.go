@@ -17,11 +17,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -601,4 +606,123 @@ func TestMultiCluster_KubeconfigHealth(t *testing.T) {
 	bundle = e.CreateBundle(t, a.ns, pipelineName, "--image", v2)
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Failed", promoteTimeout)
 	assert.Contains(t, ps.Status.Message, `health.kubeconfigSecretRef "spoke": kubeconfig not allowed: users[].user.exec is not supported`)
+}
+
+// hubKubeconfig is a kubeconfig for the hub's API server as the controller
+// reaches it from its Pod (https://kubernetes.default.svc, the cluster CA of
+// ns's kube-root-ca.crt), with a token for the ServiceAccount ns/sa: the
+// identity a Pipeline's health check uses there instead of the
+// controller's.
+func hubKubeconfig(t *testing.T, e *framework.Env, ns, sa string) string {
+	t.Helper()
+	ctx := context.Background()
+	_, err := e.Kube.CoreV1().ServiceAccounts(ns).Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	var ca corev1.ConfigMap
+	framework.Eventually(t, time.Minute, "kube-root-ca.crt in "+ns, func(context.Context) (bool, string) {
+		err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "kube-root-ca.crt"}, &ca)
+		return err == nil && ca.Data["ca.crt"] != "", fmt.Sprint(err)
+	})
+	tok, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, sa, &authenticationv1.TokenRequest{
+		Spec: authenticationv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](3600)}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	cfg := clientcmdapi.NewConfig()
+	cfg.Clusters["hub"] = &clientcmdapi.Cluster{Server: "https://kubernetes.default.svc", CertificateAuthorityData: []byte(ca.Data["ca.crt"])}
+	cfg.AuthInfos[sa] = &clientcmdapi.AuthInfo{Token: tok.Status.Token}
+	cfg.Contexts["hub"] = &clientcmdapi.Context{Cluster: "hub", AuthInfo: sa}
+	cfg.CurrentContext = "hub"
+	out, err := clientcmd.Write(*cfg)
+	require.NoError(t, err)
+	return string(out)
+}
+
+// argoRole grants ns/sa verbs on the Argo CD Applications names (all with
+// none) in framework.ArgoCDNamespace, deleted when the test ends; revoke
+// deletes the binding first.
+func argoRole(t *testing.T, e *framework.Env, name, ns, sa string, verbs []string, names ...string) (revoke func()) {
+	t.Helper()
+	ctx := context.Background()
+	roles, bindings := e.Kube.RbacV1().Roles(framework.ArgoCDNamespace), e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace)
+	_, err := roles.Create(ctx, &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name},
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{"argoproj.io"}, Resources: []string{"applications"},
+			ResourceNames: names, Verbs: verbs}}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = bindings.Create(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name},
+		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: name},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: sa, Namespace: ns}}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	revoke = func() {
+		if err := bindings.Delete(context.Background(), name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("delete RoleBinding %s/%s: %v", framework.ArgoCDNamespace, name, err)
+		}
+	}
+	t.Cleanup(func() {
+		revoke()
+		if err := roles.Delete(context.Background(), name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("delete Role %s/%s: %v", framework.ArgoCDNamespace, name, err)
+		}
+	})
+	return revoke
+}
+
+// TestMultiCluster_KubeconfigArgoCD checks health.type argocd and
+// health.refresh through health.kubeconfigSecretRef (#1882): the Pipeline's
+// kubeconfig names the hub's API server with a ServiceAccount of its own
+// namespace that may read the Argo CD Applications and patch only its own,
+// as a remote hub's Role would (resourceNames). The step reads the
+// Application with that identity and waits for the promoted commit, and its
+// refresh goes out with that identity too: once the patch grant is removed
+// the request is refused (the controller's own ServiceAccount may patch
+// Applications, so a 403 shows the kubeconfig's identity was used), recorded
+// classified, counts no health failure, and Argo CD's poll verifies the
+// release.
+//
+// Covers MC-KUBECONFIG-04, MC-KUBECONFIG-05.
+func TestMultiCluster_KubeconfigArgoCD(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	s := e.Spoke(t)
+	a := newSpokeApp(t, e, s, fixtures.KustomizeRepo, "prod")
+	application, workload := a.argoApp("prod"), fixtures.Workload("prod")
+	s.WaitDeploymentImage(t, a.ns, workload, fixtures.Image+":"+fixtures.V1, syncTimeout)
+	argoRole(t, e, a.ns+"-read", a.ns, "hub-reader", []string{"get", "list", "watch"})
+	revokePatch := argoRole(t, e, a.ns+"-refresh", a.ns, "hub-reader", []string{"patch"}, application)
+	putKubeconfig(t, e, a.ns, "hub", hubKubeconfig(t, e, a.ns, "hub-reader"))
+
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Health.Timeout = "5m"
+	p.Spec.Environments[0].Health.KubeconfigSecretRef = &v1alpha1.KubeconfigSecretRef{Name: "hub"}
+	a.apply(t, p)
+
+	v2 := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", v2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, "health check passed via argocd: Healthy+Synced")
+	commit := ps.Status.Outputs["commitSHA"]
+	require.NotEmpty(t, commit)
+	st, err := e.ArgoAppState(context.Background(), application)
+	require.NoError(t, err)
+	assert.Equal(t, commit, st.Revision, "the Application synced the promoted commit: %s", st)
+	require.NotNil(t, ps.Status.RefreshRequestedAt, "the step asked the remote Application to refresh")
+	assert.Equal(t, commit, ps.Status.RefreshRevision)
+	assert.Equal(t, fmt.Sprintf("refresh requested: Application %s/%s", framework.ArgoCDNamespace, application), ps.Status.RefreshMessage)
+	assert.Equal(t, v2, s.DeploymentImage(t, a.ns, workload))
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+
+	revokePatch()
+	v3 := fixtures.Image + ":" + fixtures.V3
+	bundle = e.CreateBundle(t, a.ns, pipelineName, "--image", v3)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Equal(t, fmt.Sprintf("refresh request failed (annotate Application %s/%s: forbidden (HTTP 403)); waiting for Argo CD to poll git",
+		framework.ArgoCDNamespace, application), ps.Status.RefreshMessage, "refused for the kubeconfig's identity, not sent as the controller")
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, "a refused refresh is not a health failure")
+	evs, err := e.Events(context.Background(), ps.Namespace, "PromotionStep", ps.Name)
+	require.NoError(t, err)
+	var failed bool
+	for _, ev := range evs {
+		failed = failed || (ev.Reason == "GitOpsRefreshFailed" && ev.Type == corev1.EventTypeWarning)
+	}
+	assert.True(t, failed, "a GitOpsRefreshFailed Warning Event")
+	assert.Equal(t, v3, s.DeploymentImage(t, a.ns, workload), "Argo CD's poll synced the release")
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
 }
