@@ -46,6 +46,10 @@
 #           and a second kind cluster, <cluster>-spoke, with Argo Rollouts,
 #           which the hub's Argo CD and Flux manage (spoke.sh); both have
 #           podinfo on the node
+#   sso     Forgejo + Argo CD + Dex (sso.sh), and an API server that trusts
+#           Dex (sso-pki.sh writes its kind config): the TestSSO_ test puts
+#           oauth2-proxy in front of the UI with docs/guides/security.md's
+#           flags and values, and signs in as Dex's users
 #   scale   Forgejo behind Toxiproxy (git latency and outages), Prometheus,
 #           and two controller replicas built with -race (KARDINAL_E2E_RACE,
 #           default 1 here): the TestScale_ topology, load, race and chaos
@@ -76,10 +80,12 @@
 set -euo pipefail
 
 SUITE=${1:?usage: $0 SUITE}
-# AFTER lists components that need the controller image, so they run after
+# BEFORE lists components that run before the cluster exists; one may write
+# the suite's kind config, KIND_CONFIG ($E2E_OUT/<path>). AFTER lists
+# components that need the controller image, so they run after
 # components/kardinal.sh. HELM_ARGS are the suite's chart values for the main
 # release, before KARDINAL_E2E_HELM_ARGS.
-AFTER=() HELM_ARGS=
+BEFORE=() KIND_CONFIG_OUT='' AFTER=() HELM_ARGS=
 case "$SUITE" in
   # RUN is the go test -run pattern of the suite's tests; the prefix names
   # the area (test/e2e/README.md). The core, gitea, gitlab and github suites
@@ -134,6 +140,10 @@ case "$SUITE" in
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
     HELM_ARGS='--set controller.namespaceShard=default' ;;
+  # Single sign-on through an OIDC proxy (docs/guides/security.md, Option 3).
+  # The test upgrades the main release with the page's values.
+  sso) BEFORE=(sso-pki.sh) KIND_CONFIG_OUT=sso/kind-config.yaml
+    COMPONENTS=("giteafamily.sh forgejo" argocd.sh sso.sh) RUN='^TestSSO_' ;;
   # Production-scale topologies, load, races and chaos. The controller
   # reaches Forgejo through Toxiproxy (components/toxiproxy.sh), runs two
   # replicas so a killed leader fails over, and is built with -race; Argo CD
@@ -174,6 +184,10 @@ if [ -n "${KIND_K8S:-}" ]; then
 fi
 
 start=$(date +%s)
+for c in "${BEFORE[@]}"; do
+  bash "$E2E_DIR/components/$c"
+done
+[ -z "$KIND_CONFIG_OUT" ] || export KIND_CONFIG="$E2E_OUT/$KIND_CONFIG_OUT"
 kind_cluster "$KIND_CLUSTER"
 target_cluster
 if [ -n "${KARDINAL_E2E_NODE_MEMORY:-}" ]; then

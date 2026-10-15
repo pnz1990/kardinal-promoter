@@ -2,7 +2,8 @@
 // Licensed under the Apache License, Version 2.0
 
 // Command htpasswd prints an htpasswd line with a bcrypt hash, the only
-// format the distribution registry accepts, for hack/e2e/components/registry.sh:
+// format the distribution registry accepts, for hack/e2e/components/registry.sh
+// (and the bcrypt hash Dex's password users need, for sso.sh):
 //
 //	htpasswd USER < password
 package main
