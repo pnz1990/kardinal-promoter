@@ -35,7 +35,7 @@ func MatrixRows(t *testing.T) [][]string {
 
 // TestScenarioMatrix runs the scenario matrix (MatrixRows), each row in a
 // World of its own and in parallel (RunCombo). Covers SCEN-MATRIX-01,
-// SCEN-REJECT-01, SCEN-ACTOR-01.
+// SCEN-REJECT-01, SCEN-ACTOR-01, SCEN-VERIFY-01.
 func TestScenarioMatrix(t *testing.T) {
 	rows := MatrixRows(t)
 	for i, row := range rows {

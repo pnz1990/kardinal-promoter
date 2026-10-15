@@ -459,6 +459,12 @@ func (w *World) runJobs() error {
 			}
 		}
 		owner := metav1.GetControllerOf(job)
+		if !done && owner != nil && owner.Kind == "AgentRun" {
+			if err := w.runAgent(job, owner); err != nil {
+				return err
+			}
+			continue
+		}
 		if done || owner == nil || owner.Kind != "RenderRun" {
 			continue
 		}

@@ -60,6 +60,8 @@ var crdFiles = map[string]string{
 	"PromotionStep": "kardinal.io_promotionsteps.yaml",
 	"ScmProvider":   "kardinal.io_scmproviders.yaml",
 	"AgentIdentity": "kardinal.io_agentidentities.yaml",
+	"Verdict":       "kardinal.io_verdicts.yaml",
+	"StepTemplate":  "kardinal.io_steptemplates.yaml",
 }
 
 func (a *Admission) load(kind string) (*crdSchema, error) {
