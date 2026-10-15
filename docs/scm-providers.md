@@ -822,6 +822,6 @@ func newProvider(providerType, token, apiURL, webhookSecret string, circuits *Ci
 
 Implement `scm.BranchDeleter` and `scm.MergeCommitGetter` too. `DynamicProvider` forwards them
 to your provider when it implements them. Without them, kardinal leaves the head branch of a PR it
-closed, and cannot look up a merge commit the webhook did not carry. Add the provider's
+closed, and cannot look up a PR's merge commit, which it never takes from a webhook payload. Implement `scm.PRMergerGetter` so the PRMerged AuditEvent can name who merged the PR. Add the provider's
 signature header to `webhookSignatureHeaders` and its event header, if it sends one, to
 `webhookEventHeaders` in `pkg/scm/repo_url.go`.

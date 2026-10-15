@@ -357,9 +357,8 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 		if prs.Spec.Repo == "" || !scm.SameRepo(s.scm, prs.Spec.Repo, event.RepoFullName) {
 			continue
 		}
-		if prstatus.DescribesSpec(prs) && prs.Status.Merged &&
-			(prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
-			// Already marked merged, and nothing to add — idempotent skip.
+		if prstatus.DescribesSpec(prs) && prs.Status.Merged {
+			// Already marked merged — idempotent skip.
 			continue
 		}
 		toMark = append(toMark, prs)
@@ -383,19 +382,14 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 			prs.Status.Merged = true
 			prs.Status.Open = false
 			prs.Status.LastCheckedAt = &now
-			// Who merged it is asked of the SCM API by the PRStatus reconciler
-			// (status.mergedBy), never taken from the payload: a valid
-			// signature proves only that the sender has the webhook secret, and
-			// GitLab and Azure DevOps send it in plain text (#1939). The
-			// payload's name is logged as a hint.
+			// Who merged it and the commit it merged as are asked of the SCM
+			// API by the PRStatus reconciler (status.mergedBy,
+			// status.mergeCommitSHA, retried for its merge-commit window),
+			// never taken from the payload: a valid signature proves only that
+			// the sender has the webhook secret, and GitLab and Azure DevOps
+			// send it in plain text (#1939, #2021). The payload's values are
+			// logged as hints.
 			prs.Status.MergedVia = v1alpha1.PRMergedViaWebhook
-		}
-		if prs.Status.MergeCommitSHA == "" && event.MergeCommitSHA != "" {
-			// Written with merged, so the health check knows the commit from
-			// the start (#1307). The status holds the commit or that it is
-			// unavailable, not both.
-			prs.Status.MergeCommitSHA = event.MergeCommitSHA
-			prs.Status.MergeCommitUnavailable = false
 		}
 
 		patchErr := s.client.Status().Patch(ctx, prs, patch)
@@ -414,7 +408,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, p scm.SCMProvide
 			Str("prstatus", prs.Name).
 			Str("namespace", prs.Namespace).
 			Int("pr", event.PRNumber).
-			Str("mergeCommit", event.MergeCommitSHA).Str("mergedByPerPayload", event.MergedBy).
+			Str("mergeCommitPerPayload", event.MergeCommitSHA).Str("mergedByPerPayload", event.MergedBy).
 			Msg("PRStatus marked merged via webhook")
 	}
 	return nil

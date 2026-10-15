@@ -37,11 +37,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -154,29 +156,25 @@ func TestWebhook_MarksPRStatusMerged_OnMerge(t *testing.T) {
 	assert.NotNil(t, updatedPRS.Status.LastCheckedAt, "PRStatus.status.lastCheckedAt should be set")
 }
 
-// TestWebhook_RecordsMergeCommit verifies that the webhook writes the merge
-// commit together with status.merged, fills it in when polling recorded the
-// merge first, and never replaces one already recorded (#1307). A commit it
-// writes clears status.mergeCommitUnavailable: the status holds one of the two.
+// TestWebhook_RecordsMergeCommit covers #2021: the webhook marks the PR
+// merged but never records the payload's merge commit, which anyone holding
+// the webhook secret could write (GitLab and Azure DevOps send it in plain
+// text); the PRStatus reconciler then asks the SCM API for it. A commit
+// already recorded, or recorded unavailable, is left as it is.
 func TestWebhook_RecordsMergeCommit(t *testing.T) {
-	const sha = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	const forged = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
 	tests := []struct {
 		name            string
 		status          v1alpha1.PRStatusStatus
-		event           string
 		want            string
 		wantUnavailable bool
 	}{
-		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, event: sha, want: sha},
-		{name: "merged by polling without the commit", status: v1alpha1.PRStatusStatus{Merged: true},
-			event: sha, want: sha},
+		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, want: ""},
+		{name: "merged by polling without the commit", status: v1alpha1.PRStatusStatus{Merged: true}, want: ""},
 		{name: "commit already recorded", status: v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "d7d4d8a"},
-			event: sha, want: "d7d4d8a"},
-		{name: "event without the commit", status: v1alpha1.PRStatusStatus{Open: true}, want: ""},
-		{name: "commit recorded unavailable, the event has it", status: v1alpha1.PRStatusStatus{
-			Merged: true, MergeCommitUnavailable: true}, event: sha, want: sha},
-		{name: "commit recorded unavailable, the event has none", status: v1alpha1.PRStatusStatus{
-			Merged: true, MergeCommitUnavailable: true}, want: "", wantUnavailable: true},
+			want: "d7d4d8a"},
+		{name: "commit recorded unavailable", status: v1alpha1.PRStatusStatus{Merged: true, MergeCommitUnavailable: true},
+			want: "", wantUnavailable: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,7 +187,7 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 				WithObjects(prs).WithStatusSubresource(prs).Build()
 			mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
 				EventType: "pull_request", Action: "closed", Merged: true,
-				PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: tc.event,
+				PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: forged,
 			}}
 			w := httptest.NewRecorder()
 			newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
@@ -199,10 +197,43 @@ func TestWebhook_RecordsMergeCommit(t *testing.T) {
 			var got v1alpha1.PRStatus
 			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
 			assert.True(t, got.Status.Merged)
-			assert.Equal(t, tc.want, got.Status.MergeCommitSHA)
+			assert.Equal(t, tc.want, got.Status.MergeCommitSHA, "never the payload's commit")
 			assert.Equal(t, tc.wantUnavailable, got.Status.MergeCommitUnavailable)
 		})
 	}
+}
+
+// TestWebhook_MergeCommitFromTheAPI (#2021): after a webhook merge, the
+// PRStatus reconciler records the commit the SCM API reports, not the one the
+// payload names.
+func TestWebhook_MergeCommitFromTheAPI(t *testing.T) {
+	const real = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"},
+		Status:     v1alpha1.PRStatusStatus{Open: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(webhookScheme()).WithObjects(prs).WithStatusSubresource(prs).Build()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"state":"closed","merged":true,"merge_commit_sha":"`+real+`","merged_by":{"login":"user1"}}`)
+	}))
+	defer srv.Close()
+	provider, err := scm.NewProvider("github", "t", srv.URL, "s")
+	require.NoError(t, err)
+	mockSCM := &mockSCMProvider{event: scm.WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true,
+		PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: "f0f0f0f0", MergedBy: "alice"}}
+	w := httptest.NewRecorder()
+	newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
+		httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+	require.Equal(t, http.StatusNoContent, w.Code)
+	_, err = (&prstatus.Reconciler{Client: c, SCM: provider}).Reconcile(context.Background(),
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(prs)})
+	require.NoError(t, err)
+	var got v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+	assert.Equal(t, real, got.Status.MergeCommitSHA)
+	assert.Equal(t, "user1", got.Status.MergedBy)
 }
 
 // TestWebhook_StatusOfTheOldPR covers B72: a PRStatus whose spec was pointed
@@ -230,7 +261,7 @@ func TestWebhook_StatusOfTheOldPR(t *testing.T) {
 	var got v1alpha1.PRStatus
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
 	assert.True(t, got.Status.Merged)
-	assert.Equal(t, "e7ddb9e", got.Status.MergeCommitSHA)
+	assert.Empty(t, got.Status.MergeCommitSHA, "the API, not the payload, names the commit (#2021)")
 	assert.Equal(t, int64(2), got.Status.ObservedGeneration)
 	assert.False(t, got.Status.ClosedFinal)
 	assert.Empty(t, got.Status.PollError)
