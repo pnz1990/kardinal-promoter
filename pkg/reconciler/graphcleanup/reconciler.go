@@ -55,9 +55,10 @@ const requeueConflict = time.Second
 // forbidden and kro writes nothing) is found by this requeue instead.
 const requeueNamespace = 30 * time.Second
 
-// GraphLister lists the kardinal Graphs in a namespace (graph.GraphClient).
+// GraphLister answers which namespaces the kardinal Graphs of a namespace
+// read (graph.GraphClient.Readers).
 type GraphLister interface {
-	List(ctx context.Context, namespace string) ([]*graph.Graph, error)
+	Readers(ctx context.Context, namespace string) (graph.Readers, error)
 }
 
 // Reconciler watches kardinal's Graphs.
@@ -97,7 +98,8 @@ type Reconciler struct {
 	// APIReader reads Namespaces and RoleBindings from the API server, so the
 	// controller needs neither a cache nor list/watch on them.
 	APIReader client.Reader
-	// Graphs lists the Graphs Prune must keep bindings for.
+	// Graphs says which namespaces the Graphs Prune must keep bindings for
+	// read.
 	Graphs GraphLister
 	// Identity provisions the Graph RoleBindings. Nil (identity managed outside
 	// the controller) turns the Reconciler off.
@@ -217,14 +219,14 @@ func (r *Reconciler) removeKroFinalizer(ctx context.Context, g *unstructured.Uns
 // reads through.
 func (r *Reconciler) prune(ctx context.Context, log zerolog.Logger, namespace string) error {
 	defer r.Identity.LockNamespace(namespace)()
-	graphs, err := r.Graphs.List(ctx, namespace)
+	reads, err := r.Graphs.Readers(ctx, namespace)
 	if err != nil {
-		return fmt.Errorf("list graphs for prune: %w", err)
+		return fmt.Errorf("read graphs for prune: %w", err)
 	}
-	if err := r.Identity.Prune(ctx, namespace, graphs); err != nil {
+	if err := r.Identity.Prune(ctx, namespace, reads); err != nil {
 		return fmt.Errorf("prune reader rolebindings: %w", err)
 	}
-	log.Debug().Int("graphs", len(graphs)).Msg("graph identity: pruned reader rolebindings after a Graph delete")
+	log.Debug().Msg("graph identity: pruned reader rolebindings after a Graph delete")
 	return nil
 }
 

@@ -115,9 +115,12 @@ type graphLister struct {
 	calls  int
 }
 
-func (l *graphLister) List(_ context.Context, ns string) ([]*graph.Graph, error) {
+func (l *graphLister) Readers(_ context.Context, ns string) (graph.Readers, error) {
 	l.calls++
-	return l.graphs[ns], l.err
+	if l.err != nil {
+		return nil, l.err
+	}
+	return graph.ReadersOf(l.graphs[ns]), nil
 }
 
 func reconcile(t *testing.T, r *graphcleanup.Reconciler, ns string) (ctrl.Result, error) {

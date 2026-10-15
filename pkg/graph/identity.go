@@ -15,6 +15,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -272,9 +273,27 @@ func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, e
 	return unbound, nil
 }
 
-// Prune deletes the reader RoleBindings for graphNS that no Graph in graphs
-// reads through any more. graphs must be every Graph in graphNS. Only
-// bindings recorded by Ensure and still carrying managedByLabel are deleted.
+// Readers reports whether a Graph of one Graph namespace still reads
+// namespace ns (a ref node reads from it), so its reader RoleBinding there
+// must stay. GraphClient.Readers answers from the Graphs' reader labels;
+// ReadersOf from a list of Graphs.
+type Readers func(ns string) (bool, error)
+
+// ReadersOf is the Readers of graphs, which must be every Graph of the
+// namespace.
+func ReadersOf(graphs []*Graph) Readers {
+	needed := map[string]bool{}
+	for _, g := range graphs {
+		for _, ns := range RefNamespaces(g) {
+			needed[ns] = true
+		}
+	}
+	return func(ns string) (bool, error) { return needed[ns], nil }
+}
+
+// Prune deletes the reader RoleBindings for graphNS that no Graph of graphNS
+// reads through any more (reads). Only bindings recorded by Ensure and still
+// carrying managedByLabel are deleted.
 // When the applier RoleBinding, which holds the record, is gone (its
 // namespace was deleted, or someone deleted it), the bindings are looked for
 // in graphNS and every namespace ReaderNamespaces names; with AllNamespaces
@@ -282,22 +301,17 @@ func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, e
 // that namespace is looked in. A namespace whose binding cannot be read stays
 // in the record, so a later Prune tries again. The caller must hold
 // LockNamespace(graphNS).
-func (p *IdentityProvisioner) Prune(ctx context.Context, graphNS string, graphs []*Graph) error {
-	return p.PruneIn(ctx, graphNS, graphs, nil)
+func (p *IdentityProvisioner) Prune(ctx context.Context, graphNS string, reads Readers) error {
+	return p.PruneIn(ctx, graphNS, reads, nil)
 }
 
 // PruneIn is Prune that also looks for reader bindings for graphNS in
 // namespaces, which the sweep passes when it found bindings there that the
-// record may not list.
-func (p *IdentityProvisioner) PruneIn(ctx context.Context, graphNS string, graphs []*Graph, namespaces []string) error {
+// record may not list. reads is asked only about the namespaces that hold
+// a binding candidate.
+func (p *IdentityProvisioner) PruneIn(ctx context.Context, graphNS string, reads Readers, namespaces []string) error {
 	if p == nil {
 		return nil
-	}
-	needed := map[string]bool{}
-	for _, g := range graphs {
-		for _, ns := range RefNamespaces(g) {
-			needed[ns] = true
-		}
 	}
 	recorded, found, err := p.recorded(ctx, graphNS)
 	if err != nil {
@@ -317,7 +331,14 @@ func (p *IdentityProvisioner) PruneIn(ctx context.Context, graphNS string, graph
 	}
 	var removed []string
 	for _, ns := range sortedKeys(candidates) {
-		if needed[ns] || (p.OnlyNamespace != "" && ns != p.OnlyNamespace) {
+		if p.OnlyNamespace != "" && ns != p.OnlyNamespace {
+			continue
+		}
+		needed, err := reads(ns)
+		if err != nil {
+			return fmt.Errorf("graph identity: does a Graph of %s read %s: %w", graphNS, ns, err)
+		}
+		if needed {
 			continue
 		}
 		pruned, err := p.deleteReaderBinding(ctx, ns, graphNS)
@@ -528,6 +549,32 @@ func RefNamespaces(g *Graph) []string {
 		seen[RefNamespace(g, n)] = true
 	}
 	return sortedKeys(seen)
+}
+
+// LabelReadsPrefix, followed by a namespace, is the label GraphClient.Create
+// puts on a Graph for each namespace its ref nodes read from (RefNamespaces),
+// so GraphClient.Readers asks the API server for one Graph that reads a
+// namespace instead of reading every Graph of the namespace (#1685).
+const LabelReadsPrefix = "reads.kardinal.io/"
+
+// LabelReaderLabels marks a Graph that carries a LabelReadsPrefix label for
+// every namespace it reads. A Graph without it (created before the labels,
+// or reading a namespace that is not a valid label name) makes Readers read
+// every Graph of the namespace instead.
+const LabelReaderLabels = "kardinal.io/reader-labels"
+
+// ReaderLabels returns the reader labels of g: LabelReadsPrefix+ns for each
+// namespace it reads, and LabelReaderLabels, or nil when a namespace it
+// reads is not a valid label name.
+func ReaderLabels(g *Graph) map[string]string {
+	out := map[string]string{LabelReaderLabels: "true"}
+	for _, ns := range RefNamespaces(g) {
+		if len(validation.IsDNS1123Label(ns)) > 0 {
+			return nil
+		}
+		out[LabelReadsPrefix+ns] = "true"
+	}
+	return out
 }
 
 // RefNamespace returns the namespace ref node n of g reads from.
