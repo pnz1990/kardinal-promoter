@@ -21,12 +21,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -467,6 +469,61 @@ func anyInFlight(pipeline string, bundles []kardinalv1alpha1.Bundle) bool {
 	return false
 }
 
+// pipelineForStep maps a PromotionStep to the Pipeline its
+// spec.pipelineName names.
+func pipelineForStep(_ context.Context, obj client.Object) []ctrl.Request {
+	s, ok := obj.(*kardinalv1alpha1.PromotionStep)
+	if !ok || s.Spec.PipelineName == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: s.Namespace, Name: s.Spec.PipelineName}}}
+}
+
+// statusCoalesce is how long a Pipeline waits, after one of its
+// PromotionSteps moved to an intermediate state (Promoting, WaitingForMerge,
+// HealthChecking, ...), before it derives its status again. The work queue
+// holds a key once and keeps the earliest time, so every change in the window
+// is written in one status update. Each update rewrites the whole Pipeline
+// (its status.environments has an entry per environment): a 496-environment
+// wave changed step states several times a second, and one write per change
+// multiplied the Pipeline's etcd writes and watch traffic (#1719). A step that
+// settles (stepSettled), a Bundle phase change, a gate instance's readiness
+// and any Pipeline event are not delayed: the CLI and the UI show the end of
+// a promotion as soon as it happens (kardinal ship --wait, get pipelines).
+const statusCoalesce = 2 * time.Second
+
+// stepSettled reports whether an update moved a PromotionStep to a state
+// that ends its promotion, Verified or one DerivePhase reports as Degraded.
+func stepSettled(e event.UpdateEvent) bool {
+	s, ok := e.ObjectNew.(*kardinalv1alpha1.PromotionStep)
+	return ok && (s.Status.State == "Verified" || degradedStates[s.Status.State])
+}
+
+// coalesced is handler.EnqueueRequestsFromMapFunc that adds each request
+// statusCoalesce later, or at once for an update urgent reports.
+func coalesced(fn handler.MapFunc, urgent func(event.UpdateEvent) bool) handler.EventHandler {
+	type queue = workqueue.TypedRateLimitingInterface[reconcile.Request]
+	add := func(ctx context.Context, q queue, now bool, objs ...client.Object) {
+		for _, o := range objs {
+			for _, req := range fn(ctx, o) {
+				if now {
+					q.Add(req)
+				} else {
+					q.AddAfter(req, statusCoalesce)
+				}
+			}
+		}
+	}
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q queue) { add(ctx, q, false, e.Object) },
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q queue) {
+			add(ctx, q, urgent(e), e.ObjectOld, e.ObjectNew)
+		},
+		DeleteFunc:  func(ctx context.Context, e event.DeleteEvent, q queue) { add(ctx, q, false, e.Object) },
+		GenericFunc: func(ctx context.Context, e event.GenericEvent, q queue) { add(ctx, q, false, e.Object) },
+	}
+}
+
 // pipelineForBundle maps a Bundle to the Pipeline named by spec.pipeline.
 func pipelineForBundle(_ context.Context, obj client.Object) []ctrl.Request {
 	b, ok := obj.(*kardinalv1alpha1.Bundle)
@@ -803,19 +860,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// is created or deleted, or its state changes (stepStateChanged): the
 		// status writes a step makes while it runs (messages, retries, health
 		// checks) do not change what the Pipeline derives from it (#1509).
-		Watches(&kardinalv1alpha1.PromotionStep{},
-			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {
-				s, ok := obj.(*kardinalv1alpha1.PromotionStep)
-				if !ok || s.Spec.PipelineName == "" {
-					return nil
-				}
-				return []ctrl.Request{{
-					NamespacedName: client.ObjectKey{
-						Name:      s.Spec.PipelineName,
-						Namespace: s.Namespace,
-					},
-				}}
-			}),
+		Watches(&kardinalv1alpha1.PromotionStep{}, coalesced(pipelineForStep, stepSettled),
 			builder.WithPredicates(stepStateChanged),
 		)
 	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})

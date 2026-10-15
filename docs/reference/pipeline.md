@@ -270,7 +270,11 @@ my-app-x7k2p  1.5.0     image   my-app     Promoting   12m
 | `status.phase` | The newest Bundle's progress: `Ready` (Verified everywhere it went), `Promoting`, `Degraded` (a version failed) or `Unknown` (no Bundle yet). |
 | `Ready` condition | Whether the **spec** is valid (reasons `Valid`, `ValidationFailed`, `NotImplemented`, …). It says nothing about promotions: a `Ready=True` Pipeline can be `Degraded`. |
 
-These fields are for reading: no controller decision uses them. `kubectl get kardinal` lists the
+These fields are for reading: no controller decision uses them. A step moving between running
+states (promoting, waiting for its PR, checking health) shows within about 2 seconds: the
+controller writes every such change of that window in one status update, so a large Pipeline is
+not rewritten for each step. A step that ends (Live, failed), a version's phase and a gate's
+result show at once. `kubectl get kardinal` lists the
 kinds users write (Pipelines, Bundles, PolicyGates, MetricChecks, ChangeWindows, Subscriptions,
 NotificationHooks, ScmProviders, ClusterScmProviders); `kubectl get kardinal-all` adds the ones
 the controller generates (PromotionSteps, PRStatuses, AuditEvents, …).
