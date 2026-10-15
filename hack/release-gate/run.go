@@ -153,6 +153,11 @@ func (g *Gate) proven(st Step, dir string) string {
 	if err != nil {
 		return "unreadable test output: " + err.Error()
 	}
+	if t.Failed > 0 {
+		// go test can exit 0 with failures recorded (a TestMain that exits
+		// 0): what the output says decides.
+		return fmt.Sprintf("the test output records %d failures (%d of them package-level)", t.Failed, t.PackageFailed)
+	}
 	if t.Run < max(1, st.MinTests) {
 		return fmt.Sprintf("%d tests ran, fewer than the %d this step proves", t.Run, max(1, st.MinTests))
 	}

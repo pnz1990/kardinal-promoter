@@ -528,6 +528,9 @@ func TestCountTests(t *testing.T) {
 	got, err := countTests(strings.NewReader(goTestJSON))
 	require.NoError(t, err)
 	assert.Equal(t, Totals{Run: 4, Passed: 2, Failed: 1, Skipped: 1}, got)
+	got, err = countTests(strings.NewReader(goTestJSON + `{"Action":"fail","Package":"p"}` + "\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Totals{Run: 4, Passed: 2, Failed: 2, Skipped: 1, PackageFailed: 1}, got, "a package-level fail counts")
 }
 
 func TestVerdict(t *testing.T) {
@@ -839,6 +842,13 @@ func TestGateProof(t *testing.T) {
 			wantReason: "1 tests skipped, more than the 0 allowed"},
 		{name: "allowed skips", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1, MaxSkips: 1}, output: passingTests(2) + skip},
 		{name: "no log", step: Step{ID: "s", Script: "x"}, noLog: true, wantReason: "not proven: no log"},
+		// QA on #1872: TestMain doing m.Run(); os.Exit(0) after a t.Errorf.
+		{name: "a failed test with exit 0", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1},
+			output:     passingTests(48) + `{"Action":"fail","Test":"TestBroken"}` + "\n",
+			wantReason: "not proven: the test output records 1 failures (0 of them package-level)"},
+		{name: "a package-level failure with exit 0", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1},
+			output:     passingTests(5) + `{"Action":"fail","Package":"p"}` + "\n",
+			wantReason: "records 1 failures (1 of them package-level)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

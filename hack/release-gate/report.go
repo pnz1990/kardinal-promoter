@@ -16,13 +16,18 @@ import (
 )
 
 // Totals counts go test results: every test and subtest's last action.
-type Totals struct{ Run, Passed, Failed, Skipped int }
+type Totals struct {
+	Run, Passed, Failed, Skipped int
+	// PackageFailed counts the package-level failures among Failed.
+	PackageFailed int
+}
 
 func (t *Totals) add(o Totals) {
 	t.Run += o.Run
 	t.Passed += o.Passed
 	t.Failed += o.Failed
 	t.Skipped += o.Skipped
+	t.PackageFailed += o.PackageFailed
 }
 
 // countTests reads a go test -json stream. A test run N times (-count)
@@ -33,7 +38,17 @@ func countTests(r io.Reader) (Totals, error) {
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	for sc.Scan() {
 		var ev struct{ Action, Test string }
-		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Test == "" {
+		if json.Unmarshal(sc.Bytes(), &ev) != nil {
+			continue
+		}
+		if ev.Test == "" {
+			// A package that fails outside a test (a TestMain that exits
+			// 0 after failures still records it, a build error, a panic)
+			// counts as a failure.
+			if ev.Action == "fail" {
+				t.Failed++
+				t.PackageFailed++
+			}
 			continue
 		}
 		switch ev.Action {
