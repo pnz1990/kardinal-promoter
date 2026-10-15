@@ -117,7 +117,7 @@ func TestMCPClientLabel(t *testing.T) {
 	}{
 		{"no session", nil, base, 0},
 		{"a client", session("claude-code", "2.1.0"), base + " (claude-code/2.1.0)", 0},
-		{"control characters and non-ASCII are dropped", session("evil\n--context=x‮", "1\r\n"), base + " (evil--context=x/1)", 0},
+		{"control characters and non-ASCII are dropped", session("evil\n--context=x\u202e", "1\r\n"), base + " (evil--context=x/1)", 0},
 		{"a long name is cut", session(strings.Repeat("a", 500), "1"), "", mcpMaxAsserted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
