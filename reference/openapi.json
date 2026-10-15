@@ -1777,6 +1777,10 @@
             "description": "Kind is human, agent, bot or controller.",
             "type": "string"
           },
+          "principal": {
+            "description": "Principal is the username the API server authenticated.",
+            "type": "string"
+          },
           "sponsor": {
             "type": "string"
           },
@@ -2204,6 +2208,11 @@
             "format": "int32",
             "type": "integer"
           },
+          "highFindings": {
+            "description": "HighFindings are the findings of high severity among Findings.",
+            "format": "int32",
+            "type": "integer"
+          },
           "name": {
             "type": "string"
           },
@@ -2222,6 +2231,14 @@
           },
           "verifier": {
             "type": "string"
+          },
+          "verifierActor": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiActorRef"
+              }
+            ],
+            "description": "VerifierActor is who wrote the verdict, in short, for the UI's actor badge (from the gate's copy of the Verdict); absent when not known."
           }
         },
         "required": [
