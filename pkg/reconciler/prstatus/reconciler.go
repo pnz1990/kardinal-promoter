@@ -528,6 +528,15 @@ func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, 
 			mergedBy, retryMerger = r.fetchMerger(ctx, log, prs)
 		}
 		if retry || retryMerger {
+			if needMerger && mergedBy != "" {
+				// Keep the name while the merge commit is retried: the step
+				// waits for it, not for the commit.
+				patch := client.MergeFrom(prs.DeepCopy())
+				prs.Status.MergedBy = mergedBy
+				if err := r.Status().Patch(ctx, prs, patch); err != nil {
+					return ctrl.Result{}, fmt.Errorf("patch prstatus %s merger: %w", prs.Name, err)
+				}
+			}
 			return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 		}
 	}

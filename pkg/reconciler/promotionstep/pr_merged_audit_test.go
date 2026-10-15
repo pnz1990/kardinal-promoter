@@ -6,9 +6,11 @@ package promotionstep_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -99,5 +101,32 @@ func TestPRMergedAudit_WaitsForTheMerger(t *testing.T) {
 		} else {
 			assert.Contains(t, got[0].Spec.Message, "merged by user1 (seen by poll)")
 		}
+	}
+}
+
+// TestPRMerged_NotFailedByTheDeadlineOrAHold (#2003 QA N1): a step whose PR
+// its PRStatus reports merged, still waiting for the merger's name, is
+// neither failed by waitForMergeTimeout nor cancelled by a hold: its change
+// is in git. QA's probe.
+func TestPRMerged_NotFailedByTheDeadlineOrAHold(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		ps, prs, gate := waitingAutoMergeStep()
+		ps.Spec.RequiredGates = nil
+		past := metav1.NewTime(time.Now().Add(-time.Minute))
+		ps.Status.WaitForMergeExpiry = &past
+		prs.Status.Open, prs.Status.Merged, prs.Status.MergedVia = false, true, v1alpha1.PRMergedViaWebhook
+		p := makePipeline("nginx-demo")
+		p.Spec.Environments[1].WaitForMergeTimeout = "1h"
+		if held {
+			at := metav1.Now()
+			p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "rollback-x", Reason: "INC",
+				CreatedBy: "alice", CreatedAt: &at}}
+		}
+		c := newClient(t, ps, prs, gate, p, makeBundle("bundle-1", "nginx-demo"))
+		r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{}, WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+		reconcileStep(t, r, "step")
+		got := getStep(t, c, "step")
+		assert.Equal(t, "WaitingForMerge", got.Status.State, "held=%v: %s", held, got.Status.Message)
+		assert.Contains(t, got.Status.Message, "waiting for the SCM to say who merged it")
 	}
 }

@@ -1562,11 +1562,17 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
 
+	// A PR its PRStatus already reports merged is past the hold and the
+	// deadline below: its change is in git. (The step may still wait here for
+	// the merger's name, #1939.)
+	merged := r.stepPRMerged(ctx, ps)
+
 	// The environment is held on another Bundle's rollback (spec.holds,
 	// #1528): this PR would deploy over it once merged, so the promotion is
 	// cancelled as supersession cancels one, with its PR closed and a comment
-	// saying why. A step already HealthChecking has merged; it finishes.
-	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil {
+	// saying why. A step already HealthChecking, or whose PR merged, has
+	// merged; it finishes.
+	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil && !merged {
 		res, _, err := r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
 			fmt.Sprintf("environment %s is held on rollback %s (%s), so kardinal cancelled this promotion; "+
 				"once the hold is released, a newer Bundle promotes here", h.Environment, h.Bundle, h.Reason),
@@ -1578,7 +1584,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	// Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when
 	// writing the expiry to CRD status; the subsequent comparison reads the stored value.
 	env := findEnv(pipeline, ps.Spec.Environment)
-	if env.WaitForMergeTimeout != "" {
+	if env.WaitForMergeTimeout != "" && !merged {
 		if d, err := time.ParseDuration(env.WaitForMergeTimeout); err == nil && d > 0 {
 			// Set expiry once on first entry into WaitingForMerge (idempotent).
 			if ps.Status.WaitForMergeExpiry == nil {
@@ -3260,4 +3266,17 @@ func (r *Reconciler) clusterUnreachable(ctx context.Context, log zerolog.Logger,
 // upgrade waits for nothing.
 func mergerPending(s *v1alpha1.PRStatusStatus) bool {
 	return s.MergedVia != "" && s.MergedBy == "" && !s.MergedByUnavailable
+}
+
+// stepPRMerged reports whether ps's PRStatus says ps's own PR merged. A
+// PRStatus that is missing, unreadable or about another PR says no.
+func (r *Reconciler) stepPRMerged(ctx context.Context, ps *v1alpha1.PromotionStep) bool {
+	if ps.Spec.PRStatusRef == "" {
+		return false
+	}
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs); err != nil {
+		return false
+	}
+	return prStatusOfStepPR(&prs, ps.Status.Outputs) && prs.Status.Merged
 }

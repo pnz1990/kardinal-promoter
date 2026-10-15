@@ -104,3 +104,32 @@ func TestReconciler_MergerLookupRetried(t *testing.T) {
 	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
 	assert.Equal(t, "user1", got.Status.MergedBy)
 }
+
+// commitFailingSCM names the merger but fails the merge-commit lookup.
+type commitFailingSCM struct{ mergerSCM }
+
+func (m *commitFailingSCM) GetPRMergeCommit(context.Context, string, int) (string, error) {
+	return "", errors.New("503 Service Unavailable")
+}
+
+// TestReconciler_MergerKeptWhileTheCommitRetries (#2003 QA): a merger the
+// SCM named is recorded at once, even while the merge-commit lookup is
+// retried, so the step does not wait for the commit.
+func TestReconciler_MergerKeptWhileTheCommitRetries(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+	prs := &v1alpha1.PRStatus{ObjectMeta: metav1.ObjectMeta{Name: "pr", Namespace: "default"},
+		Spec:   v1alpha1.PRStatusSpec{PRURL: "https://github.com/acme/app/pull/5", PRNumber: 5, Repo: "acme/app"},
+		Status: v1alpha1.PRStatusStatus{Merged: true, MergedVia: v1alpha1.PRMergedViaWebhook, LastCheckedAt: &now}}
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(prs).WithStatusSubresource(prs).Build()
+	m := &commitFailingSCM{mergerSCM{merger: "user1"}}
+	r := &prstatus.Reconciler{Client: c, SCM: m}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr", Namespace: "default"}}
+	res, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Positive(t, res.RequeueAfter, "the commit is retried")
+	var got v1alpha1.PRStatus
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	assert.Equal(t, "user1", got.Status.MergedBy)
+	assert.Empty(t, got.Status.MergeCommitSHA)
+}
