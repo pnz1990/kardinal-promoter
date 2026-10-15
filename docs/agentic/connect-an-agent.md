@@ -15,8 +15,9 @@ command of the same name, in that process, with the kubeconfig and context it wa
 - **Read tools are on; write tools only with `--allow-write`.** Without it the write tools are
   not offered, and a call to one is refused.
 - **Gates still decide.** What the agent ships or approves goes through the same admission
-  policies, gates and approval rules as what a person does. An approval gate with
-  `excludeAuthor: true` does not count the agent's approval of a version the agent created.
+  policies, gates and approval rules as what a person does. An agent's approval counts only on
+  a gate that opts in to it (`approval.allowAgents`), and never on its own party's work
+  ([Agents as approvers](../approvals.md#agents-as-approvers)).
 
 Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 

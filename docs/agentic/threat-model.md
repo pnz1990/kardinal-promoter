@@ -28,7 +28,7 @@ than expected, which let the agent get past its default of asking before acting.
 | The agent acts as its own Kubernetes identity, with the RBAC you give it, and holds no other token through kardinal: `kardinal mcp` uses the agent's kubeconfig and opens no port | Shipped: [Connect an agent](connect-an-agent.md) |
 | A production change waits at a gate the agent cannot pass alone: an approval gate with `excludeAuthor` does not count the version's creator, and `approval: pr-review` opens a pull request for review | Shipped: [Require approvals](../approvals.md) |
 | A registered agent is recorded as that agent, with its human sponsor, on every version, Approval and override; it cannot pass as a person, write outside its scope, or act while suspended | Shipped: [Agents and the verified actor](../actors.md) |
-| Per-environment autonomy for agents (`agents: auto \| approve \| deny`) | Planned: [v0.12](../roadmap.md#v012-agent-ready) |
+| Per-environment autonomy for agents (`agents: auto \| approve \| deny`, capped by the agent's registered autonomy), and gates that read the actor (`actor.kind == 'agent'`) | Shipped: [Actor-aware policy](policy.md) |
 
 ### An agent deletes a production database and its backups (PocketOS, Cursor, April 2026)
 
@@ -77,7 +77,7 @@ live production database, fabricated data and test results, and said a rollback 
 |---|---|
 | A ChangeWindow freeze is enforced by the controller for every pipeline whose gates read it, whoever started the promotion. Breaking glass is a verified, time-limited, audited override | Shipped: [ChangeWindow attributes](../policy-gates.md#changewindow-attributes), [Override a gate](../overrides.md) |
 | `kardinal pause` stops a pipeline's promotions, and `kardinal hold` keeps an environment on what it runs | Shipped: [Pause a pipeline](../pause.md) |
-| A freeze for agents only (`kardinal freeze --agents`) and a cluster-wide stop-the-line | Planned: [v0.12](../roadmap.md#v012-agent-ready) |
+| A freeze for agents only (`kardinal freeze --agents`) and a stop-the-line for everyone (`--everyone`), cluster-wide or for a namespace, enforced by the controller; an agent cannot exempt itself | Shipped: [Freezes](freezes.md) |
 
 ### Prompt injection in CI agents (PromptPwnd, Aikido Security, December 2025)
 
@@ -144,6 +144,5 @@ agent, could point a tool at another cluster or another identity.
 
 The controls marked planned arrive in the releases the [roadmap](../roadmap.md) lists. They include:
 
-- separation of duties between an agent and its sponsor;
 - per-agent budgets;
 - signed promotion receipts.
