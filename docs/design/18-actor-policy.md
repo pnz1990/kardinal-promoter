@@ -1,6 +1,6 @@
 # Design: Actor-aware policy, agent approvals and freezes
 
-> Status: Accepted (spec for epic #1843, v0.12.0). Implementation follows in a separate PR.
+> Status: Implemented in v0.12.0 (epic #1843, #1869).
 > Created: 2026-10-14
 > Depends on: [17-actors.md](17-actors.md) (epic #1834): the `Actor` type, the `kardinal.io/actor`
 > stamp on Bundles, Approvals and overrides, `AgentIdentity`, and `pkg/actor`

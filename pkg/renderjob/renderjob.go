@@ -36,10 +36,6 @@ const (
 	GitSecretDir = "/var/run/kardinal/git"
 	// TokenFile is where the git Secret's token key is mounted.
 	TokenFile = GitSecretDir + "/token"
-	// SSHPrivateKeyFile and KnownHostsFile are where the git Secret's
-	// sshPrivateKey and knownHosts keys are mounted.
-	SSHPrivateKeyFile = GitSecretDir + "/sshPrivateKey"
-	KnownHostsFile    = GitSecretDir + "/knownHosts"
 	// WorkDir is the emptyDir the render works in.
 	WorkDir = "/work"
 	// TerminationMessagePath is where the Result is written.
