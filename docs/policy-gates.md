@@ -106,7 +106,8 @@ the gate instance and the gate's message: `waiting for gate
 no-weekend-deploys-platform-policies-prod--<bundle>: Production deployments are blocked on
 weekends`. An instance name that is too long, or has characters a name cannot hold, ends in a hash.
 A gate without a message shows the result, then the version (`!schedule.isWeekend = false (version
-1.29.0)`), and an approval gate the count (`waiting for approvals: 0 of 1 (version 1.29.0)`). The
+1.29.0)`), and an approval gate the count (`waiting for approvals: 0 of 1 (version 1.29.0)`), also
+when it has a message and its expression passes. The
 message is not shown when the gate blocks for another reason: an evaluation error (`CEL evaluation
 error: ... (version 1.29.0)`) or a context error (`context error: ...`) keeps its own reason,
 because the message does not explain it. The version is also in `status.bundleVersion`, for

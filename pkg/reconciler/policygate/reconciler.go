@@ -333,6 +333,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	if reqErr != nil && (evalErr == nil || pass) {
 		pass, reason, evalErr = false, "approval.requiredWhen: "+reqErr.Error(), reqErr
 	}
+	// spec.message explains a false expression only: a gate whose expression
+	// passes and that its approval or verify policy holds says so in its own
+	// words, not in the message (a registered agent's version waiting for a
+	// person is not "not registered").
+	exprFalse := !pass && evalErr == nil
 	// The approval and verify policies hold a gate whose expression passes.
 	if pass && evalErr == nil {
 		switch {
@@ -404,7 +409,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// A false expression is what spec.message explains: lead with it, so the
 	// Ready condition, kardinal explain/status, the UI, PR evidence and
 	// notifications show it (GATE-MESSAGE-01). The version ends the reason.
-	if !pass {
+	if exprFalse {
 		reason = graph.BlockedReason(gate.Spec.Message, reason, bundleVersion)
 	} else {
 		reason = graph.WithVersion(reason, bundleVersion)
