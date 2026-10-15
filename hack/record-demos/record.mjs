@@ -61,7 +61,7 @@ function freePort() {
     const s = net.createServer()
     s.unref()
     s.on('error', reject)
-    s.listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)) })
+    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) })
   })
 }
 
@@ -73,7 +73,7 @@ async function startMockServer() {
     child.stdout.on('data', (b) => { if (String(b).includes('running')) { clearTimeout(t); resolve() } })
     child.on('exit', (code) => reject(new Error(`record-demos: the mock server exited (${code})`)))
   })
-  return { base: `http://localhost:${port}`, stop: () => child.kill() }
+  return { base: `http://127.0.0.1:${port}`, stop: () => child.kill() }
 }
 
 async function recordFlow(browser, base, flow, theme, opts) {
