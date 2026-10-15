@@ -340,11 +340,12 @@ func labelUntrusted(v any) any {
 func untrusted(s string) map[string]any { return map[string]any{"untrusted": s} }
 
 // keepGlobals saves the package variables a command sets (its persistent
-// flags, the output style) and returns the func that puts them back.
+// flags, the output style, the stamp's asserted fields) and returns the
+// func that puts them back.
 func keepGlobals() (restore func()) {
-	ns, kc, ctx, out, s, e := globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut
+	ns, kc, ctx, out, s, e, a := globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut, assertedOf
 	return func() {
-		globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut = ns, kc, ctx, out, s, e
+		globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut, assertedOf = ns, kc, ctx, out, s, e, a
 	}
 }
 

@@ -54,7 +54,8 @@ func newMCPTool[In any](name, title, description string, write, destructive bool
 	ann.OpenWorldHint = &openWorld
 	return mcpTool{name: name, write: write, add: func(s *mcp.Server, k *mcpServer) {
 		mcp.AddTool(s, &mcp.Tool{Name: name, Title: title, Description: description, Annotations: ann},
-			func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+				ctx = context.WithValue(ctx, mcpClientKey{}, mcpClientLabel(req))
 				if v, ok := any(in).(interface{ check() error }); ok {
 					if err := v.check(); err != nil {
 						return toolError(fmt.Errorf("%s: %w", name, err)), nil, nil
@@ -103,6 +104,38 @@ type (
 		Pipeline string `json:"pipeline" jsonschema:"Pipeline name"`
 	}
 )
+
+// mcpClientKey is the context key of the label of the MCP client that
+// called a tool (mcpClientLabel).
+type mcpClientKey struct{}
+
+// mcpMaxAsserted is the longest asserted field the actor stamp takes.
+const mcpMaxAsserted = 128
+
+// mcpClientLabel is the stamp's asserted client for a tool call:
+// kardinal-mcp/<version>, and the name and version the client gave when it
+// connected, as it gave them (asserted, never trusted), printable ASCII
+// only and at most mcpMaxAsserted bytes.
+func mcpClientLabel(req *mcp.CallToolRequest) string {
+	label := "kardinal-mcp/" + CLIVersion
+	if req != nil && req.Session != nil {
+		if p := req.Session.InitializeParams(); p != nil && p.ClientInfo != nil {
+			if c := strings.TrimSpace(p.ClientInfo.Name + "/" + p.ClientInfo.Version); c != "/" {
+				label += " (" + strings.Trim(c, "/") + ")"
+			}
+		}
+	}
+	label = strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return -1
+		}
+		return r
+	}, label)
+	if len(label) > mcpMaxAsserted {
+		label = label[:mcpMaxAsserted]
+	}
+	return label
+}
 
 // The patterns a tool's arguments must match before anything runs: the
 // CRDs' own (an environment name; an image tag, which a version extends
@@ -202,6 +235,19 @@ func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	}
 	globalOutput = "json"
 	sty, errOut = style.Plain(), io.Discard
+	// The writes are stamped by the commands' own code (stampOf): the actor
+	// is who the kubeconfig authenticates. What the client says about itself
+	// goes in the stamp's asserted fields: kardinal mcp and the agent that
+	// connected, unless KARDINAL_ACTOR_CLIENT says otherwise.
+	label, _ := ctx.Value(mcpClientKey{}).(string)
+	asserted := assertedOf
+	assertedOf = func() v1alpha1.AssertedActor {
+		a := asserted()
+		if a.Client == "" {
+			a.Client = label
+		}
+		return a
+	}
 	c, cns, err := buildClient()
 	if err != nil {
 		return nil, err

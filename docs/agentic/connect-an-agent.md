@@ -66,6 +66,17 @@ Without `version`, it evaluates a version that went through every upstream envir
 labels, provenance, creator, Approvals and how long it has soaked. The CLI has the same with
 `kardinal policy simulate my-app prod --version 1.5.0`.
 
+### Who the writes are recorded as
+
+The write tools run the CLI's own code, so what they write carries the same verified actor
+stamp as a write from `kardinal` itself ([Agents and the verified actor](../actors.md)): the identity the kubeconfig
+authenticates, and for a registered agent its AgentIdentity's name and sponsor. A registered
+agent's writes must carry that stamp: the chart's admission policy refuses them without it. What
+the client says about itself goes in the stamp's asserted fields, never trusted: the client is
+`kardinal-mcp/<version> (<agent>/<version>)`, with the name and version the agent gave when it
+connected, unless `KARDINAL_ACTOR_CLIENT` is set; the model and session are
+`KARDINAL_ACTOR_MODEL` and `KARDINAL_ACTOR_SESSION`, which you can set in the server's `env`.
+
 ### Text kardinal did not write
 
 Tool results carry text from outside kardinal: PR URLs, step messages relayed from the SCM or
