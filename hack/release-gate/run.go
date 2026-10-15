@@ -138,7 +138,7 @@ func (g *Gate) cached(st Step) (Result, bool) {
 // and at most MaxSkips skips. Else it says what is missing; the step is not
 // a pass.
 func (g *Gate) proven(st Step, dir string) string {
-	if fi, err := os.Stat(filepath.Join(dir, "log.txt")); err != nil || fi.Size() == 0 {
+	if _, err := os.Stat(filepath.Join(dir, "log.txt")); err != nil {
 		return "no log"
 	}
 	if st.Tests == "" {
@@ -411,6 +411,9 @@ func (b bashRunner) Run(ctx context.Context, st Step, dir string) error {
 		return fmt.Errorf("create log: %w", err)
 	}
 	defer func() { _ = log.Close() }()
+	if _, err := fmt.Fprintf(log, "== %s (%s)\n", st.ID, st.Title); err != nil {
+		return fmt.Errorf("write log: %w", err)
+	}
 	if err := b.command(ctx, st.Script, st, dir, log).Run(); err != nil {
 		return fmt.Errorf("script: %w (see log.txt)", err)
 	}
