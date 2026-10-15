@@ -29,12 +29,11 @@ import (
 // kube-apiserver (envtest), the one KUBEBUILDER_ASSETS names. CI runs it on
 // the oldest Kubernetes the chart supports and on the newest
 // (ENVTEST_K8S_MIN and ENVTEST_K8S_MAX in hack/tool-versions.env), so a
-// schema or CEL rule only newer API servers accept never ships again (#1835:
-// a CEL rule on an int-or-string field cost 94 times the budget before
-// 1.34). The API server compiles each policy's CEL when it is created (the
+// schema or CEL rule only newer API servers accept never ships (#1835). The
+// API server compiles each policy's CEL when it is created (the
 // type-checking warnings come from kube-controller-manager, which envtest
 // does not run). A few writes then check the fleet rules end to end: the
-// CRD's maxUnavailable pattern and the fleets policy.
+// CRD's maxUnavailable rule and the fleets policy.
 //
 // Covers FLEET-16.
 func TestInstallOnAPIServer(t *testing.T) {

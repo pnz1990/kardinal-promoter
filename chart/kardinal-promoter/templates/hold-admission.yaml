@@ -3,9 +3,7 @@ Copyright 2026 The kardinal-promoter Authors.
 Licensed under the Apache License, Version 2.0
 
 Admission policy for Pipeline spec.holds (kardinal rollback --hold, #1528;
-docs/rollback.md#who-may-hold). Kubernetes 1.30+ serves
-admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy (the chart's
-kubeVersion).
+docs/rollback.md#who-may-hold).
 */}}
 {{- $fullname := include "kardinal-promoter.fullname" . }}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}

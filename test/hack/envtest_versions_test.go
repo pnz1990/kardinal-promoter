@@ -27,11 +27,7 @@ func TestEnvtestCoversTheSupportedKubernetes(t *testing.T) {
 	require.NotNil(t, maxM, "ENVTEST_K8S_MAX %q", v["ENVTEST_K8S_MAX"])
 	assert.NotEmpty(t, v["SETUP_ENVTEST_VERSION"])
 
-	chart, err := os.ReadFile(filepath.Join(repoRoot(t), "chart", "kardinal-promoter", "Chart.yaml"))
-	require.NoError(t, err)
-	kube := regexp.MustCompile(`(?m)^kubeVersion:\s*"?>=\s*1\.(\d+)\.`).FindSubmatch(chart)
-	require.NotNil(t, kube, "Chart.yaml kubeVersion is >=1.<minor>...")
-	assert.Equal(t, string(kube[1]), minM[1], "ENVTEST_K8S_MIN is the chart's oldest supported minor")
+	assert.Equal(t, strconv.Itoa(oldestMinor(t)), minM[1], "ENVTEST_K8S_MIN is the chart's oldest supported minor")
 	lo, _ := strconv.Atoi(minM[1])
 	hi, _ := strconv.Atoi(maxM[1])
 	assert.Greater(t, hi, lo, "ENVTEST_K8S_MAX is newer than ENVTEST_K8S_MIN")
@@ -40,4 +36,17 @@ func TestEnvtestCoversTheSupportedKubernetes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(ci), "make envtest ENVTEST_K8S=", "CI runs make envtest")
 	assert.Contains(t, string(ci), "k8s: [min, max]")
+}
+
+// oldestMinor is the oldest Kubernetes minor kardinal supports: the chart's
+// kubeVersion (">=1.<minor>.0-0").
+func oldestMinor(t *testing.T) int {
+	t.Helper()
+	chart, err := os.ReadFile(filepath.Join(repoRoot(t), "chart", "kardinal-promoter", "Chart.yaml"))
+	require.NoError(t, err)
+	kube := regexp.MustCompile(`(?m)^kubeVersion:\s*"?>=\s*1\.(\d+)\.`).FindSubmatch(chart)
+	require.NotNil(t, kube, "Chart.yaml kubeVersion is >=1.<minor>...")
+	n, err := strconv.Atoi(string(kube[1]))
+	require.NoError(t, err)
+	return n
 }

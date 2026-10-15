@@ -975,7 +975,7 @@ The CLI reads your username from the API server with a SelfSubjectReview (what
 `kubectl auth whoami` shows): an OIDC user is often `oidc:alice@example.com`, a ServiceAccount
 `system:serviceaccount:<namespace>:<name>`. The local OS user is not used. The policy has
 `failurePolicy: Fail`, so a policy that cannot be evaluated denies the write. It needs
-Kubernetes 1.30 or later, the chart's minimum.
+Kubernetes 1.35 or later, the chart's minimum.
 
 ---
 

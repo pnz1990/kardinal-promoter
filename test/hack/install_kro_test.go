@@ -56,23 +56,23 @@ func versionJSON(minor, gitVersion string) string {
 
 // TestInstallKroRefusesOldKubernetes: hack/install-kro.sh reads the server
 // version of the KUBE_CONTEXT cluster before it installs anything, and
-// refuses Kubernetes older than 1.30, where kro's CRDs (CRD selectableFields)
-// cannot be installed. A managed cluster's "30+" minor counts as 30, and a
-// server it cannot read stops the script too. Covers UPG-OLDK8S-01.
+// refuses Kubernetes older than 1.35, the oldest kardinal supports. A managed
+// cluster's "35+" minor counts as 35, and a server it cannot read stops the
+// script too. Covers UPG-OLDK8S-01.
 func TestInstallKroRefusesOldKubernetes(t *testing.T) {
-	const refused = "install-kro.sh: Kubernetes 1.29 is not supported: kro's CRDs need 1.30 or later (CRD selectableFields). Upgrade the cluster first."
+	const refused = "install-kro.sh: Kubernetes 1.34 is not supported: kardinal needs 1.35 or later. Upgrade the cluster first."
 	tests := []struct {
 		name    string
 		version string
 		// wantErr is part of the error output, or "" when kro is installed.
 		wantErr string
 	}{
-		{name: "1.29 refused", version: versionJSON("29", "v1.29.14"), wantErr: refused},
-		{name: "GKE 29+ refused", version: versionJSON("29+", "v1.29.15-gke.1234000"), wantErr: refused},
-		{name: "1.30 accepted", version: versionJSON("30", "v1.30.13")},
-		{name: "EKS 30+ accepted", version: versionJSON("30+", "v1.30.14-eks-ce1d5eb")},
+		{name: "1.34 refused", version: versionJSON("34", "v1.34.4"), wantErr: refused},
+		{name: "GKE 34+ refused", version: versionJSON("34+", "v1.34.5-gke.1234000"), wantErr: refused},
+		{name: "1.35 accepted", version: versionJSON("35", "v1.35.8")},
+		{name: "EKS 35+ accepted", version: versionJSON("35+", "v1.35.2-eks-ce1d5eb")},
 		{name: "1.37 accepted", version: versionJSON("37", "v1.37.0")},
-		{name: "empty minor read from gitVersion", version: versionJSON("", "v1.31.2")},
+		{name: "empty minor read from gitVersion", version: versionJSON("", "v1.36.2")},
 		{name: "unreachable server refused", wantErr: "cannot read the Kubernetes server version (kubectl version failed)"},
 		{
 			name:    "no serverVersion refused",

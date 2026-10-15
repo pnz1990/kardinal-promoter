@@ -12,8 +12,7 @@ field but metadata, any metadata but the annotation and resourceVersion,
 managedFields and generation) unless
 the controller may also update the object: rbac.argocdApplicationsWrite
 grants update on Applications for the argocd update strategy, and a Role of
-your own can grant it per object. Kubernetes 1.30+ serves
-admissionregistration.k8s.io/v1 (the chart's kubeVersion).
+your own can grant it per object.
 */}}
 {{- $fullname := include "kardinal-promoter.fullname" . }}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}

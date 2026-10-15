@@ -9,9 +9,9 @@ package v1alpha1_test
 // celAdmission runs the API server's own CEL validator
 // (k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel), not the cel-go
 // approximation in crd_schema_test.go, so it also covers CRD validation
-// ratcheting: with ratcheting (the CRDValidationRatcheting gate, beta and on by
-// default since Kubernetes 1.30, GA in 1.33) a rule error is dropped when the
-// schema node that carries the rule is unchanged from the stored object.
+// ratcheting: with ratcheting (CRDValidationRatcheting, GA on every Kubernetes
+// kardinal supports) a rule error is dropped when the schema node that carries
+// the rule is unchanged from the stored object.
 
 import (
 	"context"
@@ -188,9 +188,7 @@ func TestCRDRejectsArgoCDFleet(t *testing.T) {
 // can still take edits that leave the rejected value alone (kardinal pause,
 // kardinal override, status writes), because each rule sits on the smallest
 // node that holds the value and ratcheting spares an unchanged node. An edit
-// to that node must fix it. Without ratcheting (Kubernetes before 1.30, or the
-// gate turned off) every update of such an object fails; the PR's upgrade note
-// says to drop the field first.
+// to that node must fix it.
 func TestCRDNewRulesRatchet(t *testing.T) {
 	crds := loadCRDs(t)
 

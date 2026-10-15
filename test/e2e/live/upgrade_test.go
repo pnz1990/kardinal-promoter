@@ -256,13 +256,11 @@ func (u *upgrade) assertKept(t *testing.T, objs []kept) {
 }
 
 // ratchetCase is a legacy object and the writes that fail on it once the new
-// CRDs are applied, with the CRD validation ratcheting of Kubernetes 1.33 and
-// later (the table in the guide's "Kubernetes version"). status132 marks an
-// object whose status write also fails on 1.30 to 1.32.
+// CRDs are applied, with CRD validation ratcheting (the table in the guide's
+// "Kubernetes version").
 type ratchetCase struct {
 	kind, name string
 	fail       []string
-	status132  bool
 }
 
 // ratchetWrite is the kubectl command of a write ("label", "spec", "status",
@@ -289,27 +287,24 @@ func (u *upgrade) ratchetWrite(kind, name, write string) string {
 
 // assertRatchets writes to every legacy object and checks which writes the
 // API server rejects.
-func (u *upgrade) assertRatchets(t *testing.T, minor int) {
+func (u *upgrade) assertRatchets(t *testing.T) {
 	t.Helper()
 	pipelineWrites := []string{"label", "spec", "status", "env0"}
 	gateWrites := []string{"label", "spec", "status"}
 	cases := []ratchetCase{
-		{"pipeline", "legacy-steps", nil, false},
-		{"pipeline", "legacy-autorollback", []string{"env0"}, true},
-		{"pipeline", "legacy-reserved", []string{"env0"}, true},
-		{"pipeline", "legacy-policygates", nil, false},
-		{"policygate", "legacy-selector", nil, false},
-		{"pipeline", "legacy-badname", nil, false},
-		{"policygate", legacyLongGate, gateWrites, false},
-		{"pipeline", "legacy-dupenv", nil, false},
-		{"pipeline", "legacy-shard", nil, false},
-		{"pipeline", "legacy-clean", nil, false},
+		{"pipeline", "legacy-steps", nil},
+		{"pipeline", "legacy-autorollback", []string{"env0"}},
+		{"pipeline", "legacy-reserved", []string{"env0"}},
+		{"pipeline", "legacy-policygates", nil},
+		{"policygate", "legacy-selector", nil},
+		{"pipeline", "legacy-badname", nil},
+		{"policygate", legacyLongGate, gateWrites},
+		{"pipeline", "legacy-dupenv", nil},
+		{"pipeline", "legacy-shard", nil},
+		{"pipeline", "legacy-clean", nil},
 	}
 	for _, c := range cases {
 		fails := c.fail
-		if c.status132 && minor < 33 {
-			fails = append([]string{"status"}, fails...)
-		}
 		writes := pipelineWrites
 		if c.kind == "policygate" {
 			writes = gateWrites
@@ -427,9 +422,9 @@ func serverMinor(t *testing.T, e *framework.Env) int {
 //     step 7 (the guide's "If you already applied the CRDs" path), so the test
 //     first checks the table in "Kubernetes version": which label, spec,
 //     status and environment writes the new CRDs reject on each object with
-//     CRD validation ratcheting: on 1.30 to 1.32 status writes fail too. The
-//     cluster must run Kubernetes 1.30 or later; the suite runs on 1.30, the
-//     oldest minor kardinal supports, and the newest.
+//     CRD validation ratcheting. The cluster must run Kubernetes 1.35 or
+//     later; the suite runs on 1.35, the oldest minor kardinal supports, and
+//     the newest.
 //   - Step 7 applies every kardinal CRD by hand; the API server then enforces them
 //     (a reserved environment name and a 64-character PolicyGate name are
 //     rejected), and kardinal policy simulate reads the pre-upgrade MetricCheck
@@ -458,7 +453,7 @@ func TestUpgrade_FromV081(t *testing.T) {
 	ns := e.Namespace(t)
 	u := &upgrade{e: e, ns: ns, main: ns, cliPaused: ns + "-cli", specPaused: ns + "-spec"}
 	minor := serverMinor(t, e)
-	require.GreaterOrEqual(t, minor, 30, "kardinal needs Kubernetes 1.30 or later; the cluster runs 1.%d", minor)
+	require.GreaterOrEqual(t, minor, 35, "kardinal needs Kubernetes 1.35 or later; the cluster runs 1.%d", minor)
 	t.Logf("Kubernetes 1.%d", minor)
 	require.Greater(t, len(legacyLongGate), 63)
 
@@ -617,7 +612,7 @@ spec:
 				long.Code != 0 && strings.Contains(long.Output, "PolicyGate names are at most 63 characters"),
 			reserved.Output + long.Output
 	})
-	u.assertRatchets(t, minor)
+	u.assertRatchets(t)
 
 	sim := e.MustKardinal(t, ns, "policy", "simulate", "--pipeline", u.main, "--env", "prod")
 	assert.True(t, strings.HasPrefix(sim, "RESULT: BLOCKED\n"), sim)

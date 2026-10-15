@@ -114,7 +114,7 @@ func TestKindClustersUseOneSupportedNodeImage(t *testing.T) {
 			require.Len(t, images, 1, "kind-config.yaml must set exactly one node image")
 			minor, err := strconv.Atoi(images[0][1])
 			require.NoError(t, err)
-			assert.GreaterOrEqual(t, minor, 30, "hack/install-kro.sh needs Kubernetes 1.30 or newer (kro's graphrevisions CRD uses selectableFields): %s", images[0][0])
+			assert.GreaterOrEqual(t, minor, oldestMinor(t), "kardinal needs Kubernetes 1.%d or newer (Chart.yaml kubeVersion): %s", oldestMinor(t), images[0][0])
 			assert.NotEmpty(t, images[0][2], "pin the node image by digest, as the kind release notes list it: %s", images[0][0])
 		} else {
 			for _, img := range images {
@@ -215,19 +215,14 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	}
 }
 
-var (
-	kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
-	// suiteNodeKey is KIND_NODE_<SUITE>_1_<minor>, a minor only that suite
-	// runs on (hack/e2e/up.sh, KIND_K8S).
-	suiteNodeKey = regexp.MustCompile(`^KIND_NODE_([A-Z][A-Z_]*)_1_(\d+)$`)
-)
+var kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
 
 // TestKindNodeMatrixIsPinned checks the KIND_NODE_1_<minor> images in
 // hack/tool-versions.env that the live e2e matrix boots: at least three
 // minors, each image digest-pinned with the minor its key names and new
-// enough for kro, kind-config.yaml using one of them, and kubectl within its
-// one minor of skew of every one. A KIND_NODE_<SUITE>_1_<minor> image is
-// digest-pinned with its key's minor, 1.30 or later, too.
+// enough for kardinal (the chart's kubeVersion), the oldest of them that
+// minor, kind-config.yaml using one of them, and kubectl within its one minor
+// of skew of every one.
 func TestKindNodeMatrixIsPinned(t *testing.T) {
 	tv := toolVersions(t)
 	kubectl := semver.FindStringSubmatch(tv["KUBECTL_VERSION"])
@@ -236,19 +231,8 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 	require.NoError(t, err)
 
 	images := map[string]bool{}
+	oldest, lowest := oldestMinor(t), 0
 	for k, v := range tv {
-		if m := suiteNodeKey.FindStringSubmatch(k); m != nil {
-			img := kindNodeImage.FindStringSubmatch(v)
-			if assert.NotNil(t, img, "%s=%s is not a kindest/node image", k, v) {
-				assert.Equal(t, v, img[0], "%s=%s: only the image, nothing else", k, v)
-				assert.Equal(t, m[2], img[1], "%s=%s: the image's minor must match the key", k, v)
-				assert.NotEmpty(t, img[2], "%s=%s: pin the image by digest", k, v)
-				minor, err := strconv.Atoi(img[1])
-				require.NoError(t, err)
-				assert.GreaterOrEqual(t, minor, 30, "%s: kardinal needs Kubernetes 1.30 or later", k)
-			}
-			continue
-		}
 		m := kindNodeKey.FindStringSubmatch(k)
 		if m == nil {
 			continue
@@ -263,10 +247,14 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 		assert.NotEmpty(t, img[2], "%s=%s: pin the image by digest", k, v)
 		minor, err := strconv.Atoi(img[1])
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, minor, 30, "%s: hack/install-kro.sh needs Kubernetes 1.30 or newer (kro's graphrevisions CRD uses selectableFields)", k)
+		assert.GreaterOrEqual(t, minor, oldest, "%s: kardinal needs Kubernetes 1.%d or later (Chart.yaml kubeVersion)", k, oldest)
+		if lowest == 0 || minor < lowest {
+			lowest = minor
+		}
 		assert.LessOrEqual(t, abs(minor-kubectlMinor), 1, "%s: KUBECTL_VERSION %s is more than one minor away", k, tv["KUBECTL_VERSION"])
 	}
 	assert.GreaterOrEqual(t, len(images), 3, "the live e2e matrix runs on three Kubernetes minors")
+	assert.Equal(t, oldest, lowest, "the oldest KIND_NODE_1_* image is the oldest minor kardinal supports")
 
 	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), "test/e2e/kind-config.yaml"))
 	require.NoError(t, err)
@@ -277,13 +265,12 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 // TestE2EMatrixRunsEverySuite checks hack/e2e/matrix.txt, the jobs
 // hack/e2e/all.sh runs locally and e2e-live.yml in CI: every suite in
 // hack/e2e/up.sh has a job and no other suite does, every job boots a node
-// image up.sh finds in hack/tool-versions.env (KIND_NODE_1_<minor>, or
-// KIND_NODE_<SUITE>_1_<minor> for a minor only that suite runs on), each
+// image up.sh finds in hack/tool-versions.env (KIND_NODE_1_<minor>), each
 // suite runs on a minor once, as a whole or with a complete set of shards,
 // and the core suite runs on every KIND_NODE_1_* minor. No job runs on a
-// Kubernetes older than 1.30, which kardinal does not support, and the upgrade
-// suite runs on 1.30, the oldest it does. e2e-live.yml must take its matrix
-// from all.sh -matrix.
+// Kubernetes older than the chart's kubeVersion, and the upgrade suite runs
+// on that oldest minor. e2e-live.yml must take its matrix from all.sh
+// -matrix.
 func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	root := repoRoot(t)
 	runs, err := coverage.SuiteRuns(root)
@@ -296,6 +283,7 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	// shards["core 1.37"] is the set of core's shards on 1.37 ("-" for none).
 	shards := map[string]map[string]bool{}
 	var oldestUpgrade bool
+	oldest := oldestMinor(t)
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
 		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
@@ -307,13 +295,11 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 		suite, minor, shard := f[0], f[1], f[2]
 		_, known := runs[suite]
 		assert.True(t, known, "matrix.txt %q: hack/e2e/up.sh has no suite %s", line, suite)
-		node, suiteNode := "KIND_NODE_"+strings.ReplaceAll(minor, ".", "_"),
-			"KIND_NODE_"+strings.ReplaceAll(strings.ToUpper(suite), "-", "_")+"_"+strings.ReplaceAll(minor, ".", "_")
-		assert.True(t, tv[node] != "" || tv[suiteNode] != "",
-			"matrix.txt %q: hack/tool-versions.env has no %s or %s", line, node, suiteNode)
+		node := "KIND_NODE_" + strings.ReplaceAll(minor, ".", "_")
+		assert.NotEmpty(t, tv[node], "matrix.txt %q: hack/tool-versions.env has no %s", line, node)
 		if n, err := strconv.Atoi(strings.TrimPrefix(minor, "1.")); assert.NoError(t, err, "matrix.txt %q: minor", line) {
-			assert.GreaterOrEqual(t, n, 30, "matrix.txt %q: kardinal needs Kubernetes 1.30 or later", line)
-			oldestUpgrade = oldestUpgrade || (suite == "upgrade" && n == 30)
+			assert.GreaterOrEqual(t, n, oldest, "matrix.txt %q: kardinal needs Kubernetes 1.%d or later", line, oldest)
+			oldestUpgrade = oldestUpgrade || (suite == "upgrade" && n == oldest)
 		}
 		if shard != "-" {
 			assert.Regexp(t, `^[1-9][0-9]*/[1-9][0-9]*$`, shard, "matrix.txt %q", line)
@@ -350,7 +336,7 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 		}
 		assert.Equal(t, want, got, "%s: the whole suite, or every shard 1/n to n/n, once", key)
 	}
-	assert.True(t, oldestUpgrade, "matrix.txt has no upgrade job on Kubernetes 1.30, the oldest minor kardinal supports")
+	assert.True(t, oldestUpgrade, "matrix.txt has no upgrade job on Kubernetes 1.%d, the oldest minor kardinal supports", oldest)
 
 	const rel = ".github/workflows/e2e-live.yml"
 	data, err = os.ReadFile(filepath.Join(root, rel))

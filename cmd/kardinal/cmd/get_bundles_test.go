@@ -11,23 +11,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-// TestGetBundles_FallbackReturnsItsOwnError (C09b-cli-23): when the
-// field-selector list and the unfiltered fallback both fail, the error is the
-// fallback's, with the first failure as context.
-func TestGetBundles_FallbackReturnsItsOwnError(t *testing.T) {
-	calls := 0
+// TestGetBundles_ListErrorIsReturned (C09b-cli-23): a failed list of one
+// Pipeline's Bundles is returned with the Pipeline as context; there is no
+// unfiltered fallback.
+func TestGetBundles_ListErrorIsReturned(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
 		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
-			calls++
-			if calls == 1 {
-				return apierrors.NewBadRequest("field label not supported: spec.pipeline") // Kubernetes 1.30
-			}
 			return errors.New("bundles.kardinal.io is forbidden")
 		},
 	}).Build()
