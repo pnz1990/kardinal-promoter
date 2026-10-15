@@ -938,6 +938,7 @@ func controllerEnvReads(t *testing.T) map[string]bool {
 // everyValue sets every value that renders a flag or env var.
 var everyValue = []string{
 	"--set", "health.refresh.enabled=false",
+	"--set", "health.refresh.namespaces={default=team-*,ops=*}",
 	"--set", "controller.tlsCertFile=/tls/tls.crt",
 	"--set", "controller.tlsKeyFile=/tls/tls.key",
 	"--set", "controller.extraVolumes[0].name=tls",
@@ -991,6 +992,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"scm-allowed-repositories":              "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
 		"gates-commit-status":                   "false",
 		"health-refresh":                        "false",
+		"health-refresh-namespaces":             "default=team-*,ops=*",
 		"gates-status-context":                  "acme/gates",
 		"ui-tokenreview-auth":                   "true",
 		"cors-allowed-origins":                  "https://a.example.com,https://b.example.com",

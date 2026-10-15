@@ -264,6 +264,13 @@ func main() {
 		"Ask Argo CD (argocd.argoproj.io/refresh) or Flux (reconcile.fluxcd.io/requestedAt) to sync a "+
 			"promotion's commit as soon as it is in git, once per step, instead of waiting for their poll "+
 			"(Helm health.refresh.enabled). An environment's health.refresh: false turns it off there.")
+	var healthRefreshNamespaces string
+	flag.StringVar(&healthRefreshNamespaces, "health-refresh-namespaces", "",
+		"Comma-separated pipelineNamespace=namespace rules (Helm health.refresh.namespaces): the Argo CD "+
+			"Applications and Flux Kustomizations of this cluster a Pipeline may have the controller refresh, "+
+			"besides those in its own namespace or deploying there. Each side is a namespace, a prefix ending "+
+			"in * or *; *=* refreshes any object. A remote cluster's refresh (health.kubeconfigSecretRef) uses "+
+			"the kubeconfig's identity and is not limited.")
 	var gatesStatusContext string
 	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
 		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
@@ -616,6 +623,15 @@ func main() {
 			Msg("the controller's SCM token is limited to the allowed repositories")
 	}
 
+	refreshScope, err := healthpkg.ParseRefreshScope(splitCSV(healthRefreshNamespaces))
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --health-refresh-namespaces")
+	}
+	if rules := refreshScope.Rules(); len(rules) > 0 {
+		logger.Info().Strs("healthRefreshNamespaces", rules).
+			Msg("health.refresh may also refresh the GitOps objects these rules admit")
+	}
+
 	trustedProxies, err := accesslog.ParseCIDRs(splitCSV(accessLogTrustedProxies))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --access-log-trusted-proxies")
@@ -930,6 +946,7 @@ func main() {
 		GitClient:           gitClient,
 		GatesStatusDisabled: !gatesCommitStatus,
 		RefreshDisabled:     !healthRefresh,
+		RefreshScope:        refreshScope,
 		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		RemoteClusters:      &healthpkg.RemoteClusters{},

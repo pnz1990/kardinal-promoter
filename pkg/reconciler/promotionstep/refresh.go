@@ -6,6 +6,7 @@ package promotionstep
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -22,6 +23,7 @@ import (
 const (
 	ReasonRefreshRequested = "GitOpsRefreshRequested"
 	ReasonRefreshFailed    = "GitOpsRefreshFailed"
+	ReasonRefreshSkipped   = "GitOpsRefreshSkipped"
 )
 
 // refreshWanted reports whether a HealthChecking step should ask the GitOps
@@ -92,18 +94,30 @@ func (r *Reconciler) noChangesRefreshWanted(ps *v1alpha1.PromotionStep, env v1al
 // Event classified (health.ClassifyRefreshError): the API server's answer and
 // address, which can be a remote cluster's, go to the log only.
 func (r *Reconciler) requestRefresh(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
-	detector *health.AutoDetector, opts health.CheckOptions, rev string) error {
+	detector *health.AutoDetector, opts health.CheckOptions, rev string, remote bool) error {
 	targets, targetsErr := detector.RefreshTargets(ctx, opts)
+	var outside []string
+	if targetsErr == nil && !remote {
+		outside = r.RefreshScope.OutOfScope(ps.Namespace, targets)
+	}
 	at := metav1.NewTime(r.now().UTC().Truncate(time.Second))
 	ps.Status.RefreshRequestedAt = &at
 	ps.Status.RefreshRevision = rev
-	if targetsErr == nil && len(targets) > 0 {
+	switch {
+	case len(outside) > 0:
+		ps.Status.RefreshMessage = refreshSkippedMessage(opts.Type, ps.Namespace, outside)
+	case targetsErr == nil && len(targets) > 0:
 		ps.Status.RefreshMessage = "refresh requested: " + health.DescribeTargets(targets)
-	} else {
+	default:
 		ps.Status.RefreshMessage = refreshFailedMessage(opts.Type, targetsErr)
 	}
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 		return fmt.Errorf("patch refresh request: %w", err)
+	}
+	if len(outside) > 0 {
+		log.Warn().Str("adapter", opts.Type).Strs("outside", outside).Msg("GitOps refresh skipped: target outside the Pipeline's namespace")
+		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonRefreshSkipped, "Verify", ps.Status.RefreshMessage)
+		return nil
 	}
 	if targetsErr != nil || len(targets) == 0 {
 		log.Warn().Err(targetsErr).Str("adapter", opts.Type).Msg("GitOps refresh not requested")
@@ -127,12 +141,24 @@ func (r *Reconciler) requestRefresh(ctx context.Context, log zerolog.Logger, bas
 	return nil
 }
 
+// gitopsTool names the tool a health type refreshes.
+func gitopsTool(healthType string) string {
+	if healthType == "flux" {
+		return "Flux"
+	}
+	return "Argo CD"
+}
+
+// refreshSkippedMessage is the status.refreshMessage of a refresh not sent
+// because a target is outside the Pipeline's namespace (RefreshScope).
+func refreshSkippedMessage(healthType, pipelineNS string, outside []string) string {
+	return fmt.Sprintf("refresh skipped (%s: outside the Pipeline's namespace %s, see --health-refresh-namespaces); waiting for %s to poll git",
+		strings.Join(outside, ", "), pipelineNS, gitopsTool(healthType))
+}
+
 // refreshFailedMessage is the status.refreshMessage of a failed request.
 func refreshFailedMessage(healthType string, err error) string {
-	tool := "Argo CD"
-	if healthType == "flux" {
-		tool = "Flux"
-	}
+	tool := gitopsTool(healthType)
 	reason := "no object to refresh"
 	if err != nil {
 		reason = health.ClassifyRefreshError(err)

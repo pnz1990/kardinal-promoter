@@ -110,6 +110,7 @@ var foreignFieldPaths = map[string]string{
 	"spec.kubeConfig":                     "Flux Kustomization",
 	"spec.kubeConfig.secretRef":           "Flux Kustomization",
 	"spec.sourceRef":                      "Flux Kustomization",
+	"spec.destination.namespace":          "Argo CD Application",
 	"status.inventory":                    "Flux Kustomization",
 	"status.lastAppliedRevision":          "Flux Kustomization",
 	"spec.policyGates":                    "the v0.8.1 Graph (docs/upgrade.md)",

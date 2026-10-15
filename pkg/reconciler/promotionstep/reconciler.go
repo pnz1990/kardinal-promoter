@@ -202,6 +202,11 @@ type Reconciler struct {
 	// RefreshDisabled is --health-refresh=false: no step asks Argo CD or
 	// Flux to sync its commit (requestRefresh); they sync on their own poll.
 	RefreshDisabled bool
+	// RefreshScope is --health-refresh-namespaces: which Applications and
+	// Kustomizations of the controller's cluster a Pipeline may have it
+	// refresh (#1781). A remote cluster's refresh uses the kubeconfig's
+	// identity and is not limited.
+	RefreshScope health.RefreshScope
 
 	// HealthDetector selects the health adapter for health checking.
 	// If nil, the health-check step stub (always-success) is used.
@@ -1918,7 +1923,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// The promoted commit is in git: ask Argo CD or Flux to sync it now
 	// rather than at its next poll (health.refresh, once per step).
 	if r.refreshWanted(ps, env, adapter.Name(), opts.ExpectedRevision, mergeCommitPending) {
-		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision); err != nil {
+		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision, remote); err != nil {
 			return ctrl.Result{}, err
 		}
 		base = ps.DeepCopy()
@@ -1975,7 +1980,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// A step with no changes waits for a head another writer pushed: when
 	// the tool has not applied it, ask it to sync now (#1910).
 	if r.noChangesRefreshWanted(ps, env, adapter.Name(), opts.ExpectedRevision, result) {
-		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision); err != nil {
+		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision, remote); err != nil {
 			return ctrl.Result{}, err
 		}
 		base = ps.DeepCopy()

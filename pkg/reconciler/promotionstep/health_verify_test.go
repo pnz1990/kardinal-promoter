@@ -92,12 +92,16 @@ func unstructuredObj(apiVersion, kind, ns, name string, status map[string]interf
 	}}
 }
 
+// argoApplication is an Application in argocd that deploys to the test
+// Pipelines' namespace, default (in the refresh scope, #1781).
 func argoApplication(name, revision string) *unstructured.Unstructured {
-	return unstructuredObj("argoproj.io/v1alpha1", "Application", "argocd", name, map[string]interface{}{
+	app := unstructuredObj("argoproj.io/v1alpha1", "Application", "argocd", name, map[string]interface{}{
 		"health":         map[string]interface{}{"status": "Healthy"},
 		"sync":           map[string]interface{}{"status": "Synced", "revision": revision},
 		"operationState": map[string]interface{}{"phase": "Succeeded"},
 	})
+	app.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{"namespace": "default"}}
+	return app
 }
 
 func canary(ns, name, phase string) *unstructured.Unstructured {

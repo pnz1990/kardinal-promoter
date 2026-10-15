@@ -4,6 +4,7 @@
 package health
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,11 @@ type RefreshTarget struct {
 	Kind      string
 	Namespace string
 	Name      string
+	// Destination is the namespace the object deploys to: an Application's
+	// spec.destination.namespace, a Kustomization's spec.targetNamespace, and
+	// for a GitRepository its Kustomization's (or, without one, the
+	// Kustomization's namespace). "" when it names none.
+	Destination string
 }
 
 // String is "Kind namespace/name".
@@ -59,7 +65,8 @@ func RefreshSupported(healthType string) bool {
 // Application; or the Flux Kustomization's source GitRepository (when its
 // spec.sourceRef is one) and then the Kustomization. Flux applies only what
 // its source has fetched, so the source comes first. It reads the
-// Kustomization for its source; it writes nothing. Other health types have
+// Kustomization for its source and each object for the namespace it deploys
+// to (RefreshTarget.Destination); it writes nothing. Other health types have
 // no target.
 func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([]RefreshTarget, error) {
 	switch opts.Type {
@@ -68,7 +75,13 @@ func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([
 		if ns == "" {
 			ns = "argocd"
 		}
-		return []RefreshTarget{{GVR: argoCDApplicationGVR, Kind: "Application", Namespace: ns, Name: opts.ArgoCD.Name}}, nil
+		target := RefreshTarget{GVR: argoCDApplicationGVR, Kind: "Application", Namespace: ns, Name: opts.ArgoCD.Name}
+		app, err := d.dynamic.Resource(argoCDApplicationGVR).Namespace(ns).Get(ctx, opts.ArgoCD.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, &RefreshError{Op: "get", Target: target, Err: err}
+		}
+		target.Destination, _, _ = unstructured.NestedString(app.Object, "spec", "destination", "namespace")
+		return []RefreshTarget{target}, nil
 	case "flux":
 		ns := opts.Flux.Namespace
 		if ns == "" {
@@ -79,8 +92,12 @@ func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([
 		if err != nil {
 			return nil, &RefreshError{Op: "get", Target: target, Err: err}
 		}
+		target.Destination, _, _ = unstructured.NestedString(ks.Object, "spec", "targetNamespace")
 		var targets []RefreshTarget
 		if src, ok := fluxGitSource(ks); ok {
+			// The source is refreshed for its Kustomization: it is in scope
+			// when the Kustomization is.
+			src.Destination = cmp.Or(target.Destination, target.Namespace)
 			targets = append(targets, src)
 		}
 		return append(targets, target), nil

@@ -36,9 +36,10 @@ func refreshObj(apiVersion, kind, ns, name string, spec map[string]interface{}) 
 // the annotation each gets; other annotations and the spec are kept.
 func TestRefreshTargetsAndRequest(t *testing.T) {
 	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
-	app := refreshObj("argoproj.io/v1alpha1", "Application", "apps", "web", map[string]interface{}{"project": "default"})
+	app := refreshObj("argoproj.io/v1alpha1", "Application", "apps", "web", map[string]interface{}{"project": "default",
+		"destination": map[string]interface{}{"namespace": "web-prod"}})
 	ks := refreshObj("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "web",
-		map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "GitRepository", "name": "repo"}})
+		map[string]interface{}{"sourceRef": map[string]interface{}{"kind": "GitRepository", "name": "repo"}, "targetNamespace": "web-test"})
 	repo := refreshObj("source.toolkit.fluxcd.io/v1", "GitRepository", "flux-system", "repo", map[string]interface{}{"url": "u"})
 	dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), app, ks, repo)
 	d := health.NewAutoDetector(nil, dyn)
@@ -47,14 +48,15 @@ func TestRefreshTargetsAndRequest(t *testing.T) {
 		name  string
 		opts  health.CheckOptions
 		want  string
+		dest  []string                                  // each target's Destination
 		check map[schema.GroupVersionResource][2]string // gvr -> ns/name, annotation value
 	}{
 		{name: "argocd", opts: health.CheckOptions{Type: "argocd", ArgoCD: health.ArgoCDConfig{Name: "web", Namespace: "apps"}},
-			want: "Application apps/web",
+			want: "Application apps/web", dest: []string{"web-prod"},
 			check: map[schema.GroupVersionResource][2]string{
 				{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}: {"apps/web", "normal"}}},
 		{name: "flux", opts: health.CheckOptions{Type: "flux", Flux: health.FluxConfig{Name: "web"}},
-			want: "GitRepository flux-system/repo, Kustomization flux-system/web",
+			want: "GitRepository flux-system/repo, Kustomization flux-system/web", dest: []string{"web-test", "web-test"},
 			check: map[schema.GroupVersionResource][2]string{
 				{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}:   {"flux-system/repo", "2026-10-11T12:00:00Z team/step"},
 				{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}: {"flux-system/web", "2026-10-11T12:00:00Z team/step"}}},
@@ -66,6 +68,11 @@ func TestRefreshTargetsAndRequest(t *testing.T) {
 			targets, err := d.RefreshTargets(context.Background(), tt.opts)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, health.DescribeTargets(targets))
+			var dest []string
+			for _, tg := range targets {
+				dest = append(dest, tg.Destination)
+			}
+			assert.Equal(t, tt.dest, dest, "the namespaces the objects deploy to (the refresh scope, #1781)")
 			require.NoError(t, d.RequestRefresh(context.Background(), targets, health.FluxRequestValue(at, "team", "step")))
 			for gvr, want := range tt.check {
 				ns, name, _ := strings.Cut(want[0], "/")

@@ -475,6 +475,14 @@
             "enabled": {
               "type": "boolean",
               "description": "--health-refresh: ask Argo CD or Flux to sync a promotion's commit at once, and grant patch on Applications, Kustomizations and GitRepositories."
+            },
+            "namespaces": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(\\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?|[a-z0-9][-a-z0-9]*\\*)=(\\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?|[a-z0-9][-a-z0-9]*\\*)$"
+              },
+              "description": "--health-refresh-namespaces: pipelineNamespace=namespace rules for the GitOps objects a Pipeline may have the controller refresh, besides its own namespace's."
             }
           }
         }
