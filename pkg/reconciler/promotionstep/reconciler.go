@@ -1307,6 +1307,7 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		K8sClient:            r.Client,
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
 		GateResults:          r.collectGateResults(ctx, log, ps),
+		Verifications:        r.collectVerifications(ctx, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
 	}
@@ -3041,6 +3042,26 @@ func (r *Reconciler) collectGateResults(ctx context.Context, log zerolog.Logger,
 			gr.EvaluatedAt = metav1.Now()
 		}
 		out = append(out, gr)
+	}
+	return out
+}
+
+// collectVerifications reads the verify gates named in spec.requiredGates so
+// the PR body can show each one's verdicts (status.verdicts, written by the
+// PolicyGate reconciler). Best effort, like collectGateResults.
+func (r *Reconciler) collectVerifications(ctx context.Context, ps *v1alpha1.PromotionStep) []scm.Verification {
+	var out []scm.Verification
+	for _, name := range ps.Spec.RequiredGates {
+		var g v1alpha1.PolicyGate
+		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ps.Namespace}, &g); err != nil || g.Spec.Verify == nil {
+			continue
+		}
+		gate := name
+		if tmpl := g.Labels["kardinal.io/gate-name"]; tmpl != "" {
+			gate = tmpl
+		}
+		out = append(out, scm.Verification{Gate: gate, Check: g.Spec.Verify.Check, Environment: g.Spec.Verify.Environment,
+			Reason: g.Status.Reason, Verdicts: g.Status.Verdicts})
 	}
 	return out
 }

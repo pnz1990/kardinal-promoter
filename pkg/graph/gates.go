@@ -27,6 +27,10 @@ const (
 	// NodeApprovalGates creates one PolicyGate per approvalGates item: the
 	// instances of gates that read the Bundle's Approvals (approvals.go).
 	NodeApprovalGates = "ApprovalGates"
+	// NodeVerifyGates creates one PolicyGate per verifyGates item: the
+	// instances of gates that read the Bundle's Verdicts (verify.go), with
+	// their Approvals when they read those too.
+	NodeVerifyGates = "VerifyGates"
 	// NodePRStatusData holds one entry per environment's PRStatus.
 	NodePRStatusData = "PRStatusData"
 	// NodePRStatuses creates one PRStatus per NodePRStatusData item.
@@ -48,19 +52,33 @@ type gateCollections struct {
 	pipeline, bundle string
 	templates        []interface{}
 	index            map[string]int
-	// gates, skipGates and approvalGates hold the items of each collection
-	// node, in chunks of at most MaxCollectionItems (kro's default forEach
-	// limit).
-	gates, skipGates, approvalGates [][]interface{}
-	instances                       []kardinalv1alpha1.PolicyGate
+	// gates, skipGates, approvalGates and verifyGates hold the items of
+	// each collection node, in chunks of at most MaxCollectionItems (kro's
+	// default forEach limit).
+	gates, skipGates, approvalGates, verifyGates [][]interface{}
+	instances                                    []kardinalv1alpha1.PolicyGate
 	// collection is the collection node of each instance name.
 	collection map[string]string
 	what       map[string]string
+	// items is the item of each instance name, and position its index in
+	// instances.
+	items    map[string]map[string]interface{}
+	position map[string]int
+	// approvals is whether the Graph has the Approvals selector ref, and
+	// agentRuns whether it has AgentRuns (refAgentRuns); namespace and
+	// bundleUID are the Bundle's.
+	approvals, agentRuns bool
+	namespace, bundleUID string
+	// approvalPolicies is whether a template has spec.approval. kro types
+	// the templates list from its data, so spec.?approval compiles only when
+	// one of them has the field.
+	approvalPolicies bool
 }
 
 func newGateCollections(pipeline, bundle string) *gateCollections {
 	return &gateCollections{pipeline: pipeline, bundle: bundle,
-		index: map[string]int{}, collection: map[string]string{}, what: map[string]string{}}
+		index: map[string]int{}, collection: map[string]string{}, what: map[string]string{},
+		items: map[string]map[string]interface{}{}, position: map[string]int{}}
 }
 
 // add records the instance of gate for envName, named k8sName. skipped is
@@ -82,22 +100,43 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		c.templates = append(c.templates, tmpl)
 	}
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
+	if gate.Spec.Approval != nil {
+		c.approvalPolicies = true
+	}
 	var collection string
 	switch {
 	case len(skipped) > 0 && needsApprovals(gate):
 		return "", fmt.Errorf("build: %s is a skip-permission gate with spec.approval or approvals.*; "+
 			"approvals are not supported on skip-permission gates, so it would never pass: remove them", what)
+	case len(skipped) > 0 && needsVerdicts(gate):
+		return "", fmt.Errorf("build: %s is a skip-permission gate with spec.verify; "+
+			"verify is not supported on skip-permission gates, so it would never pass: remove it", what)
 	case len(skipped) > 0:
 		item["skipped"] = strings.Join(skipped, ",")
 		collection = appendChunked(&c.skipGates, item, NodeSkipPermissionGates)
+	case needsVerdicts(gate):
+		// A verify gate that reads approvals too copies them (every item of
+		// the collection says whether it does, so the field is always there).
+		item["readsApprovals"] = needsApprovals(gate)
+		collection = appendChunked(&c.verifyGates, item, NodeVerifyGates)
 	case needsApprovals(gate):
 		collection = appendChunked(&c.approvalGates, item, NodeApprovalGates)
 	default:
 		collection = appendChunked(&c.gates, item, NodePolicyGates)
 	}
 	c.collection[k8sName] = collection
+	c.items[k8sName] = item
+	c.position[k8sName] = len(c.instances)
 	c.instances = append(c.instances, c.instance(tmpl, item, len(skipped) > 0))
 	return k8sName, nil
+}
+
+// setVerify gives instance name its verify policy (verifyPolicyData): per
+// item, because the verified environment depends on the instance's
+// environment.
+func (c *gateCollections) setVerify(name string, data map[string]interface{}) {
+	c.items[name]["verify"] = data
+	c.instances[c.position[name]].Spec.Verify = verifyPolicyFromData(data)
 }
 
 // gateTemplateData is what every instance of gate copies: its spec and the
@@ -240,6 +279,9 @@ func (c *gateCollections) collectionIDs() []string {
 	for i := range c.approvalGates {
 		ids = append(ids, chunkID(NodeApprovalGates, i))
 	}
+	for i := range c.verifyGates {
+		ids = append(ids, chunkID(NodeVerifyGates, i))
+	}
 	return ids
 }
 
@@ -265,6 +307,11 @@ func (c *gateCollections) nodes() []GraphNode {
 		field := chunkID("approvalGates", i)
 		data[field] = items
 		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalGates, i), field))
+	}
+	for i, items := range c.verifyGates {
+		field := chunkID("verifyGates", i)
+		data[field] = items
+		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyGates, i), field))
 	}
 	return append([]GraphNode{{ID: NodePolicyGateData, Def: data}}, out...)
 }
@@ -347,6 +394,34 @@ func approvalPolicyFromData(p map[string]interface{}) *kardinalv1alpha1.GateAppr
 // data-pending (K3, G11).
 func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 	n := c.collectionNode(id, field, false)
+	spec := c.liveSpec()
+	spec["approvals"] = approvalsOfItem(c.approvalPolicies)
+	n.Template["spec"] = spec
+	return n
+}
+
+// verifyCollectionNode is the collection of verify gate instances: like
+// approvalCollectionNode, with the item's verify policy (setVerify) and the
+// live list of the Bundle's Verdicts for its check, read from the
+// VerdictsNodeID selector ref (verdictsOfItem), and the Approvals for the
+// items that read them.
+func (c *gateCollections) verifyCollectionNode(id, field string) GraphNode {
+	n := c.collectionNode(id, field, false)
+	spec := c.liveSpec()
+	if c.approvals {
+		inner := strings.TrimSuffix(strings.TrimPrefix(approvalsOfItem(c.approvalPolicies), "${"), "}")
+		spec["approvals"] = "${" + iterGate + ".readsApprovals ? (" + inner + ") : []}"
+	}
+	spec["verify"] = "${" + iterGate + ".verify}"
+	spec["verdicts"] = verdictsOfItem(c.pipeline, c.namespace, c.bundleUID, c.agentRuns)
+	n.Template["spec"] = spec
+	return n
+}
+
+// liveSpec is the template-copied part of a live gate instance's spec. A
+// gate that only reads approvals.* in its expression has no policy: a
+// missing optional renders as null, which leaves the field unset.
+func (c *gateCollections) liveSpec() map[string]interface{} {
 	tmpl := func(f string) string {
 		return fmt.Sprintf("${%s.templates[%s.t].spec.%s}", NodePolicyGateData, iterGate, f)
 	}
@@ -355,13 +430,11 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 		"message":         tmpl("message"),
 		"recheckInterval": tmpl("recheckInterval"),
 		"generated":       true,
-		"approvals":       approvalsOfItem(),
 	}
-	// A gate that only reads approvals.* in its expression has no policy: a
-	// missing optional renders as null, which leaves the field unset.
-	spec["approval"] = fmt.Sprintf("${%s.templates[%s.t].spec.?approval}", NodePolicyGateData, iterGate)
-	n.Template["spec"] = spec
-	return n
+	if c.approvalPolicies {
+		spec["approval"] = fmt.Sprintf("${%s.templates[%s.t].spec.?approval}", NodePolicyGateData, iterGate)
+	}
+	return spec
 }
 
 // approvalsOfItem is the spec.approvals of an approval gate instance: the
@@ -373,12 +446,17 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 // Approvals from people who may not approve cannot crowd out the ones that
 // count. The gate blocks when it gets more than it counts (policygate
 // maxGateApprovals).
-func approvalsOfItem() string {
+func approvalsOfItem(policies bool) string {
 	policy := fmt.Sprintf("%s.templates[%s.t].spec.?approval", NodePolicyGateData, iterGate)
 	users := policy + ".?allowedUsers.orValue([])"
 	groups := policy + ".?allowedGroups.orValue([])"
 	eligible := fmt.Sprintf("((size(%[1]s) == 0 && size(%[2]s) == 0) || a.spec.user in %[1]s || "+
 		"a.spec.?groups.orValue([]).exists(g, g in %[2]s))", users, groups)
+	if !policies {
+		// No template has spec.approval: everyone's approval is copied
+		// (spec.?approval would not compile, see approvalPolicies).
+		eligible = "true"
+	}
 	list := fmt.Sprintf("%s.filter(a, a.spec.environment == %s.environment && a.spec.bundleUID == bundle.metadata.uid && %s)"+
 		".sortBy(a, a.metadata.name).map(a, a.spec)", ApprovalsNodeID, iterGate, eligible)
 	return fmt.Sprintf("${size(%[1]s) > %[2]d ? %[1]s.slice(0, %[2]d) : %[1]s}", list, maxCopiedApprovals)

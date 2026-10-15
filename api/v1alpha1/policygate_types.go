@@ -69,6 +69,24 @@ type PolicyGateSpec struct {
 	// +optional
 	Approvals []GateApproval `json:"approvals,omitempty"`
 
+	// Verify makes the gate wait for verdicts (docs/design/19-verdicts.md):
+	// it is ready only when its expression is true and at least
+	// verify.required verifiers found the Bundle to pass verify.check in
+	// verify.environment, and no more than verify.maxFailures found it to
+	// fail. Copied from the template to every gate instance. For a gate that
+	// only waits for verdicts, use the expression "true".
+	// +optional
+	Verify *GateVerifyPolicy `json:"verify,omitempty"`
+
+	// Verdicts is written by the promotion Graph on gate instances: the
+	// Verdicts of the instance's Bundle for verify.environment and
+	// verify.check from verifiers the gate allows, copied from the Verdict
+	// objects, at most 101 (more than 100 blocks the gate). Do not set it; on
+	// a template it is ignored.
+	// +kubebuilder:validation:MaxItems=101
+	// +optional
+	Verdicts []GateVerdict `json:"verdicts,omitempty"`
+
 	// Generated is set by kardinal on the PolicyGates it creates: the gate
 	// instances a promotion Graph makes from a template, and the freeze gate
 	// of a paused Pipeline. Kardinal never uses a generated PolicyGate as a
@@ -106,6 +124,200 @@ type GateApprovalPolicy struct {
 	// the gate: the rule cannot be enforced.
 	// +optional
 	ExcludeAuthor bool `json:"excludeAuthor,omitempty"`
+}
+
+// Verify onInconclusive and onTimeout values.
+const (
+	VerifyHold  = "hold"
+	VerifyRetry = "retry"
+	VerifyFail  = "fail"
+	VerifyAllow = "allow"
+)
+
+// GateVerifyPolicy says which verdicts a gate counts and how many it needs.
+// +kubebuilder:validation:XValidation:rule="!has(self.retries) || self.retries == 0 || self.onInconclusive == 'retry'",message="verify.retries needs onInconclusive: retry"
+// +kubebuilder:validation:XValidation:rule="!has(self.run) || !has(self.run.count) || self.run.count >= self.required",message="verify.run.count must be at least verify.required"
+type GateVerifyPolicy struct {
+	// Check is the verification the gate waits for (Verdict spec.check).
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Check string `json:"check"`
+
+	// Environment is the environment verified, where the version already
+	// runs: an upstream of the environment the gate applies to. Empty: that
+	// environment's only direct upstream.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Environment string `json:"environment,omitempty"`
+
+	// Required is how many votes must pass.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +kubebuilder:default=1
+	// +optional
+	Required int `json:"required,omitempty"`
+
+	// MaxFailures is how many failing votes the gate tolerates; one more
+	// blocks it.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=20
+	// +optional
+	MaxFailures int `json:"maxFailures,omitempty"`
+
+	// AllowedAgents are the agents (AgentIdentity names) whose verdicts
+	// count. An agent's verdict counts only when the agent is listed.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	AllowedAgents []string `json:"allowedAgents,omitempty"`
+
+	// AllowedUsers are the usernames of people and bots whose verdicts
+	// count. With neither allowedUsers nor allowedGroups, every verdict by
+	// someone who is not an agent counts.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	AllowedUsers []string `json:"allowedUsers,omitempty"`
+
+	// AllowedGroups are groups: a verdict counts when one of its groups is
+	// listed.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	AllowedGroups []string `json:"allowedGroups,omitempty"`
+
+	// ExcludeAuthor does not count a verdict from the version's author, the
+	// author's agent or that agent's sponsor (one party). An agent's verdict
+	// on work of its own party never counts, whatever this says.
+	// +kubebuilder:default=true
+	// +optional
+	ExcludeAuthor *bool `json:"excludeAuthor,omitempty"`
+
+	// OnInconclusive is what an inconclusive verdict does: hold (wait for
+	// more), retry (wait, and run the AgentRun again, up to retries), or fail
+	// (count it as a failing vote).
+	// +kubebuilder:validation:Enum=hold;retry;fail
+	// +kubebuilder:default=hold
+	// +optional
+	OnInconclusive string `json:"onInconclusive,omitempty"`
+
+	// Retries is how many more attempts each AgentRun gets after an
+	// inconclusive verdict, or none, with onInconclusive: retry.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=5
+	// +optional
+	Retries int `json:"retries,omitempty"`
+
+	// Timeout bounds the wait, from the time the version passed its health
+	// check in the verified environment. Verdicts written later do not count.
+	// Empty or "0": no timeout.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+
+	// OnTimeout is what the gate does once the timeout passed without a
+	// result: fail (stay blocked) or allow (pass, and say so).
+	// +kubebuilder:validation:Enum=fail;allow
+	// +kubebuilder:default=fail
+	// +optional
+	OnTimeout string `json:"onTimeout,omitempty"`
+
+	// Run runs verifiers in the cluster: AgentRuns of a StepTemplate.
+	// +optional
+	Run *GateVerifyRun `json:"run,omitempty"`
+}
+
+// GateVerifyRun asks the promotion Graph to run AgentRuns for a verify gate.
+type GateVerifyRun struct {
+	// Template is the StepTemplate the AgentRuns run.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Template string `json:"template"`
+
+	// Count is how many AgentRuns run per version. Default: verify.required.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	// +optional
+	Count int `json:"count,omitempty"`
+
+	// Namespace is the namespace the agent tests. Default: the verified
+	// environment's workload namespace.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// GateVerdict is a Verdict as the Graph copies it into a gate instance.
+type GateVerdict struct {
+	// Name is the Verdict's name.
+	Name string `json:"name"`
+	// CreatedAt is the Verdict's creationTimestamp, written by the API
+	// server.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+	// Bundle is the Bundle verified.
+	Bundle string `json:"bundle"`
+	// BundleUID is that Bundle's UID.
+	BundleUID string `json:"bundleUID"`
+	// Environment is the environment verified.
+	Environment string `json:"environment"`
+	// Check is the check.
+	Check string `json:"check"`
+	// Result is pass, fail or inconclusive.
+	Result string `json:"result"`
+	// Summary is the verifier's summary.
+	// +optional
+	Summary string `json:"summary,omitempty"`
+	// EvidenceURL is the verifier's evidence link.
+	// +optional
+	EvidenceURL string `json:"evidenceURL,omitempty"`
+	// Findings is how many findings the Verdict lists.
+	// +optional
+	Findings int `json:"findings,omitempty"`
+	// HighFindings is how many of them are high or critical.
+	// +optional
+	HighFindings int `json:"highFindings,omitempty"`
+	// By is the writer's username.
+	By string `json:"by"`
+	// Groups are the writer's groups.
+	// +optional
+	Groups []string `json:"groups,omitempty"`
+	// Actor is the Verdict's actor stamp.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+	// Run is the AgentRun that wrote it.
+	// +optional
+	Run *VerdictRun `json:"run,omitempty"`
+}
+
+// GateVerdictStatus records how the gate counted one Verdict.
+type GateVerdictStatus struct {
+	// Name is the Verdict's name.
+	Name string `json:"name"`
+	// Verifier names the writer (an actor sentence).
+	Verifier string `json:"verifier"`
+	// Result is pass, fail or inconclusive.
+	Result string `json:"result"`
+	// Counted reports whether the verdict is a vote.
+	Counted bool `json:"counted"`
+	// Reason says why a verdict does not count, or what it waits for.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Run and Attempt are the AgentRun's run and attempt numbers.
+	// +optional
+	Run int `json:"run,omitempty"`
+	// +optional
+	Attempt int `json:"attempt,omitempty"`
+	// Summary is the verifier's summary.
+	// +optional
+	Summary string `json:"summary,omitempty"`
+	// EvidenceURL is the verifier's evidence link.
+	// +optional
+	EvidenceURL string `json:"evidenceURL,omitempty"`
+	// Findings is how many findings the Verdict lists.
+	// +optional
+	Findings int `json:"findings,omitempty"`
+	// CreatedAt is when the Verdict was created.
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 }
 
 // GateApproval is an Approval's spec as the Graph copies it into a gate
@@ -239,6 +451,12 @@ type PolicyGateStatus struct {
 	// the UI.
 	// +optional
 	Approvals []GateApprovalStatus `json:"approvals,omitempty"`
+
+	// Verdicts records each verdict in spec.verdicts and whether the gate
+	// counted it (spec.verify), for kardinal explain, the PR evidence and the
+	// UI.
+	// +optional
+	Verdicts []GateVerdictStatus `json:"verdicts,omitempty"`
 
 	// Overrides records each spec.overrides entry the controller has seen:
 	// when it first saw it, whether its createdBy was checked by the chart's

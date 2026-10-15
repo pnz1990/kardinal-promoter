@@ -771,7 +771,8 @@ spec:
                           description: |-
                             BodyTemplate replaces the default body. The evidence sections are
                             template functions (evidence, provenanceTable, gatesTable,
-                            upstreamTable, rollbackNotice), so a custom body can keep them.
+                            verificationTable, upstreamTable, rollbackNotice), so a custom body
+                            can keep them.
                           maxLength: 16384
                           type: string
                         labels:
@@ -2271,6 +2272,8 @@ spec:
                           - HoldBundleMissing
                           - BundleRejected
                           - APIWrite
+                          - VerdictRecorded
+                          - VerdictRevoked
                           type: string
                         actor:
                           description: |-

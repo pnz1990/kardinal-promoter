@@ -319,7 +319,8 @@ type PRConfig struct {
 
 	// BodyTemplate replaces the default body. The evidence sections are
 	// template functions (evidence, provenanceTable, gatesTable,
-	// upstreamTable, rollbackNotice), so a custom body can keep them.
+	// verificationTable, upstreamTable, rollbackNotice), so a custom body
+	// can keep them.
 	// +kubebuilder:validation:MaxLength=16384
 	// +optional
 	BodyTemplate string `json:"bodyTemplate,omitempty"`

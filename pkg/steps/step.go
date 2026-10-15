@@ -155,6 +155,10 @@ type StepState struct {
 	// GateResults holds the PolicyGate evaluations for this environment.
 	GateResults []v1alpha1.GateResult
 
+	// Verifications holds this environment's verify gates and their
+	// verdicts, for the PR body.
+	Verifications []scm.Verification
+
 	// UpstreamEnvironments holds verification evidence from upstream environments.
 	UpstreamEnvironments []v1alpha1.EnvironmentStatus
 

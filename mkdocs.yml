@@ -130,6 +130,7 @@ nav:
     - Connect an agent: agentic/connect-an-agent.md
     - Threat model: agentic/threat-model.md
     - Agents and the verified actor: actors.md
+    - Verify with agents: agentic/verify-with-agents.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
@@ -223,6 +224,9 @@ nav:
       - kardinal status: reference/cli/kardinal-status.md
       - kardinal unhold: reference/cli/kardinal-unhold.md
       - kardinal validate: reference/cli/kardinal-validate.md
+      - kardinal verify:
+        - kardinal verify: reference/cli/kardinal-verify.md
+        - kardinal verify list: reference/cli/kardinal-verify-list.md
       - kardinal version: reference/cli/kardinal-version.md
       - kardinal why: reference/cli/kardinal-why.md
       # END CLI NAV

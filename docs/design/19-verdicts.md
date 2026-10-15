@@ -132,28 +132,38 @@ The spec is immutable by CRD rule, so only CREATE checks the identity fields.
 ### 4.2 Binding a Verdict to its AgentRun
 
 A gate counts each AgentRun as its own vote (section 6.3), so a Verdict that names a run must
-really come from that run. Admission has no lookup (17-actors §5.1), but it does see the
-requesting Pod: a bound ServiceAccount token, which every projected Pod token is, adds
-`authentication.kubernetes.io/pod-name` to `request.userInfo.extra`
-(`k8s.io/apiserver pkg/authentication/serviceaccount/util.go:38-48`). The AgentRun reconciler
-names the Job after the AgentRun, and the Job controller names its Pods `<job>-<5 random>`.
+really come from that run, and the run must vote once. Admission has no lookup (17-actors §5.1),
+so the binding is made of names kardinal controls:
+
+- Each AgentRun runs as **its own ServiceAccount**, `kr-<run>`, which the AgentRun reconciler
+  creates for it (8.4) and deletes when the run ends. Nobody else's identity is used.
+- Its Pod's projected token carries `authentication.kubernetes.io/pod-name` in
+  `request.userInfo.extra` (Kubernetes 1.35 and later, the chart's minimum). The Job is named
+  after the AgentRun, and the Job controller names its Pod `<job>-<5 random characters>`.
 
 ```cel
+# A run-bound Verdict: written by the run's ServiceAccount, from the run's Pod, named after the run.
 !has(object.spec.run) || (
-  'authentication.kubernetes.io/pod-name' in request.userInfo.extra &&
-  request.userInfo.extra['authentication.kubernetes.io/pod-name'].exists(p,
-    p.startsWith(object.spec.run.name + '-')) &&
-  object.metadata.name == object.spec.run.name)
+  request.userInfo.username == 'system:serviceaccount:' + request.namespace + ':kr-' + object.spec.run.name &&
+  object.metadata.name == object.spec.run.name &&
+  podNames.exists(p, p.matches('^' + object.spec.run.name + '-[a-z0-9]{5}$')))
+# A run's ServiceAccount writes nothing but its run's Verdict.
+!request.userInfo.username.startsWith('system:serviceaccount:' + request.namespace + ':kr-') || has(object.spec.run)
 ```
 
-- A run's Verdict is named after the run, so a run has at most one Verdict: a second CREATE is
-  `AlreadyExists`.
-- A token minted with `TokenRequest` outside a Pod has no `pod-name`, so it cannot claim a run.
-- A Job's Pod name keeps the full Job name only while the Job name is at most 52 characters
-  (the Job controller cuts `generateName` to 58). AgentRun names are therefore at most 52
-  characters (`boundedName`, as `HookRunName`).
-- What it does not stop: someone who may create Pods with the agent's ServiceAccount, named like
-  the run, in that namespace. That is someone who can already act as the agent (17-actors §11).
+- A run has at most one Verdict: it is named after the run (a second CREATE is `AlreadyExists`),
+  and its ServiceAccount cannot write an unbound one.
+- A Pod of run `X-y…` is not run `X`'s Pod: the Pod name is matched exactly, not by prefix, and
+  the ServiceAccount must be `kr-X`.
+- A token minted with `TokenRequest` outside a Pod has no `pod-name`, so it cannot write.
+- The Graph counts a run-bound Verdict only for an AgentRun of this Bundle that it applied, with
+  the Verdict's environment and check (5.1); the run's agent, sponsor, index and attempt are
+  read from that AgentRun, never from the Verdict. A run cannot vote for another version or
+  another run's index.
+- AgentRun names are at most 52 characters (`boundedName`), so the Job's Pod name keeps the full
+  Job name (the Job controller cuts `generateName` to 58).
+- What it does not stop: someone who may create Pods or tokens as `kr-<run>` in the Pipeline's
+  namespace (`edit` or `admin` there), the trust boundary of the Graph identity too (G16).
 
 ### 4.3 The actor stamp
 
@@ -177,8 +187,8 @@ A human or a bot may write a Verdict without a stamp (17-actors §5.5). It reads
 The chart's user roles: `<release>-approver` gains `create`, `delete` on `verdicts` (the people who
 may approve may verify). A new `<release>-verifier` ClusterRole grants `get, list, watch, create`
 on `verdicts` only, for binding to agent and CI ServiceAccounts. Viewer roles gain `get, list,
-watch`. The Graph ServiceAccount gains `list, watch` on `verdicts` (selector ref) and `get, list,
-watch` on `agentruns` (read-back), in `graph-rbac.yaml`.
+watch`. The Graph ServiceAccount gains `list, watch` on `verdicts` (selector ref), and the Graph applier role every verb on `agentruns` (it
+creates them and reads them back), in `graph-rbac.yaml`.
 
 ## 5. How the Graph reads Verdicts
 
@@ -211,9 +221,11 @@ Verdicts.filter(v,
     <eligible(v)>)                                   # allowedAgents / allowedUsers / allowedGroups (6.2)
   .sortBy(v, v.metadata.name)
   .map(v, {"name": v.metadata.name, "createdAt": v.metadata.creationTimestamp,
-           "result": v.spec.result, "summary": v.spec.summary, "by": v.spec.by,
+           "result": v.spec.result, "summary": v.spec.?summary.orValue(""), "by": v.spec.by,
            ?"groups": v.spec.?groups, ?"actor": v.spec.?actor, ?"run": v.spec.?run,
-           ?"evidenceURL": v.spec.?evidenceURL, ?"findings": v.spec.?findings})
+           ?"evidenceURL": v.spec.?evidenceURL,
+           "findings": size(v.spec.?findings.orValue([])),   # counts only: 101 Verdicts of 50
+           "highFindings": size(<the high and critical ones>)})  # findings each would not fit
 ```
 
 capped at 101 entries like `spec.approvals` (more than 100 holds the gate: "more than 100
@@ -418,25 +430,24 @@ first, with its message. An active override passes the gate as today. A gate may
 ```
 kardinal verify <bundle|version> --pipeline P --env uat --check exploratory-qa
                 (--pass | --fail | --inconclusive) [--summary TEXT] [--evidence URL]
-                [--finding 'high:Title[:url]']... [--model M] [--session S] [--client C]
-                [--revoke [--name NAME]] [-o json]
+                [--finding 'high:Title']... [--version V] [--revoke [--name NAME]]
 kardinal verify list <bundle|version> --pipeline P [--env E] [--check C]
 ```
 
 - Resolves the version like `kardinal approve` (a Bundle name, or a version of the Pipeline).
 - Writes `spec.by` and `spec.groups` from a SelfSubjectReview, and the actor stamp as 17-actors §6
-  says (`actor.Derive` on the AgentIndex; asserted fields from the flags or
-  `KARDINAL_ACTOR_MODEL`, `_SESSION`, `_CLIENT`).
+  says (`actor.Derive` on the AgentIndex; asserted fields from `KARDINAL_ACTOR_MODEL`, `_SESSION`
+  and `_CLIENT`, as for every other command).
 - Owns the Verdict by the Bundle, sets the three labels, and names it
   `<bundle>-<env>-<check>-<hash of by and time>`.
-- Before writing it reads the gates that wait for this check and tells the caller where they
-  stand, from the same function the reconciler uses (`lifecycle.VerdictStandingOf`, as
-  `ApprovalStandingOf`): "your verdict would not count: agent fixer is the author's party". It
-  still writes the Verdict when asked (`--force`): a record that does not count is still evidence.
+- After writing it reads the gates that wait for this check and tells the caller whether each
+  counts the verdict, from the same functions the reconciler uses (`lifecycle.VerdictStandingOf`):
+  "not counted by gate prod-needs-qa: the author's party (agent fixer for alice)". A verdict that
+  does not count is still written: it is evidence.
 - `--fail` and `--inconclusive` require `--summary`.
 - `--revoke` deletes the caller's latest Verdict for (version, env, check), or `--name`.
-- `verify list` prints NAME, VERIFIER, RESULT, COUNTED, REASON, AGE, EVIDENCE, read from the
-  gates' `status.verdicts` (what counted) and the Verdicts (what exists).
+- `verify list` prints NAME, ENV, CHECK, VERIFIER, RESULT, COUNTED (with the reason), AGE and
+  EVIDENCE, read from the Verdicts (what exists) and the gates' `status.verdicts` (what counted).
 
 The local MCP server (E10) exposes the same as a tool, so a desktop agent submits its verdict
 through it.
@@ -461,8 +472,8 @@ Verdict.
 
 **(b) A new AgentRun CRD, with its registration in a new kind.** A namespaced, Graph-owned run
 object whose reconciler builds the Pod itself from a cluster-scoped registration.
-- Pro: the bounds are the only mode; the reconciler shares HookRun's Job lifecycle code
-  (a package both use) rather than its API; runs and attempts are first-class.
+- Pro: the bounds are the only mode; the reconciler follows HookRun's Job lifecycle without its
+  API; runs and attempts are first-class.
 - Con: one more Graph-owned kind (admission `graph-objects`, RBAC, CRD docs), and a registration
   kind to keep.
 
@@ -477,9 +488,9 @@ images with input and output schemas at hook points (`pre`, `after-update`, `bef
 **Decision: (b), with the registration named and shaped as StepTemplate's v0.12 subset.** The
 run object is a new `AgentRun` kind (b). The registration is the cluster-scoped `StepTemplate`
 kind (c), with `output: Verdict` the only output v0.12 accepts. v0.14 adds outputs, schemas and
-hook points to the same kind, so registrations do not migrate. The Job lifecycle (create with an
-ownerReference, observe, latch, deadline, adopt) moves from `pkg/reconciler/hookrun` into a
-package both reconcilers use, so there is one implementation of the G12 workaround.
+hook points to the same kind, so registrations do not migrate. The AgentRun reconciler follows HookRun's
+Job lifecycle (create with an ownerReference, observe, latch, deadline, adopt) in its own, smaller
+code: an AgentRun has no finalizer, spec hash or sibling ordering, which is most of HookRun's.
 
 ### 8.2 StepTemplate (cluster-scoped, admin-registered)
 
@@ -498,7 +509,7 @@ spec:
     - {name: MODEL_ENDPOINT, value: https://llm.internal.example.com}
   secretEnv:                         # values from Secrets in the Pipeline namespace (8.4)
     - {name: MODEL_API_KEY, secret: qa-explorer-model, key: token}
-  serviceAccountName: qa-explorer    # in the Pipeline namespace; must be an agent (8.4)
+  agent: qa-explorer                 # the AgentIdentity its verdicts count for (8.4)
   timeout: 45m                       # per attempt; default 30m, at most 24h
   resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
   egress:                            # beyond DNS, the API server and the target namespace
@@ -556,8 +567,9 @@ HookRuns (`pkg/graph/compact_extras.go`): data, admission, collection.
   where `step` is the verified environment's PromotionStep name and `prev` the previous attempt's
   name.
 - `refAgentRuns` (a selector `ref` on `kardinal.io/bundle-uid`) reads the AgentRuns back, and the
-  `Verdicts` ref (5.1) reads their Verdicts. The steps are read back through the step read-back the shape has (`refSteps` in
-  the node shape, added when a Graph needs it; `StepsObserved` in the compact shape).
+  `Verdicts` ref (5.1) reads their Verdicts. The steps are read back through `refVerifySteps` in the
+  node shape and `StepsObserved` in the compact shape. `AgentRunState` (a `def`) lists the AgentRuns
+  that exist and that finished, the runs a pass or fail decided, and the Verified steps.
 - `AgentRunsAdmitted` (a `def`) keeps an item when its AgentRun already exists, or when all of:
   the Bundle is not Superseded or Rejected (`bundleHeld`); the verified environment's step is
   `Verified`; and either `attempt == 1`, or the previous attempt is terminal and its Verdict is
@@ -576,53 +588,65 @@ only when the def drops them). A template node re-creates an object that disappe
 run-once kind that would run it again, which `spec.recorded` prevents (8.7). The admission
 `graph-objects` policy gains `agentruns`, so only kro and the controller create them (G17).
 
-### 8.4 The AgentRun reconciler: bounds
+### 8.4 The AgentRun reconciler: bounds and its own identity
 
-`pkg/reconciler/agentrun` writes only the AgentRun's status, and creates two children it owns:
-a NetworkPolicy and a Job. Before the first, it checks the run is **bounded**, and fails it
-(phase `Failed`, condition `Bounded=False` with the reason) otherwise:
+`pkg/reconciler/agentrun` writes only the AgentRun's status. Before anything else it checks the
+run is **bounded**, and fails it (phase `Failed`, condition `Bounded=False` with the reason)
+otherwise:
 
 1. **The template is ready**, and `output` is `Verdict`.
-2. **The ServiceAccount is an agent.** `system:serviceaccount:<ns>:<serviceAccountName>` is in
-   the AgentIndex (17-actors §5.4), not blocked, and its scope allows the namespace, the Pipeline
-   and the verified environment. Read once per start from the AgentIndex the controller builds
-   (its own CRD's status, read through the cache).
-3. **Its RBAC is read-only.** SubjectAccessReviews as that ServiceAccount: it may `create
-   verdicts` in the Pipeline namespace; it may not `get secrets` there or in the target namespace,
-   nor `create`, `update`, `patch` or `delete` any of: deployments, statefulsets, daemonsets,
-   pods, pods/exec, services, configmaps, secrets (target namespace), bundles, approvals,
-   policygates, pipelines (Pipeline namespace), nor `create serviceaccounts/token`. The list is
-   in code, with a test per verb. A wide grant fails closed: "agent qa-explorer may patch
-   deployments in checkout-uat; an AgentRun's agent must be read-only".
-4. **Its Secrets are its own.** Every `secretEnv` Secret carries the label
+2. **Its agent may verify.** The StepTemplate's `agent` is an AgentIdentity that is ready, not
+   suspended, and whose scope allows the namespace, the Pipeline and the verified environment.
+3. **Its Secrets are its own.** Every `secretEnv` Secret carries the label
    `kardinal.io/step-template: <template>`. A Pipeline's git or SCM Secret is not labelled for a
    template, so a template cannot pull git credentials into the Pod even by name.
 
-Then it creates, with the AgentRun as controller owner:
+**Options for "a read-only kubeconfig scoped to the target namespace"**:
 
-- **NetworkPolicy** `<run>`: selects the run's Pod; no ingress; egress to DNS (kube-dns,
-  53/UDP and TCP), the API server (the `default/kubernetes` EndpointSlice addresses and port,
-  read at start), every Pod in the target namespace, and the template's `egress`. Nothing else:
-  no cloud metadata, no other namespace, no git host. Enforced where the CNI implements
-  NetworkPolicy (kind's kindnet does from kind v0.24; the live test asserts a blocked address).
+- (a) *Audit the agent's own ServiceAccount*: SubjectAccessReviews for every write verb on every
+  served resource, and Secret reads, in the Pipeline's, the target and the cluster scope. Hundreds
+  of reviews per run, and still a denylist of what kardinal thought of; an aggregated ClusterRole
+  can widen the grant after the check.
+- (b) *Construct the identity*: kardinal creates a ServiceAccount for the run, binds it to two
+  chart-defined ClusterRoles, and deletes it when the run ends. Nothing borrowed, nothing to audit.
+- (c) Both.
+
+**Decision: (b).** What the run may do is what the chart's two roles say, reviewable in one file
+(`agentrun-rbac.yaml`), and the identity cannot outlive the run. The controller may bind only those
+two roles (`bind` with `resourceNames`), so it grants nothing else. The agent's AgentIdentity is
+who the verdict counts for, not what the Pod runs as. Before the Job it creates, owned by the
+AgentRun unless noted, and adds the finalizer `kardinal.io/agentrun-access`:
+
+- **ServiceAccount** `kr-<run>`, with no automounted token.
+- **RoleBinding** `kr-<run>` in the Pipeline's namespace to `<release>-agentrun-writer`: create
+  Verdicts, get Bundles.
+- **RoleBinding** `kr-<run>` in the target namespace to `<release>-agentrun-reader`: get, list and
+  watch Pods, Pods' logs, Services, Endpoints, EndpointSlices, Events, Deployments, ReplicaSets,
+  StatefulSets, DaemonSets and Ingresses. No Secrets, no ConfigMaps, no writes. In another
+  namespace the AgentRun cannot own it, so it carries the run's UID label.
+- **NetworkPolicy** `<run>`: selects the run's Pod; no ingress; egress to DNS (kube-dns in
+  kube-system, 53/UDP and TCP), the API server (the `default/kubernetes` EndpointSlice addresses
+  and port, read at start), every Pod in the target namespace, and the template's `egress`.
+  Nothing else: no cloud metadata, no other namespace, no git host. Enforced where the CNI
+  implements NetworkPolicy (kind's kindnet does, about a second after a Pod gets its IP; the
+  live test asserts a blocked address). NetworkPolicies are additive: a namespace policy that
+  allows more egress also applies.
 - **Job** `<run>`: one Pod, `restartPolicy: Never`, `backoffLimit: 0`,
   `activeDeadlineSeconds` = the timeout, `ttlSecondsAfterFinished` unset (the AgentRun owns it).
   The Pod is built by the controller, never from user Pod YAML: the template's image, command,
-  args, env and resources; `serviceAccountName`; `automountServiceAccountToken: false` and a
-  projected token at the standard path with `expirationSeconds` covering the timeout (so
-  in-cluster clients work, and the token dies with the run); `runtimeClassName` when set; Pod
-  security `restricted` (non-root, no privilege escalation, all capabilities dropped,
-  `RuntimeDefault` seccomp, read-only root filesystem with an `emptyDir` at `/tmp`); no other
-  volumes but the context (8.5).
+  args, env and resources; `serviceAccountName: kr-<run>`; `automountServiceAccountToken: false`
+  and a projected token at the standard path with `expirationSeconds` covering the timeout;
+  `runtimeClassName` when set; Pod security `restricted` (non-root, no privilege escalation, all
+  capabilities dropped, `RuntimeDefault` seccomp, read-only root filesystem with an `emptyDir` at
+  `/tmp`); no other volumes but the context (8.5).
+
+When the run is terminal, or its AgentRun is deleted, the reconciler deletes the RoleBindings and
+the ServiceAccount (its tokens stop working), then removes the finalizer.
 
 The run is **Succeeded** when the Job completes, and **Failed** when it fails, passes its deadline
-(the Job is deleted, as HookRun does), or is refused as unbounded. The result of the check is in
-the Verdict, not in the phase: a Job that exits 0 without writing a Verdict is Succeeded with
-"finished without a verdict", and counts as inconclusive for the retry rule (9.1).
-
-The "read-only kubeconfig scoped to the target namespace" of the plan is this: the Pod's only
-credential is a short-lived token of a ServiceAccount whose RBAC check 3 proved read-only, and
-whose NetworkPolicy lets it reach only the API server, the target namespace and the model.
+(the Job is deleted, as HookRun does), or is refused. The result of the check is in the Verdict,
+not in the phase: a Job that exits 0 without writing a Verdict is Succeeded, and counts as
+inconclusive for the retry rule (9.1).
 
 ### 8.5 The contract: inputs and output
 
@@ -652,8 +676,8 @@ it.
 client-go, or `kardinal verify --from-context`). The image's exit code says whether it ran; the
 Verdict says what it found. An agent that finds a bug exits 0 and writes `fail`.
 
-The repository ships a minimal reference agent, `test/agent/probe` (a Go program: probe the
-target namespace's Services over HTTP, then write a Verdict). The live e2e builds it, loads it
+The repository ships a minimal reference agent, `hack/e2e/testagent` (a Go program, standard
+library only: probe the target namespace's Services over HTTP, then write a Verdict). The live e2e builds it, loads it
 into kind, and registers it as a StepTemplate.
 
 ### 8.6 Sandboxing: options
@@ -721,10 +745,10 @@ same records.
   why not), summary, evidence link, findings count, run and attempt. Built by the PromotionStep
   reconciler from the gates it already reads for the gate table (`collectGateResults`), so no new
   read. The custom PR template gets `.Verifications`.
-- **UI.** The stage drawer's gate section shows a verify gate's quorum (`1 of 2`), each Verdict
-  with a result chip, the verifier sentence, the summary, the evidence link and expandable
-  findings, and each AgentRun of the check with its phase and a link to its Pod logs command. The
-  UI API returns `status.verdicts` and the AgentRuns of the Bundle.
+- **UI.** The stage drawer's gate section shows a verify gate's quorum (`1 of 2`) and each
+  Verdict: the verifier sentence, the result, its run and attempt, whether it counted and why
+  not, the summary, the number of findings and the evidence link, with the `kardinal verify`
+  command. The UI API returns the gate's `verify` policy and `status.verdicts`.
 - **CLI.** `kardinal explain` prints the verify gate's reason and its Verdicts; `kardinal verify
   list` (section 7).
 - **Audit.** `VerdictRecorded` and `VerdictRevoked` AuditEvents with the Verdict's actor (6.5);
@@ -743,8 +767,10 @@ same records.
 - **Asserted fields.** Model, session, `startedAt` and `durationSeconds` are claims.
 - **NetworkPolicy without an enforcing CNI** does nothing. kardinal cannot detect whether the CNI
   enforces it, so the run still starts; the user page says so.
-- **Read-only is checked, not guaranteed.** The SubjectAccessReviews cover a fixed list (8.4).
-  A custom resource writable by the agent is not on it. Admins own the agent's RBAC.
+- **NetworkPolicies are additive.** A namespace policy that allows more egress to all Pods also
+  applies to the run's Pod.
+- **Edit and admin holders in the Pipeline's namespace** can run Pods or mint tokens as
+  `kr-<run>`, as they can for the Graph identity (G16).
 
 ## 12. Decisions
 
@@ -758,7 +784,7 @@ same records.
 | V6 | Timer start | gate first evaluation; the verified environment's health check time; AgentRun start | **Health check time** (`healthCheckedAt`): a CRD timestamp that exists for external and in-cluster verifiers alike, and does not reset when a gate instance is re-created. |
 | V7 | After the timeout | fail only; fail or allow; hold | **fail (default) or allow**: "hold" is no timeout. `allow` is explicit and named in the reason. |
 | V8 | In-cluster runner | extend HookRun; new AgentRun; generic StepTemplate | **AgentRun + StepTemplate registration** (8.1). |
-| V9 | Agent bounds | trust the image; NetworkPolicy + RBAC check + token + no-secret rule; a separate cluster | **NetworkPolicy + RBAC check + short token + labelled Secrets** (8.4): enforced by the API server and the CNI, not by the agent. |
+| V9 | Agent bounds | (a) audit the agent's RBAC with SubjectAccessReviews; (b) construct a per-run ServiceAccount bound to two chart roles; (c) both | **(b)**, with a NetworkPolicy, a short token and labelled Secrets (8.4): a denylist audit always misses a grant (QA found six on #1870), a constructed identity grants exactly the chart roles and dies with the run. |
 | V10 | Sandbox | runtimeClassName; Sandbox CR; none | **runtimeClassName** (8.6). |
 | V11 | Agents with empty allow lists | count; do not count | **Do not count**: agent verification is opt-in per agent, like agent approvals (the owner's rule). |
 

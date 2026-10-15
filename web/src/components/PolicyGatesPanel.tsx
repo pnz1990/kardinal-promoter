@@ -10,6 +10,7 @@ import { HealthChip, type HealthState } from './HealthChip'
 import { gateDisplay, gateLabel } from '../stage/stageModel'
 import '../styles/PolicyGatesPanel.css'
 import { ApprovalQuorum } from './ApprovalQuorum'
+import { VerifyQuorum } from './VerifyQuorum'
 import { ago } from '../timeFormat'
 
 interface Props {
@@ -154,6 +155,9 @@ export function PolicyGatesPanel({ gates, loading, onDecided, collapsed, incomin
                 <ApprovalQuorum approval={gate.approval} pipeline={gate.pipeline} bundle={gate.bundle} environment={gate.environment}
                   current={isIncoming(gate, incomingFor)}
                   namespace={gate.namespace} onDecided={onDecided} />
+              )}
+              {gate.verify && (
+                <VerifyQuorum verify={gate.verify} pipeline={gate.pipeline} namespace={gate.namespace} />
               )}
             </div>
           ))}

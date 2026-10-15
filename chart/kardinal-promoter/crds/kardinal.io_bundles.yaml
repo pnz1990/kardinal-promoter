@@ -561,6 +561,8 @@ spec:
                           - HoldBundleMissing
                           - BundleRejected
                           - APIWrite
+                          - VerdictRecorded
+                          - VerdictRevoked
                           type: string
                         actor:
                           description: |-

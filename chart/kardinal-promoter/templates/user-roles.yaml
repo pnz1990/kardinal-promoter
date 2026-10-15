@@ -18,7 +18,11 @@ SubjectAccessReview, so these roles decide what a caller can do there too
                        (bundles/reject)
   <fullname>-approver  viewer + override (approve) PolicyGates
                        (policygates/override) + reject Bundles in the UI
-                       (bundles/reject) + create Approvals
+                       (bundles/reject) + create Approvals and Verdicts
+  <fullname>-verifier  read, create and revoke Verdicts only (admission lets a
+                       verifier delete only its own): bind it to the agents and
+                       CI that verify versions (verify gates; an AgentRun's
+                       agent needs it in the Pipeline's namespace)
   <fullname>-admin     every verb on every kardinal kind, and pipelines/edit
                        and policygates/edit; aggregates the other three and
                        <fullname>-admin-extra
@@ -45,7 +49,7 @@ to those roles grant kardinal access too.
 */}}
 {{- define "kardinal-promoter.userRoles.readRules" }}
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications", "renderruns", "agentidentities", "agentindexes"]
+  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications", "renderruns", "agentidentities", "agentindexes", "verdicts", "agentruns", "steptemplates"]
   verbs: ["get", "list", "watch"]
 # Step events in the UI.
 - apiGroups: [""]
@@ -121,6 +125,10 @@ rules:
 - apiGroups: ["kardinal.io"]
   resources: ["approvals"]
   verbs: ["create", "delete"]
+# Record a verdict (verify gates, kardinal verify), and revoke your own.
+- apiGroups: ["kardinal.io"]
+  resources: ["verdicts"]
+  verbs: ["create", "delete"]
 {{- if $direct }}
 # kardinal override from a kubeconfig. identity-admission.yaml limits the
 # write to spec.overrides.
@@ -128,6 +136,26 @@ rules:
   resources: ["policygates"]
   verbs: ["update", "patch"]
 {{- end }}
+---
+# Verifiers: an agent or CI job that verifies versions (kardinal verify, an
+# AgentRun's Pod) needs nothing else; it may revoke only its own Verdicts
+# (identity-admission.yaml). It is deliberately not part of the
+# viewer: an AgentRun's agent must not read Secrets or write workloads, and
+# this role grants neither.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-verifier
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    kardinal.io/aggregate-to-admin: "true"
+rules:
+- apiGroups: ["kardinal.io"]
+  resources: ["verdicts"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["kardinal.io"]
+  resources: ["bundles", "policygates", "pipelines"]
+  verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

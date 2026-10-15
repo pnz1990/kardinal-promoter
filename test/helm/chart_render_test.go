@@ -393,7 +393,7 @@ type apiAccess struct {
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
 	"promotionsteps", "prstatuses", "metricchecks",
-	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications",
+	"scheduleclocks", "notificationhooks", "hookruns", "imageverifications", "agentruns",
 }
 
 var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
@@ -429,7 +429,14 @@ func controllerAccess() []apiAccess {
 		{"source.toolkit.fluxcd.io", "gitrepositories", []string{"patch"}, inWatched, "", "health refresh.go RequestRefresh (reconcile.fluxcd.io/requestedAt)"},
 		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
 		{"multicluster.x-k8s.io", "clusterprofiles", []string{"get", "list"}, inWatched, "", "pipeline fleets.go: fleet selector kind ClusterProfile (uncached List)"},
-		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout)"},
+		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout); agentrun reconciler.go: agent Jobs"},
+		{"networking.k8s.io", "networkpolicies", []string{"get", "create"}, inWatched, "", "agentrun reconciler.go networkPolicy (create, adopt check)"},
+		{"discovery.k8s.io", "endpointslices", []string{"get"}, inCluster, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
+		{"", "serviceaccounts", []string{"delete"}, inWatched, "", "agentrun reconciler.go revoke: a run's own ServiceAccount"},
+		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-writer", "agentrun reconciler.go ensureAccess"},
+		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-reader", "agentrun reconciler.go ensureAccess"},
+		{"kardinal.io", "steptemplates", readVerbs, inCluster, "", "agentrun and steptemplate reconcilers"},
+		{"kardinal.io", "steptemplates/status", []string{"get", "update", "patch"}, inCluster, "", "steptemplate reconciler Ready status"},
 		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
 		{"", "configmaps", []string{"create"}, inRelease, "", "ensureVersionConfigMap"},
 		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},

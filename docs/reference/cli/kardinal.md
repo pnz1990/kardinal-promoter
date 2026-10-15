@@ -122,6 +122,7 @@ names the new Bundle.
 * [kardinal status](kardinal-status.md)	 - Show controller health or per-pipeline in-flight promotion details
 * [kardinal unhold](kardinal-unhold.md)	 - Release an environment's hold (kardinal hold, or rollback --hold)
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
+* [kardinal verify](kardinal-verify.md)	 - Record a verdict on the version running in an environment (verify gates)
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions
 * [kardinal why](kardinal-why.md)	 - Say why an environment waits, and what moves it on
 

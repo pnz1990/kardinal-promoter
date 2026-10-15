@@ -692,8 +692,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	if anyNeedsApprovals(gatesByEnv) {
 		nodes = append(nodes, approvalsRefNode(bundle)) // approval gates (approvals.go)
 	}
+	if anyNeedsVerdicts(gatesByEnv) {
+		nodes = append(nodes, verdictsRefNode(bundle)) // verify gates (verify.go)
+	}
 
 	gates := newGateCollections(pipelineName, bundle.Name)
+	gates.approvals = anyNeedsApprovals(gatesByEnv)
+	agentRuns := newAgentRunPlan()
 	var prItems []interface{}
 	var compactSteps []compactStep
 	var compactMetrics []compactMetric
@@ -717,6 +722,14 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			name, err := gates.add(gate, envName, k8s, nil)
 			if err != nil {
 				return nil, nil, nil, err
+			}
+			if needsVerdicts(gate) {
+				verified, err := VerifiedEnvironment(gate, envName, rawUpstreams, ancestorsOf(envName, deps, filteredSet))
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				gates.setVerify(name, verifyPolicyData(gate, verified))
+				agentRuns.add(gate, verified)
 			}
 			envGates = append(envGates, name)
 		}
@@ -841,7 +854,10 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		nodes = append(nodes, extras.nodes...)
 	}
 
+	runs := agentRuns.list(pipeline, bundle)
+	gates.agentRuns, gates.namespace, gates.bundleUID = len(runs) > 0, bundle.Namespace, string(bundle.UID)
 	nodes = append(nodes, gates.nodes()...)
+	nodes = append(nodes, agentRunNodes(pipeline, bundle, runs, compact)...)
 	nodes = append(nodes, gateMirrorNodes(mirrorSteps, gates.collectionIDs())...)
 	nodes = append(nodes, GraphNode{ID: NodePRStatusData, Def: map[string]interface{}{"items": prItems}},
 		prStatusesNode(pipelineName, bundle.Name))

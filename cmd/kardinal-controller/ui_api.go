@@ -502,6 +502,79 @@ type uiGateResponse struct {
 	// Approval is the gate's approval quorum and who approved (an approval
 	// gate, spec.approval). Absent for a gate without one.
 	Approval *uiGateApproval `json:"approval,omitempty"`
+	// Verify is the gate's verify policy and its verdicts (a verify gate,
+	// spec.verify). Absent for a gate without one.
+	Verify *uiGateVerify `json:"verify,omitempty"`
+}
+
+// uiGateVerify is a verify gate's policy (spec.verify) and how the gate
+// counted the verdicts it has (status.verdicts).
+type uiGateVerify struct {
+	// Check is the verification the gate waits for; Environment the
+	// environment verified.
+	Check       string `json:"check"`
+	Environment string `json:"environment"`
+	// Required is how many votes must pass; MaxFailures how many failing
+	// votes the gate tolerates.
+	Required    int `json:"required"`
+	MaxFailures int `json:"maxFailures,omitempty"`
+	// AllowedAgents are the agents whose verdicts count.
+	AllowedAgents []string `json:"allowedAgents,omitempty"`
+	// OnInconclusive is hold, retry or fail; Timeout the wait ("" none).
+	OnInconclusive string `json:"onInconclusive"`
+	Timeout        string `json:"timeout,omitempty"`
+	// Template is the StepTemplate its AgentRuns run, when it runs any.
+	Template string `json:"template,omitempty"`
+	// Passed and Failed count the gate's counted pass and fail votes.
+	Passed int `json:"passed"`
+	Failed int `json:"failed"`
+	// Verdicts are status.verdicts, in name order.
+	Verdicts []uiGateVerdict `json:"verdicts,omitempty"`
+}
+
+// uiGateVerdict is one Verdict as the gate counted it.
+type uiGateVerdict struct {
+	Name        string `json:"name"`
+	Verifier    string `json:"verifier"`
+	Result      string `json:"result"`
+	Counted     bool   `json:"counted"`
+	Reason      string `json:"reason,omitempty"`
+	Run         int    `json:"run,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	EvidenceURL string `json:"evidenceURL,omitempty"`
+	Findings    int    `json:"findings,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+}
+
+// gateVerify is the uiGateVerify of g, or nil without spec.verify.
+func gateVerify(g *v1alpha1.PolicyGate) *uiGateVerify {
+	p := lifecycle.VerifyPolicyOf(g)
+	if p == nil {
+		return nil
+	}
+	out := &uiGateVerify{Check: p.Check, Environment: p.Environment, Required: p.Required, MaxFailures: p.MaxFailures,
+		AllowedAgents: p.AllowedAgents, OnInconclusive: p.OnInconclusive, Timeout: p.Timeout}
+	if p.Run != nil {
+		out.Template = p.Run.Template
+	}
+	for _, v := range g.Status.Verdicts {
+		d := uiGateVerdict{Name: v.Name, Verifier: v.Verifier, Result: v.Result, Counted: v.Counted, Reason: v.Reason,
+			Run: v.Run, Attempt: v.Attempt, Summary: v.Summary, EvidenceURL: v.EvidenceURL, Findings: v.Findings}
+		if v.CreatedAt != nil {
+			d.CreatedAt = v.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		if v.Counted {
+			switch v.Result {
+			case v1alpha1.VerdictPass:
+				out.Passed++
+			default:
+				out.Failed++
+			}
+		}
+		out.Verdicts = append(out.Verdicts, d)
+	}
+	return out
 }
 
 // uiBundleRejection is spec.rejected of a Bundle.
@@ -1416,6 +1489,7 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			Holding:     state == graphpkg.GateStateBlock,
 			State:       state,
 			Approval:    gateApproval(&g),
+			Verify:      gateVerify(&g),
 		}
 		if !g.CreationTimestamp.IsZero() {
 			resp.CreatedAt = g.CreationTimestamp.UTC().Format(time.RFC3339)

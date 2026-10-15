@@ -23,7 +23,7 @@ import (
 // release (identity-admission.yaml).
 func identityAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "bundle-creator", "graph-objects", "scoped-writes"} {
+	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "verdicts", "bundle-creator", "graph-objects", "scoped-writes"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out
@@ -601,7 +601,7 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 4)
 	assert.Equal(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Delete}, rules[1].Operations)
-	assert.Equal(t, []string{"hookruns"}, rules[1].Resources, "a deleted HookRun would run its hook again")
+	assert.Equal(t, []string{"hookruns", "agentruns"}, rules[1].Resources, "a deleted HookRun would run its hook again, an AgentRun its agent")
 	// A refused HookRun delete gets its own message: "the Graph recreates
 	// it", the message for creates and changes, is not true for one.
 	require.Len(t, vap.Spec.Validations, 3)

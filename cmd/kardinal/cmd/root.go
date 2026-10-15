@@ -92,7 +92,7 @@ Getting started:
 	}
 	add(groupStart, newQuickstartCmd(), newInitCmd(), newDoctorCmd(), newDashboardCmd(), newVersionCmd())
 	add(groupShip, newShipCmd(), newCreateCmd(), newStatusCmd(), newWhyCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
-	add(groupGate, newInboxCmd(), newApproveCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
+	add(groupGate, newInboxCmd(), newApproveCmd(), newVerifyCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
 	add(groupIncident, newPauseCmd(), newResumeCmd(), newRollbackCmd(), newHoldCmd(), newReleaseHoldCmd(), newRejectCmd())
 	add(groupAdmin, newValidateCmd(), newAuditCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newMCPCmd(), newCompletionCmd())
 	root.SetHelpCommandGroupID(groupAdmin)

@@ -17,14 +17,16 @@ metadata:
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
-  # Graph templates (metricchecks: per-promotion MetricCheck instances);
+  # Graph templates (metricchecks: per-promotion MetricCheck instances;
+  # agentruns: verify gates' AgentRuns, and their refAgentRuns read-back);
   # promotionsteps also takes the hook, analysis and render mirror patch.
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "hookruns", "imageverifications", "renderruns"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "hookruns", "imageverifications", "renderruns", "agentruns"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Graph refs: the Bundle, and its Approvals (approval gates).
+  # Graph refs: the Bundle, its Approvals (approval gates) and its Verdicts
+  # (verify gates).
   - apiGroups: ["kardinal.io"]
-    resources: ["bundles", "approvals"]
+    resources: ["bundles", "approvals", "verdicts"]
     verbs: ["get", "list", "watch"]
   # Argo Rollouts analysis (spec.verification): AnalysisRun templates, and
   # the refAnalysisRuns read-back.
@@ -67,7 +69,7 @@ metadata:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns", "approvals", "imageverifications", "renderruns"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns", "approvals", "imageverifications", "renderruns", "agentruns", "verdicts"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

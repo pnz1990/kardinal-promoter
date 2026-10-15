@@ -53,6 +53,8 @@ spec:
             - --graph-service-account={{ .Values.graph.serviceAccountName }}
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
+            - --agentrun-writer-clusterrole={{ include "kardinal-promoter.agentRunWriterRole" . }}
+            - --agentrun-reader-clusterrole={{ include "kardinal-promoter.agentRunReaderRole" . }}
             - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
             - --fleet-application-namespaces={{ join "," .Values.fleets.applicationNamespaces }}
             {{- with .Values.fleets.clusterProfileNamespaces }}

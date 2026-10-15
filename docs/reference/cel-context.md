@@ -19,6 +19,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `metrics` | map | MetricCheck results from the gate's metrics namespace (the org policy namespace for an org gate, the gate's namespace otherwise) |
 | `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes) |
 | `approvals` | map | The Approvals counted for this gate instance (`kardinal approve`). See [`approvals.*`](#approvals) |
+| `verdicts` | map | The Verdicts a verify gate counted (`kardinal verify`, AgentRuns). See [`verdicts.*`](#verdicts) |
 
 ---
 
@@ -327,3 +328,21 @@ The decisions `kardinal approve` recorded for the gate instance's Bundle and env
 expression: 'approvals.count >= 2 && !approvals.rejected && !schedule.isWeekend'
 ```
 
+## `verdicts.*`
+
+The votes a verify gate (`spec.verify`) counted from the Verdicts of the gate instance's Bundle for its check and verified environment (the Graph copies them into `spec.verdicts`), by the rules of [Verify with agents](../agentic/verify-with-agents.md#how-verdicts-count). A gate without `spec.verify` gets zeros.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `verdicts.passed` | int | `2` | Always; counted pass votes |
+| `verdicts.failed` | int | `0` | Always; counted fail votes (and inconclusive ones with `onInconclusive: fail`) |
+| `verdicts.inconclusive` | int | `1` | Always; inconclusive votes that wait |
+| `verdicts.required` | int | `2` | `spec.verify.required`; `0` without `spec.verify` |
+| `verdicts.verifiers` | list | `["qa-explorer", "qa-explorer"]` | Always; the passing voters (agent or principal), oldest first |
+| `verdicts.timedOut` | bool | `false` | Always; `true` past `spec.verify.timeout` |
+| `verdicts.findings.high` | int | `0` | Always; high or critical findings in counted votes |
+
+```yaml
+# The quorum, and no high finding among the counted verdicts
+expression: 'verdicts.findings.high == 0'
+```

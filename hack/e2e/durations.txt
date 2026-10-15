@@ -147,6 +147,9 @@ TestGate_ScheduleClockTicks 136 parallel
 TestGate_TeamGatesScoped 91 parallel
 TestGate_UpstreamHistory 84 parallel
 TestGate_UpstreamSoak 109 parallel
+TestGate_VerifyAgentRuns 43 parallel
+TestGate_VerifyByPerson 50 parallel
+TestGate_VerifyRefusesWideAgent 37 parallel
 TestGate_WindowBoundaryFlipsGates 113 parallel
 TestGiteaFamily_SignedCommitInstance 20 parallel
 TestGiteaFamily_SignedCommitPerson 31 parallel

@@ -14,6 +14,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 |---|---|---|---|
 | [AgentIdentity](#agentidentity) | `agentidentities.kardinal.io` | Cluster | `agentid` |
 | [AgentIndex](#agentindex) | `agentindexes.kardinal.io` | Cluster | `agentidx` |
+| [AgentRun](#agentrun) | `agentruns.kardinal.io` | Namespaced | `ar` |
 | [Approval](#approval) | `approvals.kardinal.io` | Namespaced | `appr` |
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
@@ -31,7 +32,9 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [RollbackPolicy](#rollbackpolicy) | `rollbackpolicies.kardinal.io` | Namespaced | `rbp` |
 | [ScheduleClock](#scheduleclock) | `scheduleclocks.kardinal.io` | Namespaced | `sclock` |
 | [ScmProvider](#scmprovider) | `scmproviders.kardinal.io` | Namespaced | `scmp` |
+| [StepTemplate](#steptemplate) | `steptemplates.kardinal.io` | Cluster | `steptmpl` |
 | [Subscription](#subscription) | `subscriptions.kardinal.io` | Namespaced | `sub` |
+| [Verdict](#verdict) | `verdicts.kardinal.io` | Namespaced | `vd` |
 
 ## AgentIdentity
 
@@ -88,6 +91,45 @@ AgentIndex is the registry of agents in the shape admission reads: the &lt;relea
 | `status.observedIdentities` | integer |  | ObservedIdentities is how many AgentIdentities the index was built from. |
 | `status.users` | map[string]object |  | Users maps a username (ServiceAccount subjects as system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;) to its agent. |
 
+## AgentRun
+
+`kardinal.io/v1alpha1`
+
+AgentRun is one attempt of an in-cluster verifier (a StepTemplate's agent image) for one Bundle, environment and check. Created by the Bundle's kro Graph for a verify gate with verify.run; reconciled by the AgentRun reconciler, which checks its bounds, creates its NetworkPolicy and Job, and records the Job's result.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | AgentRunSpec is one attempt of one in-cluster verifier for one Bundle, environment and check (docs/design/19-verdicts.md, section 8). The kro Graph of the Bundle creates it; the AgentRun reconciler runs the Job whose Pod writes the Verdict. |
+| `spec.attempt` | integer | yes | Attempt is the attempt's number (1-based). |
+| `spec.bundleName` | string | yes | BundleName is the Bundle verified. |
+| `spec.bundleUID` | string | yes | BundleUID is that Bundle's UID. |
+| `spec.check` | string | yes | Check is the verify gate's check. |
+| `spec.environment` | string | yes | Environment is the environment verified. |
+| `spec.pipelineName` | string | yes | PipelineName is the Bundle's Pipeline. |
+| `spec.recorded` | string |  | Recorded is set by the Graph: the result of the Verdict named after this AgentRun, when one exists. An AgentRun that starts with it set does not run its Job (an AgentRun deleted and applied again does not run twice). |
+| `spec.run` | integer | yes | Run is the run's number among the check's runs (1-based). |
+| `spec.targetNamespace` | string | yes | TargetNamespace is the namespace the agent tests: its Pod may reach every Pod there. |
+| `spec.template` | string | yes | Template is the StepTemplate the run runs. |
+| `spec.version` | string |  | Version is the Bundle's version. |
+| `status` | object |  | AgentRunStatus is the observed state of an AgentRun. |
+| `status.agent` | string |  | Agent and Sponsor are the agent the run verifies for (its StepTemplate's AgentIdentity) and that agent's sponsor, when the run started. The Graph names them as the actor of the run's Verdict. |
+| `status.conditions` | []object |  | Conditions: Bounded. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.deadline` | string (date-time) |  | Deadline is StartedAt plus the template's timeout. |
+| `status.finishedAt` | string (date-time) |  | FinishedAt is when the run reached a terminal phase. |
+| `status.jobName` | string |  | JobName is the name of the Job the reconciler created. |
+| `status.jobUID` | string |  | JobUID is the UID of that Job. A Job of that name with another UID, or none at all, while the run runs fails it: it is not run again. |
+| `status.message` | string |  | Message says why the AgentRun is in its phase. |
+| `status.phase` | string |  | Phase is Pending until the Job is created, Running while it runs, and Succeeded (the Job completed) or Failed (it failed, timed out, or the run was refused) once it finished, or Skipped. The verify result is the Verdict's, not the phase. One of: `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`. |
+| `status.serviceAccount` | string |  | ServiceAccount is the ServiceAccount kardinal created for the run (kr-&lt;run&gt;): the only identity that may write the run's Verdict. It is deleted, with its access, when the run ends. |
+| `status.sponsor` | string |  |  |
+| `status.startedAt` | string (date-time) |  | StartedAt is when the Job was created. |
+
 ## Approval
 
 `kardinal.io/v1alpha1`
@@ -124,7 +166,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it (the rule is on AuditEvent.Spec, so the outbox entries that embed the type, PendingAuditEvent, can be stored in a list). |
-| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`. |
+| `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`, `VerdictRecorded`, `VerdictRevoked`. |
 | `spec.actor` | object |  | Actor is who caused the event (docs/actors.md). Absent on records written before v0.12. |
 | `spec.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
 | `spec.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
@@ -215,7 +257,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
 | `status.pendingAuditEvents[].name` | string | yes | Name is the AuditEvent's name. |
 | `status.pendingAuditEvents[].spec` | object | yes | Spec is the AuditEvent's spec, timestamp included: the record carries the time of the transition, not the time it was written. |
-| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`. |
+| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`, `VerdictRecorded`, `VerdictRevoked`. |
 | `status.pendingAuditEvents[].spec.actor` | object |  | Actor is who caused the event (docs/actors.md). Absent on records written before v0.12. |
 | `status.pendingAuditEvents[].spec.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
@@ -666,7 +708,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].path` | string |  | Path is the subdirectory within the GitOps repository for this environment. Used when spec.git.layout is "directory". Defaults to "environments/&lt;name&gt;". |
 | `spec.environments[].pr` | object |  | PR configures the pull request a pr-review environment opens: its title and body, labels, reviewers, assignees, and whether the SCM merges it on its own once its checks and approvals pass (auto-merge). Every string is a Go text/template over the Bundle and the environment (see docs/pr-evidence.md#customising-the-pr). The Pipeline is Ready=False/ValidationFailed when a template does not parse or execute, and a control the SCM provider does not support fails the step before the PR is opened (docs/scm-providers.md#pr-controls). |
 | `spec.environments[].pr.assignees` | []string |  | Assignees are the users the PR is assigned to (templates, one user per output line). "{{ .Bundle.Author }}" assigns the author recorded in the Bundle's provenance. |
-| `spec.environments[].pr.bodyTemplate` | string |  | BodyTemplate replaces the default body. The evidence sections are template functions (evidence, provenanceTable, gatesTable, upstreamTable, rollbackNotice), so a custom body can keep them. |
+| `spec.environments[].pr.bodyTemplate` | string |  | BodyTemplate replaces the default body. The evidence sections are template functions (evidence, provenanceTable, gatesTable, verificationTable, upstreamTable, rollbackNotice), so a custom body can keep them. |
 | `spec.environments[].pr.labels` | []string |  | Labels are added to the kardinal labels (kardinal, kardinal/promotion, kardinal/rollback). Each entry is a template; each line of its output is one label, and empty lines are dropped. |
 | `spec.environments[].pr.merge` | object |  | Merge asks the SCM to merge the PR on its own once the repository's required checks and approvals pass. |
 | `spec.environments[].pr.merge.allowImmediate` | boolean |  | AllowImmediate lets kardinal merge the PR at once when nothing is pending on it (no required check, review or pipeline). This skips human review and any CI the repository does not require. |
@@ -854,7 +896,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
 | `status.pendingAuditEvents[].name` | string | yes | Name is the AuditEvent's name. |
 | `status.pendingAuditEvents[].spec` | object | yes | Spec is the AuditEvent's spec, timestamp included: the record carries the time of the transition, not the time it was written. |
-| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`. |
+| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`, `VerdictRecorded`, `VerdictRevoked`. |
 | `status.pendingAuditEvents[].spec.actor` | object |  | Actor is who caused the event (docs/actors.md). Absent on records written before v0.12. |
 | `status.pendingAuditEvents[].spec.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
@@ -930,6 +972,51 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
 | `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). The minimum is 10s: a smaller value is raised to 10s, and "0" or an invalid value means the default. Default: `5m`. |
 | `spec.skipPermission` | boolean |  | SkipPermission marks a skip-permission gate as granting skips. A Bundle may skip (intent.skipEnvironments) an environment an org gate applies to only when a gate labelled kardinal.io/type=skip-permission, with skipPermission true, in an org policy namespace, applies to that environment. Gates in other namespaces never grant a skip. The permission gate's expression is evaluated like any gate, in front of the next environment the Bundle promotes, so that environment waits until it is true. On any other gate this field has no effect. Default: `false`. |
+| `spec.verdicts` | []object |  | Verdicts is written by the promotion Graph on gate instances: the Verdicts of the instance's Bundle for verify.environment and verify.check from verifiers the gate allows, copied from the Verdict objects, at most 101 (more than 100 blocks the gate). Do not set it; on a template it is ignored. |
+| `spec.verdicts[].actor` | object |  | Actor is the Verdict's actor stamp. |
+| `spec.verdicts[].actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `spec.verdicts[].actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `spec.verdicts[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `spec.verdicts[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `spec.verdicts[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `spec.verdicts[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.verdicts[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `spec.verdicts[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `spec.verdicts[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
+| `spec.verdicts[].bundle` | string | yes | Bundle is the Bundle verified. |
+| `spec.verdicts[].bundleUID` | string | yes | BundleUID is that Bundle's UID. |
+| `spec.verdicts[].by` | string | yes | By is the writer's username. |
+| `spec.verdicts[].check` | string | yes | Check is the check. |
+| `spec.verdicts[].createdAt` | string (date-time) |  | CreatedAt is the Verdict's creationTimestamp, written by the API server. |
+| `spec.verdicts[].environment` | string | yes | Environment is the environment verified. |
+| `spec.verdicts[].evidenceURL` | string |  | EvidenceURL is the verifier's evidence link. |
+| `spec.verdicts[].findings` | integer |  | Findings is how many findings the Verdict lists. |
+| `spec.verdicts[].groups` | []string |  | Groups are the writer's groups. |
+| `spec.verdicts[].highFindings` | integer |  | HighFindings is how many of them are high or critical. |
+| `spec.verdicts[].name` | string | yes | Name is the Verdict's name. |
+| `spec.verdicts[].result` | string | yes | Result is pass, fail or inconclusive. |
+| `spec.verdicts[].run` | object |  | Run is the AgentRun that wrote it. |
+| `spec.verdicts[].run.attempt` | integer | yes | Attempt is the attempt's number (1-based). |
+| `spec.verdicts[].run.index` | integer | yes | Index is the run's number among the check's runs (1-based). |
+| `spec.verdicts[].run.name` | string | yes | Name is the AgentRun's name. |
+| `spec.verdicts[].summary` | string |  | Summary is the verifier's summary. |
+| `spec.verify` | object |  | Verify makes the gate wait for verdicts (docs/design/19-verdicts.md): it is ready only when its expression is true and at least verify.required verifiers found the Bundle to pass verify.check in verify.environment, and no more than verify.maxFailures found it to fail. Copied from the template to every gate instance. For a gate that only waits for verdicts, use the expression "true". |
+| `spec.verify.allowedAgents` | []string |  | AllowedAgents are the agents (AgentIdentity names) whose verdicts count. An agent's verdict counts only when the agent is listed. |
+| `spec.verify.allowedGroups` | []string |  | AllowedGroups are groups: a verdict counts when one of its groups is listed. |
+| `spec.verify.allowedUsers` | []string |  | AllowedUsers are the usernames of people and bots whose verdicts count. With neither allowedUsers nor allowedGroups, every verdict by someone who is not an agent counts. |
+| `spec.verify.check` | string | yes | Check is the verification the gate waits for (Verdict spec.check). |
+| `spec.verify.environment` | string |  | Environment is the environment verified, where the version already runs: an upstream of the environment the gate applies to. Empty: that environment's only direct upstream. |
+| `spec.verify.excludeAuthor` | boolean |  | ExcludeAuthor does not count a verdict from the version's author, the author's agent or that agent's sponsor (one party). An agent's verdict on work of its own party never counts, whatever this says. Default: `true`. |
+| `spec.verify.maxFailures` | integer |  | MaxFailures is how many failing votes the gate tolerates; one more blocks it. |
+| `spec.verify.onInconclusive` | string |  | OnInconclusive is what an inconclusive verdict does: hold (wait for more), retry (wait, and run the AgentRun again, up to retries), or fail (count it as a failing vote). One of: `hold`, `retry`, `fail`. Default: `hold`. |
+| `spec.verify.onTimeout` | string |  | OnTimeout is what the gate does once the timeout passed without a result: fail (stay blocked) or allow (pass, and say so). One of: `fail`, `allow`. Default: `fail`. |
+| `spec.verify.required` | integer |  | Required is how many votes must pass. Default: `1`. |
+| `spec.verify.retries` | integer |  | Retries is how many more attempts each AgentRun gets after an inconclusive verdict, or none, with onInconclusive: retry. |
+| `spec.verify.run` | object |  | Run runs verifiers in the cluster: AgentRuns of a StepTemplate. |
+| `spec.verify.run.count` | integer |  | Count is how many AgentRuns run per version. Default: verify.required. |
+| `spec.verify.run.namespace` | string |  | Namespace is the namespace the agent tests. Default: the verified environment's workload namespace. |
+| `spec.verify.run.template` | string | yes | Template is the StepTemplate the AgentRuns run. |
+| `spec.verify.timeout` | string |  | Timeout bounds the wait, from the time the version passed its health check in the verified environment. Verdicts written later do not count. Empty or "0": no timeout. |
 | `spec.when` | string |  | When is ignored: every gate on an environment is re-checked right before that environment's PromotionStep starts. It stays in the schema only so that a Graph built by an earlier release, whose gate instances carry it, still compiles while its Bundle finishes; gate instances do not copy it. Leave it unset. One of: `pre-deploy`, `post-deploy`. |
 | `status` | object |  | PolicyGateStatus defines the observed state of a PolicyGate. |
 | `status.approvals` | []object |  | Approvals records each decision in spec.approvals and whether the gate counted it (spec.approval), for kardinal explain, the PR evidence and the UI. |
@@ -969,7 +1056,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
 | `status.pendingAuditEvents[].name` | string | yes | Name is the AuditEvent's name. |
 | `status.pendingAuditEvents[].spec` | object | yes | Spec is the AuditEvent's spec, timestamp included: the record carries the time of the transition, not the time it was written. |
-| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`. |
+| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`, `VerdictRecorded`, `VerdictRevoked`. |
 | `status.pendingAuditEvents[].spec.actor` | object |  | Actor is who caused the event (docs/actors.md). Absent on records written before v0.12. |
 | `status.pendingAuditEvents[].spec.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
@@ -991,6 +1078,18 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in a sentence: the gate's message when its expression blocks, what the expression evaluated to, and the version it was evaluated for, for example "waiting for approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion for the version. |
+| `status.verdicts` | []object |  | Verdicts records each verdict in spec.verdicts and whether the gate counted it (spec.verify), for kardinal explain, the PR evidence and the UI. |
+| `status.verdicts[].attempt` | integer |  |  |
+| `status.verdicts[].counted` | boolean | yes | Counted reports whether the verdict is a vote. |
+| `status.verdicts[].createdAt` | string (date-time) |  | CreatedAt is when the Verdict was created. |
+| `status.verdicts[].evidenceURL` | string |  | EvidenceURL is the verifier's evidence link. |
+| `status.verdicts[].findings` | integer |  | Findings is how many findings the Verdict lists. |
+| `status.verdicts[].name` | string | yes | Name is the Verdict's name. |
+| `status.verdicts[].reason` | string |  | Reason says why a verdict does not count, or what it waits for. |
+| `status.verdicts[].result` | string | yes | Result is pass, fail or inconclusive. |
+| `status.verdicts[].run` | integer |  | Run and Attempt are the AgentRun's run and attempt numbers. |
+| `status.verdicts[].summary` | string |  | Summary is the verifier's summary. |
+| `status.verdicts[].verifier` | string | yes | Verifier names the writer (an actor sentence). |
 
 ## PromotionStep
 
@@ -1089,7 +1188,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
 | `status.pendingAuditEvents[].name` | string | yes | Name is the AuditEvent's name. |
 | `status.pendingAuditEvents[].spec` | object | yes | Spec is the AuditEvent's spec, timestamp included: the record carries the time of the transition, not the time it was written. |
-| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`. |
+| `status.pendingAuditEvents[].spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing", "BundleRejected", "APIWrite". ApprovalRecorded and ApprovalRevoked are written by an approval gate when a decision (kardinal approve) appears in or leaves its spec.approvals. BundleRejected is written once when a Bundle's spec.rejected is set (kardinal reject or the UI), naming who rejected it and why; its environment is "*" (the whole Bundle). GateOverridden is written once per spec.overrides entry of a gate instance, naming who created it (kardinal override or the UI). APIWrite is written for each write through the UI API or the Bundle API (controller.accessLog.auditEvents), naming the caller in actor and the route in request. HealthCheckFailed and GateBlocked are accepted but never written: a failed health check records PromotionFailed (RollbackStarted when onHealthFailure is rollback), and a blocked gate records GateEvaluated with outcome Failure. One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `PromotionRejected`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `HoldCreated`, `HoldReleased`, `HoldBundleMissing`, `BundleRejected`, `APIWrite`, `VerdictRecorded`, `VerdictRevoked`. |
 | `status.pendingAuditEvents[].spec.actor` | object |  | Actor is who caused the event (docs/actors.md). Absent on records written before v0.12. |
 | `status.pendingAuditEvents[].spec.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
@@ -1274,6 +1373,44 @@ ScmProvider is an SCM that Pipelines in its namespace open their PRs on (spec.gi
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the conditions describe. |
 
+## StepTemplate
+
+`kardinal.io/v1alpha1`
+
+StepTemplate registers an image kardinal may run as a step: in this release, a verifier whose AgentRuns write Verdicts. Cluster-scoped and written by cluster admins only.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | StepTemplateSpec registers an image kardinal may run as a step (docs/design/19-verdicts.md, section 8.2). Only cluster admins write StepTemplates. In this release a StepTemplate is a verifier: AgentRuns run it, and its Pod writes one Verdict. |
+| `spec.agent` | string | yes | Agent is the AgentIdentity the step runs for: its verdicts count as that agent's, and the one-party rule uses its sponsor. It must be ready, not suspended, and its scope must cover the namespace, the Pipeline and the environment of each run. The Pod does not run as one of the agent's subjects: each AgentRun gets a ServiceAccount of its own that kardinal creates, with only the chart's AgentRun roles (create Verdicts; read the namespace under test), and deletes when the run ends. |
+| `spec.args` | []string |  | Args are the arguments. |
+| `spec.command` | []string |  | Command overrides the image's entrypoint. |
+| `spec.description` | string |  | Description says what the step does. |
+| `spec.egress` | []object |  | Egress are the destinations the Pod may reach besides DNS, the Kubernetes API server and the namespace under test: the model endpoint, for example. |
+| `spec.egress[].cidr` | string | yes | CIDR is the destination address range. |
+| `spec.egress[].ports` | []integer (int32) |  | Ports are the TCP ports; empty: all. |
+| `spec.env` | []object |  | Env are literal environment variables. Names starting with KARDINAL_ are reserved for the run's context. |
+| `spec.env[].name` | string | yes | Name is the variable's name. |
+| `spec.env[].value` | string |  | Value is its value. |
+| `spec.image` | string | yes | Image is the container image. A digest (image@sha256:...) is recommended; the controller's --step-template-require-digest refuses tags. |
+| `spec.output` | string |  | Output is what the step produces. Only Verdict. One of: `Verdict`. Default: `Verdict`. |
+| `spec.resources` | object |  | Resources are the container's resource requests and limits. |
+| `spec.resources.claims` | []object |  | Claims lists the names of resources, defined in spec.resourceClaims, that are used by this container. This field depends on the DynamicResourceAllocation feature gate. This field is immutable. It can only be set for containers. |
+| `spec.resources.claims[].name` | string | yes | Name must match the name of one entry in pod.spec.resourceClaims of the Pod where this field is used. It makes that resource available inside a container. |
+| `spec.resources.claims[].request` | string |  | Request is the name chosen for a request in the referenced claim. If empty, everything from the claim is made available, otherwise only the result of this request. |
+| `spec.resources.limits` | map[string]int or string |  | Limits describes the maximum amount of compute resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/ |
+| `spec.resources.requests` | map[string]int or string |  | Requests describes the minimum amount of compute resources required. If Requests is omitted for a container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests cannot exceed Limits. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/ |
+| `spec.runtimeClassName` | string |  | RuntimeClassName runs the Pod in a sandboxed runtime (gVisor, Kata). |
+| `spec.secretEnv` | []object |  | SecretEnv are environment variables from Secrets in the Pipeline's namespace. Each Secret must carry the label kardinal.io/step-template with this template's name: a Secret not labelled for it (a Pipeline's git credentials) is refused. |
+| `spec.secretEnv[].key` | string | yes | Key is the key in the Secret. |
+| `spec.secretEnv[].name` | string | yes | Name is the variable's name. |
+| `spec.secretEnv[].secret` | string | yes | Secret is the Secret's name, in the Pipeline's namespace. |
+| `spec.timeout` | string |  | Timeout bounds each attempt. Default 30m, at most 24h. |
+| `status` | object |  | StepTemplateStatus is the observed state of a StepTemplate. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation Ready is for. |
+| `status.ready` | boolean |  | Ready is true when the template is valid and AgentRuns may run it. |
+| `status.reason` | string |  | Reason says why it is not ready. |
+
 ## Subscription
 
 `kardinal.io/v1alpha1`
@@ -1337,3 +1474,44 @@ Subscription watches an OCI registry, a Git repository or a Helm chart repositor
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
 | `status.observedPathGlob` | string |  | ObservedPathGlob is the spec.git.pathGlob the last successful poll used. When the glob changes, the next poll records a new baseline and creates no Bundle. |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |
+
+## Verdict
+
+`kardinal.io/v1alpha1`
+
+Verdict records that a verifier (an agent, a person or CI) found a Bundle to pass, fail or be inconclusive in an environment for a check. The promotion Graph copies the Verdicts of its Bundle into the verify gates (PolicyGate spec.verdicts), and the PolicyGate reconciler counts them against spec.verify.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | VerdictSpec is one verifier's result for one Bundle, environment and check (docs/design/19-verdicts.md). A Verdict is never changed: delete it to revoke it. The chart's &lt;release&gt;-verdicts ValidatingAdmissionPolicy admits it only when spec.by is the requesting user, spec.groups are among the requester's groups, the kardinal.io/bundle, kardinal.io/environment and kardinal.io/check labels match the spec, and spec.run is set only by the Pod of that AgentRun. |
+| `spec.actor` | object |  | Actor is the actor stamp (docs/design/17-actors.md). Agents must set it; the &lt;release&gt;-actor policy checks it. |
+| `spec.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `spec.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
+| `spec.bundle` | string | yes | Bundle is the name of the Bundle verified, in the Verdict's namespace. |
+| `spec.bundleUID` | string | yes | BundleUID is the UID of that Bundle: the Graph counts the Verdict only for the Bundle with this UID, so a Verdict cannot carry over to a new Bundle that reuses the name. |
+| `spec.by` | string | yes | By is the Kubernetes username of the writer, as the API server authenticates it. |
+| `spec.check` | string | yes | Check is the verification's name (a gate's verify.check). |
+| `spec.durationSeconds` | integer (int64) |  | DurationSeconds is how long the verifier says it ran (asserted). |
+| `spec.environment` | string | yes | Environment is the environment verified: the version runs there. |
+| `spec.evidenceURL` | string |  | EvidenceURL links to the verifier's evidence (a CI run, a report). |
+| `spec.findings` | []object |  | Findings are what the verifier wants a reviewer to see. |
+| `spec.findings[].detail` | string |  | Detail explains it. |
+| `spec.findings[].severity` | string | yes | Severity is info, low, medium, high or critical. One of: `info`, `low`, `medium`, `high`, `critical`. |
+| `spec.findings[].title` | string | yes | Title is the finding in a line. |
+| `spec.findings[].url` | string |  | URL links to it. |
+| `spec.groups` | []string |  | Groups are the writer's groups that count for verify.allowedGroups. Each must be one of the requester's groups. |
+| `spec.pipeline` | string | yes | Pipeline is the Bundle's Pipeline. The Graph counts the Verdict only for a Bundle of this Pipeline. |
+| `spec.result` | string | yes | Result is pass, fail or inconclusive. One of: `pass`, `fail`, `inconclusive`. |
+| `spec.run` | object |  | Run binds the Verdict to the AgentRun whose Pod wrote it. Admission admits it only from that run's Pod, and only when the Verdict is named after the run. |
+| `spec.run.attempt` | integer | yes | Attempt is the attempt's number (1-based). |
+| `spec.run.index` | integer | yes | Index is the run's number among the check's runs (1-based). |
+| `spec.run.name` | string | yes | Name is the AgentRun's name. |
+| `spec.startedAt` | string (date-time) |  | StartedAt is when the verifier says it started (asserted). |
+| `spec.summary` | string |  | Summary says what the verifier found. Required for fail and inconclusive. Default: ``. |

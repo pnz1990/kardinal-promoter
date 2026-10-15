@@ -34,6 +34,7 @@ Approve and gate:
   override    Force-pass a PolicyGate with a mandatory audit record
   policy      Manage and evaluate promotion policy gates
   promote     Promote the version verified upstream into an environment
+  verify      Record a verdict on the version running in an environment (verify gates)
 
 Incident:
   hold        Keep an environment on what runs there now

@@ -1,0 +1,258 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: agentruns.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    categories:
+    - kardinal-all
+    kind: AgentRun
+    listKind: AgentRunList
+    plural: agentruns
+    shortNames:
+    - ar
+    singular: agentrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bundleName
+      name: Bundle
+      type: string
+    - jsonPath: .spec.environment
+      name: Env
+      type: string
+    - jsonPath: .spec.check
+      name: Check
+      type: string
+    - jsonPath: .spec.run
+      name: Run
+      type: integer
+    - jsonPath: .spec.attempt
+      name: Attempt
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AgentRun is one attempt of an in-cluster verifier (a StepTemplate's agent
+          image) for one Bundle, environment and check. Created by the Bundle's kro
+          Graph for a verify gate with verify.run; reconciled by the AgentRun
+          reconciler, which checks its bounds, creates its NetworkPolicy and Job,
+          and records the Job's result.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AgentRunSpec is one attempt of one in-cluster verifier for one Bundle,
+              environment and check (docs/design/19-verdicts.md, section 8). The kro
+              Graph of the Bundle creates it; the AgentRun reconciler runs the Job whose
+              Pod writes the Verdict.
+            properties:
+              attempt:
+                description: Attempt is the attempt's number (1-based).
+                maximum: 6
+                minimum: 1
+                type: integer
+              bundleName:
+                description: BundleName is the Bundle verified.
+                minLength: 1
+                type: string
+              bundleUID:
+                description: BundleUID is that Bundle's UID.
+                minLength: 1
+                type: string
+              check:
+                description: Check is the verify gate's check.
+                minLength: 1
+                type: string
+              environment:
+                description: Environment is the environment verified.
+                minLength: 1
+                type: string
+              pipelineName:
+                description: PipelineName is the Bundle's Pipeline.
+                minLength: 1
+                type: string
+              recorded:
+                description: |-
+                  Recorded is set by the Graph: the result of the Verdict named after
+                  this AgentRun, when one exists. An AgentRun that starts with it set
+                  does not run its Job (an AgentRun deleted and applied again does not
+                  run twice).
+                type: string
+              run:
+                description: Run is the run's number among the check's runs (1-based).
+                maximum: 10
+                minimum: 1
+                type: integer
+              targetNamespace:
+                description: |-
+                  TargetNamespace is the namespace the agent tests: its Pod may reach
+                  every Pod there.
+                maxLength: 63
+                minLength: 1
+                type: string
+              template:
+                description: Template is the StepTemplate the run runs.
+                minLength: 1
+                type: string
+              version:
+                description: Version is the Bundle's version.
+                type: string
+            required:
+            - attempt
+            - bundleName
+            - bundleUID
+            - check
+            - environment
+            - pipelineName
+            - run
+            - targetNamespace
+            - template
+            type: object
+          status:
+            description: AgentRunStatus is the observed state of an AgentRun.
+            properties:
+              agent:
+                description: |-
+                  Agent and Sponsor are the agent the run verifies for (its
+                  StepTemplate's AgentIdentity) and that agent's sponsor, when the run
+                  started. The Graph names them as the actor of the run's Verdict.
+                type: string
+              conditions:
+                description: 'Conditions: Bounded.'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              deadline:
+                description: Deadline is StartedAt plus the template's timeout.
+                format: date-time
+                type: string
+              finishedAt:
+                description: FinishedAt is when the run reached a terminal phase.
+                format: date-time
+                type: string
+              jobName:
+                description: JobName is the name of the Job the reconciler created.
+                type: string
+              jobUID:
+                description: |-
+                  JobUID is the UID of that Job. A Job of that name with another UID,
+                  or none at all, while the run runs fails it: it is not run again.
+                type: string
+              message:
+                description: Message says why the AgentRun is in its phase.
+                type: string
+              phase:
+                description: |-
+                  Phase is Pending until the Job is created, Running while it runs, and
+                  Succeeded (the Job completed) or Failed (it failed, timed out, or the
+                  run was refused) once it finished, or Skipped. The verify result is
+                  the Verdict's, not the phase.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Skipped
+                type: string
+                x-kubernetes-validations:
+                - message: a finished AgentRun's phase cannot change
+                  rule: '!(oldSelf in [''Succeeded'', ''Failed'', ''Skipped'']) ||
+                    self == oldSelf'
+              serviceAccount:
+                description: |-
+                  ServiceAccount is the ServiceAccount kardinal created for the run
+                  (kr-<run>): the only identity that may write the run's Verdict. It is
+                  deleted, with its access, when the run ends.
+                type: string
+              sponsor:
+                type: string
+              startedAt:
+                description: StartedAt is when the Job was created.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

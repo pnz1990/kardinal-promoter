@@ -19,7 +19,7 @@ import (
 // kubectl get kardinal lists them. Every kind, generated ones included, is in
 // kardinal-all.
 var userKinds = []string{"AgentIdentity", "Bundle", "ChangeWindow", "ClusterScmProvider", "MetricCheck",
-	"NotificationHook", "Pipeline", "PolicyGate", "ScmProvider", "Subscription"}
+	"NotificationHook", "Pipeline", "PolicyGate", "ScmProvider", "StepTemplate", "Subscription"}
 
 // TestCRDCategories (P1): kubectl get kardinal lists the kinds users write,
 // Pipelines, PolicyGates and Bundles among them, and kubectl get kardinal-all
@@ -29,7 +29,7 @@ var userKinds = []string{"AgentIdentity", "Bundle", "ChangeWindow", "ClusterScmP
 func TestCRDCategories(t *testing.T) {
 	files, err := filepath.Glob("../../config/crd/bases/*.yaml")
 	require.NoError(t, err)
-	require.Len(t, files, 20)
+	require.Len(t, files, 23)
 	var user []string
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
