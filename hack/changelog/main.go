@@ -17,6 +17,7 @@
 //
 //	changelog lint                          every fragment is well formed
 //	changelog unreleased                    the [Unreleased] section, from the fragments
+//	changelog page                          docs/changelog.md as the docs site shows it
 //	changelog release vX.Y.Z [YYYY-MM-DD]   write the fragments in as vX.Y.Z and delete them
 //	changelog check BASE [LABELS]           a user-facing change since BASE adds a fragment
 package main
@@ -41,7 +42,7 @@ func main() {
 	}
 }
 
-const usage = "usage: changelog lint | unreleased | release vX.Y.Z [YYYY-MM-DD] | check BASE [LABELS]"
+const usage = "usage: changelog lint | unreleased | page | release vX.Y.Z [YYYY-MM-DD] | check BASE [LABELS]"
 
 func run(root string, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
@@ -61,6 +62,13 @@ func run(root string, args []string, stdout io.Writer) error {
 			return err
 		}
 		_, err = io.WriteString(stdout, fragments.Render(fs))
+		return err
+	case "page":
+		text, err := fragments.Assembled(root)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(stdout, text)
 		return err
 	case "release":
 		if len(args) < 2 || len(args) > 3 {
