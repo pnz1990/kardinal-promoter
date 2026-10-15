@@ -145,6 +145,19 @@ type ghJob struct {
 	URL        string `json:"url"`
 }
 
+// runDone says whether every job of the run has finished.
+func (c *ciRunner) runDone(ctx context.Context, run int64) (bool, error) {
+	out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--json", "status")
+	if err != nil {
+		return false, fmt.Errorf("view run %d: %w", run, err)
+	}
+	var v struct{ Status string }
+	if err := json.Unmarshal(out, &v); err != nil {
+		return false, fmt.Errorf("parse run %d: %w", run, err)
+	}
+	return v.Status == "completed", nil
+}
+
 func (c *ciRunner) job(ctx context.Context, run int64, name string) (ghJob, int, error) {
 	out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--json", "jobs,attempt")
 	if err != nil {
@@ -179,6 +192,15 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 			return err
 		}
 		if j.Status == "completed" && j.Conclusion != "success" && rerun {
+			// GitHub re-runs a job only once its whole run has finished.
+			if done, err := c.runDone(ctx, run.ID); err != nil {
+				return err
+			} else if !done {
+				if err := sleep(ctx, c.poll); err != nil {
+					return err
+				}
+				continue
+			}
 			rerun = false
 			c.log("%s: re-running the failed CI job %s", st.ID, j.URL)
 			if _, err := c.gh(ctx, "run", "rerun", fmt.Sprint(run.ID), "--repo", c.repo, "--job", fmt.Sprint(j.DatabaseID)); err != nil {

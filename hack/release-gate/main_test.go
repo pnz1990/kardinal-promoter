@@ -522,9 +522,11 @@ func TestRender(t *testing.T) {
 		[]byte(`{"Action":"pass","Test":"TestCore_X"}`+"\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(out, "images"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(out, "images", "images.txt"), []byte("ctl:abc sha256:111 (host build)\n"), 0o644))
+	t0 := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.WriteFile(filepath.Join(out, "e2e-core-137", "ci-job.txt"), []byte("https://x/job/1\n"), 0o644))
 	results := []Result{
-		{ID: "unit", Status: statusFail, Reason: "script: exit status 1", Seconds: 65},
-		{ID: "e2e-core-137", Status: statusPass, Seconds: 600, Cached: true},
+		{ID: "unit", Status: statusFail, Reason: "script: exit status 1", Seconds: 65, Started: t0},
+		{ID: "e2e-core-137", Status: statusPass, Seconds: 600, Cached: true, Started: t0},
 		{ID: "upgrade-v0110", Status: statusMissing, Reason: "no suite"},
 	}
 	cov := Coverage{Rows: 10, ByStatus: map[string]int{"covered": 8, "todo": 2}, ByResult: map[string]int{"passed": 7, "not run": 3}}
@@ -540,7 +542,7 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, s, "| Unit, fuzz and scenarios | FAIL | 0 of 1 | 4 | 2 | 1 | 1 | 1m5s |")
 	assert.Contains(t, s, "| **Total** | **NO-GO** | | **5** | **3** | **1** | **1** | 1h30m0s wall |")
 	assert.Contains(t, s, "| unit tests | Unit, fuzz and scenarios | FAIL: script: exit status 1 | 2/1/1 | 1m5s | [log](unit/log.txt) |")
-	assert.Contains(t, s, "| core on 1.37 | Live e2e | PASS (cached) | 1/0/0 | 10m0s |  |")
+	assert.Contains(t, s, "| core on 1.37 | Live e2e | PASS (cached) | 1/0/0 | 10m0s | [CI job](https://x/job/1) |")
 	assert.Contains(t, s, "| upgrade from v0.11.0 | Upgrade | MISSING: no suite |")
 	assert.Contains(t, s, "10 rows, 8 covered and 2 not (8 covered, 2 todo)")
 	assert.Contains(t, s, "): 3 not run, 7 passed.")
@@ -676,7 +678,7 @@ func (f *fakeGH) called(prefix string) int {
 
 func TestCIRunner(t *testing.T) {
 	out := t.TempDir()
-	var views atomic.Int32
+	var views, runViews atomic.Int32
 	conclusion := "failure"
 	f := &fakeGH{}
 	f.reply = func(call string) ([]byte, error) {
@@ -688,6 +690,12 @@ func TestCIRunner(t *testing.T) {
 		case strings.HasPrefix(call, "run list"):
 			return []byte(`[{"databaseId":7,"headSha":"other","createdAt":"` + time.Now().UTC().Format(time.RFC3339) + `"},
 {"databaseId":9,"headSha":"abc","createdAt":"` + time.Now().UTC().Format(time.RFC3339) + `"}]`), nil
+		case call == "run view 9 --repo o/r --json status":
+			// The whole run: still running at first, so the re-run waits.
+			if runViews.Add(1) == 1 {
+				return []byte(`{"status":"in_progress"}`), nil
+			}
+			return []byte(`{"status":"completed"}`), nil
 		case strings.HasPrefix(call, "run view 9"):
 			status := "in_progress"
 			if views.Add(1) > 1 {
@@ -729,6 +737,7 @@ func TestCIRunner(t *testing.T) {
 	require.NoError(t, c2.Run(context.Background(), st, dir))
 	assert.Equal(t, 1, f.called("workflow run"), "dispatched once per commit")
 	assert.Equal(t, 1, f.called("run rerun 9 --repo o/r --job 55"))
+	assert.Equal(t, 2, f.called("run view 9 --repo o/r --json status"), "the re-run waited for the whole run to finish")
 
 	// The branch is not at the gate's commit: no dispatch.
 	c3 := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "def", out: t.TempDir(), suites: []string{"core"},
@@ -743,4 +752,17 @@ func TestJobID(t *testing.T) {
 	assert.Equal(t, "core-135-1of3", jobID(MatrixLine{"core", "1.35", "1/3"}))
 	assert.Equal(t, "upgrade-v0100-130", jobID(MatrixLine{"upgrade-v0100", "1.30", "-"}))
 	assert.Equal(t, "core 1/3 on Kubernetes 1.35", ciJob{Suite: "core", Minor: "1.35", Shard: "1/3"}.Name())
+}
+
+// An area's time is its span: two overlapping steps take the longer one's.
+func TestRenderAreaSpan(t *testing.T) {
+	t0 := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	steps := []Step{{ID: "a", Area: areaE2E, Title: "a"}, {ID: "b", Area: areaE2E, Title: "b"}}
+	results := []Result{
+		{ID: "a", Status: statusPass, Started: t0, Seconds: 3600},
+		{ID: "b", Status: statusPass, Started: t0.Add(10 * time.Minute), Seconds: 3600},
+	}
+	var b bytes.Buffer
+	require.NoError(t, Render(&b, steps, results, t.TempDir(), Coverage{ByStatus: map[string]int{}}, Provenance{SHA: "x"}, time.Hour))
+	assert.Contains(t, b.String(), "| Live e2e | PASS | 2 of 2 | 0 | 0 | 0 | 0 | 1h10m0s |")
 }

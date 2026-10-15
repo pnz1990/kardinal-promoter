@@ -320,7 +320,7 @@ var kroVersion = regexp.MustCompile(`KRO_VERSION="\$\{KRO_VERSION:-([^}]+)\}"`)
 
 func provenance(root, sha string, dirty bool, repo *Repo, out string) Provenance {
 	p := Provenance{SHA: sha, Dirty: dirty, PrevRelease: repo.PrevRelease}
-	p.Describe, _ = git(root, "describe", "--tags", "--always")
+	p.Describe, _ = git(root, "describe", "--tags", "--always", sha)
 	if v, err := exec.Command("go", "env", "GOVERSION").Output(); err == nil {
 		p.GoVersion = strings.TrimSpace(string(v))
 	}

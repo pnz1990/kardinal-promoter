@@ -183,13 +183,22 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 			continue
 		}
 		var t Totals
-		passed, secs := 0, 0.0
+		passed := 0
 		status := statusPass
+		var first, last time.Time
 		for _, i := range idx {
 			if tt, ok := stepTotals(out, steps[i]); ok {
 				t.add(tt)
 			}
-			secs += results[i].Seconds
+			if r := results[i]; !r.Started.IsZero() {
+				end := r.Started.Add(time.Duration(r.Seconds * float64(time.Second)))
+				if first.IsZero() || r.Started.Before(first) {
+					first = r.Started
+				}
+				if end.After(last) {
+					last = end
+				}
+			}
 			switch results[i].Status {
 			case statusPass:
 				passed++
@@ -202,12 +211,15 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 			}
 		}
 		all.add(t)
+		// The area's span, first start to last end: its steps overlap (the
+		// CI jobs run at once), so their sum would overstate it.
 		fmt.Fprintf(&b, "| %s | %s | %d of %d | %d | %d | %d | %d | %s |\n", a, strings.ToUpper(status), passed, len(idx),
-			t.Run, t.Passed, t.Failed, t.Skipped, duration(secs))
+			t.Run, t.Passed, t.Failed, t.Skipped, duration(last.Sub(first).Seconds()))
 	}
 	fmt.Fprintf(&b, "| **Total** | **%s** | | **%d** | **%d** | **%d** | **%d** | %s wall |\n\n",
 		verdict(results), all.Run, all.Passed, all.Failed, all.Skipped, wall.Round(time.Second))
-	b.WriteString("Tests count every test and subtest once per run (`-count`), from each step's `go test -json` output.\n\n")
+	b.WriteString("Tests count every test and subtest once per run (`-count`), from each step's `go test -json` output. " +
+		"An area's time runs from its first step's start to its last step's end.\n\n")
 
 	b.WriteString("## Steps\n\n| Step | Area | Result | Tests (pass/fail/skip) | Time | Log |\n|---|---|---|---|---|---|\n")
 	for i, st := range steps {
@@ -224,7 +236,9 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 			tests = fmt.Sprintf("%d/%d/%d", t.Passed, t.Failed, t.Skipped)
 		}
 		logLink := ""
-		if _, err := os.Stat(filepath.Join(out, st.ID, "log.txt")); err == nil {
+		if job, err := os.ReadFile(filepath.Join(out, st.ID, "ci-job.txt")); err == nil {
+			logLink = fmt.Sprintf("[CI job](%s)", strings.TrimSpace(string(job)))
+		} else if _, err := os.Stat(filepath.Join(out, st.ID, "log.txt")); err == nil {
 			logLink = fmt.Sprintf("[log](%s/log.txt)", st.ID)
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", st.Title, st.Area, res, tests, duration(r.Seconds), logLink)
