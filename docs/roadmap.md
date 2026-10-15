@@ -11,29 +11,30 @@ what changed in each release.
 
 ## Planned
 
-Everything in this section is planned and not in kardinal yet. Plans change with feedback; the
-[changelog](changelog.md) says what shipped.
+The v0.12 items are merged on main and ship in v0.12.0, except where noted; v0.13 and later are
+planned and not in kardinal yet. Plans change with feedback; the [changelog](changelog.md) says
+what shipped.
 
-### v0.12: agent-ready
+### v0.12: agent-ready (on main, unreleased)
 
 - **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
   the namespaces, pipelines and environments it may act in. Versions, approvals and overrides
-  record the verified actor and sponsor, and AuditEvents name them. On main, unreleased:
+  record the verified actor and sponsor, and AuditEvents name them:
   [Agents and the verified actor](actors.md).
 - **Policy that knows the actor.** Gates read who created a version (`actor.*`, `agent.*`), and an
   environment can say `agents: auto | approve | deny`. Approvals from agents count only where a
-  gate opts in, never for the agent's own work or its sponsor's.
+  gate opts in, never for the agent's own work or its sponsor's: [Actor-aware policy](agentic/policy.md).
 - **Agents as verifiers.** A `Verdict` object records an agent's pass, fail or inconclusive result
   for a version in an environment, and a verification gate waits for N verdicts from eligible
-  agents. On main, unreleased: [Verify with agents](agentic/verify-with-agents.md).
-- **An agent freeze.** `kardinal freeze --agents` stops promotions by agents, and a cluster-wide
-  stop-the-line stops everyone.
+  agents: [Verify with agents](agentic/verify-with-agents.md).
+- **An agent freeze.** `kardinal freeze --agents` stops promotions by agents, and
+  `kardinal freeze --everyone` stops the line for everyone: [Freezes](agentic/freezes.md).
 - **Local MCP.** `kardinal mcp` over stdio, with the caller's kubeconfig: read tools by default,
   write tools only with `--allow-write`, and a policy pre-flight that says whether a version
-  would be allowed into an environment now. On main, unreleased: [Connect an agent](agentic/connect-an-agent.md).
-- **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage. On main,
-  unreleased: [Pause one fleet](pause.md#pause-one-fleet), [Roll back a fleet](rollback.md#roll-back-a-fleet).
-- Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
+  would be allowed into an environment now: [Connect an agent](agentic/connect-an-agent.md).
+- **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage:
+  [Pause one fleet](pause.md#pause-one-fleet), [Roll back a fleet](rollback.md#roll-back-a-fleet).
+- Planned: move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
 
 ### v0.13: evidence
 
