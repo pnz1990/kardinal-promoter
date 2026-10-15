@@ -33,14 +33,15 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+// DefaultNewestBuildTags bounds how many tags newest-build ordering
+// inspects when the Subscription sets no discoveryLimit. Newest-build reads
+// each tag's manifest and image config, so it costs two or three registry
+// requests per tag on every poll.
+const DefaultNewestBuildTags = 50
+
 const (
 	// maxTagPages bounds tags/list pagination.
 	maxTagPages = 100
-	// defaultNewestBuildTags bounds how many tags newest-build ordering
-	// inspects when the Subscription sets no discoveryLimit. Newest-build reads
-	// each tag's manifest and image config, so it costs two or three registry
-	// requests per tag on every poll.
-	defaultNewestBuildTags = 50
 	// maxNewestBuildTags is the highest discoveryLimit.
 	maxNewestBuildTags = 200
 	// manifestAccept lists every manifest media type the watcher understands.
@@ -179,7 +180,7 @@ func (w *OCIWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 
 	limit := w.DiscoveryLimit
 	if limit <= 0 {
-		limit = defaultNewestBuildTags
+		limit = DefaultNewestBuildTags
 	}
 	limit = min(limit, maxNewestBuildTags)
 	tag, digest, err := s.selectByStrategy(ctx, w.Strategy, filtered, limit)

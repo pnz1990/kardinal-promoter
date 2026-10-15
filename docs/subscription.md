@@ -389,6 +389,7 @@ Complete manifests for the image and git sources are in
 | `status.lastSeenRevision` | With `pathGlob`: the branch head the last poll read up to |
 | `status.lastRefreshRequest` | The `kardinal.io/refresh` value the last poll answered |
 | `status.observedPathGlob` | The `pathGlob` of the last successful poll |
+| `status.observedSelection` | A hash of the source and tag selection (`registry`, `repoURL`, `chart`, `branch`, `strategy`, the tag filters, `discoveryLimit`) `lastSeenDigest` was chosen with |
 | `status.conditions[type=Ready]` | `True` while polling; `False` with the reason (`SecretNotReferenceable`, `SecretNotFound`, `SecretUnreadable`, `SecretHasNoCredentials`, `WatchFailed`, `InvalidSpec`) |
 | `status.message` | Error details when phase=Error |
 
@@ -397,6 +398,30 @@ Complete manifests for the image and git sources are in
 The first poll records the current digest in `status.lastSeenDigest` as a baseline and
 creates no version: an artifact that already existed when the Subscription was created is
 not promoted. Each later poll that sees a different digest creates one version.
+
+Editing the source or what selects the artifact also records a new baseline and creates no
+version:
+
+- For an image Subscription: `registry`, `strategy`, `tagFilter`, `excludeTagFilter`,
+  `allowTags`, `ignoreTags`, `semverConstraint` and `discoveryLimit`.
+- For a Helm Subscription: `repoURL`, `chart` and its filters.
+- For a Git Subscription: `repoURL` and `branch`. The new branch is read from its head.
+
+The poll after the edit records what the new selection picks, in `status.lastSeenDigest`
+and `status.observedSelection` (a hash of those fields). The next new artifact under it is a
+version. A new selection can pick an older artifact, for example `strategy: Lexical` instead
+of `NewestBuild`, or a mirror that lags. Promoting it would roll the environments back.
+
+An edit that picks the same way is not a new baseline. Examples are `interval`, the order of
+`allowTags`, or a default spelled out. The same applies to `pathGlob` (see
+[Path filtering](#path-filtering-pathglob)).
+
+An artifact pushed between the edit and that poll becomes the baseline too. It is promoted
+only when the next artifact arrives. To promote it at once, create its version with
+`kardinal create bundle`, or push again.
+
+A Subscription whose baseline predates `status.observedSelection` keeps it, and its first
+poll after an upgrade records the selection.
 
 Before creating a version the controller lists the Subscription's versions (label
 `kardinal.io/subscription`). When the newest one is already for the digest (label
