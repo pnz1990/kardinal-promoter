@@ -137,3 +137,11 @@ func (r *Registry) EvictedForTest() int {
 	defer r.mu.Unlock()
 	return len(r.evictedAt)
 }
+
+// forget gives v's label slot back, so a test that admits v can run again in
+// one process (go test -count=N).
+func (c *labelCap) forget(v string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.seen, v)
+}

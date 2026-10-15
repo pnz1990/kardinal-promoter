@@ -88,18 +88,22 @@ func TestSCMMetrics_OwnerAdmittedOnSuccess(t *testing.T) {
 	count := func(label, result string) float64 {
 		return testutil.ToFloat64(SCMRequestsTotal.WithLabelValues("github", label, "PATCH pulls", result))
 	}
-	other := count(labelOther, "client_error")
+	// The label slots and the counters are the process's: each run of the
+	// test (go test -count=N) starts with the owner not admitted, and reads
+	// the counters as deltas (#1889).
+	ownerLabels.forget(ownerKey(owner))
+	other, ok, failed := count(labelOther, "client_error"), count(owner, "ok"), count(owner, "client_error")
 	require.Error(t, g.ClosePR(ctx, owner+"/app", 1))
 	assert.Equal(t, other+1, count(labelOther, "client_error"), "a failing call does not admit its owner")
 	assert.Equal(t, labelOther, knownOwnerLabel(owner))
 
 	status = http.StatusOK
 	require.NoError(t, g.ClosePR(ctx, owner+"/app", 1))
-	assert.Equal(t, 1.0, count(owner, "ok"), "a 2xx admits the owner")
+	assert.Equal(t, ok+1, count(owner, "ok"), "a 2xx admits the owner")
 
 	status = http.StatusNotFound
 	require.Error(t, g.ClosePR(ctx, owner+"/app", 1))
-	assert.Equal(t, 1.0, count(owner, "client_error"), "an admitted owner keeps its label on failures")
+	assert.Equal(t, failed+1, count(owner, "client_error"), "an admitted owner keeps its label on failures")
 }
 
 // TestSCMMetrics_GitHubCalls (#1529): every GitHub API call counts by
