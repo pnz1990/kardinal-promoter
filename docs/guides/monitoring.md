@@ -289,6 +289,14 @@ kardinal-promoter ships a pre-built Grafana dashboard covering:
 - **Reconciler health**: reconcile rate, error rate, P99 latency, work queue depth per controller
 - **Go runtime**: goroutines, heap memory, CPU usage
 
+Every panel shows only kardinal-promoter, also in a Prometheus that scrapes other operators or
+other clusters. The `Cluster` and `Namespace` variables pick the controller, from the `cluster`
+and `namespace` labels of its `kardinal_pr_duration_seconds_count` series. Both default to All,
+which also matches series without the label, so a Prometheus without them needs no setup. The
+controller-runtime, work queue and Go runtime panels, whose metrics every operator exports, are
+kept to kardinal's own scrape targets (`and on (cluster, job, instance)` that series), whatever
+the scrape job is called.
+
 ### Option 1 — Grafana sidecar (kube-prometheus-stack)
 
 Enable via Helm when using a Grafana sidecar that auto-discovers labelled ConfigMaps:
