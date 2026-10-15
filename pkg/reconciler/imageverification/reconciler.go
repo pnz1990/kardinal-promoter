@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,8 @@ const (
 	ReasonInvalidRegistryCredentials = "InvalidRegistryCredentials"
 	ReasonSignatureNotVerified       = "SignatureNotVerified"
 	ReasonCommitNotVerified          = "CommitNotVerified"
+	ReasonAttestationNotVerified     = "AttestationNotVerified"
+	ReasonSLSALevelTooLow            = "SLSALevelTooLow"
 	ReasonTimeout                    = "Timeout"
 )
 
@@ -192,6 +195,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			o.waiting, o.reason = c.waiting, c.reason
 		}
 	}
+	if o.failed == "" {
+		a := r.checkAttestations(checkCtx, log, &iv)
+		if a.waiting != "" && o.waiting == "" {
+			o.waiting, o.reason = a.waiting, a.reason
+		}
+	}
 	switch {
 	case o.failed != "":
 		log.Info().Str("reason", o.reason).Str("message", o.failed).Msg("image verification failed")
@@ -292,6 +301,123 @@ func (r *Reconciler) checkImages(ctx context.Context, log zerolog.Logger, iv *v1
 			ReasonSignatureNotVerified)
 	}
 	iv.Status.Images = results
+	return o
+}
+
+// attestationKey keys an attestation result by policy name and image.
+func attestationKey(name, image string) string { return name + "\x00" + image }
+
+// attestationDone reports whether res needs no further check: it verified
+// and its SLSA level, if the policy holds one, is reached.
+func attestationDone(res v1alpha1.AttestationResult, p v1alpha1.AttestationPolicy) bool {
+	return res.Verified && (p.SLSA == nil || p.SLSA.MinLevel == 0 || (res.SLSA != nil && res.SLSA.BuildLevel >= p.SLSA.MinLevel))
+}
+
+// attestationTypes are the predicate types the policy's attestations need
+// read from the registry: their own, their VEX, and the SLSA VSA when one
+// holds a level.
+func attestationTypes(policies []v1alpha1.AttestationPolicy) []string {
+	var out []string
+	addType := func(t string) {
+		if !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	for _, p := range policies {
+		addType(p.PredicateType)
+		if p.VEX != nil {
+			if p.VEX.PredicateType != "" {
+				addType(p.VEX.PredicateType)
+			} else {
+				addType(PredicateOpenVEX)
+			}
+		}
+		if p.SLSA != nil {
+			addType(PredicateSLSAVSA)
+		}
+	}
+	return out
+}
+
+// checkAttestations verifies, for every image, the attestations of the
+// policy not done yet (attestationDone). A required one not verified, and
+// a SLSA level below minLevel, wait until the deadline (CI may attest after
+// it pushes, a VSA may follow the provenance); the others are recorded as
+// they are.
+func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, iv *v1alpha1.ImageVerification) outcome {
+	var o outcome
+	policies := iv.Spec.Policy.Attestations
+	if len(policies) == 0 || len(iv.Spec.Images) == 0 {
+		iv.Status.Attestations = nil
+		return o
+	}
+	wait := func(msg, reason string) {
+		if o.waiting == "" {
+			o.waiting, o.reason = msg, reason
+		}
+	}
+	prev := map[string]v1alpha1.AttestationResult{}
+	for _, res := range iv.Status.Attestations {
+		prev[attestationKey(res.Name, res.Image)] = res
+	}
+	var results []v1alpha1.AttestationResult
+	var authorities []authority
+	var loadErr error
+	for _, img := range iv.Spec.Images {
+		ref := img.Repository + "@" + img.Digest
+		pending := false
+		for _, p := range policies {
+			if res, ok := prev[attestationKey(p.Name, ref)]; !ok || !attestationDone(res, p) {
+				pending = true
+			}
+		}
+		var sigs Signatures
+		var fetchErr error
+		if pending {
+			if authorities == nil && loadErr == nil {
+				authorities, loadErr = r.authorities(ctx, iv)
+			}
+			fetchErr = loadErr
+			if fetchErr == nil {
+				var opts RegistryOptions
+				if opts, fetchErr = r.registryOptions(ctx, iv); fetchErr == nil {
+					opts.AttestationTypes = attestationTypes(policies)
+					fetchCtx, cancel := context.WithTimeout(ctx, durationOr(r.RegistryTimeout, DefaultRegistryTimeout))
+					sigs, fetchErr = r.Registry.Signatures(fetchCtx, img.Repository, img.Digest, opts)
+					cancel()
+				}
+			}
+			if fetchErr != nil {
+				log.Warn().Err(fetchErr).Str("image", ref).Msg("attestations: registry error; retrying")
+			}
+		}
+		for _, p := range policies {
+			key := attestationKey(p.Name, ref)
+			res, ok := prev[key]
+			switch {
+			case ok && attestationDone(res, p):
+			case fetchErr != nil:
+				res = v1alpha1.AttestationResult{Name: p.Name, Image: ref, PredicateType: p.PredicateType,
+					Message: clip("registry: " + fetchErr.Error())}
+			default:
+				res = evaluateAttestation(img, p, sigs.Attestations, authorities)
+			}
+			switch {
+			case !res.Verified && p.Required:
+				wait(fmt.Sprintf("%s: attestation %s: %s", ref, p.Name, res.Message), ReasonAttestationNotVerified)
+			case res.Verified && !attestationDone(res, p):
+				level := 0
+				if res.SLSA != nil {
+					level = res.SLSA.BuildLevel
+				}
+				wait(fmt.Sprintf("%s: attestation %s: SLSA build level %d, below minLevel %d", ref, p.Name, level, p.SLSA.MinLevel),
+					ReasonSLSALevelTooLow)
+			}
+			results = append(results, res)
+		}
+	}
+	boundPredicates(results)
+	iv.Status.Attestations = results
 	return o
 }
 

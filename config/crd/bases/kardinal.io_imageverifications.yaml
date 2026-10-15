@@ -137,6 +137,130 @@ spec:
                 description: Policy is the Pipeline's policy (its images selector
                   already applied).
                 properties:
+                  attestations:
+                    description: |-
+                      Attestations are the in-toto attestations each verified image must (or
+                      may) carry, as Sigstore bundles in its OCI referrers: SLSA provenance,
+                      vulnerability scans with VEX, and any other predicate. Each result is
+                      recorded in status.attestations; PolicyGate CEL reads it as
+                      attestations.<name> (docs/image-verification.md#attestations).
+                    items:
+                      description: |-
+                        AttestationPolicy is one attestation an image carries: its predicate
+                        type, who may sign it, and what the ImageVerification decides itself
+                        (required, slsa.minLevel). Everything else is a gate's decision.
+                      properties:
+                        authorities:
+                          description: |-
+                            Authorities name the spec.imageVerification.authorities that may sign
+                            the attestation.
+                          items:
+                            maxLength: 63
+                            type: string
+                          maxItems: 10
+                          minItems: 1
+                          type: array
+                        name:
+                          description: 'Name names the result: a gate reads attestations.<name>.'
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z][a-z0-9]*$
+                          type: string
+                        predicateType:
+                          description: |-
+                            PredicateType is the in-toto predicate type, exactly
+                            ("https://slsa.dev/provenance/v1").
+                          maxLength: 256
+                          minLength: 1
+                          type: string
+                        required:
+                          description: |-
+                            Required holds the version until every image carries a verified
+                            attestation of this type, and fails it at the timeout. False records
+                            the attestation when it is there.
+                          type: boolean
+                        slsa:
+                          description: |-
+                            SLSA grants SLSA build levels to provenance builders, and holds a
+                            version below MinLevel.
+                          properties:
+                            builders:
+                              description: |-
+                                Builders map trusted builder IDs to the level granted to them.
+                                Provenance from a builder not listed is level 1.
+                              items:
+                                description: SLSABuilder is a trusted builder and
+                                  the level granted to it.
+                                properties:
+                                  id:
+                                    description: ID is the builder's runDetails.builder.id,
+                                      exactly.
+                                    maxLength: 512
+                                    minLength: 1
+                                    type: string
+                                  level:
+                                    description: Level is the SLSA build level granted
+                                      (1 to 3).
+                                    maximum: 3
+                                    minimum: 1
+                                    type: integer
+                                required:
+                                - id
+                                - level
+                                type: object
+                              maxItems: 20
+                              type: array
+                            minLevel:
+                              description: |-
+                                MinLevel holds the version (Failed at the timeout) while an image's
+                                level is below it. 0 holds nothing.
+                              maximum: 3
+                              minimum: 0
+                              type: integer
+                          type: object
+                        vex:
+                          description: |-
+                            VEX names who may say, with OpenVEX statements, that a finding of the
+                            scan does not apply.
+                          properties:
+                            authorities:
+                              description: |-
+                                Authorities name the spec.imageVerification.authorities whose OpenVEX
+                                attestations count. A scan's own signer does not suppress its
+                                findings unless it is listed here.
+                              items:
+                                maxLength: 63
+                                type: string
+                              maxItems: 10
+                              minItems: 1
+                              type: array
+                            predicateType:
+                              description: |-
+                                PredicateType is the predicate type of the VEX attestations. Empty
+                                means https://openvex.dev/ns.
+                              maxLength: 256
+                              type: string
+                          required:
+                          - authorities
+                          type: object
+                      required:
+                      - authorities
+                      - name
+                      - predicateType
+                      type: object
+                      x-kubernetes-validations:
+                      - message: vex applies to a vulnerability scan (cosign vuln
+                          or in-toto vulns predicate)
+                        rule: '!has(self.vex) || self.predicateType in [''https://cosign.sigstore.dev/attestation/vuln/v1'',
+                          ''https://in-toto.io/attestation/vulns'']'
+                      - message: slsa applies to SLSA provenance or a SLSA VSA
+                        rule: '!has(self.slsa) || self.predicateType in [''https://slsa.dev/provenance/v1'',
+                          ''https://slsa.dev/verification_summary/v1'']'
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   authorities:
                     description: |-
                       Authorities are the signers an image may be signed by: an image is
@@ -318,6 +442,12 @@ spec:
                 - message: set authorities, commits.requireSigned, or both
                   rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
                     && self.commits.requireSigned)
+                - message: an attestation's authorities and vex.authorities must name
+                    spec.imageVerification.authorities
+                  rule: '!has(self.attestations) || self.attestations.all(a, a.authorities.all(n,
+                    has(self.authorities) && self.authorities.exists(x, x.name ==
+                    n)) && (!has(a.vex) || a.vex.authorities.all(n, has(self.authorities)
+                    && self.authorities.exists(x, x.name == n))))'
             required:
             - bundleName
             - pipelineName
@@ -334,6 +464,178 @@ spec:
                   Attempts counts checks that ended without a verdict (registry or SCM
                   unreachable, signature not there yet); it spaces the retries.
                 type: integer
+              attestations:
+                description: Attestations has one result per attestation policy and
+                  image.
+                items:
+                  description: |-
+                    AttestationResult is one attestation of one image: whether it verified,
+                    who signed it, and its typed summary and predicate.
+                  properties:
+                    authority:
+                      description: Authority is the authority that verified it.
+                      maxLength: 63
+                      type: string
+                    count:
+                      description: Count is how many attestations of the type verified;
+                        the newest is used.
+                      type: integer
+                    digest:
+                      description: Digest is the sha256 of the verified DSSE payload.
+                      maxLength: 80
+                      type: string
+                    image:
+                      description: Image is "repository@digest".
+                      type: string
+                    message:
+                      description: Message says why it is not verified, or what was
+                        dropped.
+                      maxLength: 1024
+                      type: string
+                    name:
+                      description: Name is the policy's attestations[].name.
+                      type: string
+                    predicate:
+                      description: |-
+                        Predicate is the predicate as canonical JSON (sorted keys), at most
+                        64 KiB; empty when omitted (PredicateOmitted).
+                      maxLength: 65536
+                      type: string
+                    predicateOmitted:
+                      description: |-
+                        PredicateOmitted says why Predicate is empty although the attestation
+                        verified: "64 KiB" (over the per-attestation cap) or "256 KiB" (over
+                        the status total, the largest dropped first).
+                      maxLength: 16
+                      type: string
+                    predicateType:
+                      description: PredicateType is the policy's predicate type.
+                      maxLength: 256
+                      type: string
+                    signer:
+                      description: Signer is the key's authority name or the certificate
+                        identity.
+                      maxLength: 1024
+                      type: string
+                    slsa:
+                      description: SLSA is the provenance summary, for a policy with
+                        slsa.
+                      properties:
+                        buildLevel:
+                          description: |-
+                            BuildLevel is the SLSA build level (0 to 3): the level the policy
+                            grants the builder (1 when it is not listed), or a verified VSA's.
+                          type: integer
+                        builderID:
+                          description: BuilderID is runDetails.builder.id.
+                          maxLength: 512
+                          type: string
+                        levelSource:
+                          description: LevelSource is builder or vsa.
+                          maxLength: 16
+                          type: string
+                        sourceCommit:
+                          description: |-
+                            SourceCommit is the gitCommit digest of the first resolved dependency
+                            that has one.
+                          maxLength: 64
+                          type: string
+                        sourceURI:
+                          description: SourceURI is that dependency's URI.
+                          maxLength: 512
+                          type: string
+                      required:
+                      - buildLevel
+                      type: object
+                    verified:
+                      description: |-
+                        Verified is true when an attestation of the type, for the image,
+                        verified against one of the policy's authorities.
+                      type: boolean
+                    vulns:
+                      description: Vulns is the scan summary, for a vulnerability
+                        scan predicate.
+                      properties:
+                        before:
+                          description: Before counts every finding.
+                          properties:
+                            critical:
+                              type: integer
+                            high:
+                              type: integer
+                            low:
+                              type: integer
+                            medium:
+                              type: integer
+                            unknown:
+                              type: integer
+                          required:
+                          - critical
+                          - high
+                          - low
+                          - medium
+                          - unknown
+                          type: object
+                        effective:
+                          description: Effective counts the findings no VEX statement
+                            covers.
+                          properties:
+                            critical:
+                              type: integer
+                            high:
+                              type: integer
+                            low:
+                              type: integer
+                            medium:
+                              type: integer
+                            unknown:
+                              type: integer
+                          required:
+                          - critical
+                          - high
+                          - low
+                          - medium
+                          - unknown
+                          type: object
+                        effectiveIDs:
+                          description: |-
+                            EffectiveIDs are the IDs of the effective critical and high findings
+                            (at most 50).
+                          items:
+                            maxLength: 128
+                            type: string
+                          maxItems: 50
+                          type: array
+                        scannedAt:
+                          description: ScannedAt is when the scan finished (RFC 3339).
+                          maxLength: 40
+                          type: string
+                        scanner:
+                          description: Scanner is the scanner's name (its URI's last
+                            element).
+                          maxLength: 256
+                          type: string
+                        scannerVersion:
+                          description: ScannerVersion is the scanner's version.
+                          maxLength: 64
+                          type: string
+                        vexStatements:
+                          description: |-
+                            VEXStatements counts the statements read from verified VEX
+                            attestations.
+                          type: integer
+                      required:
+                      - before
+                      - effective
+                      type: object
+                  required:
+                  - image
+                  - name
+                  - predicateType
+                  - verified
+                  type: object
+                maxItems: 200
+                type: array
               commit:
                 description: Commit is the commit result.
                 properties:
@@ -406,7 +708,8 @@ spec:
                   Reason is a machine-readable reason for a Failed or waiting
                   verification: SecretNotReferenceable, SecretNotFound,
                   InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials,
-                  SignatureNotVerified, CommitNotVerified, Timeout.
+                  SignatureNotVerified, CommitNotVerified, AttestationNotVerified,
+                  SLSALevelTooLow, Timeout.
                 type: string
               startedAt:
                 description: StartedAt is when the verification started.

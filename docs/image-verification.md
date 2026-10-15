@@ -63,6 +63,7 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
 | `registrySecretRef.name` | anonymous | A `kubernetes.io/dockerconfigjson` Secret in the Pipeline namespace for private registries. |
 | `insecureRegistries[]` | | Registry hosts read over plain HTTP. Every other registry is HTTPS only. |
 | `timeout` | `10m` | How long a missing signature is waited for (CI may sign after it pushes). |
+| `attestations[]` | | In-toto attestations each image must or may carry, up to 10: see [Attestations](#attestations). |
 
 ## Signature formats
 
@@ -70,10 +71,10 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
   `--new-bundle-format`. Key and keyless. The bundle must be a cosign image signature: a DSSE
   in-toto statement with predicate type `https://sigstore.dev/cosign/sign/v1` whose subject is the
   image digest. Attestations (SBOM, provenance) and plain message signatures attached to the same
-  image are not signatures of it, whoever signed them. Up to 32 bundles are read per image; a
-  referrer whose `dev.sigstore.bundle.predicateType` annotation names another predicate is
-  skipped before it counts, so attestations attached to the image cannot crowd out its
-  signatures.
+  image are not signatures of it, whoever signed them. Up to 64 bundles are read per image,
+  signatures and the [attestations](#attestations) the policy names together; a referrer whose
+  `dev.sigstore.bundle.predicateType` annotation names another predicate is skipped before it
+  counts, so other attestations attached to the image cannot crowd out its signatures.
 - **Legacy cosign signatures** in the `sha256-<digest>.sig` tag (cosign v2's default): key
   authorities only. A keyless signature must be a Sigstore bundle.
 
@@ -111,8 +112,8 @@ controller does not query Rekor, so an entry that the log no longer serves is no
    update of `spec.images`.
 
 `status.reason` is one of `SecretNotReferenceable`, `SecretNotFound`, `InvalidPublicKey`,
-`InvalidTrustedRoot`, `InvalidRegistryCredentials`, `SignatureNotVerified`, `CommitNotVerified`
-and `Timeout`. A key, trusted root or `.dockerconfigjson` that does not parse is reported by Secret
+`InvalidTrustedRoot`, `InvalidRegistryCredentials`, `SignatureNotVerified`, `CommitNotVerified`,
+`AttestationNotVerified`, `SLSALevelTooLow` and `Timeout`. A key, trusted root or `.dockerconfigjson` that does not parse is reported by Secret
 and key name only; nothing of its content is copied to the status.
 
 **Policy changes.** An ImageVerification's spec is immutable, and its name carries a hash of it.
@@ -123,6 +124,113 @@ started are not checked again.
 **`update.strategy: argocd`** writes an image pinned by digest as `<tag>@<digest>` (see
 [Argo CD native promotion](argocd-native-promotion.md#multi-image-bundles)), so the digest that
 was verified is the one deployed. The kustomize and Helm strategies write the digest too.
+
+## Attestations
+
+A signature says who signed an image. Attestations say how it was built and what is in it: SLSA
+provenance, a vulnerability scan with VEX statements, test results, or any other in-toto
+predicate. With `attestations`, the ImageVerification also reads each image's attestations from
+its OCI referrers, verifies them against the policy's authorities, and records what they say in
+`status.attestations`. Gates then decide in CEL, per environment, over
+[`attestations.*`](reference/cel-context.md#attestations).
+
+```yaml
+spec:
+  imageVerification:
+    authorities:
+      - name: release
+        keyless: {issuer: https://token.actions.githubusercontent.com,
+                  subjectRegExp: '^https://github\.com/myorg/[^/]+/\.github/workflows/release\.yml@refs/tags/.*$'}
+      - name: security
+        key: {secretRef: {name: security-pub, key: cosign.pub}}
+    attestations:
+      - name: provenance                # gates read attestations.provenance
+        predicateType: https://slsa.dev/provenance/v1
+        authorities: [release]          # who may sign it
+        required: true                  # missing at the timeout: Failed
+        slsa:
+          builders:                     # runDetails.builder.id -> the level you grant it
+            - id: https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@refs/tags/v2.1.0
+              level: 3
+          minLevel: 2                   # below it at the timeout: Failed
+      - name: vulns
+        predicateType: https://cosign.sigstore.dev/attestation/vuln/v1
+        authorities: [release]
+        required: true
+        vex:
+          authorities: [security]       # who may say a finding does not apply
+      - name: tests
+        predicateType: https://in-toto.io/attestation/test-result/v0.1
+        authorities: [release]
+---
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: prod-supply-chain
+  namespace: my-app
+  labels: {kardinal.io/applies-to: prod}
+spec:
+  expression: >-
+    attestations.provenance.slsa.buildLevel >= 3 &&
+    attestations.provenance.slsa.sourceCommit == bundle.provenance.commitSHA &&
+    attestations.vulns.effective.critical == 0
+  message: prod needs level-3 provenance from the version's commit and no critical vulnerability
+```
+
+Attach them with cosign, as Sigstore bundles in the image's referrers (cosign v3, or v2 with
+`--new-bundle-format`):
+
+```bash
+cosign attest --new-bundle-format --type slsaprovenance1 --predicate provenance.json "$IMAGE"
+cosign attest --new-bundle-format --type vuln --predicate trivy.json "$IMAGE"
+cosign attest --new-bundle-format --key security.key --type openvex --predicate vex.json "$IMAGE"
+```
+
+`attestations[]`:
+
+| Field | Default | Description |
+|---|---|---|
+| `name` | | Lower-case letters and digits; the gate reads `attestations.<name>`. |
+| `predicateType` | | The in-toto predicate type, exactly. |
+| `authorities[]` | | Names of `authorities` that may sign it. An attestation from any other signer is not used. |
+| `required` | `false` | Hold the version until every image carries a verified attestation of the type; at the `timeout` it fails (`status.reason: AttestationNotVerified`). Without it the attestation is recorded when it is there, and holds nothing. |
+| `slsa.builders[]` | | `{id, level}`: the SLSA build level (1 to 3) you grant a provenance builder (`runDetails.builder.id`, exactly). Provenance from a builder not listed is level 1. |
+| `slsa.minLevel` | `0` | Hold the version while an image's level is below it; at the `timeout` it fails (`SLSALevelTooLow`). |
+| `vex.authorities[]` | | Names of `authorities` whose OpenVEX attestations count against the scan's findings. The scan's own signer does not suppress its findings unless it is listed. |
+| `vex.predicateType` | `https://openvex.dev/ns` | The predicate type of the VEX attestations. |
+
+**What is checked.** An attestation counts when its bundle verifies against one of its
+`authorities` (key, keyless, private trusted root, as for signatures), its in-toto statement's
+subject is the image's digest, and its predicate type is the policy's. Of several, the newest by
+its verified timestamp (else the last referrer) is used, and `count` says how many verified. A
+bundle that does not verify is never used; its reason is in `message`.
+
+**SLSA build level.** A build level is a property of the builder, not a field of the provenance:
+the policy grants it in `slsa.builders`. A SLSA verification summary (VSA, predicate type
+`https://slsa.dev/verification_summary/v1`) signed by one of the attestation's authorities, with
+`verificationResult: PASSED` and a `resourceUri` that names the image's digest, raises the level to
+the highest `SLSA_BUILD_LEVEL_n` it lists. `slsa.levelSource` says which decided (`builder` or
+`vsa`). The provenance's source, the first `resolvedDependencies` entry with a `gitCommit` digest,
+is recorded as `sourceCommit` and `sourceURI`.
+
+**Vulnerabilities and VEX.** The scan formats read are cosign's vuln predicate
+(`https://cosign.sigstore.dev/attestation/vuln/v1`, what `cosign attest --type vuln` writes) holding
+a Trivy or Grype report, and in-toto vulns v0.2 (`https://in-toto.io/attestation/vulns`). A
+finding is **effective** unless the latest OpenVEX statement for its ID (or an alias), and a product
+that names the image (`<repository>@<digest>`, the digest, or its `pkg:oci` purl), says
+`not_affected` or `fixed`; `affected` and `under_investigation` keep it. The status counts the
+findings by severity (critical, high, medium, low, unknown) before and after VEX, and lists the IDs
+of the effective critical and high ones (at most 50). How old a scan may be is a gate's decision:
+`attestations.vulns.scannedAt`.
+
+**Bounds.** Each attestation's predicate is kept as canonical JSON (sorted keys) of at most 64 KiB,
+and a status holds at most 256 KiB of them; the largest are dropped first. A dropped predicate keeps
+its summary, and `predicateOmitted` says why: an expression that reads it then fails, so the gate
+blocks rather than passes. The predicate is the build's own text: a gate may compare it, as data.
+
+**Timing.** Verified is terminal, as for signatures: an attestation added later, or a vulnerability
+found later, is not seen by that version. An attestation not required that is missing when the rest
+verified is recorded as not verified.
 
 ## Signed commits
 

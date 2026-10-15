@@ -148,7 +148,9 @@ func docsCELFixture(t *testing.T) (*Reconciler, *kardinalv1alpha1.PolicyGate) {
 		},
 		Status: kardinalv1alpha1.BundleStatus{Environments: envStatus},
 	}
-	objs := []runtime.Object{pipeline, bundle}
+	objs := []runtime.Object{pipeline, bundle,
+		// The version's attestations (attestations.*): provenance, a scan and tests.
+		attestedIV("app-v1-verify", "app-v1", now, kardinalv1alpha1.ImageVerificationVerified)}
 	validUntil := metav1.NewTime(now.Add(time.Minute))
 	for name, value := range map[string]string{
 		"error-rate": "0.001", "p99-latency": "120", "success-rate": "0.999", "staging-error-rate": "0.001",

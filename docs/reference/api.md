@@ -522,6 +522,19 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `spec.images[].repository` | string | yes | Repository is the image repository, without tag or digest. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline. |
 | `spec.policy` | object | yes | Policy is the Pipeline's policy (its images selector already applied). |
+| `spec.policy.attestations` | []object |  | Attestations are the in-toto attestations each verified image must (or may) carry, as Sigstore bundles in its OCI referrers: SLSA provenance, vulnerability scans with VEX, and any other predicate. Each result is recorded in status.attestations; PolicyGate CEL reads it as attestations.&lt;name&gt; (docs/image-verification.md#attestations). |
+| `spec.policy.attestations[].authorities` | []string | yes | Authorities name the spec.imageVerification.authorities that may sign the attestation. |
+| `spec.policy.attestations[].name` | string | yes | Name names the result: a gate reads attestations.&lt;name&gt;. |
+| `spec.policy.attestations[].predicateType` | string | yes | PredicateType is the in-toto predicate type, exactly ("https://slsa.dev/provenance/v1"). |
+| `spec.policy.attestations[].required` | boolean |  | Required holds the version until every image carries a verified attestation of this type, and fails it at the timeout. False records the attestation when it is there. |
+| `spec.policy.attestations[].slsa` | object |  | SLSA grants SLSA build levels to provenance builders, and holds a version below MinLevel. |
+| `spec.policy.attestations[].slsa.builders` | []object |  | Builders map trusted builder IDs to the level granted to them. Provenance from a builder not listed is level 1. |
+| `spec.policy.attestations[].slsa.builders[].id` | string | yes | ID is the builder's runDetails.builder.id, exactly. |
+| `spec.policy.attestations[].slsa.builders[].level` | integer | yes | Level is the SLSA build level granted (1 to 3). |
+| `spec.policy.attestations[].slsa.minLevel` | integer |  | MinLevel holds the version (Failed at the timeout) while an image's level is below it. 0 holds nothing. |
+| `spec.policy.attestations[].vex` | object |  | VEX names who may say, with OpenVEX statements, that a finding of the scan does not apply. |
+| `spec.policy.attestations[].vex.authorities` | []string | yes | Authorities name the spec.imageVerification.authorities whose OpenVEX attestations count. A scan's own signer does not suppress its findings unless it is listed here. |
+| `spec.policy.attestations[].vex.predicateType` | string |  | PredicateType is the predicate type of the VEX attestations. Empty means https://openvex.dev/ns. |
 | `spec.policy.authorities` | []object |  | Authorities are the signers an image may be signed by: an image is verified when one of its signatures verifies against any authority. |
 | `spec.policy.authorities[].key` | object |  | Key is a PEM public key (cosign.pub) in a Secret of the Pipeline namespace. |
 | `spec.policy.authorities[].key.requireTransparencyLog` | boolean |  | RequireTransparencyLog requires a Rekor entry (and its inclusion proof) in the Sigstore bundle. Default false: a key signature is verified against the key alone, like cosign --insecure-ignore-tlog. |
@@ -547,6 +560,42 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `spec.policy.timeout` | string |  | Timeout bounds how long a missing signature is waited for (CI may sign after it pushes), from the moment the ImageVerification starts. A signature that does not verify fails at once. Empty or "0" means 10m. |
 | `status` | object |  | ImageVerificationStatus is the observed state. |
 | `status.attempts` | integer |  | Attempts counts checks that ended without a verdict (registry or SCM unreachable, signature not there yet); it spaces the retries. |
+| `status.attestations` | []object |  | Attestations has one result per attestation policy and image. |
+| `status.attestations[].authority` | string |  | Authority is the authority that verified it. |
+| `status.attestations[].count` | integer |  | Count is how many attestations of the type verified; the newest is used. |
+| `status.attestations[].digest` | string |  | Digest is the sha256 of the verified DSSE payload. |
+| `status.attestations[].image` | string | yes | Image is "repository@digest". |
+| `status.attestations[].message` | string |  | Message says why it is not verified, or what was dropped. |
+| `status.attestations[].name` | string | yes | Name is the policy's attestations[].name. |
+| `status.attestations[].predicate` | string |  | Predicate is the predicate as canonical JSON (sorted keys), at most 64 KiB; empty when omitted (PredicateOmitted). |
+| `status.attestations[].predicateOmitted` | string |  | PredicateOmitted says why Predicate is empty although the attestation verified: "64 KiB" (over the per-attestation cap) or "256 KiB" (over the status total, the largest dropped first). |
+| `status.attestations[].predicateType` | string | yes | PredicateType is the policy's predicate type. |
+| `status.attestations[].signer` | string |  | Signer is the key's authority name or the certificate identity. |
+| `status.attestations[].slsa` | object |  | SLSA is the provenance summary, for a policy with slsa. |
+| `status.attestations[].slsa.buildLevel` | integer | yes | BuildLevel is the SLSA build level (0 to 3): the level the policy grants the builder (1 when it is not listed), or a verified VSA's. |
+| `status.attestations[].slsa.builderID` | string |  | BuilderID is runDetails.builder.id. |
+| `status.attestations[].slsa.levelSource` | string |  | LevelSource is builder or vsa. |
+| `status.attestations[].slsa.sourceCommit` | string |  | SourceCommit is the gitCommit digest of the first resolved dependency that has one. |
+| `status.attestations[].slsa.sourceURI` | string |  | SourceURI is that dependency's URI. |
+| `status.attestations[].verified` | boolean | yes | Verified is true when an attestation of the type, for the image, verified against one of the policy's authorities. |
+| `status.attestations[].vulns` | object |  | Vulns is the scan summary, for a vulnerability scan predicate. |
+| `status.attestations[].vulns.before` | object | yes | Before counts every finding. |
+| `status.attestations[].vulns.before.critical` | integer | yes |  |
+| `status.attestations[].vulns.before.high` | integer | yes |  |
+| `status.attestations[].vulns.before.low` | integer | yes |  |
+| `status.attestations[].vulns.before.medium` | integer | yes |  |
+| `status.attestations[].vulns.before.unknown` | integer | yes |  |
+| `status.attestations[].vulns.effective` | object | yes | Effective counts the findings no VEX statement covers. |
+| `status.attestations[].vulns.effective.critical` | integer | yes |  |
+| `status.attestations[].vulns.effective.high` | integer | yes |  |
+| `status.attestations[].vulns.effective.low` | integer | yes |  |
+| `status.attestations[].vulns.effective.medium` | integer | yes |  |
+| `status.attestations[].vulns.effective.unknown` | integer | yes |  |
+| `status.attestations[].vulns.effectiveIDs` | []string |  | EffectiveIDs are the IDs of the effective critical and high findings (at most 50). |
+| `status.attestations[].vulns.scannedAt` | string |  | ScannedAt is when the scan finished (RFC 3339). |
+| `status.attestations[].vulns.scanner` | string |  | Scanner is the scanner's name (its URI's last element). |
+| `status.attestations[].vulns.scannerVersion` | string |  | ScannerVersion is the scanner's version. |
+| `status.attestations[].vulns.vexStatements` | integer |  | VEXStatements counts the statements read from verified VEX attestations. |
 | `status.commit` | object |  | Commit is the commit result. |
 | `status.commit.message` | string |  | Message is the SCM's reason when not verified. |
 | `status.commit.signer` | string |  | Signer is who signed, as the SCM reports it. |
@@ -561,7 +610,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt is when the registry or SCM was last asked. |
 | `status.message` | string |  | Message summarizes the phase. |
 | `status.phase` | string |  | Phase is Pending, Verified or Failed. Verified and Failed are terminal: a verified signature is not checked again (revocation after the verification is not seen). One of: `Pending`, `Verified`, `Failed`. |
-| `status.reason` | string |  | Reason is a machine-readable reason for a Failed or waiting verification: SecretNotReferenceable, SecretNotFound, InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials, SignatureNotVerified, CommitNotVerified, Timeout. |
+| `status.reason` | string |  | Reason is a machine-readable reason for a Failed or waiting verification: SecretNotReferenceable, SecretNotFound, InvalidPublicKey, InvalidTrustedRoot, InvalidRegistryCredentials, SignatureNotVerified, CommitNotVerified, AttestationNotVerified, SLSALevelTooLow, Timeout. |
 | `status.startedAt` | string (date-time) |  | StartedAt is when the verification started. |
 
 ## MetricCheck
@@ -898,6 +947,19 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.holds[].expiresAt` | string (date-time) |  | ExpiresAt, when set, is when the controller removes the hold. |
 | `spec.holds[].reason` | string | yes | Reason says why the environment is held. It is shown wherever the hold or a gate it exempts is. |
 | `spec.imageVerification` | object |  | ImageVerification requires the signatures of the Bundle's images (and of a config Bundle's commit) to verify before the Bundle is promoted into its first environments. Selected images must be pinned by digest. See docs/image-verification.md. |
+| `spec.imageVerification.attestations` | []object |  | Attestations are the in-toto attestations each verified image must (or may) carry, as Sigstore bundles in its OCI referrers: SLSA provenance, vulnerability scans with VEX, and any other predicate. Each result is recorded in status.attestations; PolicyGate CEL reads it as attestations.&lt;name&gt; (docs/image-verification.md#attestations). |
+| `spec.imageVerification.attestations[].authorities` | []string | yes | Authorities name the spec.imageVerification.authorities that may sign the attestation. |
+| `spec.imageVerification.attestations[].name` | string | yes | Name names the result: a gate reads attestations.&lt;name&gt;. |
+| `spec.imageVerification.attestations[].predicateType` | string | yes | PredicateType is the in-toto predicate type, exactly ("https://slsa.dev/provenance/v1"). |
+| `spec.imageVerification.attestations[].required` | boolean |  | Required holds the version until every image carries a verified attestation of this type, and fails it at the timeout. False records the attestation when it is there. |
+| `spec.imageVerification.attestations[].slsa` | object |  | SLSA grants SLSA build levels to provenance builders, and holds a version below MinLevel. |
+| `spec.imageVerification.attestations[].slsa.builders` | []object |  | Builders map trusted builder IDs to the level granted to them. Provenance from a builder not listed is level 1. |
+| `spec.imageVerification.attestations[].slsa.builders[].id` | string | yes | ID is the builder's runDetails.builder.id, exactly. |
+| `spec.imageVerification.attestations[].slsa.builders[].level` | integer | yes | Level is the SLSA build level granted (1 to 3). |
+| `spec.imageVerification.attestations[].slsa.minLevel` | integer |  | MinLevel holds the version (Failed at the timeout) while an image's level is below it. 0 holds nothing. |
+| `spec.imageVerification.attestations[].vex` | object |  | VEX names who may say, with OpenVEX statements, that a finding of the scan does not apply. |
+| `spec.imageVerification.attestations[].vex.authorities` | []string | yes | Authorities name the spec.imageVerification.authorities whose OpenVEX attestations count. A scan's own signer does not suppress its findings unless it is listed here. |
+| `spec.imageVerification.attestations[].vex.predicateType` | string |  | PredicateType is the predicate type of the VEX attestations. Empty means https://openvex.dev/ns. |
 | `spec.imageVerification.authorities` | []object |  | Authorities are the signers an image may be signed by: an image is verified when one of its signatures verifies against any authority. |
 | `spec.imageVerification.authorities[].key` | object |  | Key is a PEM public key (cosign.pub) in a Secret of the Pipeline namespace. |
 | `spec.imageVerification.authorities[].key.requireTransparencyLog` | boolean |  | RequireTransparencyLog requires a Rekor entry (and its inclusion proof) in the Sigstore bundle. Default false: a key signature is verified against the key alone, like cosign --insecure-ignore-tlog. |

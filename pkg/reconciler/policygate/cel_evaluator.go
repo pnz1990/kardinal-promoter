@@ -109,6 +109,7 @@ func newEvaluator() (*evaluator, error) {
 		goccel.Variable("actor", goccel.DynType),
 		goccel.Variable("agent", goccel.DynType),
 		goccel.Variable("bundle", goccel.DynType),
+		goccel.Variable("attestations", goccel.DynType),
 		goccel.Variable("schedule", goccel.DynType),
 		goccel.Variable("environment", goccel.DynType),
 		goccel.Variable("metrics", goccel.DynType),

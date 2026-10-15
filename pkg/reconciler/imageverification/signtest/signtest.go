@@ -86,6 +86,13 @@ func (k *Key) Bundle(repository, digest string) ([]byte, error) {
 // BundleWithPredicate is Bundle with another in-toto predicate type (an
 // attestation, which is not an image signature).
 func (k *Key) BundleWithPredicate(repository, digest, predicateType string) ([]byte, error) {
+	return k.Attest(repository, digest, predicateType, map[string]interface{}{})
+}
+
+// Attest is an attestation bundle for repository@digest: an in-toto
+// statement of predicateType holding predicate, signed with k, like
+// `cosign attest --key --type <type> --predicate <file> --new-bundle-format`.
+func (k *Key) Attest(repository, digest, predicateType string, predicate interface{}) ([]byte, error) {
 	hexPart, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok {
 		return nil, fmt.Errorf("digest %q is not sha256", digest)
@@ -94,7 +101,7 @@ func (k *Key) BundleWithPredicate(repository, digest, predicateType string) ([]b
 		"_type":         "https://in-toto.io/Statement/v1",
 		"subject":       []interface{}{map[string]interface{}{"name": repository, "digest": map[string]string{"sha256": hexPart}}},
 		"predicateType": predicateType,
-		"predicate":     map[string]interface{}{},
+		"predicate":     predicate,
 	})
 	if err != nil {
 		return nil, err

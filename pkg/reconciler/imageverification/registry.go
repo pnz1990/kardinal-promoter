@@ -42,8 +42,9 @@ const (
 	cosignCertificateAnnotation = "dev.sigstore.cosign/certificate"
 	// maxSignatureBytes bounds what is read per signature blob.
 	maxSignatureBytes = 1 << 20
-	// maxSignatures bounds the signatures read per image.
-	maxSignatures = 32
+	// maxSignatures bounds the Sigstore bundles read per image, signatures
+	// and attestations together.
+	maxSignatures = 64
 )
 
 // RegistryOptions say how to reach the registries of one ImageVerification.
@@ -54,6 +55,9 @@ type RegistryOptions struct {
 	Insecure []string
 	// SignatureRepository, when set, is where signatures are looked up.
 	SignatureRepository string
+	// AttestationTypes are the in-toto predicate types whose bundles are
+	// read as attestations (Signatures.Attestations), besides signatures.
+	AttestationTypes []string
 }
 
 // RegistryClient fetches the signatures of an image.
@@ -134,18 +138,31 @@ func (r *OCIRegistry) Signatures(ctx context.Context, repository, digest string,
 		if err != nil {
 			return Signatures{}, fmt.Errorf("referrers of %s: %w", ref, err)
 		}
+		read := 0
 		for _, d := range m.Manifests {
-			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || len(out.Bundles) >= maxSignatures {
+			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || read >= maxSignatures {
 				continue
 			}
-			if p, ok := d.Annotations[predicateTypeAnnotation]; ok && p != CosignSignPredicate {
+			// A referrer that names its predicate is read only for the
+			// signature or an attestation type the policy names; one that
+			// names none may be either, and verification decides.
+			p, named := d.Annotations[predicateTypeAnnotation]
+			signature := !named || p == CosignSignPredicate
+			attestation := (!named && len(opts.AttestationTypes) > 0) || (named && slices.Contains(opts.AttestationTypes, p))
+			if !signature && !attestation {
 				continue
 			}
 			b, err := firstLayer(ref.Context().Digest(d.Digest.String()), ropts)
 			if err != nil {
 				return Signatures{}, fmt.Errorf("read bundle %s: %w", d.Digest, err)
 			}
-			out.Bundles = append(out.Bundles, b)
+			read++
+			if signature {
+				out.Bundles = append(out.Bundles, b)
+			}
+			if attestation {
+				out.Attestations = append(out.Attestations, b)
+			}
 		}
 	}
 

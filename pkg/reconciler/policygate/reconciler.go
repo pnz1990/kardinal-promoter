@@ -670,10 +670,21 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	}
 	tally := tallyApprovals(gate, author)
 
+	// The version's attestations are read only when the expression
+	// references them, so a List failure blocks exactly those gates.
+	attCtx := map[string]interface{}{"verified": false}
+	if strings.Contains(gate.Spec.Expression, attestationsRoot) {
+		var attErr error
+		if attCtx, attErr = r.buildAttestationContext(ctx, gate.Namespace, bundleName); attErr != nil {
+			return nil, version, fmt.Errorf("attestations: %w", attErr)
+		}
+	}
+
 	return map[string]interface{}{
-		"actor":  actorContext(bundle.Spec.Actor, author),
-		"agent":  agentCtx,
-		"bundle": bundleCtx,
+		"actor":        actorContext(bundle.Spec.Actor, author),
+		"agent":        agentCtx,
+		"attestations": attCtx,
+		"bundle":       bundleCtx,
 		"schedule": map[string]interface{}{
 			"isWeekend": now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
 			"hour":      now.Hour(),
@@ -1435,6 +1446,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch the AgentIndex: a suspension or an autonomy change
 		// re-evaluates the gates that read agent.* (18-actor-policy 2.2).
 		Watches(&kardinalv1alpha1.AgentIndex{}, handler.EnqueueRequestsFromMapFunc(r.agentIndexGateRequests)).
+		// Watch ImageVerifications: a verified attestation (or its phase)
+		// re-evaluates the gates of its Bundle that read attestations.*.
+		Watches(&kardinalv1alpha1.ImageVerification{}, handler.EnqueueRequestsFromMapFunc(r.imageVerificationRequests),
+			builder.WithPredicates(imageVerificationStatusChanged)).
 		// Watch Pipelines: adding or releasing a hold (spec.holds) re-evaluates
 		// the Pipeline's gate instances, so the held rollback's exemption
 		// starts and ends at once.
