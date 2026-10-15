@@ -389,7 +389,8 @@ spec:
                                     description: |-
                                       Refresh asks the GitOps tool to sync as soon as the promotion's commit
                                       is in git, instead of waiting for its poll interval: when health.type
-                                      (or delivery.delegate) is argocd or flux, the step entering
+                                      (or delivery.delegate) is argocd or flux, or health.refreshTarget
+                                      names an Application or Kustomization, the step entering
                                       HealthChecking sets argocd.argoproj.io/refresh: normal on the
                                       Application, or reconcile.fluxcd.io/requestedAt on the Kustomization
                                       and its source GitRepository, once (status.refreshRequestedAt). A
@@ -398,6 +399,48 @@ spec:
                                       controller's --health-refresh=false (Helm health.refresh.enabled)
                                       turns it off everywhere.
                                     type: boolean
+                                  refreshTarget:
+                                    description: |-
+                                      RefreshTarget names the GitOps object health.refresh asks to sync when
+                                      it is not the one the health check reads: the Argo CD Application or
+                                      Flux Kustomization that deploys the environment, when health.type is
+                                      argoRollouts, flagger or resource, or when the health check reads
+                                      another cluster (health.kubeconfigSecretRef) and the GitOps tool runs
+                                      in the controller's. The object is always in the controller's cluster
+                                      and is refreshed with the controller's identity, so it must be in the
+                                      Pipeline's namespace or deploy there, or be admitted by
+                                      --health-refresh-namespaces. Empty fields default as for health.argocd
+                                      and health.flux. health.refresh: false turns the refresh off.
+                                    properties:
+                                      argocd:
+                                        description: |-
+                                          ArgoCD is the Application to refresh. Defaults: name
+                                          "<pipeline>-<environment>", namespace "argocd".
+                                        properties:
+                                          name:
+                                            description: Name is the object name.
+                                            type: string
+                                          namespace:
+                                            description: Namespace is the object namespace.
+                                            type: string
+                                        type: object
+                                      flux:
+                                        description: |-
+                                          Flux is the Kustomization to refresh, with its source GitRepository.
+                                          Defaults: name "<pipeline>-<environment>", namespace "flux-system".
+                                        properties:
+                                          name:
+                                            description: Name is the object name.
+                                            type: string
+                                          namespace:
+                                            description: Namespace is the object namespace.
+                                            type: string
+                                        type: object
+                                    type: object
+                                    x-kubernetes-validations:
+                                    - message: 'health.refreshTarget: set exactly
+                                        one of argocd and flux'
+                                      rule: has(self.argocd) != has(self.flux)
                                   resource:
                                     description: |-
                                       Resource specifies the exact Kubernetes resource to watch for health.type=resource.
@@ -600,7 +643,8 @@ spec:
                           description: |-
                             Refresh asks the GitOps tool to sync as soon as the promotion's commit
                             is in git, instead of waiting for its poll interval: when health.type
-                            (or delivery.delegate) is argocd or flux, the step entering
+                            (or delivery.delegate) is argocd or flux, or health.refreshTarget
+                            names an Application or Kustomization, the step entering
                             HealthChecking sets argocd.argoproj.io/refresh: normal on the
                             Application, or reconcile.fluxcd.io/requestedAt on the Kustomization
                             and its source GitRepository, once (status.refreshRequestedAt). A
@@ -609,6 +653,48 @@ spec:
                             controller's --health-refresh=false (Helm health.refresh.enabled)
                             turns it off everywhere.
                           type: boolean
+                        refreshTarget:
+                          description: |-
+                            RefreshTarget names the GitOps object health.refresh asks to sync when
+                            it is not the one the health check reads: the Argo CD Application or
+                            Flux Kustomization that deploys the environment, when health.type is
+                            argoRollouts, flagger or resource, or when the health check reads
+                            another cluster (health.kubeconfigSecretRef) and the GitOps tool runs
+                            in the controller's. The object is always in the controller's cluster
+                            and is refreshed with the controller's identity, so it must be in the
+                            Pipeline's namespace or deploy there, or be admitted by
+                            --health-refresh-namespaces. Empty fields default as for health.argocd
+                            and health.flux. health.refresh: false turns the refresh off.
+                          properties:
+                            argocd:
+                              description: |-
+                                ArgoCD is the Application to refresh. Defaults: name
+                                "<pipeline>-<environment>", namespace "argocd".
+                              properties:
+                                name:
+                                  description: Name is the object name.
+                                  type: string
+                                namespace:
+                                  description: Namespace is the object namespace.
+                                  type: string
+                              type: object
+                            flux:
+                              description: |-
+                                Flux is the Kustomization to refresh, with its source GitRepository.
+                                Defaults: name "<pipeline>-<environment>", namespace "flux-system".
+                              properties:
+                                name:
+                                  description: Name is the object name.
+                                  type: string
+                                namespace:
+                                  description: Namespace is the object namespace.
+                                  type: string
+                              type: object
+                          type: object
+                          x-kubernetes-validations:
+                          - message: 'health.refreshTarget: set exactly one of argocd
+                              and flux'
+                            rule: has(self.argocd) != has(self.flux)
                         resource:
                           description: |-
                             Resource specifies the exact Kubernetes resource to watch for health.type=resource.
@@ -2200,7 +2286,8 @@ spec:
                                 description: |-
                                   Refresh asks the GitOps tool to sync as soon as the promotion's commit
                                   is in git, instead of waiting for its poll interval: when health.type
-                                  (or delivery.delegate) is argocd or flux, the step entering
+                                  (or delivery.delegate) is argocd or flux, or health.refreshTarget
+                                  names an Application or Kustomization, the step entering
                                   HealthChecking sets argocd.argoproj.io/refresh: normal on the
                                   Application, or reconcile.fluxcd.io/requestedAt on the Kustomization
                                   and its source GitRepository, once (status.refreshRequestedAt). A
@@ -2209,6 +2296,48 @@ spec:
                                   controller's --health-refresh=false (Helm health.refresh.enabled)
                                   turns it off everywhere.
                                 type: boolean
+                              refreshTarget:
+                                description: |-
+                                  RefreshTarget names the GitOps object health.refresh asks to sync when
+                                  it is not the one the health check reads: the Argo CD Application or
+                                  Flux Kustomization that deploys the environment, when health.type is
+                                  argoRollouts, flagger or resource, or when the health check reads
+                                  another cluster (health.kubeconfigSecretRef) and the GitOps tool runs
+                                  in the controller's. The object is always in the controller's cluster
+                                  and is refreshed with the controller's identity, so it must be in the
+                                  Pipeline's namespace or deploy there, or be admitted by
+                                  --health-refresh-namespaces. Empty fields default as for health.argocd
+                                  and health.flux. health.refresh: false turns the refresh off.
+                                properties:
+                                  argocd:
+                                    description: |-
+                                      ArgoCD is the Application to refresh. Defaults: name
+                                      "<pipeline>-<environment>", namespace "argocd".
+                                    properties:
+                                      name:
+                                        description: Name is the object name.
+                                        type: string
+                                      namespace:
+                                        description: Namespace is the object namespace.
+                                        type: string
+                                    type: object
+                                  flux:
+                                    description: |-
+                                      Flux is the Kustomization to refresh, with its source GitRepository.
+                                      Defaults: name "<pipeline>-<environment>", namespace "flux-system".
+                                    properties:
+                                      name:
+                                        description: Name is the object name.
+                                        type: string
+                                      namespace:
+                                        description: Namespace is the object namespace.
+                                        type: string
+                                    type: object
+                                type: object
+                                x-kubernetes-validations:
+                                - message: 'health.refreshTarget: set exactly one
+                                    of argocd and flux'
+                                  rule: has(self.argocd) != has(self.flux)
                               resource:
                                 description: |-
                                   Resource specifies the exact Kubernetes resource to watch for health.type=resource.

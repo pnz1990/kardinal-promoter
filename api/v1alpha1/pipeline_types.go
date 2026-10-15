@@ -859,7 +859,8 @@ type HealthConfig struct {
 
 	// Refresh asks the GitOps tool to sync as soon as the promotion's commit
 	// is in git, instead of waiting for its poll interval: when health.type
-	// (or delivery.delegate) is argocd or flux, the step entering
+	// (or delivery.delegate) is argocd or flux, or health.refreshTarget
+	// names an Application or Kustomization, the step entering
 	// HealthChecking sets argocd.argoproj.io/refresh: normal on the
 	// Application, or reconcile.fluxcd.io/requestedAt on the Kustomization
 	// and its source GitRepository, once (status.refreshRequestedAt). A
@@ -869,6 +870,19 @@ type HealthConfig struct {
 	// turns it off everywhere.
 	// +optional
 	Refresh *bool `json:"refresh,omitempty"`
+
+	// RefreshTarget names the GitOps object health.refresh asks to sync when
+	// it is not the one the health check reads: the Argo CD Application or
+	// Flux Kustomization that deploys the environment, when health.type is
+	// argoRollouts, flagger or resource, or when the health check reads
+	// another cluster (health.kubeconfigSecretRef) and the GitOps tool runs
+	// in the controller's. The object is always in the controller's cluster
+	// and is refreshed with the controller's identity, so it must be in the
+	// Pipeline's namespace or deploy there, or be admitted by
+	// --health-refresh-namespaces. Empty fields default as for health.argocd
+	// and health.flux. health.refresh: false turns the refresh off.
+	// +optional
+	RefreshTarget *RefreshTarget `json:"refreshTarget,omitempty"`
 
 	// LabelSelector enables WatchKind mode for health.type=resource.
 	// When set, the health node watches ALL Deployments in the environment namespace
@@ -912,6 +926,21 @@ type HealthConfig struct {
 	// Defaults: name "<pipeline>", namespace "<environment>".
 	// +optional
 	Flagger *HealthTargetRef `json:"flagger,omitempty"`
+}
+
+// RefreshTarget is the GitOps object a step asks to sync: exactly one of an
+// Argo CD Application or a Flux Kustomization (and its source GitRepository).
+// +kubebuilder:validation:XValidation:rule="has(self.argocd) != has(self.flux)",message="health.refreshTarget: set exactly one of argocd and flux"
+type RefreshTarget struct {
+	// ArgoCD is the Application to refresh. Defaults: name
+	// "<pipeline>-<environment>", namespace "argocd".
+	// +optional
+	ArgoCD *HealthTargetRef `json:"argocd,omitempty"`
+
+	// Flux is the Kustomization to refresh, with its source GitRepository.
+	// Defaults: name "<pipeline>-<environment>", namespace "flux-system".
+	// +optional
+	Flux *HealthTargetRef `json:"flux,omitempty"`
 }
 
 // KubeconfigSecretRef names the key of a Secret, in the Pipeline's

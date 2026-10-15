@@ -4,6 +4,7 @@
 package promotionstep_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -305,17 +306,25 @@ var noChanges = v1alpha1.PromotionStepStatus{Outputs: map[string]string{"noChang
 func TestRefreshNoChanges(t *testing.T) {
 	for _, tt := range []struct {
 		name, healthType string
+		target           *v1alpha1.RefreshTarget
 		dynObjs          []runtime.Object
 		wantPatches      []string
+		waitingFor       string // the adapter of the waiting message, healthType when empty
 	}{
 		{name: "argocd", healthType: "argocd", dynObjs: []runtime.Object{argoApplication("p-test", oldSHA)},
 			wantPatches: []string{"applications argocd/p-test"}},
 		{name: "flux", healthType: "flux", dynObjs: []runtime.Object{
 			fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "repo", ""), gitRepository("flux-system", "repo")},
 			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations flux-system/p-test"}},
+		{name: "argoRollouts with health.refreshTarget (#2007)", healthType: "argoRollouts",
+			target: &v1alpha1.RefreshTarget{ArgoCD: &v1alpha1.HealthTargetRef{Name: "my-app-test"}},
+			dynObjs: []runtime.Object{argoApplication("my-app-test", oldSHA),
+				unstructuredObj("argoproj.io/v1alpha1", "Rollout", "test", "p", map[string]interface{}{"phase": "Progressing"})},
+			wantPatches: []string{"applications argocd/my-app-test"}, waitingFor: "argoRollouts"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			g := refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: tt.healthType}},
+			g := refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto",
+				Health: v1alpha1.HealthConfig{Type: tt.healthType, RefreshTarget: tt.target}},
 				status: noChanges, dynObjs: tt.dynObjs}.rig(t)
 			require.NoError(t, g.reconcile(t))
 			assert.Equal(t, tt.wantPatches, g.patches())
@@ -324,7 +333,7 @@ func TestRefreshNoChanges(t *testing.T) {
 			assert.Equal(t, newSHA, got.Status.RefreshRevision)
 			assert.Contains(t, got.Status.RefreshMessage, "refresh requested: ")
 			assert.Equal(t, "HealthChecking", got.Status.State)
-			assert.Contains(t, got.Status.Message, "waiting for "+tt.healthType)
+			assert.Contains(t, got.Status.Message, "waiting for "+cmp.Or(tt.waitingFor, tt.healthType))
 			require.NotNil(t, got.Status.LastHealthCheckAt, "the health check result is recorded with the request")
 			ev := g.events()
 			require.Len(t, ev, 1)
@@ -489,6 +498,69 @@ func tenantKsIn(ns string) *unstructured.Unstructured {
 	return ks
 }
 
+// TestRefreshTarget (#2007): health.refreshTarget names the Application or
+// Kustomization to refresh when the health check reads another object (a
+// Rollout, a Canary, a Deployment): the step asks it, once, in the
+// controller's cluster, and the refresh scope (#1781) applies to it. Without
+// it those health types ask nothing (TestRefreshNotRequested).
+// Covers HEALTH-REFRESH-09.
+func TestRefreshTarget(t *testing.T) {
+	rollouts := func(target *v1alpha1.RefreshTarget) v1alpha1.EnvironmentSpec {
+		return v1alpha1.EnvironmentSpec{Name: "prod", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "argoRollouts",
+			ArgoRollouts: &v1alpha1.HealthTargetRef{Name: "my-app", Namespace: "my-app"}, RefreshTarget: target}}
+	}
+	elsewhere := argoApplication("team-b-prod", oldSHA)
+	elsewhere.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{"namespace": "team-b"}}
+	tests := []struct {
+		name        string
+		env         v1alpha1.EnvironmentSpec
+		dynObjs     []runtime.Object
+		wantPatches []string
+		wantMsg     string
+	}{
+		{name: "argoRollouts, the Application that deploys it",
+			env:         rollouts(&v1alpha1.RefreshTarget{ArgoCD: &v1alpha1.HealthTargetRef{Name: "my-app-prod"}}),
+			dynObjs:     []runtime.Object{argoApplication("my-app-prod", oldSHA)},
+			wantPatches: []string{"applications argocd/my-app-prod"}, wantMsg: "refresh requested: Application argocd/my-app-prod"},
+		{name: "argoRollouts, the default Application name",
+			env:         rollouts(&v1alpha1.RefreshTarget{ArgoCD: &v1alpha1.HealthTargetRef{}}),
+			dynObjs:     []runtime.Object{argoApplication("p-prod", oldSHA)},
+			wantPatches: []string{"applications argocd/p-prod"}, wantMsg: "refresh requested: Application argocd/p-prod"},
+		{name: "resource, a Flux Kustomization and its source",
+			env: v1alpha1.EnvironmentSpec{Name: "prod", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource",
+				RefreshTarget: &v1alpha1.RefreshTarget{Flux: &v1alpha1.HealthTargetRef{Name: "apps"}}}},
+			dynObjs:     []runtime.Object{fluxKustomizationFrom("flux-system", "apps", "GitRepository", "repo", ""), gitRepository("flux-system", "repo")},
+			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations flux-system/apps"},
+			wantMsg:     "refresh requested: GitRepository flux-system/repo, Kustomization flux-system/apps"},
+		{name: "another tenant's Application is out of scope",
+			env:     rollouts(&v1alpha1.RefreshTarget{ArgoCD: &v1alpha1.HealthTargetRef{Name: "team-b-prod"}}),
+			dynObjs: []runtime.Object{elsewhere},
+			wantMsg: "refresh skipped (Application argocd/team-b-prod (deploys to team-b): outside the Pipeline's namespace default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := refreshCase{env: tt.env, status: pushed, dynObjs: tt.dynObjs}.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches())
+			got := getStep(t, g.c, "step")
+			require.NotNil(t, got.Status.RefreshRequestedAt)
+			assert.Equal(t, newSHA, got.Status.RefreshRevision)
+			assert.Contains(t, got.Status.RefreshMessage, tt.wantMsg)
+
+			got.Status.LastHealthCheckAt = nil
+			require.NoError(t, g.c.Status().Update(context.Background(), &got))
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches(), "asked once")
+		})
+	}
+
+	// Without a refresh target, a Rollout's environment asks nothing.
+	g := refreshCase{env: rollouts(nil), status: pushed, dynObjs: []runtime.Object{argoApplication("my-app-prod", oldSHA)}}.rig(t)
+	require.NoError(t, g.reconcile(t))
+	assert.Empty(t, g.patches())
+	assert.Nil(t, getStep(t, g.c, "step").Status.RefreshRequestedAt)
+}
+
 // TestRefreshWithoutMergeCommit: a PR merged with no merge commit the SCM
 // will report (status.mergeCommitUnavailable) is refreshed once, with no
 // revision.
@@ -632,6 +704,49 @@ func fakeRemoteArgoCD(t *testing.T, deny bool) (*httptest.Server, *[]string) {
 	t.Cleanup(srv.Close)
 	remoteCA = base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 	return srv, &patches
+}
+
+// TestRefreshTargetRemoteHealth (#2007): with health.kubeconfigSecretRef the
+// health check reads the remote cluster, but health.refreshTarget names an
+// Application of the controller's cluster (a hub's Argo CD): the refresh goes
+// there, with the controller's identity, and nothing is patched in the remote
+// cluster. Being the controller's write, it stays within the refresh scope:
+// a target outside it is skipped in both clusters, so a kubeconfig Secret
+// cannot open the controller's patch to any Application. Covers
+// HEALTH-REFRESH-09.
+func TestRefreshTargetRemoteHealth(t *testing.T) {
+	elsewhere := argoApplication("team-b-app", oldSHA)
+	elsewhere.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{"namespace": "team-b"}}
+	for _, tt := range []struct {
+		name, target string
+		wantPatches  []string
+		wantMsg      string
+		wantEvent    string
+	}{
+		{name: "in scope", target: "hub-app", wantPatches: []string{"applications argocd/hub-app"},
+			wantMsg: "refresh requested: Application argocd/hub-app", wantEvent: "Normal " + promotionstep.ReasonRefreshRequested},
+		{name: "out of scope", target: "team-b-app",
+			wantMsg:   "refresh skipped (Application argocd/team-b-app (deploys to team-b): outside the Pipeline's namespace default",
+			wantEvent: "Warning " + promotionstep.ReasonRefreshSkipped},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{
+				Type: "argocd", ArgoCD: &v1alpha1.HealthTargetRef{Name: "custom"},
+				KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "spoke"},
+				RefreshTarget:       &v1alpha1.RefreshTarget{ArgoCD: &v1alpha1.HealthTargetRef{Name: tt.target}}}}
+			srv, remotePatches := fakeRemoteArgoCD(t, false)
+			g := refreshCase{env: env, status: pushed, remote: &health.RemoteClusters{Dial: loopbackDial},
+				objs:    []client.Object{kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, ""))},
+				dynObjs: []runtime.Object{argoApplication("hub-app", oldSHA), elsewhere}}.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches(), "the controller's cluster")
+			assert.Empty(t, *remotePatches, "nothing is patched in the remote cluster")
+			assert.Contains(t, getStep(t, g.c, "step").Status.RefreshMessage, tt.wantMsg)
+			ev := g.events()
+			require.Len(t, ev, 1)
+			assert.Contains(t, ev[0], tt.wantEvent)
+		})
+	}
 }
 
 // TestRefreshRemoteCluster: with health.kubeconfigSecretRef the request goes
