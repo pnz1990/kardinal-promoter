@@ -1103,4 +1103,3 @@ func TestStepTypeFollowsUpdateStrategy(t *testing.T) {
 	}
 	assert.Equal(t, want, got, "compact shape")
 }
-
