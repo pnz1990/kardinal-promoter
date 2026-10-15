@@ -105,6 +105,9 @@ func TestCLI_MCP(t *testing.T) {
 			Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: a.ns, Name: "release-agent"}},
 			Sponsor:  v1alpha1.AgentSponsor{User: sponsor},
 			Scope:    v1alpha1.AgentScope{Namespaces: []string{a.ns}},
+			// auto: the gates of the pipeline decide (prod waits for a person),
+			// not the default autonomy, approve, which holds every environment.
+			Autonomy: v1alpha1.AutonomyAuto,
 		},
 	}))
 	t.Cleanup(func() {
