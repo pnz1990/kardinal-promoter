@@ -153,17 +153,17 @@ func TestWriteAuditEvent_LogsErrors(t *testing.T) {
 }
 
 func TestAuditEntry_NeedsLabels(t *testing.T) {
-	_, ok := auditEntry(nil, AuditActionPromotionStarted, AuditOutcomePending, "", time.Now())
+	_, ok := auditEntry(nil, AuditActionPromotionStarted, AuditOutcomePending, "", time.Now(), nil)
 	assert.False(t, ok, "no step, no record")
 	ps := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"}}
-	_, ok = auditEntry(ps, AuditActionPromotionStarted, AuditOutcomePending, "", time.Now())
+	_, ok = auditEntry(ps, AuditActionPromotionStarted, AuditOutcomePending, "", time.Now(), nil)
 	assert.False(t, ok, "a step without pipeline and bundle labels has no useful record")
 }
 
 // writeAuditEvent records action on ps through the outbox, as a transition
 // does: the entry is stored in ps's status and flushed.
 func writeAuditEvent(ctx context.Context, c client.Client, ps *v1alpha1.PromotionStep, action, outcome, message string) {
-	e, ok := auditEntry(ps, action, outcome, message, time.Now())
+	e, ok := auditEntry(ps, action, outcome, message, time.Now(), nil)
 	if !ok {
 		return
 	}

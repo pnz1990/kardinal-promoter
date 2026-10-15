@@ -190,6 +190,6 @@ func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	}
 	return audit.Entry(sanitizeGateName(base+suffix), gateAuditLabels(labels, action), kardinalv1alpha1.AuditEventSpec{
 		BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
-		Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: msg,
+		Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: msg, Actor: rec.Actor,
 	}, metav1.NewTime(r.now())), true
 }

@@ -176,7 +176,7 @@ func TestCLI_Quickstart(t *testing.T) {
 	r = cli.Exec(framework.CLIOptions{}, "why", "demo", "prod")
 	t.Logf("why demo prod:\n--- stdout\n%s--- stderr\n%s", r.Stdout, r.Stderr)
 	require.Equal(t, 0, r.Code, r.Output())
-	assert.Regexp(t, `^prod is waiting for your approval\.\n  Version  `+regexp.QuoteMeta(fixtures.V2)+` \(demo-[a-z0-9]+\)\n`+
+	assert.Regexp(t, `^prod is waiting for your approval\.\n  Version  `+regexp.QuoteMeta(fixtures.V2)+` \(demo-[a-z0-9]+\), by kubernetes-admin\n`+
 		`  Gate     prod-approval · 0 of 1 approvals\n  Next     kardinal approve demo prod\n$`, r.Stdout)
 	r = cli.Exec(framework.CLIOptions{}, "why", "demo", "prod", "-o", "wide")
 	t.Logf("why demo prod -o wide:\n--- stdout\n%s--- stderr\n%s", r.Stdout, r.Stderr)

@@ -120,7 +120,8 @@
           "properties": {
             "allRequests": {"type": "boolean"},
             "sourceIP": {"type": "boolean"},
-            "trustedProxies": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[0-9a-fA-F.:/]+$"}}
+            "trustedProxies": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[0-9a-fA-F.:/]+$"}},
+            "auditEvents": {"type": "boolean"}
           }
         },
         "tlsCertFile": {
@@ -571,6 +572,19 @@
           "type": "string",
           "enum": ["baseline", "restricted", "privileged"],
           "description": "Pod Security Standard a hook's Pod must meet (--hook-pod-security-level)."
+        }
+      }
+    },
+    "actors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "directory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "public": {"type": "boolean", "description": "Bind the agent directory reader ClusterRole to system:authenticated."}
+          }
         }
       }
     },

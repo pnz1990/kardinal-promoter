@@ -62,6 +62,24 @@ describe('StageDrawer (U3)', () => {
     }))
   })
 
+  it('says who shipped the version: the verified actor, and what it asserted apart (docs/actors.md)', () => {
+    const agentBundles = bundles.map(x => x.name === 'web-3' ? { ...x, version: '1.5.0', actorText: 'agent fixer for alice',
+      actorAsserted: 'model claude-opus-5 (asserted)',
+      actor: { kind: 'agent' as const, principal: 'system:serviceaccount:ci:fixer', agent: 'fixer', sponsor: 'alice' } } : x)
+    renderDrawer([approvalGate], { data: { pipeline, bundles: agentBundles, steps: [step], gates: [approvalGate] } })
+    const drawer = screen.getByTestId('stage-drawer')
+    const versions = drawer.querySelector('.stage-versions') as HTMLElement
+    expect(within(versions).getByText('Shipped by')).toBeInTheDocument()
+    expect(versions).toHaveTextContent('agent fixer for alice · model claude-opus-5 (asserted)')
+    expect(screen.getByTestId('shipped-by')).toHaveTextContent('1.5.0 shipped by agent fixer for alice.')
+  })
+
+  it('says nothing about who shipped a version with no known creator', () => {
+    renderDrawer()
+    expect(screen.queryByText('Shipped by')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('shipped-by')).not.toBeInTheDocument()
+  })
+
   it('puts why it is waiting first: the gate, its message and its age, before the actions', () => {
     renderDrawer([approvalGate, freeze])
     const drawer = screen.getByTestId('stage-drawer')

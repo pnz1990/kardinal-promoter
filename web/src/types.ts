@@ -207,6 +207,24 @@ export interface Bundle {
   /** What the Bundle ships, for display (status.version: the image tag,
    *  "config <sha>", or the chart and its version). */
   version?: string
+  /** Who created the Bundle (docs/actors.md): its verified actor stamp, or
+   *  kind "unknown" with its v0.11 creator. */
+  actor?: Actor
+  /** The actor as one sentence: "agent fixer for alice", "bob via the UI". */
+  actorText?: string
+  /** What the creator asserted about itself, labelled as asserted. */
+  actorAsserted?: string
+}
+
+/** Who made a change (docs/actors.md). kind, principal, agent, sponsor and
+ *  via are verified; asserted is what the client said about itself. */
+export interface Actor {
+  kind: 'human' | 'agent' | 'bot' | 'controller' | 'unknown'
+  principal: string
+  agent?: string
+  sponsor?: string
+  via?: string
+  asserted?: { model?: string; session?: string; client?: string }
 }
 
 /** #563: A container image reference — repository, tag, and optional digest. */

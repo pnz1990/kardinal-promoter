@@ -37,6 +37,7 @@
 package subscription
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -56,6 +57,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
@@ -86,6 +88,9 @@ const (
 // Reconciler watches artifact sources and creates Bundle CRDs when new artifacts are detected.
 // It is idempotent and safe to re-run after a crash.
 type Reconciler struct {
+	// ControllerUser is the controller's own username: the principal of the
+	// Bundles it creates on its own (docs/actors.md). Empty: kardinal-controller.
+	ControllerUser string
 	client.Client
 	// WatcherFn constructs a Watcher for the given Subscription with the
 	// credentials from its secretRef. Nil means NewWatcher; tests override it.
@@ -374,6 +379,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		return "", &artifactRejectedError{digest: result.Digest, bundle: name}
 	}
 
+	bundle.Spec.Actor = actor.Controller(cmp.Or(r.ControllerUser, lifecycle.ControllerCreator), kardinalv1alpha1.ViaSubscription)
 	if err := lifecycle.CreateBundleAs(ctx, r.Client, bundle, "subscription:"+sub.Name); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return "", fmt.Errorf("create bundle %s: %w", bundleName, err)

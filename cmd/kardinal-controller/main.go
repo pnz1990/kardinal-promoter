@@ -50,9 +50,11 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	agentidentityrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/auditretention"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
@@ -167,6 +169,15 @@ func main() {
 			"its expiresAt and this cap. The UI API refuses a longer override, and the chart's scoped-writes "+
 			"admission policy one written with kubectl by a caller limited to policygates/override "+
 			"(Helm controller.gateOverrideMaxMinutes).")
+	var agentIndexName string
+	flag.StringVar(&agentIndexName, "agent-index", "",
+		"Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the "+
+			"Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). "+
+			"Empty: no agent registry, every caller is a person or a bot (docs/actors.md).")
+	var apiAuditEvents bool
+	flag.BoolVar(&apiAuditEvents, "api-audit-events", true,
+		"Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the "+
+			"Bundle API. Chart value: controller.accessLog.auditEvents.")
 	var overrideIdentityPolicy string
 	flag.StringVar(&overrideIdentityPolicy, "override-identity-policy", "",
 		"Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an "+
@@ -587,8 +598,15 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --access-log-trusted-proxies")
 	}
+	var apiAuditSink accesslog.AuditSink
+	var apiAuditWriter *apiAudit
+	if apiAuditEvents {
+		// The client is set once the manager exists.
+		apiAuditWriter = newAPIAudit(nil, logger)
+		apiAuditSink = apiAuditWriter
+	}
 	accessLog := accesslog.New(accesslog.Config{AllRequests: accessLogAll, SourceIP: accessLogSourceIP,
-		TrustedProxies: trustedProxies}, logger.With().Str("component", "access").Logger())
+		TrustedProxies: trustedProxies, Audit: apiAuditSink}, logger.With().Str("component", "access").Logger())
 
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
@@ -647,6 +665,30 @@ func main() {
 	}
 	graphIdentity.Writer = mgr.GetClient()
 	graphIdentity.Reader = mgr.GetAPIReader()
+
+	// Actors (docs/actors.md): the agent registry and the stamps of the
+	// controller's own records and of its callers'.
+	selfCtx, selfCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	controllerUser := selfUsername(selfCtx, restConfig, logger)
+	selfCancel()
+	actors := &actorWriter{}
+	if agentIndexName != "" {
+		actors.source = &actor.Source{Reader: mgr.GetClient(), Name: agentIndexName}
+		if err := (&agentidentityrecon.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+			logger.Fatal().Err(err).Msg("unable to set up AgentIdentityReconciler")
+		}
+		if err := (&agentidentityrecon.IndexReconciler{Client: mgr.GetClient(), Name: agentIndexName}).SetupWithManager(mgr); err != nil {
+			logger.Fatal().Err(err).Msg("unable to set up AgentIndexReconciler")
+		}
+	} else {
+		logger.Warn().Msg("--agent-index is not set: no agent registry; every caller is recorded as a person or a bot")
+	}
+	if apiAuditWriter != nil {
+		apiAuditWriter.client = mgr.GetClient()
+		if err := mgr.Add(apiAuditWriter); err != nil {
+			logger.Fatal().Err(err).Msg("unable to add the APIWrite AuditEvent writer")
+		}
+	}
 
 	// SCM provider — scm.NewProvider dispatches on the --scm-provider flag.
 	// When --scm-token-secret-name is set, a DynamicProvider is used so that
@@ -853,6 +895,7 @@ func main() {
 	}
 
 	if err := (&psreconciler.Reconciler{
+		ControllerUser:      controllerUser,
 		Workers:             *workers["promotionstep"],
 		Client:              mgr.GetClient(),
 		APIReader:           mgr.GetAPIReader(),
@@ -964,8 +1007,9 @@ func main() {
 	}
 
 	if err := (&rbprecon.Reconciler{
-		Client:   mgr.GetClient(),
-		Recorder: eventRecorder,
+		ControllerUser: controllerUser,
+		Client:         mgr.GetClient(),
+		Recorder:       eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up RollbackPolicyReconciler")
 	}
@@ -1008,7 +1052,8 @@ func main() {
 	// request from the webhook receiver) and creates Bundle CRDs when new
 	// artifacts are detected. WatcherFn nil is subscriptionrecon.NewWatcher.
 	if err := (&subscriptionrecon.Reconciler{
-		Client: mgr.GetClient(),
+		ControllerUser: controllerUser,
+		Client:         mgr.GetClient(),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
@@ -1032,6 +1077,15 @@ func main() {
 	})
 	if err := mgr.AddReadyzCheck("readyz", cacheSyncChecker); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
+	}
+	// The chart's actor policy refuses Bundle, Approval and override writes
+	// while the release's AgentIndex is missing (fail closed): the controller
+	// is ready only once the index exists, so helm install --wait returns
+	// after it does.
+	if agentIndexName != "" {
+		if err := mgr.AddReadyzCheck("agent-index", agentIndexReady(mgr.GetAPIReader(), agentIndexName)); err != nil {
+			logger.Fatal().Err(err).Msg("unable to set up the agent index ready check")
+		}
 	}
 
 	// Webhook server: SCM webhooks and the bundle API.
@@ -1064,6 +1118,7 @@ func main() {
 		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
 		bundleAPI.onlyNamespace = watchNamespace
 		bundleAPI.reader = mgr.GetAPIReader()
+		bundleAPI.actors = actors
 		if bundleTokenReviewAuth {
 			tokens, access, _, err := newReviewers(mgr.GetConfig(), review)
 			if err != nil {
@@ -1100,6 +1155,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("UI API authentication")
 	}
+	uiAuth.actors = actors
 	switch {
 	case uiAuth.staticToken != "":
 		// O4 (spec issue-975): the static token takes precedence over TokenReview.

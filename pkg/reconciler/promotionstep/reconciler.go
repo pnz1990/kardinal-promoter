@@ -146,6 +146,9 @@ const (
 // the last persisted index, so every step must be safe to repeat (the git and
 // open-pr steps are).
 type Reconciler struct {
+	// ControllerUser is the controller's own username: the principal of the
+	// Bundles it creates on its own (docs/actors.md). Empty: kardinal-controller.
+	ControllerUser string
 	// pushTurns gives auto promotions writing one branch their turn one at a
 	// time (#1578).
 	pushTurns branchQueue

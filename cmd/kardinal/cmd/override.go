@@ -28,6 +28,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -127,6 +128,10 @@ func overrideFn(
 		return fmt.Errorf("override: %w", err)
 	}
 	createdBy := id.Username
+	stamp, err := stampOf(ctx, c, id, actor.Where{Namespace: ns, Pipeline: pipeline, Environment: stage})
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
 
 	now := time.Now().UTC()
 	expiresAt := metav1.NewTime(now.Add(expDuration))
@@ -138,6 +143,7 @@ func overrideFn(
 		ExpiresAt: expiresAt,
 		CreatedAt: &createdAt,
 		CreatedBy: createdBy,
+		Actor:     stamp,
 	}
 
 	stageInfo := "all stages"

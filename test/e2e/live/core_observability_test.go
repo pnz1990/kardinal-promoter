@@ -44,9 +44,11 @@ func TestCore_ControllerProbes(t *testing.T) {
 	p, err := e.Kube.CoreV1().Pods(framework.ControllerNamespace).Get(ctx, pod, metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.True(t, podReady(p), "the controller pod %s is Ready", pod)
+	// readyz also waits for the release's AgentIndex (the actor policy
+	// refuses writes without it).
 	for path, body := range map[string]string{
 		"/readyz": "ok", "/healthz": "ok",
-		"/readyz?verbose": "[+]readyz ok\n", "/healthz?verbose": "[+]healthz ok\n",
+		"/readyz?verbose": "[+]agent-index ok\n[+]readyz ok\n", "/healthz?verbose": "[+]healthz ok\n",
 	} {
 		code, got, err := e.PodHTTP(ctx, framework.ControllerNamespace, pod, healthPort, "GET", path)
 		require.NoError(t, err, "GET %s", path)

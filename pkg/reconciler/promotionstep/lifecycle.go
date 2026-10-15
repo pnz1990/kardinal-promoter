@@ -4,6 +4,7 @@
 package promotionstep
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
@@ -202,6 +204,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		}
 		return "", nil, fmt.Errorf("plan rollback: %w", planErr)
 	}
+	plan.Bundle.Spec.Actor = actor.Controller(cmp.Or(r.ControllerUser, lifecycle.ControllerCreator), v1alpha1.ViaAutoRollback)
 	if createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
 		return "", nil, fmt.Errorf("create rollback bundle %s: %w", name, createErr)
 	}

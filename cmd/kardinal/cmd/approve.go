@@ -18,6 +18,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	pipelinerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -251,9 +252,13 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 	if err != nil {
 		return fmt.Errorf("approve: %w", err)
 	}
+	stamp, err := stampOf(ctx, c, id, actor.Where{Namespace: ns, Environment: o.env})
+	if err != nil {
+		return fmt.Errorf("approve: %w", err)
+	}
 	outcome, a, err := lifecycle.RecordApproval(ctx, c, lifecycle.ApprovalRequest{
 		Namespace: ns, Bundle: bundleName, Environment: o.env, User: id.Username, Groups: id.Groups,
-		Decision: o.decision, Comment: o.comment, Revoke: o.revoke,
+		Decision: o.decision, Comment: o.comment, Revoke: o.revoke, Actor: stamp,
 	})
 	if err != nil {
 		return fmt.Errorf("approve: %w", err)

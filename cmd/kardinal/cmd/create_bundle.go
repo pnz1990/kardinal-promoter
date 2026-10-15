@@ -211,7 +211,9 @@ func newBundle(ctx context.Context, c sigs_client.Client, ns, pipeline string, o
 	// Record sub-second creation order so supersession picks the newer of two
 	// Bundles created in the same second.
 	lifecycle.StampCreatedAt(bundle, time.Now())
-	stampCreator(ctx, c, bundle)
+	if err := stampCreator(ctx, c, bundle); err != nil {
+		return nil, fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
+	}
 
 	if err := c.Create(ctx, bundle); err != nil {
 		return nil, fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)

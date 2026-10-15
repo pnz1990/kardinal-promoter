@@ -30,6 +30,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -257,6 +258,12 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		incoming, incomingVersion = e.Bundle, e.Version
 	}
 	version := whyLine{"Version", versionLabel(incomingVersion, incoming)}
+	// Who made the version (docs/actors.md), when it is known.
+	if b := byName[incoming]; b != nil {
+		if a := bundleActor(b); a.Kind != v1alpha1.ActorUnknown || a.Principal != "" {
+			version.value += ", by " + actor.Describe(a)
+		}
+	}
 	running := shortVersion(e.Version, e.Bundle)
 
 	if p.Spec.Paused {

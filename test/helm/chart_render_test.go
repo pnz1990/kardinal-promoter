@@ -183,7 +183,7 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 				got = append(got, d.Kind+"/"+d.Name)
 			}
 		}
-		assert.ElementsMatch(t, append(identityAdmissionObjects("kardinal-promoter"),
+		assert.ElementsMatch(t, append(append(identityAdmissionObjects("kardinal-promoter"), actorAdmissionObjects("kardinal-promoter")...),
 			"ValidatingAdmissionPolicy/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-hold-writes",
 			"ValidatingAdmissionPolicy/kardinal-promoter-fleets",
@@ -439,6 +439,10 @@ func controllerAccess() []apiAccess {
 		{"kardinal.io", "scmproviders/status", []string{"get", "update", "patch"}, inWatched, "", "scmprovider reconciler Ready condition"},
 		{"kardinal.io", "clusterscmproviders", readVerbs, inCluster, "", "scm registry.go GetProvider; scmprovider reconciler"},
 		{"kardinal.io", "clusterscmproviders/status", []string{"get", "update", "patch"}, inCluster, "", "scmprovider reconciler Ready condition"},
+		{"kardinal.io", "agentidentities", readVerbs, inCluster, "", "agentidentity reconciler; actor derivation (UI API, Bundle API)"},
+		{"kardinal.io", "agentidentities/status", []string{"get", "update", "patch"}, inCluster, "", "agentidentity reconciler Ready condition"},
+		{"kardinal.io", "agentindexes", []string{"get", "list", "watch", "create"}, inCluster, "", "agentidentity IndexReconciler (creates the release's index)"},
+		{"kardinal.io", "agentindexes/status", []string{"get", "update", "patch"}, inCluster, "", "agentidentity IndexReconciler"},
 		// Namespace mode limits it to the watched namespace (releaseNS in
 		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
 		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback"},

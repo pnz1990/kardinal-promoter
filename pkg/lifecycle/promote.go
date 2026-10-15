@@ -27,6 +27,8 @@ type PromoteRequest struct {
 	Environment string
 	// Actor is recorded in the kardinal.io/requested-by annotation.
 	Actor string
+	// Stamp is the new Bundle's actor stamp (spec.actor, docs/actors.md), or nil.
+	Stamp *v1alpha1.Actor
 	// Now stamps kardinal.io/created-at when not zero.
 	Now time.Time
 }
@@ -144,6 +146,7 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 		Spec: v1alpha1.BundleSpec{
 			Pipeline: req.Pipeline,
 			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: req.Environment},
+			Actor:    req.Stamp,
 		},
 	}
 	if req.Actor != "" {

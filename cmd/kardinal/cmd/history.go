@@ -26,6 +26,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
@@ -80,6 +81,9 @@ type HistoryRow struct {
 	Created time.Time
 	Seconds *int64
 	Running bool
+	// Actor is who created the version (docs/actors.md): its stamp, or
+	// kind unknown with its v0.11 creator.
+	Actor v1alpha1.Actor
 }
 
 // historyEntry is one entry of kardinal history -o json|yaml.
@@ -97,6 +101,8 @@ type historyEntry struct {
 	// Running is true while the step runs.
 	Running   bool      `json:"running,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Actor is who created the version.
+	Actor v1alpha1.Actor `json:"actor"`
 }
 
 // writeHistoryStructured writes rows as -o json|yaml asks.
@@ -104,7 +110,7 @@ func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
 	out := make([]historyEntry, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
-			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC()})
+			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC(), Actor: r.Actor})
 	}
 	return writeStructured(w, out)
 }
@@ -150,11 +156,18 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 
 	rows := buildHistoryRows(steps.Items, rollbacks, envFilter, limit)
 	versions := map[string]string{}
+	actors := map[string]v1alpha1.Actor{}
 	for i := range bundles {
 		versions[bundles[i].Name] = createdOf(&bundles[i]).Version
+		actors[bundles[i].Name] = bundleActor(&bundles[i])
 	}
 	for i := range rows {
 		rows[i].Version = versions[rows[i].Bundle]
+		a, ok := actors[rows[i].Bundle]
+		if !ok {
+			a = actor.OrUnknown(nil, "")
+		}
+		rows[i].Actor = a
 	}
 
 	if len(rows) == 0 {
@@ -330,14 +343,20 @@ func stepDuration(s v1alpha1.PromotionStep) (time.Duration, bool) {
 // formatHistoryTable writes the history table to w.
 func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
 	tw := style.NewTable(w, 3)
-	if _, err := fmt.Fprintln(tw, "VERSION\tACTION\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
+	if _, err := fmt.Fprintln(tw, "VERSION\tACTION\tACTOR\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
 		return fmt.Errorf("write history header: %w", err)
 	}
 	for _, r := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			versionLabel(r.Version, r.Bundle), r.Action, r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			versionLabel(r.Version, r.Bundle), r.Action, actor.Describe(r.Actor), r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
 			return fmt.Errorf("write history row: %w", err)
 		}
 	}
 	return tw.Flush()
+}
+
+// bundleActor is who created b: its actor stamp, or for a Bundle without one
+// kind unknown with its kardinal.io/created-by.
+func bundleActor(b *v1alpha1.Bundle) v1alpha1.Actor {
+	return actor.OrUnknown(b.Spec.Actor, b.Annotations[lifecycle.AnnotationCreatedBy])
 }

@@ -42,6 +42,8 @@ type uiAuthConfig struct {
 	// scopeNamespace is --watch-namespace: all-namespace reads are checked
 	// against it because the controller cache only holds that namespace.
 	scopeNamespace string
+	// actors stamps the UI's writes with the verified caller (docs/actors.md).
+	actors *actorWriter
 }
 
 // reviewOptions are the TokenReview settings shared by the UI API and the
@@ -155,6 +157,7 @@ func newUIHandler(k8s client.Client, apiReader client.Reader, assets fs.FS, auth
 	apiServer := newUIAPIServer(apiClient, log)
 	apiServer.scopeNamespace = auth.scopeNamespace
 	apiServer.apiReader = apiReader
+	apiServer.actors = auth.actors
 	if tokenReview {
 		apiServer.accessCheck = auth.accessCheck
 	}

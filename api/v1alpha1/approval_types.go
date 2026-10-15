@@ -53,6 +53,11 @@ type ApprovalSpec struct {
 	// +kubebuilder:default=approve
 	Decision string `json:"decision"`
 
+	// Actor is who decided (docs/actors.md): the verified kardinal.io/actor
+	// stamp. Its principal equals spec.user.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+
 	// Comment is a free-form note shown with the decision.
 	// +kubebuilder:validation:MaxLength=1024
 	// +kubebuilder:default=""

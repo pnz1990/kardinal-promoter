@@ -50,6 +50,8 @@ type ApprovalRequest struct {
 	Revoke bool
 	// Via, when set, is written as AnnotationRecordedVia.
 	Via string
+	// Actor is the decision's actor stamp (docs/actors.md), or nil.
+	Actor *v1alpha1.Actor
 }
 
 // ApprovalOutcome is what RecordApproval did.
@@ -174,7 +176,7 @@ func RecordApproval(ctx context.Context, c client.Client, req ApprovalRequest) (
 		},
 		Spec: v1alpha1.ApprovalSpec{
 			Bundle: req.Bundle, BundleUID: string(b.UID), Environment: req.Environment, User: req.User, Groups: groups,
-			Decision: req.Decision, Comment: req.Comment,
+			Decision: req.Decision, Comment: req.Comment, Actor: req.Actor,
 		},
 	}
 	if req.Via != "" {

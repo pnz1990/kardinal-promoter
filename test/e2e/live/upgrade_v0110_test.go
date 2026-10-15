@@ -166,7 +166,11 @@ func (snap u0110Snapshot) phases() (bundles, steps map[string]int) {
 //   - kardinal get pipelines -A, the UI API (validated against the OpenAPI
 //     document) and a new version promoting end to end work.
 //
-// Covers UPG-V0110-01, UPG-V0110-02, UPG-V0110-03, UPG-V0110-04.
+//   - the actors (docs/actors.md): the release's AgentIndex is built and the
+//     actor policies are bound; versions v0.11.0 stored have no actor; a
+//     version kardinal create bundle makes now is stamped with its creator.
+//
+// Covers UPG-V0110-01, UPG-V0110-02, UPG-V0110-03, UPG-V0110-04, UPG-V0110-05.
 func TestUpgradeV0110_Estate(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
@@ -561,6 +565,29 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 
 	fresh := bundle(s.ops, steady, 2)
 	e.WaitBundlePhase(t, s.ops.NS, fresh, "Verified", promoteTimeout)
+
+	// ── The actors ──────────────────────────────────────────────────────
+	for _, name := range []string{"kardinal-promoter-actor", "kardinal-promoter-audit-actor", "kardinal-promoter-agent-identities"} {
+		_, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().Get(ctx, name, metav1.GetOptions{})
+		require.NoError(t, err, "binding %s", name)
+	}
+	framework.Eventually(t, time.Minute, "the release's AgentIndex is Ready", func(ctx context.Context) (bool, string) {
+		var idx v1alpha1.AgentIndex
+		if err := e.Client.Get(ctx, types.NamespacedName{Name: framework.ControllerDeployment}, &idx); err != nil {
+			return false, err.Error()
+		}
+		return meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), fmt.Sprint(idx.Status.Conditions)
+	})
+	var stored v1alpha1.BundleList
+	require.NoError(t, e.Client.List(ctx, &stored, client.InNamespace(s.approve.NS)))
+	for _, b := range stored.Items {
+		assert.Nil(t, b.Spec.Actor, "%s, stored by v0.11.0, has no actor", b.Name)
+	}
+	me := whoAmI(t, e)
+	stamped := e.CreateBundle(t, s.ops.NS, steady, "--image", imageV3)
+	var sb v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: s.ops.NS, Name: stamped}, &sb))
+	assert.Equal(t, &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: me}, sb.Spec.Actor, "a new version is stamped")
 }
 
 // u0110AllKinds reads every stored object of every kardinal kind in the

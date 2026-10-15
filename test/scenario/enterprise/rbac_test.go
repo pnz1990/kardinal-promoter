@@ -166,8 +166,19 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 	for _, name := range []string{"-viewer", "-approver", "-promoter"} {
 		require.Contains(t, c.roles, release+name)
 	}
-	// The chart binds cluster-wide only its own ServiceAccounts.
+	// The chart binds cluster-wide only its own ServiceAccounts, and the
+	// agent directory (docs/actors.md): every authenticated user reads the
+	// cluster-scoped agent registry, and nothing else.
 	for _, b := range c.crbs {
+		if b.Name == release+"-agent-directory-reader" {
+			role := c.roles[b.RoleRef.Name]
+			require.NotNil(t, role, b.RoleRef.Name)
+			for _, r := range role.Rules {
+				assert.ElementsMatch(t, []string{"agentidentities", "agentindexes"}, r.Resources)
+				assert.ElementsMatch(t, []string{"get", "list", "watch"}, r.Verbs)
+			}
+			continue
+		}
 		for _, sub := range b.Subjects {
 			assert.Equal(t, rbacv1.ServiceAccountKind, sub.Kind, "ClusterRoleBinding %s binds %s %s", b.Name, sub.Kind, sub.Name)
 		}

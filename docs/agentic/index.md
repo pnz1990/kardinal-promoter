@@ -16,6 +16,7 @@ decides what it may do.
 
 | Control | What it does | Page |
 |---|---|---|
+| Agents and the verified actor | Register each agent with the person who answers for it (`AgentIdentity`). Every version, approval and override records its actor, verified by an admission policy: a person, a bot, kardinal, or an agent with its sponsor. An agent cannot pass as a person, write outside its scope, or act while suspended. Model and session are recorded as asserted, apart | [Agents and the verified actor](../actors.md) |
 | Verified identity on approvals, rejections and overrides | ValidatingAdmissionPolicies refuse an Approval, a rejection or a gate override that does not name the caller the API server authenticated. Nobody records a decision in someone else's name | [Verified identity](../guides/security.md#verified-identity) |
 | The verified creator | Each version's `kardinal.io/created-by` annotation is admitted only in the requester's name and never changes. With TokenReview enabled, the Bundle API records the authenticated caller | [Require approvals](../approvals.md) |
 | `excludeAuthor` | An approval gate with `excludeAuthor: true` does not count the version's creator, so whoever created a version, an agent included, cannot approve it | [Require approvals](../approvals.md) |
@@ -23,7 +24,7 @@ decides what it may do.
 | CEL gates | PolicyGates hold an environment until a CEL rule passes: soak time upstream, metrics, schedule, PR review state, version metadata | [Gate promotions](../policy-gates.md) |
 | ChangeWindows | Cluster-scoped freezes and allowed hours, enforced by the controller for every pipeline whose gates read them; breaking glass is a verified, time-limited, audited override | [ChangeWindow attributes](../policy-gates.md#changewindow-attributes), [Override a gate](../overrides.md) |
 | PR evidence | Every pull request kardinal opens carries the version's provenance and each gate's result and reason | [Read PR evidence](../pr-evidence.md) |
-| Audit trail | Append-only `AuditEvent` records of promotions, rollbacks, supersession, gate results, approvals (with the approver), overrides (with who overrode) and rejections (with who rejected) | [Audit logging](../guides/security.md#audit-logging) |
+| Audit trail | Append-only `AuditEvent` records of promotions, rollbacks, supersession, gate results, approvals, overrides, rejections and every UI API and Bundle API write, each naming its verified actor; `kardinal audit export` writes them as JSON lines or OCSF events | [Audit logging](../guides/security.md#audit-logging) |
 
 ## A starting point for an agent
 
@@ -48,8 +49,9 @@ spec:
     excludeAuthor: true
 ```
 
-A version the agent ships with its own kubeconfig (`kardinal ship my-app --image ...`) records the
-agent's ServiceAccount as its creator. It promotes through test and uat under the other gates,
+[Register the agent](../actors.md#register-an-agent) with an AgentIdentity that names its
+ServiceAccount, its sponsor and its scope. A version the agent ships with its own kubeconfig
+(`kardinal ship my-app --image ...`) then records it as "agent <name> for <sponsor>". It promotes through test and uat under the other gates,
 and waits at prod for a release manager, who cannot be the agent. Restrict who may push to
 the GitOps repository, so that changes reach the environments through kardinal, and for
 `pr-review` environments require the `kardinal/gates` status check
@@ -70,5 +72,5 @@ freeze to PromptPwnd, and names the kardinal control that stops each one, shippe
 
 ## What's next
 
-Agent identities with sponsors, actor-aware policy, agent verdicts as gates and an agent freeze
-are planned; they are not in kardinal yet. See the [roadmap](../roadmap.md).
+Actor-aware policy (gates that read the actor, and agent approvals), agent verdicts as gates and
+an agent freeze are planned; they are not in kardinal yet. See the [roadmap](../roadmap.md).

@@ -11,6 +11,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // creation; the CRD rejects any later change to it (the rule is on
 // AuditEvent.Spec, so the outbox entries that embed the type,
 // PendingAuditEvent, can be stored in a list).
+// +kubebuilder:validation:XValidation:rule="has(self.bundleName) || has(self.pipelineName) || has(self.environment)",message="an AuditEvent names at least one of bundleName, pipelineName and environment"
 type AuditEventSpec struct {
 	// Timestamp is when the event occurred (RFC 3339 format).
 	// +kubebuilder:validation:Format=date-time
@@ -18,22 +19,25 @@ type AuditEventSpec struct {
 
 	// BundleName is the name of the Bundle being promoted.
 	// +kubebuilder:validation:MinLength=1
-	BundleName string `json:"bundleName"`
+	// +optional
+	BundleName string `json:"bundleName,omitempty"`
 
 	// PipelineName is the name of the Pipeline the Bundle is promoting through.
 	// +kubebuilder:validation:MinLength=1
-	PipelineName string `json:"pipelineName"`
+	// +optional
+	PipelineName string `json:"pipelineName,omitempty"`
 
 	// Environment is the environment name where the event occurred.
 	// +kubebuilder:validation:MinLength=1
-	Environment string `json:"environment"`
+	// +optional
+	Environment string `json:"environment,omitempty"`
 
 	// Action is a short verb describing what happened.
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
 	//               "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
 	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
-	//               "HoldBundleMissing", "BundleRejected".
+	//               "HoldBundleMissing", "BundleRejected", "APIWrite".
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
 	// when a decision (kardinal approve) appears in or leaves its
 	// spec.approvals.
@@ -42,11 +46,14 @@ type AuditEventSpec struct {
 	// environment is "*" (the whole Bundle).
 	// GateOverridden is written once per spec.overrides entry of a gate
 	// instance, naming who created it (kardinal override or the UI).
+	// APIWrite is written for each write through the UI API or the Bundle
+	// API (controller.accessLog.auditEvents), naming the caller in actor and
+	// the route in request.
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -57,6 +64,27 @@ type AuditEventSpec struct {
 	// Message is a human-readable description of the event.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Actor is who caused the event (docs/actors.md). Absent on records
+	// written before v0.12.
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
+
+	// Request is the API request of an APIWrite event. It records no body
+	// and no token.
+	// +optional
+	Request *AuditRequest `json:"request,omitempty"`
+}
+
+// AuditRequest names the API request an APIWrite AuditEvent records.
+type AuditRequest struct {
+	// Route is the API route pattern, for example
+	// /api/v1/ui/pipelines/{name}/pause.
+	// +kubebuilder:validation:MaxLength=256
+	Route string `json:"route"`
+	// Method is the HTTP method.
+	// +kubebuilder:validation:MaxLength=16
+	Method string `json:"method"`
 }
 
 // AuditEvent is an immutable record of a single promotion event.
@@ -97,7 +125,7 @@ var AuditActions = []string{
 	"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected",
 	"RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated",
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
-	"BundleRejected",
+	"BundleRejected", "APIWrite",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

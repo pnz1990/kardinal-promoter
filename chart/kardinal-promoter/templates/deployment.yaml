@@ -118,6 +118,9 @@ spec:
             {{- with .trustedProxies }}
             - --access-log-trusted-proxies={{ join "," . }}
             {{- end }}
+            {{- if not .auditEvents }}
+            - --api-audit-events=false
+            {{- end }}
             {{- end }}
             {{- with (.Values.graph.retire).superseded }}
             - --graph-retire-superseded-after={{ . }}
@@ -129,6 +132,7 @@ spec:
             - --graph-retire-verified-after={{ . }}
             {{- end }}
             - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
+            - --agent-index={{ include "kardinal-promoter.fullname" . }}
             {{- with .Values.controller.gateOverrideMaxMinutes }}
             - --gate-override-max-minutes={{ . }}
             {{- end }}

@@ -38,6 +38,8 @@ func TestCreateBundleAs(t *testing.T) {
 		{name: "admitted", want: "bundle-api"},
 		{name: "creator refused", refuse: apierrors.NewForbidden(bundles, "b",
 			errorString(`ValidatingAdmissionPolicy 'kardinal-promoter-bundle-creator' denied request: the kardinal.io/created-by annotation must be your own username`)), want: ""},
+		{name: "stamp refused", refuse: apierrors.NewForbidden(bundles, "b",
+			errorString(`ValidatingAdmissionPolicy 'kardinal-promoter-actor' denied request: actor must be {kind: bot, principal: system:serviceaccount:k:other}`)), want: ""},
 		{name: "other refusal", refuse: apierrors.NewForbidden(bundles, "b", errorString("quota")), wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,7 +53,8 @@ func TestCreateBundleAs(t *testing.T) {
 					}
 					return cl.Create(ctx, obj, opts...)
 				}}).Build()
-			b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "default"}}
+			b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "default"},
+				Spec: v1alpha1.BundleSpec{Actor: &v1alpha1.Actor{Kind: "bot", Principal: "bundle-api", Via: "api"}}}
 			err := lifecycle.CreateBundleAs(context.Background(), c, b, "bundle-api")
 			if tc.wantErr {
 				require.Error(t, err)
@@ -61,6 +64,7 @@ func TestCreateBundleAs(t *testing.T) {
 			var got v1alpha1.Bundle
 			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(b), &got))
 			assert.Equal(t, tc.want, got.Annotations[lifecycle.AnnotationCreatedBy])
+			assert.Equal(t, tc.want != "", got.Spec.Actor != nil, "the stamp goes with the creator")
 		})
 	}
 }

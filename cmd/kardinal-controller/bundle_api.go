@@ -35,6 +35,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/accesslog"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
@@ -130,6 +131,9 @@ type bundleAPIServer struct {
 	// AuthorizingClient, so the caller needs get on the Pipeline and create on
 	// bundles in the namespace, as with kubectl.
 	review http.Handler
+	// actors stamps Bundles with the caller's actor (docs/actors.md); nil
+	// derives from no agent index.
+	actors *actorWriter
 }
 
 // enableTokenReview makes the API accept Kubernetes tokens: tokens
@@ -262,6 +266,23 @@ func (s *bundleAPIServer) serve(w http.ResponseWriter, r *http.Request, c client
 			return
 		}
 
+		// The verified actor (docs/actors.md): the reviewed caller, or the
+		// static token's holder, a bot.
+		target := accesslog.AuditTarget{Namespace: ns, Pipeline: req.Pipeline, Route: "/api/v1/bundles",
+			Message: "create a bundle"}
+		stamp, err := s.actors.forCaller(r.Context(), v1alpha1.ViaAPI, actor.Where{Namespace: ns, Pipeline: req.Pipeline})
+		if err != nil {
+			if requester != "" {
+				target.Message += " by " + requester
+			}
+			accesslog.FromContext(r.Context()).Audit = &target
+			writeActorError(w, s.log, err)
+			return
+		}
+		target.Actor = stamp
+		accesslog.FromContext(r.Context()).Audit = &target
+		spec.Actor = stamp
+
 		// Set timestamp on provenance if not provided.
 		now := time.Now().UTC()
 		if spec.Provenance == nil {
@@ -309,6 +330,7 @@ func (s *bundleAPIServer) serve(w http.ResponseWriter, r *http.Request, c client
 			return
 		}
 		name := bundle.Name
+		target.Bundle, target.Message = name, "created bundle "+name
 
 		s.log.Info().
 			Str("name", name).

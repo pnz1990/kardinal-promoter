@@ -807,7 +807,15 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	// controller too, so it is bound the same way.
 	// fleets (#1835) is bound the same way.
 	policies = append(policies, "kardinal-promoter-hold-writes", "kardinal-promoter-fleets")
+	// The actor policies (actor-admission.yaml) exempt the controller too.
+	policies = append(policies, "kardinal-promoter-actor", "kardinal-promoter-audit-actor")
 	team := bindings("--set", "controller.namespaceShard=team-b")
+	// agent-identities matches a cluster-scoped kind: one binding, without a
+	// namespace selector, in every mode.
+	ids, ok := team["kardinal-promoter-agent-identities"]
+	require.True(t, ok)
+	assert.Nil(t, ids.Spec.MatchResources)
+	delete(team, "kardinal-promoter-agent-identities")
 	// gitops-writes (gitops-admission.yaml) matches the controller's writes
 	// to Argo CD and Flux objects in their own namespaces: one binding,
 	// cluster-wide, in every mode.
@@ -824,6 +832,7 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	}
 	def := bindings("--set", "controller.namespaceShard=default")
 	delete(def, "kardinal-promoter-gitops-writes")
+	delete(def, "kardinal-promoter-agent-identities")
 	assert.Len(t, def, 2*len(policies))
 	for _, name := range policies {
 		labelled, unlabelled := def[name], def[name+"-unlabelled"]
