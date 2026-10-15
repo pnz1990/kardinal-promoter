@@ -26,7 +26,7 @@ spec:
       name: slack-webhook
     # Or, for a URL without a token in it:
     # url: https://alerting.example.com/kardinal-events
-  format: slack             # json (default), slack, teams or template
+  format: slack             # json (default), slack, teams, template or cloudevents
   events:
     - Bundle.Verified       # bundle promoted successfully through all environments
     - Bundle.Failed         # bundle failed during promotion
@@ -167,7 +167,7 @@ send neither.
 | `source` | The Pipeline the event belongs to, as an API path; the namespace path for an event without a Pipeline |
 | `type` | `io.kardinal.` + the event name in lower case (`io.kardinal.policygate.blocked`, `io.kardinal.promotionstep.failed`) |
 | `subject` | The version, with `/<environment>` when the event has one |
-| `time` | When the event happened (the version phase change, gate block, or step transition); a retry keeps it. The payload's `timestamp` is the send time |
+| `time` | The time the event is ordered by: the version's or the step's creation time, or the time the gate's `Ready` condition last changed; a retry keeps it. The payload's `timestamp` is the send time |
 | `data` | The [Webhook payload](#webhook-payload) |
 
 The `X-Kardinal-*` headers are sent as well. Binary content mode (`ce-*` headers) is not offered.
@@ -306,15 +306,15 @@ Limits, so a template cannot run away with the controller:
 A template that does not parse, or uses a refused action, makes the hook `Ready=False`
 (reason `InvalidTemplate`) and nothing is sent until it is fixed. A template that parses but
 fails to render for one event (invalid JSON, a body over 64 KiB, a refused argument) cannot succeed on a retry,
-so that event is given up on at once (`failureMessage: gave up on <key>: template: ...`) and
-the next event is delivered. A dropped event is not silent:
+so that event is given up on at once (`failureMessage: gave up on <key>: template: ...`) and the next event is delivered. A dropped event is not silent:
 
 - the hook gets a `Warning` Event, reason `NotificationTemplateFailed` (or
   `NotificationDropped` for an event given up on after its last delivery attempt), with
   the same message: `kubectl get events --field-selector involvedObject.name=<hook>`;
-- the counter `kardinal_notifications_dropped_total{hook_namespace,hook,reason}` (reason The Warning Event can itself be dropped under load ([Kubernetes Events](operate.md#kubernetes-events)); the counter and `status.failureMessage` are the durable record.
-  `template` or `attempts`) goes up by one
+- the counter `kardinal_notifications_dropped_total{hook_namespace,hook,reason}` (reason `template` or `attempts`) goes up by one
   ([kardinal metrics](reference/metrics.md#kardinal-metrics)). Alert on any increase.
+
+The Warning Event can itself be dropped under load ([Kubernetes Events](operate.md#kubernetes-events)); the counter and `status.failureMessage` are the durable record.
 
 ---
 
@@ -560,9 +560,9 @@ See §Delivery for the retry schedule.
 
 | `Ready=False` reason | Meaning |
 |----------------------|---------|
-| `SecretNotFound`, `SecretUnreadable` | The Secret `secretRef` names does not exist or cannot be read |
+| `SecretNotFound`, `SecretUnreadable` | The Secret `spec.webhook.secretRef` or `spec.signing.secretRef` names does not exist or cannot be read |
 | `SecretNotReferenceable` | The Secret is not labeled `kardinal.io/referenceable: "true"` ([Authorization](#authorization), [the rule](guides/security.md#secrets-referenced-by-custom-resources)) |
-| `SecretKeyMissing` | The Secret has neither an `authorization` nor a `url` key |
+| `SecretKeyMissing`, `SigningKeyTooShort` | The webhook Secret has neither an `authorization` nor a `url` key, or the signing Secret lacks its key or holds one shorter than 32 bytes ([Signed requests](#signed-requests)) |
 | `URLMissing` | No URL in `spec.webhook.url` or the Secret |
 | `InvalidURL` | The URL is not an absolute `http://` or `https://` URL |
 | `InvalidAuthorization` | The Authorization value contains a line break |

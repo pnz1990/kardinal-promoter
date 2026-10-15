@@ -340,7 +340,7 @@ kardinal explain kardinal-test-app --env prod
 
 Add a step to your CI pipeline that creates a Bundle after building and pushing your image.
 
-The Bundle API (`POST /api/v1/bundles`) listens on port 8083 of the `kardinal-promoter` Service and is off until you set `bundleAPI.tokenSecretRef.name`. Expose it to CI yourself (for example with an Ingress); `kardinal.example.com` below stands for that address. See [CI integration](ci-integration.md#webhook-token).
+The Bundle API (`POST /api/v1/bundles`) listens on port 8083 of the `kardinal-promoter` Service and is off until you set `bundleAPI.tokenSecretRef.name` (or `bundleAPI.tokenReview: true`). Expose it to CI yourself (for example with an Ingress); `kardinal.example.com` below stands for that address. See [CI integration](ci-integration.md#webhook-token).
 
 **GitHub Actions example:**
 

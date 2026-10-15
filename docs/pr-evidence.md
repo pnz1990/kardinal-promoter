@@ -19,7 +19,7 @@ For rollbacks:
 versions `<pipeline>-<random suffix>`). On a rollback it is the rollback version. `<version>`
 is what the rollback deploys: the image tag (or short digest), `<image>:<tag>` for each of
 several images (three at most, then "and N more"), `config <commit>` for a config version, or
-both for a mixed version (`1.28.0 with config 0123abc`). `<commit>` is the short (7-character)
+both for a mixed version (`1.28.0 with config 0123abc`), or `<chart> <version>` for a chart version. `<commit>` is the short (7-character)
 config commit. When the version has no images or config commit, it is the name of the rollback's
 target (`spec.provenance.rollbackOf`).
 
@@ -77,7 +77,7 @@ A rollback PR starts with `## ROLLBACK: <bundle> -> <pipeline>/<environment>` an
 
 The "This is a rollback PR." line of the note says what the rollback restores, by the rollback
 version's type: the images of the target for an image version, its config commit for a config
-version, and for a mixed version "It reverts environment prod to the state of bundle <target>".
+version, its chart version for a chart version, and for a mixed version "It reverts environment prod to the state of bundle <target>".
 An image or config rollback can target a mixed version and leave its other half as deployed (see
 [Rollback](rollback.md#images-the-target-does-not-name)).
 
@@ -120,7 +120,7 @@ with `kubectl`, shows the client-written `kardinal.io/requested-by` instead, as
 out. A rollback PR names its actor on the "Rolled back by" line instead.
 
 A version with no images, such as a `config` version, gets one row of `—`. The body then shows
-neither its provenance nor its config commit.
+neither its provenance nor its config commit. A `chart` version also gets a table of its chart's name, version, repository and digest.
 
 ### Policy Gate Compliance
 
@@ -200,8 +200,8 @@ Every template is a Go [text/template](https://pkg.go.dev/text/template) with th
 |---|---|
 | `.Pipeline` | Pipeline name |
 | `.Environment` | Environment name |
-| `.Bundle.Name`, `.Bundle.Type` | Version name and type (`image`, `config`, `mixed`) |
-| `.Bundle.Version` | What the version deploys: the tag of a one-image version, `<image>:<tag>` for each of several images, `config <commit>` for a config version (as in the rollback title) |
+| `.Bundle.Name`, `.Bundle.Type` | Version name and type (`image`, `config`, `mixed`, `chart`) |
+| `.Bundle.Version` | What the version deploys: the tag of a one-image version, `<image>:<tag>` for each of several images, `config <commit>` for a config version, `<chart> <version>` for a chart version (as in the rollback title) |
 | `.Bundle.Images` | The images: `.Repository`, `.Tag`, `.Digest`. Read one with `index`: `{{ (index .Bundle.Images 0).Tag }}`; list them with `imageList` |
 | `.Bundle.ConfigCommitSHA` | The config commit of a config or mixed version |
 | `.Bundle.Author`, `.Bundle.CommitSHA`, `.Bundle.CIRunURL` | `spec.provenance`; empty when the version has none |

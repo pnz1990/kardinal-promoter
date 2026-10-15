@@ -255,8 +255,8 @@ subjects:
 
 The other write tools need more rules. They act from the agent's kubeconfig, as the CLI does,
 so they need `update` on the object itself; the chart's `scoped-writes` admission policy then
-limits a caller who holds `pipelines/pause` or `pipelines/hold` to `spec.paused` and
-`spec.holds` ([User roles](../guides/security.md#user-roles)):
+limits a caller who holds `pipelines/pause` or `pipelines/hold` to `spec.paused`,
+`spec.pausedFleets` and `spec.holds` ([User roles](../guides/security.md#user-roles)):
 
 | Tool | Rules |
 |---|---|

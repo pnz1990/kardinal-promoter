@@ -98,10 +98,10 @@ An environment path holding a `Chart.yaml` is rendered with `helm template`:
 ```
 
 The render is offline: subcharts must be vendored in `charts/`, `lookup` finds nothing,
-`getHostByName` resolves nothing, and the default capabilities are used. Hooks and `NOTES.txt`
+and the default capabilities are used. Hooks and `NOTES.txt`
 are not rendered. A template that calls a function whose result changes from one render to the
 next (`randAlphaNum` and the other `rand*`, `uuidv4`, `now`, `ago`, `genCA`, `genPrivateKey` and
-the other `gen*`, `encryptAES`, `bcrypt`, `htpasswd`, `shuffle`) fails the render: the same DRY
+the other `gen*`, `encryptAES`, `bcrypt`, `htpasswd`, `shuffle`, `getHostByName`) fails the render: the same DRY
 commit would render different manifests, every promotion would commit a change, and a rollback
 would not restore what ran. Set `render.allowNondeterministic: true` to allow them. `env` and
 `expandenv` are not available, as in Helm.

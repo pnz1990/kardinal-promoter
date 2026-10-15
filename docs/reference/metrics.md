@@ -17,7 +17,7 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 | `controller_runtime_max_concurrent_reconciles` | Gauge | Configured max concurrent reconciles per controller |
 | `controller_runtime_active_workers` | Gauge | Active reconcile goroutines per controller |
 
-**Controller labels**: `bundle`, `changewindow`, `graphcleanup`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `rollbackpolicy`, `scheduleclock`, `subscription`
+**Controller labels**: `bundle`, `bundle-retire`, `changewindow`, `clusterscmprovider`, `graphcleanup`, `hookrun`, `imageverification`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `renderrun`, `rollbackpolicy`, `scheduleclock`, `scmprovider`, `subscription`
 
 ### Work queue metrics
 
@@ -33,8 +33,8 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 
 ## kardinal Metrics
 
-The controller registers these on the same `/metrics` endpoint
-(`pkg/reconciler/observability/metrics.go`):
+The controller registers these on the same `/metrics` endpoint (`pkg/reconciler/observability/metrics.go`,
+`pkg/accesslog`, `pkg/audit` and `pkg/reconciler/kubeevent`):
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
@@ -42,7 +42,7 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
 | `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
 | `kardinal_api_access_log_dropped_total` | Counter | `kind` (`denied`, `request`) | API access log lines not written over their per-second budget ([API access log](../guides/security.md#api-access-log)) |
-| `kardinal_audit_write_failures_total` | Counter | `kind` (`PromotionStep`, `PolicyGate`, `Pipeline`) | AuditEvent creates that failed and stay in the writer's `status.pendingAuditEvents` to be retried ([Audit outbox](../guides/security.md#audit-outbox)). While a finished Bundle's step or gate holds unwritten records, its Graph is not retired: the Bundle's `GraphRetired` condition stays `Unknown` (reason `WaitingForSteps`) and names the object, so a counter that keeps rising with Bundles stuck there means the outbox cannot drain |
+| `kardinal_audit_write_failures_total` | Counter | `kind` (`Bundle`, `PromotionStep`, `PolicyGate`, `Pipeline`) | AuditEvent creates that failed and stay in the writer's `status.pendingAuditEvents` to be retried ([Audit outbox](../guides/security.md#audit-outbox)). While a finished Bundle's step or gate holds unwritten records, its Graph is not retired: the Bundle's `GraphRetired` condition stays `Unknown` (reason `WaitingForSteps`) and names the object, so a counter that keeps rising with Bundles stuck there means the outbox cannot drain |
 | `kardinal_audit_events_dropped_total` | Counter | `kind`, `reason` (`overflow`, `invalid`) | Audit records never written: the outbox of 32 was full, or the API server rejected the record. Alert on any increase |
 | `kardinal_pr_duration_seconds` | Histogram | — | Time from the PR opening (the `open-pr` step completing) to the merge the controller sees, observed once, when the step's move to `HealthChecking` is written |
 | `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step, observed once, when the status that records it Completed or Failed is written. `wait-for-merge` lasts until the merge; `health-check` covers the health check and the bake |

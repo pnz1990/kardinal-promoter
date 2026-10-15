@@ -90,8 +90,8 @@ before it expires (installation tokens last one hour). PRs are then opened by th
 (`<app-name>[bot]`).
 
 1. Create a GitHub App (**Settings → Developer settings → GitHub Apps → New GitHub App**) with
-   the repository permissions **Contents: Read and write**, **Pull requests: Read and write**
-   and **Metadata: Read-only**. Webhooks of the App are not used; configure the repository
+   the repository permissions **Contents: Read and write**, **Pull requests: Read and write**,
+   **Commit statuses: Read and write** (for the `kardinal/gates` status) and **Metadata: Read-only**. Webhooks of the App are not used; configure the repository
    webhook below if you want them.
 2. Install it on the account or organisation that owns the GitOps repositories, and note the
    installation ID (the number at the end of the installation's settings URL).
@@ -379,7 +379,7 @@ A ScmProvider or ClusterScmProvider of `type: bitbucket-datacenter` (with `apiUR
 server's base URL) works the same way. Its `allowedRepositories` are `KEY/slug` globs, and they
 match every URL form of the repository.
 
-- **PRs**: opened from `kardinal/<bundle>/<env>`; a PR that is open between the same branches is
+- **PRs**: opened from `kardinal/<namespace hash>/<bundle>/<env>`; a PR that is open between the same branches is
   reused. Closing declines it (with the PR's current version) and deletes the branch with the
   branch-utils API. There are no PR labels, so find rollback PRs by their `[kardinal] Rollback`
   title.
@@ -547,7 +547,7 @@ metadata:
   name: team-gitlab
   namespace: team-a
 spec:
-  type: gitlab                       # github, gitlab, forgejo, gitea, bitbucket or azuredevops
+  type: gitlab                       # github, gitlab, forgejo, gitea, bitbucket, azuredevops or bitbucket-datacenter
   apiURL: https://gitlab.example.com # https:// only (see below); empty uses the public API
   secretRef:
     name: team-gitlab-token          # key "token" unless secretRef.key is set
@@ -701,7 +701,7 @@ watched Secret. The check never stops the controller from starting.
 | GitHub / GitHub Enterprise | `GET /user` | token rejected (401); a classic PAT without `repo` or `public_repo`; a fine-grained PAT or GitHub App token, whose permissions the call cannot show |
 | GitLab | `GET /api/v4/personal_access_tokens/self` | token rejected; no `api` scope |
 | Forgejo / Gitea | `GET /api/v1/user` | token rejected (401). The API does not show a token's scopes, so a missing scope is not reported. `/user` needs `read:user`, which the documented scopes leave out, so it usually returns 403; an info line then says "SCM token scopes not checked" with the provider name |
-| Bitbucket Cloud, Azure DevOps | none | not checked; an info line says so, and token problems show on the first promotion step |
+| Bitbucket Cloud, Azure DevOps, Bitbucket Data Center | none | not checked; an info line says so, and token problems show on the first promotion step |
 
 Find the warnings with:
 
@@ -744,14 +744,14 @@ restart in static mode.
 
 When `scm.secretRef.name` or `scm.token` is set in the Helm chart, these three environment
 variables are injected into the controller Deployment automatically. With `scm.token` the
-Secret is the chart-managed `<release>-github-token`; rotate it with
+Secret is the chart-managed `<fullname>-github-token`; rotate it with
 the `helm upgrade` in [Upgrade](upgrade.md) with `--set scm.token=<NEW_TOKEN>` added.
 
 ### Rotating a PAT (zero-downtime procedure)
 
 1. Generate the new token in your SCM provider and copy it.
 2. Update the controller's token Secret: the Secret `scm.secretRef.name` names, or
-   `<release>-github-token` when you set `scm.token` (then use the `helm upgrade` above
+   `<fullname>-github-token` when you set `scm.token` (then use the `helm upgrade` above
    instead):
    ```bash
    kubectl create secret generic <token Secret> \
@@ -802,11 +802,11 @@ Update the Pipeline git Secrets too, as in step 3 above.
 
 ## Adding a new SCM provider
 
-Implement the `SCMProvider` interface in `pkg/scm/` and register it in
-`pkg/scm/factory.go`:
+Implement the `SCMProvider` interface in `pkg/scm/` and register it in `newProvider` (which
+`NewProvider` calls) in `pkg/scm/factory.go`; simplified:
 
 ```go
-func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider, error) {
+func newProvider(providerType, token, apiURL, webhookSecret string, circuits *CircuitRegistry) (SCMProvider, error) {
     token = strings.TrimSpace(token)
     switch providerType {
     case "github", "":

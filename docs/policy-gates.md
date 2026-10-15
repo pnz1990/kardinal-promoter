@@ -33,14 +33,14 @@ prod is held by gate uat-soak.
   Version  main (demo-q8m4t)
   Why      prod waits until the version has been live in uat for 5 minutes
   Rule     upstream.uat.soakMinutes >= 5
-  Now      upstream.uat.soakMinutes >= 5 = false
-  Opens    when the expression passes; rechecked every 1m
-  Next     kardinal override demo prod --gate uat-soak --reason <why>
+  Now      soak 1.2 of 5 min in uat
+  Opens    by itself in about 3m48s; rechecked every 1m
+  Next     wait: it opens by itself in about 3m48s (kardinal status demo -w follows it)
+  Or       kardinal override demo prod --gate uat-soak --reason <why>
 ```
 
-After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, prod then still
-waits for your approval at `prod-approval`). [CEL Context](#cel-context) lists what an expression
-can read, and [CEL Expression Examples](#cel-expression-examples) has more rules.
+After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, prod then still waits for your approval at `prod-approval`).
+[CEL Context](#cel-context) lists what an expression can read, and [CEL Expression Examples](#cel-expression-examples) has more rules.
 
 ## When a new or edited gate takes effect
 
@@ -586,8 +586,8 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 ### Gates of finished versions
 
 The gate instances of a finished version keep their last result: they are not evaluated or written
-again, and `status.lastEvaluatedAt` stops moving. A version is finished when it is **Superseded**,
-or when it is **Verified** and its `GraphReady` condition is `True` (the Graph has seen every
+again, and `status.lastEvaluatedAt` stops moving. A version is finished when it is **Superseded** or
+**Rejected**, or when it is **Verified** and its `GraphReady` condition is `True` (the Graph has seen every
 environment verified; nothing reads the gates after that). So the number of gate writes per
 ScheduleClock tick follows the number of versions in flight, not the version history. The gates of a
 **Failed** version are still evaluated, because the version can recover.
@@ -615,10 +615,10 @@ environment (every upstream environment is Verified and the environment has no s
 environment's `Pending` step requires the gate. A gate that is not ready but does not hold the version,
 because its environment is not reached yet or the version failed (it can still retry), is shown as
 **Waiting** (grey) instead of **Block** (red). A superseded version's gates that are not ready are
-shown as **Superseded**: they are not evaluated again.
+shown as **Superseded**, and a rejected version's (`kardinal reject`) as **Rejected**: they are not evaluated again.
 
 `kardinal explain` gives each gate the same state in its STATE column: **Pass** (ready), **Block**
-(holding the version), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
+(holding the version), **Superseded**, **Rejected**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
 ready, not holding the version).
 
 ## Rollback hold exemption

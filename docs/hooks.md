@@ -54,7 +54,7 @@ spec:
 |---|---|---|---|
 | `name` | Yes | | DNS label, at most 40 characters, unique within the environment. The HookRun and its Job are named `<pipeline>-<bundle>-<environment>-<phase>-<name>-<hash>`, the readable part cut to fit 63 characters. |
 | `phase` | Yes | | `pre` or `post`. |
-| `job` | Yes | | A `batch/v1` [JobSpec](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/job-v1/#JobSpec). The CRD keeps the field untyped; the controller rejects a job that is not a valid JobSpec (unknown fields included) or has no containers when it builds the Bundle's Graph, and the version fails with `TranslationError`. Defaults: `backoffLimit` **0** (a failed migration is not retried; set it to retry), `template.spec.restartPolicy` `Never`, `activeDeadlineSeconds` the timeout. `ttlSecondsAfterFinished` is dropped: the HookRun owns the Job's cleanup, and a Job deleted as it finishes would read as deleted before it finished. `selector` and `manualSelector` are refused, and so are privileged Pods ([Security](#security-which-serviceaccount-a-hook-runs-as)). |
+| `job` | Yes | | A `batch/v1` [JobSpec](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/job-v1/#JobSpec). The CRD keeps the field untyped; the controller rejects a job that is not a valid JobSpec (unknown fields included) or has no containers when it builds the Bundle's Graph, and the version fails with condition `InvalidSpec` (reason `GraphBuildFailed`). Defaults: `backoffLimit` **0** (a failed migration is not retried; set it to retry), `template.spec.restartPolicy` `Never`, `activeDeadlineSeconds` the timeout. `ttlSecondsAfterFinished` is dropped: the HookRun owns the Job's cleanup, and a Job deleted as it finishes would read as deleted before it finished. `selector` and `manualSelector` are refused, and so are privileged Pods ([Security](#security-which-serviceaccount-a-hook-runs-as)). |
 | `timeout` | No | `30m` | Go duration from the moment the hook starts. A hook still running then fails and its Job is deleted, with its Pods. |
 
 Strings in the job are passed to the Pod as written: `${HOME}` in a command is expanded by
@@ -136,7 +136,7 @@ edges:
   ([Pause and Resume](pause.md)).
 - **A held environment starts no other version's pre hook.** While an environment is held for a
   rollback version (`spec.holds`), another version's pre hook for it waits in `Pending` ("not
-  started: environment ... is held for version ..."), without its timeout counting, and runs if
+  started: environment ... is held for Bundle ..."), without its timeout counting, and runs if
   that version still promotes once the hold ends.
 - **A superseded or rejected version starts no pre hook.** Its pre-hook HookRuns that have not
   created their Job end `Skipped` ("not run: Bundle ... was superseded by a newer Bundle", or
@@ -193,7 +193,7 @@ the chart's `<release>-graph-objects` admission policy is what stops a forged Ho
 ServiceAccount passes as kro, so treat that permission as the right to run hooks.
 
 The controller needs `create`, `get`, `list`, `watch` and `delete` on `batch/jobs` in Pipeline
-namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/hookrun`.
+namespaces (the chart grants it) and caches only Jobs labelled `kardinal.io/run-job`.
 
 In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
 environments) the HookRuns are items of one collection, created under the conditions the node
@@ -223,9 +223,9 @@ waits for the hook. The version's `RunsCreated` condition names it, with kro's e
 
 ```bash
 kubectl get hookruns -n my-app
-# NAME                                    PIPELINE  ENV   HOOK     WHEN  PHASE      AGE
-# my-app-my-app-x7k2p-prod-pre-migrate    my-app    prod  migrate  pre   Succeeded  6m
-kubectl logs -n my-app job/my-app-my-app-x7k2p-prod-pre-migrate
+# NAME                                            PIPELINE  ENV   HOOK     WHEN  PHASE      AGE
+# my-app-my-app-x7k2p-prod-pre-migrate-4c1d9e2a   my-app    prod  migrate  pre   Succeeded  6m
+kubectl logs -n my-app job/my-app-my-app-x7k2p-prod-pre-migrate-4c1d9e2a
 kubectl get promotionstep -n my-app my-app-my-app-x7k2p-prod -o jsonpath='{.spec.live.hooks}'
 ```
 

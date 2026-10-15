@@ -56,15 +56,15 @@ Common cases:
 |---|---|
 | `spec.environments` | Add at least one environment to your Pipeline spec |
 | `spec.environments[].name` | Use a non-empty, valid environment name; the error names the rule it broke |
-| `spec.environments[].update.strategy` | Only `kustomize`, `helm`, `argocd` are valid |
-| Bundle `spec.type` | Only `image`, `config`, `mixed` are valid |
+| `spec.environments[].update.strategy` | Only `kustomize`, `helm`, `argocd`, `yaml` are valid |
+| Bundle `spec.type` | Only `image`, `config`, `mixed`, `chart` are valid |
 | Bundle `spec.pipeline` | Add `pipeline: <name>` to your Bundle spec |
 | PolicyGate `spec.expression` | Add a CEL expression to your PolicyGate spec |
 | PolicyGate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
 
-These checks are part of the CRDs and cannot be turned off. The chart's only
-ValidatingAdmissionPolicies are the identity policies (a rejection, an override or an approval
-must name the requesting user, see [Verified identity](guides/security.md#verified-identity)); an
+These checks are part of the CRDs and cannot be turned off. The chart's ValidatingAdmissionPolicies are the identity policies (a rejection, an override or an approval
+must name the requesting user, see [Verified identity](guides/security.md#verified-identity)), the hold-writes policy (only `pipelines/hold` may change `spec.holds`),
+the fleets policy (each `spec.pausedFleets` entry names an environment with a fleet) and the gitops-writes policy (the controller changes Argo CD and Flux objects only by their refresh annotation); an
 `admission webhook "..." denied the request` or `ValidatingAdmissionPolicy '<release>-...' ... denied
 request` error names the rule.
 

@@ -36,7 +36,9 @@ Everything in this section is planned and not in kardinal yet. Plans change with
 
 ### v0.13: evidence
 
-- Verify SLSA provenance and in-toto attestations, and commit signatures.
+- Verify SLSA provenance and in-toto attestations, and keyless (gitsign) commit signatures.
+  Commit signatures the SCM verified (`commits.requireSigned`) already ship:
+  [Signed commits](image-verification.md#signed-commits).
 - A signed promotion receipt for each promotion into each environment: the version, the actor
   and sponsor, every gate with its result, the approvers and verdicts.
 - A compliance mapping page and an evidence pack export.

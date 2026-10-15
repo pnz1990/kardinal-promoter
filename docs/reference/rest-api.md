@@ -14,7 +14,7 @@ curl -s http://localhost:8082/api/v1/openapi.json -o kardinal-openapi.json
 | API | Listener | Paths | Credentials |
 |-----|----------|-------|-------------|
 | UI API | `--ui-listen-address`, port `8082` | `/api/v1/ui/*` | The UI auth mode: none (loopback only), the shared UI token, or a Kubernetes token with TokenReview |
-| Bundle API | `--webhook-bind-address`, port `8083` | `POST /api/v1/bundles` | The Bundle API token |
+| Bundle API | `--webhook-bind-address`, port `8083` | `POST /api/v1/bundles` | The Bundle API token, or with `bundleAPI.tokenReview` a Kubernetes token with TokenReview |
 | SCM webhooks | port `8083` | `POST /webhook/scm`, `GET /webhook/scm/health` | The webhook secret (signature header), see [SCM providers](../scm-providers.md) |
 
 With controller TLS set (`controller.tlsCertFile`), both listeners use `https://`.
@@ -38,20 +38,20 @@ With controller TLS set (`controller.tlsCertFile`), both listeners use `https://
 | `POST` | `/api/v1/ui/rollback` | Roll an environment back (with `hold`, keep it on the rollback) |
 | `POST` | `/api/v1/ui/release-hold` | Release the hold of a rollback on an environment |
 | `POST` | `/api/v1/ui/approvals` | Approve, reject or revoke a Bundle for an environment's approval gates, as the UI user (TokenReview mode only) |
-| `POST` | `/api/v1/ui/pause` | Pause a Pipeline |
-| `POST` | `/api/v1/ui/resume` | Resume a Pipeline |
+| `POST` | `/api/v1/ui/pause` | Pause a Pipeline, or one fleet (`environment`) |
+| `POST` | `/api/v1/ui/resume` | Resume a Pipeline, or one fleet (`environment`) |
 | `POST` | `/api/v1/ui/access` | Which of the given actions the caller may take, and the role that grants each (the UI hides or disables the rest) |
 | `POST` | `/api/v1/ui/validate-cel` | Compile a PolicyGate CEL expression |
 | `GET` | `/api/v1/ui/steps/{namespace}/{step}/events` | The Kubernetes Events of a PromotionStep |
-| `POST` | `/api/v1/bundles` | Create a Bundle from CI (served only when a Bundle API token is set) |
+| `POST` | `/api/v1/bundles` | Create a Bundle from CI (served only when a Bundle API token or `bundleAPI.tokenReview` is set) |
 | `GET` | `/webhook/scm/health` | SCM webhook configuration and counters |
 | `GET` | `/api/v1/openapi.json` | The OpenAPI description |
 
 Errors are `text/plain` with the HTTP status the OpenAPI document lists for each operation:
 `400` invalid request, `401` no valid credentials, `403` refused (with no UI auth mode: a
 client that is not local, or a cross-origin request from an origin not allowed; in
-TokenReview mode: RBAC denied it), `404` not found (also `POST /api/v1/bundles` when no Bundle
-API token is set), `405` wrong method, `409` conflict, `429` rate limited, `503` the
+TokenReview mode: RBAC denied it), `404` not found (also `POST /api/v1/bundles` when neither a Bundle
+API token nor its TokenReview mode is set), `405` wrong method, `409` conflict, `429` rate limited, `503` the
 TokenReview or SubjectAccessReview API is unreachable (TokenReview mode fails closed).
 Write endpoints record the caller as the requester (`kardinal.io/requested-by` on the Bundles
 they create, `createdBy` on gate overrides): the Kubernetes user with TokenReview, else
@@ -176,8 +176,11 @@ access and no per-caller authorization; use it only behind an authenticating pro
 ## CI: the Bundle API token
 
 `POST /api/v1/bundles` takes the Bundle API token (`bundleAPI.tokenSecretRef`,
-`--bundle-api-token`), not a Kubernetes token: CI systems outside the cluster can create
-Bundles without cluster credentials. See [CI integration](../ci-integration.md#webhook-token).
-It is one token shared by every CI caller, limited to 60 requests a minute. A CI job that has
+`--bundle-api-token`): CI systems outside the cluster can create Bundles without cluster
+credentials. See [CI integration](../ci-integration.md#webhook-token). It is one token shared by
+every CI caller, limited to 60 requests a minute. With `bundleAPI.tokenReview`
+(`--bundle-api-tokenreview-auth`) it also accepts Kubernetes tokens: each caller is
+authenticated with a TokenReview, needs `create` on bundles and `get` on the Pipeline in the
+namespace, and is recorded in `kardinal.io/requested-by`. A CI job that has
 cluster credentials can instead create the Bundle with `kardinal create bundle` or `kubectl`,
 authorized by its own RBAC.

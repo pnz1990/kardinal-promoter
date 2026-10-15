@@ -185,8 +185,8 @@ parallel; see [Design a pipeline](pipeline-reference.md).
 ### Promotion steps
 
 The promotion of one version into one environment is a **promotion step** (kind
-`PromotionStep`). kardinal creates them; you do not. In the UI's pipeline lane, each
-environment's step is a stage card. A step clones the repository, updates the manifests,
+`PromotionStep`). kardinal creates them; you do not. On the UI's map, each
+environment's step is a station. A step clones the repository, updates the manifests,
 commits, pushes or opens a pull request, waits for the merge, and checks health. Its state is
 one of Pending, Promoting, WaitingForMerge, HealthChecking, Verifying (the environment's
 [post-deploy hooks](hooks.md) run), Verified, Failed, AbortedByAlarm, RollingBack or Superseded
@@ -246,7 +246,7 @@ environment reads its health from its cluster through a kubeconfig Secret
 A **gate** holds a version out of an environment until its expression is true. The expression
 is written in [CEL](https://cel.dev) (Common Expression Language), and reads the version, the
 time, metrics and the history of the pipeline. A gate is a Kubernetes object of kind
-`PolicyGate`. Gates show in the UI's promotion graph and in `kardinal explain`.
+`PolicyGate`. Gates show on the UI's map and in `kardinal explain`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1

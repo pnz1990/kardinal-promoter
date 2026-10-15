@@ -303,8 +303,8 @@ resources:
     memory: 512Mi
 ```
 
-**2. Reconcile concurrency** is controller-runtime's default of one worker per CRD type
-(MetricCheck uses 4); there is no flag to change it.
+**2. Reconcile concurrency** is set per controller with `controller.workers.*` (see
+[Controller concurrency](#controller-concurrency)); MetricCheck runs `--metriccheck-global-slots` plus 4 workers, at least 16.
 
 **3. Reduce ScheduleClock tick frequency** if no gate needs minute-level `schedule.*`
 re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:

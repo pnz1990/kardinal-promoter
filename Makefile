@@ -84,8 +84,9 @@ vuln: $(GOVULNCHECK)
 
 hygiene: hygiene-go hygiene-web ## Fail on dead code and dead files (Go, docs, scripts, web); exceptions in hack/hygiene/allow.txt
 
-hygiene-go: $(DEADCODE) ## Go functions no main or test reaches (deadcode), orphan docs pages and assets, scripts nothing calls
+hygiene-go: $(DEADCODE) ## Go functions no main or test reaches (deadcode), orphan docs pages and assets, scripts nothing calls, docs that name a missing command, flag or CRD field
 	$(GO) run ./hack/hygiene -deadcode $(DEADCODE)
+	$(GO) test ./test/examples -count=1 -run 'TestDocumented|TestSchemaHas'
 
 hygiene-web: ## Unused files, exports and dependencies in web/ (knip; needs npm ci in web/)
 	cd web && npm run knip

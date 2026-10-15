@@ -280,9 +280,9 @@ How a fleet is promoted:
   target the rollback changes, or it is refused, naming them
   ([Roll back a fleet](rollback.md#roll-back-a-fleet)).
   `--to` names the version for every target. `--hold` on a fleet holds every target, and
-  `kardinal unhold --env <fleet>` releases them. A target held through its fleet cannot be
+  `kardinal unhold <pipeline> --env <fleet>` releases them. A target held through its fleet cannot be
   released alone.
-- **Hold.** `kardinal hold <pipeline> --env <fleet>` holds every target on the version they run,
+- **Hold.** `kardinal hold <pipeline> --env <fleet> --reason <text>` holds every target on the version they run,
   with one `spec.holds` entry for the fleet; it is refused while the targets run different
   versions ([Hold an environment](rollback.md#hold-an-environment)).
 - **Targets on one branch.** Targets in flight together push to the same branch. Argo CD (or
@@ -304,7 +304,7 @@ How a fleet is promoted:
   pacing has admitted the target's step, so no migration runs for a target still waiting for a
   place. Post hooks and analyses start when the target's step enters Verifying.
 - **CLI and UI.** `kardinal get pipelines` shows a fleet as one column, `Verified` or
-  `12/50 Verified, 1 Failed, 1 Superseded (prod-eu-west)`. `kardinal status`, `promote` and `rollback` take a target's
+  `12/50 live, 1 failed, 1 replaced by newer version (prod-eu-west)`. `kardinal status`, `promote` and `rollback` take a target's
   environment name (`prod-eu-west`). The UI's fleet board draws the fleet as one station with
   a bar of its targets: Verified, in flight, Failed and Superseded, naming the Superseded ones. It names the fleet as `stopped` once
   `maxUnavailable` is reached, and `paused` while it is paused; the fleet's actions pause or

@@ -145,7 +145,7 @@ pipeline               my-app    (last 7 days)
 target_env             prod
 bundles_total          15
 deployment_frequency   2.00/day  (14 verified in target env)
-lead_time_avg          45m12s    (creation → prod verified, 14 samples)
+lead_time_avg          45m12s    (creation to prod verified, 14 samples)
 change_fail_rate       6.7%      (1 failed / 15 total)
 rollback_count         1
 ```
@@ -262,7 +262,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "kardinal {{ $labels.controller }} reconcile error rate elevated"
+          summary: "kardinal {{ $labels.controller }} reconciler error rate is elevated"
           runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
 
       - alert: KardinalWorkQueueBacklog
@@ -271,7 +271,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "kardinal work queue depth > 100 for {{ $labels.name }}"
+          summary: "kardinal {{ $labels.name }} work queue depth > 100"
           runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#graph-controller-issues"
 ```
 
@@ -283,7 +283,7 @@ kardinal-promoter ships a pre-built Grafana dashboard covering:
 
 - **Promotion overview**: bundle phase counts (Verified/Failed/Superseded), step failure rate, gate blocks, reconcile errors
 - **Throughput**: bundle phase rate and step terminal rate over time
-- **Step latency**: P50/P99 per step type (git-clone, kustomize, open-pr, health-check), PR review latency, PromotionStep age
+- **Step latency**: P50/P99 per step type (git-clone, kustomize-set-image, open-pr, health-check), PR review latency, PromotionStep age
 - **Policy gates**: gate evaluation rate and blocking duration histograms
 - **SCM API and git**: SCM requests by result, P99 latency by operation, rate limit left per owner, circuit breaker state, git clone and push P90 duration, git bytes transferred, and git operations by result
 - **Reconciler health**: reconcile rate, error rate, P99 latency, work queue depth per controller
