@@ -30,17 +30,14 @@ const (
 // Kustomization, it has not asked yet, and the promotion wrote a commit that
 // is in git now. rev and pending are expectedRevision's.
 //
-// A step with no changes wrote nothing. A step with neither a pushed commit
-// nor a PR (update.strategy argocd patches the Application itself) has no
+// A step with no changes wrote nothing: noChangesRefreshWanted decides for
+// it once its health check ran. A step with neither a pushed commit nor a PR (update.strategy argocd patches the Application itself) has no
 // commit to sync. While the PR merge commit may still be recorded (pending),
 // the step waits for it, so the refresh is recorded against the commit; when
 // the SCM never reports it, the refresh is requested without a revision.
 func (r *Reconciler) refreshWanted(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, healthType, rev string, pending bool) bool {
 	switch {
-	case r.RefreshDisabled,
-		env.Health.Refresh != nil && !*env.Health.Refresh,
-		!health.RefreshSupported(healthType),
-		ps.Status.RefreshRequestedAt != nil,
+	case !r.refreshAllowed(ps, env, healthType),
 		ps.Status.Outputs["noChanges"] == "true":
 		return false
 	case rev != "":
@@ -48,6 +45,31 @@ func (r *Reconciler) refreshWanted(ps *v1alpha1.PromotionStep, env v1alpha1.Envi
 	default:
 		return opensPR(ps) && !pending
 	}
+}
+
+// refreshAllowed reports whether the step may still ask the GitOps tool to
+// sync: refresh is on (controller and environment), the health type names an
+// Argo CD Application or a Flux Kustomization, and the step has not asked yet.
+func (r *Reconciler) refreshAllowed(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, healthType string) bool {
+	return !r.RefreshDisabled &&
+		(env.Health.Refresh == nil || *env.Health.Refresh) &&
+		health.RefreshSupported(healthType) &&
+		ps.Status.RefreshRequestedAt == nil
+}
+
+// noChangesRefreshWanted reports whether a step whose git-commit found
+// nothing to commit should ask the GitOps tool to sync the branch head it
+// waits for (rev, the head it cloned, #1669) after a health check that did
+// not pass (#1910). Another writer pushed that head, so the tool may not have
+// synced it yet, and its poll can take minutes. A check that passed means the
+// tool applied the head (or a descendant), and there is nothing to ask for; a
+// terminal result does not recover by syncing. A check that fails for another
+// reason (the workload rolling out on the head) spends the one request
+// harmlessly: the tool syncs what it already has.
+func (r *Reconciler) noChangesRefreshWanted(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, healthType, rev string,
+	result health.HealthStatus) bool {
+	return ps.Status.Outputs["noChanges"] == "true" && rev != "" && !result.Healthy && !result.Terminal &&
+		r.refreshAllowed(ps, env, healthType)
 }
 
 // requestRefresh asks the GitOps object the health check names to sync the
