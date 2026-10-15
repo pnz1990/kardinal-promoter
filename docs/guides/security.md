@@ -1034,8 +1034,10 @@ the check off. The controller logs a warning at startup while no auth mode is se
     well. When the controller pod runs with a sidecar, set one of the two modes below.
 
 To reach the UI through an Ingress, a `NodePort` or a `LoadBalancer`, set one of the two
-modes below. An authenticating reverse proxy in front of the UI (for example
-oauth2-proxy) can use Option 1 and inject the shared token as the `Authorization` header.
+modes below. For single sign-on, where each person signs in with your identity provider and the
+UI acts as that person, see [Option 3](#option-3-single-sign-on-through-an-oidc-proxy): it is
+Option 2 behind an OIDC proxy. A proxy that injects Option 1's shared token makes every signed-in
+user the controller, and the UI then refuses approvals.
 
 ### Option 1: shared UI token
 
@@ -1151,6 +1153,98 @@ empty list. A read of one object, and every write, is still checked on that obje
 with `403`.
 When the controller runs with `--watch-namespace`, lists are checked against that namespace.
 The chart's [user roles](#user-roles) hold these permissions.
+
+### Option 3: single sign-on through an OIDC proxy
+
+People sign in with your identity provider (Keycloak, Okta, Entra ID, Google, Dex), and the UI
+acts as each of them: RBAC applies per user, and an approval from the UI records the person.
+This is Option 2 with three pieces in front of it, and needs no change to kardinal:
+
+1. **The API server trusts the identity provider.** Configure an OIDC authenticator on the
+   cluster, with a username and groups prefix so these users cannot collide with other
+   identities:
+    - on EKS: `aws eks associate-identity-provider-config --cluster-name <cluster> --oidc identityProviderConfigName=sso,issuerUrl=<issuer>,clientId=<client id>,usernameClaim=preferred_username,usernamePrefix=oidc:,groupsClaim=groups,groupsPrefix=oidc:`.
+      The first requests after the association turns `ACTIVE` can still be refused for about a
+      minute;
+    - on a cluster you run: the API server's `--oidc-issuer-url`, `--oidc-client-id`,
+      `--oidc-username-claim`, `--oidc-username-prefix`, `--oidc-groups-claim` and
+      `--oidc-groups-prefix` flags, or the same in a structured `AuthenticationConfiguration`.
+
+    A user then reaches the API server as `oidc:<username>` in the groups `oidc:<group>`.
+
+2. **A proxy signs people in and forwards their ID token.** In front of the UI port (`8082`), the
+   proxy runs the OIDC login and passes the user's ID token to kardinal as
+   `Authorization: Bearer <token>`. With [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/):
+
+    ```text
+    --provider=oidc
+    --oidc-issuer-url=<issuer>
+    --client-id=<client id>
+    --client-secret=<client secret>
+    --cookie-secret=<32 random bytes, base64>
+    --email-domain=*
+    --redirect-url=https://kardinal.example.com/ui/oauth2/callback
+    --upstream=http://kardinal-promoter.kardinal-system.svc:8082/
+    --pass-authorization-header=true
+    --proxy-prefix=/ui/oauth2
+    --api-route=^/api/v1/ui/
+    --skip-provider-button=true
+    ```
+
+    - `--pass-authorization-header` forwards the ID token, which is what kardinal reviews.
+    - The UI loads from `/ui/` and calls `/api/v1/ui/`, both absolute paths, so the proxy must
+      pass both. `--proxy-prefix=/ui/oauth2` keeps the proxy's own endpoints under `/ui/`.
+    - `--api-route` makes the proxy answer an API call that has no session with `401` instead
+      of a login redirect, which a script cannot follow. When a session ends, the UI then shows
+      its own **Sign in to kardinal** dialog; reloading the page signs in through the proxy
+      again.
+    - The ID token must still be valid when it reaches kardinal. Have the proxy refresh it
+      before it expires (oauth2-proxy `--cookie-refresh`, shorter than the provider's ID token
+      lifetime).
+
+3. **kardinal accepts the ID token.** Turn on TokenReview, accept tokens for the API server's
+   own audience, and allow the host name people browse to:
+
+    ```bash
+    helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+      -n kardinal-system --reset-then-reuse-values \
+      --set ui.auth.tokenReview=true \
+      --set tokenReview.acceptAPIServerAudience=true \
+      --set 'ui.allowedHosts={kardinal.example.com}'
+    ```
+
+    The OIDC authenticator is not audience-aware: it authenticates the ID token but returns no
+    audience, so the review for `kardinal-promoter` refuses it and only the review for the API
+    server's audience accepts it ([Option 2](#option-2-kubernetes-tokens-tokenreview), step 1).
+    `ui.allowedHosts` is needed because the proxy passes the browser's `Host` header
+    ([Host names](#host-names-dns-rebinding)).
+
+Then bind people by their prefixed groups, as for any Kubernetes user, and name those groups in
+approval gates:
+
+```bash
+kubectl create rolebinding release-managers-approve -n my-app \
+  --clusterrole kardinal-promoter-approver --group oidc:release-managers
+kubectl create rolebinding developers-view -n my-app \
+  --clusterrole kardinal-promoter-viewer --group oidc:developers
+```
+
+```yaml
+spec:
+  approval:
+    allowedGroups: [oidc:release-managers]
+```
+
+What people see: a release manager signs in through the identity provider with no kardinal
+dialog, and approves from the Approvals page; the Approval holds `user: oidc:<name>`, their
+groups and `kardinal.io/recorded-via: ui`, and the gate's reason says `approved by oidc:<name>`.
+A developer bound only to the viewer role sees "Nothing waits on you"; a direct
+`POST /api/v1/ui/approvals` is refused with `403` naming the verb, resource and namespace.
+
+Trust: kardinal now receives tokens that also work against the API server, so treat the proxy,
+kardinal and every hop between them as able to act as the signed-in users. Serve the UI over
+TLS ([TLS Configuration](#tls-configuration)) and keep the proxy and kardinal in the same
+cluster network.
 
 ### User roles
 
