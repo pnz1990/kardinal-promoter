@@ -101,7 +101,7 @@ func (r *repo) mentioned(needle string, skip func(string) bool, in func(string) 
 
 // orphanPages lists docs pages that are neither in mkdocs.yml nor linked from
 // another docs page, the theme overrides or the README. docs/aide is not
-// published (exclude_docs).
+// published (exclude_docs), and docs/changelog.d holds changelog entries.
 func orphanPages(r *repo) []string {
 	inMkdocs := map[string]bool{}
 	for _, p := range mkdocsPage.FindAllString(r.text["mkdocs.yml"], -1) {
@@ -123,7 +123,10 @@ func orphanPages(r *repo) []string {
 	}
 	var out []string
 	for _, f := range r.files {
-		if !strings.HasPrefix(f, "docs/") || !strings.HasSuffix(f, ".md") || strings.HasPrefix(f, "docs/aide/") {
+		// docs/changelog.d holds changelog entries the changelog page lists
+		// (hack/docs-changelog), not pages.
+		if !strings.HasPrefix(f, "docs/") || !strings.HasSuffix(f, ".md") || strings.HasPrefix(f, "docs/aide/") ||
+			strings.HasPrefix(f, "docs/changelog.d/") {
 			continue
 		}
 		if !inMkdocs[f] && !linked[f] {

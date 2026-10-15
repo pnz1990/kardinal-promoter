@@ -20,8 +20,8 @@ the summary line here. -->
 ## Checklist
 
 - [ ] `go build ./...`, `go vet ./...` and `go test ./... -race` pass
-- [ ] Every new behaviour has a test; a feature has a live e2e test and a `test/e2e/coverage.tsv` row (`go test ./test/hack` passes)
-- [ ] User docs in `docs/` and the `docs/changelog.md` `[Unreleased]` section are updated
+- [ ] Every new behaviour has a test; a feature has a live e2e test and a `test/e2e/coverage.tsv` row, in id order, citing `path#anchor` (`go test ./test/hack` passes)
+- [ ] User docs in `docs/` are updated, and a user-facing change adds `docs/changelog.d/<issue>-<slug>.md` (or has the `no-changelog` label)
 - [ ] New `.go` files have the Apache 2.0 header; no `util.go`, `helpers.go` or `common.go`
 - [ ] Generated files are regenerated (`make manifests generate api-docs`, `web/dist` with `make ui`, CLI docs with `go run ./hack/gen-cli-docs/main.go`)
 - [ ] The title follows Conventional Commits (`feat(scope): ...`, `fix(scope): ...`)

@@ -27,7 +27,7 @@ IMG      ?= $(IMG_REPO):$(IMG_TAG)
 .PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
         lint lint-local vet vuln hygiene hygiene-go hygiene-web envtest generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all \
+        install-kro e2e-tools e2e-up e2e-down test-e2e-live e2e-all changelog-release \
         tools help
 
 all: generate build test lint
@@ -187,6 +187,10 @@ e2e-down: ## Delete the kind cluster of live suite SUITE (and the multi-cluster 
 	kc=$${KUBECONFIG:-test/e2e/results/$$c/kubeconfig}; kc=$${kc%%:*}; \
 	kind delete cluster --name "$$c" --kubeconfig "$$kc" && \
 	if kind get clusters 2>/dev/null | grep -qx "$$c-spoke"; then kind delete cluster --name "$$c-spoke" --kubeconfig "$$kc"; fi
+
+changelog-release: ## Before tagging VERSION (vX.Y.Z): write docs/changelog.d into docs/changelog.md as VERSION and delete the fragments
+	@test -n "$(VERSION)" || { echo "usage: make changelog-release VERSION=vX.Y.Z"; exit 1; }
+	$(GO) run ./hack/changelog release $(VERSION)
 
 e2e-all: ## Run every live suite on this host, JOBS clusters at a time, and prove the coverage (hack/e2e/all.sh)
 	JOBS=$(JOBS) COUNT=$(COUNT) bash hack/e2e/all.sh

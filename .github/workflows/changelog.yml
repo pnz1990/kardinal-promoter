@@ -1,0 +1,39 @@
+name: changelog
+
+# A pull request that changes what users see (the product, the chart, the
+# CRDs, the UI or the user docs) adds its changelog entry as a file of its
+# own, docs/changelog.d/<issue>-<slug>.md, so two pull requests never edit
+# the same lines of docs/changelog.md (hack/changelog). The no-changelog
+# label opts a pull request out. It runs on label changes too, so it is a
+# workflow of its own: ci.yml re-running on every label would cost a full CI
+# run.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: A user-facing change adds a changelog fragment
+        env:
+          BASE: origin/${{ github.base_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: go run ./hack/changelog check "$BASE" "$LABELS"

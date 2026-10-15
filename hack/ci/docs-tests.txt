@@ -23,3 +23,4 @@ test/hack
 !pkg/source its README.md and docs/notes.md are files of the scratch repositories it serves
 !pkg/steps/steps README.md is a file its tests write into scratch git repositories
 !pkg/steps/steps/sharedbranch README.md is a file its tests write into the scratch remote
+!hack/changelog/fragments its tests write docs/changelog.d fixtures into temp directories

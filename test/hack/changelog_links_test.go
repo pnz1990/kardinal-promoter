@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/kardinal-promoter/kardinal-promoter/hack/changelog/fragments"
 )
 
 // siteURL is the published docs site. The changelog links to it with
@@ -49,10 +51,11 @@ var (
 func TestChangelogLinksResolve(t *testing.T) {
 	root := repoRoot(t)
 	docs := filepath.Join(root, "docs")
-	data, err := os.ReadFile(filepath.Join(docs, "changelog.md"))
+	// The page as the docs site shows it: the docs/changelog.d entries too.
+	data, err := fragments.Assembled(root)
 	require.NoError(t, err)
 	redirects := mkdocsRedirects(t, filepath.Join(root, "mkdocs.yml"))
-	links := markdownLinks(string(data))
+	links := markdownLinks(data)
 	require.Greater(t, len(links), 50, "too few links found in docs/changelog.md; is the scan broken?")
 	checked := 0
 	for _, l := range links {

@@ -121,8 +121,9 @@ the solution you have in mind.
 
 1. Fork the repository and create a branch from `main`.
 2. Make your changes. Every PR must include:
-   - Tests for new behavior
+   - Tests for new behavior, with their `test/e2e/coverage.tsv` rows (see Coverage rows)
    - Updated documentation in `docs/`
+   - A changelog entry for a change users see (see Changelog)
    - Apache 2.0 license header in new Go files
 3. Ensure `go build ./...`, `go test ./... -race`, and `go vet ./...` all pass.
 4. Open a pull request against `main`.
@@ -134,6 +135,33 @@ those changes; describe what you need in an issue or in the PR.
 
 PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/):
 `feat(scope): description`, `fix(scope): description`, `chore(scope): description`.
+
+### Changelog
+
+Do not edit the `[Unreleased]` section of `docs/changelog.md`: every pull request edited the same
+lines there, and nearly every pair conflicted. A change users see adds a file of its own,
+`docs/changelog.d/<issue or PR number>-<slug>.md`. It has front matter with its section (Upgrade,
+Added, Changed, Deprecated, Removed, Fixed, Security, Documentation or Development) and the entry
+as a `- **Title** (#N) — ...` bullet; [docs/changelog.d/README.md](docs/changelog.d/README.md)
+has the format. The docs site lists the files under [Unreleased], and
+`go run ./hack/changelog unreleased` prints the section.
+
+A pull request that changes `api/`, `cmd/`, `pkg/`, `chart/`, `config/`, `web/src/` or the user docs
+needs a file there: the `changelog` check fails without one. Test-only, CI and tooling changes
+need none. Label the pull request `no-changelog` when a user-facing change has nothing to tell
+users. Before a release is tagged, `make changelog-release VERSION=vX.Y.Z` writes the files into
+`docs/changelog.md` as that version and deletes them; then write the release's highlights and
+upgrade notes above its sections.
+
+### Coverage rows
+
+`test/e2e/coverage.tsv` is sorted by id: add a row where its id sorts. Cite sources as
+`path#anchor`, never `path:N`. The anchor is a Go declaration (`Reconcile`,
+`Reconciler.Reconcile`, a type, var or const), a markdown heading, or else text that appears on
+exactly one line of the file. A line number moved with every edit above it, so any pull request
+that touched a cited file rewrote other rows. `go test ./test/hack -run TestE2ECoverage` checks
+that every anchor names one place. [test/e2e/README.md](test/e2e/README.md#coverage) has the
+rules.
 
 ### Merging
 

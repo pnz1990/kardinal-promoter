@@ -45,7 +45,9 @@ type Row struct {
 	Area    string
 	Feature string
 	// Source is where the behavior is documented and implemented: refs
-	// separated by "; ", each a repo path, path:N or path:N-M, or docs/changelog.md#<entry title or heading>[@<release>].
+	// separated by "; ", each a repo path or path#anchor: a Go declaration, a
+	// markdown heading or text on one line of the file (test/e2e/README.md,
+	// Coverage); docs/changelog.md#<entry title or heading>[@<release>].
 	Source string
 }
 

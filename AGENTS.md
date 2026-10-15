@@ -439,7 +439,9 @@ and workflows run with repo secrets. The `agent instructions guard` check
   (`git merge-base --is-ancestor <sha> origin/main`).
 - Prereleases are vX.Y.Z-rc.N. helm skips them unless you pass --version, so the docs pin the
   chart version.
-- Before tagging: docs/changelog.md has the section with upgrade notes; README.md, docs/quickstart.md
+- Before tagging: `make changelog-release VERSION=vX.Y.Z` writes the docs/changelog.d entries into
+  docs/changelog.md as the release and deletes them (release.yml refuses a tag that still has
+  entries there); docs/changelog.md has the section with upgrade notes; README.md, docs/quickstart.md
   and docs/installation.md show the new version; the kro pin (hack/install-kro.sh, the Chart.yaml
   kro.version annotation, the release notes text in release.yml) matches kro's latest release;
   J1–J6 have e2e-live evidence on the tagged commit (§Journey validation).

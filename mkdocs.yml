@@ -6,8 +6,11 @@ repo_name: pnz1990/kardinal-promoter
 edit_uri: edit/main/docs/
 
 # docs/aide/ holds the contributor vision and journey definition of done; they are not user documentation.
+# docs/changelog.d/ holds the unreleased changelog entries, which the changelog page lists
+# (hack/docs-changelog/changelog_fragments.py).
 exclude_docs: |
   aide/
+  changelog.d/
   requirements.txt
 
 # Every page must be in the nav: strict mode fails on an omitted page.
@@ -79,6 +82,7 @@ extra_css:
 
 hooks:
   - hack/docs-station-map/station_map.py
+  - hack/docs-changelog/changelog_fragments.py
 
 plugins:
   - search:

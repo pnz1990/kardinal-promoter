@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/kardinal-promoter/kardinal-promoter/hack/changelog/fragments"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/coverage"
 )
 
@@ -112,21 +112,25 @@ func TestE2ECoverage(t *testing.T) {
 	}
 }
 
-// sourceRef is a source ref: a path in the repo (a file or a directory), or
-// lines of a file: path:N or path:N-M.
-var sourceRef = regexp.MustCompile(`^([^:\s]+)(?::([0-9]+)(?:-([0-9]+))?)?$`)
+// sourceRef is a source ref: a path in the repo (a file or a directory),
+// optionally with an anchor, path#anchor.
+var sourceRef = regexp.MustCompile(`^([^#\s]+)(?:#(.+))?$`)
 
-// tableSeparator is the line under the header of a markdown table, such as
-// |---|---| or | :--- | ---: |. Each cell needs three dashes, so a YAML "- |"
-// line is not one.
-var tableSeparator = regexp.MustCompile(`^\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?$`)
+// lineRef is the old form, path:N or path:N-M, now refused.
+var lineRef = regexp.MustCompile(`^[^#\s]+:[0-9]+(-[0-9]+)?$`)
 
 // TestE2ECoverage_SourceRefs: every source ref of every row names a path in
-// the repo. A ref with lines names lines that exist, and its first line has
-// content, so a reader of the row lands on the behavior. A covered rollback row
-// names lines in every ref, except docs/changelog.md, which is cited by entry
-// title or heading and never by line (changelogRefProblem): a
-// docs/changelog.md#<anchor> ref is as precise as a line and does not shift.
+// the repo, and an anchor, when it has one, names one place in that file: a
+// Go declaration (Func, Type.Method, Type, a var or const) of a .go file, a
+// heading of a .md file, or else text on exactly one line of the file. A
+// covered rollback row names an anchor in every ref. docs/changelog.md is
+// cited by entry title or heading, its unreleased entries included
+// (docs/changelog.d; changelogRefProblem).
+//
+// Refs never name line numbers (#1894): any edit above a line moved it, so
+// every pull request that touched a cited file rewrote other rows, and two
+// unrelated pull requests conflicted on coverage.tsv. An anchor moves with
+// its text.
 func TestE2ECoverage_SourceRefs(t *testing.T) {
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
@@ -136,19 +140,42 @@ func TestE2ECoverage_SourceRefs(t *testing.T) {
 	}
 }
 
+// TestE2ECoverage_RowsSorted: coverage.tsv lists its rows by id, each id
+// once, so pull requests that add rows of different features add them in
+// different places and do not conflict (#1894).
+func TestE2ECoverage_RowsSorted(t *testing.T) {
+	rows, err := coverage.Rows(repoRoot(t))
+	require.NoError(t, err)
+	for i := 1; i < len(rows); i++ {
+		if rows[i-1].ID >= rows[i].ID {
+			t.Errorf("row %s is after %s: keep coverage.tsv sorted by id (LC_ALL=C sort), each id once", rows[i].ID, rows[i-1].ID)
+		}
+	}
+}
+
 // TestSourceRefProblems: each rule of TestE2ECoverage_SourceRefs refuses a ref
 // that breaks it, and a ref that keeps every rule passes.
 func TestSourceRefProblems(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "pkg"), 0o755))
-	doc := "# Title\n\n| a | b |\n|---|---|\n---\ntext\n- |\n| :--- | ---: |\n"
+	doc := "# Title\n\n## Install\n\ntext once\ntwice\ntwice\n\n## Twice\n\n## Twice\n\n```\n## Not a heading\n```\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(doc), 0o600))
-	changelog := "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **New thing** — text\n- **Fix with `code`: a colon** (#1) — text\n" +
-		"- **Twice** — one\n- **Twice** — two\n- **Shared title** — again\n  - **Not top level** — nested\n- plain bullet\n\n" +
-		"## [v1.0.0] — 2026-10-01\n\n### Before you upgrade\n\nprose\n\n" +
-		"## [v0.9.0] — 2026-09-01\n\n### Before you upgrade\n\n### Fixed\n\n- **Shared title** — first\n"
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs"), 0o755))
+	src := "package pkg\n\ntype Reconciler struct{}\n\nfunc (r *Reconciler) Reconcile() {}\n\nfunc (r Other) Reconcile() {}\n\n" +
+		"func New() {}\n\nconst (\n\tLimit = 3\n)\n\nvar a, b = 1, 2\n\nfunc dup() {}\n\n// once: a comment\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "r.go"), []byte(src), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "values.yaml"), []byte("a:\n  b: 1\nc:\n  b: 1\n"), 0o600))
+	changelog := "# Changelog\n\n## [Unreleased]\n\n" + fragments.Marker + "\n\n" +
+		"## [v1.0.0] — 2026-10-01\n\n### Before you upgrade\n\nprose\n\n- **Twice** — one\n- **Twice** — two\n\n" +
+		"## [v0.9.0] — 2026-09-01\n\n### Before you upgrade\n\n### Fixed\n\n- **Shared title** — first\n  - **Not top level** — nested\n- plain bullet\n"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs", "changelog.d"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "changelog.md"), []byte(changelog), 0o600))
+	for name, body := range map[string]string{
+		"10-new-thing.md":    "---\nsection: Added\n---\n\n- **New thing** — text\n",
+		"11-fix.md":          "---\nsection: Fixed\n---\n\n- **Fix with `code`: a colon** (#11) — text\n",
+		"12-shared-title.md": "---\nsection: Changed\n---\n\n- **Shared title** — again\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "changelog.d", name), []byte(body), 0o600))
+	}
 	for _, tc := range []struct {
 		source, area, status string
 		// problem is part of the one problem expected, or "" for none.
@@ -156,47 +183,55 @@ func TestSourceRefProblems(t *testing.T) {
 	}{
 		{source: "doc.md"},
 		{source: "pkg"},
-		{source: "doc.md:1"},
-		{source: "doc.md:3-6"},
-		{source: "doc.md:6; pkg"},
-		{source: "doc.md:7"},
-		{source: "doc.md:1", area: "rollback", status: "covered"},
+		{source: "doc.md#Install"},
+		{source: "doc.md#Title"},
+		{source: "doc.md#text once"},
+		{source: "doc.md#Install; pkg/r.go#New"},
+		{source: "pkg/r.go#Reconciler"},
+		{source: "pkg/r.go#Reconciler.Reconcile"},
+		{source: "pkg/r.go#Other.Reconcile"},
+		{source: "pkg/r.go#Limit"},
+		{source: "pkg/r.go#b"},
+		{source: "pkg/r.go#once: a comment"},
+		{source: "values.yaml#a:"},
+		{source: "doc.md#Install", area: "rollback", status: "covered"},
 		{source: "doc.md", area: "rollback", status: "todo"},
-		{source: "doc.md handleBake", problem: "is not path, path:N or path:N-M"},
-		{source: "doc.md:handleBake", problem: "is not path, path:N or path:N-M"},
-		{source: "doc.md:1;doc.md:6", problem: "is not path, path:N or path:N-M"},
+		{source: "doc.md:1", problem: "names line numbers"},
+		{source: "doc.md:3-6", problem: "names line numbers"},
+		{source: "doc.md handleBake", problem: "is not path or path#anchor"},
+		{source: "doc.md#Install;doc.md", problem: "names no Go declaration, heading or text"},
 		{source: "missing.md", problem: "names no path in the repo"},
+		{source: "missing.md#Install", problem: "names an anchor in no file"},
+		{source: "pkg#New", problem: "names an anchor in no file"},
 		{source: "../doc.md", problem: "names a path outside the repo"},
-		{source: "/doc.md:1", problem: "names a path outside the repo"},
-		{source: "missing.md:1", problem: "names lines of no file"},
-		{source: "pkg:1", problem: "names lines of no file"},
-		{source: "doc.md:0", problem: "is outside doc.md, which has 8 lines"},
-		{source: "doc.md:9", problem: "is outside doc.md, which has 8 lines"},
-		{source: "doc.md:6-9", problem: "is outside doc.md, which has 8 lines"},
-		{source: "doc.md:3-2", problem: "is outside doc.md, which has 8 lines"},
-		{source: "doc.md:1; doc.md:2-3", problem: `"doc.md:2-3" starts on a blank line`},
-		{source: "doc.md:4", problem: "starts on a markdown table separator"},
-		{source: "doc.md:8", problem: "starts on a markdown table separator"},
-		{source: "doc.md:5-6", problem: "starts on a bare ---"},
-		{source: "doc.md", area: "rollback", status: "covered", problem: "names no lines"},
-		// docs/changelog.md is cited by entry title or heading, not line.
+		{source: "/doc.md", problem: "names a path outside the repo"},
+		{source: "doc.md#Nowhere", problem: "names no Go declaration, heading or text"},
+		// Not a heading (it is in a code block), but text on one line.
+		{source: "doc.md#Not a heading"},
+		{source: "doc.md#twice", problem: "matches 2 lines of doc.md"},
+		{source: "doc.md#Twice", problem: "names 2 headings of doc.md"},
+		// Two methods and the type name hold the text: name the method.
+		{source: "pkg/r.go#Reconcile", problem: "matches 3 lines of pkg/r.go"},
+		{source: "values.yaml#b: 1", problem: "matches 2 lines of values.yaml"},
+		{source: "doc.md", area: "rollback", status: "covered", problem: "names no anchor"},
+		// docs/changelog.md is cited by entry title or heading; the
+		// unreleased entries are the files in docs/changelog.d.
 		{source: "docs/changelog.md#New thing"},
 		{source: "docs/changelog.md#Fix with `code`: a colon"},
 		{source: "docs/changelog.md#Before you upgrade@v1.0.0"},
 		{source: "docs/changelog.md#Shared title@v0.9.0"},
+		{source: "docs/changelog.md#Shared title@Unreleased"},
 		{source: "docs/changelog.md#Fixed@v0.9.0", area: "rollback", status: "covered"},
 		{source: "docs/changelog.md#New thing; pkg"},
 		{source: "docs/changelog.md#New", problem: "names no `- **Title**` entry or heading"},
 		{source: "docs/changelog.md#new thing", problem: "names no `- **Title**` entry or heading"},
 		{source: "docs/changelog.md#New thing@v0.9.0", problem: "names no `- **Title**` entry or heading"},
-		{source: "docs/changelog.md#Twice", problem: "appears 2 times in release Unreleased"},
+		{source: "docs/changelog.md#Twice", problem: "appears 2 times in release v1.0.0"},
 		{source: "docs/changelog.md#Shared title", problem: "several releases (Unreleased, v0.9.0): add @<release>"},
 		{source: "docs/changelog.md#Before you upgrade", problem: "several releases (v0.9.0, v1.0.0): add @<release>"},
-		{source: "docs/changelog.md#Release title", problem: "names no `- **Title**` entry or heading"},
+		{source: "docs/changelog.md#Not top level", problem: "names no `- **Title**` entry or heading"},
 		{source: "docs/changelog.md"},
-		{source: "docs/changelog.md:7", problem: "cites the changelog by line"},
-		{source: "./docs/changelog.md:7", problem: "cites the changelog by line"},
-		{source: "docs/../docs/changelog.md:7-8", problem: "cites the changelog by line"},
+		{source: "docs/changelog.md:7", problem: "names line numbers"},
 	} {
 		row := coverage.Row{ID: "TEST-01", Area: tc.area, Status: tc.status, Source: tc.source}
 		got := sourceRefProblems(root, []coverage.Row{row})
@@ -228,23 +263,23 @@ func sourceRefProblems(root string, rows []coverage.Row) []string {
 // sourceRefProblem returns the rule that ref, a source ref of row r, breaks,
 // or "" when it keeps them all. files holds the lines of the files read so far.
 func sourceRefProblem(root string, files map[string][]string, r coverage.Row, ref string) string {
-	if anchor, ok := strings.CutPrefix(ref, changelogPath+"#"); ok {
-		return changelogRefProblem(root, files, anchor)
+	if lineRef.MatchString(ref) {
+		return "names line numbers, which move with every edit above them: write path#<Go declaration, heading or text on one line>"
 	}
 	m := sourceRef.FindStringSubmatch(ref)
 	if m == nil {
-		return "is not path, path:N or path:N-M"
+		return "is not path or path#anchor"
 	}
-	path := m[1]
+	path, anchor := m[1], m[2]
 	if !filepath.IsLocal(path) {
 		return "names a path outside the repo"
 	}
-	if filepath.Clean(path) == changelogPath && m[2] != "" {
-		return "cites the changelog by line: write " + changelogPath + "#<entry title or heading>, which an entry added above does not shift"
+	if filepath.Clean(path) == changelogPath && anchor != "" {
+		return changelogRefProblem(root, files, anchor)
 	}
-	if m[2] == "" {
+	if anchor == "" {
 		if r.Area == "rollback" && r.Status == "covered" {
-			return "names no lines; a covered rollback row writes path:N or path:N-M"
+			return "names no anchor; a covered rollback row writes path#anchor"
 		}
 		if _, err := os.Stat(filepath.Join(root, path)); err != nil {
 			return fmt.Sprintf("names no path in the repo: %v", err)
@@ -255,36 +290,111 @@ func sourceRefProblem(root string, files map[string][]string, r coverage.Row, re
 	if !ok {
 		b, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
-			return fmt.Sprintf("names lines of no file: %v", err)
+			return fmt.Sprintf("names an anchor in no file: %v", err)
 		}
 		lines = strings.Split(string(b), "\n")
-		if lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
 		files[path] = lines
 	}
-	first, _ := strconv.Atoi(m[2])
-	last := first
-	if m[3] != "" {
-		last, _ = strconv.Atoi(m[3])
-	}
-	if first < 1 || first > last || last > len(lines) {
-		return fmt.Sprintf("is outside %s, which has %d lines", path, len(lines))
-	}
-	switch line := strings.TrimSpace(lines[first-1]); {
-	case line == "":
-		return "starts on a blank line"
-	case line == "---":
-		return "starts on a bare ---"
-	case tableSeparator.MatchString(line):
-		return "starts on a markdown table separator"
-	}
-	return ""
+	return anchorProblem(path, lines, anchor)
 }
 
-// changelogPath is the one file cited by entry title rather than by line:
-// every new entry shifts the lines of all the older ones, so line refs into
-// it made every open PR conflict on coverage.tsv.
+// anchorProblem checks that anchor names one place in path: a Go
+// declaration, a markdown heading, or else text on one line.
+func anchorProblem(path string, lines []string, anchor string) string {
+	switch {
+	case strings.HasSuffix(path, ".go"):
+		if n := goDecls(lines)[anchor]; n == 1 {
+			return ""
+		} else if n > 1 {
+			return fmt.Sprintf("names %d declarations of %s: write Type.Method", n, path)
+		}
+	case strings.HasSuffix(path, ".md"):
+		if n := mdHeadings(lines)[anchor]; n == 1 {
+			return ""
+		} else if n > 1 {
+			return fmt.Sprintf("names %d headings of %s: name the section above it, or text on one line", n, path)
+		}
+	}
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, anchor) {
+			n++
+		}
+	}
+	switch n {
+	case 1:
+		return ""
+	case 0:
+		return "names no Go declaration, heading or text of " + path
+	}
+	return fmt.Sprintf("matches %d lines of %s: quote more of the line, or name its declaration or heading", n, path)
+}
+
+var (
+	goFuncDecl  = regexp.MustCompile(`^func (?:\((?:\w+ )?\*?(\w+)(?:\[[^\]]*\])?\) )?(\w+)`)
+	goNameDecl  = regexp.MustCompile(`^(?:type|var|const) (\w+)`)
+	goNames     = regexp.MustCompile(`^(?:var|const) ((?:\w+, )*\w+)\b`)
+	goBlock     = regexp.MustCompile(`^(?:var|const|type) \($`)
+	goBlockName = regexp.MustCompile(`^\t((?:\w+, )*\w+)\b`)
+	mdHeading   = regexp.MustCompile(`^#{1,6}\s+(.*?)\s*#*\s*$`)
+)
+
+// goDecls counts the top-level declarations of a Go file by name: Func,
+// Type.Method, Type, and each var and const name, also in blocks.
+func goDecls(lines []string) map[string]int {
+	out := map[string]int{}
+	block := false
+	for _, l := range lines {
+		if block {
+			if strings.HasPrefix(l, ")") {
+				block = false
+			} else if m := goBlockName.FindStringSubmatch(l); m != nil {
+				for _, n := range strings.Split(m[1], ", ") {
+					out[n]++
+				}
+			}
+			continue
+		}
+		switch {
+		case goBlock.MatchString(l):
+			block = true
+		case goFuncDecl.MatchString(l):
+			m := goFuncDecl.FindStringSubmatch(l)
+			if m[1] != "" {
+				out[m[1]+"."+m[2]]++
+			} else {
+				out[m[2]]++
+			}
+		case goNames.MatchString(l):
+			for _, n := range strings.Split(goNames.FindStringSubmatch(l)[1], ", ") {
+				out[n]++
+			}
+		case goNameDecl.MatchString(l):
+			out[goNameDecl.FindStringSubmatch(l)[1]]++
+		}
+	}
+	return out
+}
+
+// mdHeadings counts a markdown file's headings by text, outside code fences.
+func mdHeadings(lines []string) map[string]int {
+	out := map[string]int{}
+	fence := false
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fence = !fence
+			continue
+		}
+		if m := mdHeading.FindStringSubmatch(l); m != nil && !fence {
+			out[m[1]]++
+		}
+	}
+	return out
+}
+
+// changelogPath is cited by entry title or heading: its unreleased entries
+// are the files of docs/changelog.d until a release writes them in.
 const changelogPath = "docs/changelog.md"
 
 // changelogRelease is a "## [<release>]" heading of the changelog.
@@ -327,11 +437,11 @@ func changelogAnchors(lines []string) map[string]map[string]int {
 func changelogRefProblem(root string, files map[string][]string, anchor string) string {
 	lines, ok := files[changelogPath]
 	if !ok {
-		b, err := os.ReadFile(filepath.Join(root, changelogPath))
+		text, err := fragments.Assembled(root)
 		if err != nil {
-			return fmt.Sprintf("names an entry of no file: %v", err)
+			return fmt.Sprintf("names an entry of no changelog: %v", err)
 		}
-		lines = strings.Split(string(b), "\n")
+		lines = strings.Split(text, "\n")
 		files[changelogPath] = lines
 	}
 	anchors := changelogAnchors(lines)
