@@ -478,7 +478,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 	}
 	w.gates = gates
 	w.prs = &prsrec.Reconciler{Client: rc, SCM: provider, NowFn: now}
-	w.windows = &cwrec.Reconciler{Client: rc, NowFn: now}
+	w.windows = &cwrec.Reconciler{Client: rc, NowFn: now, MaxExemption: cwrec.DefaultMaxExemption}
 	w.metrics = &mcrec.Reconciler{Client: rc, Backends: map[string]mcrec.Backend{"prometheus": w.Metrics}, NowFn: now}
 	w.rollbacks = &rbprec.Reconciler{Client: rc, NowFn: now, ControllerUser: ControllerUser}
 	w.renders = &rrrec.Reconciler{Client: rc, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",

@@ -91,6 +91,8 @@ github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part6 26.5
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part7 24.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part8 24.4
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/matrix/part9 23.3
+github.com/kardinal-promoter/kardinal-promoter/test/scenario/policy/part1 39.0
+github.com/kardinal-promoter/kardinal-promoter/test/scenario/policy/part2 33.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/verify/part1 19.3
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/verify/part2 19.1
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/verify/part3 17.0

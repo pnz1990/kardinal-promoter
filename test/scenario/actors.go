@@ -301,3 +301,9 @@ func (w *World) Policies() []string {
 	}
 	return w.api.policies
 }
+
+// Store is the World's object store itself: reads and writes through it
+// skip admission, as a write straight to etcd would.
+func (w *World) Store() client.Client {
+	return w.store
+}
