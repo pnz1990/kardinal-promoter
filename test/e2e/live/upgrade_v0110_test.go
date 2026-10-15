@@ -164,8 +164,7 @@ func (snap u0110Snapshot) phases() (bundles, steps map[string]int) {
 //     types, and the admission policies admit a label on the ones the
 //     estate wrote;
 //   - kardinal get pipelines -A, the UI API (validated against the OpenAPI
-//     document) and a new version promoting end to end work.
-//
+//     document) and a new version promoting end to end work;
 //   - the actors (docs/actors.md): the release's AgentIndex is built and the
 //     actor policies are bound; versions v0.11.0 stored have no actor; a
 //     version kardinal create bundle makes now is stamped with its creator.
