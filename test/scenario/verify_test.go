@@ -5,6 +5,7 @@ package scenario
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,8 @@ type verifyRun struct {
 	policy   v1alpha1.GateVerifyPolicy
 	shipper  string
 	attempts []AgentResult
+	// agent, when set, decides every attempt instead.
+	agent Agent
 	// setup changes the cluster before the version ships.
 	setup func(t *testing.T, w *World, p *Plan)
 	// act runs once staging is Verified and the agents had their rounds.
@@ -63,6 +66,44 @@ func explore(required, maxFailures, count int, inconclusive string, retries int)
 }
 
 func gateReason(g v1alpha1.PolicyGate) string { return g.Status.Reason }
+
+// smokeCheck is the second check of the two-check case, whose own run
+// votes once smokeVotes is set.
+const smokeCheck = "smoke"
+
+var smokeVotes atomic.Bool
+
+// misdirectingAgent runs both checks: the explore run writes its Verdict for
+// smoke in dev (labels and spec; admission checks neither), and smoke's own
+// run waits until smokeVotes, then passes.
+func misdirectingAgent(run v1alpha1.AgentRun) AgentResult {
+	if run.Spec.Check == smokeCheck {
+		if !smokeVotes.Load() {
+			return AgentResult{Wait: true}
+		}
+		return pass("smoke passes")
+	}
+	r := pass("smoke, said the explore run")
+	r.Edit = func(v map[string]interface{}) {
+		spec := v["spec"].(map[string]interface{})
+		spec["check"], spec["environment"] = smokeCheck, "dev"
+		labels := v["metadata"].(map[string]interface{})["labels"].(map[string]interface{})
+		labels["kardinal.io/check"], labels["kardinal.io/environment"] = smokeCheck, "dev"
+	}
+	return r
+}
+
+// gateByCheck is bundle's verify gate instance for check.
+func gateByCheck(t *testing.T, w *World, ns, bundle, check string) v1alpha1.PolicyGate {
+	t.Helper()
+	for _, g := range w.GateInstances(ns, bundle) {
+		if g.Spec.Verify != nil && g.Spec.Verify.Check == check {
+			return g
+		}
+	}
+	t.Fatalf("no %s gate instance for %s", check, bundle)
+	return v1alpha1.PolicyGate{}
+}
 
 // TestScenarioVerify runs verify gates end to end: the Graph plans the
 // AgentRuns, the AgentRun reconciler runs them bounded, the agent's Pod
@@ -142,6 +183,42 @@ func TestScenarioVerify(t *testing.T) {
 				require.NoError(t, w.RecordVerdict(qaOutside, p.NS, b.Name, "staging", VerifyCheck, v1alpha1.VerdictPass, nil))
 				expectProd(t, w, p, b, true)
 			}},
+		{name: "a run's Verdict for another check and environment does not count there", policy: explore(1, 0, 1, "", 0),
+			shipper: "human", agent: misdirectingAgent,
+			setup: func(t *testing.T, w *World, p *Plan) {
+				// A second verify gate on prod: check smoke on dev, the same
+				// agent allowed. Its own run waits until smokeVotes.
+				smoke := p.Gate.DeepCopy()
+				smoke.Name, smoke.ResourceVersion, smoke.UID = "smoke-gate", "", ""
+				sp := explore(1, 0, 1, "", 0)
+				sp.Check, sp.Environment = smokeCheck, "dev"
+				smoke.Spec.Verify = &sp
+				w.MustApply(smoke)
+			},
+			act: func(t *testing.T, w *World, p *Plan, b *v1alpha1.Bundle) {
+				smoke := gateByCheck(t, w, p.NS, b.Name, smokeCheck)
+				assert.False(t, smoke.Status.Ready, "the smoke gate opened on the explore run's Verdict")
+				assert.Contains(t, smoke.Status.Reason, "waiting for verdicts: 0 of 1")
+				for _, v := range smoke.Status.Verdicts {
+					assert.False(t, v.Counted && strings.Contains(v.Name, "-"+VerifyCheck+"-"), "the explore run's Verdict counted for smoke: %+v", v)
+				}
+				// The explore run's Verdict was admitted: admission does not
+				// check the check or the environment, the Graph does.
+				var vl v1alpha1.VerdictList
+				require.NoError(t, w.Client.List(w.Ctx, &vl, client.InNamespace(p.NS)))
+				misdirected := 0
+				for _, v := range vl.Items {
+					if v.Spec.Run != nil && strings.Contains(v.Name, "-"+VerifyCheck+"-") && v.Spec.Check == smokeCheck {
+						misdirected++
+					}
+				}
+				assert.Equal(t, 1, misdirected, "the explore run's Verdict for smoke is admitted")
+				// Smoke's own run votes: the smoke gate opens.
+				smokeVotes.Store(true)
+				require.True(t, w.RunUntil(maxRounds, func() bool { return gateByCheck(t, w, p.NS, b.Name, smokeCheck).Status.Ready }),
+					"the smoke gate opens on its own run's pass\n%s", w.Describe(p.NS))
+			},
+			reason: "waiting for verdicts: 0 of 1"},
 		{name: "bounds: a suspended agent's run never starts", policy: explore(1, 0, 1, "", 0), shipper: "human",
 			setup: func(t *testing.T, w *World, p *Plan) {
 				require.NoError(t, w.editAgent(QAAgent, func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = true }))
@@ -213,6 +290,9 @@ func startVerify(t *testing.T, vr verifyRun, byRun map[int]AgentResult) (*World,
 	policy.Environment = "staging"
 	p.Gate.Spec.Verify = &policy
 	w.Agents = map[string]Agent{QAAgent: func(run v1alpha1.AgentRun) AgentResult {
+		if vr.agent != nil {
+			return vr.agent(run)
+		}
 		if r, ok := byRun[run.Spec.Run]; ok {
 			return r
 		}
@@ -260,7 +340,7 @@ func expectProd(t *testing.T, w *World, p *Plan, b *v1alpha1.Bundle, verified bo
 func verifyGate(t *testing.T, w *World, ns, bundle string) v1alpha1.PolicyGate {
 	t.Helper()
 	for _, g := range w.GateInstances(ns, bundle) {
-		if g.Spec.Verify != nil {
+		if g.Spec.Verify != nil && g.Spec.Verify.Check == VerifyCheck {
 			return g
 		}
 	}

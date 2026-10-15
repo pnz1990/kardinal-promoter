@@ -30,6 +30,11 @@ type AgentResult struct {
 	Result, Summary string
 	Findings        []v1alpha1.VerdictFinding
 	Crash           bool
+	// Wait leaves the Job running: the attempt has not ended yet.
+	Wait bool
+	// Edit changes the Verdict before it is written (an agent that writes
+	// another Verdict than the one its run gave it).
+	Edit func(verdict map[string]interface{})
 }
 
 // Agent is an in-cluster verifier's behaviour: what an attempt of an
@@ -57,6 +62,9 @@ func (w *World) runAgent(job *batchv1.Job, owner *metav1.OwnerReference) error {
 	if agent != nil {
 		res = agent(run)
 	}
+	if res.Wait {
+		return nil
+	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: job.Namespace, Name: job.Name + "-" + podSuffix(job.Name),
 		Labels: map[string]string{"batch.kubernetes.io/controller-uid": string(job.UID), "job-name": job.Name},
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID,
@@ -76,6 +84,9 @@ func (w *World) runAgent(job *batchv1.Job, owner *metav1.OwnerReference) error {
 			return fmt.Errorf("agent %s: the context has no Verdict to write", run.Name)
 		}
 		spec["result"], spec["summary"] = res.Result, res.Summary
+		if res.Edit != nil {
+			res.Edit(rc.Verdict)
+		}
 		if len(res.Findings) > 0 {
 			raw, err := json.Marshal(res.Findings)
 			if err != nil {
