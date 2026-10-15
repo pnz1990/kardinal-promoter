@@ -65,7 +65,6 @@ spec:
             {{- if not (kindIs "invalid" .Values.graph.compactAbove) }}
             - --graph-compact-above={{ .Values.graph.compactAbove }}
             {{- end }}
-            - --hook-service-accounts={{ join "," .Values.hooks.serviceAccounts }}
             - --render-image={{ include "kardinal-promoter.renderImage" . }}
             {{- with .Values.render.image.pullPolicy }}
             - --render-image-pull-policy={{ . }}
