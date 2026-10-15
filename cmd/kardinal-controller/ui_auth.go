@@ -46,6 +46,9 @@ type uiAuthConfig struct {
 	actors *actorWriter
 	// freezeControls is --ui-freeze-controls: the UI may write freezes.
 	freezeControls bool
+	// receipts is --receipts: the steps API names each Verified step's
+	// PromotionReceipt (docs/receipts.md).
+	receipts bool
 }
 
 // reviewOptions are the TokenReview settings of the UI API and the Bundle
@@ -206,6 +209,7 @@ func newUIHandler(k8s client.Client, apiReader client.Reader, assets fs.FS, auth
 	apiServer.apiReader = apiReader
 	apiServer.actors = auth.actors
 	apiServer.freezeControls = auth.freezeControls
+	apiServer.receipts = auth.receipts
 	if tokenReview {
 		apiServer.accessCheck = auth.accessCheck
 	}

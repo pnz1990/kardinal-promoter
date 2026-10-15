@@ -1264,6 +1264,7 @@ func main() {
 	}
 	uiAuth.actors = actors
 	uiAuth.freezeControls = uiFreezeControls
+	uiAuth.receipts = receiptOpts.enabled
 	switch {
 	case uiAuth.staticToken != "":
 		// O4 (spec issue-975): the static token takes precedence over TokenReview.

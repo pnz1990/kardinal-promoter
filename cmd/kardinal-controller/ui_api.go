@@ -42,6 +42,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -447,6 +448,18 @@ type uiStepResponse struct {
 	// Steps is the per-step progress from status.steps[], in execution order.
 	// The UI renders it as the step progress list.
 	Steps []uiStepStatus `json:"steps,omitempty"`
+	// Receipt is the step's signed promotion receipt (docs/receipts.md),
+	// when receipts are on and the step is Verified.
+	Receipt *uiReceipt `json:"receipt,omitempty"`
+}
+
+// uiReceipt names a step's PromotionReceipt and its phase.
+type uiReceipt struct {
+	Name string `json:"name"`
+	// Phase is Pending, Signed, Stored or Failed.
+	Phase string `json:"phase"`
+	// Verified is true once it is signed (Signed or Stored).
+	Verified bool `json:"verified"`
 }
 
 // uiStepStatus is the JSON shape for one entry of PromotionStep status.steps[].
@@ -693,6 +706,8 @@ type uiAPIServer struct {
 	// freezeControls is --ui-freeze-controls: POST /freeze and /unfreeze are
 	// served (ui_freeze.go); off, they answer 403 and /access says no.
 	freezeControls bool
+	// receipts: read each Verified step's PromotionReceipt (--receipts).
+	receipts bool
 }
 
 // upstreamCache memoizes graph.AllEnvironmentUpstreams per Pipeline UID and
@@ -1454,9 +1469,24 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 			BakeTargetMinutes:  bakeMinutes,
 			BakeResets:         ps.Status.BakeResets,
 			Steps:              buildUIStepStatuses(ps.Status.Steps),
+			Receipt:            s.stepReceipt(r.Context(), &ps),
 		})
 	}
 	writeJSON(w, result)
+}
+
+// stepReceipt is ps's PromotionReceipt, nil when receipts are off, the step
+// is not Verified or the receipt cannot be read (it is shown, never needed).
+func (s *uiAPIServer) stepReceipt(ctx context.Context, ps *v1alpha1.PromotionStep) *uiReceipt {
+	if !s.receipts || ps.Status.State != "Verified" {
+		return nil
+	}
+	var rc v1alpha1.PromotionReceipt
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: receipt.Name(ps.Spec.BundleName, ps.Spec.Environment)}, &rc); err != nil {
+		return nil
+	}
+	return &uiReceipt{Name: rc.Name, Phase: rc.Status.Phase,
+		Verified: rc.Status.Phase == v1alpha1.ReceiptSigned || rc.Status.Phase == v1alpha1.ReceiptStored}
 }
 
 // buildUIStepStatuses converts status.steps[] to the UI shape.

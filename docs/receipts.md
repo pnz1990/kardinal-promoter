@@ -183,8 +183,10 @@ It checks, and exits non-zero when any check fails:
   signed.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to
   verify it.
+- **The UI**: the stage drawer's History says "Receipt <name>: verified ✓" with the command to
+  verify it once the step's receipt is signed.
 
-Environments with `approval: auto` have no PR: their receipts show in `history` and `why`.
+Environments with `approval: auto` have no PR: their receipts show in `history`, `why` and the UI.
 
 ## What a receipt does not prove
 
