@@ -49,6 +49,7 @@ var (
 // to installation/#upgrading-from-v090 after the upgrade guide moved to its
 // own page.
 func TestChangelogLinksResolve(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	docs := filepath.Join(root, "docs")
 	// The page as the docs site shows it: the docs/changelog.d entries too.

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,7 @@ import (
 // covered only by live tests, every live test names its rows and runs in
 // some suite, and a row's suite runs one of its tests.
 func TestE2ECoverage(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
 	require.NoError(t, err)
@@ -132,6 +134,7 @@ var lineRef = regexp.MustCompile(`^[^#\s]+:[0-9]+(-[0-9]+)?$`)
 // unrelated pull requests conflicted on coverage.tsv. An anchor moves with
 // its text.
 func TestE2ECoverage_SourceRefs(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	rows, err := coverage.Rows(root)
 	require.NoError(t, err)
@@ -298,18 +301,32 @@ func sourceRefProblem(root string, files map[string][]string, r coverage.Row, re
 	return anchorProblem(path, lines, anchor)
 }
 
+// countsMemo holds goDecls and mdHeadings of each file read, by kind, path
+// and line count: every row's anchors in one file share them.
+var countsMemo sync.Map
+
+func memoCounts(kind, path string, lines []string, f func([]string) map[string]int) map[string]int {
+	key := fmt.Sprintf("%s|%s|%d", kind, path, len(lines))
+	if v, ok := countsMemo.Load(key); ok {
+		return v.(map[string]int)
+	}
+	m := f(lines)
+	countsMemo.Store(key, m)
+	return m
+}
+
 // anchorProblem checks that anchor names one place in path: a Go
 // declaration, a markdown heading, or else text on one line.
 func anchorProblem(path string, lines []string, anchor string) string {
 	switch {
 	case strings.HasSuffix(path, ".go"):
-		if n := goDecls(lines)[anchor]; n == 1 {
+		if n := memoCounts("go", path, lines, goDecls)[anchor]; n == 1 {
 			return ""
 		} else if n > 1 {
 			return fmt.Sprintf("names %d declarations of %s: write Type.Method", n, path)
 		}
 	case strings.HasSuffix(path, ".md"):
-		if n := mdHeadings(lines)[anchor]; n == 1 {
+		if n := memoCounts("md", path, lines, mdHeadings)[anchor]; n == 1 {
 			return ""
 		} else if n > 1 {
 			return fmt.Sprintf("names %d headings of %s: name the section above it, or text on one line", n, path)

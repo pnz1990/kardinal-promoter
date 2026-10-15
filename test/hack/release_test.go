@@ -465,6 +465,7 @@ func readNotes(t *testing.T, dir string) string {
 // TestReleaseNotesForEveryChangelogVersion runs the notes step on the real
 // docs/changelog.md: every released version has a section the step can read.
 func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
+	t.Parallel()
 	script := preflightScript(t, "Release notes from docs/changelog.md")
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "changelog.md"))
 	require.NoError(t, err)

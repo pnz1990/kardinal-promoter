@@ -26,6 +26,7 @@ var conflictMarker = regexp.MustCompile(`^(<<<<<<<|=======|>>>>>>>)( |$)`)
 // file. A resolution that kept a marker reached main once, in
 // docs/changelog.md, and nothing caught it.
 func TestNoConflictMarkers(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	ls := exec.Command("git", "ls-files", "-z")
 	ls.Dir = root
