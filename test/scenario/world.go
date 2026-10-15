@@ -6,7 +6,9 @@ package scenario
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/admission"
 	clienttesting "k8s.io/client-go/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,6 +44,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	airec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 	bundlerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	cwrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	mcrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
@@ -134,6 +138,17 @@ type Options struct {
 	// requeue time came. Without it, every object is reconciled every round,
 	// which also checks that every reconcile is idempotent.
 	Watch bool
+	// Actors runs the agent registry (the AgentIdentity and AgentIndex
+	// reconcilers, the index built at start as the controller does) and
+	// admits every write of a kind the chart's identity and actor policies
+	// match through the API server's ValidatingAdmissionPolicy plugin
+	// (APIServer), as the user of the write's context (AsUser; the
+	// controller's ServiceAccount by default, kro's Graph ServiceAccount for
+	// kro). The index is the policies' param, as the plugin's informer sees
+	// it at the time of the write.
+	Actors bool
+	// MaxIndexBytes bounds the agent index (0: actor.MaxIndexBytes).
+	MaxIndexBytes int
 }
 
 // World is one kardinal controller and the cluster, git host and GitOps
@@ -167,6 +182,15 @@ type World struct {
 	rollbacks *rbprec.Reconciler
 	renders   *rrrec.Reconciler
 	gitClient *RewritingGit
+
+	// The agent registry and admission (Options.Actors).
+	api         *APIServer
+	identities  *airec.Reconciler
+	index       *airec.IndexReconciler
+	indexDirty  atomic.Bool
+	indexPaused atomic.Bool
+	store       client.WithWatch
+	mapper      apimeta.RESTMapper
 
 	// Metrics are the fake metric backend's values by query.
 	Metrics *FakeMetrics
@@ -204,9 +228,10 @@ func NewWorld(t testing.TB, opts Options) *World {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	mapper := restMapper(s)
 	w := &World{T: t, Scheme: s, Dir: dir, reconciles: map[string]int{}, perObject: map[string]int{}, errors: map[string]int{}, lastErrors: map[string]string{},
 		verified: map[string]string{}, seenVerified: map[string]bool{},
-		watch: opts.Watch, policyNS: map[string]bool{}, keyWrites: map[string]int64{}, seen: map[string]reconcileState{}}
+		watch: opts.Watch, policyNS: map[string]bool{}, keyWrites: map[string]int64{}, seen: map[string]reconcileState{}, mapper: mapper}
 	for _, ns := range opts.PolicyNamespaces {
 		w.policyNS[ns] = true
 	}
@@ -220,6 +245,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 		w.clock = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) // a Wednesday
 	}
 	countWrite := func(o client.Object, created bool) {
+		if objKind(o) == "AgentIndex" {
+			w.indexDirty.Store(true)
+		}
 		w.writes.Add(1)
 		w.noteWrite(o)
 		if w.cache != nil {
@@ -230,7 +258,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		&v1alpha1.Pipeline{}, &v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{},
 		&v1alpha1.PRStatus{}, &v1alpha1.ChangeWindow{}, &v1alpha1.MetricCheck{}, &v1alpha1.RollbackPolicy{},
 		&v1alpha1.RenderRun{}, &v1alpha1.HookRun{}, &v1alpha1.ScheduleClock{}, &appsv1.Deployment{}, &batchv1.Job{},
-		&corev1.Pod{}, &v1alpha1.AuditEvent{},
+		&corev1.Pod{}, &v1alpha1.AuditEvent{}, &v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{},
 	}
 	for _, gvk := range []schema.GroupVersionKind{GraphGVK, ApplicationGVK, RolloutGVK, KustomizationGVK, GitRepositoryGVK, CanaryGVK} {
 		u := &unstructured.Unstructured{}
@@ -242,7 +270,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		// field-managed tracker's managedFields bookkeeping was a third of
 		// the suite's time.
 		WithObjectTracker(clienttesting.NewObjectTracker(s, serializer.NewCodecFactory(s).UniversalDecoder())).
-		WithRESTMapper(restMapper(s)).
+		WithRESTMapper(w.mapper).
 		WithGlobalResourceVersionCounter().
 		WithStatusSubresource(statusObjs...).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
@@ -268,6 +296,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 				if o.GetGeneration() == 0 {
 					o.SetGeneration(1)
 				}
+				if err := w.admitWrite(ctx, c, admission.Create, o, nil); err != nil {
+					return err
+				}
 				return c.Create(ctx, o, opts...)
 			},
 			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) (err error) {
@@ -278,6 +309,13 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}()
 				if gerr := bumpGeneration(ctx, c, o, nil); gerr != nil {
 					return gerr
+				}
+				old, gerr := w.stored(ctx, c, o)
+				if gerr != nil {
+					return gerr
+				}
+				if err := w.admitWrite(ctx, c, admission.Update, o, old); err != nil {
+					return err
 				}
 				return c.Update(ctx, o, opts...)
 			},
@@ -291,10 +329,19 @@ func NewWorld(t testing.TB, opts Options) *World {
 				if serr != nil {
 					return serr
 				}
+				old, serr := w.stored(ctx, c, o)
+				if serr != nil {
+					return serr
+				}
 				if err = c.Patch(ctx, o, p, opts...); err != nil {
 					return err
 				}
-				return bumpGeneration(ctx, c, o, before)
+				if err = bumpGeneration(ctx, c, o, before); err != nil {
+					return err
+				}
+				// The patched object is admitted as the API server would
+				// before storing it: refused, the stored one is put back.
+				return w.admitPatched(ctx, c, o, old)
 			},
 			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {
 				defer func() {
@@ -302,6 +349,15 @@ func NewWorld(t testing.TB, opts Options) *World {
 						countWrite(o, true)
 					}
 				}()
+				old, gerr := w.stored(ctx, c, o)
+				if gerr != nil {
+					return gerr
+				}
+				if old != nil {
+					if err := w.admitWrite(ctx, c, admission.Delete, nil, old); err != nil {
+						return err
+					}
+				}
 				return c.Delete(ctx, o, opts...)
 			},
 			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) (err error) {
@@ -324,6 +380,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		Build()
 	w.cache = newReadCache(c)
 	w.Client = w.cache
+	w.store = c
 	kinds := map[schema.GroupVersionResource]string{}
 	for gvr, gvk := range unstructuredKinds {
 		kinds[gvr] = gvk.Kind
@@ -372,7 +429,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.pipelines = &pipelinerec.Reconciler{Client: rc, Reader: c, CompactAbove: &compactAbove, Now: now}
 	w.steps = &psrec.Reconciler{Client: rc, APIReader: c, SCM: provider, GitClient: w.gitClient,
 		HealthDetector: health.NewAutoDetector(rc, dyn), RemoteClusters: &health.RemoteClusters{},
-		WorkDirRoot: filepath.Join(dir, "work"), NowFn: now}
+		WorkDirRoot: filepath.Join(dir, "work"), NowFn: now, ControllerUser: ControllerUser}
 	gates, err := pgrec.NewReconciler(rc)
 	if err != nil {
 		t.Fatal(err)
@@ -384,9 +441,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.prs = &prsrec.Reconciler{Client: rc, SCM: provider, NowFn: now}
 	w.windows = &cwrec.Reconciler{Client: rc, NowFn: now}
 	w.metrics = &mcrec.Reconciler{Client: rc, Backends: map[string]mcrec.Backend{"prometheus": w.Metrics}, NowFn: now}
-	w.rollbacks = &rbprec.Reconciler{Client: rc, NowFn: now}
+	w.rollbacks = &rbprec.Reconciler{Client: rc, NowFn: now, ControllerUser: ControllerUser}
 	w.renders = &rrrec.Reconciler{Client: rc, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",
 		AuthorName: "kardinal-promoter", AuthorEmail: "kardinal@kardinal.io", NowFn: now, Timeout: time.Hour}
+	if opts.Actors {
+		w.startActors(opts.MaxIndexBytes)
+	}
 	return w
 }
 
@@ -407,6 +467,11 @@ func (w *World) Advance(d time.Duration) {
 // Apply admits obj as the API server would (Admission) and creates it.
 // It returns the reasons the API server refuses it, or creates it.
 func (w *World) Apply(obj client.Object) ([]string, error) {
+	return w.ApplyAs(AsUser(w.Ctx, AdminUser, AdminGroups...), obj)
+}
+
+// ApplyAs is Apply by the user of ctx (AsUser).
+func (w *World) ApplyAs(ctx context.Context, obj client.Object) ([]string, error) {
 	if _, kardinal := crdFiles[kindOf(obj)]; kardinal {
 		reasons, err := w.Admit.Admit(obj, nil)
 		if err != nil {
@@ -416,7 +481,15 @@ func (w *World) Apply(obj client.Object) ([]string, error) {
 			return reasons, nil
 		}
 	}
-	if err := w.Client.Create(w.Ctx, obj); err != nil {
+	if err := w.Client.Create(ctx, obj); err != nil {
+		// A policy's denial: Forbidden from a validation with that reason,
+		// Invalid (422) from one without, or when a binding cannot be
+		// configured (its param is missing).
+		var status apierrors.APIStatus
+		if errors.As(err, &status) && (status.Status().Code == http.StatusForbidden ||
+			status.Status().Code == http.StatusUnprocessableEntity) && strings.Contains(err.Error(), "ValidatingAdmissionPolicy") {
+			return []string{err.Error()}, nil
+		}
 		return nil, fmt.Errorf("create %s %s: %w", kindOf(obj), obj.GetName(), err)
 	}
 	return nil, nil
@@ -446,7 +519,16 @@ type reconcileKind struct {
 }
 
 func (w *World) kinds() []reconcileKind {
-	return []reconcileKind{
+	var registry []reconcileKind
+	if w.index != nil {
+		// The registry first: the controller builds the index at start and
+		// keeps it current; a write is admitted against it.
+		registry = []reconcileKind{
+			{"AgentIdentity", &v1alpha1.AgentIdentityList{}, w.identities.Reconcile},
+			{"AgentIndex", nil, w.index.Reconcile},
+		}
+	}
+	return append(registry, []reconcileKind{
 		{"Pipeline", &v1alpha1.PipelineList{}, w.pipelines.Reconcile},
 		{"ChangeWindow", &v1alpha1.ChangeWindowList{}, w.windows.Reconcile},
 		{"MetricCheck", &v1alpha1.MetricCheckList{}, w.metrics.Reconcile},
@@ -458,7 +540,7 @@ func (w *World) kinds() []reconcileKind {
 		{"RenderRun", &v1alpha1.RenderRunList{}, w.renders.Reconcile},
 		{"RollbackPolicy", &v1alpha1.RollbackPolicyList{}, w.rollbacks.Reconcile},
 		{"Bundle", &v1alpha1.BundleList{}, w.bundles.Reconcile},
-	}
+	}...)
 }
 
 // Round runs every actor, kro, every kardinal reconciler on every object of
@@ -474,6 +556,10 @@ func (w *World) Round() int64 {
 	}
 	w.syncKro()
 	for _, k := range w.kinds() {
+		if k.list == nil && k.rec != nil {
+			w.reconcileIndex(k)
+			continue
+		}
 		if k.list == nil {
 			w.syncKro()
 			continue
@@ -489,29 +575,7 @@ func (w *World) Round() int64 {
 			return objs[i].GetNamespace()+"/"+objs[i].GetName() < objs[j].GetNamespace()+"/"+objs[j].GetName()
 		})
 		for _, o := range objs {
-			key := types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
-			skey := k.name + "/" + key.String()
-			if !w.wakes(skey, o) {
-				continue
-			}
-			// A reconcile that wrote and asks to run again at once runs
-			// again, as the watch event of its own write would make it.
-			for i := 0; i < maxImmediate; i++ {
-				before := w.writes.Load()
-				res, err := k.rec(w.Ctx, ctrl.Request{NamespacedName: key})
-				w.mu.Lock()
-				w.reconciles[k.name]++
-				w.perObject[skey]++
-				if err != nil && !apierrors.IsConflict(err) {
-					w.errors[k.name]++
-					w.lastErrors[k.name] = err.Error()
-				}
-				w.mu.Unlock()
-				w.reconciled(skey, o, res, err)
-				if err != nil || w.writes.Load() == before || res.RequeueAfter > 0 {
-					break
-				}
-			}
+			w.reconcileObject(k, o)
 		}
 	}
 	if err := w.GitOps.Sync(); err != nil {
@@ -526,6 +590,33 @@ func (w *World) Round() int64 {
 	w.mu.Unlock()
 	w.Advance(w.tick)
 	return w.writes.Load() - start
+}
+
+// reconcileObject reconciles o with k when a watch would wake it.
+func (w *World) reconcileObject(k reconcileKind, o client.Object) {
+	key := types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
+	skey := k.name + "/" + key.String()
+	if !w.wakes(skey, o) {
+		return
+	}
+	// A reconcile that wrote and asks to run again at once runs
+	// again, as the watch event of its own write would make it.
+	for i := 0; i < maxImmediate; i++ {
+		before := w.writes.Load()
+		res, err := k.rec(w.Ctx, ctrl.Request{NamespacedName: key})
+		w.mu.Lock()
+		w.reconciles[k.name]++
+		w.perObject[skey]++
+		if err != nil && !apierrors.IsConflict(err) {
+			w.errors[k.name]++
+			w.lastErrors[k.name] = err.Error()
+		}
+		w.mu.Unlock()
+		w.reconciled(skey, o, res, err)
+		if err != nil || w.writes.Load() == before || res.RequeueAfter > 0 {
+			break
+		}
+	}
 }
 
 func (w *World) syncKro() {
@@ -578,6 +669,10 @@ func emitKeys(o client.Object, policyNS map[string]bool) []string {
 		return []string{"A:" + ns + "/" + b}
 	case "MetricCheck", "ChangeWindow", "ScheduleClock":
 		return []string{"IN:*"}
+	case "AgentIdentity":
+		return []string{"AI:*"}
+	case "AgentIndex":
+		return []string{"IX:*"}
 	case "Job":
 		if owner := metav1.GetControllerOf(o); owner != nil {
 			return []string{"RR:" + ns + "/" + owner.Name}
@@ -617,6 +712,12 @@ func listenKeys(o client.Object) []string {
 			"GT:" + ns, "GT:*"}
 	case "RenderRun":
 		return []string{"RR:" + ns + "/" + o.GetName()}
+	case "AgentIdentity":
+		// A change to one AgentIdentity re-checks them all
+		// (agentidentity.Reconciler.SetupWithManager).
+		return []string{"AI:*"}
+	case "AgentIndex":
+		return []string{"AI:*", "IX:*"}
 	}
 	return nil
 }

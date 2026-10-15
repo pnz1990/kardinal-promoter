@@ -59,6 +59,7 @@ var crdFiles = map[string]string{
 	"Approval":      "kardinal.io_approvals.yaml",
 	"PromotionStep": "kardinal.io_promotionsteps.yaml",
 	"ScmProvider":   "kardinal.io_scmproviders.yaml",
+	"AgentIdentity": "kardinal.io_agentidentities.yaml",
 }
 
 func (a *Admission) load(kind string) (*crdSchema, error) {
@@ -156,6 +157,23 @@ func (a *Admission) Admit(obj, old runtime.Object) ([]string, error) {
 		out = append(out, e.Error())
 	}
 	return out, nil
+}
+
+// Default prunes and defaults u, an object of kind as JSON-shaped data, in
+// place, as the API server does before admission plugins see it. A kind
+// without a CRD file is left as it is.
+func (a *Admission) Default(kind string, u map[string]interface{}) error {
+	if _, ok := crdFiles[kind]; !ok || u == nil {
+		return nil
+	}
+	s, err := a.load(kind)
+	if err != nil {
+		return err
+	}
+	pruning.Prune(u, s.structural, true)
+	defaulting.PruneNonNullableNullsWithoutDefaults(u, s.structural)
+	defaulting.Default(u, s.structural)
+	return nil
 }
 
 // kindOf is the Go type name of a typed object without TypeMeta.
