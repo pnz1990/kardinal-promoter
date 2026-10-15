@@ -24,3 +24,4 @@ test/hack
 !pkg/steps/steps README.md is a file its tests write into scratch git repositories
 !pkg/steps/steps/sharedbranch README.md is a file its tests write into the scratch remote
 !hack/changelog/fragments its tests write docs/changelog.d fixtures into temp directories
+!hack/release-gate "docs" is the id of its docs build step; its tests read no docs
