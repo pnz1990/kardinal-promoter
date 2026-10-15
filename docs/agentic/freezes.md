@@ -61,7 +61,14 @@ agent, and the controller never honours one stamped as an agent's (the freeze's
 
 ## In the UI
 
-Every view shows a banner while a freeze is active, with **Unfreeze** for those who may lift it.
+Every view shows a banner for each active freeze: whom it holds and where, who froze (a person
+or an automation, as in [Who shipped a version](../ui.md#who-shipped-a-version)), since when and
+until when, the reason, and how many exemptions are in effect. Stopping the line is in the failed
+colour, an agent freeze in the blocked one, and the words say which. **Unfreeze** is there for
+those who may lift it; for everyone else, and while the controls below are off, the banner shows
+`kardinal unfreeze <name>`, with the controller's reason as its tooltip. The stage drawer of an
+environment a freeze holds says so in **Why it's waiting**, with the step's message: the freeze,
+and the commands to lift it or let this environment through.
 The top bar's **Freeze** menu offers **Freeze agents…** and **Stop the line…** (which asks you to
 type `stop`). The controls need the UI's TokenReview sign-in (a freeze names who froze) and Helm
 `ui.freezeControls: true`, which lets the controller write freezes for allowed callers.

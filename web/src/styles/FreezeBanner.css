@@ -2,38 +2,14 @@
  * Copyright 2026 The kardinal-promoter Authors.
  * Licensed under the Apache License, Version 2.0
  *
- * FreezeBanner.css — the freeze banner and the Freeze menu's form (components/FreezeBanner.tsx).
+ * FreezeBanner.css — the freezes' stack of Banners and the Freeze menu's form
+ * (components/FreezeBanner.tsx); each freeze is a ui/Banner.
  */
 
 .freeze-banner {
   display: flex;
   flex-direction: column;
   gap: var(--k-space-1);
-  padding: var(--k-space-1_5) var(--k-space-2);
-  border: var(--k-border-hairline) solid var(--k-status-blocked-fg);
-  border-radius: var(--k-radius-2);
-  background: var(--k-status-blocked-wash);
-  color: var(--k-status-blocked-fg);
-  font-size: var(--k-text-sm);
-}
-
-.freeze-banner__row {
-  display: flex;
-  align-items: center;
-  gap: var(--k-space-2);
-}
-
-.freeze-banner__row[data-actors="everyone"] {
-  color: var(--k-status-failed-fg);
-  font-weight: var(--k-weight-semibold);
-}
-
-.freeze-banner__text {
-  flex: 1;
-}
-
-.freeze-banner__cmd {
-  color: var(--k-ink-2);
 }
 
 .freeze-form {

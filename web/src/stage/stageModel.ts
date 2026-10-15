@@ -13,7 +13,7 @@ import type { Bundle, EnvironmentNode, FailedVersion, GraphEdge, GraphNode, Pipe
 
 /** One reason the environment is not moving, most urgent first. */
 export interface WaitReason {
-  kind: 'paused' | 'held' | 'gate' | 'approval' | 'verify' | 'pr' | 'upstream' | 'failed'
+  kind: 'paused' | 'frozen' | 'held' | 'gate' | 'approval' | 'verify' | 'pr' | 'upstream' | 'failed'
   /** One sentence a person can act on. */
   title: string
   /** The sentence's tooltip: the Bundle name behind a version it names. */
@@ -54,6 +54,18 @@ export function gateLabel(g: PolicyGate): string {
 export function awaitingQuorum(g: PolicyGate): boolean {
   return !!g.approval && !g.approval.rejected && g.approval.approved < g.approval.required
 }
+
+/** The prefix of the message a freeze writes on the step it holds
+ *  (pkg/reconciler/changewindow FrozenMessage, docs/agentic/freezes.md). */
+const FROZEN_PREFIX = 'frozen by '
+
+/** Whether a step's message is a freeze's hold. */
+function isFrozenMessage(message: string): boolean {
+  return message.startsWith(FROZEN_PREFIX)
+}
+
+/** Step states a freeze no longer holds. */
+const TERMINAL_STEP = new Set(['Verified', 'Failed', 'AbortedByAlarm', 'Superseded'])
 
 /** Whether g is a verify gate still collecting its verdicts (not failed). */
 export function awaitingVerdicts(g: PolicyGate): boolean {
@@ -175,6 +187,9 @@ export function stageView(input: StageInput): StageView {
   const why: WaitReason[] = []
   if (p.paused) {
     why.push({ kind: 'paused', title: 'The pipeline is paused: nothing new starts until it is resumed.', next: 'resume' })
+  }
+  if (step?.message && isFrozenMessage(step.message) && !TERMINAL_STEP.has(stepState)) {
+    why.push({ kind: 'frozen', title: 'Held by a freeze: it promotes once the freeze is lifted, or exempted here.', detail: step.message })
   }
   if (hold) {
     // The version it is held on, as everywhere; the Bundle name is the tooltip.

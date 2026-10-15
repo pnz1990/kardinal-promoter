@@ -64,6 +64,15 @@ describe('stageView', () => {
     expect(both.state.label).toBe('Waiting for approval in two')
   })
 
+  it('a step a freeze holds: why names the freeze in the controller\'s words (#1908)', () => {
+    const msg = 'frozen by kardinal-freeze-agents (agents, every namespace) since 2026-10-14T09:00:00Z by alice: INC-4211 — lift it with: kardinal unfreeze kardinal-freeze-agents'
+    const held: PromotionStep = { name: 's', namespace: 'team', stepType: 'kustomize-set-image', pipeline: 'web', bundle: 'web-3', environment: 'prod', state: 'Pending', message: msg }
+    const v = stageView(input({ steps: [held] }))
+    expect(v.why[0]).toMatchObject({ kind: 'frozen', detail: msg })
+    expect(stageView(input({ steps: [{ ...held, state: 'Verified' }] })).why.some(w => w.kind === 'frozen')).toBe(false)
+    expect(stageView(input({ steps: [{ ...held, message: 'waiting for merge' }] })).why.some(w => w.kind === 'frozen')).toBe(false)
+  })
+
   it('paused and held come before the gates; release and resume are offered', () => {
     const p = pipeline({ paused: true, environmentTopology: [{ name: 'test' }, { name: 'uat' },
       { name: 'prod', hold: { bundle: 'web-1', reason: 'bad 1.4.0', createdBy: 'alice' } }] })

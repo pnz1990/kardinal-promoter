@@ -10,10 +10,10 @@ import type { Freeze } from '../types'
 
 const api = vi.hoisted(() => ({ freeze: vi.fn(), unfreeze: vi.fn(), listFreezes: vi.fn() }))
 vi.mock('../api/client', () => ({ api }))
-const perm = vi.hoisted(() => ({ allowed: true, known: true }))
+const perm = vi.hoisted(() => ({ allowed: true, known: true, reason: undefined as string | undefined }))
 vi.mock('../access/access', () => ({ useAccessIn: () => ({ can: () => perm, identity: undefined }) }))
 
-import { FreezeBanner, FreezeMenu, freezeSentence } from './FreezeBanner'
+import { FreezeBanner, FreezeMenu, freezeEnds, freezeHeadline } from './FreezeBanner'
 
 const agents: Freeze = {
   name: 'kardinal-freeze-agents', actors: 'agents', namespaces: [], scope: 'agents, every namespace', active: true,
@@ -21,13 +21,27 @@ const agents: Freeze = {
 }
 
 describe('FreezeBanner', () => {
-  beforeEach(() => { api.unfreeze.mockReset(); api.freeze.mockReset(); perm.allowed = true; perm.known = true })
+  beforeEach(() => { api.unfreeze.mockReset(); api.freeze.mockReset(); perm.allowed = true; perm.known = true; perm.reason = undefined })
 
-  it('says who froze whom, where, since when and why', () => {
-    expect(freezeSentence(agents)).toBe(
-      'Agents are frozen in every namespace by alice since 2026-10-14T09:00:00Z: INC-4211 (1 exemption in effect)')
-    expect(freezeSentence({ ...agents, actors: 'everyone', namespaces: ['payments'], until: '2026-10-14T11:00:00Z', exemptions: 0 }))
-      .toBe('The line is stopped for everyone in payments by alice since 2026-10-14T09:00:00Z until 2026-10-14T11:00:00Z: INC-4211')
+  it('says who froze whom, where, since when, until when and why (#1908)', () => {
+    const now = Date.parse('2026-10-14T11:00:00Z')
+    expect(freezeHeadline(agents)).toBe('Agents are frozen in every namespace')
+    expect(freezeHeadline({ ...agents, actors: 'everyone', namespaces: ['payments'] })).toBe('The line is stopped for everyone in payments')
+    expect(freezeEnds(agents, now)).toBe('until it is lifted')
+    expect(freezeEnds({ ...agents, until: '2026-10-14T13:30:00Z' }, now)).toBe('ends in 2h 30m')
+    render(<FreezeBanner freezes={[agents]} onChange={() => {}} now={now} />)
+    const banner = screen.getByRole('alert', { name: 'Freeze kardinal-freeze-agents' })
+    expect(banner).toHaveTextContent('Agents are frozen in every namespace by alice, since 2h ago, until it is lifted: INC-4211 (1 exemption in effect)')
+    expect(banner).toHaveClass('k-banner--blocked')
+    expect(banner.querySelector('[data-actor-kind="human"]')).toHaveTextContent('alice')
+    expect(banner.querySelector('time')).toHaveAttribute('dateTime', '2026-10-14T09:00:00Z')
+  })
+
+  it('stopping the line is the failed tone, an automation a bot', () => {
+    render(<FreezeBanner freezes={[{ ...agents, actors: 'everyone', createdBy: 'system:serviceaccount:ops:pager' }]} onChange={() => {}} />)
+    const banner = screen.getByRole('alert')
+    expect(banner).toHaveClass('k-banner--failed')
+    expect(banner.querySelector('[data-actor-kind="bot"]')).toHaveTextContent('ops/pager')
   })
 
   it('shows only active freezes, and nothing without one', () => {
@@ -49,11 +63,19 @@ describe('FreezeBanner', () => {
     expect(onChange).toHaveBeenCalledOnce()
   })
 
-  it('names the command for those who may not unfreeze', () => {
+  it('names the command, with why, for those who may not unfreeze or while the controls are off', () => {
     perm.allowed = false
+    perm.reason = 'the UI\'s freeze controls are off (Helm ui.freezeControls); use kardinal freeze and kardinal unfreeze'
     render(<FreezeBanner freezes={[agents]} onChange={() => {}} />)
     expect(screen.queryByRole('button', { name: 'Unfreeze' })).not.toBeInTheDocument()
-    expect(screen.getByRole('alert')).toHaveTextContent('kardinal unfreeze kardinal-freeze-agents')
+    const cmd = screen.getByText('kardinal unfreeze kardinal-freeze-agents')
+    expect(cmd).toHaveAttribute('title', expect.stringContaining('ui.freezeControls'))
+  })
+
+  it('offers Unfreeze only once the controller said yes', () => {
+    perm.known = false
+    render(<FreezeBanner freezes={[agents]} onChange={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Unfreeze' })).not.toBeInTheDocument()
   })
 })
 

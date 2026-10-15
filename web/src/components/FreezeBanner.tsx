@@ -5,13 +5,18 @@
 // holds promotions (who froze, whom it holds, since when, why), with Unfreeze, and the
 // Freeze menu's two actions, Freeze agents and Stop the line. The controller enforces a
 // freeze; the UI only shows and writes it (POST /freeze, /unfreeze: TokenReview mode with
-// Helm ui.freezeControls, and the changewindows/freeze permission).
-import { useCallback, useId, useState } from 'react'
+// Helm ui.freezeControls, and the changewindows/freeze permission). Each freeze is a Banner
+// (ui/Banner.tsx): who froze is an ActorBadge, the times are ages with the instant as
+// their title. Without the right to lift it (or with ui.freezeControls off) the banner
+// names kardinal unfreeze, with the controller's reason as its title.
+import { useCallback, useEffect, useId, useState } from 'react'
 import { api } from '../api/client'
 import { useAccessIn } from '../access/access'
 import { usePolling } from '../usePolling'
 import type { AccessCheck, Freeze } from '../types'
-import { Button, ConfirmDialog, MenuButton } from '../ui'
+import { actorOfUser } from '../actor'
+import { ago, humanDuration } from '../timeFormat'
+import { ActorBadge, Banner, Button, ConfirmDialog, MenuButton } from '../ui'
 import { actionErrorMessage } from './ConfirmDialog'
 import '../styles/FreezeBanner.css'
 
@@ -21,32 +26,75 @@ export const FREEZE_CHECK: AccessCheck = { verb: 'update', resource: 'changewind
 /** How often the banner re-reads the freezes. */
 const FREEZE_POLL_MS = 15_000
 
-/** The sentence of one freeze: "Agents are frozen in every namespace by alice since … : INC-4211". */
-export function freezeSentence(f: Freeze): string {
+/** Whom a freeze holds and where: "Agents are frozen in every namespace". */
+export function freezeHeadline(f: Freeze): string {
   const who = f.actors === 'agents' ? 'Agents are frozen' : 'The line is stopped for everyone'
-  const where = f.namespaces.length === 0 ? 'in every namespace' : `in ${f.namespaces.join(', ')}`
-  const until = f.until ? ` until ${f.until}` : ''
-  const by = f.createdBy ? ` by ${f.createdBy}` : ''
-  const exempt = f.exemptions > 0 ? ` (${f.exemptions} exemption${f.exemptions === 1 ? '' : 's'} in effect)` : ''
-  return `${who} ${where}${by} since ${f.since}${until}${f.reason ? `: ${f.reason}` : ''}${exempt}`
+  return `${who} ${f.namespaces.length === 0 ? 'in every namespace' : `in ${f.namespaces.join(', ')}`}`
 }
 
-/** The freezes, re-read every FREEZE_POLL_MS; refresh reads them now. */
-export function useFreezes(): { freezes: Freeze[]; refresh: () => void } {
+/** When a freeze ends, at now: "ends in 2h", "ends when lifted". */
+export function freezeEnds(f: Freeze, now: number = Date.now()): string {
+  if (!f.until) return 'until it is lifted'
+  const left = (Date.parse(f.until) - now) / 1000
+  return Number.isNaN(left) ? `until ${f.until}` : `ends in ${humanDuration(left)}`
+}
+
+function FreezeRow({ f, may, onLift, now }: { f: Freeze; may: { allowed: boolean; known: boolean; reason?: string }; onLift: () => void; now: number }) {
+  const who = actorOfUser(f.createdBy)
+  const since = ago(f.since, now)
+  return (
+    <Banner
+      tone={f.actors === 'everyone' ? 'failed' : 'blocked'}
+      icon="pause"
+      data-actors={f.actors}
+      aria-label={`Freeze ${f.name}`}
+      actions={may.known && may.allowed
+        ? <Button variant="secondary" size="sm" onClick={onLift}>Unfreeze</Button>
+        : <code title={may.reason}>kardinal unfreeze {f.name}</code>}
+    >
+      <strong>{freezeHeadline(f)}</strong>
+      {who && <> by <ActorBadge actor={who} compact /></>}
+      {since && <>, <time dateTime={f.since} title={f.since}>since {since}</time></>}
+      {', '}{f.until ? <time dateTime={f.until} title={f.until}>{freezeEnds(f, now)}</time> : freezeEnds(f, now)}
+      {f.reason && <>: {f.reason}</>}
+      {f.exemptions > 0 && <> ({f.exemptions} exemption{f.exemptions === 1 ? '' : 's'} in effect)</>}
+    </Banner>
+  )
+}
+
+/** How long the views wait for the first read of the freezes (see useFreezes). */
+const FIRST_READ_MS = 1000
+
+/**
+ * The freezes, re-read every FREEZE_POLL_MS; refresh reads them now. settled is
+ * true once the first read answered (or failed), or after FIRST_READ_MS: until
+ * then App keeps the view under the banner hidden, so a banner that arrives
+ * with the first read does not push the page down (journey 027).
+ */
+export function useFreezes(): { freezes: Freeze[]; refresh: () => void; settled: boolean } {
   const [freezes, setFreezes] = useState<Freeze[]>([])
+  const [settled, setSettled] = useState(false)
   const load = useCallback(async () => {
     try {
       setFreezes((await api.listFreezes()).freezes ?? [])
     } catch {
       // A controller without the endpoint, or no read rights: no banner.
+    } finally {
+      setSettled(true)
     }
   }, [])
   usePolling(load, FREEZE_POLL_MS)
-  return { freezes, refresh: () => { void load() } }
+  useEffect(() => {
+    const t = window.setTimeout(() => setSettled(true), FIRST_READ_MS)
+    return () => window.clearTimeout(t)
+  }, [])
+  return { freezes, refresh: () => { void load() }, settled }
 }
 
 /** The banner of the active freezes, with Unfreeze for those allowed. */
-export function FreezeBanner({ freezes, onChange }: { freezes: Freeze[]; onChange: () => void }) {
+export function FreezeBanner({ freezes, onChange, className, now = Date.now() }: { freezes: Freeze[]; onChange: () => void
+  /** A class from the page that places it, for its margins. */
+  className?: string; now?: number }) {
   const access = useAccessIn([['default', FREEZE_CHECK]])
   const may = access.can('default', FREEZE_CHECK)
   const [lifting, setLifting] = useState<Freeze>()
@@ -69,15 +117,9 @@ export function FreezeBanner({ freezes, onChange }: { freezes: Freeze[]; onChang
     }
   }
   return (
-    <div role="alert" data-testid="freeze-banner" className="freeze-banner">
+    <div data-testid="freeze-banner" className={className ? `freeze-banner ${className}` : 'freeze-banner'}>
       {active.map(f => (
-        <div key={f.name} className="freeze-banner__row" data-actors={f.actors}>
-          <span className="freeze-banner__text">{freezeSentence(f)}</span>
-          {may.allowed && (
-            <Button variant="secondary" size="sm" onClick={() => { setError(undefined); setLifting(f) }}>Unfreeze</Button>
-          )}
-          {!may.allowed && <code className="freeze-banner__cmd">kardinal unfreeze {f.name}</code>}
-        </div>
+        <FreezeRow key={f.name} f={f} may={may} now={now} onLift={() => { setError(undefined); setLifting(f) }} />
       ))}
       <ConfirmDialog
         open={lifting !== undefined}

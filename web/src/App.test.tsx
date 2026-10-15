@@ -511,7 +511,8 @@ describe('App insecure connection banner', () => {
   afterEach(() => {
     Object.defineProperty(window, 'location', { value: original, writable: true, configurable: true })
   })
-  const banners = () => screen.queryAllByText(/^Insecure connection — kardinal UI is accessed over plain HTTP\./)
+  const banners = () => screen.queryAllByRole('alert')
+    .filter(e => e.textContent?.startsWith('Insecure connection — kardinal UI is accessed over plain HTTP.'))
 
   // #/ is the fleet: without a route, the only pipeline would open.
   it('warns on the landing page', async () => {
