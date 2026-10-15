@@ -135,6 +135,52 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 }
 
+// revisionBehind is health.CheckOptions.RevisionBehind for the step: how
+// many commits want, the promoted commit, has on the environment's branch
+// that rev does not, when rev is an ancestor of it (#1883). It reads the same
+// shared remote cache as revisionContains, and only for a revision the tool
+// applied instead of want.
+func (r *Reconciler) revisionBehind(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
+	want string) func(context.Context, string) (int, error) {
+	rh, ok := r.GitClient.(scm.RemoteHeadReader)
+	gr, gok := r.GitClient.(scm.BranchGraphReader)
+	if !ok || !gok || want == "" || pipeline == nil {
+		return nil
+	}
+	return func(ctx context.Context, rev string) (int, error) {
+		cred := r.resolveGitCredential(ctx, log, pipeline)
+		if cred.refused != nil {
+			return 0, cred.refused
+		}
+		if cred.reason == reasonSecretNotReferenceable {
+			return 0, errors.New(cred.notReferenceable())
+		}
+		return r.behind(ctx, rh, gr, pipeline.Spec.Git.URL, baseBranch(pipeline), cred.auth(), rev, want)
+	}
+}
+
+// behind is scm.Behind of rev and want in the last historyDepth commits of
+// branch, read through the shared remote cache: a tool that is behind is
+// usually a commit or two behind, so the deep history is not read.
+func (r *Reconciler) behind(ctx context.Context, rh scm.RemoteHeadReader, gr scm.BranchGraphReader,
+	url, branch string, auth scm.GitAuth, rev, want string) (int, error) {
+	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	heads, err := r.remotes.remoteHeads(hctx, rh, url, auth, r.now())
+	if err != nil {
+		return 0, fmt.Errorf("read the heads of %s: %w", scm.RedactURL(url), err)
+	}
+	head := heads[branch]
+	if head == "" {
+		return 0, nil
+	}
+	g, err := r.remotes.branchGraph(hctx, gr, url, branch, head, auth, historyDepth)
+	if err != nil {
+		return 0, fmt.Errorf("read the history of %s: %w", branch, err)
+	}
+	return scm.Behind(g.graph, rev, want), nil
+}
+
 // descends reports whether rev deploys want: want is rev or an ancestor of
 // it in the commit graph of branch (through every parent, so a merge commit
 // contains both sides), and no commit rev has and want does not changed one

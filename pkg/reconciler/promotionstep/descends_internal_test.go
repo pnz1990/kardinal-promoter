@@ -123,3 +123,30 @@ func TestDescends_OneReadPerHead(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, 1, rem.reads, "150 concurrent checks of one head: one graph read")
 }
+
+// TestBehind (#1883): an applied revision that is an older commit of the
+// branch than the promoted one is that many commits behind it; a later or
+// unrelated one is not behind.
+func TestBehind(t *testing.T) {
+	ctx := context.Background()
+	rem := &linearRemote{n: 30}
+	r := &Reconciler{NowFn: func() time.Time { return time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC) }}
+	c := func(i int) string { return fmt.Sprintf("c%07d", i) }
+	for _, tc := range []struct {
+		name      string
+		rev, want string
+		behind    int
+	}{
+		{"the parent of the promoted commit", c(28), c(29), 1},
+		{"three commits behind", c(26), c(29), 3},
+		{"the promoted commit", c(29), c(29), 0},
+		{"a later commit", c(29), c(27), 0},
+		{"not on the branch", "deadbeef00", c(29), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := r.behind(ctx, rem, rem, "https://git/acc", "main", scm.TokenAuth("tok"), tc.rev, tc.want)
+			require.NoError(t, err)
+			assert.Equal(t, tc.behind, n)
+		})
+	}
+}

@@ -24,7 +24,13 @@ token), and is "SCM token" when doctor finds no controller Deployment.
 
 Use --controller-namespace when kardinal-promoter is installed in a namespace
 other than kardinal-system. --pipeline checks a Pipeline in the current
-namespace (-n, else the kubeconfig context's namespace).
+namespace (-n, else the kubeconfig context's namespace). For each of its
+environments whose health check reads a remote cluster
+(health.kubeconfigSecretRef) it also reads the kubeconfig Secret (doctor
+needs get on it), and asks that cluster, as the kubeconfig's identity,
+whether it may get the object the health check names and, with
+health.refresh on, patch it: a missing patch is a WARN, because the
+refresh is then refused and promotions wait for the GitOps tool's poll.
 
 Use 'kardinal doctor' as the first troubleshooting step.
 
