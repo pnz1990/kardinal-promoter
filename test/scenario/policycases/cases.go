@@ -1,7 +1,9 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package policy
+// Package policycases is the actor-aware policy scenarios
+// (test/scenario/policy/part1, part2).
+package policycases
 
 import (
 	"errors"
@@ -153,9 +155,9 @@ func (pw *policyWorld) expectVerified(t *testing.T, b *v1alpha1.Bundle) {
 		"%s not Verified\n%s", b.Name, pw.Describe(pw.p.NS))
 }
 
-// TestScenarioOneParty: an agent and its sponsor are one party, and a party
-// has one vote. Covers SCEN-POLICY-PARTY-01.
-func TestScenarioOneParty(t *testing.T) {
+// OneParty: an agent and its sponsor are one party, and a party
+// has one vote.
+func OneParty(t *testing.T) {
 	t.Parallel()
 	t.Run("the sponsor of the version's agent cannot approve it", func(t *testing.T) {
 		t.Parallel()
@@ -208,9 +210,9 @@ func TestScenarioOneParty(t *testing.T) {
 	})
 }
 
-// TestScenarioAgentApprovals: agents' approvals count only where a gate
-// opts in, by name. Covers SCEN-POLICY-APPROVE-01.
-func TestScenarioAgentApprovals(t *testing.T) {
+// AgentApprovals: agents' approvals count only where a gate
+// opts in, by name.
+func AgentApprovals(t *testing.T) {
 	t.Parallel()
 	qa := scenario.Identity{Username: scenario.SAUser(scenario.QAAgent), Groups: []string{"system:serviceaccounts", "system:authenticated"}}
 	t.Run("naming agents without opting in is refused", func(t *testing.T) {
@@ -252,11 +254,11 @@ func TestScenarioAgentApprovals(t *testing.T) {
 // strictness orders the agents ceilings: deny over approve over auto.
 var strictness = map[string]int{v1alpha1.AutonomyAuto: 0, v1alpha1.AutonomyApprove: 1, v1alpha1.AutonomyDeny: 2}
 
-// TestScenarioAgentsShorthand: an environment's agents (auto, approve, deny,
+// AgentsShorthand: an environment's agents (auto, approve, deny,
 // unset) against the AgentIdentity's autonomy: the stricter applies, as a
 // kardinal-agents-<ceiling> gate on every environment of an agent's version,
-// and none on a person's. Covers SCEN-POLICY-AGENTS-01.
-func TestScenarioAgentsShorthand(t *testing.T) {
+// and none on a person's.
+func AgentsShorthand(t *testing.T) {
 	t.Parallel()
 	for _, env := range []string{"", v1alpha1.AutonomyAuto, v1alpha1.AutonomyApprove, v1alpha1.AutonomyDeny} {
 		for _, autonomy := range []string{v1alpha1.AutonomyAuto, v1alpha1.AutonomyApprove, v1alpha1.AutonomyDeny} {
@@ -390,12 +392,11 @@ func (pw *policyWorld) freeze(t *testing.T, id scenario.Identity, actors, ns str
 	return cw.Name
 }
 
-// TestScenarioFreeze: agent freezes and stop-the-line hold promotions in
+// Freeze: agent freezes and stop-the-line hold promotions in
 // flight, exemptions let one pipeline through for a while and only in its
 // namespace, an agent's exemption is refused and never honoured, and a
 // namespace's admin cannot lift someone else's freeze.
-// Covers SCEN-POLICY-FREEZE-01.
-func TestScenarioFreeze(t *testing.T) {
+func Freeze(t *testing.T) {
 	t.Parallel()
 	t.Run("an agent freeze holds agents' versions, not people's", func(t *testing.T) {
 		t.Parallel()
@@ -527,10 +528,9 @@ func describeActor(a *v1alpha1.Actor) string {
 	return actor.Describe(*a)
 }
 
-// TestScenarioRequireStamp: a gate on the actor holds a version without a
+// RequireStamp: a gate on the actor holds a version without a
 // verified stamp, and people-only prod holds agents' and bots' versions.
-// Covers SCEN-POLICY-STAMP-01.
-func TestScenarioRequireStamp(t *testing.T) {
+func RequireStamp(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, expr string
@@ -562,5 +562,3 @@ func TestScenarioRequireStamp(t *testing.T) {
 		})
 	}
 }
-
-func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
