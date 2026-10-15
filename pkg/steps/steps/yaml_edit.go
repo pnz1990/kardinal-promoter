@@ -153,16 +153,18 @@ func (d *yamlDoc) encode() ([]byte, error) {
 		return nil, errReencodeChanges
 	}
 	// Nor is it stable: a comment in a flow collection can come out with a
-	// blank line that the next encode drops (#1965), so the next run of the
-	// same edit would write other bytes. Encode what was written until it
-	// no longer changes: what the step writes is what it would write again.
-	for range 3 {
+	// blank line that the next encode drops, and the sequence indentation
+	// the next run reads from the file may not be this one's (#1965), so the
+	// next run of the same edit would write other bytes. Encode what was
+	// written, as the next run would, until it no longer changes: what the
+	// step writes is what it would write again.
+	for range 4 {
 		var again yaml.Node
 		if err := yaml.Unmarshal(out, &again); err != nil {
 			return nil, errReencodeChanges
 		}
 		keepFlowNulls(&again, false)
-		next, err := encodeNode(&again, d.compactSeq)
+		next, err := encodeNode(&again, compactSeqIndent(out))
 		if err != nil {
 			return nil, err
 		}
