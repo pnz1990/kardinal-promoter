@@ -43,8 +43,9 @@ die() {
   exit 1
 }
 
-# kind_cluster NAME creates the kind cluster NAME from test/e2e/kind-config.yaml,
-# with the node image NODE_IMAGE if set, unless it exists. kind writes the
+# kind_cluster NAME creates the kind cluster NAME from KIND_CONFIG (default
+# test/e2e/kind-config.yaml), with the node image NODE_IMAGE if set, unless
+# it exists. kind writes the
 # cluster's context to the first file in KUBECONFIG, or to ~/.kube/config
 # when KUBECONFIG is unset, so an unset KUBECONFIG defaults to
 # $E2E_OUT/kubeconfig (printed) and kind always gets --kubeconfig: the
@@ -59,7 +60,7 @@ kind_cluster() {
   fi
   file=${KUBECONFIG%%:*}
   if ! kind get clusters 2>/dev/null | grep -qx "$name"; then
-    kind create cluster --name "$name" --config "$REPO_ROOT/test/e2e/kind-config.yaml" --kubeconfig "$file" \
+    kind create cluster --name "$name" --config "${KIND_CONFIG:-$REPO_ROOT/test/e2e/kind-config.yaml}" --kubeconfig "$file" \
       ${NODE_IMAGE:+--image "$NODE_IMAGE"} --wait 120s
   elif [ "$file" = "$E2E_OUT/kubeconfig" ]; then
     kind export kubeconfig --name "$name" --kubeconfig "$file" >&2

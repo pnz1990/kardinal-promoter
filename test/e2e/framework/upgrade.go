@@ -217,6 +217,24 @@ func PageBlockAt(t *testing.T, page, contains string, n int) string {
 	return blocks[pageBlockIndex(t, blocks, page, contains, n)].body
 }
 
+// PageCode is the one code block of docs/<page> in language lang ("text",
+// "yaml") that contains contains, dedented: a block that is not a command,
+// such as the flags of a program the page configures. It fails the test
+// unless exactly one block matches.
+func PageCode(t *testing.T, page, lang, contains string) string {
+	t.Helper()
+	var found []string
+	for _, b := range pageBlocks(t, page) {
+		if b.lang == lang && strings.Contains(b.body, contains) {
+			found = append(found, b.body)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("docs/%s: %d %s blocks contain %q, want 1", page, len(found), lang, contains)
+	}
+	return found[0]
+}
+
 // PageSample is the ```text block that follows, with no other bash block
 // between them, the bash block PageBlockAt(page, contains, n) returns: the
 // output the page shows for that command.

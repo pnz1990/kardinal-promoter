@@ -1189,9 +1189,14 @@ This is Option 2 with three pieces in front of it, and needs no change to kardin
     --proxy-prefix=/ui/oauth2
     --api-route=^/api/v1/ui/
     --skip-provider-button=true
+    --http-address=0.0.0.0:4180
     ```
 
     - `--pass-authorization-header` forwards the ID token, which is what kardinal reviews.
+    - The ID token must carry the groups claim. Some providers add it only when the client asks
+      for a scope: with Dex, add `--scope=openid email profile groups`.
+    - `--http-address=0.0.0.0:4180` serves the proxy on the pod's address; its default,
+      `127.0.0.1:4180`, is reachable only from inside the pod.
     - The UI loads from `/ui/` and calls `/api/v1/ui/`, both absolute paths, so the proxy must
       pass both. `--proxy-prefix=/ui/oauth2` keeps the proxy's own endpoints under `/ui/`.
     - `--api-route` makes the proxy answer an API call that has no session with `401` instead
