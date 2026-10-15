@@ -14,6 +14,9 @@
 
 ---
 
+
+> **Merge order.** Implementation starts after v0.13 is tagged, and only after the actors spec (#1857), actor-aware policy (#1869) and verdicts (#1870) are on main: this spec builds on their CRDs and CEL variables.
+
 ## 1. Problem and scope
 
 Every version is treated the same today. A one-line README change and a 3,000-line database
@@ -1251,7 +1254,7 @@ a Bundle in flight and checks the rebuilt Graph has the node.
 | 15 | Follow-ups: `agents: earned` shorthand; `kardinal risk report` (tier against later failure) | m | 10, 6 |
 
 Ledger work in this PR: entry **G23** (the `path.glob` proposal to kro) and a G8 row for the
-ChangeRisk reconciler (proposed, owner approval pending). Reserved number G24 is not used: the
+ChangeRisk reconciler (planned; the G8 row was approved by the coordinator as the owner's delegate on 2026-10-15). Reserved number G24 is not used: the
 other kro behaviours this spec depends on are existing entries (G1, G3, G10, G12, G14, G15).
 
 ## 19. Ledger entries
@@ -1259,4 +1262,4 @@ other kro behaviours this spec depends on are existing entries (G1, G3, G10, G12
 - **G23** in [16-graph-capability-ledger.md](16-graph-capability-ledger.md#g23-graph-cel-has-no-path-glob):
   Graph CEL has no path glob; the proposed `path` library with cost bounds.
 - **G8 row** "Change risk scoring": the ChangeRisk reconciler and its Job, external git reads before
-  any gate, writing only ChangeRisk status. Marked proposed.
+  any gate, writing only ChangeRisk status. Approved 2026-10-15.

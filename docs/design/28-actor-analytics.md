@@ -16,6 +16,9 @@
 
 ---
 
+
+> **Merge order.** Implementation starts after v0.13 is tagged, and only after the actors spec (#1857), actor-aware policy (#1869) and verdicts (#1870) are on main: this spec builds on their CRDs and CEL variables.
+
 ## 1. Problem and scope
 
 kardinal computes one set of DORA figures per Pipeline (`Pipeline.status.deploymentMetrics`).
@@ -69,7 +72,7 @@ read that Deployment" or "this Pipeline's hook may call that cloud API".
 | Naming a ServiceAccount | A ValidatingAdmissionPolicy with the `authorizer` library | VAP |
 | The ServiceAccount's privileges | SubjectAccessReviews as the ServiceAccount, written to the Pipeline's and each run's own status | 2, the AgentRun pattern (19-verdicts §8.4) |
 
-Two rows are added to the ledger's G8 table, marked proposed (section 16). No kro gap is
+Two rows are added to the ledger's G8 table, approved on 2026-10-15 (section 16). No kro gap is
 needed: section 9.8 says why the Graph identity stays per namespace, and what kro would do if
 it did not.
 
@@ -749,8 +752,8 @@ Downgrading to v0.13 leaves DeploymentLogs inert (owned by their Pipelines) and 
 ## 16. Ledger
 
 No new G entry (9.8). This PR adds two rows to the
-[G8 table](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph), marked proposed:
-like every new G8 row, they need the owner's approval.
+[G8 table](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph). Both are status-writing
+reconcilers; the coordinator approved them as the owner's delegate on 2026-10-15.
 
 | Logic | Where | Why not in the Graph | Possible kro primitive |
 |-------|-------|----------------------|------------------------|
