@@ -625,6 +625,76 @@ func TestReleaseNotesLinksFromTheFragments(t *testing.T) {
 	t.Logf("%d fragments, %d relative links, %d docs links in the notes", len(fragments), relative, docsLinks)
 }
 
+var stopCommands = regexp.MustCompile(`^::stop-commands::(.*)$`)
+
+// workflowCommands is what the Actions runner would take as workflow commands
+// in a step's log: the lines starting with "::" (leading space ignored),
+// except between "::stop-commands::TOKEN" and "::TOKEN::", where it reads
+// nothing but that resume line. It also returns the tokens it stopped with.
+func workflowCommands(log string) (commands, tokens []string) {
+	stopped := ""
+	for _, line := range strings.Split(log, "\n") {
+		line = strings.TrimSpace(line)
+		if stopped != "" {
+			if line == "::"+stopped+"::" {
+				stopped = ""
+			}
+			continue
+		}
+		if m := stopCommands.FindStringSubmatch(line); m != nil {
+			stopped = m[1]
+			tokens = append(tokens, m[1])
+			continue
+		}
+		if strings.HasPrefix(line, "::") {
+			commands = append(commands, line)
+		}
+	}
+	return commands, tokens
+}
+
+// TestReleaseNotesLogRunsNoCommands runs a dry run's notes step on a fragment
+// whose lines are workflow commands: the step prints the notes with commands
+// stopped by a random token, so none of them runs, not even one that tries to
+// resume commands itself.
+func TestReleaseNotesLogRunsNoCommands(t *testing.T) {
+	script := preflightScript(t, "Release notes from docs/changelog.md")
+	hostile := []string{
+		"::set-output name=notes::../../etc/passwd",
+		"  ::add-mask::hide-the-logs",
+		"::error::a fake failure",
+		"::stop-commands::mine",
+		"::mine::",
+		"::warning::after a guessed resume",
+	}
+	run := func(t *testing.T) (string, []string, []string) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs", "changelog.d"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.md"), []byte(changelogFixture), 0o600))
+		fragment := "---\nsection: Fixed\n---\n\n- **A fix** (#1) — text.\n\n" + strings.Join(hostile, "\n") + "\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "changelog.d", "1-hostile.md"), []byte(fragment), 0o600))
+		out, got, err := runReleaseStep(t, dir, script, "VERSION=v0.0.0-dryrun.1", "DRY_RUN=true")
+		require.NoError(t, err, out)
+		assert.Equal(t, map[string]string{"notes": "release-notes/notes.md"}, got, "the fragment set no output")
+		notes := readNotes(t, dir)
+		for _, h := range hostile {
+			require.Contains(t, notes, h, "the notes keep the fragment's text")
+			require.Contains(t, out, h, "the log shows the notes")
+		}
+		commands, tokens := workflowCommands(out)
+		return out, commands, tokens
+	}
+
+	out, commands, tokens := run(t)
+	assert.Empty(t, commands, "the notes ran workflow commands:\n%s", out)
+	require.Len(t, tokens, 1, "commands are stopped once, around the notes")
+	assert.Regexp(t, `^[0-9a-f]{32}$`, tokens[0], "the token is 16 random bytes")
+	assert.Contains(t, out, "::"+tokens[0]+"::", "commands resume after the notes")
+	_, _, again := run(t)
+	require.Len(t, again, 1)
+	assert.NotEqual(t, tokens[0], again[0], "each run has its own token")
+}
+
 var pinnedAction = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
 
 // TestReleaseWorkflowWiring checks that the release job uses what preflight
