@@ -79,7 +79,16 @@ spec:
     - repository: ghcr.io/myorg/my-app
       tag: v1.4.0
       digest: sha256:3f2a9c1b...
+  provenance:                             # only when the build recorded its commit
+    commitSHA: 7a98d10da0777741569e3c6bfb7e04d02c091005
 ```
+
+`provenance.commitSHA` is the source commit the image's build recorded in
+`org.opencontainers.image.revision`: an annotation of its manifest (for a multi-architecture
+index, of the linux/amd64 image's) or a label of its image config, as `docker buildx --label`
+and the OCI metadata actions write it. An image without one, or with a revision that is not a
+commit SHA, gets no `provenance`, and its PR evidence shows `—` for the commit. The digest is
+in `images[0].digest` only.
 
 Version names are lowercased and made DNS-safe (`Build_42` becomes `build-42`) and are
 at most 63 characters. The digest suffix means a re-pushed mutable tag (`latest`,

@@ -190,7 +190,69 @@ func (w *OCIWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 
 	// First-run is not considered a change.
 	changed := lastDigest != "" && digest != lastDigest
-	return &WatchResult{Digest: digest, Tag: tag, Changed: changed}, nil
+	res := &WatchResult{Digest: digest, Tag: tag, Changed: changed}
+	if changed {
+		// Best effort: a version is made without it.
+		res.SourceCommit, _ = s.imageRevision(ctx, digest)
+	}
+	return res, nil
+}
+
+// revisionKey is the OCI annotation (and image label) for the source
+// revision an image was built from.
+const revisionKey = "org.opencontainers.image.revision"
+
+// commitPattern is what a Bundle's provenance.commitSHA accepts as a commit.
+var commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
+
+// imageRevision is the commit the image at digest was built from: the
+// org.opencontainers.image.revision annotation of its manifest (or of the
+// platform image of an index), else that label of its image config. "" when
+// there is none, or it is not a commit SHA (a tag name, a branch).
+func (s *registrySession) imageRevision(ctx context.Context, digest string) (string, error) {
+	m, _, err := s.getManifest(ctx, digest)
+	if err != nil {
+		return "", err
+	}
+	if r := m.Annotations[revisionKey]; r != "" {
+		return commitOrEmpty(r), nil
+	}
+	if len(m.Manifests) > 0 {
+		child := pickPlatformManifest(m)
+		if child == "" {
+			return "", nil
+		}
+		if m, _, err = s.getManifest(ctx, child); err != nil {
+			return "", err
+		}
+		if r := m.Annotations[revisionKey]; r != "" {
+			return commitOrEmpty(r), nil
+		}
+	}
+	if m.Config.Digest == "" {
+		return "", nil
+	}
+	body, _, err := s.get(ctx, s.base.JoinPath("v2", s.name, "blobs", m.Config.Digest), "")
+	if err != nil {
+		return "", err
+	}
+	var cfg struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return "", fmt.Errorf("decode image config: %w", err)
+	}
+	return commitOrEmpty(cfg.Config.Labels[revisionKey]), nil
+}
+
+// commitOrEmpty is r when it is a commit SHA, else "".
+func commitOrEmpty(r string) string {
+	if commitPattern.MatchString(r) {
+		return r
+	}
+	return ""
 }
 
 func (w *OCIWatcher) client() *http.Client {
@@ -338,7 +400,8 @@ type ociManifest struct {
 	Config struct {
 		Digest string `json:"digest"`
 	} `json:"config"`
-	Manifests []struct {
+	Annotations map[string]string `json:"annotations"`
+	Manifests   []struct {
 		Digest   string `json:"digest"`
 		Platform *struct {
 			OS           string `json:"os"`

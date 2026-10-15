@@ -323,6 +323,10 @@ type testImage struct {
 	digest  string // manifest (or index) digest
 	created string // image config "created"
 	index   bool   // serve the tag as a multi-arch OCI index
+	// annotation and label are the org.opencontainers.image.revision the
+	// image manifest (the platform image's, for an index) and the image
+	// config carry ("" for none).
+	annotation, label string
 }
 
 // testRegistry is a fake OCI registry. It serves tags/list (optionally
@@ -400,7 +404,8 @@ func (reg *testRegistry) start(t *testing.T) *httptest.Server {
 			reg.serveManifest(w, r, strings.TrimPrefix(rest, "manifests/"))
 		case strings.HasPrefix(rest, "blobs/sha256:cfg-"):
 			img := reg.images[strings.TrimPrefix(rest, "blobs/sha256:cfg-")]
-			fmt.Fprintf(w, `{"architecture":"amd64","created":%q}`, img.created) //nolint:errcheck
+			fmt.Fprintf(w, `{"architecture":"amd64","created":%q,"config":{"Labels":{"org.opencontainers.image.revision":%q}}}`, //nolint:errcheck
+				img.created, img.label)
 		default:
 			http.Error(w, "unexpected request: "+r.Method+" "+r.URL.Path, http.StatusNotFound)
 		}
@@ -434,10 +439,18 @@ func (reg *testRegistry) serveTags(w http.ResponseWriter, r *http.Request) {
 func (reg *testRegistry) serveManifest(w http.ResponseWriter, r *http.Request, ref string) {
 	var body, digest string
 	if tag, ok := strings.CutPrefix(ref, "sha256:child-"); ok {
-		body = fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"sha256:cfg-%s"}}`, tag)
+		body = imageManifest(tag, reg.images[tag].annotation)
 		digest = ref
 	} else {
 		img, ok := reg.images[ref]
+		if !ok {
+			// By digest: the tag whose image has it.
+			for tag, im := range reg.images {
+				if im.digest == ref {
+					img, ok, ref = im, true, tag
+				}
+			}
+		}
 		if !ok {
 			http.Error(w, "manifest unknown", http.StatusNotFound)
 			return
@@ -453,7 +466,7 @@ func (reg *testRegistry) serveManifest(w http.ResponseWriter, r *http.Request, r
 				`{"digest":"sha256:attestation","platform":{"os":"unknown","architecture":"unknown"}},`+
 				`{"digest":"sha256:child-%s","platform":{"os":"linux","architecture":"amd64"}}]}`, ref)
 		} else {
-			body = fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"sha256:cfg-%s"}}`, ref)
+			body = imageManifest(ref, img.annotation)
 		}
 	}
 	if !reg.noDigestHeader {
@@ -464,6 +477,16 @@ func (reg *testRegistry) serveManifest(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	fmt.Fprint(w, body) //nolint:errcheck
+}
+
+// imageManifest is the image manifest of tag, with a revision annotation
+// when revision is set.
+func imageManifest(tag, revision string) string {
+	if revision == "" {
+		return fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"sha256:cfg-%s"}}`, tag)
+	}
+	return fmt.Sprintf(`{"schemaVersion":2,"config":{"digest":"sha256:cfg-%s"},"annotations":{"org.opencontainers.image.revision":%q}}`,
+		tag, revision)
 }
 
 func toJSONArray(ss []string) string {
@@ -777,4 +800,40 @@ func testSSHKey(t *testing.T) []byte {
 	block, err := gossh.MarshalPrivateKey(priv, "")
 	require.NoError(t, err)
 	return pem.EncodeToMemory(block)
+}
+
+// TestOCIWatcher_SourceCommit (#1946): a changed image reports the commit
+// its build recorded in org.opencontainers.image.revision, from its manifest
+// annotation (the platform image's for an index), else its image config
+// label; a revision that is not a commit SHA, or none, gives none; an
+// unchanged image is not read for it.
+func TestOCIWatcher_SourceCommit(t *testing.T) {
+	const sha = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+	for _, tc := range []struct {
+		name string
+		img  testImage
+		want string
+	}{
+		{"the manifest annotation", testImage{annotation: sha, label: "ffffffff"}, sha},
+		{"the config label", testImage{label: sha}, sha},
+		{"an index: the platform image's annotation", testImage{index: true, annotation: sha}, sha},
+		{"a revision that is not a commit", testImage{annotation: "v1.2.3"}, ""},
+		{"a branch name", testImage{label: "main"}, ""},
+		{"none", testImage{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			img := tc.img
+			img.digest, img.created = "sha256:"+strings.Repeat("e", 64), "2026-01-01T00:00:00Z"
+			reg := &testRegistry{name: "org/app", tags: []string{"v2"}, images: map[string]testImage{"v2": img}}
+			srv := reg.start(t)
+			w := source.NewOCIWatcher(srv.URL+"/org/app", "").WithHTTPClient(srv.Client())
+			res, err := w.Watch(context.Background(), "sha256:old")
+			require.NoError(t, err)
+			assert.True(t, res.Changed)
+			assert.Equal(t, tc.want, res.SourceCommit)
+			again, err := w.Watch(context.Background(), img.digest)
+			require.NoError(t, err)
+			assert.Empty(t, again.SourceCommit, "not read for an unchanged image")
+		})
+	}
 }

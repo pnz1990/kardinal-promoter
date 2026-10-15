@@ -137,8 +137,12 @@ func assertImageBundle(t *testing.T, e *framework.Env, ns, sub, name, repository
 	assert.Equal(t, "image", b.Spec.Type)
 	assert.Equal(t, pipelineName, b.Spec.Pipeline)
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: repository, Tag: tag, Digest: digest}}, b.Spec.Images)
-	require.NotNil(t, b.Spec.Provenance)
-	assert.Equal(t, digest, b.Spec.Provenance.CommitSHA)
+	// The digest is the image's; provenance names a commit only when the
+	// build recorded one (org.opencontainers.image.revision), #1946.
+	if b.Spec.Provenance != nil {
+		assert.NotEqual(t, digest, b.Spec.Provenance.CommitSHA, "the digest is not a commit")
+		assert.Regexp(t, `^([0-9a-fA-F]{7,64})?$`, b.Spec.Provenance.CommitSHA)
+	}
 }
 
 // TestSub_ImageNewTag checks an image Subscription on a registry that allows

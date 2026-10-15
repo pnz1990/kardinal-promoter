@@ -132,6 +132,11 @@ type WatchResult struct {
 	Revision string
 	// Changed is true when Digest differs from the last known digest.
 	Changed bool
+	// SourceCommit is the source commit an image's build recorded
+	// (org.opencontainers.image.revision, a manifest annotation or an image
+	// config label), read for a changed image only; empty when it has none
+	// or it is not a commit SHA.
+	SourceCommit string
 }
 
 // Watcher is the interface for artifact source watchers.
