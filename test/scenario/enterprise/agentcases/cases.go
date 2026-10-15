@@ -1,7 +1,9 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package agents
+// Package agentcases is the enterprise agent load
+// (test/scenario/enterprise/agents/load, .../differential).
+package agentcases
 
 import (
 	"encoding/json"
@@ -177,7 +179,7 @@ func agentRegistry(sz agentSize) registry {
 	return reg
 }
 
-// TestEnterprise_AgentLoad is the enterprise of the load test with agents:
+// Run is the enterprise of the load test with agents:
 // Identities AgentIdentities registered (2,000 in full: half the index's
 // bound), Agents of them shipping versions in bursts across every team, a
 // release manager approving prod, every write admitted by the API server's
@@ -193,8 +195,11 @@ func agentRegistry(sz agentSize) registry {
 // with its agent and sponsor, and so is every promotion AuditEvent and PR. An
 // index pushed over its 1 MiB bound refuses every write the policy checks
 // and none of the controller's, and recovers when the AgentIdentities go.
-// Covers SCEN-AGENT-LOAD-01, SCEN-AGENT-DIFF-01.
-func TestEnterprise_AgentLoad(t *testing.T) {
+//
+// Phase Differential runs the registry and the probes, phase Load the
+// registry, the bursts and the overflow: two packages, so each fits a CI
+// shard's budget.
+func Run(t *testing.T, phase Phase) {
 	sz := agentSizeFromEnv()
 	reg := agentRegistry(sz)
 	require.Len(t, reg.active, sz.Agents, "the registry has an active agent per team in turn")
@@ -221,9 +226,12 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 		time.Since(start).Round(time.Millisecond), w.Reconciles()["AgentIdentity"]-before)
 	assert.Equal(t, sz.Identities, idx.Status.ObservedIdentities)
 
-	// The policy is pkg/actor's transliteration: the same verdict on every
-	// probe, over the whole index.
-	probeAgainstGo(t, reg, &idx, sz)
+	if phase == Differential {
+		// The policy is pkg/actor's transliteration: the same verdict on
+		// every probe, over the whole index.
+		probeAgainstGo(t, reg, &idx, sz)
+		return
+	}
 
 	// Bursts of versions by the active agents, while the release manager
 	// approves prod and out-of-scope and suspended agents are refused.
@@ -350,6 +358,15 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 	assert.Empty(t, w.Kro.Errors())
 	assert.Empty(t, w.SCM.Unknown())
 }
+
+// Phase is a part of Run.
+type Phase string
+
+// The phases of Run.
+const (
+	Differential Phase = "differential"
+	Load         Phase = "load"
+)
 
 func teamIndex(ns string) int {
 	var i int
@@ -773,5 +790,3 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	require.NoError(t, err)
 	assert.Empty(t, refused, "the agent ships again")
 }
-
-func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
