@@ -20,11 +20,13 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tmplsafe"
 )
 
 // PRBodyUpstreamEnv holds per-environment upstream verification evidence for the
@@ -310,13 +312,30 @@ func renderSection(name string, data PRBody) (string, error) {
 	return buf.String(), nil
 }
 
-// RenderPRBody renders the PR body template with the given data.
+// maxPRBody is the longest PR body kardinal writes, in characters: what
+// GitHub takes (GitLab and Forgejo take more).
+const maxPRBody = 65536
+
+// prBodyCut ends a PR body cut at maxPRBody.
+const prBodyCut = "\n\n…\n\n*The evidence was cut to fit the 65,536-character PR body limit; `kardinal explain` and `kardinal why` show all of it.*\n"
+
+// RenderPRBody renders the PR body template with the given data. A body over
+// maxPRBody characters (text the version's creator wrote can be long) is
+// cut to fit, with a note, so the SCM never refuses the PR for its body.
 func RenderPRBody(data PRBody) (string, error) {
 	var buf bytes.Buffer
 	if err := prBodyTemplate.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("render PR body: %w", err)
 	}
-	return buf.String(), nil
+	return capPRBody(buf.String()), nil
+}
+
+// capPRBody cuts body to at most maxPRBody characters, ending in prBodyCut.
+func capPRBody(body string) string {
+	if utf8.RuneCountInString(body) <= maxPRBody {
+		return body
+	}
+	return tmplsafe.TruncateRunes(body, maxPRBody-utf8.RuneCountInString(prBodyCut)) + prBodyCut
 }
 
 // maxVersionImages is how many images BundleVersion lists before it says

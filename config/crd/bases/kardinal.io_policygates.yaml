@@ -401,12 +401,14 @@ spec:
                     reason:
                       description: Reason is the mandatory human-readable justification
                         for the override.
+                      maxLength: 1024
                       minLength: 1
                       type: string
                     stage:
                       description: |-
                         Stage is the environment name this override applies to.
                         An empty string applies to all environments.
+                      maxLength: 63
                       type: string
                   required:
                   - expiresAt

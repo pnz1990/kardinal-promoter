@@ -192,10 +192,12 @@ type BundleProvenance struct {
 	CommitSHA string `json:"commitSHA,omitempty"`
 
 	// CIRunURL is the URL of the CI run that built this Bundle.
+	// +kubebuilder:validation:MaxLength=2048
 	// +optional
 	CIRunURL string `json:"ciRunURL,omitempty"`
 
 	// Author is the committer or triggering actor for this build.
+	// +kubebuilder:validation:MaxLength=256
 	// +optional
 	Author string `json:"author,omitempty"`
 

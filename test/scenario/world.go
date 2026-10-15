@@ -313,6 +313,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 				if ts := o.GetCreationTimestamp(); ts.IsZero() {
 					o.SetCreationTimestamp(metav1.NewTime(w.Now()))
 				}
+				if err := w.validMeta(c, o, nil); err != nil {
+					return err
+				}
+				if err := w.validSchema(o, nil); err != nil {
+					return err
+				}
 				if err := w.admitWrite(ctx, c, admission.Create, o, nil); err != nil {
 					return err
 				}
@@ -330,6 +336,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 				old, gerr := w.stored(ctx, c, o)
 				if gerr != nil {
 					return gerr
+				}
+				if err := w.validMeta(c, o, old); err != nil {
+					return err
+				}
+				if err := w.validSchema(o, old); err != nil {
+					return err
 				}
 				if err := w.admitWrite(ctx, c, admission.Update, o, old); err != nil {
 					return err
@@ -358,6 +370,15 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				// The patched object is admitted as the API server would
 				// before storing it: refused, the stored one is put back.
+				if verr := w.validSchema(o, old); verr != nil && old != nil {
+					if cur, gerr := w.stored(ctx, c, o); gerr == nil && cur != nil {
+						old.SetResourceVersion(cur.GetResourceVersion())
+					}
+					if rerr := c.Update(ctx, old); rerr != nil {
+						return fmt.Errorf("restore %s %s after a refused patch: %w", objKind(o), o.GetName(), rerr)
+					}
+					return verr
+				}
 				return w.admitPatched(ctx, c, "", o, old)
 			},
 			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {

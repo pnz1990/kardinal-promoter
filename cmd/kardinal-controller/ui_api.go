@@ -1783,6 +1783,14 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 	case apierrors.IsNotFound(err):
 		http.Error(w, "gate not found", http.StatusNotFound)
 		return
+	case apierrors.IsInvalid(err):
+		// The API server refused a field the caller sent (a reason over its
+		// maxLength): its message names the field.
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case apierrors.IsForbidden(err):
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
 	case err != nil:
 		s.log.Error().Err(err).Str("gate", gateName).Msg("ui: approve gate")
 		http.Error(w, "failed to update gate", http.StatusInternalServerError)

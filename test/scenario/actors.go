@@ -211,6 +211,9 @@ func (w *World) admitPatched(ctx context.Context, c client.WithWatch, sub string
 		return nil
 	}
 	old.SetResourceVersion(o.GetResourceVersion())
+	if cur, gerr := w.stored(ctx, c, o); gerr == nil && cur != nil {
+		old.SetResourceVersion(cur.GetResourceVersion())
+	}
 	var rerr error
 	if sub != "" {
 		rerr = c.SubResource(sub).Update(ctx, old)

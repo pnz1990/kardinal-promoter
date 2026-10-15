@@ -130,6 +130,11 @@ func (a *Admission) Admit(obj, old runtime.Object) ([]string, error) {
 	delete(u, "status")
 	if oldU != nil {
 		delete(oldU, "status")
+		// The API server defaults what it reads from etcd too: the old
+		// object a transition rule sees is defaulted.
+		pruning.Prune(oldU, s.structural, true)
+		defaulting.PruneNonNullableNullsWithoutDefaults(oldU, s.structural)
+		defaulting.Default(oldU, s.structural)
 	}
 	// The API server's order: prune unknown fields, drop nulls of
 	// non-nullable fields, then default.

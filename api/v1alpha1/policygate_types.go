@@ -410,10 +410,12 @@ type GateApprovalStatus struct {
 type PolicyGateOverride struct {
 	// Reason is the mandatory human-readable justification for the override.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
 	Reason string `json:"reason"`
 
 	// Stage is the environment name this override applies to.
 	// An empty string applies to all environments.
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	Stage string `json:"stage,omitempty"`
 
