@@ -326,3 +326,22 @@ func TestScmProviderInstanceSignersRule(t *testing.T) {
 		}
 	}
 }
+
+// TestPipelineCRDRefreshTarget (#2007): health.refreshTarget names exactly
+// one of an Argo CD Application and a Flux Kustomization.
+func TestPipelineCRDRefreshTarget(t *testing.T) {
+	node := crdSchema(t, "kardinal.io_pipelines.yaml", "spec", "environments", "[]", "health", "refreshTarget")
+	const msg = "health.refreshTarget: set exactly one of argocd and flux"
+	for _, tc := range []struct {
+		name string
+		self map[string]interface{}
+		want []string
+	}{
+		{"argocd", map[string]interface{}{"argocd": map[string]interface{}{"name": "my-app-prod"}}, nil},
+		{"flux", map[string]interface{}{"flux": map[string]interface{}{}}, nil},
+		{"both", map[string]interface{}{"argocd": map[string]interface{}{}, "flux": map[string]interface{}{}}, []string{msg}},
+		{"neither", map[string]interface{}{}, []string{msg}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, failingRules(t, node, tc.self)) })
+	}
+}

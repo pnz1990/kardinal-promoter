@@ -1923,7 +1923,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// The promoted commit is in git: ask Argo CD or Flux to sync it now
 	// rather than at its next poll (health.refresh, once per step).
 	if r.refreshWanted(ps, env, adapter.Name(), opts.ExpectedRevision, mergeCommitPending) {
-		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision, remote); err != nil {
+		ropts, rdetector, rremote := r.refreshSubject(pipeline.Name, env, opts, detector, remote)
+		if err := r.requestRefresh(ctx, log, base, ps, rdetector, ropts, opts.ExpectedRevision, rremote); err != nil {
 			return ctrl.Result{}, err
 		}
 		base = ps.DeepCopy()
@@ -1980,7 +1981,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// A step with no changes waits for a head another writer pushed: when
 	// the tool has not applied it, ask it to sync now (#1910).
 	if r.noChangesRefreshWanted(ps, env, adapter.Name(), opts.ExpectedRevision, result) {
-		if err := r.requestRefresh(ctx, log, base, ps, detector, opts, opts.ExpectedRevision, remote); err != nil {
+		ropts, rdetector, rremote := r.refreshSubject(pipeline.Name, env, opts, detector, remote)
+		if err := r.requestRefresh(ctx, log, base, ps, rdetector, ropts, opts.ExpectedRevision, rremote); err != nil {
 			return ctrl.Result{}, err
 		}
 		base = ps.DeepCopy()

@@ -74,6 +74,7 @@ When the `health` field is omitted or partially specified, the controller applie
 | `resource.condition` | `Available` |
 | `argocd.name` / `argocd.namespace` | `<pipeline>-<environment>` / `argocd` |
 | `flux.name` / `flux.namespace` | `<pipeline>-<environment>` / `flux-system` |
+| `refreshTarget.argocd` / `refreshTarget.flux` name and namespace | as `argocd` / `flux` (set one to refresh that object instead of the health check's; [Sync on promotion](health-adapters.md#sync-on-promotion)) |
 | `argoRollouts.name` / `argoRollouts.namespace` | `Pipeline.metadata.name` / environment name |
 | `flagger.name` / `flagger.namespace` | `Pipeline.metadata.name` / environment name |
 | `timeout` | `10m` |
@@ -569,7 +570,7 @@ Available (see [Health Check Defaults](#health-check-defaults)).
 
 ### Multi-cluster with Argo Rollouts
 
-The `argocd` checks work for any destination cluster because the Applications live in the controller's cluster. The `argoRollouts` checks read the Rollout in the controller's cluster, so this layout suits Rollouts that the controller's cluster runs: here each prod region has its own namespace there. Give each environment its own Rollout; two environments that name the same one check the same object. For Rollouts in other clusters, check their hub Applications with `type: argocd` instead (see [Remote Clusters](health-adapters.md#remote-clusters)).
+The `argocd` checks work for any destination cluster because the Applications live in the controller's cluster. The `argoRollouts` checks read the Rollout in the controller's cluster, so this layout suits Rollouts that the controller's cluster runs: here each prod region has its own namespace there. Give each environment its own Rollout; two environments that name the same one check the same object. A Rollout check names no GitOps object, so `health.refreshTarget` names the Application that deploys each region: the step asks it to sync the promoted commit at once instead of waiting for Argo CD's poll ([Sync on promotion](health-adapters.md#sync-on-promotion)). For Rollouts in other clusters, read them through `health.kubeconfigSecretRef` with the same `refreshTarget` on the hub's Application, or check their hub Applications with `type: argocd` instead (see [Remote Clusters](health-adapters.md#remote-clusters)).
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -597,6 +598,8 @@ spec:
       health:
         type: argoRollouts
         argoRollouts: { name: my-app, namespace: prod-us }
+        refreshTarget:
+          argocd: { name: my-app-prod-us }
       delivery:
         delegate: argoRollouts
     - name: prod-eu
@@ -605,6 +608,8 @@ spec:
       health:
         type: argoRollouts
         argoRollouts: { name: my-app, namespace: prod-eu }
+        refreshTarget:
+          argocd: { name: my-app-prod-eu }
       delivery:
         delegate: argoRollouts
 ```

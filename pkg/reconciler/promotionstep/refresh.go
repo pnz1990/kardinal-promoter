@@ -4,6 +4,7 @@
 package promotionstep
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -28,9 +29,9 @@ const (
 
 // refreshWanted reports whether a HealthChecking step should ask the GitOps
 // tool to sync now (health.refresh): refresh is on (controller and
-// environment), the health type names an Argo CD Application or a Flux
-// Kustomization, it has not asked yet, and the promotion wrote a commit that
-// is in git now. rev and pending are expectedRevision's.
+// environment), there is an Argo CD Application or a Flux Kustomization to
+// ask (refreshAllowed), it has not asked yet, and the promotion wrote a commit
+// that is in git now. rev and pending are expectedRevision's.
 //
 // A step with no changes wrote nothing: noChangesRefreshWanted decides for
 // it once its health check ran. A step with neither a pushed commit nor a PR (update.strategy argocd patches the Application itself) has no
@@ -50,13 +51,39 @@ func (r *Reconciler) refreshWanted(ps *v1alpha1.PromotionStep, env v1alpha1.Envi
 }
 
 // refreshAllowed reports whether the step may still ask the GitOps tool to
-// sync: refresh is on (controller and environment), the health type names an
-// Argo CD Application or a Flux Kustomization, and the step has not asked yet.
+// sync: refresh is on (controller and environment), there is a GitOps object
+// to ask (health.refreshTarget, or a health type that names an Argo CD
+// Application or a Flux Kustomization), and the step has not asked yet.
 func (r *Reconciler) refreshAllowed(ps *v1alpha1.PromotionStep, env v1alpha1.EnvironmentSpec, healthType string) bool {
 	return !r.RefreshDisabled &&
 		(env.Health.Refresh == nil || *env.Health.Refresh) &&
-		health.RefreshSupported(healthType) &&
+		(env.Health.RefreshTarget != nil || health.RefreshSupported(healthType)) &&
 		ps.Status.RefreshRequestedAt == nil
+}
+
+// refreshSubject is what the step's refresh annotates, and how: by default
+// the object its health check reads (opts), through the health check's
+// detector, in the remote cluster when the check reads one. With
+// health.refreshTarget (#2007) it is that Application or Kustomization, in
+// the controller's cluster (r.HealthDetector, remote false: the controller's
+// identity, so the refresh scope applies), whatever the health type and
+// health.kubeconfigSecretRef.
+func (r *Reconciler) refreshSubject(pipeline string, env v1alpha1.EnvironmentSpec, opts health.CheckOptions,
+	detector *health.AutoDetector, remote bool) (health.CheckOptions, *health.AutoDetector, bool) {
+	t := env.Health.RefreshTarget
+	if t == nil {
+		return opts, detector, remote
+	}
+	def := pipeline + "-" + env.Name
+	switch {
+	case t.ArgoCD != nil:
+		opts.Type = "argocd"
+		opts.ArgoCD = health.ArgoCDConfig{Name: cmp.Or(t.ArgoCD.Name, def), Namespace: cmp.Or(t.ArgoCD.Namespace, "argocd")}
+	case t.Flux != nil:
+		opts.Type = "flux"
+		opts.Flux = health.FluxConfig{Name: cmp.Or(t.Flux.Name, def), Namespace: cmp.Or(t.Flux.Namespace, "flux-system")}
+	}
+	return opts, r.HealthDetector, false
 }
 
 // noChangesRefreshWanted reports whether a step whose git-commit found
