@@ -294,7 +294,7 @@ var yamlSeedTags = []string{"2.0.0", "true", "null", "1e3", "~", "a: b", "#x", "
 // FuzzYAMLUpdate fuzzes the yaml-update step with checkYAMLUpdateProperty.
 // Run it with go test ./pkg/steps/steps -run '^$' -fuzz '^FuzzYAMLUpdate$' -fuzztime 2m.
 func FuzzYAMLUpdate(f *testing.F) {
-	for i, doc := range yamlSeedDocs {
+	for i, doc := range append(append([]string{}, yamlSeedDocs...), styledDocs()...) {
 		f.Add(doc, yamlSeedPaths[i%len(yamlSeedPaths)], yamlSeedTags[i%len(yamlSeedTags)])
 	}
 	f.Fuzz(func(t *testing.T, doc, path, tag string) { checkYAMLUpdateProperty(t, doc, path, tag) })
@@ -304,7 +304,7 @@ func FuzzYAMLUpdate(f *testing.F) {
 // Run it with go test ./pkg/steps/steps -run '^$' -fuzz '^FuzzKustomizeSetImage$' -fuzztime 2m.
 func FuzzKustomizeSetImage(f *testing.F) {
 	repos := []string{"ghcr.io/org/app", "app", "docker.io/library/nginx", "a/b/c/app"}
-	for i, doc := range yamlSeedDocs {
+	for i, doc := range append(append([]string{}, yamlSeedDocs...), styledDocs()...) {
 		f.Add(doc, repos[i%len(repos)], yamlSeedTags[i%len(yamlSeedTags)], []string{"", "sha256:abc"}[i%2])
 	}
 	f.Fuzz(func(t *testing.T, doc, repo, tag, digest string) { checkKustomizeProperty(t, doc, repo, tag, digest) })
@@ -336,6 +336,18 @@ func genYAML(r *rand.Rand) (string, []string) {
 				fmt.Fprintf(&b, "%s# comment %d\n", indent, i)
 			}
 			switch c := r.Intn(10); {
+			case (c < 4 || depth > 3) && r.Intn(4) == 0:
+				// A block scalar in any style (styledValues), indented under
+				// its key (#1965).
+				v := styledValues[3+r.Intn(len(styledValues)-3)]
+				lines := strings.Split(v, "\n")
+				for i := 1; i < len(lines); i++ {
+					if lines[i] != "" {
+						lines[i] = indent + lines[i]
+					}
+				}
+				fmt.Fprintf(&b, "%s%s: %s\n", indent, k, strings.Join(lines, "\n"))
+				paths = append(paths, p)
 			case c < 4 || depth > 3:
 				fmt.Fprintf(&b, "%s%s: %s\n", indent, k, []string{"1", "\"x\"", "'y'", "null", "true", "v1.0", "~", ""}[r.Intn(8)])
 				paths = append(paths, p)

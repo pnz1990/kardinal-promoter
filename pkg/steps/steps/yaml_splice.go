@@ -206,7 +206,48 @@ func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 	if keepChomping(s.lines[last.Line-1], last.Column) {
 		return end
 	}
-	return s.trim(start, end, false)
+	// A line of only spaces, more of them than the scalar's indentation, is
+	// the scalar's text (folded ">\n 0\n  \n" is "0\n \n"), not a blank
+	// line after it: an entry inserted before it would take it from the
+	// scalar (#1965).
+	indent, ok := s.blockIndent(last)
+	for end > start {
+		line := strings.TrimRight(s.lines[end-1], "\n")
+		if strings.TrimSpace(line) != "" {
+			break
+		}
+		if !ok || (strings.Trim(line, " ") == "" && len(line) > indent) {
+			break
+		}
+		end--
+	}
+	return end
+}
+
+// blockIndent is the content indentation of the block scalar n: the
+// header's indentation indicator added to its line's indentation, else the
+// indentation of its first line that is not blank. ok is false when it has
+// no such line: every line after the header may then be its text.
+func (s *splicer) blockIndent(n *yaml.Node) (int, bool) {
+	header := s.lines[n.Line-1]
+	if n.Column-1 < len(header) {
+		h := header[n.Column-1:]
+		if i := strings.IndexAny(h, " \t#\n"); i >= 0 {
+			h = h[:i]
+		}
+		for _, r := range h {
+			if r >= '1' && r <= '9' {
+				return len(header) - len(strings.TrimLeft(header, " ")) + int(r-'0'), true
+			}
+		}
+	}
+	for l := n.Line; l < len(s.lines); l++ {
+		line := strings.TrimRight(s.lines[l], "\n")
+		if strings.TrimSpace(line) != "" {
+			return len(line) - len(strings.TrimLeft(line, " ")), true
+		}
+	}
+	return 0, false
 }
 
 // trim drops the blank lines, and with comments the comment-only lines, at
