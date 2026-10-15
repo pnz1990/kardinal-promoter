@@ -60,7 +60,7 @@ func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v
 			return true, ctrl.Result{}, err
 		}
 		if recorded {
-			return true, ctrl.Result{Requeue: true}, nil
+			return true, ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		return false, ctrl.Result{}, nil
 	}

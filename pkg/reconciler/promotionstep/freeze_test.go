@@ -89,7 +89,7 @@ func TestFreeze_HoldsStep(t *testing.T) {
 			res, err := r.Reconcile(ctx, req)
 			require.NoError(t, err)
 			if tc.wantExempt {
-				assert.True(t, res.Requeue, "the exemption is recorded first, then the step goes on")
+				assert.Positive(t, res.RequeueAfter, "the exemption is recorded first, then the step goes on")
 				_, err = r.Reconcile(ctx, req)
 				require.NoError(t, err)
 			}

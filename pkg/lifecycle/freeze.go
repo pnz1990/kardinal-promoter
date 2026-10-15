@@ -215,7 +215,8 @@ func ExemptFromFreezes(ctx context.Context, c client.Client, req ExemptRequest) 
 					kept = append(kept, e)
 				}
 			}
-			cw.Spec.Freeze.Exemptions = append(kept, ex)
+			kept = append(kept, ex)
+			cw.Spec.Freeze.Exemptions = kept
 			return c.Update(ctx, &cw)
 		})
 		if apierrors.IsNotFound(err) {
