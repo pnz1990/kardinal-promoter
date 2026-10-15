@@ -25,12 +25,14 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 // mcpTool is one tool of kardinal mcp: its name, whether it writes, and
@@ -301,6 +303,10 @@ func mcpTools() []mcpTool {
 				"would be allowed in at a time (default now), and for each blocking gate what it waits for and "+
 				"the next hour it would pass with the same inputs.",
 			false, false, mcpSimulate),
+		newMCPTool("verdicts", "Verdicts on a version",
+			"The verdicts recorded on a version (the one that runs in an environment, or a named one): each "+
+				"verifier, check, result, summary, evidence and findings, and whether a verify gate counted it.",
+			false, false, mcpVerdicts),
 
 		newMCPTool("ship", "Ship a version",
 			"Create a Bundle (a version) of a pipeline from images: it promotes through the environments under "+
@@ -328,6 +334,12 @@ func mcpTools() []mcpTool {
 				"the identity kardinal mcp runs as. The version is required: nothing is recorded when another "+
 				"version is waiting. The gate decides whether this identity's approval counts.",
 			true, false, mcpApprove),
+		newMCPTool("verify", "Record a verdict",
+			"Record a verdict (pass, fail or inconclusive) for a check on the version that runs in an "+
+				"environment, as the identity kardinal mcp runs as. The version is required: nothing is "+
+				"recorded when another version runs there. A verify gate decides whether the verdict counts: "+
+				"an agent's only where the gate lists it in verify.allowedAgents, never on its own party's work.",
+			true, false, mcpVerify),
 	}
 }
 
@@ -733,5 +745,178 @@ func mcpApprove(ctx context.Context, k *mcpServer, in mcpApproveIn) (*mcp.CallTo
 			return nil, err
 		}
 		return nil, approveChecked(ctx, w, c, ns, bundle, o, nil)
+	})
+}
+
+// ─── verdicts ───────────────────────────────────────────────────────────────
+
+var (
+	// mcpCheckPattern is a Verdict's spec.check (the CRD's).
+	mcpCheckPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+	// mcpEvidencePattern is an evidence URL: http(s), no whitespace or
+	// control characters, at most the CRD's 2048 bytes.
+	mcpEvidencePattern = regexp.MustCompile(`^https?://[!-~]+$`)
+)
+
+// checkCheck checks a verify check name; "" passes unless required.
+func checkCheck(v string, required bool) error {
+	if v == "" {
+		if required {
+			return fmt.Errorf("check is required")
+		}
+		return nil
+	}
+	if len(v) > 63 || !mcpCheckPattern.MatchString(v) {
+		return argErr("check", v, "a check name (lower case letters, digits and '-')")
+	}
+	return nil
+}
+
+type mcpVerdictsIn struct {
+	mcpNamespace
+	Pipeline    string `json:"pipeline" jsonschema:"Pipeline name"`
+	Environment string `json:"environment,omitempty" jsonschema:"The environment: the version that runs there, and only its verdicts"`
+	Version     string `json:"version,omitempty" jsonschema:"A version or Bundle name of the pipeline, instead of the one that runs in the environment"`
+	Check       string `json:"check,omitempty" jsonschema:"Only verdicts for this check"`
+	Offset      int    `json:"offset,omitempty" jsonschema:"The first verdict to return, from a previous page's nextOffset"`
+}
+
+func (in mcpVerdictsIn) check() error {
+	errs := []error{checkNamespace(in.Namespace), checkName("pipeline", in.Pipeline, true), checkEnv(in.Environment, false),
+		checkVersion("version", in.Version, false), checkCheck(in.Check, false)}
+	if in.Environment == "" && in.Version == "" {
+		errs = append(errs, fmt.Errorf("give environment (the version that runs there) or version"))
+	}
+	if in.Offset < 0 {
+		errs = append(errs, fmt.Errorf("offset must not be negative"))
+	}
+	return checkAll(errs...)
+}
+
+// mcpVerdict is one verdict as the verdicts tool returns it. What the
+// verifier wrote (summary, evidence, finding titles) is labelled untrusted.
+type mcpVerdict struct {
+	Name        string           `json:"name"`
+	Bundle      string           `json:"bundle"`
+	Environment string           `json:"environment"`
+	Check       string           `json:"check"`
+	Result      string           `json:"result"`
+	Verifier    string           `json:"verifier"`
+	Actor       *v1alpha1.Actor  `json:"actor,omitempty"`
+	Summary     any              `json:"summary,omitempty"`
+	EvidenceURL any              `json:"evidenceURL,omitempty"`
+	Findings    []mcpVerdictFind `json:"findings,omitempty"`
+	Counted     string           `json:"counted,omitempty"`
+	CreatedAt   metav1.Time      `json:"createdAt"`
+}
+
+// mcpVerdictFind is one finding of a verdict.
+type mcpVerdictFind struct {
+	Severity string `json:"severity"`
+	Title    any    `json:"title"`
+}
+
+// untrustedOr is s labelled untrusted, or nil when s is empty.
+func untrustedOr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return untrusted(s)
+}
+
+func mcpVerdicts(ctx context.Context, k *mcpServer, in mcpVerdictsIn) (*mcp.CallToolResult, error) {
+	return k.direct(ctx, in.Namespace, in.Offset, func(ctx context.Context, _ io.Writer, c sigs_client.Client, ns string) (any, error) {
+		var bundle string
+		var err error
+		if in.Version != "" {
+			bundle, err = resolveBundleRef(ctx, c, ns, in.Pipeline, in.Version)
+		} else {
+			bundle, err = runningBundle(ctx, c, ns, in.Pipeline, in.Environment)
+		}
+		if err != nil {
+			return nil, err
+		}
+		list, counted, err := verdictsCounted(ctx, c, ns, bundle, in.Environment, in.Check)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]mcpVerdict, 0, len(list))
+		for _, v := range list {
+			mv := mcpVerdict{Name: v.Name, Bundle: v.Spec.Bundle, Environment: v.Spec.Environment, Check: v.Spec.Check,
+				Result: v.Spec.Result, Verifier: actor.Describe(actor.OrUnknown(v.Spec.Actor, v.Spec.By)), Actor: v.Spec.Actor,
+				Summary: untrustedOr(v.Spec.Summary), EvidenceURL: untrustedOr(v.Spec.EvidenceURL),
+				Counted: counted[v.Name], CreatedAt: v.CreationTimestamp}
+			for _, f := range v.Spec.Findings {
+				mv.Findings = append(mv.Findings, mcpVerdictFind{Severity: f.Severity, Title: untrusted(f.Title)})
+			}
+			out = append(out, mv)
+		}
+		return out, nil
+	})
+}
+
+type mcpVerifyIn struct {
+	mcpPipelineTarget
+	Version     string           `json:"version" jsonschema:"The version that runs in the environment, which you verified (image tag, config commit or chart version); nothing is recorded when another one runs there"`
+	Check       string           `json:"check" jsonschema:"The check verified: a verify gate's verify.check"`
+	Result      string           `json:"result" jsonschema:"pass, fail or inconclusive"`
+	Summary     string           `json:"summary,omitempty" jsonschema:"What you found, in a sentence or two (required for fail and inconclusive)"`
+	EvidenceURL string           `json:"evidenceURL,omitempty" jsonschema:"An http(s) link to the evidence (a CI run, a report)"`
+	Findings    []mcpVerifyFound `json:"findings,omitempty" jsonschema:"What you found, each with a severity"`
+}
+
+// mcpVerifyFound is one finding the verify tool records.
+type mcpVerifyFound struct {
+	Severity string `json:"severity" jsonschema:"info, low, medium, high or critical"`
+	Title    string `json:"title" jsonschema:"The finding in a line"`
+}
+
+func (in mcpVerifyIn) check() error {
+	errs := []error{in.mcpPipelineTarget.check(), checkCheck(in.Check, true)}
+	if err := checkVersion("version", in.Version, true); err != nil {
+		errs = append(errs, fmt.Errorf("%w: name the version you verified", err))
+	}
+	switch in.Result {
+	case "pass", "fail", "inconclusive":
+	default:
+		errs = append(errs, argErr("result", in.Result, "pass, fail or inconclusive"))
+	}
+	if len(in.Summary) > 1024 {
+		errs = append(errs, fmt.Errorf("summary is longer than 1024 bytes"))
+	}
+	if in.EvidenceURL != "" && (len(in.EvidenceURL) > 2048 || !mcpEvidencePattern.MatchString(in.EvidenceURL)) {
+		errs = append(errs, argErr("evidenceURL", in.EvidenceURL, "an http(s) URL without spaces"))
+	}
+	if len(in.Findings) > 32 {
+		errs = append(errs, fmt.Errorf("at most 32 findings"))
+	}
+	for _, f := range in.Findings {
+		switch f.Severity {
+		case "info", "low", "medium", "high", "critical":
+		default:
+			errs = append(errs, argErr("findings.severity", f.Severity, "info, low, medium, high or critical"))
+		}
+		if strings.TrimSpace(f.Title) == "" || len(f.Title) > 256 {
+			errs = append(errs, fmt.Errorf("findings.title: give a line of at most 256 bytes"))
+		}
+	}
+	return checkAll(errs...)
+}
+
+func mcpVerify(ctx context.Context, k *mcpServer, in mcpVerifyIn) (*mcp.CallToolResult, error) {
+	o := verifyOptions{env: in.Environment, check: in.Check, version: in.Version, summary: in.Summary, evidence: in.EvidenceURL,
+		pass: in.Result == "pass", fail: in.Result == "fail", inconclusive: in.Result == "inconclusive"}
+	for _, f := range in.Findings {
+		o.findings = append(o.findings, f.Severity+":"+f.Title)
+	}
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		bundle, err := runningBundle(ctx, c, ns, in.Pipeline, in.Environment)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkVerifyVersion(ctx, c, ns, bundle, in.Environment, in.Version); err != nil {
+			return nil, err
+		}
+		return nil, verifyFn(ctx, w, c, ns, bundle, o, time.Now())
 	})
 }

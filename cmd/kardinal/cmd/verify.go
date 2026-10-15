@@ -67,14 +67,8 @@ and never on work of its own party (its sponsor's, or its own).`,
 				return err
 			}
 			o.env = env
-			if o.version != "" {
-				version, err := approvalVersion(ctx, c, ns, bundle)
-				if err != nil {
-					return err
-				}
-				if version != o.version {
-					return fmt.Errorf("verify: %s runs %s (%s) in %s, not %s: nothing recorded", bundle, versionOr(version, bundle), bundle, env, o.version)
-				}
+			if err := checkVerifyVersion(ctx, c, ns, bundle, env, o.version); err != nil {
+				return err
 			}
 			return verifyFn(ctx, cmd.OutOrStdout(), c, ns, bundle, o, time.Now())
 		},
@@ -118,16 +112,39 @@ func verifyTarget(ctx context.Context, c sigs_client.Client, ns string, cmd *cob
 	if env == "" {
 		return "", "", fmt.Errorf("which environment? Give it after the pipeline: kardinal verify %s <env>", first)
 	}
-	p, err := requirePipeline(ctx, c, ns, first)
+	bundle, err := runningBundle(ctx, c, ns, first, env)
+	return bundle, env, err
+}
+
+// runningBundle is the Bundle that runs in env of pipeline, the one a
+// verdict is about.
+func runningBundle(ctx context.Context, c sigs_client.Client, ns, pipeline, env string) (string, error) {
+	p, err := requirePipeline(ctx, c, ns, pipeline)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	for _, e := range p.Status.Environments {
 		if e.Name == env && e.Bundle != "" {
-			return e.Bundle, env, nil
+			return e.Bundle, nil
 		}
 	}
-	return "", "", fmt.Errorf("verify: no version runs in %s of %s yet; name one: kardinal verify <bundle> --env %s", env, first, env)
+	return "", fmt.Errorf("verify: no version runs in %s of %s yet; name one: kardinal verify <bundle> --env %s", env, pipeline, env)
+}
+
+// checkVerifyVersion refuses to record when version is set and is not the
+// version bundle ships.
+func checkVerifyVersion(ctx context.Context, c sigs_client.Client, ns, bundle, env, version string) error {
+	if version == "" {
+		return nil
+	}
+	got, err := approvalVersion(ctx, c, ns, bundle)
+	if err != nil {
+		return err
+	}
+	if got != version {
+		return fmt.Errorf("verify: %s runs %s (%s) in %s, not %s: nothing recorded", bundle, versionOr(got, bundle), bundle, env, version)
+	}
+	return nil
 }
 
 // verdictResult is the result the flags give, or an error.
@@ -303,15 +320,13 @@ func newVerifyListCmd() *cobra.Command {
 	return cmd
 }
 
-// verifyListFn prints the Verdicts of bundle and, for each, whether a verify
-// gate counted it (from the gates' status.verdicts).
-func verifyListFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundle, env, check string) error {
+// verdictsCounted is the Verdicts of bundle (of env and check, when set),
+// and by Verdict name whether a verify gate counted it, from the gates'
+// status.verdicts: "yes (<gate>)", "no: <reason>", or absent.
+func verdictsCounted(ctx context.Context, c sigs_client.Client, ns, bundle, env, check string) ([]v1alpha1.Verdict, map[string]string, error) {
 	list, err := lifecycle.VerdictsOf(ctx, c, ns, bundle, env, check)
 	if err != nil {
-		return fmt.Errorf("verify list: %w", err)
-	}
-	if len(list) == 0 {
-		return writef(w, "No verdicts on %s.\n", bundle)
+		return nil, nil, fmt.Errorf("verify list: %w", err)
 	}
 	counted := map[string]string{}
 	var gates v1alpha1.PolicyGateList
@@ -326,6 +341,19 @@ func verifyListFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bu
 				}
 			}
 		}
+	}
+	return list, counted, nil
+}
+
+// verifyListFn prints the Verdicts of bundle and, for each, whether a verify
+// gate counted it (from the gates' status.verdicts).
+func verifyListFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundle, env, check string) error {
+	list, counted, err := verdictsCounted(ctx, c, ns, bundle, env, check)
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		return writef(w, "No verdicts on %s.\n", bundle)
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "NAME\tENV\tCHECK\tVERIFIER\tRESULT\tCOUNTED\tAGE\tEVIDENCE")

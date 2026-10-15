@@ -32,12 +32,14 @@ Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 | `explain` | Every step and gate of the current version, with each gate's CEL | `kardinal explain -o json` |
 | `gates` | The PolicyGate templates, or those of a pipeline | `kardinal policy list` |
 | `simulate` | Pre-flight: would a version be allowed into an environment now, and what would let it in | `kardinal policy simulate` |
+| `verdicts` | The verdicts on a version, and whether a verify gate counted each | `kardinal verify list` |
 | `ship` (write) | Create a version from images | `kardinal ship -o json` |
 | `promote` (write) | Promote what is Verified upstream into an environment | `kardinal promote -o json` |
 | `rollback` (write) | Roll an environment back, optionally holding it there | `kardinal rollback -o json` |
 | `pause`, `resume` (write) | Stop and restart a pipeline's promotions | `kardinal pause`, `kardinal resume` |
 | `reject` (write) | Reject a version for good, with a reason | `kardinal reject` |
 | `approve` (write) | Approve (or reject) the version waiting at an approval gate; the version is required | `kardinal approve --version` |
+| `verify` (write) | Record a verdict (pass, fail, inconclusive) for a check on the version that runs in an environment; the version is required | `kardinal verify --version` |
 
 The write tools ask for no confirmation: the agent's call is the confirmation. Start
 `kardinal mcp --allow-write` only with a kubeconfig whose RBAC is what you want the agent to do.
@@ -80,7 +82,8 @@ connected, unless `KARDINAL_ACTOR_CLIENT` is set; the model and session are
 ### Text kardinal did not write
 
 Tool results carry text from outside kardinal: PR URLs, step messages relayed from the SCM or
-the GitOps tool, a version's author and CI URL, the reasons and comments people typed. Each
+the GitOps tool, a version's author and CI URL, the reasons and comments people typed, and
+what a verifier wrote in a verdict (its summary, evidence link and finding titles). Each
 such value comes labelled:
 
 ```json
@@ -171,7 +174,7 @@ only the first:
 
 | Role | Tools that work | Tools that fail with `Forbidden` |
 |---|---|---|
-| `kardinal-agent-read` (with the `platform-policies` Role, for `simulate`) | `why`, `status`, `inbox`, `history`, `diff`, `explain`, `gates`, `simulate` | every write tool |
+| `kardinal-agent-read` (with the `platform-policies` Role, for `simulate`) | `why`, `status`, `inbox`, `history`, `diff`, `explain`, `gates`, `simulate`, `verdicts` | every write tool |
 | `kardinal-agent-read` and `kardinal-agent-ship` | the read tools, `ship`, `promote`, and `rollback` without `hold` | `rollback` with `hold`, `pause`, `resume`, `reject`, `approve` |
 
 `ship`, `promote` and `rollback` all create a Bundle, so `create` on Bundles grants all three. A
@@ -187,7 +190,7 @@ metadata:
   name: release-agent
   namespace: my-app
 ---
-# The read tools: why, status, inbox, history, diff, explain, gates, simulate.
+# The read tools: why, status, inbox, history, diff, explain, gates, simulate, verdicts.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -196,7 +199,7 @@ metadata:
 rules:
   - apiGroups: ["kardinal.io"]
     resources: ["pipelines", "bundles", "promotionsteps", "policygates", "prstatuses",
-                "metricchecks", "approvals", "auditevents"]
+                "metricchecks", "approvals", "auditevents", "verdicts"]
     verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -275,6 +278,7 @@ limits a caller who holds `pipelines/pause` or `pipelines/hold` to `spec.paused`
 | `pause`, `resume` | `pipelines` `update`, `patch` and `pipelines/pause` `update` |
 | `reject` | `bundles` `patch` |
 | `approve` | `approvals` `create`, `delete` |
+| `verify` | `verdicts` `create` |
 
 A gate that reads `changewindow.*` needs `get` and `list` on the cluster-scoped `changewindows`
 for `simulate` to evaluate it: that is a ClusterRole.
