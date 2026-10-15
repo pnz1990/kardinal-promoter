@@ -21,9 +21,9 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/hack/changelog/fragments"
 )
 
-// siteURL is the published docs site. The changelog links to it with
-// absolute URLs where its text is also the GitHub release body, in which a
-// relative link would not resolve.
+// siteURL is the published docs site. Older changelog sections link to it
+// with absolute URLs; release.yml's notes step now turns every relative link
+// of the notes into one, for the GitHub release body (#1829).
 const siteURL = "https://pnz1990.github.io/kardinal-promoter/"
 
 var (

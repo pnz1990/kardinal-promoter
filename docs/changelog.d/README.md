@@ -18,6 +18,11 @@ Deprecated, Removed, Fixed, Security, Documentation or Development. A file may
 hold several entries of one section. The docs site lists these files under
 [Unreleased] (`hack/docs-changelog/changelog_fragments.py`).
 
+Link to docs pages relative to docs/, as `docs/changelog.md` does. The
+release notes on GitHub get the docs site's URL for each
+(`guides/security.md#audit-logging` becomes
+`https://pnz1990.github.io/kardinal-promoter/guides/security/#audit-logging`).
+
 `go run ./hack/changelog unreleased` prints the section as it will be
 released. `make changelog-release VERSION=vX.Y.Z` writes the entries into
 `docs/changelog.md` under that version and deletes these files, before the
