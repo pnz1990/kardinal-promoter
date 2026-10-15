@@ -27,8 +27,9 @@
           <li><strong>A local MCP server.</strong> <code>kardinal mcp</code> runs with the agent's own
             kubeconfig, read-only unless started with <code>--allow-write</code>, and answers a
             policy pre-flight before the agent acts.</li>
-          <li><strong>Fleet controls.</strong> Pause, hold or roll back every target of a fleet at once,
-            and stop a rollout after <code>maxUnavailable</code> failures.</li>
+          <li><strong>Agents as governed verifiers.</strong> A verify gate holds an environment until
+            enough eligible agents, people or CI record passing verdicts on the version, never from
+            the author agent's own party, with the evidence in the pull request.</li>
         </ul>
         <div class="k-hero__actions">
           <a class="md-button md-button--primary" href="{{ 'quickstart/' | url }}">Start the quickstart</a>
