@@ -142,23 +142,55 @@ func (d *yamlDoc) encode() ([]byte, error) {
 		}
 	}
 	keepFlowNulls(&d.doc, false)
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if d.compactSeq {
-		enc.CompactSeqIndent()
-	}
-	if err := enc.Encode(&d.doc); err != nil {
-		return nil, err
-	}
-	if err := enc.Close(); err != nil {
+	out, err := encodeNode(&d.doc, d.compactSeq)
+	if err != nil {
 		return nil, err
 	}
 	// The encoder does not round-trip every scalar (a folded block scalar
 	// with more-indented lines, #1907): refuse to write a file whose other
 	// values would change, rather than change them.
-	if same, err := sameData(buf.Bytes(), &d.doc); err != nil || !same {
+	if same, err := sameData(out, &d.doc); err != nil || !same {
 		return nil, errReencodeChanges
+	}
+	// Nor is it stable: a comment in a flow collection can come out with a
+	// blank line that the next encode drops (#1965), so the next run of the
+	// same edit would write other bytes. Encode what was written until it
+	// no longer changes: what the step writes is what it would write again.
+	for range 3 {
+		var again yaml.Node
+		if err := yaml.Unmarshal(out, &again); err != nil {
+			return nil, errReencodeChanges
+		}
+		keepFlowNulls(&again, false)
+		next, err := encodeNode(&again, d.compactSeq)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(next, out) {
+			return out, nil
+		}
+		if same, err := sameData(next, &d.doc); err != nil || !same {
+			return nil, errReencodeChanges
+		}
+		out = next
+	}
+	return nil, errReencodeChanges
+}
+
+// encodeNode encodes n with two-space indentation and, when compactSeq,
+// sequences not indented under their key.
+func encodeNode(n *yaml.Node, compactSeq bool) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if compactSeq {
+		enc.CompactSeqIndent()
+	}
+	if err := enc.Encode(n); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
 	}
 	return buf.Bytes(), nil
 }
