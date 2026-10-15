@@ -5,12 +5,15 @@ package agentidentity_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -176,4 +179,69 @@ func TestEnsureIndex(t *testing.T) {
 	require.NoError(t, e.Start(ctx), "idempotent")
 	assert.Equal(t, n, patches.Load())
 	assert.False(t, e.NeedLeaderElection())
+}
+
+// TestIndex_TwoBuilders (#1917): two builders race on one index. Builder A
+// (a replica's build) reads the index and the AgentIdentities before a
+// suspension; the suspension is applied and builder B (the leader) writes
+// it; A's write, from its older read, is refused with a Conflict, and the
+// index keeps the suspension. And a replica's start-up build leaves a Ready
+// index alone.
+func TestIndex_TwoBuilders(t *testing.T) {
+	ctx := context.Background()
+	s := scheme(t)
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(id("fixer", 0, "alice", sa("ci", "fixer"))).
+		WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}).Build()
+	leader := &agentidentity.IndexReconciler{Client: base, Name: "k"}
+	_, err := leader.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+
+	suspend := func() {
+		var cur v1alpha1.AgentIdentity
+		require.NoError(t, base.Get(ctx, client.ObjectKey{Name: "fixer"}, &cur))
+		cur.Spec.Suspended = true
+		require.NoError(t, base.Update(ctx, &cur))
+	}
+	// A's view: its list of AgentIdentities is the one before the
+	// suspension (a stale cache); between its reads and its write the
+	// suspension lands and the leader writes it.
+	var before v1alpha1.AgentIdentityList
+	require.NoError(t, base.List(ctx, &before))
+	raced := false
+	stale := interceptor.NewClient(base, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if l, ok := list.(*v1alpha1.AgentIdentityList); ok {
+				before.DeepCopyInto(l)
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch,
+			opts ...client.SubResourcePatchOption) error {
+			if !raced {
+				raced = true
+				suspend()
+				_, err := leader.Reconcile(ctx, reconcile.Request{})
+				require.NoError(t, err)
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	// A must have something to write: make its stale view differ from the
+	// stored index (a second subject only it knows about).
+	before.Items[0].Spec.Subjects = append(before.Items[0].Spec.Subjects, sa("ci", "other"))
+	_, err = (&agentidentity.IndexReconciler{Client: stale, Name: "k"}).Reconcile(ctx, reconcile.Request{})
+	require.Error(t, err, "the stale write is refused")
+	assert.True(t, apierrors.IsConflict(errors.Unwrap(err)) || strings.Contains(err.Error(), "the object has been modified"), err.Error())
+	var idx v1alpha1.AgentIndex
+	require.NoError(t, base.Get(ctx, client.ObjectKey{Name: "k"}, &idx))
+	assert.Equal(t, "suspended", idx.Status.Users["system:serviceaccount:ci:fixer"].Blocked, "the suspension holds")
+
+	// A replica's start-up build does not touch a Ready index.
+	e := agentidentity.NewEnsureIndexForTest(stale, "k")
+	require.NoError(t, e.Start(ctx))
+	require.NoError(t, base.Get(ctx, client.ObjectKey{Name: "k"}, &idx))
+	assert.Equal(t, "suspended", idx.Status.Users["system:serviceaccount:ci:fixer"].Blocked)
+	_, has := idx.Status.Users["system:serviceaccount:ci:other"]
+	assert.False(t, has, "the stale view was not written")
 }

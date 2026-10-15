@@ -162,7 +162,11 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 		return reconcile.Result{}, nil
 	}
 	idx.Status = want
-	if err := r.Status().Patch(ctx, &idx, client.MergeFrom(base)); err != nil {
+	// Optimistic concurrency (#1917): a builder whose read of the index is
+	// older than another builder's write (a replica's start-up build from a
+	// stale cache, racing the leader's) gets a Conflict instead of undoing
+	// the newer index, for example a suspension just applied.
+	if err := r.Status().Patch(ctx, &idx, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return reconcile.Result{}, fmt.Errorf("patch agent index %s status: %w", r.Name, err)
 	}
 	zerolog.Ctx(ctx).Info().Str("agentindex", r.Name).Int("identities", reg.Index.ObservedIdentities).
@@ -171,7 +175,7 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 }
 
 // ensureIndex builds the index once at start on every replica, leader or
-// not (NeedLeaderElection false): a replica is ready only once the index is
+// not (NeedLeaderElection false), when it has never been built: a replica is ready only once the index is
 // Ready, and during a rolling upgrade the leader can be a release that does
 // not know the index. Every replica writes the same status (Evaluate is
 // deterministic); afterwards the leader's IndexReconciler keeps it current.
@@ -189,6 +193,14 @@ func (e *ensureIndex) Start(ctx context.Context) error {
 		return nil
 	}
 	for {
+		// Only an index that was never built: once one is Ready, the
+		// leader's IndexReconciler keeps it current, and a start-up build
+		// from this replica's cache could be older than it (#1917).
+		var idx v1alpha1.AgentIndex
+		if err := e.r.Get(ctx, client.ObjectKey{Name: e.r.Name}, &idx); err == nil &&
+			meta.IsStatusConditionTrue(idx.Status.Conditions, ConditionReady) {
+			return nil
+		}
 		_, err := e.r.Reconcile(ctx, reconcile.Request{})
 		if err == nil {
 			return nil
