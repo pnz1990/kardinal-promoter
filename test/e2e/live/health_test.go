@@ -1036,8 +1036,9 @@ func TestHealth_ArgoWaitsForRevision(t *testing.T) {
 			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != "", framework.DescribeStep(ps)
 		})
 	commit := ps.Status.Outputs["commitSHA"]
-	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=Synced, opPhase=Succeeded, revision=%s, waiting for %s",
-		short(old), short(commit))
+	// The applied revision is the commit before the pushed one (#1883).
+	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=Synced, opPhase=Succeeded, revision=%s, waiting for %s"+
+		" (%s is 1 commit behind it: Argo CD has not fetched the promoted commit yet)", short(old), short(commit), short(old))
 	e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "the older revision to hold the step",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
 			return ps.Status.Message == waiting, framework.DescribeStep(ps)
@@ -1147,8 +1148,10 @@ func TestHealth_ArgoMergeCommit(t *testing.T) {
 		})
 	merge := ps.Status.Outputs["mergeCommitSHA"]
 	assert.Empty(t, ps.Status.Outputs["commitSHA"], "a pr-review step pushes only its PR branch")
-	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=Synced, opPhase=Succeeded, revision=%s, waiting for %s",
-		short(old), short(merge))
+	// The applied revision is two behind the merge commit: the PR's commit,
+	// then the merge (#1883).
+	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=Synced, opPhase=Succeeded, revision=%s, waiting for %s"+
+		" (%s is 2 commits behind it: Argo CD has not fetched the promoted commit yet)", short(old), short(merge), short(old))
 	e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "the merge commit to be awaited",
 		func(ps *v1alpha1.PromotionStep) (bool, string) {
 			return ps.Status.Message == waiting, framework.DescribeStep(ps)
