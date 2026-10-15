@@ -21,9 +21,9 @@
           the cluster, not in the agent.
         </p>
         <ul class="k-hero__proof">
-          <li><strong>Verified identity.</strong> The API server admits an approval, an override or a
-            rejection only in the caller's own name, and <code>excludeAuthor</code> keeps a version's
-            creator from approving it.</li>
+          <li><strong>A verified actor and sponsor.</strong> Every version, approval and override records
+            who acted, checked by the API server; a registered agent is recorded with the person who
+            answers for it, and <code>excludeAuthor</code> keeps a version's creator from approving it.</li>
           <li><strong>A local MCP server.</strong> <code>kardinal mcp</code> runs with the agent's own
             kubeconfig, read-only unless started with <code>--allow-write</code>, and answers a
             policy pre-flight before the agent acts.</li>

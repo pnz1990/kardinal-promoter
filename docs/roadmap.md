@@ -18,7 +18,8 @@ Everything in this section is planned and not in kardinal yet. Plans change with
 
 - **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
   the namespaces, pipelines and environments it may act in. Versions, approvals and overrides
-  record the verified actor and sponsor, and AuditEvents name them.
+  record the verified actor and sponsor, and AuditEvents name them. On main, unreleased:
+  [Agents and the verified actor](actors.md).
 - **Policy that knows the actor.** Gates read who created a version (`actor.*`, `agent.*`), and an
   environment can say `agents: auto | approve | deny`. Approvals from agents count only where a
   gate opts in, never for the agent's own work or its sponsor's.

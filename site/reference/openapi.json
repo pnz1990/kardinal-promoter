@@ -93,10 +93,83 @@
       }
     },
     "schemas": {
+      "Actor": {
+        "additionalProperties": false,
+        "description": "Actor records who made a change: the kardinal.io/actor stamp. Kind, principal, agent, sponsor and via are verified: the chart's <release>-actor ValidatingAdmissionPolicy admits a stamp only when it says what request.userInfo resolves to through the AgentIndex, and only the controller may set via. Everything under asserted is written by the client and never trusted.",
+        "properties": {
+          "agent": {
+            "description": "Agent is the AgentIdentity name, when kind is agent.",
+            "type": "string"
+          },
+          "asserted": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssertedActor"
+              }
+            ],
+            "description": "Asserted holds what the client says about itself. It is recorded as written and never used for a security decision."
+          },
+          "kind": {
+            "description": "Kind is human, agent, bot or controller (docs/actors.md).",
+            "type": "string"
+          },
+          "principal": {
+            "description": "Principal is the username the API server authenticated.",
+            "type": "string"
+          },
+          "sponsor": {
+            "description": "Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent.",
+            "type": "string"
+          },
+          "via": {
+            "description": "Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "principal"
+        ],
+        "type": "object"
+      },
+      "AssertedActor": {
+        "additionalProperties": false,
+        "description": "AssertedActor is what a client says about itself: not verified.",
+        "properties": {
+          "client": {
+            "description": "Client is the tool that wrote the record (for example kardinal/0.12.0).",
+            "type": "string"
+          },
+          "model": {
+            "description": "Model is the AI model the client says it runs.",
+            "type": "string"
+          },
+          "session": {
+            "description": "Session is the client's session or run identifier.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Bundle": {
         "additionalProperties": false,
         "description": "uiBundleResponse is the JSON shape for a Bundle in the UI API.",
         "properties": {
+          "actor": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Actor"
+              }
+            ],
+            "description": "Actor is who created the Bundle (docs/actors.md): its stamp, or kind unknown with its kardinal.io/created-by."
+          },
+          "actorAsserted": {
+            "type": "string"
+          },
+          "actorText": {
+            "description": "ActorText is Actor as one sentence (\"agent fixer for alice\"), and ActorAsserted what it asserted about itself, labelled as asserted.",
+            "type": "string"
+          },
           "createdAt": {
             "description": "ISO 8601 creation time for timeline sorting",
             "type": "string"
@@ -163,6 +236,8 @@
           }
         },
         "required": [
+          "actor",
+          "actorText",
           "name",
           "namespace",
           "phase",
