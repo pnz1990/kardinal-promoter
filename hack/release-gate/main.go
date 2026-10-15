@@ -365,7 +365,7 @@ func proveCoverage(root, out string, steps []Step, results []Result) error {
 		}
 	}
 	if len(files) == 0 {
-		return fmt.Errorf("no live suite ran on this commit with these inputs: no row is proven")
+		return fmt.Errorf("no live suite ran on this commit with these inputs")
 	}
 	sort.Strings(files)
 	cmd := exec.Command("go", append([]string{"run", "./test/e2e/proof", "-out", proof}, files...)...)
