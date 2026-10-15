@@ -253,7 +253,9 @@ func TestActorsOnAPIServer(t *testing.T) {
 		cur.Spec.LastChange = ch
 		return c.Update(ctx, &cur)
 	}
-	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "bob", Actor: hu("bob")})
+	// Only by is wrong: the stamp is alice's own, so only the hold-writes
+	// policy refuses (two refusing policies answer in no fixed order).
+	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "bob", Actor: hu("alice")})
 	require.Error(t, err, "18c a pause recorded in someone else's name")
 	require.Contains(t, err.Error(), "spec.lastChange.by must be your own username")
 	require.Error(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Actor: hu("bob")}),
