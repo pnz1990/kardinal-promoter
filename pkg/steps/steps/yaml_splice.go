@@ -277,7 +277,7 @@ func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 	// the scalar's text (folded ">\n 0\n  \n" is "0\n \n"), not a blank
 	// line after it: an entry inserted before it would take it from the
 	// scalar (#1965).
-	indent, ok := s.blockIndent(last)
+	indent, ok := s.blockIndent(last, scalarKeyColumn(v, col))
 	for end > start {
 		line := strings.TrimRight(s.lines[end-1], "\n")
 		if strings.TrimSpace(line) != "" {
@@ -292,10 +292,11 @@ func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 }
 
 // blockIndent is the content indentation of the block scalar n: the
-// header's indentation indicator added to its line's indentation, else the
+// header's indentation indicator added to the indentation of its key (at
+// column keyCol, 0 when it has none), else the
 // indentation of its first line that is not blank. ok is false when it has
 // no such line: every line after the header may then be its text.
-func (s *splicer) blockIndent(n *yaml.Node) (int, bool) {
+func (s *splicer) blockIndent(n *yaml.Node, keyCol int) (int, bool) {
 	header := s.lines[n.Line-1]
 	if n.Column-1 < len(header) {
 		h := header[n.Column-1:]
@@ -304,7 +305,13 @@ func (s *splicer) blockIndent(n *yaml.Node) (int, bool) {
 		}
 		for _, r := range h {
 			if r >= '1' && r <= '9' {
-				return len(header) - len(strings.TrimLeft(header, " ")) + int(r-'0'), true
+				// Relative to the indentation of the scalar's parent: its
+				// key's, wherever the header is ("0:\n >2", #1965). A
+				// scalar in a sequence: unknown, so every line may be text.
+				if keyCol < 1 {
+					return 0, false
+				}
+				return keyCol - 1 + int(r-'0'), true
 			}
 		}
 	}
@@ -341,6 +348,22 @@ func keepChomping(line string, col int) bool {
 		h = h[:i]
 	}
 	return strings.Contains(h, "+")
+}
+
+// scalarKeyColumn is the column of the key of n's last scalar: col when n
+// is that scalar (the entry's key is at col), the column of the last key of
+// the deepest last mapping, or 0 when the scalar is a sequence item.
+func scalarKeyColumn(n *yaml.Node, col int) int {
+	for n != nil && (n.Kind == yaml.MappingNode || n.Kind == yaml.SequenceNode) && len(n.Content) > 0 {
+		switch n.Kind {
+		case yaml.MappingNode:
+			col = n.Content[len(n.Content)-2].Column
+		case yaml.SequenceNode:
+			col = 0
+		}
+		n = n.Content[len(n.Content)-1]
+	}
+	return col
 }
 
 // lastScalar returns the last scalar of n, or nil.

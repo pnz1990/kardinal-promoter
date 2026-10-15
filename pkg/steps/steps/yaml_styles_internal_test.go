@@ -42,7 +42,8 @@ var styledValues = []string{
 	">2-\n   explicit\n   ",
 	"\"quoted over\n  # two lines, not a comment\"",
 	"'single over\n  #two lines, it''s text'",
-	"\"0\n#\"", // the second crasher: a quoted line that starts with #
+	"\"0\n#\"",   // the second crasher: a quoted line that starts with #
+	"\n >2\n   ", // a header on its own line: the indicator counts from the key
 }
 
 // styledDocs are documents of styledValues: alone, before another key,
