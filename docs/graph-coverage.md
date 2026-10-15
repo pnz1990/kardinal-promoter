@@ -98,6 +98,10 @@ of items checked are in the [ledger](design/16-graph-capability-ledger.md#upstre
 | G9: reconcile cost | None filed ([kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324) is related) | None | Ask kro to cache the access check and skip unchanged applies |
 | G10–G14: object size, collections, Job cleanup, sharding, frozen nodes | None filed | None | See the [ledger](design/16-graph-capability-ledger.md#gaps-with-no-upstream-work) for each ask |
 | G18–G19: watching a named `ref` with a name-limited grant; reading a cluster-scoped `ref` from a namespaced Graph | None filed | None | See the [ledger](design/16-graph-capability-ledger.md#g18-the-ref-watch-check-ignores-the-refs-name) for each ask |
+| G21–G22: claiming from a budget shared by many Graphs; counting across namespaces (planned agent budgets) | None filed | None | No ask: a reconciler that owns the budget is the intended shape. See the [ledger](design/16-graph-capability-ledger.md#g21-two-graphs-cannot-claim-from-one-shared-budget) |
+| G23: a path glob in Graph CEL | None filed | None | Propose a `path.glob` CEL library to kro (drafted in the [ledger](design/16-graph-capability-ledger.md#g23-graph-cel-has-no-path-glob), not posted) |
+| G25: an optional `ref` (publish "absent" instead of holding dependents) | None filed | None | None for now: the error-budget gate reads Prometheus, not the SLO objects ([design](design/26-error-budget-gate.md)) |
+| G26: a missing key in an untyped field waits instead of failing (planned custom steps) | None filed | None | See the [ledger](design/16-graph-capability-ledger.md#g26-a-missing-key-in-an-untyped-field-reads-as-data-pending) for the ask |
 
 Want to help? Pick a row, check the ledger entry for the proposed kro change, and open an
 issue or discussion on [kardinal-promoter](https://github.com/pnz1990/kardinal-promoter/issues).
