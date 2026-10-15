@@ -250,7 +250,14 @@ jobs:
           mkdir -p release-notes
           printf '%s\n' "$NOTES" > release-notes/notes.md
           echo "notes=release-notes/notes.md" >> "$GITHUB_OUTPUT"
-          echo "$NOTES"
+          # The notes are the log's too. They come from pull requests, and a
+          # line of theirs starting with :: would be a workflow command
+          # (::set-output, ::add-mask, ::error), so commands are stopped
+          # while they print, with a token no fragment can guess.
+          STOP=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          echo "::stop-commands::$STOP"
+          printf '%s\n' "$NOTES"
+          echo "::$STOP::"
 
       # docs/upgrade.md describes the upgrade to the next release before it
       # exists with a --version <version> placeholder and a "not released
