@@ -29,6 +29,13 @@ const (
 	// sigstoreBundlePrefix prefixes the artifact type of a Sigstore bundle
 	// referrer (application/vnd.dev.sigstore.bundle.v0.3+json).
 	sigstoreBundlePrefix = "application/vnd.dev.sigstore.bundle"
+	// predicateTypeAnnotation names the in-toto predicate of a Sigstore
+	// bundle referrer (cosign sets it, and so do kardinal's promotion
+	// receipts). A referrer that names another predicate than an image
+	// signature's is skipped before it counts against maxSignatures, so
+	// attestations (receipts, SBOMs, provenance) cannot crowd out the
+	// image's signatures. One that names none is read and checked.
+	predicateTypeAnnotation = "dev.sigstore.bundle.predicateType"
 	// cosignSignatureAnnotation holds a legacy signature, base64.
 	cosignSignatureAnnotation = "dev.cosignproject.cosign/signature"
 	// cosignCertificateAnnotation holds a legacy keyless certificate.
@@ -129,6 +136,9 @@ func (r *OCIRegistry) Signatures(ctx context.Context, repository, digest string,
 		}
 		for _, d := range m.Manifests {
 			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || len(out.Bundles) >= maxSignatures {
+				continue
+			}
+			if p, ok := d.Annotations[predicateTypeAnnotation]; ok && p != CosignSignPredicate {
 				continue
 			}
 			b, err := firstLayer(ref.Context().Digest(d.Digest.String()), ropts)

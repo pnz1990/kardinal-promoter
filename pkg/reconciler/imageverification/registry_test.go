@@ -5,6 +5,7 @@ package imageverification_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -111,4 +112,53 @@ func mustHost(t *testing.T, raw string) string {
 	u, err := url.Parse(raw)
 	require.NoError(t, err)
 	return u.Host
+}
+
+// TestOCIRegistry_AttestationsDoNotCrowdOutSignatures: an image carrying 40
+// Sigstore bundle referrers of another predicate (promotion receipts, one per
+// environment it reached) and one cosign signature: the attestations are
+// skipped before the maxSignatures bound, so the signature is still read. A
+// bundle that names no predicate is read, as before.
+func TestOCIRegistry_AttestationsDoNotCrowdOutSignatures(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(srv.Close)
+	host := mustHost(t, srv.URL)
+	ctx := context.Background()
+	img, err := random.Image(256, 1)
+	require.NoError(t, err)
+	d, err := img.Digest()
+	require.NoError(t, err)
+	repo := host + "/app"
+	ref, err := name.NewDigest(repo+"@"+d.String(), name.Insecure)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ref, img))
+	insecure := []name.Option{name.Insecure}
+	key, err := signtest.NewKey()
+	require.NoError(t, err)
+
+	const vsa = "https://slsa.dev/verification_summary/v1"
+	for i := range 40 {
+		b, err := key.BundleWithPredicate(repo, d.String(), vsa)
+		require.NoError(t, err)
+		// Each receipt is a distinct referrer.
+		require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), b,
+			map[string]string{"dev.sigstore.bundle.predicateType": vsa, "e2e/n": fmt.Sprint(i)}, insecure))
+	}
+	sig, err := key.Bundle(repo, d.String())
+	require.NoError(t, err)
+	require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), sig,
+		map[string]string{"dev.sigstore.bundle.predicateType": iv.CosignSignPredicate}, insecure))
+	unnamed, err := key.Bundle(repo, d.String()+"x")
+	require.NoError(t, err)
+	require.NoError(t, signtest.PushBundle(ctx, repo, d.String(), unnamed, insecure))
+
+	r := &iv.OCIRegistry{Transport: http.DefaultTransport}
+	got, err := r.Signatures(ctx, repo, d.String(), iv.RegistryOptions{Insecure: []string{host}})
+	require.NoError(t, err)
+	require.Len(t, got.Bundles, 2, "the signature and the unnamed bundle; no receipt")
+	var texts []string
+	for _, b := range got.Bundles {
+		texts = append(texts, string(b))
+	}
+	assert.Contains(t, texts, string(sig))
 }
