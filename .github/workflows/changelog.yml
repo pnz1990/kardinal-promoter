@@ -7,6 +7,12 @@ name: changelog
 # label opts a pull request out. It runs on label changes too, so it is a
 # workflow of its own: ci.yml re-running on every label would cost a full CI
 # run.
+#
+# No concurrency group: cancelling a superseded run (several labels added in
+# one go) leaves a check suite with no changelog check in it, and GitHub then
+# reports the required check as "expected" and blocks the merge. Each run
+# reads the pull request's labels as they are now, not as they were in its
+# event, so every run reaches the same verdict whichever finishes last.
 
 on:
   pull_request:
@@ -15,10 +21,7 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: changelog-${{ github.ref }}
-  cancel-in-progress: true
+  pull-requests: read
 
 jobs:
   changelog:
@@ -35,5 +38,9 @@ jobs:
       - name: A user-facing change adds a changelog fragment
         env:
           BASE: origin/${{ github.base_ref }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-        run: go run ./hack/changelog check "$BASE" "$LABELS"
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          go run ./hack/changelog check "$BASE" "$LABELS"
