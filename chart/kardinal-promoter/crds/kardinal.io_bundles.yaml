@@ -725,6 +725,13 @@ spec:
                 - Superseded
                 - Rejected
                 type: string
+              phaseTransitionTime:
+                description: |-
+                  PhaseTransitionTime is when phase last changed: when the version
+                  became Promoting, Verified, Failed, Superseded or Rejected. The
+                  NotificationHook events of a phase change carry it as their time.
+                format: date-time
+                type: string
               pipelineSpecHash:
                 description: |-
                   PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused

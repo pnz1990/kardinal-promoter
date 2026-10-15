@@ -644,7 +644,7 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	}
 
 	patch := statusPatch(b.DeepCopy())
-	b.Status.Phase = phaseAvailable
+	setPhase(b, phaseAvailable, r.now())
 	b.Status.Version = scm.BundleVersion(b.Spec)
 	// Ready=False/Available lets operators observe the phase via kubectl wait
 	// and lets GitOps controllers gate on standard conditions.
@@ -934,7 +934,7 @@ func (r *Reconciler) pipelineBundleList(ctx context.Context, ns, pipeline string
 func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
 	patch := statusPatch(b.DeepCopy())
-	supersede(b)
+	supersede(b, r.now())
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Superseded: %w", err)
 	}
@@ -946,8 +946,8 @@ func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 	return ctrl.Result{}, nil
 }
 
-func supersede(b *kardinalv1alpha1.Bundle) {
-	b.Status.Phase = phaseSuperseded
+func supersede(b *kardinalv1alpha1.Bundle, now time.Time) {
+	setPhase(b, phaseSuperseded, now)
 	meta.RemoveStatusCondition(&b.Status.Conditions, graph.CondBundleWaitingForSlot)
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
 		"superseded by a newer bundle for the same pipeline and type")
@@ -997,7 +997,7 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 		// The time is read for this CRD status write (Graph-first).
 		b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, rejectionAuditEntry(b, r.now()))
 	}
-	b.Status.Phase = phaseRejected
+	setPhase(b, phaseRejected, r.now())
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
 	setBundleCondition(b, condRejected, metav1.ConditionTrue, "Rejected", msg)
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
@@ -1113,7 +1113,7 @@ func (r *Reconciler) markRejectedArtifact(ctx context.Context, log zerolog.Logge
 	b *kardinalv1alpha1.Bundle, from string) (ctrl.Result, error) {
 	patch := statusPatch(b.DeepCopy())
 	msg := fmt.Sprintf("carries an image or config commit of the rejected bundle %s; it is never promoted", from)
-	b.Status.Phase = phaseRejected
+	setPhase(b, phaseRejected, r.now())
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "RejectedArtifact", msg)
 	setBundleCondition(b, condRejected, metav1.ConditionTrue, "RejectedArtifact", msg)
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
@@ -1260,7 +1260,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	}
 
 	patch := statusPatch(b.DeepCopy())
-	b.Status.Phase = phasePromoting
+	setPhase(b, phasePromoting, r.now())
 	b.Status.GraphRef = graphName                              // for recreation detection (#490)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // for change detection (#626)
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Promoting", "promotion in progress")
@@ -1419,7 +1419,7 @@ func (r *Reconciler) namespaceDeleting(ctx context.Context, log zerolog.Logger, 
 func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline, cause error) (ctrl.Result, error) {
 	patch := statusPatch(b.DeepCopy())
-	reason, msg, _ := setInvalid(b, pipeline, cause, usedGatesHash(pipeline, cause))
+	reason, msg, _ := setInvalid(b, pipeline, cause, usedGatesHash(pipeline, cause), r.now())
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -1444,7 +1444,7 @@ func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kar
 //
 // Graph-first: a pure mutation of the in-memory Bundle before a status patch.
 func setInvalid(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline,
-	cause error, gatesHash string) (reason, msg string, changed bool) {
+	cause error, gatesHash string, now time.Time) (reason, msg string, changed bool) {
 	reason = "InvalidIntent"
 	hint := "apply a corrected Pipeline to retry"
 	b.Status.PolicyGatesHash = ""
@@ -1461,7 +1461,7 @@ func setInvalid(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline,
 	}
 	msg = fmt.Sprintf("%v — %s", cause, hint)
 
-	b.Status.Phase = phaseFailed
+	setPhase(b, phaseFailed, now)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(pipeline)
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Failed", "promotion failed: "+msg)
 	changed = setBundleCondition(b, condInvalidSpec, metav1.ConditionTrue, reason, msg)
@@ -1500,7 +1500,7 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 	}
 
 	patch := statusPatch(b.DeepCopy())
-	b.Status.Phase = phaseAvailable
+	setPhase(b, phaseAvailable, r.now())
 	b.Status.Version = scm.BundleVersion(b.Spec)
 	b.Status.PipelineSpecHash = ""
 	b.Status.PolicyGatesHash = ""
@@ -1564,7 +1564,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		}
 	case invalidBuild:
 		wasFailed := before.Status.Phase == phaseFailed
-		reason, msg, changed := setInvalid(b, pipeline, syncErr, usedGatesHash(pipeline, syncErr))
+		reason, msg, changed := setInvalid(b, pipeline, syncErr, usedGatesHash(pipeline, syncErr), r.now())
 		setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "InvalidSpec", syncErr.Error())
 		if changed {
 			log.Warn().Str("reason", reason).Err(syncErr).Msg("bundle failed: graph cannot be built")
@@ -1597,7 +1597,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		switch {
 		case failedEnv != nil || rejected != nil:
 			reason, msg := failureCause(failedEnv, rejected, steps)
-			b.Status.Phase = phaseFailed
+			setPhase(b, phaseFailed, r.now())
 			setBundleCondition(b, condReady, metav1.ConditionFalse, "Failed", "promotion failed: "+msg)
 			setBundleCondition(b, condFailed, metav1.ConditionTrue, reason, msg)
 			after = append(after, func() {
@@ -1611,7 +1611,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			// supersedes a Promoting Bundle only for a newer one in flight;
 			// one that is Verified already supersedes it here. Not a failure.
 			s := supersededStep(steps)
-			supersede(b)
+			supersede(b, r.now())
 			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
 				fmt.Sprintf("environment %s: %s", s.Spec.Environment, s.Status.Message))
 			after = append(after, func() { r.superseded(b) })
@@ -1619,7 +1619,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			// Every target of a fleet was deployed by newer Bundles (each
 			// step Superseded): this Bundle was replaced everywhere there.
 			fleet := supersededFleet(pipeline, b, steps)
-			supersede(b)
+			supersede(b, r.now())
 			setBundleCondition(b, condReady, metav1.ConditionFalse, "Superseded",
 				fmt.Sprintf("every target of fleet %s was deployed by a newer bundle", fleet))
 			after = append(after, func() { r.superseded(b) })
@@ -1631,7 +1631,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			settled := supersededTargets(steps)
 			expected = slices.DeleteFunc(slices.Clone(expected), func(e string) bool { return settled[e] })
 			if err == nil && allVerified(b.Status.Environments, expected) {
-				b.Status.Phase = phaseVerified
+				setPhase(b, phaseVerified, r.now())
 				if b.Status.Metrics == nil {
 					// The metrics are written once, so a failed read is
 					// retried rather than recorded as zero interventions.
@@ -1671,7 +1671,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			// newer Bundle is seen (its create event re-queues this one, see
 			// waitingSiblings) the outcome is Superseded, as when it was seen
 			// first.
-			supersede(b)
+			supersede(b, r.now())
 			after = append(after, func() { r.superseded(b) })
 			break
 		}
@@ -1706,13 +1706,13 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			!meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
 			switch {
 			case newer:
-				supersede(b)
+				supersede(b, r.now())
 				after = append(after, func() { r.superseded(b) })
 			case held:
 				setBundleCondition(b, condReady, metav1.ConditionFalse, "WaitingForSlot", slotMessage(limit))
 				log.Info().Int("limit", limit).Msg("maxConcurrentPromotions reached — failed bundle waits to recover")
 			default:
-				b.Status.Phase = phasePromoting
+				setPhase(b, phasePromoting, r.now())
 				setBundleCondition(b, condReady, metav1.ConditionFalse, "Promoting", "promotion in progress")
 				setBundleCondition(b, condFailed, metav1.ConditionFalse, "Recovered", "no environment is failing")
 				after = append(after, func() {
@@ -1822,6 +1822,17 @@ func pipelineSpecHashFor(pipeline *kardinalv1alpha1.Pipeline) string {
 // reports whether anything changed.
 //
 // Graph-first: a pure mutation of the in-memory Bundle before a status patch.
+// setPhase sets b's phase and, when it changes, status.phaseTransitionTime
+// to now: when the version became Verified, Failed or Superseded, for the
+// notification events of the change (#1945).
+func setPhase(b *kardinalv1alpha1.Bundle, phase string, now time.Time) {
+	if b.Status.Phase != phase {
+		t := metav1.NewTime(now.UTC().Truncate(time.Second))
+		b.Status.PhaseTransitionTime = &t
+	}
+	b.Status.Phase = phase
+}
+
 func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status metav1.ConditionStatus, reason, message string) bool {
 	return meta.SetStatusCondition(&b.Status.Conditions, metav1.Condition{
 		Type:               condType,

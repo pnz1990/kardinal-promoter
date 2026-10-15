@@ -310,6 +310,12 @@ type PromotionStepStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verifying;Verified;Failed;AbortedByAlarm;RollingBack;Superseded
 	State string `json:"state,omitempty"`
 
+	// StateTransitionTime is when state last changed. The NotificationHook
+	// events of a state change (PromotionStep.Failed, WaitingForApproval)
+	// carry it as their time.
+	// +optional
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
+
 	// Message provides human-readable detail about the current state.
 	// +optional
 	Message string `json:"message,omitempty"`
