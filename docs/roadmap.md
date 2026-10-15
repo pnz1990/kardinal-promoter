@@ -30,7 +30,8 @@ Everything in this section is planned and not in kardinal yet. Plans change with
 - **Local MCP.** `kardinal mcp` over stdio, with the caller's kubeconfig: read tools by default,
   write tools only with `--allow-write`, and a policy pre-flight that says whether a version
   would be allowed into an environment now. On main, unreleased: [Connect an agent](agentic/connect-an-agent.md).
-- **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage.
+- **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage. On main,
+  unreleased: [Pause one fleet](pause.md#pause-one-fleet), [Roll back a fleet](rollback.md#roll-back-a-fleet).
 - Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
 
 ### v0.13: evidence

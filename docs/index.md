@@ -39,6 +39,15 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
 
     [:octicons-arrow-right-24: Quickstart](quickstart.md)
 
+-   :material-robot-outline:{ .lg .middle } **Connect your agent**
+
+    ---
+
+    Give Claude Code, Codex or Cursor a local MCP server with its own least-privilege identity:
+    read-only by default, with a policy pre-flight.
+
+    [:octicons-arrow-right-24: Connect an agent](agentic/connect-an-agent.md)
+
 -   :material-shield-check:{ .lg .middle } **Gates you can read**
 
     ---
