@@ -53,3 +53,32 @@ func TestContains(t *testing.T) {
 	assert.Equal(t, scm.AncestryContains, a)
 	assert.ElementsMatch(t, []string{"m", "env/test/k.yaml", "p"}, paths)
 }
+
+// TestBehind (#1883): how many commits the promoted want has that an older
+// applied rev does not; 0 when rev is not an ancestor of want or the graph
+// does not tell.
+func TestBehind(t *testing.T) {
+	// R←B←{L1, P}←M, fetched down to B (R is the boundary).
+	g := map[string]scm.GraphCommit{
+		"m000000000": {Parents: []string{"l100000000", "p000000000"}},
+		"l100000000": {Parents: []string{"b000000000"}},
+		"p000000000": {Parents: []string{"b000000000"}},
+		"b000000000": {Parents: []string{"r000000000"}, Partial: true},
+	}
+	for _, tc := range []struct {
+		name      string
+		rev, want string
+		behind    int
+	}{
+		{"behind a merge with another side", "l100000000", "m000000000", 2}, // M and P
+		{"behind a merge", "b000000000", "m000000000", 3},
+		{"the parent", "b000000000", "p000000000", 1},
+		{"abbreviated", "b000000", "p000000", 1},
+		{"itself", "m000000000", "m000000000", 0},
+		{"ahead, not behind", "m000000000", "b000000000", 0},
+		{"a sibling", "l100000000", "p000000000", 0},
+		{"not in the graph", "x000000000", "m000000000", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.behind, scm.Behind(g, tc.rev, tc.want)) })
+	}
+}

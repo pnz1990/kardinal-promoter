@@ -306,6 +306,42 @@ func Contains(graph map[string]GraphCommit, rev, want string) Ancestry {
 	return AncestryUnknown
 }
 
+// Behind is how many commits want has that rev does not, when rev is an
+// ancestor of want in graph (want contains rev): how far a GitOps tool that
+// applied rev is behind the promoted want. 0 when rev is want, is not an
+// ancestor of it, or the graph does not tell.
+func Behind(graph map[string]GraphCommit, rev, want string) int {
+	rev, want = fullSHA(graph, rev), fullSHA(graph, want)
+	if rev == want || Contains(graph, want, rev) != AncestryContains {
+		return 0
+	}
+	older := ancestors(graph, rev)
+	n := 0
+	for c := range ancestors(graph, want) {
+		if !older[c] {
+			n++
+		}
+	}
+	return n
+}
+
+// ancestors is rev and every ancestor of it in graph.
+func ancestors(graph map[string]GraphCommit, rev string) map[string]bool {
+	seen := map[string]bool{rev: true}
+	queue := []string{rev}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		for _, p := range graph[c].Parents {
+			if !seen[p] {
+				seen[p] = true
+				queue = append(queue, p)
+			}
+		}
+	}
+	return seen
+}
+
 // PathsSince returns, when rev contains want (Contains), the paths changed
 // by the commits rev has and want does not (rev's ancestors that are not
 // want's), so a caller can tell whether a later commit changed files since

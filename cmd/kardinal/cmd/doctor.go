@@ -124,6 +124,10 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 	}
 	if pipeline != "" {
 		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))
+		var p v1alpha1.Pipeline
+		if err := client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err == nil {
+			results = append(results, checkRemoteHealthAccess(ctx, client, &p)...)
+		}
 	}
 	return printDoctorResults(w, results)
 }
@@ -537,6 +541,12 @@ token), and is "SCM token" when doctor finds no controller Deployment.
 
 Use --controller-namespace when kardinal-promoter is installed in a namespace
 other than kardinal-system. --pipeline checks a Pipeline in the current
-namespace (-n, else the kubeconfig context's namespace).
+namespace (-n, else the kubeconfig context's namespace). For each of its
+environments whose health check reads a remote cluster
+(health.kubeconfigSecretRef) it also reads the kubeconfig Secret (doctor
+needs get on it), and asks that cluster, as the kubeconfig's identity,
+whether it may get the object the health check names and, with
+health.refresh on, patch it: a missing patch is a WARN, because the
+refresh is then refused and promotions wait for the GitOps tool's poll.
 
 Use 'kardinal doctor' as the first troubleshooting step.`

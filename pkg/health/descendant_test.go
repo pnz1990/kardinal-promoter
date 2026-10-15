@@ -164,3 +164,86 @@ func TestFluxAdapter_AppliedDescendant(t *testing.T) {
 	assert.False(t, res.Healthy, res.Reason)
 	assert.Contains(t, res.Reason, "waiting for 77fe8dd636ee (could not read whether 13012b285355 contains it: ls-remote: timeout)")
 }
+
+// TestAdapters_AppliedAncestor (#1883): a tool Synced or Ready on an older
+// commit of the branch than the promoted one says how far behind it is, so
+// the step's message shows that the tool has not fetched the promoted commit
+// yet; with no history reader, or one that does not know, it says nothing
+// more. Covers HEALTH-ARGOCD-BEHIND-01.
+func TestAdapters_AppliedAncestor(t *testing.T) {
+	const earlier = "dc6706827cb70000000000000000000000000000"
+	app := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]interface{}{"name": "spike-prod-cd", "namespace": "argocd"},
+		"status": map[string]interface{}{
+			"health":         map[string]interface{}{"status": "Healthy"},
+			"sync":           map[string]interface{}{"status": "Synced", "revision": earlier},
+			"operationState": map[string]interface{}{"phase": "Succeeded", "syncResult": map[string]interface{}{"revision": earlier}},
+		},
+	}}
+	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
+	ks := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]interface{}{"name": "spike-prod", "namespace": "flux-system", "generation": int64(1)},
+		"status": map[string]interface{}{
+			"observedGeneration":    int64(1),
+			"lastAppliedRevision":   "main@sha1:" + earlier,
+			"lastAttemptedRevision": "main@sha1:" + earlier,
+			"conditions":            []interface{}{map[string]interface{}{"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded"}},
+		},
+	}}
+	ks.SetGroupVersionKind(schema.GroupVersionKind{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Kind: "Kustomization"})
+	argo := health.NewArgoCDAdapter(dynfake.NewSimpleDynamicClient(runtime.NewScheme(), app))
+	flux := health.NewFluxAdapter(dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}: "KustomizationList"}, ks))
+	behind := func(n int, err error) func(context.Context, string) (int, error) {
+		return func(_ context.Context, rev string) (int, error) {
+			assert.Equal(t, earlier, rev, "the applied revision is the one asked about")
+			return n, err
+		}
+	}
+	notContains := func(context.Context, string) (bool, error) { return false, nil }
+	for _, tc := range []struct {
+		name   string
+		behind func(context.Context, string) (int, error)
+		argo   string
+		flux   string
+	}{
+		{name: "one commit behind", behind: behind(1, nil),
+			argo: "revision=dc6706827cb7, waiting for 77fe8dd636ee (dc6706827cb7 is 1 commit behind it: Argo CD has not fetched the promoted commit yet)",
+			flux: "lastAppliedRevision=dc6706827cb7, waiting for 77fe8dd636ee (dc6706827cb7 is 1 commit behind it: Flux has not fetched the promoted commit yet)"},
+		{name: "three commits behind", behind: behind(3, nil),
+			argo: "(dc6706827cb7 is 3 commits behind it: Argo CD", flux: "(dc6706827cb7 is 3 commits behind it: Flux"},
+		{name: "not an ancestor", behind: behind(0, nil), argo: "revision=dc6706827cb7, waiting for 77fe8dd636ee",
+			flux: "lastAppliedRevision=dc6706827cb7, waiting for 77fe8dd636ee"},
+		{name: "the history cannot be read", behind: behind(0, errors.New("timeout")), argo: "waiting for 77fe8dd636ee",
+			flux: "waiting for 77fe8dd636ee"},
+		{name: "no history reader", argo: "waiting for 77fe8dd636ee", flux: "waiting for 77fe8dd636ee"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := argo.Check(context.Background(), health.CheckOptions{
+				ArgoCD: health.ArgoCDConfig{Name: "spike-prod-cd", Namespace: "argocd"}, ExpectedRevision: promoted,
+				RevisionContains: notContains, RevisionBehind: tc.behind})
+			require.NoError(t, err)
+			assert.True(t, res.Progressing, res.Reason)
+			assert.Contains(t, res.Reason, tc.argo)
+			if n, _ := callOr(tc.behind); n == 0 {
+				assert.NotContains(t, res.Reason, "behind")
+			}
+			res, err = flux.Check(context.Background(), health.CheckOptions{
+				Flux: health.FluxConfig{Name: "spike-prod", Namespace: "flux-system"}, ExpectedRevision: promoted,
+				RevisionContains: notContains, RevisionBehind: tc.behind})
+			require.NoError(t, err)
+			assert.False(t, res.Healthy, res.Reason)
+			assert.Contains(t, res.Reason, tc.flux)
+		})
+	}
+}
+
+// callOr calls f with the applied revision, or returns 0 for nil.
+func callOr(f func(context.Context, string) (int, error)) (int, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f(context.Background(), "dc6706827cb70000000000000000000000000000")
+}

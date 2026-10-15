@@ -125,6 +125,13 @@ type CheckOptions struct {
 	// branch history through its shared remote cache. Nil: not known.
 	RevisionContains func(ctx context.Context, revision string) (bool, error)
 
+	// RevisionBehind, when set, reports how many commits ExpectedRevision
+	// has that revision does not, when revision is an ancestor of it on the
+	// branch: the tool applied an older commit and has not fetched the
+	// promoted one (#1883). 0: not an ancestor, or not known. The argocd and
+	// flux adapters say so in the waiting reason. Nil: not known.
+	RevisionBehind func(ctx context.Context, revision string) (int, error)
+
 	// ExpectedImages are the Bundle images. The resource adapter (and the argocd
 	// adapter when no ExpectedRevision is known) require every workload container
 	// that runs one of these repositories to run the Bundle's tag or digest.
@@ -646,6 +653,9 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	if !target.deployed || target.unverified {
 		state += ", " + target.note
 	}
+	if !target.deployed && target.waitingOn != "" {
+		state += behindNote(ctx, opts, target.waitingOn, "Argo CD")
+	}
 	opFailed := opPhase == "Failed" || opPhase == "Error"
 	if opFailed && !target.operated && target.opNote != "" {
 		state += ", " + target.opNote
@@ -696,6 +706,10 @@ func argoCDDescendant(ctx context.Context, app *unstructured.Unstructured, opts 
 
 // argoCDTarget is how far an Application has got with the promoted change.
 type argoCDTarget struct {
+	// waitingOn is the synced revision when it is not the promoted commit
+	// and nothing showed it contains it: behindNote says whether it is an
+	// older commit of the branch.
+	waitingOn string
 	// deployed: the Application has applied the promoted change, so its
 	// health is about it.
 	deployed bool
@@ -787,8 +801,30 @@ func argoCDRevision(app *unstructured.Unstructured, syncStatus, opPhase string, 
 		t.note = fmt.Sprintf("revision=%s not synced yet", shortRev(current))
 	} else {
 		t.note = fmt.Sprintf("revision=%s, waiting for %s", shortRev(current), shortRev(want))
+		t.waitingOn = current
 	}
 	return t
+}
+
+// behindNote says, when the branch history shows that rev, the revision the
+// tool applied, is an ancestor of the promoted commit, how far behind it is:
+// the tool has not fetched the promoted commit yet (#1883). A tool that
+// was not asked to refresh (or refused) keeps an older head until its poll,
+// and its revision cache can keep it longer. "" when rev is not behind or
+// the history does not tell.
+func behindNote(ctx context.Context, opts CheckOptions, rev, tool string) string {
+	if opts.RevisionBehind == nil || rev == "" || SameRevision(rev, opts.ExpectedRevision) {
+		return ""
+	}
+	n, err := opts.RevisionBehind(ctx, rev)
+	if err != nil || n == 0 {
+		return ""
+	}
+	commits := "commits"
+	if n == 1 {
+		commits = "commit"
+	}
+	return fmt.Sprintf(" (%s is %d %s behind it: %s has not fetched the promoted commit yet)", shortRev(rev), n, commits, tool)
 }
 
 // revisions reads revision and revisions under fields of the Application.
@@ -1004,6 +1040,9 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 				if err != nil {
 					note = fmt.Sprintf(" (could not read whether %s contains it: %v)", shortRev(rev), err)
 				}
+			}
+			if note == "" {
+				note = behindNote(ctx, opts, rev, "Flux")
 			}
 			waiting := progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s%s", state, shortRev(rev), shortRev(want), note))
 			// Another commit on the shared branch (another environment's
