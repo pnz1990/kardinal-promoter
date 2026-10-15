@@ -1210,6 +1210,14 @@
           "template": {
             "description": "Template is true for a PolicyGate template (no kardinal.io/bundle label). Templates are never evaluated for a bundle and always report ready=false, so the UI must not count them as blocking.",
             "type": "boolean"
+          },
+          "verify": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiGateVerify"
+              }
+            ],
+            "description": "Verify is the gate's verify policy and its verdicts (a verify gate, spec.verify). Absent for a gate without one."
           }
         },
         "required": [
@@ -2172,6 +2180,126 @@
           "counted",
           "decision",
           "user"
+        ],
+        "type": "object"
+      },
+      "uiGateVerdict": {
+        "additionalProperties": false,
+        "description": "uiGateVerdict is one Verdict as the gate counted it.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "counted": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "evidenceURL": {
+            "type": "string"
+          },
+          "findings": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "run": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "verifier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "counted",
+          "name",
+          "result",
+          "verifier"
+        ],
+        "type": "object"
+      },
+      "uiGateVerify": {
+        "additionalProperties": false,
+        "description": "uiGateVerify is a verify gate's policy (spec.verify) and how the gate counted the verdicts it has (status.verdicts).",
+        "properties": {
+          "allowedAgents": {
+            "description": "AllowedAgents are the agents whose verdicts count.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "check": {
+            "description": "Check is the verification the gate waits for; Environment the environment verified.",
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "failed": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxFailures": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "onInconclusive": {
+            "description": "OnInconclusive is hold, retry or fail; Timeout the wait (\"\" none).",
+            "type": "string"
+          },
+          "passed": {
+            "description": "Passed and Failed count the gate's counted pass and fail votes.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "required": {
+            "description": "Required is how many votes must pass; MaxFailures how many failing votes the gate tolerates.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "template": {
+            "description": "Template is the StepTemplate its AgentRuns run, when it runs any.",
+            "type": "string"
+          },
+          "timeout": {
+            "type": "string"
+          },
+          "verdicts": {
+            "description": "Verdicts are status.verdicts, in name order.",
+            "items": {
+              "$ref": "#/components/schemas/uiGateVerdict"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "check",
+          "environment",
+          "failed",
+          "onInconclusive",
+          "passed",
+          "required"
         ],
         "type": "object"
       },
