@@ -4,6 +4,7 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
@@ -52,10 +53,14 @@ func yamlLeaves(raw []byte) (map[string]string, bool) {
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				k := n.Content[i]
 				key := k.Value
-				if k.Kind != yaml.ScalarNode {
+				switch {
+				case k.Kind != yaml.ScalarNode:
 					// A complex key (? ...), named by its position: no
 					// Kubernetes manifest or Helm values file has one.
 					key = fmt.Sprintf("?%d", i/2)
+				case k.Tag == "!!null":
+					// "?", "~", "null" and "" are one null key.
+					key = "<null>"
 				}
 				p := key
 				if path != "" {
@@ -181,6 +186,14 @@ func checkYAMLUpdateProperty(t *testing.T, doc, path, tag string) {
 		require.True(t, strings.HasPrefix(target, k+"."), "the removed null %s is on the path to the target %s", k, target)
 	}
 
+	// Byte for byte, the file outside the edited top-level entry is as it
+	// was (#1907).
+	if key := topKeyOf(path); key != "" {
+		if same, ok := onlyTopKeyChanged([]byte(doc), got, key); ok {
+			require.True(t, same, "only the %s entry changes, byte for byte; doc:\n%s\nafter:\n%s", key, doc, got)
+		}
+	}
+
 	// Applying the same edit again writes the same bytes.
 	res2, again := runEditor(t, step, state, file, got)
 	require.Equal(t, parentsteps.StepSuccess, res2.Status, res2.Message)
@@ -231,6 +244,11 @@ func checkKustomizeProperty(t *testing.T, doc, repo, tag, digest string) {
 	for _, k := range append(removed, changed...) {
 		require.True(t, k == "images" || strings.HasPrefix(k, "images["),
 			"only images entries change, not %s; doc:\n%s\nafter:\n%s", k, doc, got)
+	}
+
+	// Byte for byte, the file outside the images entry is as it was (#1907).
+	if same, ok := onlyTopKeyChanged([]byte(doc), got, "images"); ok {
+		require.True(t, same, "only the images entry changes, byte for byte; doc:\n%s\nafter:\n%s", doc, got)
 	}
 
 	res2, again := runEditor(t, step, state, file, got)
@@ -460,9 +478,11 @@ func TestYAMLUpdate_Refusals(t *testing.T) {
 // nulls into strings. Covers STEP-FUZZ-04.
 func TestEncode_KeepsFlowNulls(t *testing.T) {
 	for in, want := range map[string]string{
-		"{0}\n":                 "{0: null}\n",
-		"{a, b: 1}\n":           "{a: null, b: 1}\n",
-		"x: {a: }\ny: [~, 1]\n": "x: {a: null}\ny: [~, 1]\n",
+		"{0}\n":       "{0: null}\n",
+		"{a, b: 1}\n": "{a: null, b: 1}\n",
+		// A block document is spliced (#1907): an unedited file is
+		// written back byte for byte.
+		"x: {a: }\ny: [~, 1]\n": "x: {a: }\ny: [~, 1]\n",
 		"a:\nb: 1\n":            "a:\nb: 1\n",
 		"a: ~\nb: null\n":       "a: ~\nb: null\n",
 	} {
@@ -475,4 +495,94 @@ func TestEncode_KeepsFlowNulls(t *testing.T) {
 		after, _ := yamlLeaves(out)
 		require.Equal(t, before, after, "%q keeps its values", in)
 	}
+}
+
+// topKeyOf is the first key of a yaml-update path ("image" of
+// ".image.tag", "spec" of "spec.containers[0].image").
+func topKeyOf(path string) string {
+	p := strings.TrimPrefix(path, ".")
+	if i := strings.IndexAny(p, ".["); i >= 0 {
+		p = p[:i]
+	}
+	return p
+}
+
+// onlyTopKeyChanged reports whether out is orig with only the entry of the
+// top-level key changed, byte for byte: the lines before the key's line
+// are the same, and so are the lines from the next top-level key (or its
+// head comment) to the end; the blank and comment lines between the entry
+// and that key may move. When orig has no such key, out is orig with the
+// entry's lines inserted. ok is false for a document whose top-level lines
+// it cannot tell apart: not a one-document block mapping with plain unique
+// keys at column 1, CR line endings, or no final line break.
+func onlyTopKeyChanged(orig, out []byte, key string) (same, ok bool) {
+	o, ok1 := topEntries(orig)
+	n, ok2 := topEntries(out)
+	if !ok1 {
+		return false, false
+	}
+	if !ok2 {
+		return false, true
+	}
+	ol, nl := splitLines(orig), splitLines(out)
+	oe, inOrig := o[key]
+	ne, inOut := n[key]
+	switch {
+	case !inOut:
+		return false, true
+	case !inOrig:
+		k := ne[0]
+		tail := len(ol) - k
+		return tail >= 0 && len(nl) >= len(ol) && strings.Join(nl[:k], "") == strings.Join(ol[:k], "") &&
+			strings.Join(nl[len(nl)-tail:], "") == strings.Join(ol[k:], ""), true
+	}
+	return strings.Join(ol[:oe[0]], "") == strings.Join(nl[:ne[0]], "") &&
+		strings.Join(ol[oe[1]:], "") == strings.Join(nl[ne[1]:], ""), true
+}
+
+func splitLines(b []byte) []string {
+	l := strings.SplitAfter(string(b), "\n")
+	if len(l) > 0 && l[len(l)-1] == "" {
+		l = l[:len(l)-1]
+	}
+	return l
+}
+
+// topEntries returns, for each top-level key of raw, the 0-based index of
+// its line and of the first line after its entry (the next key's head
+// comment or line, or the end of the file).
+func topEntries(raw []byte) (map[string][2]int, bool) {
+	if bytes.Contains(raw, []byte("\r")) || bytes.Contains(raw, []byte("\n---")) || bytes.HasPrefix(raw, []byte("---")) ||
+		!bytes.HasSuffix(raw, []byte("\n")) {
+		return nil, false
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
+		return nil, false
+	}
+	m := doc.Content[0]
+	if m.Kind != yaml.MappingNode || m.Style&yaml.FlowStyle != 0 || len(m.Content) == 0 {
+		return nil, false
+	}
+	out := map[string][2]int{}
+	total := len(splitLines(raw))
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := m.Content[i]
+		if k.Kind != yaml.ScalarNode || k.Column != 1 || m.Content[i+1].Line < k.Line {
+			return nil, false
+		}
+		if _, dup := out[k.Value]; dup {
+			return nil, false
+		}
+		end := total
+		if i+2 < len(m.Content) {
+			next := m.Content[i+2]
+			end = next.Line - 1
+			if next.HeadComment != "" {
+				end -= strings.Count(next.HeadComment, "\n") + 1
+			}
+		}
+		out[k.Value] = [2]int{k.Line - 1, end}
+	}
+	return out, true
 }

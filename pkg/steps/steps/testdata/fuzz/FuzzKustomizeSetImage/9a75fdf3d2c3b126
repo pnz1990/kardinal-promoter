@@ -1,0 +1,5 @@
+go test fuzz v1
+string("H:\nH:\n#")
+string("0")
+string("\n")
+string("")
