@@ -298,10 +298,15 @@ gains two variables, read from the version's ImageVerification (label `kardinal.
 | `attestations.<name>.signer`, `.agent`, `.predicateType` | string | from status |
 | `attestations.<name>.slsa.buildLevel` | int | 0 to 3 |
 | `attestations.<name>.slsa.builderID`, `.sourceCommit`, `.sourceURI` | string | from status |
-| `attestations.<name>.vulns.effective.critical` (and `high`, `medium`, `low`, `unknown`) | int | after VEX |
-| `attestations.<name>.vulns.before.*`, `.effectiveIDs`, `.scannedAt` | int, list, string | from status |
+| `attestations.<name>.effective.critical` (and `high`, `medium`, `low`, `unknown`) | int | a scan, after VEX |
+| `attestations.<name>.before.*`, `.effectiveIDs`, `.scannedAt`, `.scanner` | int, list, string | a scan, from status |
 | `attestations.<name>.predicate` | string | canonical JSON; use `json.unmarshal(...)` |
 | `commit.verified`, `commit.method`, `commit.signer`, `commit.issuer`, `commit.agent` | bool, string | from status |
+
+A scan's fields are on the attestation itself, so a policy that names its scan `vulns` reads
+`attestations.vulns.effective.critical`. They are also under `attestations.<name>.vulns`, the
+status field they come from (`attestations.vulns.vulns.effective.critical`). An earlier version of
+this table wrote only that longer path, while the examples below and §3.4 used the shorter one.
 
 Examples:
 
