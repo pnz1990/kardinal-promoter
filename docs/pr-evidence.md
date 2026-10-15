@@ -88,7 +88,7 @@ version it deploys; the version is left out when that Bundle was deleted, and th
 "Rolled back by" is the rollback version's verified actor ([Agents and the verified
 actor](actors.md)): your Kubernetes user name for `kardinal rollback`, "alice via the UI" for a
 rollback from the UI with TokenReview auth (`bot kardinal-ui via the UI` otherwise, see
-[who acted](guides/security.md#who-acted)), or `kardinal (auto-rollback)` for an automatic
+[who acted](guides/security.md#who-acted)), or "kardinal (auto-rollback)" for an automatic
 rollback. A rollback version without an actor shows its `kardinal.io/created-by` annotation. A rollback
 version without it shows the client-written `kardinal.io/requested-by` instead, marked
 "(unverified)". The line is left out when neither is set.

@@ -504,7 +504,7 @@ One sentence form everywhere, from `actor.Describe`:
 | agent | `agent fixer for alice@example.com` |
 | human | `alice@example.com` |
 | bot | `bot system:serviceaccount:ci:builder` |
-| controller | `kardinal (subscription)`, `kardinal (auto-rollback)` |
+| controller | "kardinal (subscription)", "kardinal (auto-rollback)" |
 | unknown with principal | `alice@example.com` |
 | unknown without | `unknown` |
 
