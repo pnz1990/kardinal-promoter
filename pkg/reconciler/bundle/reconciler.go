@@ -1056,7 +1056,7 @@ func rejectionAuditEntry(b *kardinalv1alpha1.Bundle, now time.Time) kardinalv1al
 		Action:      AuditActionBundleRejected,
 		Outcome:     "Success",
 		Message:     fmt.Sprintf("%s rejected bundle %s: %s", rej.By, b.Name, rej.Reason),
-		Actor:       rej.Actor,
+		Actor:       rejectionStamp(rej),
 	}, metav1.NewTime(now))
 }
 
@@ -2341,4 +2341,14 @@ func (r *Reconciler) lockPipeline(namespace, pipeline string) (unlock func()) {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// rejectionStamp is the rejection's actor stamp when it names the rejecting
+// user (rej.by), else nil: admission refuses another's stamp, and the record
+// never carries one either.
+func rejectionStamp(rej *kardinalv1alpha1.BundleRejection) *kardinalv1alpha1.Actor {
+	if rej.Actor == nil || rej.Actor.Principal != rej.By {
+		return nil
+	}
+	return rej.Actor
 }

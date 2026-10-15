@@ -1149,6 +1149,14 @@ type PipelineStatus struct {
 	// +optional
 	ObservedPaused *bool `json:"observedPaused,omitempty"`
 
+	// ObservedLastChange identifies the spec.lastChange the Pipeline
+	// reconciler last consumed (a hash): a record names who made the change it
+	// was written with, and a later change made without one (kubectl) is
+	// recorded with no actor, not with the earlier record's.
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	ObservedLastChange string `json:"observedLastChange,omitempty"`
+
 	// ObservedPausedFleets is spec.pausedFleets as last recorded, for the
 	// AuditEvents of a fleet's pause and resume.
 	// +listType=set

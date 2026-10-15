@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -150,7 +151,8 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 	if onlyBy != "" && cw.Spec.Freeze.CreatedBy != onlyBy {
 		return notYours(name, cw.Spec.Freeze.CreatedBy, "lift")
 	}
-	if lift != nil && lift.By != "" && cw.Spec.Freeze.Lifted == nil {
+	// The requester replaces a lift an earlier, failed unfreeze left.
+	if lift != nil && lift.By != "" && !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
 		cw.Spec.Freeze.Lifted = lift
 		if err := c.Update(ctx, &cw); err != nil && !apierrors.IsForbidden(err) {
 			if apierrors.IsNotFound(err) {

@@ -1067,7 +1067,7 @@ func main() {
 	// ChangeWindowReconciler: evaluates each ChangeWindow (blackout or recurring),
 	// writes status.active/reason and requeues at the next boundary. The status write
 	// re-evaluates the PolicyGates that reference the window.
-	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient(), AuditNamespace: os.Getenv("POD_NAMESPACE"),
+	cwReconciler := &changewindowrecon.Reconciler{Client: mgr.GetClient(), AuditNamespace: freezeAuditNamespace(watchNamespace),
 		MaxExemption: time.Duration(freezeExemptionMaxMinutes) * time.Minute}
 	// An Event on a ChangeWindow, a cluster-scoped kind, is written in the
 	// default namespace, where namespace mode grants no Event writes. There the
@@ -1500,4 +1500,15 @@ func isSameOrigin(origin, host string) bool {
 		return false
 	}
 	return strings.EqualFold(u.Host, host)
+}
+
+// freezeAuditNamespace is where the ChangeWindow reconciler writes the
+// AuditEvents of a freeze it cannot write in the frozen namespace: the
+// watched namespace in namespace mode (the only one the controller's Role
+// lets it write), else its own.
+func freezeAuditNamespace(watchNamespace string) string {
+	if watchNamespace != "" {
+		return watchNamespace
+	}
+	return os.Getenv("POD_NAMESPACE")
 }

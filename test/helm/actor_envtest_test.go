@@ -270,6 +270,8 @@ func TestActorsOnAPIServer(t *testing.T) {
 
 	rb := bundle("payments-a", "checkout", nil)
 	require.NoError(t, as("alice").Create(ctx, rb))
+	rb2 := bundle("payments-a", "checkout", nil) // rejected in 23b, with the index missing
+	require.NoError(t, as("alice").Create(ctx, rb2))
 	rb.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("bob")}
 	require.Error(t, as("alice").Update(ctx, rb), "18c a rejection with a forged stamp")
 	rb.Spec.Rejected.Actor = hu("alice")
@@ -316,6 +318,28 @@ func TestActorsOnAPIServer(t *testing.T) {
 		return as("alice").Create(ctx, bundle("payments-a", "checkout", nil)) != nil
 	}, 30*time.Second, 500*time.Millisecond, "23 missing index denies")
 	t.Logf("ok 23 missing index: %v", as(controllerUser).Create(ctx, bundle("payments-a", "checkout", nil)))
+
+	// 23b the index missing (#1939): a Pipeline write still goes through
+	// (actor-records admits), but a stamp still names the requester, with no
+	// via and a kind that fits (bot or agent for a ServiceAccount, human or
+	// agent for a person): hold-writes, bundle-rejection and freezes check it
+	// without the index. Only an agent's agent and sponsor go unchecked.
+	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Actor: hu("bob")})
+	require.Error(t, err, "23b a stamp naming someone else, index missing")
+	require.Contains(t, err.Error(), "an actor stamp must name you")
+	require.Error(t, pauseAs(as(fx), &v1alpha1.PipelineChange{Action: "Pause", By: fx, Actor: hu(fx)}),
+		"23b a ServiceAccount stamped human, index missing")
+	require.Error(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice",
+		Actor: &v1alpha1.Actor{Kind: "human", Principal: "alice", Via: "ui"}}), "23b via, index missing")
+	require.NoError(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Resume", By: "alice", Actor: hu("alice")}),
+		"23b a person's own stamp, index missing")
+	rb2.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("bob")}
+	require.Error(t, as("alice").Update(ctx, rb2), "23b a rejection stamped with someone else, index missing")
+	var fz3 v1alpha1.ChangeWindow
+	require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(fz2), &fz3))
+	fz3.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "alice", Actor: hu("bob")}
+	require.Error(t, as("alice").Update(ctx, &fz3), "23b a lift stamped with someone else, index missing")
+	t.Log("ok 23b stamps without the index")
 
 	// 24 index recreated, status not yet written (what a replica does first):
 	// still closed; the controller, exempt, refuses on its own (503).

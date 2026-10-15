@@ -196,13 +196,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Pauses and resumes (#1939): the PipelinePaused/PipelineResumed
 	// AuditEvents and status.observedPaused.
-	if err := r.reconcilePauseAudit(ctx, log, &p); err != nil {
+	// spec.lastChange names who made a change only once: the change it was
+	// written with (status.observedLastChange records the one consumed).
+	fresh := freshChange(&p)
+	if err := r.reconcilePauseAudit(ctx, log, &p, fresh); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Holds (#1528): expiry, the HoldCreated/HoldReleased AuditEvents and
 	// status.observedHolds.
-	holdRecheck, updated, err := r.reconcileHolds(ctx, log, &p)
+	holdRecheck, updated, err := r.reconcileHolds(ctx, log, &p, fresh)
 	if err != nil || updated {
 		return ctrl.Result{}, err
 	}

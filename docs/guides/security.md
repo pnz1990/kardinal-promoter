@@ -574,7 +574,19 @@ Each record of a person's or an agent's action names its verified actor in `spec
 `spec.lastChange`, a rejection's, a freeze's), which the chart's actor admission policies check.
 A change made without kardinal, such as `kubectl patch` of `spec.paused` or `kubectl delete` of a
 freeze, is still recorded, with no actor and a message that says so: the Kubernetes audit log
-names who made it.
+names who made it. A `spec.lastChange` names only the change it was written with: the Pipeline
+reconciler records the one it used (`status.observedLastChange`), so a later kubectl change is
+not attributed to it. A stamp that names someone other than the user the record names is never
+recorded.
+
+Admission checks a stamp in two parts. That it names the requester (its `principal`), carries no
+`via` (only the controller sets it) and has a kind that fits (`bot` or `agent` for a
+ServiceAccount, `human` or `agent` for anyone else) is checked always, by the hold-writes,
+bundle-rejection and freezes policies. That an agent's stamp names its registered agent and
+sponsor needs the AgentIndex: for these records it is checked by `<release>-actor-records`, which
+admits while the index is missing (a fresh install, until the controller builds it, so Pipeline
+writes never wait for it). In that window an agent's record can name another agent or sponsor,
+or claim `human` or `bot`; nothing else about it goes unchecked.
 
 The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
 them: a failed health check records `PromotionFailed` (or `RollbackStarted` with

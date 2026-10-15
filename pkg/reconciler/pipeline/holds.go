@@ -181,7 +181,8 @@ func holdKey(h *kardinalv1alpha1.EnvironmentHold) string {
 //
 // It returns when to come back for the next expiry (0: none), and whether it
 // updated the spec (the caller then stops: the update is reconciled anew).
-func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline) (time.Duration, bool, error) {
+func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline,
+	fresh *kardinalv1alpha1.PipelineChange) (time.Duration, bool, error) {
 	now := r.now()
 	var kept []kardinalv1alpha1.EnvironmentHold
 	expired := false
@@ -223,7 +224,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		if !observed[holdKey(h)] {
 			entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldCreated, fmt.Sprintf(
 				"%s held %s on rollback %s: %s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h)),
-				h.Actor))
+				stampOf(h.Actor, h.CreatedBy)))
 		}
 	}
 	for i := range p.Status.ObservedHolds {
@@ -233,7 +234,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		}
 		why := "released (spec.holds entry removed without kardinal; the Kubernetes audit log names who)"
 		var stamp *kardinalv1alpha1.Actor
-		if by, reason, s := changeOf(p, kardinalv1alpha1.PipelineChangeReleaseHold, h.Environment); by != "" {
+		if by, reason, s := changeOf(fresh, kardinalv1alpha1.PipelineChangeReleaseHold, h.Environment); by != "" {
 			why, stamp = "released by "+by, s
 			if reason != "" {
 				why += ": " + reason
@@ -269,6 +270,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		// and store its record again.
 		patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		p.Status.ObservedHolds = append([]kardinalv1alpha1.EnvironmentHold(nil), p.Spec.Holds...)
+		p.Status.ObservedLastChange = changeKey(p.Spec.LastChange)
 		p.Status.HoldStates = chk.states
 		setHoldCondition(p, chk)
 		for _, e := range entries {

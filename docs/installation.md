@@ -416,8 +416,9 @@ See also [Troubleshooting: deletion hangs](troubleshoot-promotions.md#a-promotio
 Lift any freeze before you uninstall (`kardinal freeze` lists them, `kardinal unfreeze <name>`
 lifts one): a freeze carries the `kardinal.io/freeze-audit` finalizer, and the controller lets
 it go once its `FreezeLifted` AuditEvent is written. One deleted after the controller is gone
-stays until you remove the finalizer with
-`kubectl patch changewindow <name> --type merge -p '{"metadata":{"finalizers":null}}'`.
+stays until you remove the finalizer (find its index in `kubectl get changewindow <name> -o
+jsonpath='{.metadata.finalizers}'`, then
+`kubectl patch changewindow <name> --type json -p '[{"op":"test","path":"/metadata/finalizers/<i>","value":"kardinal.io/freeze-audit"},{"op":"remove","path":"/metadata/finalizers/<i>"}]'`).
 
 Then remove the CRDs and kro if you want:
 

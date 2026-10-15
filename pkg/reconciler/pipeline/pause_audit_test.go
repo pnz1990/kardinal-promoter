@@ -5,6 +5,7 @@ package pipeline_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,4 +149,124 @@ func TestPipelineHolds_ReleaseNamesWho(t *testing.T) {
 	require.Len(t, released, 1)
 	assert.Contains(t, released[0].Spec.Message, "released by carol: fix verified")
 	assert.Equal(t, carol, released[0].Spec.Actor)
+}
+
+// TestPipelinePauseAudit_LastChangeIsConsumedOnce covers the QA finding on
+// #2001 (B1): spec.lastChange names who made the change it was written with,
+// once. A later kubectl change that leaves it in place is recorded with no
+// actor, not with the earlier record's; a record for another fleet names no
+// one; and a stamp naming someone other than by is dropped.
+func TestPipelinePauseAudit_LastChangeIsConsumedOnce(t *testing.T) {
+	ctx := context.Background()
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Environments[1].Fleet = &kardinalv1alpha1.FleetSpec{}
+	c := newClientWithIndex(newPipelineScheme(), p)
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC) }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	reconcile := func() {
+		t.Helper()
+		_, err := r.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	kubectl := func(edit func(*kardinalv1alpha1.Pipeline)) {
+		t.Helper()
+		var cur kardinalv1alpha1.Pipeline
+		require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+		edit(&cur)
+		cur.Generation++
+		require.NoError(t, c.Update(ctx, &cur))
+	}
+	reconcile()
+	alice := &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "alice"}
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "app", &kardinalv1alpha1.PipelineChange{By: "alice", Actor: alice}))
+	kubectl(func(*kardinalv1alpha1.Pipeline) {})
+	reconcile()
+	kubectl(func(cur *kardinalv1alpha1.Pipeline) { cur.Spec.Paused = false })
+	reconcile()
+	kubectl(func(cur *kardinalv1alpha1.Pipeline) { cur.Spec.Paused = true })
+	reconcile()
+	paused := auditsOf(t, c, pipeline.AuditActionPipelinePaused)
+	require.Len(t, paused, 2)
+	var byAlice, byNobody int
+	for _, e := range paused {
+		if e.Spec.Actor != nil && e.Spec.Actor.Principal == "alice" {
+			byAlice++
+		} else if e.Spec.Actor == nil {
+			byNobody++
+		}
+	}
+	assert.Equal(t, 1, byAlice, "alice's pause")
+	assert.Equal(t, 1, byNobody, "the later kubectl pause names no one")
+
+	// A record for another fleet does not name the pause of this one.
+	kubectl(func(cur *kardinalv1alpha1.Pipeline) {
+		cur.Spec.PausedFleets = []string{"prod"}
+		cur.Spec.LastChange = &kardinalv1alpha1.PipelineChange{Action: kardinalv1alpha1.PipelineChangePauseFleet,
+			Target: "staging", By: "bob", Actor: &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "bob"}}
+	})
+	reconcile()
+	for _, e := range auditsOf(t, c, pipeline.AuditActionPipelinePaused) {
+		if e.Spec.Environment == "prod" {
+			assert.Nil(t, e.Spec.Actor, "a record for staging names no one for prod")
+		}
+	}
+
+	// A stamp of someone else than by is not recorded.
+	kubectl(func(cur *kardinalv1alpha1.Pipeline) {
+		cur.Spec.PausedFleets = nil
+		cur.Spec.LastChange = &kardinalv1alpha1.PipelineChange{Action: kardinalv1alpha1.PipelineChangeResumeFleet,
+			Target: "prod", By: "carol", Actor: &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "mallory"}}
+	})
+	reconcile()
+	resumed := auditsOf(t, c, pipeline.AuditActionPipelineResumed)
+	require.NotEmpty(t, resumed)
+	for _, e := range resumed {
+		if e.Spec.Environment == "prod" {
+			assert.Contains(t, e.Spec.Message, "carol resumed fleet prod")
+			assert.Nil(t, e.Spec.Actor, "mallory's stamp on carol's record is dropped")
+		}
+	}
+}
+
+// TestPipelineHolds_StaleReleaseRecord (B1): after alice's unhold of prod, a
+// later hold of prod removed with kubectl is not attributed to her.
+func TestPipelineHolds_StaleReleaseRecord(t *testing.T) {
+	ctx := context.Background()
+	at := metav1.NewTime(time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC))
+	hold := func(created metav1.Time) kardinalv1alpha1.EnvironmentHold {
+		return kardinalv1alpha1.EnvironmentHold{Environment: "prod", Bundle: "app-rollback-1", Reason: "INC-42",
+			CreatedBy: "alice", CreatedAt: &created}
+	}
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{hold(at)}
+	c := newClientWithIndex(newPipelineScheme(), p, holdBundle("app-rollback-1"))
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return at.Time }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	reconcile := func() {
+		t.Helper()
+		_, err := r.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	reconcile()
+	_, err := lifecycle.ReleaseHold(ctx, c, "default", "app", "prod", &kardinalv1alpha1.PipelineChange{By: "alice"})
+	require.NoError(t, err)
+	reconcile()
+	var cur kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+	cur.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{hold(metav1.NewTime(at.Add(time.Hour)))}
+	require.NoError(t, c.Update(ctx, &cur))
+	reconcile()
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+	cur.Spec.Holds = nil // kubectl
+	require.NoError(t, c.Update(ctx, &cur))
+	reconcile()
+	released := auditsOf(t, c, pipeline.AuditActionHoldReleased)
+	require.Len(t, released, 2)
+	n := 0
+	for _, e := range released {
+		if strings.Contains(e.Spec.Message, "released by alice") {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "only the first release is alice's: %v", released)
 }

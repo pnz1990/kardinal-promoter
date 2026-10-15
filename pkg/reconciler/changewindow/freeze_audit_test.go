@@ -10,11 +10,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
@@ -87,4 +92,76 @@ func TestFreezeAudit(t *testing.T) {
 	lifted = freezeAudits(t, c, "payments")[changewindow.AuditActionFreezeLifted]
 	assert.Nil(t, lifted.Spec.Actor)
 	assert.Contains(t, lifted.Spec.Message, "deleted without kardinal unfreeze; the Kubernetes audit log names who")
+}
+
+// TestFreezeAudit_WriteFailures covers the QA finding on #2001 (B2): a
+// freeze audit write that fails never keeps the freeze from taking effect
+// (its status is written), is retried and reported (a Warning Event), falls
+// back to the controller's namespace when the frozen one refuses it, and
+// never holds a deleted window past the grace. The FreezeAudited condition
+// keeps a re-run from writing again, and FreezeStarted carries the time of
+// the freeze.
+func TestFreezeAudit_WriteFailures(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	team := freezeWindow("kardinal-freeze-everyone-gone", kardinalv1alpha1.FreezeEveryone, []string{"gone"})
+	team.UID = "uid-team"
+	team.CreationTimestamp = metav1.NewTime(at("2026-10-15T08:00:00Z"))
+	broken := false
+	creates := 0
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(team).WithStatusSubresource(team).
+		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*kardinalv1alpha1.AuditEvent); ok {
+				creates++
+				if broken {
+					return apierrors.NewServiceUnavailable("etcd timeout")
+				}
+				if obj.GetNamespace() == "gone" {
+					return apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "gone")
+				}
+			}
+			return cl.Create(ctx, obj, opts...)
+		}}).Build()
+	rec := events.NewFakeRecorder(20)
+	now := at("2026-10-15T09:00:00Z")
+	r := &changewindow.Reconciler{Client: c, Recorder: rec, AuditNamespace: "kardinal-system", NowFn: func() time.Time { return now }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: team.Name}}
+
+	// The frozen namespace is gone: the record goes to the controller's.
+	_, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	started := freezeAudits(t, c, "kardinal-system")[changewindow.AuditActionFreezeStarted]
+	assert.Equal(t, at("2026-10-15T08:00:00Z"), started.Spec.Timestamp.UTC(), "when it froze, not when it was recorded")
+	n := creates
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, n, creates, "recorded once (FreezeAudited)")
+
+	// Every write fails: the status is still written, the reconcile retries.
+	other := freezeWindow("kardinal-freeze-agents", kardinalv1alpha1.FreezeAgents, nil)
+	other.UID = "uid-other"
+	require.NoError(t, c.Create(ctx, other))
+	broken = true
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: other.Name}})
+	require.NoError(t, err, "an audit write never fails the reconcile")
+	assert.Positive(t, res.RequeueAfter)
+	var got kardinalv1alpha1.ChangeWindow
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(other), &got))
+	assert.Equal(t, got.Generation, got.Status.ObservedGeneration, "the freeze's status is written")
+	assert.True(t, got.Status.Active)
+	assert.Contains(t, <-rec.Events, changewindow.ReasonFreezeAuditFailed)
+
+	// Deleted while writes fail: held for the grace, then let go.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(other), &got))
+	require.Contains(t, got.Finalizers, changewindow.FreezeAuditFinalizer)
+	require.NoError(t, c.Delete(ctx, &got))
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: other.Name}})
+	require.NoError(t, err)
+	assert.Positive(t, res.RequeueAfter, "retried within the grace")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(other), &got), "still there")
+	now = got.DeletionTimestamp.Add(3 * time.Minute)
+	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: other.Name}})
+	require.NoError(t, err)
+	assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKeyFromObject(other), &got)), "let go after the grace")
 }

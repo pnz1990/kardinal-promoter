@@ -99,6 +99,20 @@ spec:
         'spec.rejected.by must be your own username "' + request.userInfo.username +
         '", not "' + object.spec.rejected.by + '"; kardinal reject sets it for you'
       reason: Forbidden
+    # Its actor stamp names the requester (#1939); what needs no AgentIndex is
+    # checked here, always (<release>-actor-records checks agent and sponsor).
+    - expression: >-
+        variables.controller || !has(object.spec.rejected) ||
+        (oldObject != null && has(oldObject.spec.rejected)) || !has(object.spec.rejected.actor) ||
+        [object.spec.rejected.actor].all(s, s == null || (s.principal == request.userInfo.username && !has(s.via) &&
+          (request.userInfo.username.startsWith('system:serviceaccount:')
+            ? s.kind in ['bot', 'agent'] : s.kind in ['human', 'agent'])))
+      messageExpression: >-
+        'an actor stamp must name you (principal ' + request.userInfo.username +
+        '), with no via, and kind ' +
+        (request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot or agent' : 'human or agent') +
+        '; kardinal sets it for you'
+      reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "bundle-rejection") }}
 ---

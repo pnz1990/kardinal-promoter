@@ -326,7 +326,9 @@ above are conventions. A status-only write does not.
 
 ## A PromotionStep, Graph or namespace never finishes deleting
 
-Two finalizers can hold a delete, and the controller removes both itself while it runs.
+Two finalizers can hold a delete, and the controller removes both itself while it runs. (A third,
+`kardinal.io/freeze-audit`, holds a deleted freeze until its `FreezeLifted` AuditEvent is written,
+at most 2 minutes while the controller runs: see [Freezes](agentic/freezes.md#who-froze-and-who-lifted-it).)
 
 **`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (its environment
 was `pr-review` when the step started) carries it while it is `Promoting` or `WaitingForMerge`,

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -36,7 +37,8 @@ const (
 // failed create cannot lose them (#1552); their names are fixed per change
 // (the Pipeline's generation), so a re-run writes nothing new. The first
 // record (status.observedPaused unset, an upgrade) is taken unaudited.
-func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline) error {
+func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline,
+	fresh *kardinalv1alpha1.PipelineChange) error {
 	paused := p.Spec.Paused
 	fleets := slices.Clone(p.Spec.PausedFleets)
 	slices.Sort(fleets)
@@ -52,22 +54,23 @@ func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger
 			if paused {
 				action = kardinalv1alpha1.PipelineChangePause
 			}
-			entries = append(entries, r.pauseAuditEntry(p, action, ""))
+			entries = append(entries, r.pauseAuditEntry(p, fresh, action, ""))
 		}
 		for _, f := range fleets {
 			if !slices.Contains(observedFleets, f) {
-				entries = append(entries, r.pauseAuditEntry(p, kardinalv1alpha1.PipelineChangePauseFleet, f))
+				entries = append(entries, r.pauseAuditEntry(p, fresh, kardinalv1alpha1.PipelineChangePauseFleet, f))
 			}
 		}
 		for _, f := range observedFleets {
 			if !slices.Contains(fleets, f) {
-				entries = append(entries, r.pauseAuditEntry(p, kardinalv1alpha1.PipelineChangeResumeFleet, f))
+				entries = append(entries, r.pauseAuditEntry(p, fresh, kardinalv1alpha1.PipelineChangeResumeFleet, f))
 			}
 		}
 	}
 	patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	p.Status.ObservedPaused = &paused
 	p.Status.ObservedPausedFleets = fleets
+	p.Status.ObservedLastChange = changeKey(p.Spec.LastChange)
 	for _, e := range entries {
 		p.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, p.Status.PendingAuditEvents, e)
 	}
@@ -88,7 +91,8 @@ func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger
 // of p, or of its fleet target. Who did it is spec.lastChange when that
 // records this change; else the actor is unknown and the message says where
 // to look.
-func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, action, target string) kardinalv1alpha1.PendingAuditEvent {
+func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, fresh *kardinalv1alpha1.PipelineChange,
+	action, target string) kardinalv1alpha1.PendingAuditEvent {
 	auditAction, verb := AuditActionPipelineResumed, "resumed"
 	if action == kardinalv1alpha1.PipelineChangePause || action == kardinalv1alpha1.PipelineChangePauseFleet {
 		auditAction, verb = AuditActionPipelinePaused, "paused"
@@ -97,7 +101,7 @@ func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, action, targe
 	if target != "" {
 		what = "fleet " + target + " of pipeline " + p.Name
 	}
-	by, why, stamp := changeOf(p, action, target)
+	by, why, stamp := changeOf(fresh, action, target)
 	msg := fmt.Sprintf("%s %s %s", orUnknown(by), verb, what)
 	if why != "" {
 		msg += ": " + why
@@ -128,14 +132,48 @@ func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, action, targe
 		}, metav1.NewTime(r.now()))
 }
 
-// changeOf is who made the change action on target, from spec.lastChange
-// when it records that change: the username, the reason and the actor
-// stamp (nil without one). An empty by means the change was made without
-// a record (kubectl, an older client).
-func changeOf(p *kardinalv1alpha1.Pipeline, action, target string) (by, why string, stamp *kardinalv1alpha1.Actor) {
-	c := p.Spec.LastChange
-	if c == nil || c.Action != action || c.Target != target {
+// changeOf is who made the change action on target, from fresh (the
+// spec.lastChange not yet consumed, freshChange) when it records that change:
+// the username, the reason and the actor stamp. A stamp that names someone
+// other than by is dropped (admission refuses one; this is the second line).
+// An empty by means the change was made without a record (kubectl, an older
+// client), or with a record already consumed by an earlier change.
+func changeOf(fresh *kardinalv1alpha1.PipelineChange, action, target string) (by, why string, stamp *kardinalv1alpha1.Actor) {
+	if fresh == nil || fresh.Action != action || fresh.Target != target {
 		return "", "", nil
 	}
-	return c.By, c.Reason, c.Actor
+	return fresh.By, fresh.Reason, stampOf(fresh.Actor, fresh.By)
+}
+
+// stampOf is stamp when it names by, else nil: an AuditEvent never carries a
+// stamp of someone other than the user its record names.
+func stampOf(stamp *kardinalv1alpha1.Actor, by string) *kardinalv1alpha1.Actor {
+	if stamp == nil || stamp.Principal != by {
+		return nil
+	}
+	return stamp
+}
+
+// freshChange is p's spec.lastChange when no earlier change consumed it
+// (status.observedLastChange), else nil: a record is used for the change it
+// was written with, and a later change made without one (kubectl) is not
+// attributed to it.
+func freshChange(p *kardinalv1alpha1.Pipeline) *kardinalv1alpha1.PipelineChange {
+	if p.Spec.LastChange == nil || changeKey(p.Spec.LastChange) == p.Status.ObservedLastChange {
+		return nil
+	}
+	return p.Spec.LastChange
+}
+
+// changeKey identifies a spec.lastChange record: a hash of every field.
+func changeKey(c *kardinalv1alpha1.PipelineChange) string {
+	if c == nil {
+		return ""
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return "" // unreachable: the type always marshals
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:16]
 }

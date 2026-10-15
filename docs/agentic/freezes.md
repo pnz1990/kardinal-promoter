@@ -62,11 +62,18 @@ agent, and the controller never honours one stamped as an agent's (the freeze's
 ## Who froze, and who lifted it
 
 A freeze's start and its lift are AuditEvents, `FreezeStarted` and `FreezeLifted`, naming who
-and their verified actor: in the freeze's namespace, or the controller's for a freeze of several
-or every namespace. `kardinal unfreeze` and the UI record who lifts it (`spec.freeze.lifted`) just
-before they delete the window, and a finalizer (`kardinal.io/freeze-audit`) keeps the window until
-`FreezeLifted` is written, so a `kubectl delete` is recorded too, without an actor. While the
-controller is down, a deleted freeze waits for it; it holds nothing meanwhile.
+and their verified actor: in the freeze's namespace, or the controller's (the watched namespace
+in namespace mode) for a freeze of several or every namespace, or when the frozen namespace is
+gone or the controller may not write there. `kardinal unfreeze` and the UI record who lifts it
+(`spec.freeze.lifted`) just before they delete the window, and a finalizer
+(`kardinal.io/freeze-audit`) keeps the window until `FreezeLifted` is written, so a
+`kubectl delete` is recorded too, without an actor. While the controller is down, a deleted freeze
+waits for it; it holds nothing meanwhile.
+
+An audit write never holds a freeze back. A freeze takes effect (its status is written) whether
+or not its `FreezeStarted` record could be written; a failed write is retried, with a
+`FreezeAuditFailed` Warning Event. A deleted freeze whose `FreezeLifted` record still cannot be
+written after 2 minutes is let go without it, with the same Event.
 
 ## In the UI
 
