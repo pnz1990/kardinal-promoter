@@ -208,5 +208,7 @@ aggregationRule:
     - matchLabels:
         kardinal.io/aggregate-to-admin: "true"
         app.kubernetes.io/instance: {{ .Release.Name }}
-rules: []
+# No rules: the API server's aggregation controller writes them. A rendered
+# "rules: []" differs from the live object after every sync, and a GitOps tool
+# shows the role OutOfSync for ever (#1912).
 {{- end }}

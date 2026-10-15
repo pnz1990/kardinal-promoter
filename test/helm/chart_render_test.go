@@ -1731,3 +1731,48 @@ func TestChartControllerSecretNeverReferenceable(t *testing.T) {
 		assert.Contains(t, out, "is the controller's SCM token Secret")
 	}
 }
+
+// TestChartFlagsRenderedOnce (#1884): the chart renders each controller flag
+// once. A repeated flag is harmless only while both copies agree; the second
+// copy of --hook-service-accounts was a template line pasted twice.
+//
+// Covers CHART-FLAGS-ONCE-01.
+func TestChartFlagsRenderedOnce(t *testing.T) {
+	for _, args := range [][]string{nil, everyValue, {"--set", "controller.watchNamespace=" + releaseNS}} {
+		c := controllerContainer(t, render(t, "kardinal-promoter", args...))
+		seen := map[string]int{}
+		for _, a := range c.Args {
+			if !strings.HasPrefix(a, "--") {
+				continue
+			}
+			k, _, _ := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+			seen[k]++
+		}
+		for f, n := range seen {
+			assert.Equal(t, 1, n, "args %v: --%s is rendered %d times", args, f, n)
+		}
+	}
+}
+
+// TestChartAggregatedClusterRolesLeaveRulesUnset (#1912): a ClusterRole with
+// an aggregationRule does not set rules. The API server's aggregation
+// controller writes them, so a rendered "rules: []" differs from the live
+// object after every sync and a GitOps tool shows the role OutOfSync for ever.
+//
+// Covers CHART-AGGREGATED-RULES-01.
+func TestChartAggregatedClusterRolesLeaveRulesUnset(t *testing.T) {
+	for _, args := range [][]string{nil, everyValue} {
+		aggregated := 0
+		for _, d := range docsOfKind(render(t, "kardinal-promoter", args...), "ClusterRole") {
+			var obj map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(d.raw, &obj))
+			if _, ok := obj["aggregationRule"]; !ok {
+				continue
+			}
+			aggregated++
+			_, hasRules := obj["rules"]
+			assert.False(t, hasRules, "args %v: ClusterRole %s has an aggregationRule and sets rules", args, d.Name)
+		}
+		assert.Positive(t, aggregated, "args %v: the chart renders the aggregated admin ClusterRole", args)
+	}
+}
