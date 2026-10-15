@@ -8,9 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/cgi"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,27 +19,23 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/test/gitbackend"
 )
 
 // gitHTTPBackend serves the bare repositories under root with git's own
-// smart HTTP server (git http-backend), pushes enabled. slowRead, when set,
-// throttles how fast the server reads a request body.
+// smart HTTP server (git http-backend), pushes enabled, and no backend
+// outliving the test (test/gitbackend, #1875). slowRead, when set, throttles
+// how fast the server reads a request body.
 func gitHTTPBackend(t *testing.T, root string, slowRead time.Duration) *httptest.Server {
 	t.Helper()
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Skip("git http-backend needs the git binary")
-	}
-	h := &cgi.Handler{Path: gitPath, Args: []string{"http-backend"},
-		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1", "REMOTE_USER=kardinal"}}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if slowRead > 0 && r.Method == http.MethodPost {
-			r.Body = io.NopCloser(&slowReader{r: r.Body, every: slowRead})
-		}
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	return gitbackend.Serve(t, root, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if slowRead > 0 && r.Method == http.MethodPost {
+				r.Body = io.NopCloser(&slowReader{r: r.Body, every: slowRead})
+			}
+			h.ServeHTTP(w, r)
+		})
+	})
 }
 
 // slowReader reads at most 16 KiB per call, each after a pause.
