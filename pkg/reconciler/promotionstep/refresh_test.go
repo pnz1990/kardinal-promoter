@@ -53,6 +53,7 @@ type refreshCase struct {
 	dynObjs  []runtime.Object
 	disabled bool
 	remote   *health.RemoteClusters
+	scope    health.RefreshScope
 	// statusPatch, when set, intercepts the PromotionStep status patches.
 	statusPatch func(n int) error
 }
@@ -93,7 +94,8 @@ func (rc refreshCase) rig(t *testing.T) *refreshRig {
 	rec := events.NewFakeRecorder(20)
 	r := &promotionstep.Reconciler{Client: reader, SCM: &mockSCM{}, GitClient: &mockGit{},
 		HealthDetector: health.NewAutoDetector(c, dyn), Recorder: rec, RefreshDisabled: rc.disabled, RemoteClusters: rc.remote,
-		NowFn: func() time.Time { return time.Date(2026, 10, 11, 12, 0, 0, 500, time.UTC) }}
+		RefreshScope: rc.scope,
+		NowFn:        func() time.Time { return time.Date(2026, 10, 11, 12, 0, 0, 500, time.UTC) }}
 	return &refreshRig{c: c, dyn: dyn, r: r, rec: rec}
 }
 
@@ -140,7 +142,7 @@ func fluxKustomizationFrom(ns, name, sourceKind, sourceName, sourceNS string) *u
 	if sourceNS != "" {
 		ref["namespace"] = sourceNS
 	}
-	ks.Object["spec"] = map[string]interface{}{"sourceRef": ref}
+	ks.Object["spec"] = map[string]interface{}{"sourceRef": ref, "targetNamespace": "default"}
 	return ks
 }
 
@@ -181,8 +183,8 @@ func TestRefreshRequestedOnce(t *testing.T) {
 				assert.Equal(t, at+" default/step", g.annotation(t, kustomizationGVR, "flux-system", "p-test", health.FluxRequestedAtAnnotation))
 			},
 			wantMsg: "refresh requested: GitRepository flux-system/repo, Kustomization flux-system/p-test"},
-		{name: "flux source in another namespace",
-			rc: refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{
+		{name: "flux source in another namespace, admitted by a rule",
+			rc: refreshCase{env: flux, status: pushed, scope: mustScope(t, "default=sources"), dynObjs: []runtime.Object{
 				fluxKustomizationFrom("flux-system", "p-test", "GitRepository", "repo", "sources"), gitRepository("sources", "repo")}},
 			wantPatches: []string{"gitrepositories sources/repo", "kustomizations flux-system/p-test"},
 			wantMsg:     "GitRepository sources/repo"},
@@ -340,6 +342,153 @@ func TestRefreshNoChanges(t *testing.T) {
 	}
 }
 
+// TestRefreshOutsidePipelineNamespace: a Pipeline has the controller refresh
+// only an object in its own namespace or one that deploys there, or one a
+// --health-refresh-namespaces rule admits (#1781). Another object is not
+// patched: the step records why, emits a Warning and waits for the poll,
+// without asking again. Covers HEALTH-REFRESH-07.
+func TestRefreshOutsidePipelineNamespace(t *testing.T) {
+	argo := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "argocd"}}
+	flux := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "flux"}}
+	elsewhere := func(dest string) runtime.Object {
+		app := argoApplication("p-test", oldSHA)
+		app.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{"namespace": dest}}
+		return app
+	}
+	ownFlux := v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{
+		Type: "flux", Flux: &v1alpha1.HealthTargetRef{Name: "p-test", Namespace: "default"}}}
+	spokeApp := func(dest string) runtime.Object {
+		app := argoApplication("p-test", oldSHA)
+		app.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{
+			"server": "https://spoke.example:6443", "namespace": dest}}
+		return app
+	}
+	// destApp deploys to the Pipeline's namespace, default, of the cluster
+	// that dest (destination.server or destination.name) names.
+	destApp := func(key, value string) runtime.Object {
+		app := argoApplication("p-test", oldSHA)
+		app.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{key: value, "namespace": "default"}}
+		return app
+	}
+	remoteKs := func() runtime.Object {
+		ks := tenantKsIn("flux-system")
+		spec := ks.Object["spec"].(map[string]interface{})
+		spec["targetNamespace"], spec["kubeConfig"] = "default", map[string]interface{}{"secretRef": map[string]interface{}{"name": "spoke"}}
+		return ks
+	}
+	tenantKs := fluxKustomizationFrom("team-b", "p-test", "GitRepository", "repo", "flux-system")
+	tenantKs.Object["spec"].(map[string]interface{})["targetNamespace"] = "team-b"
+	rule := func(r ...string) health.RefreshScope {
+		s, err := health.ParseRefreshScope(r)
+		require.NoError(t, err)
+		return s
+	}
+	tests := []struct {
+		name        string
+		rc          refreshCase
+		wantPatches []string
+		wantMsg     string
+	}{
+		{name: "an Application that deploys to another namespace",
+			rc: refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{elsewhere("team-b")}},
+			wantMsg: "refresh skipped (Application argocd/p-test (deploys to team-b): outside the Pipeline's namespace default, " +
+				"see --health-refresh-namespaces); waiting for Argo CD to poll git"},
+		{name: "an Application with no destination namespace",
+			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{elsewhere("")}},
+			wantMsg: "refresh skipped (Application argocd/p-test: outside the Pipeline's namespace default"},
+		{name: "another tenant's Kustomization and its shared source",
+			rc: refreshCase{env: v1alpha1.EnvironmentSpec{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{
+				Type: "flux", Flux: &v1alpha1.HealthTargetRef{Name: "p-test", Namespace: "team-b"}}},
+				status: pushed, dynObjs: []runtime.Object{tenantKs, gitRepository("flux-system", "repo")}},
+			wantMsg: "refresh skipped (GitRepository flux-system/repo, Kustomization team-b/p-test (deploys to team-b): " +
+				"outside the Pipeline's namespace default, see --health-refresh-namespaces); waiting for Flux to poll git"},
+		{name: "a rule admits the Pipeline namespace's prefix",
+			rc: refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{elsewhere("team-b")},
+				scope: rule("default=team-*")},
+			wantPatches: []string{"applications argocd/p-test"}, wantMsg: "refresh requested: Application argocd/p-test"},
+		{name: "a rule for other Pipelines does not",
+			rc: refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{elsewhere("team-b")},
+				scope: rule("team-a=team-b")},
+			wantMsg: "refresh skipped (Application argocd/p-test (deploys to team-b)"},
+		{name: "a Kustomization in the Pipeline's namespace with its source there",
+			rc: refreshCase{env: ownFlux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("default", "p-test", "GitRepository", "repo", ""), gitRepository("default", "repo")}},
+			wantPatches: []string{"gitrepositories default/repo", "kustomizations default/p-test"},
+			wantMsg:     "refresh requested: GitRepository default/repo, Kustomization default/p-test"},
+		{name: "another tenant's source, named by the Pipeline's own Kustomization",
+			rc: refreshCase{env: ownFlux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("default", "p-test", "GitRepository", "b-repo", "team-b"), gitRepository("team-b", "b-repo")}},
+			wantMsg: "refresh skipped (GitRepository team-b/b-repo: outside the Pipeline's namespace default"},
+		{name: "a shared flux-system source needs a rule",
+			rc: refreshCase{env: ownFlux, status: pushed, dynObjs: []runtime.Object{
+				fluxKustomizationFrom("default", "p-test", "GitRepository", "repo", "flux-system"), gitRepository("flux-system", "repo")}},
+			wantMsg: "refresh skipped (GitRepository flux-system/repo: outside the Pipeline's namespace default"},
+		{name: "a shared flux-system source admitted by default=flux-system",
+			rc: refreshCase{env: ownFlux, status: pushed, scope: rule("default=flux-system"), dynObjs: []runtime.Object{
+				fluxKustomizationFrom("default", "p-test", "GitRepository", "repo", "flux-system"), gitRepository("flux-system", "repo")}},
+			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations default/p-test"},
+			wantMsg:     "refresh requested: GitRepository flux-system/repo, Kustomization default/p-test"},
+		{name: "an Application deploying to that namespace of a cluster named by destination.name",
+			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{destApp("name", "spoke")}},
+			wantMsg: "refresh skipped (Application argocd/p-test: outside the Pipeline's namespace default"},
+		{name: "destination.name in-cluster",
+			rc:          refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{destApp("name", "in-cluster")}},
+			wantPatches: []string{"applications argocd/p-test"}, wantMsg: "refresh requested: Application argocd/p-test"},
+		{name: "destination.server https://kubernetes.default.svc/ (trailing slash)",
+			rc:          refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{destApp("server", "https://kubernetes.default.svc/")}},
+			wantPatches: []string{"applications argocd/p-test"}, wantMsg: "refresh requested: Application argocd/p-test"},
+		{name: "an Application deploying to that namespace on another cluster",
+			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{spokeApp("default")}},
+			wantMsg: "refresh skipped (Application argocd/p-test: outside the Pipeline's namespace default"},
+		{name: "a Kustomization applying to that namespace on another cluster",
+			rc:      refreshCase{env: flux, status: pushed, dynObjs: []runtime.Object{remoteKs()}},
+			wantMsg: "refresh skipped (Kustomization flux-system/p-test: outside the Pipeline's namespace default"},
+		{name: "*=* admits any object",
+			rc:          refreshCase{env: flux, status: pushed, scope: rule("*=*"), dynObjs: []runtime.Object{tenantKsIn("flux-system")}},
+			wantPatches: []string{"kustomizations flux-system/p-test"}, wantMsg: "refresh requested: Kustomization flux-system/p-test"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.rc.rig(t)
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches())
+			got := getStep(t, g.c, "step")
+			require.NotNil(t, got.Status.RefreshRequestedAt, "the one request is spent either way")
+			assert.Contains(t, got.Status.RefreshMessage, tt.wantMsg)
+			assert.Equal(t, "HealthChecking", got.Status.State, "a skipped refresh is not a health failure")
+			assert.Zero(t, got.Status.ConsecutiveHealthFailures)
+			ev := g.events()
+			require.Len(t, ev, 1)
+			if tt.wantPatches == nil {
+				assert.Contains(t, ev[0], "Warning "+promotionstep.ReasonRefreshSkipped)
+			} else {
+				assert.Contains(t, ev[0], "Normal "+promotionstep.ReasonRefreshRequested)
+			}
+
+			got.Status.LastHealthCheckAt = nil
+			require.NoError(t, g.c.Status().Update(context.Background(), &got))
+			require.NoError(t, g.reconcile(t))
+			assert.Equal(t, tt.wantPatches, g.patches(), "not asked again")
+		})
+	}
+}
+
+// mustScope parses refresh scope rules.
+func mustScope(t *testing.T, rules ...string) health.RefreshScope {
+	t.Helper()
+	s, err := health.ParseRefreshScope(rules)
+	require.NoError(t, err)
+	return s
+}
+
+// tenantKsIn is a Kustomization p-test in ns with no source to refresh and no
+// target namespace.
+func tenantKsIn(ns string) *unstructured.Unstructured {
+	ks := fluxKustomizationFrom(ns, "p-test", "OCIRepository", "oci", "")
+	delete(ks.Object["spec"].(map[string]interface{}), "targetNamespace")
+	return ks
+}
+
 // TestRefreshWithoutMergeCommit: a PR merged with no merge commit the SCM
 // will report (status.mergeCommitUnavailable) is refreshed once, with no
 // revision.
@@ -454,7 +603,11 @@ func fakeRemoteArgoCD(t *testing.T, deny bool) (*httptest.Server, *[]string) {
 	t.Helper()
 	var mu sync.Mutex
 	var patches []string
+	// It deploys to a namespace of the remote cluster that is not the
+	// Pipeline's: the refresh scope (#1781) must not apply to the
+	// kubeconfig's identity.
 	app := argoApplication("custom", oldSHA)
+	app.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{"namespace": "spoke-ns"}}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer remote-token" ||
 			r.URL.Path != "/apis/argoproj.io/v1alpha1/namespaces/argocd/applications/custom" {
@@ -495,7 +648,9 @@ func TestRefreshRemoteCluster(t *testing.T) {
 			g := refreshCase{env: env, status: pushed, remote: &health.RemoteClusters{Dial: loopbackDial},
 				objs: []client.Object{kubeconfigSecret("spoke", remoteKubeconfig(srv.URL, ""))},
 				// The controller's cluster has an Application of the same name:
-				// it must not be touched.
+				// it must not be touched. The remote Application deploys to
+				// spoke-ns, outside the Pipeline's namespace: the refresh
+				// scope (#1781) does not apply to the kubeconfig's identity.
 				dynObjs: []runtime.Object{argoApplication("custom", oldSHA)}}.rig(t)
 			require.NoError(t, g.reconcile(t))
 			assert.Empty(t, g.patches(), "nothing is sent to the controller's cluster")

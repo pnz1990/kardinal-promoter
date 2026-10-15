@@ -164,6 +164,9 @@ spec:
             {{- if ne (include "kardinal-promoter.healthRefresh" .) "true" }}
             - --health-refresh=false
             {{- end }}
+            {{- with (dig "health" "refresh" "namespaces" list .Values.AsMap) }}
+            - --health-refresh-namespaces={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.gatesCommitStatus }}
             {{- if eq (toString .enabled) "false" }}
             - --gates-commit-status=false

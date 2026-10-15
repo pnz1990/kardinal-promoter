@@ -121,6 +121,45 @@ func TestHealth_ArgoCDRefresh(t *testing.T) {
 	}
 }
 
+// TestHealth_ArgoCDRefreshOtherTenant: a Pipeline whose health.argocd names
+// another namespace's Application (one that deploys into that namespace)
+// does not have the controller refresh it (#1781). The step records
+// "refresh skipped (...)" and a GitOpsRefreshSkipped Warning, and counts no
+// health failure; the other tenant's own Pipeline still refreshes it
+// (HEALTH-REFRESH-01). Covers HEALTH-REFRESH-08.
+func TestHealth_ArgoCDRefreshOtherTenant(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	other := newArgoApp(t, e, "test") // another tenant's Application, deploying into its namespace
+	a := newArgoApp(t, e, "test")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Health.ArgoCD.Name = other.argoApp("test")
+	a.apply(t, p)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+
+	var ps *v1alpha1.PromotionStep
+	framework.Eventually(t, 2*time.Minute, "the step records its refresh decision", func(ctx context.Context) (bool, string) {
+		st, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("step: %v", err)
+		}
+		ps = st
+		return st.Status.RefreshRequestedAt != nil, fmt.Sprintf("state %s, refreshMessage %q", st.Status.State, st.Status.RefreshMessage)
+	})
+	assert.Equal(t, fmt.Sprintf("refresh skipped (Application %s/%s (deploys to %s): outside the Pipeline's namespace %s, "+
+		"see --health-refresh-namespaces); waiting for Argo CD to poll git", framework.ArgoCDNamespace, other.argoApp("test"), other.ns, a.ns),
+		ps.Status.RefreshMessage)
+	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, "a skipped refresh is not a health failure")
+	evs, err := e.Events(context.Background(), ps.Namespace, "PromotionStep", ps.Name)
+	require.NoError(t, err)
+	var skipped bool
+	for _, ev := range evs {
+		assert.NotEqual(t, "GitOpsRefreshRequested", ev.Reason)
+		skipped = skipped || (ev.Reason == "GitOpsRefreshSkipped" && ev.Type == corev1.EventTypeWarning)
+	}
+	assert.True(t, skipped, "a GitOpsRefreshSkipped Warning Event")
+}
+
 // TestFlux_RefreshOnPromotion runs Flux with a one-hour GitRepository and
 // Kustomization interval, so only a refresh request syncs a commit within
 // the test. test promotes with the default health.refresh: the step sets

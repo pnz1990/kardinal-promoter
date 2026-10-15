@@ -4,6 +4,7 @@
 package health
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,12 @@ type RefreshTarget struct {
 	Kind      string
 	Namespace string
 	Name      string
+	// Destination is the namespace the object deploys to in this cluster:
+	// an in-cluster Application's spec.destination.namespace, a
+	// Kustomization's spec.targetNamespace (without spec.kubeConfig), and for
+	// a GitRepository in its Kustomization's namespace the Kustomization's
+	// (or that namespace). "" when it names none.
+	Destination string
 }
 
 // String is "Kind namespace/name".
@@ -59,7 +66,8 @@ func RefreshSupported(healthType string) bool {
 // Application; or the Flux Kustomization's source GitRepository (when its
 // spec.sourceRef is one) and then the Kustomization. Flux applies only what
 // its source has fetched, so the source comes first. It reads the
-// Kustomization for its source; it writes nothing. Other health types have
+// Kustomization for its source and each object for the namespace it deploys
+// to (RefreshTarget.Destination); it writes nothing. Other health types have
 // no target.
 func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([]RefreshTarget, error) {
 	switch opts.Type {
@@ -68,7 +76,15 @@ func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([
 		if ns == "" {
 			ns = "argocd"
 		}
-		return []RefreshTarget{{GVR: argoCDApplicationGVR, Kind: "Application", Namespace: ns, Name: opts.ArgoCD.Name}}, nil
+		target := RefreshTarget{GVR: argoCDApplicationGVR, Kind: "Application", Namespace: ns, Name: opts.ArgoCD.Name}
+		app, err := d.dynamic.Resource(argoCDApplicationGVR).Namespace(ns).Get(ctx, opts.ArgoCD.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, &RefreshError{Op: "get", Target: target, Err: err}
+		}
+		if inCluster(app) {
+			target.Destination, _, _ = unstructured.NestedString(app.Object, "spec", "destination", "namespace")
+		}
+		return []RefreshTarget{target}, nil
 	case "flux":
 		ns := opts.Flux.Namespace
 		if ns == "" {
@@ -79,13 +95,44 @@ func (d *AutoDetector) RefreshTargets(ctx context.Context, opts CheckOptions) ([
 		if err != nil {
 			return nil, &RefreshError{Op: "get", Target: target, Err: err}
 		}
+		if _, remote, _ := unstructured.NestedMap(ks.Object, "spec", "kubeConfig"); !remote {
+			// A Kustomization that applies to another cluster
+			// (spec.kubeConfig) deploys to a namespace there: it is judged
+			// by its own namespace.
+			target.Destination, _, _ = unstructured.NestedString(ks.Object, "spec", "targetNamespace")
+		}
 		var targets []RefreshTarget
 		if src, ok := fluxGitSource(ks); ok {
+			// A source in the Kustomization's namespace is refreshed for it
+			// and in scope when the Kustomization is. A source in another
+			// namespace (a shared flux-system GitRepository, or another
+			// tenant's) is judged by its own namespace: naming it in a
+			// Kustomization does not make it the Pipeline's.
+			if src.Namespace == ks.GetNamespace() {
+				src.Destination = cmp.Or(target.Destination, target.Namespace)
+			}
 			targets = append(targets, src)
 		}
 		return append(targets, target), nil
 	}
 	return nil, nil
+}
+
+// inCluster reports whether an Application deploys to the cluster Argo CD
+// runs in (spec.destination.server https://kubernetes.default.svc, or name
+// in-cluster, or neither set). An Application that deploys to another cluster
+// names a namespace of that cluster, which says nothing about who owns it
+// here: it is judged by its own namespace.
+func inCluster(app *unstructured.Unstructured) bool {
+	server, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
+	name, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "name")
+	switch {
+	case server != "":
+		return strings.TrimSuffix(server, "/") == "https://kubernetes.default.svc"
+	case name != "":
+		return name == "in-cluster"
+	}
+	return true
 }
 
 // fluxGitSource is the GitRepository a Kustomization's spec.sourceRef names.

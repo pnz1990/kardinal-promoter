@@ -184,6 +184,7 @@ TestGraph_TargetEnvironmentStops 66 parallel
 TestGraph_WavesRunInParallel 118 parallel
 TestHealth_AbortStaysAborted 117 parallel
 TestHealth_ArgoCDRefresh 80 parallel
+TestHealth_ArgoCDRefreshOtherTenant 60 parallel
 TestHealth_ArgoCDWaveOnSharedBranch 60 parallel
 TestHealth_ArgoFailures 194 parallel
 TestHealth_ArgoIgnoresEarlierDegraded 147 parallel
