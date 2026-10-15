@@ -9,7 +9,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
 import {
-  Badge, Button, CodeBlock, CodeInline, ConfirmDialog, Dialog, Drawer, Icon, ICON_NAMES, IconButton, Kbd, MenuButton, Stack,
+  Badge, Banner, Button, CodeBlock, CodeInline, ConfirmDialog, Dialog, Drawer, Icon, ICON_NAMES, IconButton, Kbd, MenuButton, Stack,
   StatusChip, TabPanel, Tabs, Tag, TONES, toneVars,
 } from '.'
 
@@ -72,6 +72,23 @@ describe('StatusChip, Badge, Tag', () => {
     expect(screen.getByRole('img', { name: 'image version' })).toHaveTextContent('■ IMG')
     expect(screen.getByRole('img', { name: 'image and config version' })).toHaveTextContent('■◆ MIX')
     await expectAccessible(container)
+  })
+})
+
+describe('Banner', () => {
+  it('is an alert with a decorative icon, its words, its tone and its actions', async () => {
+    const { container } = render(
+      <Banner tone="failed" icon="pause" aria-label="Freeze f" actions={<Button size="sm">Unfreeze</Button>}>The line is stopped</Banner>)
+    const b = screen.getByRole('alert', { name: 'Freeze f' })
+    expect(b).toHaveClass('k-banner', 'k-banner--failed')
+    expect(b).toHaveTextContent('The line is stopped')
+    expect(b.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(b.querySelector('.k-banner__actions')).toContainElement(screen.getByRole('button', { name: 'Unfreeze' }))
+    await expectAccessible(container)
+  })
+  it('takes another role, and has no actions slot without actions', () => {
+    render(<Banner tone="blocked" role="status">Heads up</Banner>)
+    expect(screen.getByRole('status').querySelector('.k-banner__actions')).toBeNull()
   })
 })
 

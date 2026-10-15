@@ -887,3 +887,37 @@ func TestUI_BrowserWaves(t *testing.T) {
 	})
 	framework.Playwright(t, "waves.spec.ts", browserEnv(mainUI(t, e), a.ns, "KARDINAL_UI_BUNDLE", b.Name))
 }
+
+// TestUI_BrowserFreezes checks a freeze in the UI (#1908). The test stops the
+// line in its own namespace for two hours with kardinal freeze, and its
+// version's step at test is held with the freeze's message. The main UI runs
+// without TokenReview, so its freeze controls are off (Helm
+// ui.freezeControls): the banner names whom it holds, where, who froze, since
+// and until when, and why, with kardinal unfreeze and the controller's reason
+// for it instead of Unfreeze, and there is no Freeze menu. The stage drawer
+// says a freeze holds the step. Both pass axe. After kardinal unfreeze the
+// step promotes.
+//
+// Covers UI-FREEZE-01.
+func TestUI_BrowserFreezes(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+	name := "kardinal-freeze-everyone-" + a.ns
+	t.Cleanup(func() {
+		_ = e.Client.Delete(context.Background(), &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	})
+	const reason = "INC-4212 e2e stop"
+	c.Must(a.ns, "freeze", "--everyone", "--reason", reason, "--for", "2h", "--yes")
+	e.WaitChangeWindow(t, name, gateTimeout, "active", func(w *v1alpha1.ChangeWindow) bool { return w.Status.Active })
+	held := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepMessage(t, a.ns, pipelineName, held, "test", "Pending", "frozen by "+name, promoteTimeout)
+
+	framework.Playwright(t, "freezes.spec.ts", browserEnv(mainUI(t, e), a.ns,
+		"KARDINAL_UI_FREEZE", name, "KARDINAL_UI_FROZEN_BY", whoAmI(t, e), "KARDINAL_UI_REASON", reason))
+
+	c.Must(a.ns, "unfreeze", name)
+	e.WaitStepState(t, a.ns, pipelineName, held, "test", "Verified", promoteTimeout)
+}

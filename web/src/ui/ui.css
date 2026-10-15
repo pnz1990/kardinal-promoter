@@ -383,3 +383,23 @@
 @keyframes k-skeleton { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .k-skeleton__bar { animation: none; } }
 [data-motion="reduce"] .k-skeleton__bar { animation: none; }
+
+/* Banner: a page-wide notice (a freeze, a rejected change live, plain HTTP).
+   The icon and the words say it; the tone's status tokens colour it. */
+.k-banner {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--k-space-2);
+  padding: var(--k-space-1_5) var(--k-space-3);
+  border: var(--k-border-hairline) solid;
+  border-radius: var(--k-radius-2);
+  font-size: var(--k-text-sm);
+}
+.k-banner--blocked { border-color: var(--k-status-blocked-fg); background: var(--k-status-blocked-wash); color: var(--k-status-blocked-fg); }
+.k-banner--failed { border-color: var(--k-status-failed-fg); background: var(--k-status-failed-wash); color: var(--k-status-failed-fg); }
+.k-banner__icon { flex-shrink: 0; }
+.k-banner__body { flex: 1; min-width: 0; }
+.k-banner__body code { font-family: var(--k-font-mono); font-size: var(--k-text-xs); }
+.k-banner__body a { color: inherit; }
+.k-banner__actions { display: flex; flex-shrink: 0; align-items: center; gap: var(--k-space-2); }

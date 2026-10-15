@@ -235,7 +235,7 @@ export function App() {
 
   // #913: insecure connection banner — dismissed state for the current session.
   const [insecureBannerDismissed, setInsecureBannerDismissed] = useState(false)
-  const { freezes, refresh: refreshFreezes } = useFreezes()
+  const { freezes, refresh: refreshFreezes, settled: freezesSettled } = useFreezes()
 
   // #462: view mode — 'list' (sidebar) | 'ops-table' (full-width operations table), in the
   // URL as view=ops.
@@ -601,9 +601,9 @@ export function App() {
       <InsecureConnectionBanner
         dismissed={insecureBannerDismissed}
         onDismiss={() => setInsecureBannerDismissed(true)}
-        className="app-insecure-banner"
+        className="app-banner"
       />
-      <FreezeBanner freezes={freezes} onChange={refreshFreezes} />
+      <FreezeBanner freezes={freezes} onChange={refreshFreezes} className="app-banner" />
     </>
   )
 
@@ -903,7 +903,7 @@ export function App() {
 
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
-        <main id="main-content" tabIndex={-1} className="app-main app-main--ops">
+        <main id="main-content" tabIndex={-1} className="app-main app-main--ops" data-freezes-pending={freezesSettled ? undefined : true}>
           <div className="app-topbar">
             {navButton}
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} versionLabel={routeVersionLabel} />
@@ -925,7 +925,7 @@ export function App() {
         </main>
       ) : (
         <>{/* Main area — column layout for header + content row */}
-        <main id="main-content" tabIndex={-1} className="app-main">
+        <main id="main-content" tabIndex={-1} className="app-main" data-freezes-pending={freezesSettled ? undefined : true}>
           <div className="app-topbar">
             {navButton}
             <Breadcrumb route={urlState} namespace={activePipeline?.namespace} versionLabel={routeVersionLabel} />

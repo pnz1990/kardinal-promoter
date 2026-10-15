@@ -177,9 +177,11 @@
 
 .stage-why__item--gate { border-inline-start-color: var(--k-status-blocked-fg); }
 /* An approval waits on people, as the chip says (Waiting tone). */
-.stage-why__item--approval { border-inline-start-color: var(--k-status-waiting-fg); }
+.stage-why__item--approval,
+.stage-why__item--verify { border-inline-start-color: var(--k-status-waiting-fg); }
 .stage-why__item--failed { border-inline-start-color: var(--k-status-failed-fg); }
 .stage-why__item--held,
+.stage-why__item--frozen,
 .stage-why__item--paused { border-inline-start-color: var(--k-status-held-fg); }
 .stage-why__item--pr { border-inline-start-color: var(--k-status-waiting-fg); }
 

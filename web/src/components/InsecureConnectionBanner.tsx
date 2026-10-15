@@ -6,7 +6,7 @@
 //
 // Design doc: docs/design/06-kardinal-ui.md §Future — port-forward UX (#913)
 
-import '../styles/InsecureConnectionBanner.css'
+import { Banner, Button } from '../ui'
 
 interface InsecureConnectionBannerProps {
   /** Whether the banner has been dismissed by the user. */
@@ -35,7 +35,7 @@ export function isInsecureNonLocalConnection(): boolean {
 }
 
 /**
- * InsecureConnectionBanner renders an amber warning banner when the UI is accessed
+ * InsecureConnectionBanner renders a blocked-tone Banner (ui/Banner.tsx) when the UI is accessed
  * over plain HTTP from a non-localhost address. It is dismissible for the session.
  * App shows it at the top of every view, including the empty and error states:
  * the connection is insecure before any pipeline loads.
@@ -45,33 +45,14 @@ export function InsecureConnectionBanner({ dismissed, onDismiss, className }: In
   if (!isInsecureNonLocalConnection()) return null
 
   return (
-    <div
-      role="alert"
-      className={className ? `insecure-banner ${className}` : 'insecure-banner'}
+    <Banner
+      tone="blocked"
+      className={className}
+      actions={<Button variant="secondary" size="sm" onClick={onDismiss} aria-label="Dismiss insecure connection warning">Dismiss</Button>}
     >
-      <div className="insecure-banner__message">
-        <span className="insecure-banner__icon" aria-hidden="true">⚠</span>
-        <span className="insecure-banner__text">
-          Insecure connection — kardinal UI is accessed over plain HTTP.{' '}
-          Use{' '}
-          <code className="insecure-banner__code">
-            {PORT_FORWARD_COMMAND}
-          </code>{' '}
-          and open{' '}
-          <a href="http://localhost:8082/ui/" className="insecure-banner__link">
-            http://localhost:8082/ui/
-          </a>
-          {' '}for secure in-cluster access.
-        </span>
-      </div>
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dismiss insecure connection warning"
-        className="insecure-banner__dismiss"
-      >
-        Dismiss
-      </button>
-    </div>
+      <strong>Insecure connection</strong> — kardinal UI is accessed over plain HTTP.{' '}
+      Use <code>{PORT_FORWARD_COMMAND}</code> and open{' '}
+      <a href="http://localhost:8082/ui/">http://localhost:8082/ui/</a> for secure in-cluster access.
+    </Banner>
   )
 }

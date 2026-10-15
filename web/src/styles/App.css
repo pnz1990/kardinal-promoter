@@ -199,7 +199,11 @@
   background: var(--k-surface-canvas);
 }
 .app-main--ops { background: var(--k-surface-sunken); }
-.app-insecure-banner { margin: var(--k-space-4) var(--k-space-6) 0; }
+.app-banner { margin: var(--k-space-4) var(--k-space-6) 0; }
+/* Until the first read of the freezes answers (at most a second, useFreezes),
+   the view under the banners is laid out but not shown: a freeze banner that
+   arrives with that read does not push a painted page down (journey 027). */
+.app-main[data-freezes-pending] > :not(.app-topbar) { visibility: hidden; }
 .app-fleet { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .app-empty { padding: var(--k-space-12) var(--k-space-8); color: var(--k-ink-3); text-align: center; }
 

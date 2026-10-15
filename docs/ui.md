@@ -63,6 +63,12 @@ person (a failed promotion, a blocking gate, a hold) says so on its line, and th
 top narrows the board to those. **⊞ Ops** in the sidebar (or **Show the operations table** in the palette) lists the same
 pipelines as a sortable table.
 
+### Freezes
+
+While a [freeze](agentic/freezes.md#in-the-ui) holds promotions, every view starts with its banner:
+whom it holds, where, who froze, since and until when, and why, with **Unfreeze** or the
+`kardinal unfreeze` command.
+
 ### Who shipped a version
 
 Every view names who shipped a version the same way, from its verified actor
