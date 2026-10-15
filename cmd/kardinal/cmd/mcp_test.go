@@ -126,8 +126,8 @@ func call(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]any)
 	return res, body
 }
 
-var mcpReadTools = []string{"diff", "explain", "gates", "history", "inbox", "simulate", "status", "verdicts", "why"}
-var mcpWriteTools = []string{"approve", "pause", "promote", "reject", "resume", "rollback", "ship", "verify"}
+var mcpReadTools = []string{"diff", "explain", "freezes", "gates", "history", "inbox", "simulate", "status", "verdicts", "why"}
+var mcpWriteTools = []string{"approve", "freeze", "pause", "promote", "reject", "resume", "rollback", "ship", "verify"}
 
 // TestMCP_ToolListing: a server lists the read tools, read-only, and with
 // --allow-write the write tools too, not read-only; it says what the
@@ -569,7 +569,7 @@ func TestMCP_HostileArguments(t *testing.T) {
 		"diff":     {"a": "1.0", "b": "2.0", "namespace": "default"},
 		"explain":  {"pipeline": "app", "environment": "prod", "namespace": "default"},
 		"gates":    {"pipeline": "app", "namespace": "default"},
-		"simulate": {"pipeline": "app", "environment": "prod", "version": "2.0", "namespace": "default"},
+		"simulate": {"pipeline": "app", "environment": "prod", "version": "2.0", "asAgent": "fixer", "namespace": "default"},
 		"ship":     {"pipeline": "app", "images": []string{"ghcr.io/acme/app:3.0"}, "namespace": "default"},
 		"promote":  {"pipeline": "app", "environment": "prod", "namespace": "default"},
 		"rollback": {"pipeline": "app", "environment": "prod", "to": "1.0", "namespace": "default"},
@@ -579,16 +579,18 @@ func TestMCP_HostileArguments(t *testing.T) {
 		"approve":  {"pipeline": "app", "environment": "prod", "version": "2.0", "namespace": "default"},
 		"verdicts": {"pipeline": "app", "environment": "prod", "version": "1.0", "check": "qa", "namespace": "default"},
 		"verify":   {"pipeline": "app", "environment": "prod", "version": "1.0", "check": "qa", "namespace": "default"},
+		"freeze":   {"holds": "agents", "namespace": "default"},
+		"freezes":  {},
 	}
 	// The other arguments a tool needs, which are free text.
-	extra := map[string]map[string]any{"reject": {"reason": "r"}, "verify": {"result": "pass"}}
+	extra := map[string]map[string]any{"reject": {"reason": "r"}, "verify": {"result": "pass"}, "freeze": {"reason": "r"}}
 	require.ElementsMatch(t, append(slices.Clone(mcpReadTools), mcpWriteTools...), slices.Collect(maps.Keys(named)))
 	for tool, valid := range named {
 		for field := range valid {
 			for _, bad := range mcpHostile {
 				optional := field == "namespace" || field == "to" || (field == "pipeline" && (tool == "status" || tool == "gates" || tool == "reject")) ||
 					(field == "environment" && (tool == "why" || tool == "history" || tool == "explain")) ||
-					(field == "version" && tool == "simulate") ||
+					(field == "version" && tool == "simulate") || (field == "asAgent" && tool == "simulate") ||
 					(tool == "verdicts" && field != "pipeline") // environment or version, either is enough
 				if bad == "" && optional {
 					continue // an empty optional argument is the default
@@ -622,4 +624,7 @@ func TestMCP_HostileArguments(t *testing.T) {
 	var verdicts v1alpha1.VerdictList
 	require.NoError(t, c.List(context.Background(), &verdicts))
 	assert.Empty(t, verdicts.Items, "no verdict recorded")
+	var windows v1alpha1.ChangeWindowList
+	require.NoError(t, c.List(context.Background(), &windows))
+	assert.Empty(t, windows.Items, "no freeze made")
 }
