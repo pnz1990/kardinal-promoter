@@ -77,13 +77,27 @@ func TestCITestShards(t *testing.T) {
 
 	build := wf.Jobs["build"]
 	assert.Equal(t, "build", build.Name, "branch protection requires the check named build")
-	assert.ElementsMatch(t, []any{"changes", "checks", "test", "docs-tests"}, build.Needs)
+	assert.ElementsMatch(t, []any{"changes", "checks", "test", "docs-tests", "count3"}, build.Needs)
 	assert.Contains(t, build.Steps[0].Run, `[ "$DOCS" = true ] && [ "$DOCS_TESTS" != success ]`, "a docs change needs the docs tests")
 	assert.Contains(t, build.Steps[0].Run, `[ "$CHANGES" != success ]`, "build fails when the changes job does")
 	assert.Contains(t, build.Steps[0].Run, `[ "$GO" != true ]`, "build passes skipped shards when no Go, chart or workflow changed")
 	assert.Equal(t, "${{ !cancelled() }}", build.If, "build runs, and fails, when a shard fails")
 	require.Len(t, build.Steps, 1)
-	assert.Contains(t, build.Steps[0].Run, `[ "$CHECKS" != success ] || [ "$TESTS" != success ]`)
+	assert.Contains(t, build.Steps[0].Run, `[ "$CHECKS" != success ] || [ "$TESTS" != success ] || [ "$COUNT3" != success ]`)
+
+	// #1889: the packages that held state across runs run three times in one
+	// process, when Go changed, and build requires it.
+	count3, ok := wf.Jobs["count3"]
+	require.True(t, ok, "ci.yml has the count3 job")
+	assert.Equal(t, test.If, count3.If, "count3 runs when the shards do")
+	var runsCount3 bool
+	for _, s := range count3.Steps {
+		runsCount3 = runsCount3 || (strings.Contains(s.Run, "go test -count=3") &&
+			strings.Contains(s.Run, "./pkg/scm/") && strings.Contains(s.Run, "./pkg/reconciler/promotionstep/") &&
+			strings.Contains(s.Run, "./cmd/kardinal/cmd/"))
+	}
+	assert.True(t, runsCount3, "count3 runs the packages of #1889 with -count=3")
+	assert.Contains(t, build.Steps[0].Run, `[ "$COUNT3" != success ]`, "build requires count3")
 
 	for id, j := range wf.Jobs {
 		for _, s := range j.Steps {
