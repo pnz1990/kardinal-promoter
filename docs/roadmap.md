@@ -25,7 +25,7 @@ Everything in this section is planned and not in kardinal yet. Plans change with
   gate opts in, never for the agent's own work or its sponsor's.
 - **Agents as verifiers.** A `Verdict` object records an agent's pass, fail or inconclusive result
   for a version in an environment, and a verification gate waits for N verdicts from eligible
-  agents.
+  agents. On main, unreleased: [Verify with agents](agentic/verify-with-agents.md).
 - **An agent freeze.** `kardinal freeze --agents` stops promotions by agents, and a cluster-wide
   stop-the-line stops everyone.
 - **Local MCP.** `kardinal mcp` over stdio, with the caller's kubeconfig: read tools by default,

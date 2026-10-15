@@ -61,6 +61,7 @@ credentials and no review.
 |---|---|
 | A change reaches an environment only as a promotion: a version written to Git, gated, health-checked, and for `pr-review` environments a pull request with the evidence in its body | Shipped: [Read PR evidence](../pr-evidence.md) |
 | A failed health check rolls the environment back (`onHealthFailure: rollback`) | Shipped: [Roll back](../rollback.md) |
+| Before prod, a verify gate can require passing verdicts on the version from a verifier other than the author agent's party: another agent, a person or CI | Shipped: [Verify with agents](verify-with-agents.md) |
 | Per-agent budgets and blast radius | Planned: [v0.14](../roadmap.md#v014-adaptive) |
 
 ### An agent ignores a code freeze (SaaStr, Replit, July 2025)
@@ -144,6 +145,5 @@ agent, could point a tool at another cluster or another identity.
 The controls marked planned arrive in the releases the [roadmap](../roadmap.md) lists. They include:
 
 - separation of duties between an agent and its sponsor;
-- agents as verifiers;
 - per-agent budgets;
 - signed promotion receipts.
