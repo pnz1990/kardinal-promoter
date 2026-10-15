@@ -779,6 +779,28 @@ func TestReleaseDryRun(t *testing.T) {
 	}
 	assert.Equal(t, 8, built, "the binaries, both images, the chart and the release body, as the release job builds them")
 
+	// Nothing a dispatch runs can reach a credential: no job that runs on a
+	// dispatch (preflight, test, the dry run), and not the workflow's env,
+	// names a secret or the job token, in a step's run, env or with, or the
+	// job's env (QA on #1935: a secret and a curl POST in a build step of both
+	// jobs kept the steps equal).
+	var raw struct {
+		Env  map[string]any            `json:"env"`
+		Jobs map[string]map[string]any `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &raw))
+	credential := regexp.MustCompile(`secrets\.|github\.token`)
+	env, err := yaml.Marshal(raw.Env)
+	require.NoError(t, err)
+	assert.NotRegexp(t, credential, string(env), "the workflow env")
+	for _, job := range []string{"preflight", "test", "dry-run"} {
+		j, ok := raw.Jobs[job]
+		require.True(t, ok, job)
+		out, err := yaml.Marshal(j)
+		require.NoError(t, err)
+		assert.NotRegexp(t, credential, string(out), "job %s runs on a dispatch: it may use no secret and no job token", job)
+	}
+
 	for _, s := range releaseJobs(t)["preflight"].Steps {
 		if s.Name == "No unreleased changelog fragments" || s.Name == "Check that the tagged commit is on main" {
 			assert.Equal(t, "env.DRY_RUN != 'true'", fmt.Sprint(s.If), "%s: a dry run builds a branch with fragments", s.Name)
