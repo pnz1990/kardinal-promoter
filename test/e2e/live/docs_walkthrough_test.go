@@ -502,7 +502,7 @@ func walkFirstPipeline(t *testing.T, w *walkthrough) {
 	require.NotEqual(t, bundle, next)
 	weekend := time.Now().UTC().Weekday() == time.Saturday || time.Now().UTC().Weekday() == time.Sunday
 	e.WaitGateReady(t, "default", next, "prod", "no-weekend-deploys", !weekend, "", promoteTimeout)
-	const explain = "kardinal explain kardinal-test-app --env prod"
+	const explain = "no-weekend-deploys   Blocking"
 	out = w.must(fp, explain)
 	if weekend {
 		w.commentSample(fp, explain, out, app)

@@ -89,7 +89,7 @@ var walkManifest = map[string][]walkBlock{
 		{match: "Live   Live   Live"},
 		{match: "name: no-weekend-deploys"},
 		{match: "kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-app:main"},
-		{match: "kardinal explain kardinal-test-app --env prod"},
+		{match: "no-weekend-deploys   Blocking"},
 		{match: "kardinal policy simulate --pipeline kardinal-test-app"},
 	},
 }
