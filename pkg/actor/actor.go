@@ -30,9 +30,12 @@ var (
 	ErrConflict = errors.New("matches more than one AgentIdentity")
 	// ErrBlocked: the requester is an agent that may not act (suspended or
 	// not ready).
-	ErrBlocked = errors.New("agent may not act")
+	ErrBlocked = errors.New("blocked by its AgentIdentity")
 	// ErrOutOfScope: the agent may not act here.
 	ErrOutOfScope = errors.New("out of the agent's scope")
+	// ErrIndexNotReady: the release's AgentIndex is missing or not built
+	// (Ready); nothing can be stamped until it is.
+	ErrIndexNotReady = errors.New("kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)")
 )
 
 // User is the authenticated requester: what TokenReview, SelfSubjectReview
@@ -66,7 +69,7 @@ func Derive(u User, idx *v1alpha1.AgentIndexStatus) (Resolved, error) {
 	}
 	if len(matches) == 0 {
 		kind := v1alpha1.ActorHuman
-		if strings.HasPrefix(u.Username, ServiceAccountPrefix) || u.Username == BundleAPIPrincipal {
+		if strings.HasPrefix(u.Username, ServiceAccountPrefix) {
 			kind = v1alpha1.ActorBot
 		}
 		return Resolved{Actor: v1alpha1.Actor{Kind: kind, Principal: u.Username}}, nil
@@ -79,7 +82,7 @@ func Derive(u User, idx *v1alpha1.AgentIndexStatus) (Resolved, error) {
 	}
 	for _, m := range matches {
 		if m.Blocked != "" {
-			return Resolved{}, fmt.Errorf("agent %s: %s: %w", m.Agent, m.Blocked, ErrBlocked)
+			return Resolved{}, fmt.Errorf("agent %s may not act: %s: %w", m.Agent, m.Blocked, ErrBlocked)
 		}
 	}
 	e := first

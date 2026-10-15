@@ -147,7 +147,9 @@ func TestActorAdmission(t *testing.T) {
 	require.NotNil(t, vap.Spec.ParamKind)
 	assert.Equal(t, "AgentIndex", vap.Spec.ParamKind.Kind)
 	idx := actorRegistry(t)
-	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: *idx})
+	ready := *idx
+	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: ready})
 
 	fixerSA := "system:serviceaccount:ci:fixer"
 	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
@@ -201,9 +203,9 @@ func TestActorAdmission(t *testing.T) {
 		{name: "12b approval in scope", req: actorReq{resource: "approvals", namespace: "payments-eu", user: fixerSA,
 			object: approvalObj(t, "payments-eu", "uat", fixer)}, where: where{Namespace: "payments-eu", Environment: "uat"}},
 		{name: "13 suspended agent", req: actorReq{resource: "bundles", namespace: "payments-eu", user: "system:serviceaccount:ci:parked",
-			object: bundleObj(t, "payments-eu", "checkout", nil)}, deny: "AgentIdentity parked is suspended"},
+			object: bundleObj(t, "payments-eu", "checkout", nil)}, deny: "agent parked may not act: suspended"},
 		{name: "14 the losing AgentIdentity's other subject is blocked", req: actorReq{resource: "bundles", namespace: "payments-eu",
-			user: "system:serviceaccount:ci:late", object: bundleObj(t, "payments-eu", "checkout", nil)}, deny: "late is not ready"},
+			user: "system:serviceaccount:ci:late", object: bundleObj(t, "payments-eu", "checkout", nil)}, deny: "agent late may not act: not ready: SubjectConflict"},
 		{name: "14b two agents at once", req: actorReq{resource: "bundles", namespace: "payments-eu", user: "oidc:reviewer",
 			groups: []string{"oidc:agents-fixer"}, object: bundleObj(t, "payments-eu", "checkout", nil)},
 			deny: "match more than one AgentIdentity (reviewer, fixer)"},
@@ -256,14 +258,25 @@ func TestActorAdmission(t *testing.T) {
 	}
 }
 
-// TestActorAdmission_NoIndexData: an index with no status yet (the
-// controller has not built it) knows no agents: people and bots pass.
-func TestActorAdmission_NoIndexData(t *testing.T) {
+// TestActorAdmission_IndexNotReady: an AgentIndex with no status (just
+// created), or one not Ready (IndexFull), denies every write the policy
+// judges, people's included, until the controller has built it: the
+// registry fails closed. A Ready index with no agents admits people and bots.
+func TestActorAdmission_IndexNotReady(t *testing.T) {
 	vap := identityPolicy(t, "actor")
-	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
-	delete(params, "status")
-	assert.Empty(t, evalActor(t, vap, params, actorReq{resource: "bundles", namespace: "x", user: "system:serviceaccount:ci:fixer",
-		object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "bot", Principal: "system:serviceaccount:ci:fixer"})}))
+	req := actorReq{resource: "bundles", namespace: "x", user: "alice", object: bundleObj(t, "x", "checkout", nil)}
+	empty := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
+	delete(empty, "status")
+	assert.Contains(t, evalActor(t, vap, empty, req), "kardinal's agent index is not ready yet")
+	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
+	assert.Contains(t, evalActor(t, vap, full, req), "kardinal's agent index is not ready yet")
+	ready := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}})
+	assert.Empty(t, evalActor(t, vap, ready, req))
+	// The controller is exempt: it refuses on its own when its index is not ready.
+	req.user = controllerUser
+	assert.Empty(t, evalActor(t, vap, empty, req))
 }
 
 // TestActorAdmission_Binding: the binding reads the release's AgentIndex and

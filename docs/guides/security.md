@@ -649,7 +649,9 @@ With `controller.accessLog.auditEvents` (`--api-audit-events`, on by default), e
 through the UI API and the Bundle API is an `APIWrite` AuditEvent in the target's namespace. It
 records the caller (`spec.actor`), the route and method (`spec.request`), the target and what
 was done (`spec.message`), and the outcome: `Failure` when the controller or the API server
-refused it. No token or request body is recorded. The events are queued and written after the
+refused it, once the request named its target (requests refused before that, such as a
+malformed body or the Bundle API's rate limit, are in the access log only). No token or request
+body is recorded. The events are queued and written after the
 response, at most 50 a second per controller replica; past that, or with the queue full, an
 event is dropped and counted in `kardinal_audit_events_dropped_total{kind="APIWrite"}`. They
 are retained with the other AuditEvents ([Retention](#retention)).

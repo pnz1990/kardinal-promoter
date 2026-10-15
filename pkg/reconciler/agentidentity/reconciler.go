@@ -151,7 +151,11 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	cond := metav1.Condition{Type: ConditionReady, Status: metav1.ConditionTrue, Reason: "Built",
 		Message: fmt.Sprintf("%d agent identities", reg.Index.ObservedIdentities), ObservedGeneration: idx.Generation}
 	if reg.Full {
-		cond.Reason, cond.Message = actor.ReasonIndexFull, "the index is full: some AgentIdentities are left out (their status says which)"
+		// Written empty and not Ready: the actor policy then refuses the
+		// writes it judges (fail closed).
+		cond.Status, cond.Reason = metav1.ConditionFalse, actor.ReasonIndexFull
+		cond.Message = "the agent index is over its size bound: remove AgentIdentities or subjects; until then kardinal " +
+			"refuses the writes the actor policy checks"
 	}
 	meta.SetStatusCondition(&want.Conditions, cond)
 	if equalIndex(idx.Status, want) {
@@ -166,49 +170,36 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	return reconcile.Result{}, nil
 }
 
-// ensureIndex creates the AgentIndex name when it is missing, on every
-// replica (NeedLeaderElection false). It writes no status: the leader's
-// IndexReconciler does.
+// ensureIndex builds the index once at start on every replica, leader or
+// not (NeedLeaderElection false): a replica is ready only once the index is
+// Ready, and during a rolling upgrade the leader can be a release that does
+// not know the index. Every replica writes the same status (Evaluate is
+// deterministic); afterwards the leader's IndexReconciler keeps it current.
 type ensureIndex struct {
-	c    client.Reader
-	w    client.Writer
-	name string
+	r    *IndexReconciler
+	sync func(context.Context) bool
 }
 
-// NeedLeaderElection: every replica creates the index it waits for.
+// NeedLeaderElection: every replica builds the index it waits for.
 func (e *ensureIndex) NeedLeaderElection() bool { return false }
 
-// Start creates the index, retrying until it exists or ctx ends.
+// Start builds the index, retrying until it succeeds or ctx ends.
 func (e *ensureIndex) Start(ctx context.Context) error {
+	if e.sync != nil && !e.sync(ctx) {
+		return nil
+	}
 	for {
-		err := e.ensure(ctx)
+		_, err := e.r.Reconcile(ctx, reconcile.Request{})
 		if err == nil {
 			return nil
 		}
-		zerolog.Ctx(ctx).Warn().Err(err).Str("agentindex", e.name).Msg("create the agent index; retrying")
+		zerolog.Ctx(ctx).Warn().Err(err).Str("agentindex", e.r.Name).Msg("build the agent index; retrying")
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(5 * time.Second):
 		}
 	}
-}
-
-func (e *ensureIndex) ensure(ctx context.Context) error {
-	var idx v1alpha1.AgentIndex
-	err := e.c.Get(ctx, client.ObjectKey{Name: e.name}, &idx)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("get agent index %s: %w", e.name, err)
-	}
-	idx = v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: e.name,
-		Labels: map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}}}
-	if err := e.w.Create(ctx, &idx); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create agent index %s: %w", e.name, err)
-	}
-	return nil
 }
 
 // equalIndex compares two statuses, treating nil and empty maps as equal
@@ -228,28 +219,14 @@ func equalIndex(a, b v1alpha1.AgentIndexStatus) bool {
 
 // SetupWithManager rebuilds the index on any AgentIdentity change and on any
 // change to the index itself (a deleted index is recreated), and once at
-// start.
+// start on every replica.
 func (r *IndexReconciler) SetupWithManager(mgr manager.Manager) error {
 	one := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: client.ObjectKey{Name: r.Name}}}
 	})
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		if !mgr.GetCache().WaitForCacheSync(ctx) {
-			return nil
-		}
-		_, err := r.Reconcile(ctx, reconcile.Request{})
-		if err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Msg("build agent index at start")
-		}
-		return nil
-	})); err != nil {
+	// Every replica, leader or not, builds the index once at start.
+	if err := mgr.Add(&ensureIndex{r: r, sync: mgr.GetCache().WaitForCacheSync}); err != nil {
 		return fmt.Errorf("add agent index start-up build: %w", err)
-	}
-	// Every replica, leader or not, creates the index when it is missing:
-	// a replica is ready only once it exists, and during a rolling upgrade
-	// the leader can be a release that does not know the index.
-	if err := mgr.Add(&ensureIndex{c: mgr.GetAPIReader(), w: mgr.GetClient(), name: r.Name}); err != nil {
-		return fmt.Errorf("add agent index creation: %w", err)
 	}
 	return ctrl.ControllerManagedBy(mgr).Named("agentindex").
 		Watches(&v1alpha1.AgentIdentity{}, one).

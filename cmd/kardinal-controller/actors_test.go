@@ -35,7 +35,12 @@ func actorFixture(t *testing.T) (client.Client, *actorWriter) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fixer"},
 		Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: "ci", Name: "fixer"}},
 			Sponsor: v1alpha1.AgentSponsor{User: "alice"}, Scope: v1alpha1.AgentScope{Namespaces: []string{"payments-*"}}},
+	}, {
+		ObjectMeta: metav1.ObjectMeta{Name: "parked"},
+		Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: "ci", Name: "parked"}},
+			Sponsor: v1alpha1.AgentSponsor{User: "bob"}, Scope: v1alpha1.AgentScope{Namespaces: []string{"*"}}, Suspended: true},
 	}}, actor.MaxIndexBytes)
+	reg.Index.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu"}},
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "billing"}},
@@ -222,6 +227,41 @@ func TestAgentIndexReady(t *testing.T) {
 	check := agentIndexReady(c, "kardinal-promoter")
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	assert.Error(t, check(req))
-	require.NoError(t, c.Create(context.Background(), &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}))
+	idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}
+	require.NoError(t, c.Create(context.Background(), idx))
+	assert.Error(t, check(req), "an index without status is not ready")
+	idx.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	require.NoError(t, c.Update(context.Background(), idx))
 	assert.NoError(t, check(req))
+}
+
+// TestUIAPI_ActorRefusals: a suspended agent is refused (403), and while the
+// release's AgentIndex is missing or not Ready every stamped write answers
+// 503, never a stamp from an empty registry (the controller is exempt from
+// the actor policy, so it must fail closed itself).
+func TestUIAPI_ActorRefusals(t *testing.T) {
+	c, actors := actorFixture(t)
+	s := newUIAPIServer(c, zerolog.Nop())
+	s.actors = actors
+	sink := &recordingSink{}
+	body := `{"pipeline":"checkout","image":"ghcr.io/acme/checkout:1.5","namespace":"payments-eu"}`
+	w := uiPost(t, s, sink, "system:serviceaccount:ci:parked", "/api/v1/ui/bundles", body)
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "agent parked may not act")
+
+	var idx v1alpha1.AgentIndex
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	idx.Status = v1alpha1.AgentIndexStatus{}
+	require.NoError(t, c.Update(context.Background(), &idx))
+	for _, user := range []string{"system:serviceaccount:ci:parked", "bob"} {
+		w = uiPost(t, s, sink, user, "/api/v1/ui/bundles", body)
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "%s: %s", user, w.Body.String())
+		assert.Contains(t, w.Body.String(), "agent index is not ready")
+	}
+	require.NoError(t, c.Delete(context.Background(), &idx))
+	w = uiPost(t, s, sink, "bob", "/api/v1/ui/bundles", body)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	assert.Empty(t, bundles.Items)
 }

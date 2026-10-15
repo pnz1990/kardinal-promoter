@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -110,7 +111,7 @@ func TestReconcile_AgentIndex(t *testing.T) {
 	assert.Equal(t, 2, idx.Status.ObservedIdentities)
 	assert.Equal(t, "fixer", idx.Status.Users["system:serviceaccount:ci:fixer"].Agent)
 	assert.Equal(t, "alice", idx.Status.Users["system:serviceaccount:ci:fixer"].Sponsor)
-	assert.Equal(t, "AgentIdentity parked is suspended", idx.Status.Users["system:serviceaccount:ci:parked"].Blocked)
+	assert.Equal(t, "suspended", idx.Status.Users["system:serviceaccount:ci:parked"].Blocked)
 	require.Len(t, idx.Status.Conditions, 1)
 	assert.Equal(t, metav1.ConditionTrue, idx.Status.Conditions[0].Status)
 
@@ -148,7 +149,8 @@ func TestReconcile_AgentIndexFull(t *testing.T) {
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &idx))
 	assert.Equal(t, "IndexFull", idx.Status.Conditions[0].Reason)
-	assert.NotEmpty(t, idx.Status.Users["system:serviceaccount:ci:b"].Blocked)
+	assert.Equal(t, metav1.ConditionFalse, idx.Status.Conditions[0].Status, "a full index is not Ready: admission fails closed")
+	assert.Empty(t, idx.Status.Users, "and is written empty, small enough to write")
 
 	ir := &agentidentity.Reconciler{Client: c, MaxIndexBytes: 150}
 	_, err = ir.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: "b"}})
@@ -159,8 +161,8 @@ func TestReconcile_AgentIndexFull(t *testing.T) {
 	assert.Equal(t, "IndexFull", b.Status.Conditions[0].Reason)
 }
 
-// TestEnsureIndex: every replica creates the index when it is missing, and
-// does nothing when it exists.
+// TestEnsureIndex: every replica builds the index at start: created when
+// missing, written Ready, and idempotent.
 func TestEnsureIndex(t *testing.T) {
 	ctx := context.Background()
 	var patches atomic.Int32
@@ -169,6 +171,9 @@ func TestEnsureIndex(t *testing.T) {
 	require.NoError(t, e.Start(ctx))
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &idx))
+	assert.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"))
+	n := patches.Load()
 	require.NoError(t, e.Start(ctx), "idempotent")
+	assert.Equal(t, n, patches.Load())
 	assert.False(t, e.NeedLeaderElection())
 }

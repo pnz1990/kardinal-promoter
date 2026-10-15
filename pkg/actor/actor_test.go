@@ -4,6 +4,7 @@
 package actor_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -68,7 +69,8 @@ func TestDerive(t *testing.T) {
 	}{
 		{name: "human", user: actor.User{Username: "alice"}, kind: "human"},
 		{name: "unregistered ServiceAccount is a bot", user: actor.User{Username: "system:serviceaccount:ci:builder"}, kind: "bot"},
-		{name: "Bundle API static token is a bot", user: actor.User{Username: "bundle-api"}, kind: "bot"},
+		{name: "a person named bundle-api is a person (the static token's bot is built by the API)",
+			user: actor.User{Username: "bundle-api"}, kind: "human"},
 		{name: "agent ServiceAccount", user: actor.User{Username: "system:serviceaccount:ci:fixer"},
 			where: actor.Where{Namespace: "payments-eu", Pipeline: "checkout"}, kind: "agent", agent: "fixer", sponsor: "alice"},
 		{name: "agent by group", user: actor.User{Username: "oidc:someone", Groups: []string{"system:authenticated", "oidc:agents-fixer"}},
@@ -134,7 +136,7 @@ func TestEvaluate(t *testing.T) {
 		id.Spec.Suspended = true
 		reg := actor.Evaluate([]v1alpha1.AgentIdentity{id}, actor.MaxIndexBytes)
 		assert.True(t, reg.Verdicts["a"].Ready)
-		assert.Equal(t, "AgentIdentity a is suspended", reg.Index.Groups["g"].Blocked)
+		assert.Equal(t, "suspended", reg.Index.Groups["g"].Blocked)
 	})
 	t.Run("defaults", func(t *testing.T) {
 		reg := actor.Evaluate([]v1alpha1.AgentIdentity{identity("a", 0, "alice", user("u"))}, actor.MaxIndexBytes)
@@ -149,10 +151,30 @@ func TestEvaluate(t *testing.T) {
 		}
 		reg := actor.Evaluate(ids, 2000)
 		assert.True(t, reg.Full)
-		assert.True(t, reg.Verdicts["a00"].Ready)
-		assert.Equal(t, actor.ReasonIndexFull, reg.Verdicts["a49"].Reason)
-		assert.NotEmpty(t, reg.Index.Users["u49"].Blocked)
-		assert.Len(t, reg.Index.Users, 50)
+		assert.Equal(t, actor.ReasonIndexFull, reg.Verdicts["a00"].Reason, "a full index takes no AgentIdentity")
+		assert.False(t, reg.Verdicts["a49"].Ready)
+		assert.Empty(t, reg.Index.Users, "written empty")
+		assert.False(t, actor.Evaluate(ids, actor.MaxIndexBytes).Full)
+	})
+	t.Run("blocked entries count against the bound", func(t *testing.T) {
+		// 700 AgentIdentities of 16 subjects each, all conflicting with an
+		// older one: every entry is blocked, and the index must still fit.
+		ids := []v1alpha1.AgentIdentity{}
+		for i := range 700 {
+			var subs []v1alpha1.AgentSubject
+			for j := range 16 {
+				subs = append(subs, sa(fmt.Sprintf("team-%04d", i), fmt.Sprintf("agent-subject-%02d", j)))
+			}
+			ids = append(ids, identity(fmt.Sprintf("agent-%04d", i), i, "alice", subs...))
+		}
+		reg := actor.Evaluate(ids, actor.MaxIndexBytes)
+		assert.True(t, reg.Full, "11,200 subjects do not fit")
+		raw, err := json.Marshal(reg.Index)
+		require.NoError(t, err)
+		assert.Less(t, len(raw), actor.MaxIndexBytes+64*1024, "a full index stays small enough to write")
+		for _, v := range reg.Verdicts {
+			require.Equal(t, actor.ReasonIndexFull, v.Reason)
+		}
 	})
 	t.Run("deterministic", func(t *testing.T) {
 		a := []v1alpha1.AgentIdentity{identity("x", 0, "alice", user("u")), identity("y", 0, "bob", user("u"))}

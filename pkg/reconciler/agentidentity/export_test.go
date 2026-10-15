@@ -9,10 +9,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// NewEnsureIndexForTest is the replica's index creator, for tests.
+// NewEnsureIndexForTest is the replica's start-up index build, for tests.
 func NewEnsureIndexForTest(c client.Client, name string) interface {
 	Start(ctx context.Context) error
 	NeedLeaderElection() bool
 } {
-	return &ensureIndex{c: c, w: c, name: name}
+	return &ensureIndex{r: &IndexReconciler{Client: c, Name: name}}
 }

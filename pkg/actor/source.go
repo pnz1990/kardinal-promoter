@@ -25,20 +25,24 @@ type Source struct {
 	Name string
 }
 
-// Index returns the agent index, or nil when there is none: no AgentIndex
-// (the controller has not built it, or the CRD is not installed) means no
-// agents.
+// Index returns the agent index. With Name set (the controller) a missing or
+// not Ready index is ErrIndexNotReady. Without (the CLI) no ready index is
+// nil: the CLI then writes no stamp, and the actor policy decides.
 func (s *Source) Index(ctx context.Context) (*v1alpha1.AgentIndexStatus, error) {
 	if s == nil || s.Reader == nil {
 		return nil, nil
 	}
 	if s.Name != "" {
+		// The controller's own index: missing or not Ready fails closed.
 		var idx v1alpha1.AgentIndex
 		if err := s.Reader.Get(ctx, client.ObjectKey{Name: s.Name}, &idx); err != nil {
 			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-				return nil, nil
+				return nil, fmt.Errorf("agent index %s does not exist: %w", s.Name, ErrIndexNotReady)
 			}
 			return nil, fmt.Errorf("read agent index %s: %w", s.Name, err)
+		}
+		if !meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready") {
+			return nil, fmt.Errorf("agent index %s: %w", s.Name, ErrIndexNotReady)
 		}
 		return &idx.Status, nil
 	}

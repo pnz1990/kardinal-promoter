@@ -257,7 +257,7 @@ func TestAudit_ActorAdmission(t *testing.T) {
 	start := time.Now()
 	framework.Eventually(t, 10*time.Second, "the suspended agent is refused", func(ctx context.Context) (bool, string) {
 		err := agent.client.Create(ctx, actorBundle(ns, agent.stamp()))
-		return err != nil && strings.Contains(err.Error(), "is suspended"), fmt.Sprint(err)
+		return err != nil && strings.Contains(err.Error(), "may not act: suspended"), fmt.Sprint(err)
 	})
 	t.Logf("suspension took effect in %s", time.Since(start).Round(time.Millisecond))
 	require.NoError(t, e.Client.Delete(ctx, &id))

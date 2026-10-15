@@ -49,6 +49,12 @@ what the requester is:
 - an agent's `agent` and `sponsor` are the ones registered;
 - only kardinal's controller sets `via`.
 
+Until the controller has built the index (`kubectl get agentindex` shows its Ready
+condition), the policy refuses every version, Approval and override it checks, people's
+included, with "kardinal's agent index is not ready yet", and the UI API and the Bundle API
+answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade,
+and after the index is deleted; the controller reports ready only once the index is.
+
 An agent must stamp what it writes; a person or a bot may leave the stamp out, as before
 v0.12. An agent that is suspended, or out of its scope, is refused. `kardinal` sets the stamp
 for you: `create bundle`, `ship`, `promote`, `rollback`, `approve` and `override` read your
@@ -113,10 +119,17 @@ The AgentIdentity is ready unless it is invalid:
 - **SubjectConflict**: another AgentIdentity already lists one of its subjects. The older one
   keeps it: a principal is never two agents.
 - **InvalidSponsor**: its sponsor is itself an agent.
-- **IndexFull**: the agent index is at its size limit (about 4,000 subjects).
+- **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 4,000 subjects,
+  blocked ones included). The whole index is then not Ready, and kardinal refuses every write
+  the actor policy checks until AgentIdentities or subjects are removed.
 
 The subjects of an AgentIdentity that is not ready are refused, with its reason, rather than
-treated as people. `autonomy` is recorded and shown; gates that act on it are planned
+treated as people.
+
+`scope.pipelines` applies to the versions an agent creates and the gate overrides it records
+(a gate instance names its Pipeline). An Approval is checked against `scope.namespaces` and
+`scope.environments` only: it names a Bundle, not a Pipeline, so give an agent that approves a
+namespace of its own Pipelines. `autonomy` is recorded and shown; gates that act on it are planned
 ([roadmap](roadmap.md)).
 
 Registering an agent decides how kardinal *records* it. What it may *do* is still decided by
@@ -161,6 +174,9 @@ caller who cannot read the index writes no stamp, which is refused for an agent.
 - The index is rebuilt after each AgentIdentity change; while the controller is down, the index
   is stale but stays in place.
 - Anyone with `edit` or `admin` in the controller's namespace can act as the controller.
+- An agent that holds the UI's or the Bundle API's static token writes as that token: a bot
+  named `kardinal-ui` or `bundle-api`, outside its suspension and scope. Give agents a
+  Kubernetes identity and TokenReview mode instead.
 
 The design, with the options considered for each decision, is in
 [Actors](design/17-actors.md).

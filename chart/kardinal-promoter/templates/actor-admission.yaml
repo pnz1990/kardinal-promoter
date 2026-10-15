@@ -82,7 +82,17 @@ spec:
         variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
     - name: check
       expression: "!variables.controller && size(variables.stamps) > 0"
+    # The index is built: a Ready condition that is True. Until then (just
+    # created, or IndexFull) every write the policy judges is refused: the
+    # registry fails closed.
+    - name: indexReady
+      expression: >-
+        has(params.status) && has(params.status.conditions) &&
+        params.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
   validations:
+    - expression: "!variables.check || variables.indexReady"
+      message: kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)
+      reason: Forbidden
     - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
       messageExpression: >-
         'you (' + request.userInfo.username + ') match more than one AgentIdentity (' +

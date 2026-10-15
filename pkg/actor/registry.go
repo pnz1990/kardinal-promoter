@@ -42,7 +42,8 @@ type Registry struct {
 	Full bool
 }
 
-// Evaluate decides which AgentIdentities take effect and builds the index.
+// Evaluate decides which AgentIdentities take effect and builds the index,
+// within maxBytes of entries.
 // It is deterministic: AgentIdentities are taken oldest first (creation
 // time, then name), and the older one keeps a subject two of them list.
 // A not-ready or suspended AgentIdentity's subjects stay in the index as
@@ -97,22 +98,12 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 			Namespaces: id.Spec.Scope.Namespaces, Pipelines: orAll(id.Spec.Scope.Pipelines),
 			Environments: orAll(id.Spec.Scope.Environments), Autonomy: orDefault(id.Spec.Autonomy),
 		}
-		if v.Ready {
-			n := entriesSize(id, entry)
-			if size+n > maxBytes {
-				v = Verdict{Reason: ReasonIndexFull,
-					Message: fmt.Sprintf("the agent index is full (%d bytes); remove unused AgentIdentities", maxBytes)}
-				reg.Full = true
-			} else {
-				size += n
-			}
-		}
 		switch {
 		case !v.Ready:
-			entry = v1alpha1.AgentIndexEntry{Agent: id.Name, Sponsor: id.Spec.Sponsor.User,
-				Blocked: "AgentIdentity " + id.Name + " is not ready: " + v.Message}
+			// Compact: every subject of the AgentIdentity carries it.
+			entry = v1alpha1.AgentIndexEntry{Agent: id.Name, Sponsor: id.Spec.Sponsor.User, Blocked: "not ready: " + v.Reason}
 		case id.Spec.Suspended:
-			entry.Blocked = "AgentIdentity " + id.Name + " is suspended"
+			entry.Blocked = "suspended"
 		}
 		reg.Verdicts[id.Name] = v
 		for _, s := range id.Spec.Subjects {
@@ -121,11 +112,24 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 				continue // an older AgentIdentity's subject keeps its entry
 			}
 			owner[k] = id.Name
+			size += entrySize(SubjectKey(s), entry)
 			if s.Kind == "Group" {
 				reg.Index.Groups[s.Name] = entry
 			} else {
 				reg.Index.Users[SubjectKey(s)] = entry
 			}
+		}
+	}
+	// Every entry counts, blocked ones too. An index past the bound is
+	// written empty and not Ready, and admission then refuses every write it
+	// judges (fail closed) until AgentIdentities are removed.
+	if size > maxBytes {
+		reg.Full = true
+		reg.Index.Users, reg.Index.Groups = map[string]v1alpha1.AgentIndexEntry{}, map[string]v1alpha1.AgentIndexEntry{}
+		for name := range reg.Verdicts {
+			reg.Verdicts[name] = Verdict{Reason: ReasonIndexFull, Message: fmt.Sprintf(
+				"the agent index is full (%d bytes of %d): remove AgentIdentities or subjects; until then kardinal refuses "+
+					"the writes the actor policy checks", size, maxBytes)}
 		}
 	}
 	return reg
@@ -138,13 +142,9 @@ func ownerKey(s v1alpha1.AgentSubject) string {
 	return "user:" + SubjectKey(s)
 }
 
-func entriesSize(id v1alpha1.AgentIdentity, e v1alpha1.AgentIndexEntry) int {
+func entrySize(key string, e v1alpha1.AgentIndexEntry) int {
 	raw, _ := json.Marshal(e)
-	n := 0
-	for _, s := range id.Spec.Subjects {
-		n += len(raw) + len(SubjectKey(s)) + 4
-	}
-	return n
+	return len(raw) + len(key) + 4
 }
 
 func orAll(v []string) []string {

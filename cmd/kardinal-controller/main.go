@@ -1079,9 +1079,9 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 	// The chart's actor policy refuses Bundle, Approval and override writes
-	// while the release's AgentIndex is missing (fail closed): the controller
-	// is ready only once the index exists, so helm install --wait returns
-	// after it does.
+	// while the release's AgentIndex is missing or not Ready (fail closed):
+	// the controller is ready only once the index is built, so helm install
+	// --wait returns after it is.
 	if agentIndexName != "" {
 		if err := mgr.AddReadyzCheck("agent-index", agentIndexReady(mgr.GetAPIReader(), agentIndexName)); err != nil {
 			logger.Fatal().Err(err).Msg("unable to set up the agent index ready check")

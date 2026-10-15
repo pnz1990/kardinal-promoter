@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,6 +71,10 @@ func (a *actorWriter) forCaller(ctx context.Context, via string, w actor.Where) 
 func writeActorError(w http.ResponseWriter, log zerolog.Logger, err error) {
 	if errors.Is(err, errActorRefused) {
 		http.Error(w, "forbidden: "+strings.TrimPrefix(err.Error(), errActorRefused.Error()+": "), http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, actor.ErrIndexNotReady) {
+		http.Error(w, actor.ErrIndexNotReady.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	log.Error().Err(err).Msg("derive the caller's actor")
@@ -269,8 +274,8 @@ func auditDone(r *http.Request, bundle, message string) {
 	}
 }
 
-// agentIndexReady is a ready check that passes once the AgentIndex name
-// exists.
+// agentIndexReady is a ready check that passes once the AgentIndex name is
+// Ready (built by a leader).
 func agentIndexReady(r client.Reader, name string) healthz.Checker {
 	return func(req *http.Request) error {
 		ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
@@ -278,6 +283,9 @@ func agentIndexReady(r client.Reader, name string) healthz.Checker {
 		var idx v1alpha1.AgentIndex
 		if err := r.Get(ctx, client.ObjectKey{Name: name}, &idx); err != nil {
 			return fmt.Errorf("agent index %s: %w", name, err)
+		}
+		if !meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready") {
+			return fmt.Errorf("agent index %s: %w", name, actor.ErrIndexNotReady)
 		}
 		return nil
 	}

@@ -243,6 +243,13 @@ func (s *bundleAPIServer) serve(w http.ResponseWriter, r *http.Request, c client
 		if ns == "" {
 			ns = s.namespace
 		}
+		// The write's APIWrite record, from here on refusals included.
+		target := accesslog.AuditTarget{Namespace: ns, Pipeline: req.Pipeline, Route: "/api/v1/bundles",
+			Message: "create a bundle"}
+		if requester != "" {
+			target.Message += " by " + requester
+		}
+		accesslog.FromContext(r.Context()).Audit = &target
 		if s.onlyNamespace != "" && ns != s.onlyNamespace {
 			http.Error(w, fmt.Sprintf("namespace %q is not watched by this controller", ns), http.StatusForbidden)
 			return
@@ -268,19 +275,12 @@ func (s *bundleAPIServer) serve(w http.ResponseWriter, r *http.Request, c client
 
 		// The verified actor (docs/actors.md): the reviewed caller, or the
 		// static token's holder, a bot.
-		target := accesslog.AuditTarget{Namespace: ns, Pipeline: req.Pipeline, Route: "/api/v1/bundles",
-			Message: "create a bundle"}
 		stamp, err := s.actors.forCaller(r.Context(), v1alpha1.ViaAPI, actor.Where{Namespace: ns, Pipeline: req.Pipeline})
 		if err != nil {
-			if requester != "" {
-				target.Message += " by " + requester
-			}
-			accesslog.FromContext(r.Context()).Audit = &target
 			writeActorError(w, s.log, err)
 			return
 		}
-		target.Actor = stamp
-		accesslog.FromContext(r.Context()).Audit = &target
+		target.Actor, target.Message = stamp, "create a bundle"
 		spec.Actor = stamp
 
 		// Set timestamp on provenance if not provided.
