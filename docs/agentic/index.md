@@ -63,6 +63,11 @@ read tools (`why`, `status`, `simulate` and more) by default, the write tools wi
 `--allow-write`, all as the agent's own Kubernetes identity. Text from PRs, commits and people
 comes labelled as untrusted data. See [Connect an agent](connect-an-agent.md).
 
+## Threat model
+
+[Threat model](threat-model.md) takes the agent incidents of 2025 and 2026, from the Replit
+freeze to PromptPwnd, and names the kardinal control that stops each one, shipped or planned.
+
 ## What's next
 
 Agent identities with sponsors, actor-aware policy, agent verdicts as gates and an agent freeze

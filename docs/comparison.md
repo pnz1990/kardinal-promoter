@@ -63,6 +63,50 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 
 ---
 
+## Agentic governance
+
+How each tool governs what AI agents change, from each vendor's documentation as of October 2026.
+Each ↗ links the page the cell rests on. "—" means we found no such control in the vendor's docs
+(the ↗ is the main page we read), not that it cannot exist. kardinal's column describes main, which is not released yet: its local
+MCP server ships in v0.12.0. The [threat model](agentic/threat-model.md) maps real incidents to
+these controls.
+
+| | kardinal | Akuity Kargo | Harness | Octopus | GitHub | GitLab | Argo CD MCP | Flux MCP |
+|---|---|---|---|---|---|---|---|---|
+| **Enforced at the target** | **Yes** | Yes [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | Partial [↗](https://github.com/harness/mcp-server "Source: Harness") | Partial [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | Yes [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") | Partial [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | Partial [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | Partial [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Verified actor and sponsor** | **Partial** | Partial [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | Partial [↗](https://developer.harness.io/harness-ai/use-harness-ai/core-capabilities/in-your-pipelines/worker-agent/permissions "Source: Harness") | Partial [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | Yes [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") | Yes [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Separation of duties between agents** | **Partial** | — [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | — [↗](https://github.com/harness/mcp-server "Source: Harness") | — [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | Partial [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") [↗](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments "Source: GitHub") | Partial [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Agent approvals opt-in** | **No** | — [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | — [↗](https://github.com/harness/mcp-server "Source: Harness") | — [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | — [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") | — [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Agents as verifiers** | **Partial** | — [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | — [↗](https://github.com/harness/mcp-server "Source: Harness") | — [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | Partial [↗](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments "Source: GitHub") | — [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Budgets** | **No** | — [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | — [↗](https://github.com/harness/mcp-server "Source: Harness") | — [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | — [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") | — [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Kill switch** | **Partial** | Partial [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | — [↗](https://github.com/harness/mcp-server "Source: Harness") | — [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | Partial [↗](https://docs.github.com/en/copilot/how-tos/administer-copilot/manage-for-organization/add-copilot-coding-agent "Source: GitHub") | Yes [↗](https://docs.gitlab.com/user/duo_agent_platform/turn_on_off/ "Source: GitLab") | Partial [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | Partial [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Receipts** | **Partial** | Partial [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | Partial [↗](https://github.com/harness/mcp-server "Source: Harness") | Partial [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | Partial [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") | Partial [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Pre-flight** | **Yes** | — [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | — [↗](https://github.com/harness/mcp-server "Source: Harness") | — [↗](https://octopus.com/docs/octopus-ai/mcp/remote "Source: Octopus") | — [↗](https://docs.github.com/en/copilot/concepts/agents/coding-agent/risks-and-mitigations "Source: GitHub") | — [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | — [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | — [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+| **Read-only by default** | **Yes** | Yes [↗](https://akuity.io/blog/agentic-control-plane-mcp-server "Source: Akuity Kargo") | No [↗](https://github.com/harness/mcp-server "Source: Harness") | No [↗](https://github.com/OctopusDeploy/mcp-server "Source: Octopus") | No [↗](https://github.com/github/github-mcp-server "Source: GitHub") | — [↗](https://docs.gitlab.com/user/duo_agent_platform/composite_identity/ "Source: GitLab") | No [↗](https://github.com/argoproj-labs/mcp-for-argocd "Source: Argo CD MCP") | No [↗](https://fluxoperator.dev/docs/mcp/config/ "Source: Flux MCP") |
+
+Akuity Kargo is its Agentic Control Plane and MCP server; GitHub is the Copilot coding agent,
+GitHub environments and the GitHub MCP server; GitLab is the Duo Agent Platform. A "Partial"
+is narrower than the row: for example GitHub's and GitLab's separation of duties is between the
+agent and the human who asked for the change, and every "Receipts" partial is an unsigned audit
+log.
+
+What kardinal does for each row today:
+
+| Control | kardinal on main |
+|---|---|
+| **Enforced at the target** | Yes: the API server's admission policies and the controller's gates judge every promotion, whoever started it |
+| **Verified actor and sponsor** | Partial: each version's creator is verified at admission (`kardinal.io/created-by`), and so are approvers, rejecters and overriders; the human sponsor of an agent is [planned](roadmap.md#v012-agent-ready) |
+| **Separation of duties between agents** | Partial: `excludeAuthor` keeps a version's creator, agent or person, from approving it; the one-party rule across an agent and its sponsor is [planned](roadmap.md#v012-agent-ready) |
+| **Agent approvals opt-in** | No: an approval gate's `allowedUsers` and `allowedGroups` decide who counts, a ServiceAccount included; opt-in agent approvals are [planned](roadmap.md#v012-agent-ready) |
+| **Agents as verifiers** | Partial: post hooks (Jobs) and Argo Rollouts analyses gate an environment; agent verdicts as gates are [planned](roadmap.md#v012-agent-ready) |
+| **Budgets** | No: per-agent budgets are [planned](roadmap.md#v014-adaptive) |
+| **Kill switch** | Partial: pause a pipeline or a fleet, and a ChangeWindow blackout freezes every pipeline whose gates read it; an agent-only freeze is [planned](roadmap.md#v012-agent-ready) |
+| **Receipts** | Partial: PR evidence and append-only AuditEvents; signed promotion receipts are [planned](roadmap.md#v013-evidence) |
+| **Pre-flight** | Yes: the MCP `simulate` tool (`kardinal policy simulate --version`) says whether a version would be allowed into an environment now, and what would let it in |
+| **Read-only by default** | Yes: `kardinal mcp` offers write tools only with `--allow-write` |
+
+---
+
 ## Why kardinal-promoter
 
 Unique to kardinal: CEL gates that combine schedule, soak, history, metrics and change windows;

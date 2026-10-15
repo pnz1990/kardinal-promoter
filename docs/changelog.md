@@ -23,6 +23,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Documentation
 
+- **Agentic delivery, part II** ([threat model](agentic/threat-model.md), [comparison](comparison.md#agentic-governance)) — the home page leads with "GitOps Governance for the Agentic Era", three shipped proof points and a "Connect your agent" quickstart. A threat model maps the 2025–26 agent incidents (Kiro, PocketOS, `terraform destroy`, the Replit freeze, PromptPwnd, s1ngularity, the GitHub MCP leak, and the MCP argument injection found in kardinal before release) to kardinal controls, each marked shipped or planned. The comparison adds an agentic-governance matrix against Kargo, Harness, Octopus, GitHub, GitLab, Argo CD MCP and Flux MCP, with a source for every cell.
+
 - **Coming from Kargo** ([page](coming-from-kargo.md)) — each Kargo concept (Warehouse, Freight, Stage, fan-in, `requiredSoakTime`, auto-promotion, verification, promotion steps) beside its kardinal counterpart, and the Kargo Enterprise features kardinal ships as open source: automatic rollback, approvals with verified identity and `excludeAuthor`, ChangeWindows with break-glass overrides, and NotificationHook. [Migrate from Kargo](guides/migrating-from-kargo.md) keeps the step-by-step walkthrough and links to it for the concepts.
 - **Agentic delivery** ([page](agentic/index.md)) — a new docs section: what kardinal enforces today for changes made by agents, and a starting point for an agent's ServiceAccount. The [roadmap](roadmap.md) lists the v0.12 to v0.14 themes, all planned.
 

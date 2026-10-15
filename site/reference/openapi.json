@@ -689,7 +689,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/uiDeployed"
             },
-            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedBundle, as kardinal status reports). Environments that never received one are absent.",
+            "description": "Deployed is, per environment, the Bundle whose change the environment runs: the newest PromotionStep there that landed its change (lifecycle.DeployedIn, as kardinal status reports). Environments that never received one are absent.",
             "type": [
               "object",
               "null"
@@ -793,6 +793,10 @@
         "additionalProperties": false,
         "description": "uiPipelineActionRequest is the body of POST /api/v1/ui/pause and POST /api/v1/ui/resume.",
         "properties": {
+          "environment": {
+            "description": "Environment, when set, pauses or resumes only this fleet environment (spec.pausedFleets) instead of the whole Pipeline.",
+            "type": "string"
+          },
           "namespace": {
             "description": "Namespace of the Pipeline. Defaults to \"default\".",
             "type": "string"
@@ -1374,6 +1378,16 @@
             "description": "Bundle is the rollback Bundle created.",
             "type": "string"
           },
+          "fleet": {
+            "description": "Fleet is set for the rollback of a whole fleet: each target, in fleet order, with the Bundle it runs and whether the rollback changes it.",
+            "items": {
+              "$ref": "#/components/schemas/uiFleetTargetRollback"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "held": {
             "description": "Held is true when the environment is held on the rollback.",
             "type": "boolean"
@@ -1905,13 +1919,21 @@
             "type": "integer"
           },
           "maxUnavailable": {
-            "description": "MaxUnavailable is spec.fleet.maxUnavailable: that many Failed targets stop the rollout. Absent when unset.",
+            "description": "MaxUnavailable is spec.fleet.maxUnavailable as a count of the targets (a percentage rounded up, at least 1): that many Failed targets stop the rollout. Absent when unset.",
             "format": "int32",
             "type": "integer"
+          },
+          "maxUnavailableSpec": {
+            "description": "MaxUnavailableSpec is spec.fleet.maxUnavailable as written (\"10%\", \"2\"). Absent when unset.",
+            "type": "string"
           },
           "message": {
             "description": "Message says why the targets cannot be resolved (a selector fleet).",
             "type": "string"
+          },
+          "paused": {
+            "description": "Paused: the fleet is in spec.pausedFleets (kardinal pause --env <fleet>), so no further target starts.",
+            "type": "boolean"
           },
           "targets": {
             "description": "Targets are the target environments (\"<environment>-<target>\"), in the order they are promoted.",
@@ -1926,6 +1948,29 @@
         },
         "required": [
           "targets"
+        ],
+        "type": "object"
+      },
+      "uiFleetTargetRollback": {
+        "additionalProperties": false,
+        "description": "uiFleetTargetRollback is one target of the rollback of a fleet.",
+        "properties": {
+          "changes": {
+            "description": "Changes is false when the target runs what the rollback restores already: its step is Verified at once.",
+            "type": "boolean"
+          },
+          "environment": {
+            "description": "Environment is the target's environment, <fleet>-<target>.",
+            "type": "string"
+          },
+          "runs": {
+            "description": "Runs is the Bundle whose change landed there last; absent when none.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "changes",
+          "environment"
         ],
         "type": "object"
       },

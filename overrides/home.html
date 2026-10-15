@@ -14,14 +14,25 @@
     <div class="md-grid k-hero__grid">
       <div class="k-hero__copy">
         <p class="k-eyebrow">Kubernetes promotion controller</p>
-        <h1 id="k-hero-title" class="k-hero__title">Follow every change to production.</h1>
+        <h1 id="k-hero-title" class="k-hero__title">GitOps Governance for the Agentic Era</h1>
         <p class="k-hero__lead">
-          kardinal moves each version of your app through your environments by writing to Git.
-          Every gate is a rule you can read. Every production change is a pull request you can
-          review. No database, no extra services.
+          Agents, CI and people ship changes the same way: kardinal promotes each version through
+          your environments by writing to Git, and enforces governance where the change lands, in
+          the cluster, not in the agent.
         </p>
+        <ul class="k-hero__proof">
+          <li><strong>Verified identity.</strong> The API server admits an approval, an override or a
+            rejection only in the caller's own name, and <code>excludeAuthor</code> keeps a version's
+            creator from approving it.</li>
+          <li><strong>A local MCP server.</strong> <code>kardinal mcp</code> runs with the agent's own
+            kubeconfig, read-only unless started with <code>--allow-write</code>, and answers a
+            policy pre-flight before the agent acts.</li>
+          <li><strong>Fleet controls.</strong> Pause, hold or roll back every target of a fleet at once,
+            and stop a rollout after <code>maxUnavailable</code> failures.</li>
+        </ul>
         <div class="k-hero__actions">
           <a class="md-button md-button--primary" href="{{ 'quickstart/' | url }}">Start the quickstart</a>
+          <a class="md-button" href="{{ 'agentic/connect-an-agent/' | url }}">Connect your agent</a>
           <a class="md-button" href="{{ config.repo_url }}">View on GitHub</a>
         </div>
         <div class="k-hero__cmd">

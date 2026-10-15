@@ -124,6 +124,7 @@ nav:
   - Agentic delivery:
     - agentic/index.md
     - Connect an agent: agentic/connect-an-agent.md
+    - Threat model: agentic/threat-model.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
