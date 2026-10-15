@@ -304,7 +304,9 @@ func RenderPR(cfg *v1alpha1.PRConfig, defaultTitle string, body PRBody) (Rendere
 			return RenderedPR{}, err
 		}
 		// The marker names kardinal's PRs, as in the default body.
-		out.Body = "<!-- kardinal-promoter auto-generated PR -->\n" + b
+		// The template is bounded in bytes; the marker and multi-byte text
+		// can still pass the SCM's character limit.
+		out.Body = capPRBody("<!-- kardinal-promoter auto-generated PR -->\n" + b)
 	}
 	var err error
 	if out.Labels, err = renderPRList(funcs, "labels", cfg.Labels, body, data); err != nil {
