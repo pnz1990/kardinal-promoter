@@ -409,7 +409,7 @@ func Freeze(t *testing.T) {
 		h := scenario.ImageBundle(pw.p.NS, scenario.PipelineName, "1.2.0")
 		scenario.ShipAs(t, pw.World, "human", h)
 		pw.expectVerified(t, h)
-		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(ic), pw.Client, name, ""))
+		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(ic), pw.Client, name, "", &v1alpha1.FreezeLift{By: ic.Username}))
 		a2 := scenario.ImageBundle(pw.p.NS, scenario.PipelineName, "1.3.0")
 		scenario.ShipAs(t, pw.World, "agent", a2)
 		pw.expectVerified(t, a2)
@@ -423,7 +423,7 @@ func Freeze(t *testing.T) {
 		require.True(t, pw.RunUntil(scenario.MaxRounds, func() bool { return slices.Contains(pw.Verified(pw.p.NS, b.Name), "dev") }))
 		name := pw.freeze(t, ic, v1alpha1.FreezeEveryone, pw.p.NS, 0)
 		pw.expectHeld(t, b, "prod")
-		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(ic), pw.Client, name, ""))
+		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(ic), pw.Client, name, "", &v1alpha1.FreezeLift{By: ic.Username}))
 		pw.expectVerified(t, b)
 	})
 	t.Run("an exemption lets one pipeline through, in its namespace, until it expires", func(t *testing.T) {
@@ -497,7 +497,7 @@ func Freeze(t *testing.T) {
 		t.Parallel()
 		pw := startPolicy(t, nil)
 		theirs := pw.freeze(t, ic, v1alpha1.FreezeEveryone, pw.p.NS, 0)
-		err := lifecycle.Unfreeze(pw.CtxOf(teamAdm), pw.Client, theirs, teamAdm.Username)
+		err := lifecycle.Unfreeze(pw.CtxOf(teamAdm), pw.Client, theirs, teamAdm.Username, &v1alpha1.FreezeLift{By: teamAdm.Username})
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, lifecycle.ErrForbidden), "%v", err)
 		var cw v1alpha1.ChangeWindow
@@ -507,9 +507,9 @@ func Freeze(t *testing.T) {
 			Reason: "mine now", CreatedBy: teamAdm.Username, OnlyOwn: true, Now: pw.Now()})
 		require.Error(t, err)
 		// Their own freeze of another scope they lift.
-		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(ic), pw.Client, theirs, ""))
+		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(ic), pw.Client, theirs, "", &v1alpha1.FreezeLift{By: ic.Username}))
 		own := pw.freeze(t, teamAdm, v1alpha1.FreezeAgents, pw.p.NS, 0)
-		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(teamAdm), pw.Client, own, teamAdm.Username))
+		require.NoError(t, lifecycle.Unfreeze(pw.CtxOf(teamAdm), pw.Client, own, teamAdm.Username, &v1alpha1.FreezeLift{By: teamAdm.Username}))
 	})
 }
 
