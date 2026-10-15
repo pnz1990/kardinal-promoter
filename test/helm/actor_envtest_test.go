@@ -339,6 +339,10 @@ func TestActorsOnAPIServer(t *testing.T) {
 	require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(fz2), &fz3))
 	fz3.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "alice", Actor: hu("bob")}
 	require.Error(t, as("alice").Update(ctx, &fz3), "23b a lift stamped with someone else, index missing")
+	fz3.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "alice", Actor: hu("alice")}
+	err = as("alice").Update(ctx, &fz3)
+	require.Error(t, err, "23b a stamped lift waits for the index (no window for freezes)")
+	require.True(t, strings.Contains(err.Error(), "not ready") || strings.Contains(err.Error(), "no params found"), err.Error())
 	t.Log("ok 23b stamps without the index")
 
 	// 24 index recreated, status not yet written (what a replica does first):

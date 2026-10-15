@@ -587,10 +587,14 @@ Admission checks a stamp in two parts. That it names the requester (its `princip
 `via` (only the controller sets it) and has a kind that fits (`bot` or `agent` for a
 ServiceAccount, `human` or `agent` for anyone else) is checked always, by the hold-writes,
 bundle-rejection and freezes policies. That an agent's stamp names its registered agent and
-sponsor needs the AgentIndex: for these records it is checked by `<release>-actor-records`, which
-admits while the index is missing (a fresh install, until the controller builds it, so Pipeline
-writes never wait for it). In that window an agent's record can name another agent or sponsor,
-or claim `human` or `bot`; nothing else about it goes unchecked.
+sponsor needs the AgentIndex. For a hold, a `spec.lastChange` and a rejection it is checked by
+`<release>-actor-records`, which admits while the index is missing (a fresh install, until the
+controller builds it, so Pipeline writes and Bundle updates never wait for it). In that window
+the stamp on one of these three records can, for an agent only: name another agent or sponsor,
+or leave the agent out; claim `bot` when the agent is a ServiceAccount; and claim `human` when
+it is a user or a member of a registered group. It still names the requester as its principal
+and carries no `via`. A freeze and its lift are checked by `<release>-actor`, which refuses them
+while the index is missing, so they have no such window.
 
 The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
 them: a failed health check records `PromotionFailed` (or `RollbackStarted` with
