@@ -157,7 +157,7 @@ func schemaHas(s *structuralschema.Structural, path []string) bool {
 		if s == nil {
 			return false
 		}
-		if s.Extensions.XPreserveUnknownFields {
+		if s.XPreserveUnknownFields {
 			return true
 		}
 		for s.Items != nil {
