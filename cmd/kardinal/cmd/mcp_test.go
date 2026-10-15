@@ -126,8 +126,8 @@ func call(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]any)
 	return res, body
 }
 
-var mcpReadTools = []string{"diff", "explain", "gates", "history", "inbox", "simulate", "status", "why"}
-var mcpWriteTools = []string{"approve", "pause", "promote", "reject", "resume", "rollback", "ship"}
+var mcpReadTools = []string{"diff", "explain", "gates", "history", "inbox", "simulate", "status", "verdicts", "why"}
+var mcpWriteTools = []string{"approve", "pause", "promote", "reject", "resume", "rollback", "ship", "verify"}
 
 // TestMCP_ToolListing: a server lists the read tools, read-only, and with
 // --allow-write the write tools too, not read-only; it says what the
@@ -577,16 +577,19 @@ func TestMCP_HostileArguments(t *testing.T) {
 		"resume":   {"pipeline": "app", "namespace": "default"},
 		"reject":   {"version": "2.0", "pipeline": "app", "namespace": "default"},
 		"approve":  {"pipeline": "app", "environment": "prod", "version": "2.0", "namespace": "default"},
+		"verdicts": {"pipeline": "app", "environment": "prod", "version": "1.0", "check": "qa", "namespace": "default"},
+		"verify":   {"pipeline": "app", "environment": "prod", "version": "1.0", "check": "qa", "namespace": "default"},
 	}
 	// The other arguments a tool needs, which are free text.
-	extra := map[string]map[string]any{"reject": {"reason": "r"}}
+	extra := map[string]map[string]any{"reject": {"reason": "r"}, "verify": {"result": "pass"}}
 	require.ElementsMatch(t, append(slices.Clone(mcpReadTools), mcpWriteTools...), slices.Collect(maps.Keys(named)))
 	for tool, valid := range named {
 		for field := range valid {
 			for _, bad := range mcpHostile {
 				optional := field == "namespace" || field == "to" || (field == "pipeline" && (tool == "status" || tool == "gates" || tool == "reject")) ||
 					(field == "environment" && (tool == "why" || tool == "history" || tool == "explain")) ||
-					(field == "version" && tool == "simulate")
+					(field == "version" && tool == "simulate") ||
+					(tool == "verdicts" && field != "pipeline") // environment or version, either is enough
 				if bad == "" && optional {
 					continue // an empty optional argument is the default
 				}
@@ -616,4 +619,7 @@ func TestMCP_HostileArguments(t *testing.T) {
 	var approvals v1alpha1.ApprovalList
 	require.NoError(t, c.List(context.Background(), &approvals))
 	assert.Empty(t, approvals.Items)
+	var verdicts v1alpha1.VerdictList
+	require.NoError(t, c.List(context.Background(), &verdicts))
+	assert.Empty(t, verdicts.Items, "no verdict recorded")
 }
