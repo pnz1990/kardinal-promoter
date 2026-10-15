@@ -73,10 +73,57 @@ type Coverage struct {
 	Rows     int
 	ByStatus map[string]int
 	ByResult map[string]int // test/e2e/proof -out, empty without e2e results
+	// Unproven are the rows whose result is failed, missing or not run.
+	Unproven map[string]string
+	// Allowed are rows that may stay unproven, each with its reason
+	// (hack/release-gate/coverage-allow.txt).
+	Allowed map[string]string
+	// ProofError, when set, is why there is no proof: the gate is NO-GO.
+	ProofError string
+}
+
+// unprovenResults are the proof results that do not prove a row.
+var unprovenResults = map[string]bool{"failed": true, "missing": true, "not run": true}
+
+// Blocking are the unproven rows not in the allowlist, sorted.
+func (c Coverage) Blocking() []string {
+	var out []string
+	for id := range c.Unproven {
+		if _, ok := c.Allowed[id]; !ok {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// readAllowlist reads "ID reason" lines; # starts a comment. A row without
+// a reason is an error.
+func readAllowlist(path string) (map[string]string, error) {
+	out := map[string]string{}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the coverage allowlist: %w", err)
+	}
+	for _, l := range strings.Split(string(data), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		id, reason, _ := strings.Cut(l, " ")
+		if strings.TrimSpace(reason) == "" {
+			return nil, fmt.Errorf("%s: %s has no reason", path, id)
+		}
+		out[id] = strings.TrimSpace(reason)
+	}
+	return out, nil
 }
 
 func readCoverage(root, proofFile string) (Coverage, error) {
-	c := Coverage{ByStatus: map[string]int{}, ByResult: map[string]int{}}
+	c := Coverage{ByStatus: map[string]int{}, ByResult: map[string]int{}, Unproven: map[string]string{}}
 	f, err := os.Open(filepath.Join(root, "test", "e2e", "coverage.tsv"))
 	if err != nil {
 		return c, fmt.Errorf("open coverage.tsv: %w", err)
@@ -97,11 +144,16 @@ func readCoverage(root, proofFile string) (Coverage, error) {
 	}
 	if data, err := os.ReadFile(proofFile); err == nil {
 		var rows []struct {
+			ID     string `json:"ID"`
 			Result string `json:"result"`
 		}
-		if json.Unmarshal(data, &rows) == nil {
-			for _, r := range rows {
-				c.ByResult[r.Result]++
+		if err := json.Unmarshal(data, &rows); err != nil {
+			return c, fmt.Errorf("read %s: %w", proofFile, err)
+		}
+		for _, r := range rows {
+			c.ByResult[r.Result]++
+			if unprovenResults[r.Result] {
+				c.Unproven[r.ID] = r.Result
 			}
 		}
 	}
@@ -114,7 +166,63 @@ type Provenance struct {
 	Dirty                      bool
 	GoVersion                  string
 	Tools                      [][2]string // name, version or image
-	Images                     []string    // images.txt lines: ref, image ID, build
+	Images                     []string    // the images step's images.txt: ref, image ID, build
+	// RanImages are the images the live suites ran: each local suite's
+	// images.txt, and the CI run's e2e-images artifact.
+	RanImages []string
+}
+
+// ranTotals counts the tests of a step that ran on this commit with these
+// inputs: output left by another run does not count.
+func ranTotals(out string, st Step, r Result) (Totals, bool) {
+	if r.Status != statusPass && r.Status != statusFail {
+		return Totals{}, false
+	}
+	return stepTotals(out, st)
+}
+
+// skippedTests lists the tests a go test -json file records as skipped.
+func skippedTests(file string) []string {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		var ev struct{ Action, Test, Package string }
+		if json.Unmarshal(sc.Bytes(), &ev) == nil && ev.Action == "skip" && ev.Test != "" {
+			out = append(out, strings.TrimPrefix(ev.Package, "github.com/kardinal-promoter/kardinal-promoter/")+" "+ev.Test)
+		}
+	}
+	return out
+}
+
+// readRanImages reads the images.txt of every step that ran and the CI
+// run's e2e-images artifact.
+func readRanImages(out string, steps []Step, results []Result) []string {
+	var lines []string
+	add := func(file string) {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return
+		}
+		for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if l != "" {
+				lines = append(lines, l)
+			}
+		}
+	}
+	for i, st := range steps {
+		if st.ID != "images" && (results[i].Status == statusPass || results[i].Status == statusFail) {
+			add(filepath.Join(out, st.ID, "images.txt"))
+		}
+	}
+	add(filepath.Join(out, "ci-images", "images.txt"))
+	sort.Strings(lines)
+	return lines
 }
 
 func readImages(out string) []string {
@@ -131,7 +239,17 @@ func readImages(out string) []string {
 	return lines
 }
 
-// Verdict of the whole gate.
+// verdictOf is the gate's verdict: the steps', made NO-GO by a coverage row
+// that is not proven (and not allowed) or by a missing proof.
+func verdictOf(results []Result, cov Coverage) string {
+	v := verdict(results)
+	if cov.ProofError != "" || len(cov.Blocking()) > 0 {
+		return "NO-GO"
+	}
+	return v
+}
+
+// verdict of the steps alone.
 func verdict(results []Result) string {
 	incomplete := false
 	for _, r := range results {
@@ -165,7 +283,8 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 		short = short[:12]
 	}
 	fmt.Fprintf(&b, "# Release gate: %s\n\n", short)
-	fmt.Fprintf(&b, "**Verdict: %s.** `%s` (%s)", verdict(results), p.SHA, p.Describe)
+	v := verdictOf(results, cov)
+	fmt.Fprintf(&b, "**Verdict: %s.** `%s` (%s)", v, p.SHA, p.Describe)
 	if p.Dirty {
 		b.WriteString(", **with uncommitted changes**")
 	}
@@ -187,7 +306,7 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 		status := statusPass
 		var first, last time.Time
 		for _, i := range idx {
-			if tt, ok := stepTotals(out, steps[i]); ok {
+			if tt, ok := ranTotals(out, steps[i], results[i]); ok {
 				t.add(tt)
 			}
 			if r := results[i]; !r.Started.IsZero() {
@@ -217,7 +336,7 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 			t.Run, t.Passed, t.Failed, t.Skipped, duration(last.Sub(first).Seconds()))
 	}
 	fmt.Fprintf(&b, "| **Total** | **%s** | | **%d** | **%d** | **%d** | **%d** | %s wall |\n\n",
-		verdict(results), all.Run, all.Passed, all.Failed, all.Skipped, wall.Round(time.Second))
+		v, all.Run, all.Passed, all.Failed, all.Skipped, wall.Round(time.Second))
 	b.WriteString("Tests count every test and subtest once per run (`-count`), from each step's `go test -json` output. " +
 		"An area's time runs from its first step's start to its last step's end.\n\n")
 
@@ -228,20 +347,38 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 		if r.Cached {
 			res += " (cached)"
 		}
+		if r.Dirty {
+			res += " (uncommitted changes)"
+		}
 		if r.Reason != "" && r.Status != statusPass {
 			res += ": " + strings.ReplaceAll(r.Reason, "|", "/")
 		}
 		tests := ""
-		if t, ok := stepTotals(out, st); ok {
+		if t, ok := ranTotals(out, st, r); ok {
 			tests = fmt.Sprintf("%d/%d/%d", t.Passed, t.Failed, t.Skipped)
 		}
 		logLink := ""
-		if job, err := os.ReadFile(filepath.Join(out, st.ID, "ci-job.txt")); err == nil {
+		if r.Status != statusPass && r.Status != statusFail {
+			// No output of this commit and these inputs to link.
+		} else if job, err := os.ReadFile(filepath.Join(out, st.ID, "ci-job.txt")); err == nil {
 			logLink = fmt.Sprintf("[CI job](%s)", strings.TrimSpace(string(job)))
 		} else if _, err := os.Stat(filepath.Join(out, st.ID, "log.txt")); err == nil {
 			logLink = fmt.Sprintf("[log](%s/log.txt)", st.ID)
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", st.Title, st.Area, res, tests, duration(r.Seconds), logLink)
+	}
+
+	var skips []string
+	for i, st := range steps {
+		if _, ok := ranTotals(out, st, results[i]); !ok {
+			continue
+		}
+		for _, name := range skippedTests(filepath.Join(out, st.ID, st.Tests)) {
+			skips = append(skips, fmt.Sprintf("- %s: `%s`", st.ID, name))
+		}
+	}
+	if len(skips) > 0 {
+		b.WriteString("\n## Skipped tests\n\n" + strings.Join(skips, "\n") + "\n")
 	}
 
 	b.WriteString("\n## Coverage\n\n")
@@ -267,8 +404,35 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 			res = append(res, fmt.Sprintf("%d %s", cov.ByResult[k], k))
 		}
 		fmt.Fprintf(&b, "The coverage proof over this gate's live results ([coverage-proof.json](coverage-proof.json)): %s.\n", strings.Join(res, ", "))
-	} else {
-		b.WriteString("No live e2e results yet, so no coverage proof.\n")
+	}
+	if cov.ProofError != "" {
+		fmt.Fprintf(&b, "\n**No coverage proof: %s.** No row is proven, so the gate is NO-GO.\n", cov.ProofError)
+	}
+	if blocking := cov.Blocking(); len(blocking) > 0 {
+		fmt.Fprintf(&b, "\n**%d covered rows are not proven** (NO-GO): ", len(blocking))
+		shown := blocking
+		if len(shown) > 60 {
+			shown = shown[:60]
+		}
+		var items []string
+		for _, id := range shown {
+			items = append(items, fmt.Sprintf("%s (%s)", id, cov.Unproven[id]))
+		}
+		b.WriteString(strings.Join(items, ", "))
+		if len(blocking) > len(shown) {
+			fmt.Fprintf(&b, " and %d more (coverage-proof.json)", len(blocking)-len(shown))
+		}
+		b.WriteString(".\n")
+	}
+	var allowed []string
+	for id := range cov.Unproven {
+		if reason, ok := cov.Allowed[id]; ok {
+			allowed = append(allowed, fmt.Sprintf("- %s (%s): %s", id, cov.Unproven[id], reason))
+		}
+	}
+	if len(allowed) > 0 {
+		sort.Strings(allowed)
+		b.WriteString("\nNot proven, allowed by hack/release-gate/coverage-allow.txt:\n\n" + strings.Join(allowed, "\n") + "\n")
 	}
 
 	b.WriteString("\n## Provenance\n\n")
@@ -280,11 +444,17 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 	for _, t := range p.Tools {
 		fmt.Fprintf(&b, "- %s: `%s`\n", t[0], t[1])
 	}
+	if len(p.RanImages) == 0 {
+		b.WriteString("- Images the live suites ran: none recorded\n")
+	}
+	for _, img := range p.RanImages {
+		fmt.Fprintf(&b, "- Image the live suites ran: `%s`\n", img)
+	}
 	if len(p.Images) == 0 {
-		b.WriteString("- Images: not built (the images step did not pass)\n")
+		b.WriteString("- Images trivy scanned: none (the images step did not pass)\n")
 	}
 	for _, img := range p.Images {
-		fmt.Fprintf(&b, "- Image: `%s`\n", img)
+		fmt.Fprintf(&b, "- Image trivy scanned: `%s`\n", img)
 	}
 	_, err := io.WriteString(w, b.String())
 	if err != nil {

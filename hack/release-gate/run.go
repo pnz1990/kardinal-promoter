@@ -6,6 +6,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,11 +31,18 @@ const (
 )
 
 // Result is a step's outcome, STEP_DIR/result.json. A pass is cached: a
-// later gate on the same commit reuses it and runs only the rest.
+// later gate reuses it, and runs only the rest, when it ran on the same
+// commit, on a clean tree, with the same inputs (Key).
 type Result struct {
-	ID      string    `json:"id"`
-	Status  string    `json:"status"`
-	SHA     string    `json:"sha"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	SHA    string `json:"sha"`
+	// Key is the hash of what the step ran: its scripts, its thresholds, the
+	// tool versions and the gate's options (Gate.key).
+	Key string `json:"key"`
+	// Dirty: the tree had uncommitted changes. Such a result is reported,
+	// marked, and never reused.
+	Dirty   bool      `json:"dirty,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
 	Started time.Time `json:"started"`
 	Seconds float64   `json:"seconds"`
@@ -61,8 +70,14 @@ type Runner interface {
 
 // Gate runs the steps of a plan.
 type Gate struct {
-	Out      string // results directory of this commit
-	SHA      string
+	Out string // results directory of this commit
+	SHA string
+	// Dirty: the tree has uncommitted changes, so nothing is reused and
+	// every result is marked.
+	Dirty bool
+	// Inputs is what every step's key includes besides its own scripts: the
+	// tool versions (hack/tool-versions.env) and the gate's options.
+	Inputs   string
 	Clusters int // cluster budget
 	Fresh    bool
 	Host     Host
@@ -81,18 +96,70 @@ func (g *Gate) clock() time.Time {
 	return time.Now()
 }
 
-// cached returns the step's earlier pass on this commit.
+// key is the hash of everything a step's result depends on besides the
+// commit: its scripts, test thresholds and CI job, and the gate's inputs.
+func (g *Gate) key(st Step) string {
+	h := sha256.New()
+	job := ""
+	if st.CIJob != nil {
+		job = st.CIJob.Name()
+	}
+	for _, part := range []string{st.ID, st.Script, st.Cleanup, st.Tests, strconv.Itoa(st.MinTests), strconv.Itoa(st.MaxSkips), job, g.Inputs} {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// cached returns the step's earlier pass, when it can stand for this run:
+// the same commit, a clean tree then and now, the same key, and its log and
+// test output still there.
 func (g *Gate) cached(st Step) (Result, bool) {
+	if g.Dirty {
+		return Result{}, false
+	}
 	data, err := os.ReadFile(filepath.Join(g.dir(st), "result.json"))
 	if err != nil {
 		return Result{}, false
 	}
 	var r Result
-	if json.Unmarshal(data, &r) != nil || r.Status != statusPass || r.SHA != g.SHA {
+	if json.Unmarshal(data, &r) != nil || r.Status != statusPass || r.SHA != g.SHA || r.Dirty || r.Key != g.key(st) {
+		return Result{}, false
+	}
+	if g.proven(st, g.dir(st)) != "" {
 		return Result{}, false
 	}
 	r.Cached = true
 	return r, true
+}
+
+// proven returns "" when a step that exited 0 left its proof: a log, and,
+// for a step with tests, a test output that records at least MinTests tests
+// and at most MaxSkips skips. Else it says what is missing; the step is not
+// a pass.
+func (g *Gate) proven(st Step, dir string) string {
+	if fi, err := os.Stat(filepath.Join(dir, "log.txt")); err != nil || fi.Size() == 0 {
+		return "no log"
+	}
+	if st.Tests == "" {
+		return ""
+	}
+	f, err := os.Open(filepath.Join(dir, st.Tests))
+	if err != nil {
+		return "no test output (" + st.Tests + ")"
+	}
+	defer func() { _ = f.Close() }()
+	t, err := countTests(f)
+	if err != nil {
+		return "unreadable test output: " + err.Error()
+	}
+	if t.Run < max(1, st.MinTests) {
+		return fmt.Sprintf("%d tests ran, fewer than the %d this step proves", t.Run, max(1, st.MinTests))
+	}
+	if t.Skipped > st.MaxSkips {
+		return fmt.Sprintf("%d tests skipped, more than the %d allowed (see the report's skipped tests)", t.Skipped, st.MaxSkips)
+	}
+	return ""
 }
 
 // failedBefore says whether the step's saved result on this commit is a failure.
@@ -102,7 +169,7 @@ func (g *Gate) failedBefore(st Step) bool {
 		return false
 	}
 	var r Result
-	return json.Unmarshal(data, &r) == nil && r.SHA == g.SHA && r.Status == statusFail
+	return json.Unmarshal(data, &r) == nil && r.SHA == g.SHA && r.Key == g.key(st) && r.Status == statusFail
 }
 
 func (g *Gate) save(r Result) error {
@@ -273,7 +340,7 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 // the script and its cleanup, and saves the result.
 func (g *Gate) runStep(ctx context.Context, st Step) Result {
 	dir := g.dir(st)
-	r := Result{ID: st.ID, SHA: g.SHA}
+	r := Result{ID: st.ID, SHA: g.SHA, Key: g.key(st), Dirty: g.Dirty}
 	if err := os.RemoveAll(dir); err != nil {
 		r.Status, r.Reason = statusFail, err.Error()
 		return r
@@ -298,9 +365,13 @@ func (g *Gate) runStep(ctx context.Context, st Step) Result {
 		g.Runner.Cleanup(st, dir)
 	}
 	r.Seconds = g.clock().Sub(r.Started).Seconds()
-	if err != nil {
+	switch {
+	case err != nil:
 		r.Status, r.Reason = statusFail, err.Error()
-	} else {
+	case g.proven(st, dir) != "":
+		// Exit 0 is not a pass by itself: the evidence must be there.
+		r.Status, r.Reason = statusFail, "not proven: "+g.proven(st, dir)
+	default:
 		r.Status = statusPass
 	}
 	if err := g.save(r); err != nil {

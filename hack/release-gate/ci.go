@@ -51,6 +51,8 @@ type ciRun struct {
 	SHA    string `json:"sha"`
 	Ref    string `json:"ref"`
 	Suites string `json:"suites"`
+	Minors string `json:"minors"`
+	Count  int    `json:"count"`
 }
 
 // GH runs the gh CLI; tests fake it.
@@ -64,11 +66,15 @@ type ciRunner struct {
 	out    string
 	count  int
 	suites []string
+	minors string // e2e-live.yml's minors input: "1.35 1.37"
 	poll   time.Duration
-	log    func(format string, args ...any)
+	// jobWait is how long a job the run does not list is waited for.
+	jobWait time.Duration
+	log     func(format string, args ...any)
 
-	mu  sync.Mutex
-	run *ciRun
+	mu         sync.Mutex
+	run        *ciRun
+	imagesDone bool
 }
 
 const workflow = "e2e-live.yml"
@@ -85,7 +91,7 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 	suites := strings.Join(c.suites, " ")
 	if data, err := os.ReadFile(path); err == nil {
 		var r ciRun
-		if json.Unmarshal(data, &r) == nil && r.SHA == c.sha && r.Suites == suites && r.ID != 0 {
+		if json.Unmarshal(data, &r) == nil && r.SHA == c.sha && r.Suites == suites && r.Minors == c.minors && r.Count == c.count && r.ID != 0 {
 			c.run = &r
 			return c.run, nil
 		}
@@ -99,7 +105,7 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 	}
 	since := time.Now().UTC().Add(-time.Minute)
 	if _, err := c.gh(ctx, "workflow", "run", workflow, "--repo", c.repo, "--ref", c.ref,
-		"-f", "suites="+suites, "-f", fmt.Sprintf("count=%d", c.count)); err != nil {
+		"-f", "suites="+suites, "-f", fmt.Sprintf("count=%d", c.count), "-f", "minors="+c.minors); err != nil {
 		return nil, fmt.Errorf("dispatch %s: %w", workflow, err)
 	}
 	c.log("dispatched %s on %s (suites: %s)", workflow, c.ref, suites)
@@ -120,7 +126,7 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 		sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 		for _, r := range runs {
 			if r.HeadSha == c.sha && !r.CreatedAt.Before(since) {
-				c.run = &ciRun{ID: r.DatabaseID, SHA: c.sha, Ref: c.ref, Suites: suites}
+				c.run = &ciRun{ID: r.DatabaseID, SHA: c.sha, Ref: c.ref, Suites: suites, Minors: c.minors, Count: c.count}
 				data, _ := json.MarshalIndent(c.run, "", "  ")
 				if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 					return nil, fmt.Errorf("save the run: %w", err)
@@ -186,10 +192,29 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 		return err
 	}
 	rerun := st.ciRetry
+	missingSince := time.Time{}
 	for {
 		j, attempt, err := c.job(ctx, run.ID, st.CIJob.Name())
 		if err != nil {
 			return err
+		}
+		if j.Name == "" {
+			// A job the run does not have (renamed, or a matrix that lists
+			// other minors) would be waited for for ever.
+			done, err := c.runDone(ctx, run.ID)
+			if err != nil {
+				return err
+			}
+			if missingSince.IsZero() {
+				missingSince = time.Now()
+			}
+			if done || time.Since(missingSince) > c.jobWait {
+				return fmt.Errorf("the CI run has no job %q", st.CIJob.Name())
+			}
+			if err := sleep(ctx, c.poll); err != nil {
+				return err
+			}
+			continue
 		}
 		if j.Status == "completed" && j.Conclusion != "success" && rerun {
 			// GitHub re-runs a job only once its whole run has finished.
@@ -216,11 +241,13 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 			if err := os.WriteFile(filepath.Join(dir, "ci-job.txt"), []byte(j.URL+"\n"), 0o644); err != nil {
 				return fmt.Errorf("save the job URL: %w", err)
 			}
-			c.fetchResults(ctx, run.ID, attempt, st, dir)
+			c.saveLog(ctx, run.ID, j, dir)
+			c.fetchImages(ctx, run.ID)
 			if j.Conclusion != "success" {
 				return fmt.Errorf("CI job %s: %s", j.URL, j.Conclusion)
 			}
-			return nil
+			// A green job proves nothing without its results.
+			return c.fetchResults(ctx, run.ID, attempt, st, dir)
 		}
 		if err := sleep(ctx, c.poll); err != nil {
 			return err
@@ -237,9 +264,37 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// saveLog writes the job's log, or at least its URL and conclusion, to
+// dir/log.txt.
+func (c *ciRunner) saveLog(ctx context.Context, run int64, j ghJob, dir string) {
+	head := fmt.Sprintf("CI job %s: %s\n", j.URL, j.Conclusion)
+	out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--job", fmt.Sprint(j.DatabaseID), "--log")
+	if err != nil {
+		out = []byte(fmt.Sprintf("(the job log could not be read: %v)\n", err))
+	}
+	_ = os.WriteFile(filepath.Join(dir, "log.txt"), append([]byte(head), out...), 0o644)
+}
+
+// fetchImages downloads, once, the IDs of the images the run's suites ran
+// (e2e-live.yml's e2e-images artifact) to the results directory.
+func (c *ciRunner) fetchImages(ctx context.Context, run int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.imagesDone {
+		return
+	}
+	dir := filepath.Join(c.out, "ci-images")
+	if _, err := c.gh(ctx, "run", "download", fmt.Sprint(run), "--repo", c.repo, "-n", "e2e-images", "-D", dir); err != nil {
+		c.log("the CI run left no e2e-images artifact: %v", err)
+		return
+	}
+	c.imagesDone = true
+}
+
 // fetchResults downloads the job's artifact and keeps its test.json and
 // summary.json in dir/e2e, where the report and the coverage proof read them.
-func (c *ciRunner) fetchResults(ctx context.Context, run int64, attempt int, st Step, dir string) {
+// A job with no artifact, or no test results in it, is an error.
+func (c *ciRunner) fetchResults(ctx context.Context, run int64, attempt int, st Step, dir string) error {
 	art := filepath.Join(dir, "artifact")
 	// A job not re-run in the latest attempt keeps the artifact of the
 	// attempt it last ran in.
@@ -250,16 +305,21 @@ func (c *ciRunner) fetchResults(ctx context.Context, run int64, attempt int, st 
 		found = err == nil
 	}
 	if !found {
-		c.log("%s: the CI job left no artifact", st.ID)
-		return
+		return fmt.Errorf("the CI job left no e2e-live-%s artifact", st.CIJob.ID)
 	}
-	_ = os.MkdirAll(filepath.Join(dir, "e2e"), 0o755)
+	if err := os.MkdirAll(filepath.Join(dir, "e2e"), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
 	for _, f := range []string{"test.json", "summary.json"} {
 		matches, _ := filepath.Glob(filepath.Join(art, "*", f))
-		if len(matches) > 0 {
-			_ = os.Rename(matches[0], filepath.Join(dir, "e2e", f))
+		if len(matches) == 0 {
+			return fmt.Errorf("the CI job's artifact has no %s", f)
+		}
+		if err := os.Rename(matches[0], filepath.Join(dir, "e2e", f)); err != nil {
+			return fmt.Errorf("keep %s: %w", f, err)
 		}
 	}
+	return nil
 }
 
 // Cleanup has nothing to delete: the runner is gone with its job.

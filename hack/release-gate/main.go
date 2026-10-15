@@ -70,9 +70,10 @@ func run() error {
 		clusters  = flag.Int("clusters", 1, "kind cluster budget: gitlab, multi-cluster and scale jobs take 2")
 		maxLoad   = flag.Float64("max-load", 64, "start a cluster only while the 1-minute load is at most this")
 		minMem    = flag.Float64("min-mem", 20, "start a cluster only while this many GB of memory are available")
-		lock      = flag.String("lock", "", "heavy-load lock directory, made with mkdir (empty: no lock)")
+		lock      = flag.String("lock", os.Getenv("RELEASE_GATE_LOCK"), "the host's heavy-load lock directory, made with mkdir (default $RELEASE_GATE_LOCK); heavy steps need it or -no-lock")
+		noLock    = flag.Bool("no-lock", false, "run heavy steps without a heavy-load lock (a host of your own)")
 		owner     = flag.String("owner", "release-gate", "who holds the heavy-load lock, written into it")
-		count     = flag.Int("count", 1, "live e2e go test -count (the upgrade and scale suites run once)")
+		count     = flag.Int("count", 2, "live e2e go test -count (the upgrade and scale suites run once)")
 		fuzzTime  = flag.String("fuzztime", "5m", "go test -fuzztime for each fuzz target")
 		scale     = flag.String("scale", "full,soak", "scale suite profiles to run (ci, full, soak), comma-separated")
 		imgBuild  = flag.String("image-build", "docker", "images for trivy: docker (the repo Dockerfiles) or host (host-built binaries)")
@@ -83,12 +84,12 @@ func run() error {
 		dirtyOK   = flag.Bool("allow-dirty", false, "run on a tree with uncommitted changes (the report says so)")
 		wait      = flag.Duration("wait", 30*time.Second, "how often to check for a free slot or a ready host")
 		lockRetry = flag.Duration("lock-retry", 5*time.Minute, "how often to retry a heavy-load lock someone else holds")
-		slots     = flag.String("slots", "", "the host's shared cluster slots: a cluster step takes DIR/1..-slot-max with mkdir (empty: none)")
+		slots     = flag.String("slots", os.Getenv("RELEASE_GATE_SLOTS"), "the host's shared cluster slots: a cluster step takes DIR/1..-slot-max with mkdir (default $RELEASE_GATE_SLOTS); cluster steps need it or -no-slots")
+		noSlots   = flag.Bool("no-slots", false, "start clusters without taking the host's cluster slots (a host of your own)")
 		slotMax   = flag.Int("slot-max", 4, "how many cluster slots the host has")
 		live      = flag.String("live", "local", "where the live suites run: local (kind on this host) or ci (one e2e-live.yml dispatch; scale stays local)")
 		ref       = flag.String("ref", "", "with -live ci, the pushed branch at this commit (default the current branch)")
 		ghRepo    = flag.String("repo", "pnz1990/kardinal-promoter", "with -live ci, the GitHub repository")
-		floor     = flag.String("k8s-floor", "1.35", "the oldest supported Kubernetes minor: each suite runs on the oldest minor at or above it and the newest")
 	)
 	flag.Parse()
 
@@ -114,15 +115,16 @@ func run() error {
 	}
 	_, ghFile := os.LookupEnv("KARDINAL_E2E_GITHUB_TOKEN_FILE")
 	_, ghToken := os.LookupEnv("DEMO_GITHUB_TOKEN")
-	var floorMinor int
-	if _, err := fmt.Sscanf(*floor, "1.%d", &floorMinor); err != nil {
-		return fmt.Errorf("-k8s-floor %q: want 1.<minor>", *floor)
-	}
 	if *live != "local" && *live != "ci" {
 		return fmt.Errorf("-live %q: want local or ci", *live)
 	}
+	// The oldest supported and the newest Kubernetes: hack/tool-versions.env.
+	floor, newest := repo.KubeMinors()
+	if floor == 0 {
+		return fmt.Errorf("hack/tool-versions.env has no KIND_NODE_1_<minor>")
+	}
 	opts := Options{Count: *count, FuzzTime: *fuzzTime, ImageBuild: *imgBuild, GitHubToken: ghFile || ghToken,
-		LiveCI: *live == "ci", Floor: floorMinor}
+		LiveCI: *live == "ci", Floor: floor, Newest: newest}
 	for _, p := range strings.Split(*scale, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			opts.ScaleProfiles = append(opts.ScaleProfiles, p)
@@ -164,6 +166,23 @@ func run() error {
 			}
 		}
 	}
+	// The host rules are on unless turned off by name: heavy steps take the
+	// heavy-load lock, clusters the host's slots.
+	if !*report {
+		if err := hostRulesProblem(selected, *lock, *slots, *noLock, *noSlots); err != nil {
+			return err
+		}
+	}
+	if *noLock {
+		*lock = ""
+	}
+	if *noSlots {
+		*slots = ""
+	}
+	tools, err := os.ReadFile(filepath.Join(root, "hack", "tool-versions.env"))
+	if err != nil {
+		return fmt.Errorf("read tool versions: %w", err)
+	}
 	var runner Runner = bashRunner{root: root}
 	if opts.LiveCI {
 		if *ref == "" {
@@ -173,11 +192,14 @@ func run() error {
 		}
 		runner = routeRunner{local: runner, ci: &ciRunner{
 			gh: ghCLI, repo: *ghRepo, ref: *ref, sha: sha, out: *out, count: *count,
-			suites: ciSuitesOf(selected), poll: time.Minute, log: logf,
+			suites: ciSuitesOf(selected), minors: minorsInput(opts), poll: time.Minute, jobWait: 30 * time.Minute, log: logf,
 		}}
 	}
 	g := &Gate{
-		Out: *out, SHA: sha, Clusters: max(1, *clusters), Fresh: *fresh, Wait: *wait, Log: logf,
+		Out: *out, SHA: sha, Dirty: dirty, Clusters: max(1, *clusters), Fresh: *fresh, Wait: *wait, Log: logf,
+		// What every step's result depends on besides its own scripts.
+		Inputs: fmt.Sprintf("%s\x00count=%d fuzztime=%s image-build=%s live=%s minors=%s",
+			tools, *count, *fuzzTime, *imgBuild, *live, minorsInput(opts)),
 		Host: &machine{maxLoad: *maxLoad, minMemGB: *minMem, slotsDir: *slots, slotMax: *slotMax, lockDir: *lock,
 			owner: fmt.Sprintf("%s pid %d %s", *owner, os.Getpid(), time.Now().UTC().Format(time.RFC3339)), lockRetry: *lockRetry, log: logf},
 		Runner: runner,
@@ -211,14 +233,24 @@ func run() error {
 			results[i] = resultOf(g, st)
 		}
 	}
-	if err := proveCoverage(root, *out, steps); err != nil {
-		logf("coverage proof: %v", err)
-	}
+	proofErr := proveCoverage(root, *out, steps, results)
 	cov, err := readCoverage(root, filepath.Join(*out, "coverage-proof.json"))
 	if err != nil {
 		return err
 	}
+	if cov.Allowed, err = readAllowlist(filepath.Join(root, "hack", "release-gate", "coverage-allow.txt")); err != nil {
+		return err
+	}
+	if proofErr != nil {
+		cov.ProofError = proofErr.Error()
+	}
 	p := provenance(root, sha, dirty, repo, *out)
+	p.RanImages = readRanImages(*out, steps, results)
+	for i, st := range steps {
+		if st.ID == "images" && results[i].Status != statusPass {
+			p.Images = nil // the scan did not pass on this commit with these inputs
+		}
+	}
 	f, err := os.Create(filepath.Join(*out, "report.md"))
 	if err != nil {
 		return fmt.Errorf("create report: %w", err)
@@ -230,13 +262,31 @@ func run() error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close report: %w", err)
 	}
-	v := verdict(results)
+	v := verdictOf(results, cov)
 	logf("verdict %s: %s", v, filepath.Join(*out, "report.md"))
 	if runErr != nil {
 		return fmt.Errorf("interrupted: %w", runErr)
 	}
 	if v != "GO" {
 		return fmt.Errorf("verdict %s", v)
+	}
+	return nil
+}
+
+// hostRulesProblem refuses heavy steps without the heavy-load lock and
+// cluster steps without the host's cluster slots, unless the run opts out by
+// name (-no-lock, -no-slots): the host rules are on by default.
+func hostRulesProblem(steps []Step, lock, slots string, noLock, noSlots bool) error {
+	for _, st := range steps {
+		if st.Script == "" {
+			continue
+		}
+		if st.Heavy && lock == "" && !noLock {
+			return fmt.Errorf("step %s is heavy: pass -lock DIR (the host's heavy-load lock, or $RELEASE_GATE_LOCK), or -no-lock on a host of your own", st.ID)
+		}
+		if st.Clusters > 0 && slots == "" && !noSlots {
+			return fmt.Errorf("step %s starts kind clusters: pass -slots DIR (the host's cluster slots, or $RELEASE_GATE_SLOTS), or -no-slots on a host of your own", st.ID)
+		}
 	}
 	return nil
 }
@@ -267,7 +317,8 @@ func ghCLI(ctx context.Context, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-// resultOf is the step's saved result, or what it is when it never ran.
+// resultOf is the step's saved result for this commit and these inputs, or
+// what it is when it never ran so.
 func resultOf(g *Gate, st Step) Result {
 	switch {
 	case st.Missing != "":
@@ -278,27 +329,46 @@ func resultOf(g *Gate, st Step) Result {
 	data, err := os.ReadFile(filepath.Join(g.dir(st), "result.json"))
 	if err == nil {
 		var r Result
-		if json.Unmarshal(data, &r) == nil && r.SHA == g.SHA {
-			r.Cached = r.Status == statusPass
+		if json.Unmarshal(data, &r) == nil && r.SHA == g.SHA && r.Key == g.key(st) {
+			switch {
+			case r.Dirty && !g.Dirty:
+				return Result{ID: st.ID, Status: statusNotRun, Reason: "ran only on a tree with uncommitted changes"}
+			case r.Status == statusPass:
+				if why := g.proven(st, g.dir(st)); why != "" {
+					return Result{ID: st.ID, Status: statusFail, SHA: r.SHA, Key: r.Key, Dirty: r.Dirty,
+						Reason: "not proven: " + why, Started: r.Started, Seconds: r.Seconds}
+				}
+				r.Cached = true
+			}
 			return r
 		}
 	}
-	return Result{ID: st.ID, Status: statusNotRun, Reason: "not run yet on this commit"}
+	return Result{ID: st.ID, Status: statusNotRun, Reason: "not run yet on this commit with these inputs"}
 }
 
-// proveCoverage runs test/e2e/proof over the live suites' summaries.
-func proveCoverage(root, out string, steps []Step) error {
+// proveCoverage runs test/e2e/proof over the live summaries of the steps that
+// ran on this commit with these inputs (passed or failed). Its exit code
+// is not the verdict: the rows' results are (verdictOf). An error, or no live
+// results at all, leaves no coverage-proof.json, and the gate is NO-GO.
+func proveCoverage(root, out string, steps []Step, results []Result) error {
+	proof := filepath.Join(out, "coverage-proof.json")
+	if err := os.Remove(proof); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove the old proof: %w", err)
+	}
 	var files []string
-	for _, st := range steps {
+	for i, st := range steps {
+		if results[i].Status != statusPass && results[i].Status != statusFail {
+			continue
+		}
 		if p := filepath.Join(out, st.ID, "e2e", "summary.json"); fileExists(p) {
 			files = append(files, p)
 		}
 	}
 	if len(files) == 0 {
-		return nil
+		return fmt.Errorf("no live suite ran on this commit with these inputs: no row is proven")
 	}
 	sort.Strings(files)
-	cmd := exec.Command("go", append([]string{"run", "./test/e2e/proof", "-out", filepath.Join(out, "coverage-proof.json")}, files...)...)
+	cmd := exec.Command("go", append([]string{"run", "./test/e2e/proof", "-out", proof}, files...)...)
 	cmd.Dir = root
 	log, err := os.Create(filepath.Join(out, "coverage-proof.log"))
 	if err != nil {
@@ -306,9 +376,22 @@ func proveCoverage(root, out string, steps []Step) error {
 	}
 	defer func() { _ = log.Close() }()
 	cmd.Stdout, cmd.Stderr = log, log
-	// The proof fails when a row failed or did not run; the report counts them.
+	// proof exits 1 when a row failed or did not run, which the rows say;
+	// any other failure leaves no file.
 	_ = cmd.Run()
+	if !fileExists(proof) {
+		return fmt.Errorf("test/e2e/proof wrote no result (coverage-proof.log)")
+	}
 	return nil
+}
+
+// minorsInput is e2e-live.yml's minors input: "1.35 1.37".
+func minorsInput(o Options) string {
+	var ms []string
+	for _, m := range o.Minors() {
+		ms = append(ms, fmt.Sprintf("1.%d", m))
+	}
+	return strings.Join(ms, " ")
 }
 
 func fileExists(p string) bool {

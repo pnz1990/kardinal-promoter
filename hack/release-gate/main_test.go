@@ -28,12 +28,12 @@ func fakeRepo() *Repo {
 			{"core", "1.35", "1/2"}, {"core", "1.35", "2/2"}, {"core", "1.37", "1/2"},
 			{"gitlab", "1.37", "-"}, {"github", "1.37", "-"},
 			{"multi-cluster", "1.36", "-"},
-			{"upgrade-v0100", "1.30", "-"}, {"upgrade-v0100", "1.37", "-"},
+			{"upgrade-v0100", "1.35", "-"}, {"upgrade-v0100", "1.37", "-"},
 		},
 		ToolVersions: map[string]string{
 			"KIND_NODE_1_35": "kindest/node:v1.35.8@sha256:a", "KIND_NODE_1_36": "kindest/node:v1.36.4@sha256:b",
-			"KIND_NODE_1_37": "kindest/node:v1.37.0@sha256:c", "KIND_NODE_UPGRADE_V0100_1_30": "kindest/node:v1.30.13@sha256:d",
-			"KIND_VERSION": "v0.33.0",
+			"KIND_NODE_1_37": "kindest/node:v1.37.0@sha256:c", "KIND_VERSION": "v0.33.0",
+			"ENVTEST_K8S_MIN": "1.35.0", "ENVTEST_K8S_MAX": "1.37.0",
 		},
 		FuzzTargets: []FuzzTarget{{"FuzzA", "./pkg/a"}},
 		PrevRelease: "v0.11.0",
@@ -48,121 +48,129 @@ func byID(steps []Step) map[string]Step {
 	return out
 }
 
+func fakeOptions() Options {
+	return Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "host", Floor: 35, Newest: 37}
+}
+
 func TestPlan(t *testing.T) {
-	opts := Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "host", Floor: 30}
-	steps := Plan(fakeRepo(), opts)
+	r := fakeRepo()
+	floor, newest := r.KubeMinors()
+	assert.Equal(t, []int{35, 37}, []int{floor, newest}, "the floor and the newest are hack/tool-versions.env's")
+	steps := Plan(r, fakeOptions())
 	ids := byID(steps)
 	assert.Len(t, ids, len(steps), "step ids are unique")
 
-	for _, id := range []string{"e2e-core-135", "e2e-core-137", "e2e-gitlab-135", "e2e-gitlab-137", "e2e-multi-cluster-136",
-		"e2e-upgrade-v0100-130", "e2e-upgrade-v0100-137", "scale-full", "scale-soak", "unit-race", "fuzz-FuzzA",
-		"scenario-matrix", "govulncheck", "golangci-lint", "hygiene", "images", "docs", "bundle-size",
-		"chart-profiles", "chart-envtest"} {
+	// Every live suite on exactly the floor and the newest minor:
+	// multi-cluster too, not on its matrix.txt 1.36.
+	for _, id := range []string{"e2e-core-135", "e2e-core-137", "e2e-gitlab-135", "e2e-gitlab-137", "e2e-github-135",
+		"e2e-multi-cluster-135", "e2e-multi-cluster-137", "e2e-upgrade-v0100-135", "e2e-upgrade-v0100-137",
+		"scale-full", "scale-soak", "unit-race", "fuzz-FuzzA", "scenario-matrix", "govulncheck", "golangci-lint",
+		"hygiene", "images", "docs", "bundle-size", "chart-profiles", "chart-envtest"} {
 		assert.Contains(t, ids, id)
 	}
-	assert.NotContains(t, ids, "e2e-multi-cluster-135", "multi-cluster runs only on its matrix minor")
-	assert.NotContains(t, ids, "e2e-scale-137", "scale runs as its profiles, not as a live suite")
-
-	core := ids["e2e-core-135"]
-	assert.Equal(t, areaE2E, core.Area)
-	assert.Equal(t, 1, core.Clusters)
-	assert.Contains(t, core.Script, "export KIND_CLUSTER=kp-rg-core-135 KIND_K8S=1.35 COUNT=2\n")
-	assert.Contains(t, core.Script, "unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN", "only the github suite sees a token")
-	assert.Contains(t, core.Script, "bash hack/e2e/up.sh core\nbash hack/e2e/run.sh core\n")
-	assert.Contains(t, core.Cleanup, "for c in kp-rg-core-135 kp-rg-core-135-spoke; do")
-	assert.Equal(t, 2, ids["e2e-gitlab-137"].Clusters)
-
-	up := ids["e2e-upgrade-v0100-130"]
-	assert.Equal(t, areaUpgrade, up.Area)
-	assert.Contains(t, up.Script, "COUNT=1\n", "the upgrade suite runs once")
-
-	assert.False(t, ids["fuzz-FuzzA"].Heavy, "a minute of fuzzing needs no lock")
-	assert.True(t, byID(Plan(fakeRepo(), Options{FuzzTime: "5m"}))["fuzz-FuzzA"].Heavy, "five minutes take the heavy-load lock")
-
-	// The supported floor (1.35): no suite and no CRD check below it.
-	floored := byID(Plan(fakeRepo(), Options{Count: 1, FuzzTime: "1m", Floor: 35}))
-	assert.Contains(t, floored, "e2e-upgrade-v0100-135")
-	assert.Contains(t, floored, "e2e-upgrade-v0100-137")
-	assert.NotContains(t, floored, "e2e-upgrade-v0100-130")
-
-	gh := ids["e2e-github-137"]
-	assert.Contains(t, gh.NotRun, "never uses your gh login")
-	assert.Empty(t, gh.Script)
-	withToken := byID(Plan(fakeRepo(), Options{Count: 1, GitHubToken: true}))["e2e-github-137"]
-	assert.Empty(t, withToken.NotRun)
-	assert.NotContains(t, withToken.Script, "unset KARDINAL_E2E_GITHUB_TOKEN_FILE", "the github suite keeps its token")
-
-	prev := ids["upgrade-v0110"]
-	assert.Contains(t, prev.Missing, "nothing tests the upgrade from v0.11.0")
-	r := fakeRepo()
-	r.Matrix = append(r.Matrix, MatrixLine{"upgrade-v0110", "1.37", "-"})
-	assert.NotContains(t, byID(Plan(r, opts)), "upgrade-v0110", "the suite exists: no missing step")
-	assert.Contains(t, byID(Plan(r, opts)), "e2e-upgrade-v0110-137")
-
-	assert.Contains(t, ids["scenario-enterprise"].Missing, "test/scenario/enterprise")
-	r = fakeRepo()
-	r.Enterprise = true
-	ent := byID(Plan(r, opts))["scenario-enterprise"]
-	assert.Empty(t, ent.Missing)
-	assert.True(t, ent.Heavy)
-	assert.Contains(t, ent.Script, "KARDINAL_SCENARIO_ENTERPRISE=full")
-
-	full, soak := ids["scale-full"], ids["scale-soak"]
-	assert.True(t, full.Heavy && soak.Heavy, "the scale profiles take the heavy-load lock")
-	assert.True(t, ids["unit-race"].Heavy)
-	assert.Contains(t, full.Script, "KARDINAL_E2E_SCALE_PROFILE=full")
-	assert.Contains(t, full.Script, "KIND_K8S=1.37")
-	assert.Contains(t, soak.Script, "export RUN='^TestScale_LoadSustained$'")
-	assert.NotContains(t, full.Script, "TestScale_LoadSustained")
-
-	assert.Contains(t, ids["fuzz-FuzzA"].Script, "-fuzz '^FuzzA$' -fuzztime 1m")
-	assert.Contains(t, ids["unit-race"].Script, "go test -race -count=3")
-	assert.Contains(t, ids["images"].Script, "IMAGE_BUILD=host")
-	assert.Equal(t, "make envtest", ids["chart-envtest"].Script, "the CRD install check is make envtest's (#1849)")
-	assert.Zero(t, ids["chart-envtest"].Clusters)
-	for _, p := range profiles {
-		assert.Contains(t, ids["chart-profiles"].Script, "echo '== "+p+"'")
+	for id := range ids {
+		assert.NotContains(t, id, "-136", "%s: only the floor and the newest minor", id)
 	}
 
+	core := ids["e2e-core-135"]
+	assert.Equal(t, 1, core.MinTests, "a live suite that ran no test proves nothing")
+	assert.Contains(t, core.Script, "export KIND_CLUSTER=kp-rg-core-135 KIND_K8S=1.35 COUNT=2\n")
+	assert.Contains(t, core.Script, `> "$STEP_DIR/images.txt"`, "the images the suite ran are recorded")
+	assert.Contains(t, core.Cleanup, "for c in kp-rg-core-135 kp-rg-core-135-spoke; do")
+	assert.Contains(t, ids["e2e-upgrade-v0100-135"].Script, "COUNT=1\n", "the upgrade suite runs once")
+	assert.Contains(t, ids["e2e-github-137"].NotRun, "never uses your gh login")
+
+	// A minor with no node image is missing evidence, not "not run".
+	noImage := fakeRepo()
+	delete(noImage.ToolVersions, "KIND_NODE_1_35")
+	assert.Contains(t, byID(Plan(noImage, fakeOptions()))["e2e-core-135"].Missing, "no node image for Kubernetes 1.35")
+
+	assert.Contains(t, ids["upgrade-v0110"].Missing, "nothing tests the upgrade from v0.11.0")
+	assert.Contains(t, ids["scenario-enterprise"].Missing, "test/scenario/enterprise")
+
+	// Each step's proof threshold.
+	assert.Equal(t, 20000, ids["unit-race"].MinTests)
+	assert.Equal(t, 40, ids["scenario-matrix"].MinTests)
+	assert.Equal(t, 1, ids["fuzz-FuzzA"].MinTests)
+	assert.Zero(t, ids["scenario-matrix"].MaxSkips, "the scenario matrix may not skip")
+
+	// envtest on the floor and the newest, or missing.
+	env := ids["chart-envtest"]
+	assert.Empty(t, env.Missing)
+	assert.Equal(t, 2, env.MinTests)
+	assert.Contains(t, env.Script, `for v in "$ENVTEST_K8S_MIN" "$ENVTEST_K8S_MAX"; do`)
+	assert.Contains(t, env.Script, "-json >> \"$STEP_DIR/tests.json\"")
+	old := fakeRepo()
+	old.ToolVersions["ENVTEST_K8S_MIN"] = "1.30.3"
+	assert.Contains(t, byID(Plan(old, fakeOptions()))["chart-envtest"].Missing, "envtest runs 1.30.3 and 1.37.0")
+
+	full, soak := ids["scale-full"], ids["scale-soak"]
+	assert.True(t, full.Heavy && soak.Heavy)
+	assert.Contains(t, full.Script, "KIND_K8S=1.37")
+	assert.Contains(t, soak.Script, "export RUN='^TestScale_LoadSustained$'")
+	assert.False(t, ids["fuzz-FuzzA"].Heavy)
+	assert.True(t, byID(Plan(fakeRepo(), Options{FuzzTime: "5m", Floor: 35, Newest: 37}))["fuzz-FuzzA"].Heavy)
 	assert.Equal(t, "upgrade-v0110", upgradeSuite("v0.11.0"))
-	assert.Equal(t, "upgrade-v090", upgradeSuite("v0.9.0"))
 }
 
-// The plan of this checkout: every matrix suite has a step, every cluster
-// step deletes the kp- clusters it creates, and every values profile exists.
+// The plan of this checkout: every matrix suite has a step on the floor and
+// the newest minor, every cluster step deletes its kp- clusters, every
+// values profile exists, and envtest runs the two minors.
 func TestPlanOfThisRepo(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 	r, err := LoadRepo(root)
 	require.NoError(t, err)
-	require.NotEmpty(t, r.FuzzTargets)
-	steps := Plan(r, Options{Count: 1, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "docker", Floor: 35})
+	floor, newest := r.KubeMinors()
+	opts := Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, ImageBuild: "docker", Floor: floor, Newest: newest}
+	steps := Plan(r, opts)
 	ids := byID(steps)
-	assert.Len(t, ids, len(steps), "step ids are unique")
+	assert.Len(t, ids, len(steps))
+	assert.Empty(t, ids["chart-envtest"].Missing, "hack/tool-versions.env's envtest minors are the floor and the newest")
 	for _, l := range r.Matrix {
 		if l.Suite == "scale" {
 			continue
 		}
-		found := false
-		for id := range ids {
-			found = found || strings.HasPrefix(id, "e2e-"+l.Suite+"-1")
+		for _, m := range opts.Minors() {
+			assert.Contains(t, ids, fmt.Sprintf("e2e-%s-1%d", l.Suite, m))
 		}
-		assert.True(t, found, "suite %s has a step", l.Suite)
 	}
 	for _, st := range steps {
 		if st.Clusters == 0 || st.Script == "" {
 			continue
 		}
-		assert.Contains(t, st.Script, "KIND_CLUSTER=kp-rg-", st.ID)
 		name := strings.Fields(strings.SplitN(st.Script, "KIND_CLUSTER=", 2)[1])[0]
+		assert.True(t, strings.HasPrefix(name, "kp-rg-"), st.ID)
 		assert.Contains(t, st.Cleanup, "for c in "+name+" "+name+"-spoke; do", st.ID)
 	}
 	for _, p := range profiles[1:] {
 		assert.FileExists(t, filepath.Join(root, "hack", "release-gate", "profiles", p+".yaml"))
 	}
-	for _, f := range r.FuzzTargets {
-		assert.True(t, strings.HasPrefix(f.Name, "Fuzz") && strings.HasPrefix(f.Dir, "./"), "%+v", f)
+	_, err = readAllowlist(filepath.Join(root, "hack", "release-gate", "coverage-allow.txt"))
+	require.NoError(t, err)
+}
+
+func TestPlanCI(t *testing.T) {
+	steps := Plan(fakeRepo(), Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full"}, LiveCI: true, Floor: 35, Newest: 37})
+	ids := byID(steps)
+	// Every suite on the floor and the newest, with its shards: gitlab on
+	// 1.35 too, which matrix.txt does not list.
+	for id, name := range map[string]string{
+		"ci-core-135-1of2":     "core 1/2 on Kubernetes 1.35",
+		"ci-core-137-2of2":     "core 2/2 on Kubernetes 1.37",
+		"ci-gitlab-135":        "gitlab on Kubernetes 1.35",
+		"ci-multi-cluster-137": "multi-cluster on Kubernetes 1.37",
+		"ci-upgrade-v0100-135": "upgrade-v0100 on Kubernetes 1.35",
+	} {
+		require.Contains(t, ids, id)
+		assert.Equal(t, name, ids[id].CIJob.Name())
+		assert.Equal(t, 1, ids[id].MinTests)
 	}
+	assert.NotContains(t, ids, "ci-multi-cluster-136")
+	assert.NotContains(t, ids, "e2e-core-135", "no local live suite")
+	assert.Contains(t, ids, "scale-full", "scale stays local")
+	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, ciSuitesOf(steps))
+	assert.Equal(t, "1.35 1.37", minorsInput(Options{Floor: 35, Newest: 37}))
 }
 
 // ── the scheduler ────────────────────────────────────────────────────────────
@@ -218,11 +226,34 @@ type fakeRunner struct {
 	maxHeavy               int
 	ran, cleaned           []string
 	fail                   map[string]bool
+	output                 map[string]string // a step's test output, when set
+	noLog                  bool
 	block                  chan struct{}
 	onStart                func(id string)
 }
 
-func (f *fakeRunner) Run(ctx context.Context, st Step, _ string) error {
+// passingTests is a go test -json stream of n passing tests.
+func passingTests(n int) string {
+	var b strings.Builder
+	for i := range n {
+		fmt.Fprintf(&b, `{"Action":"pass","Test":"Test%d"}`+"\n", i)
+	}
+	return b.String()
+}
+
+func (f *fakeRunner) Run(ctx context.Context, st Step, dir string) error {
+	// The step's evidence: a log and, for a step with tests, enough of them
+	// (or what output says, for a step that output names).
+	if !f.noLog {
+		_ = os.WriteFile(filepath.Join(dir, "log.txt"), []byte("ran "+st.ID+"\n"), 0o644)
+	}
+	if body, ok := f.output[st.ID]; st.Tests != "" && body != "\x00none" {
+		if !ok {
+			body = passingTests(max(1, st.MinTests))
+		}
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, st.Tests)), 0o755)
+		_ = os.WriteFile(filepath.Join(dir, st.Tests), []byte(body), 0o644)
+	}
 	f.mu.Lock()
 	f.ran = append(f.ran, st.ID)
 	f.clusters += st.Clusters
@@ -546,7 +577,7 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, s, "| upgrade from v0.11.0 | Upgrade | MISSING: no suite |")
 	assert.Contains(t, s, "10 rows, 8 covered and 2 not (8 covered, 2 todo)")
 	assert.Contains(t, s, "): 3 not run, 7 passed.")
-	assert.Contains(t, s, "- Image: `ctl:abc sha256:111 (host build)`")
+	assert.Contains(t, s, "- Image trivy scanned: `ctl:abc sha256:111 (host build)`")
 	assert.Contains(t, s, "- KIND_NODE_1_37: `kindest/node:v1.37.0@sha256:c`")
 	assert.Contains(t, s, "- Previous release: v0.11.0")
 }
@@ -566,27 +597,6 @@ func TestReadCoverage(t *testing.T) {
 	c, err = readCoverage(root, filepath.Join(root, "none.json"))
 	require.NoError(t, err)
 	assert.Empty(t, c.ByResult)
-}
-
-func TestPlanCI(t *testing.T) {
-	steps := Plan(fakeRepo(), Options{Count: 1, FuzzTime: "1m", ScaleProfiles: []string{"full"}, LiveCI: true, Floor: 35})
-	ids := byID(steps)
-	for id, name := range map[string]string{
-		"ci-core-135-1of2":     "core 1/2 on Kubernetes 1.35",
-		"ci-gitlab-137":        "gitlab on Kubernetes 1.37",
-		"ci-upgrade-v0100-130": "upgrade-v0100 on Kubernetes 1.30",
-	} {
-		require.Contains(t, ids, id)
-		assert.Equal(t, name, ids[id].CIJob.Name())
-		assert.Zero(t, ids[id].Clusters, "a CI job takes no local cluster")
-	}
-	assert.Equal(t, areaUpgrade, ids["ci-upgrade-v0100-130"].Area)
-	assert.NotContains(t, ids, "e2e-core-135", "no local live suite")
-	assert.Contains(t, ids, "scale-full", "scale stays local")
-	assert.Contains(t, ids, "upgrade-v0110", "the missing upgrade suite is missing in CI too")
-	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, ciSuitesOf(steps),
-		"the dispatch runs every suite but scale")
-	assert.Equal(t, []string{"gitlab"}, ciSuitesOf([]Step{ids["ci-gitlab-137"], ids["unit-race"]}), "only the selected steps' suites")
 }
 
 func TestGateRun_Slots(t *testing.T) {
@@ -676,73 +686,113 @@ func (f *fakeGH) called(prefix string) int {
 	return n
 }
 
+// fakeCI is a GitHub with one e2e-live.yml run (9) on commit abc, whose job
+// "core on Kubernetes 1.37" (55) fails until it is re-run.
+type fakeCI struct {
+	t                   *testing.T
+	views, runViews     atomic.Int32
+	mu                  sync.Mutex
+	conclusion, jobName string
+	artifact            bool // the job's attempt-1 artifact exists
+}
+
+func (f *fakeCI) reply(call string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case strings.HasPrefix(call, "api repos/o/r/commits/br"):
+		return []byte("abc\n"), nil
+	case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br -f suites=core gitlab -f count=2 -f minors=1.35 1.37"):
+		return nil, nil
+	case strings.HasPrefix(call, "run list"):
+		now := time.Now().UTC().Format(time.RFC3339)
+		return []byte(`[{"databaseId":7,"headSha":"other","createdAt":"` + now + `"},{"databaseId":9,"headSha":"abc","createdAt":"` + now + `"}]`), nil
+	case call == "run view 9 --repo o/r --json status":
+		if f.runViews.Add(1) == 1 {
+			return []byte(`{"status":"in_progress"}`), nil
+		}
+		return []byte(`{"status":"completed"}`), nil
+	case strings.HasPrefix(call, "run view 9 --repo o/r --job 55 --log"):
+		return []byte("the job's log\n"), nil
+	case strings.HasPrefix(call, "run view 9"):
+		status := "in_progress"
+		if f.views.Add(1) > 1 {
+			status = "completed"
+		}
+		return []byte(`{"attempt":2,"jobs":[{"databaseId":55,"name":"` + f.jobName + `","status":"` + status +
+			`","conclusion":"` + f.conclusion + `","url":"https://x/job/55"}]}`), nil
+	case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-images -D "):
+		dir := strings.Fields(call)[len(strings.Fields(call))-1]
+		require.NoError(f.t, os.MkdirAll(dir, 0o755))
+		require.NoError(f.t, os.WriteFile(filepath.Join(dir, "images.txt"), []byte("ghcr.io/x/controller:e2e sha256:777\n"), 0o644))
+		return nil, nil
+	case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-live-core-137-attempt-1 -D ") && f.artifact:
+		art := strings.Fields(call)[len(strings.Fields(call))-1]
+		require.NoError(f.t, os.MkdirAll(filepath.Join(art, "kardinal-e2e-core"), 0o755))
+		require.NoError(f.t, os.WriteFile(filepath.Join(art, "kardinal-e2e-core", "test.json"), []byte(goTestJSON), 0o644))
+		require.NoError(f.t, os.WriteFile(filepath.Join(art, "kardinal-e2e-core", "summary.json"), []byte("{}"), 0o644))
+		return nil, nil
+	case strings.HasPrefix(call, "run download 9"):
+		return nil, errors.New("no artifact")
+	case strings.HasPrefix(call, "run rerun 9 --repo o/r --job 55"):
+		f.conclusion = "success"
+		f.views.Store(0)
+		return nil, nil
+	}
+	return nil, fmt.Errorf("unexpected gh %s", call)
+}
+
 func TestCIRunner(t *testing.T) {
 	out := t.TempDir()
-	var views, runViews atomic.Int32
-	conclusion := "failure"
-	f := &fakeGH{}
-	f.reply = func(call string) ([]byte, error) {
-		switch {
-		case strings.HasPrefix(call, "api repos/o/r/commits/br"):
-			return []byte("abc\n"), nil
-		case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br -f suites=core gitlab -f count=2"):
-			return nil, nil
-		case strings.HasPrefix(call, "run list"):
-			return []byte(`[{"databaseId":7,"headSha":"other","createdAt":"` + time.Now().UTC().Format(time.RFC3339) + `"},
-{"databaseId":9,"headSha":"abc","createdAt":"` + time.Now().UTC().Format(time.RFC3339) + `"}]`), nil
-		case call == "run view 9 --repo o/r --json status":
-			// The whole run: still running at first, so the re-run waits.
-			if runViews.Add(1) == 1 {
-				return []byte(`{"status":"in_progress"}`), nil
-			}
-			return []byte(`{"status":"completed"}`), nil
-		case strings.HasPrefix(call, "run view 9"):
-			status := "in_progress"
-			if views.Add(1) > 1 {
-				status = "completed"
-			}
-			return []byte(`{"attempt":2,"jobs":[{"databaseId":55,"name":"core on Kubernetes 1.37","status":"` + status +
-				`","conclusion":"` + conclusion + `","url":"https://x/job/55"}]}`), nil
-		case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-live-core-137-attempt-2"):
-			return nil, errors.New("no artifact")
-		case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-live-core-137-attempt-1 -D "):
-			art := strings.Fields(call)[len(strings.Fields(call))-1]
-			require.NoError(t, os.MkdirAll(filepath.Join(art, "kardinal-e2e-core"), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(art, "kardinal-e2e-core", "test.json"), []byte(goTestJSON), 0o644))
-			require.NoError(t, os.WriteFile(filepath.Join(art, "kardinal-e2e-core", "summary.json"), []byte("{}"), 0o644))
-			return nil, nil
-		case strings.HasPrefix(call, "run rerun 9 --repo o/r --job 55"):
-			conclusion = "success"
-			views.Store(0)
-			return nil, nil
-		}
-		return nil, fmt.Errorf("unexpected gh %s", call)
+	ci := &fakeCI{t: t, conclusion: "failure", jobName: "core on Kubernetes 1.37", artifact: true}
+	f := &fakeGH{reply: ci.reply}
+	runner := func(out string, sha string) *ciRunner {
+		return &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: sha, out: out, count: 2, suites: []string{"core", "gitlab"},
+			minors: "1.35 1.37", poll: time.Millisecond, jobWait: 50 * time.Millisecond, log: func(string, ...any) {}}
 	}
-	c := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 2, suites: []string{"core", "gitlab"},
-		poll: time.Millisecond, log: func(string, ...any) {}}
 	st := Step{ID: "ci-core-137", CIJob: &ciJob{ID: "core-137", Suite: "core", Minor: "1.37", Shard: "-"}}
 	dir := filepath.Join(out, st.ID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 
-	err := c.Run(context.Background(), st, dir)
+	err := runner(out, "abc").Run(context.Background(), st, dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CI job https://x/job/55: failure")
-	assert.FileExists(t, filepath.Join(dir, "e2e", "test.json"), "the attempt-1 artifact, the job's latest")
 	assert.FileExists(t, filepath.Join(out, "ci-run.json"))
+	logText, err := os.ReadFile(filepath.Join(dir, "log.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "CI job https://x/job/55: failure\nthe job's log\n", string(logText), "the step's log is the job's")
+	assert.FileExists(t, filepath.Join(out, "ci-images", "images.txt"), "the IDs of the images the run's suites ran")
 
-	// A later gate on the commit: the same run, no new dispatch, the failed job re-run.
-	c2 := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 2, suites: []string{"core", "gitlab"},
-		poll: time.Millisecond, log: func(string, ...any) {}}
+	// A later gate on the commit: the same run, no new dispatch, the failed
+	// job re-run once the run has finished, its results fetched.
 	st.ciRetry = true
-	require.NoError(t, c2.Run(context.Background(), st, dir))
+	require.NoError(t, runner(out, "abc").Run(context.Background(), st, dir))
 	assert.Equal(t, 1, f.called("workflow run"), "dispatched once per commit")
 	assert.Equal(t, 1, f.called("run rerun 9 --repo o/r --job 55"))
 	assert.Equal(t, 2, f.called("run view 9 --repo o/r --json status"), "the re-run waited for the whole run to finish")
+	assert.FileExists(t, filepath.Join(dir, "e2e", "test.json"), "the attempt-1 artifact, the job's latest")
+
+	// A green job that left no artifact proves nothing.
+	ci.mu.Lock()
+	ci.artifact = false
+	ci.mu.Unlock()
+	st.ciRetry = false
+	dir2 := filepath.Join(out, "again")
+	require.NoError(t, os.MkdirAll(dir2, 0o755))
+	err = runner(out, "abc").Run(context.Background(), st, dir2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "left no e2e-live-core-137 artifact")
+
+	// A job the run does not have is not waited for for ever.
+	ci.mu.Lock()
+	ci.jobName = "renamed"
+	ci.mu.Unlock()
+	err = runner(out, "abc").Run(context.Background(), st, dir2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `the CI run has no job "core on Kubernetes 1.37"`)
 
 	// The branch is not at the gate's commit: no dispatch.
-	c3 := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "def", out: t.TempDir(), suites: []string{"core"},
-		poll: time.Millisecond, log: func(string, ...any) {}}
-	err = c3.Run(context.Background(), st, t.TempDir())
+	err = runner(t.TempDir(), "def").Run(context.Background(), st, t.TempDir())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not the gate's commit")
 	assert.Equal(t, 1, f.called("workflow run"))
@@ -765,4 +815,140 @@ func TestRenderAreaSpan(t *testing.T) {
 	var b bytes.Buffer
 	require.NoError(t, Render(&b, steps, results, t.TempDir(), Coverage{ByStatus: map[string]int{}}, Provenance{SHA: "x"}, time.Hour))
 	assert.Contains(t, b.String(), "| Live e2e | PASS | 2 of 2 | 0 | 0 | 0 | 0 | 1h10m0s |")
+}
+
+// TestGateProof (QA on #1872): exit 0 is not a pass without the evidence: a
+// test output with at least MinTests tests and at most MaxSkips skips, and a
+// log.
+func TestGateProof(t *testing.T) {
+	skip := `{"Action":"skip","Test":"TestScenarioMatrix"}` + "\n"
+	tests := []struct {
+		name, output string
+		step         Step
+		noLog        bool
+		wantReason   string
+	}{
+		{name: "enough tests", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 3}, output: passingTests(3)},
+		{name: "no test output", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1}, output: "\x00none",
+			wantReason: "not proven: no test output"},
+		{name: "zero tests", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1}, output: "",
+			wantReason: "0 tests ran, fewer than the 1"},
+		{name: "fewer than the minimum", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 40}, output: passingTests(39),
+			wantReason: "39 tests ran, fewer than the 40"},
+		{name: "everything skipped", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1}, output: skip,
+			wantReason: "1 tests skipped, more than the 0 allowed"},
+		{name: "allowed skips", step: Step{ID: "s", Script: "x", Tests: "tests.json", MinTests: 1, MaxSkips: 1}, output: passingTests(2) + skip},
+		{name: "no log", step: Step{ID: "s", Script: "x"}, noLog: true, wantReason: "not proven: no log"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &fakeRunner{output: map[string]string{}, noLog: tt.noLog}
+			if tt.output != "\x00none" {
+				r.output["s"] = tt.output
+			} else {
+				r.output["s"] = "\x00none"
+			}
+			results, err := newGate(t, 1, &fakeHost{}, r).Run(context.Background(), []Step{tt.step})
+			require.NoError(t, err)
+			if tt.wantReason == "" {
+				assert.Equal(t, statusPass, results[0].Status, results[0].Reason)
+				return
+			}
+			assert.Equal(t, statusFail, results[0].Status)
+			assert.Contains(t, results[0].Reason, tt.wantReason)
+		})
+	}
+}
+
+// TestGateCache (QA on #1872): a pass is reused only on the same commit, a
+// clean tree then and now, the same key (scripts, thresholds, inputs), and
+// with its evidence still there.
+func TestGateCache(t *testing.T) {
+	st := Step{ID: "fuzz", Script: "fuzz for 10s", Tests: "tests.json", MinTests: 1}
+	r := &fakeRunner{}
+	g := newGate(t, 1, &fakeHost{}, r)
+	g.Inputs = "fuzztime=10s"
+	run := func() Result {
+		t.Helper()
+		res, err := g.Run(context.Background(), []Step{st})
+		require.NoError(t, err)
+		return res[0]
+	}
+	assert.Equal(t, statusPass, run().Status)
+	assert.True(t, run().Cached, "same commit, inputs and evidence: reused")
+	assert.Len(t, r.ran, 1)
+
+	g.Inputs = "fuzztime=5m"
+	assert.False(t, run().Cached, "other inputs: run again")
+	assert.Len(t, r.ran, 2)
+	st.Script = "fuzz for 5m"
+	assert.False(t, run().Cached, "another script: run again")
+	assert.Len(t, r.ran, 3)
+
+	require.NoError(t, os.Remove(filepath.Join(g.Out, "fuzz", "tests.json")))
+	assert.False(t, run().Cached, "its evidence is gone: run again")
+	require.NoError(t, os.Remove(filepath.Join(g.Out, "fuzz", "log.txt")))
+	res := resultOf(g, st)
+	assert.Equal(t, statusFail, res.Status, "a saved pass whose log is gone is not shown as a pass")
+	assert.Contains(t, res.Reason, "not proven: no log")
+	assert.Len(t, r.ran, 4)
+
+	// A dirty tree reuses nothing, and its results are never reused.
+	g.Dirty = true
+	assert.False(t, run().Cached)
+	assert.True(t, run().Dirty)
+	assert.Len(t, r.ran, 6, "every dirty run runs")
+	g.Dirty = false
+	res = resultOf(g, st)
+	assert.Equal(t, statusNotRun, res.Status, "a dirty pass does not stand for the clean tree")
+	assert.Contains(t, res.Reason, "uncommitted changes")
+	assert.False(t, run().Cached, "the clean tree runs it")
+	assert.Len(t, r.ran, 7)
+	g.Dirty = true
+	assert.False(t, run().Cached, "a clean pass is not reused on a dirty tree either")
+}
+
+// TestVerdictCoverage (QA on #1872): the coverage proof decides with the steps.
+func TestVerdictCoverage(t *testing.T) {
+	pass := []Result{{Status: statusPass}}
+	ok := Coverage{Unproven: map[string]string{}}
+	assert.Equal(t, "GO", verdictOf(pass, ok))
+	assert.Equal(t, "NO-GO", verdictOf(pass, Coverage{ProofError: "no live suite ran"}), "no proof is no pass")
+	unproven := Coverage{Unproven: map[string]string{"CORE-01": "not run", "SCALE-01": "failed"}}
+	assert.Equal(t, "NO-GO", verdictOf(pass, unproven))
+	assert.Equal(t, []string{"CORE-01", "SCALE-01"}, unproven.Blocking())
+	unproven.Allowed = map[string]string{"CORE-01": "needs a token", "SCALE-01": "the host is too small"}
+	assert.Equal(t, "GO", verdictOf(pass, unproven), "every unproven row allowed, with its reason")
+	assert.Equal(t, "NO-GO", verdictOf([]Result{{Status: statusFail}}, ok))
+
+	var b bytes.Buffer
+	require.NoError(t, Render(&b, nil, nil, t.TempDir(), Coverage{ProofError: "no live suite ran", ByStatus: map[string]int{}}, Provenance{SHA: "x"}, 0))
+	assert.Contains(t, b.String(), "**Verdict: NO-GO.**")
+	assert.Contains(t, b.String(), "**No coverage proof: no live suite ran.**")
+	b.Reset()
+	require.NoError(t, Render(&b, nil, nil, t.TempDir(), Coverage{ByStatus: map[string]int{}, Unproven: map[string]string{"CORE-01": "not run"}}, Provenance{SHA: "x"}, 0))
+	assert.Contains(t, b.String(), "**1 covered rows are not proven** (NO-GO): CORE-01 (not run).")
+
+	dir := t.TempDir()
+	allow := filepath.Join(dir, "allow.txt")
+	require.NoError(t, os.WriteFile(allow, []byte("# comment\nCORE-01 the github token is not on this host\n"), 0o600))
+	got, err := readAllowlist(allow)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"CORE-01": "the github token is not on this host"}, got)
+	require.NoError(t, os.WriteFile(allow, []byte("CORE-01\n"), 0o600))
+	_, err = readAllowlist(allow)
+	assert.ErrorContains(t, err, "has no reason")
+}
+
+// TestHostRules (QA on #1872): heavy steps need the lock and cluster steps
+// the host's slots, unless the run opts out by name.
+func TestHostRules(t *testing.T) {
+	heavy, cluster := Step{ID: "unit-race", Script: "x", Heavy: true}, Step{ID: "e2e", Script: "x", Clusters: 1}
+	assert.ErrorContains(t, hostRulesProblem([]Step{heavy}, "", "", false, false), "-lock DIR")
+	assert.NoError(t, hostRulesProblem([]Step{heavy}, "/l", "", false, false))
+	assert.NoError(t, hostRulesProblem([]Step{heavy}, "", "", true, false))
+	assert.ErrorContains(t, hostRulesProblem([]Step{cluster}, "", "", false, false), "-slots DIR")
+	assert.NoError(t, hostRulesProblem([]Step{cluster}, "", "/s", false, false))
+	assert.NoError(t, hostRulesProblem([]Step{cluster}, "", "", false, true))
+	assert.NoError(t, hostRulesProblem([]Step{{ID: "m", Missing: "x", Heavy: true}}, "", "", false, false), "a step that never runs needs nothing")
 }

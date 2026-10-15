@@ -55,6 +55,10 @@ type Step struct {
 	// Missing, when set, is evidence the release needs that this commit has
 	// no test for: the gate fails.
 	Missing string
+	// MinTests is how many tests (and subtests, per run) its Tests file must
+	// record for a pass: a step that ran no test proves nothing. MaxSkips
+	// is how many of them may skip (they are listed in the report).
+	MinTests, MaxSkips int
 	// CIJob, when set, is the e2e-live.yml job that runs the step (-live ci).
 	CIJob *ciJob
 	// ciRetry: the step failed in an earlier gate on this commit, so its CI
@@ -70,20 +74,35 @@ type Options struct {
 	ImageBuild    string   // docker (the repo Dockerfiles) or host (host-built binaries)
 	GitHubToken   bool     // a GitHub token for the github suite is set
 	LiveCI        bool     // the live suites run in e2e-live.yml, not on this host
-	// Floor is the oldest supported Kubernetes minor (1.35 -> 35): the gate
-	// runs each suite on the oldest minor at or above it and the newest.
-	Floor int
+	// Floor and Newest are the oldest supported and the newest Kubernetes
+	// minors (35, 37): every live suite runs on exactly these two, and
+	// envtest installs the CRDs on them.
+	Floor, Newest int
 }
 
-// atLeast keeps the minors at or above floor.
-func atLeast(minors []int, floor int) []int {
-	var out []int
-	for _, m := range minors {
-		if m >= floor {
-			out = append(out, m)
-		}
+// Minors are the floor and the newest minor, once each.
+func (o Options) Minors() []int {
+	if o.Newest == o.Floor {
+		return []int{o.Floor}
 	}
-	return out
+	return []int{o.Floor, o.Newest}
+}
+
+// KubeMinors are the oldest and newest KIND_NODE_1_<minor> of
+// hack/tool-versions.env: the supported floor and the newest Kubernetes.
+func (r *Repo) KubeMinors() (floor, newest int) {
+	for k := range r.ToolVersions {
+		m := kindNode.FindStringSubmatch(k)
+		if m == nil || m[1] != "" {
+			continue
+		}
+		n, _ := strconv.Atoi(m[2])
+		if floor == 0 || n < floor {
+			floor = n
+		}
+		newest = max(newest, n)
+	}
+	return floor, newest
 }
 
 // fuzzHeavy: a fuzz run longer than a minute takes the heavy-load lock
@@ -237,27 +256,6 @@ func upgradeSuite(tag string) string {
 	return "upgrade-v" + strings.ReplaceAll(strings.TrimPrefix(tag, "v"), ".", "")
 }
 
-// minors returns the Kubernetes minors a suite can boot: KIND_NODE_1_<m>
-// for every suite, KIND_NODE_<SUITE>_1_<m> for that suite.
-func (r *Repo) minors(suite string) []int {
-	key := strings.ToUpper(strings.ReplaceAll(suite, "-", "_"))
-	set := map[int]bool{}
-	for k := range r.ToolVersions {
-		m := kindNode.FindStringSubmatch(k)
-		if m == nil || (m[1] != "" && m[1] != key) {
-			continue
-		}
-		n, _ := strconv.Atoi(m[2])
-		set[n] = true
-	}
-	var out []int
-	for n := range set {
-		out = append(out, n)
-	}
-	sort.Ints(out)
-	return out
-}
-
 // nodeImage is the node image for suite on minor (KIND_NODE_1_<m>, then the
 // suite's own), or "".
 func (r *Repo) nodeImage(suite string, minor int) string {
@@ -267,11 +265,6 @@ func (r *Repo) nodeImage(suite string, minor int) string {
 	key := strings.ToUpper(strings.ReplaceAll(suite, "-", "_"))
 	return r.ToolVersions[fmt.Sprintf("KIND_NODE_%s_1_%d", key, minor)]
 }
-
-// fixedMinor lists the suites whose matrix.txt minor is the only one they
-// run on: the multi-cluster spoke boots test/e2e/kind-config.yaml's node
-// image, and the hub must run the same minor.
-var fixedMinor = map[string]bool{"multi-cluster": true}
 
 // clusterWeight is how much of the cluster budget a suite's job takes:
 // gitlab needs about 7 GB, multi-cluster boots two clusters, scale a 24 GB node.
@@ -284,7 +277,7 @@ func Plan(r *Repo, o Options) []Step {
 	var steps []Step
 	// Quick checks first, so a broken tree fails in minutes; then the
 	// suites, then scale.
-	steps = append(steps, chartSteps()...)
+	steps = append(steps, chartSteps(r, o)...)
 	steps = append(steps, staticSteps(o)...)
 	steps = append(steps, unitSteps(r, o)...)
 	steps = append(steps, e2eSteps(r, o)...)
@@ -292,52 +285,60 @@ func Plan(r *Repo, o Options) []Step {
 	return steps
 }
 
-// ciSteps are the e2e-live.yml jobs of the CI suites: the minors and shards
-// of hack/e2e/matrix.txt, as CI runs them.
-func ciSteps(r *Repo) []Step {
-	var steps []Step
+// suiteShards lists the live suites of matrix.txt but scale, in order, with
+// the shards each runs in ("-" for the whole suite).
+func suiteShards(r *Repo) ([]string, map[string][]string) {
+	var suites []string
+	shards := map[string][]string{}
 	for _, l := range r.Matrix {
 		if l.Suite == "scale" {
 			continue
 		}
-		j := &ciJob{ID: jobID(l), Suite: l.Suite, Minor: l.Minor, Shard: l.Shard}
-		area := areaE2E
-		if isUpgrade(l.Suite) {
-			area = areaUpgrade
+		if _, ok := shards[l.Suite]; !ok {
+			suites = append(suites, l.Suite)
 		}
-		steps = append(steps, Step{ID: "ci-" + j.ID, Area: area, Title: j.Name() + " (CI)", Tests: "e2e/test.json", CIJob: j})
+		known := false
+		for _, s := range shards[l.Suite] {
+			known = known || s == l.Shard
+		}
+		if !known {
+			shards[l.Suite] = append(shards[l.Suite], l.Shard)
+		}
+	}
+	return suites, shards
+}
+
+// ciSteps are the e2e-live.yml jobs the gate dispatches: every suite but
+// scale on the floor and the newest minor (e2e-live.yml's minors input,
+// hack/e2e/all.sh MINORS), with its matrix.txt shards.
+func ciSteps(r *Repo, o Options) []Step {
+	suites, shards := suiteShards(r)
+	var steps []Step
+	for _, suite := range suites {
+		for _, m := range o.Minors() {
+			for _, sh := range shards[suite] {
+				l := MatrixLine{Suite: suite, Minor: fmt.Sprintf("1.%d", m), Shard: sh}
+				j := &ciJob{ID: jobID(l), Suite: suite, Minor: l.Minor, Shard: sh}
+				area := areaE2E
+				if isUpgrade(suite) {
+					area = areaUpgrade
+				}
+				steps = append(steps, Step{ID: "ci-" + j.ID, Area: area, Title: j.Name() + " (CI)",
+					Tests: "e2e/test.json", MinTests: 1, CIJob: j})
+			}
+		}
 	}
 	return steps
 }
 
 func e2eSteps(r *Repo, o Options) []Step {
 	if o.LiveCI {
-		return append(ciSteps(r), prevUpgrade(r)...)
+		return append(ciSteps(r, o), prevUpgrade(r)...)
 	}
-	var suites []string
-	matrixMinors := map[string][]int{}
-	for _, l := range r.Matrix {
-		if l.Suite == "scale" {
-			continue
-		}
-		if _, ok := matrixMinors[l.Suite]; !ok {
-			suites = append(suites, l.Suite)
-		}
-		n, _ := strconv.Atoi(strings.TrimPrefix(l.Minor, "1."))
-		matrixMinors[l.Suite] = append(matrixMinors[l.Suite], n)
-	}
+	suites, _ := suiteShards(r)
 	var steps []Step
 	for _, s := range suites {
-		minors := atLeast(r.minors(s), o.Floor)
-		if fixedMinor[s] || len(minors) == 0 {
-			minors = matrixMinors[s]
-		}
-		sort.Ints(minors)
-		pick := []int{minors[0]}
-		if last := minors[len(minors)-1]; last != minors[0] {
-			pick = append(pick, last)
-		}
-		for _, m := range pick {
+		for _, m := range o.Minors() {
 			steps = append(steps, e2eStep(r, o, s, m))
 		}
 	}
@@ -370,14 +371,14 @@ func e2eStep(r *Repo, o Options, suite string, minor int) Step {
 	}
 	st := Step{
 		ID: id, Area: area, Title: fmt.Sprintf("%s on Kubernetes 1.%d", suite, minor),
-		Clusters: max(1, clusterWeight[suite]), Tests: "e2e/test.json",
+		Clusters: max(1, clusterWeight[suite]), Tests: "e2e/test.json", MinTests: 1,
 	}
 	if suite == "github" && !o.GitHubToken {
 		st.NotRun = "no KARDINAL_E2E_GITHUB_TOKEN_FILE or DEMO_GITHUB_TOKEN (the gate never uses your gh login)"
 		return st
 	}
 	if r.nodeImage(suite, minor) == "" {
-		st.NotRun = fmt.Sprintf("no node image for 1.%d in hack/tool-versions.env", minor)
+		st.Missing = fmt.Sprintf("no node image for Kubernetes 1.%d in hack/tool-versions.env", minor)
 		return st
 	}
 	cluster := "kp-rg-" + strings.TrimPrefix(id, "e2e-")
@@ -400,7 +401,14 @@ func liveScript(suite, cluster, minor string, count int, env []string) string {
 		fmt.Fprintf(&b, "export %s\n", e)
 	}
 	b.WriteString("unset RUN SHARD\nmkdir -p \"$E2E_OUT\"\n")
-	fmt.Fprintf(&b, "bash hack/e2e/up.sh %s\nbash hack/e2e/run.sh %s\n", suite, suite)
+	fmt.Fprintf(&b, "bash hack/e2e/up.sh %s\n", suite)
+	// The images this suite runs, as up.sh built and loaded them.
+	b.WriteString(`for i in "${KARDINAL_E2E_IMAGE:-ghcr.io/pnz1990/kardinal-promoter/controller:e2e-$KIND_CLUSTER}" \
+  "${KARDINAL_E2E_RENDER_IMAGE:-ghcr.io/pnz1990/kardinal-promoter/render:e2e-$KIND_CLUSTER}"; do
+  echo "$i $(docker image inspect -f '{{.Id}}' "$i") (e2e $KIND_CLUSTER)"
+done > "$STEP_DIR/images.txt"
+`)
+	fmt.Fprintf(&b, "bash hack/e2e/run.sh %s\n", suite)
 	return b.String()
 }
 
@@ -416,19 +424,18 @@ done
 }
 
 func scaleSteps(r *Repo, o Options) []Step {
-	minors := r.minors("scale")
 	var steps []Step
 	for _, p := range o.ScaleProfiles {
 		st := Step{
 			ID: "scale-" + p, Area: areaScale, Title: "scale suite, " + p + " profile",
-			Clusters: clusterWeight["scale"], Heavy: true, Tests: "e2e/test.json",
+			Clusters: clusterWeight["scale"], Heavy: true, Tests: "e2e/test.json", MinTests: 1,
 		}
-		if len(minors) == 0 {
-			st.NotRun = "no node image for the scale suite"
+		if r.nodeImage("scale", o.Newest) == "" {
+			st.Missing = fmt.Sprintf("no node image for Kubernetes 1.%d", o.Newest)
 			steps = append(steps, st)
 			continue
 		}
-		minor := fmt.Sprintf("1.%d", minors[len(minors)-1])
+		minor := fmt.Sprintf("1.%d", o.Newest)
 		env := []string{"KARDINAL_E2E_NODE_MEMORY=24g", "KARDINAL_E2E_KRO_MEMORY=8Gi", "KARDINAL_E2E_SCALE_PROFILE=" + p}
 		switch p {
 		case "full":
@@ -451,6 +458,9 @@ func scaleSteps(r *Repo, o Options) []Step {
 func unitSteps(r *Repo, o Options) []Step {
 	steps := []Step{{
 		ID: "unit-race", Area: areaUnit, Title: "go test -race -count=3 ./...", Heavy: true, Tests: "tests.json",
+		// A whole -count=3 run records over 30,000; a few tests skip where a
+		// tool is missing (each is listed).
+		MinTests: 20000, MaxSkips: 10,
 		// -p 8: at most 8 test binaries at once, so the host keeps room for
 		// others while the gate holds the heavy-load lock.
 		Script: `go test -race -count=3 -p 8 -timeout 60m -json ./... > "$STEP_DIR/tests.json"`,
@@ -458,17 +468,19 @@ func unitSteps(r *Repo, o Options) []Step {
 	for _, f := range r.FuzzTargets {
 		steps = append(steps, Step{
 			ID: "fuzz-" + f.Name, Area: areaUnit, Title: fmt.Sprintf("%s (%s) for %s", f.Name, f.Dir, o.FuzzTime),
-			Tests: "tests.json", Heavy: fuzzHeavy(o.FuzzTime),
+			Tests: "tests.json", MinTests: 1, Heavy: fuzzHeavy(o.FuzzTime),
 			Script: fmt.Sprintf(`go test -run '^$' -fuzz '^%s$' -fuzztime %s -parallel 4 -json %s > "$STEP_DIR/tests.json"`,
 				f.Name, o.FuzzTime, f.Dir),
 		})
 	}
 	steps = append(steps, Step{
 		ID: "scenario-matrix", Area: areaUnit, Title: "scenario matrix (test/scenario)", Tests: "tests.json",
-		Script: `go test -race -count=1 -timeout 30m -json -run '^TestScenarioMatrix$' ./test/scenario/ > "$STEP_DIR/tests.json"`,
+		MinTests: 40, // 48 pairwise combinations
+		Script:   `go test -race -count=1 -timeout 30m -json -run '^TestScenarioMatrix$' ./test/scenario/ > "$STEP_DIR/tests.json"`,
 	})
 	ent := Step{ID: "scenario-enterprise", Area: areaUnit, Title: "enterprise scenario at full size", Heavy: true, Tests: "tests.json",
-		Script: `KARDINAL_SCENARIO_ENTERPRISE=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/ > "$STEP_DIR/tests.json"`}
+		MinTests: 2,
+		Script:   `KARDINAL_SCENARIO_ENTERPRISE=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/ > "$STEP_DIR/tests.json"`}
 	if !r.Enterprise {
 		ent.Script = ""
 		ent.Missing = "no test/scenario/enterprise on this commit (#1860)"
@@ -540,7 +552,7 @@ npm run size
 // hack/release-gate/profiles (default is the chart's values.yaml alone).
 var profiles = []string{"default", "ha", "observability", "secure", "gitlab"}
 
-func chartSteps() []Step {
+func chartSteps(r *Repo, o Options) []Step {
 	var lint strings.Builder
 	lint.WriteString("PATH=\"$PWD/bin/e2e:$PATH\"\nbash hack/e2e/tools.sh\n")
 	for _, p := range profiles {
@@ -553,10 +565,31 @@ func chartSteps() []Step {
 	}
 	return []Step{
 		{ID: "chart-profiles", Area: areaChart, Title: "helm lint and template, every values profile", Script: lint.String()},
-		// make envtest (#1849): every CRD and the chart's admission policies
-		// installed on the oldest and newest supported API servers
-		// (ENVTEST_K8S_MIN, ENVTEST_K8S_MAX in hack/tool-versions.env).
-		{ID: "chart-envtest", Area: areaChart, Title: "CRDs and admission policies on the oldest and newest API servers (make envtest)",
-			Script: "make envtest"},
+		envtestStep(r, o),
 	}
+}
+
+// envtestStep is make envtest (#1849) with go test -json: every CRD and the
+// chart's admission policies installed on API servers of the floor and the
+// newest minor (ENVTEST_K8S_MIN and _MAX of hack/tool-versions.env, which
+// must be those minors).
+func envtestStep(r *Repo, o Options) Step {
+	st := Step{ID: "chart-envtest", Area: areaChart, Tests: "tests.json", MinTests: 2,
+		Title: fmt.Sprintf("CRDs and admission policies on Kubernetes 1.%d and 1.%d (make envtest)", o.Floor, o.Newest)}
+	lo, hi := r.ToolVersions["ENVTEST_K8S_MIN"], r.ToolVersions["ENVTEST_K8S_MAX"]
+	want := func(v string, m int) bool { return strings.HasPrefix(v, fmt.Sprintf("1.%d.", m)) }
+	if !want(lo, o.Floor) || !want(hi, o.Newest) {
+		st.Missing = fmt.Sprintf("envtest runs %s and %s (hack/tool-versions.env ENVTEST_K8S_MIN, _MAX), not 1.%d and 1.%d", lo, hi, o.Floor, o.Newest)
+		return st
+	}
+	st.Script = `source hack/tool-versions.env
+GOBIN="$PWD/bin" go install "sigs.k8s.io/controller-runtime/tools/setup-envtest@$SETUP_ENVTEST_VERSION"
+: > "$STEP_DIR/tests.json"
+for v in "$ENVTEST_K8S_MIN" "$ENVTEST_K8S_MAX"; do
+  assets=$(bin/setup-envtest use "$v" --bin-dir "$PWD/bin/envtest" -p path)
+  echo "== Kubernetes $v"
+  KUBEBUILDER_ASSETS=$assets go test -tags envtest ./test/helm/ -run TestInstallOnAPIServer -count=1 -json >> "$STEP_DIR/tests.json"
+done
+`
+	return st
 }

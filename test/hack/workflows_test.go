@@ -4,6 +4,7 @@
 package hack
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -589,4 +590,57 @@ func TestDependabotCoversEveryManifest(t *testing.T) {
 	}
 	assert.Contains(t, k8sPatterns, "k8s.io/*", "k8s.io modules must be updated in one group")
 	assert.Contains(t, k8sPatterns, "sigs.k8s.io/*", "sigs.k8s.io modules must be updated with k8s.io")
+}
+
+// TestE2EMatrixMinors: hack/e2e/all.sh -matrix with MINORS runs every
+// suite, with its matrix.txt shards, on exactly those minors, as the release
+// gate dispatches e2e-live.yml (its minors input).
+func TestE2EMatrixMinors(t *testing.T) {
+	root := repoRoot(t)
+	cmd := exec.Command("bash", "hack/e2e/all.sh", "-matrix")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "MINORS=1.35 1.37", "SUITES=", "SAMPLE=", "SAMPLE_ONLY=")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	var m struct {
+		Include []struct{ ID, Suite, K8s, Shard string } `json:"include"`
+	}
+	require.NoError(t, json.Unmarshal(out, &m), "%s", out)
+	got := map[string]map[string][]string{}
+	for _, j := range m.Include {
+		if got[j.Suite] == nil {
+			got[j.Suite] = map[string][]string{}
+		}
+		got[j.Suite][j.K8s] = append(got[j.Suite][j.K8s], j.Shard)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "matrix.txt"))
+	require.NoError(t, err)
+	shards := map[string]map[string]bool{}
+	for _, l := range strings.Split(string(data), "\n") {
+		f := strings.Fields(l)
+		if len(f) != 3 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		if shards[f[0]] == nil {
+			shards[f[0]] = map[string]bool{}
+		}
+		s := f[2]
+		if s == "-" {
+			s = ""
+		}
+		shards[f[0]][s] = true
+	}
+	for suite, want := range shards {
+		require.Contains(t, got, suite)
+		assert.Len(t, got[suite], 2, "%s runs on exactly 1.35 and 1.37: %v", suite, got[suite])
+		for _, minor := range []string{"1.35", "1.37"} {
+			assert.Len(t, got[suite][minor], len(want), "%s on %s keeps its shards", suite, minor)
+		}
+	}
+	cmd = exec.Command("bash", "hack/e2e/all.sh", "-matrix")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "MINORS=1.x")
+	out, err = cmd.CombinedOutput()
+	require.Error(t, err)
+	assert.Contains(t, string(out), "MINORS: 1.x is not a Kubernetes minor")
 }

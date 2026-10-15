@@ -20,6 +20,8 @@
 #   JOBS        jobs at once (default 4; each cluster takes 2-3 GB of
 #               memory, gitlab's about 7 GB; multi-cluster's job has two)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
+#   MINORS      run every suite on these Kubernetes minors, e.g. '1.35 1.37',
+#               instead of matrix.txt's (each suite keeps its shards)
 #   SAMPLE      a date (YYYY-MM-DD, or today): add that night's sample jobs
 #               (hack/e2e/sample.sh), as the scheduled e2e-live.yml runs do
 #   SAMPLE_ONLY set with SAMPLE to run the sample jobs alone
@@ -73,6 +75,32 @@ if [ -z "${SAMPLE_ONLY:-}" ]; then
     id="$suite-${k8s//./}${shard:+-${shard%/*}of${shard#*/}}"
     matrix+=("$id $suite $k8s ${shard:--} -")
   done <"$E2E_DIR/matrix.txt"
+fi
+# MINORS ("1.35 1.37"): every suite runs on each of these minors instead of
+# its matrix.txt ones, with its matrix.txt shards (the release gate,
+# hack/release-gate -live ci).
+if [ -n "${MINORS:-}" ]; then
+  read -ra minors <<<"$MINORS"
+  for m in "${minors[@]}"; do
+    [[ "$m" =~ ^1\.[0-9]+$ ]] || die "MINORS: $m is not a Kubernetes minor (1.N)"
+  done
+  declare -A shards_of=()
+  order=()
+  for j in "${matrix[@]}"; do
+    read -r _ suite _ shard _ <<<"$j"
+    [ -n "${shards_of[$suite]+x}" ] || order+=("$suite")
+    case " ${shards_of[$suite]:-} " in *" $shard "*) ;; *) shards_of[$suite]="${shards_of[$suite]:-} $shard" ;; esac
+  done
+  matrix=()
+  for suite in "${order[@]}"; do
+    for m in "${minors[@]}"; do
+      for shard in ${shards_of[$suite]}; do
+        s=$shard
+        [ "$s" != - ] || s=
+        matrix+=("$suite-${m//./}${s:+-${s%/*}of${s#*/}} $suite $m $shard -")
+      done
+    done
+  done
 fi
 # The night's sample (hack/e2e/sample.sh): jobs matrix.txt does not run.
 if [ -n "${SAMPLE:-}" ]; then

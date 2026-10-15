@@ -41,6 +41,10 @@ on:
         description: 'only these suites, space-separated (hack/e2e/all.sh SUITES); empty runs every suite'
         required: false
         default: ''
+      minors:
+        description: 'run every suite on these Kubernetes minors instead of matrix.txt''s, space-separated (hack/e2e/all.sh MINORS; the release gate passes the floor and the newest)'
+        required: false
+        default: ''
       sample:
         description: 'a date (YYYY-MM-DD) or today: add that night''s sample jobs (hack/e2e/sample.sh); scheduled runs add today''s'
         required: false
@@ -85,6 +89,7 @@ jobs:
         id: matrix
         env:
           SUITES: ${{ inputs.suites }}
+          MINORS: ${{ inputs.minors }}
           # Every scheduled run adds the night's sample (hack/e2e/sample.sh):
           # one suite on a minor matrix.txt does not run it on, and a ninth of
           # the core suite with each test three times.
@@ -109,6 +114,18 @@ jobs:
           docker build -t "$KARDINAL_E2E_IMAGE" .
           docker build -t "$KARDINAL_E2E_RENDER_IMAGE" -f render.Dockerfile .
           docker save "$KARDINAL_E2E_IMAGE" "$KARDINAL_E2E_RENDER_IMAGE" | gzip > controller-image.tar.gz
+      # The IDs of the images every suite job runs: the release gate's report
+      # records them (hack/release-gate).
+      - name: Record the image IDs
+        run: |
+          for i in "$KARDINAL_E2E_IMAGE" "$KARDINAL_E2E_RENDER_IMAGE"; do
+            echo "$i $(docker image inspect -f '{{.Id}}' "$i")"
+          done | tee images.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: e2e-images
+          path: images.txt
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: controller-image
