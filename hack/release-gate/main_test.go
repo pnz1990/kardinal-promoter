@@ -230,6 +230,7 @@ type fakeRunner struct {
 	noLog                  bool
 	block                  chan struct{}
 	onStart                func(id string)
+	onEnd                  func(id string) // when the step's run returns
 }
 
 // passingTests is a go test -json stream of n passing tests.
@@ -288,6 +289,9 @@ func (f *fakeRunner) Run(ctx context.Context, st Step, dir string) error {
 		f.heavy--
 	}
 	f.mu.Unlock()
+	if f.onEnd != nil {
+		f.onEnd(st.ID)
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -362,7 +366,13 @@ func TestGateRun_OversizeStepRunsAlone(t *testing.T) {
 			}
 		}
 		running[id] = true
-		go func() { time.Sleep(4 * time.Millisecond); mu.Lock(); delete(running, id); mu.Unlock() }()
+	}
+	// A step runs from its start to the return of its run: no timer guesses
+	// when it ended (#2015).
+	r.onEnd = func(id string) {
+		mu.Lock()
+		defer mu.Unlock()
+		delete(running, id)
 	}
 	steps := []Step{{ID: "a", Clusters: 1, Script: "x"}, {ID: "big", Clusters: 4, Script: "x"}, {ID: "b", Clusters: 1, Script: "x"}}
 	_, err := newGate(t, 2, &fakeHost{}, r).Run(context.Background(), steps)
