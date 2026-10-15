@@ -22,8 +22,9 @@ kardinal unhold <pipeline> <env> [flags]
 ### Options
 
 ```
-  -e, --env string   Held environment to release (or give it after the pipeline)
-  -h, --help         help for unhold
+  -e, --env string      Held environment to release (or give it after the pipeline)
+  -h, --help            help for unhold
+      --reason string   why, recorded with your name in the HoldReleased AuditEvent
 ```
 
 ### Options inherited from parent commands

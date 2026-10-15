@@ -1321,6 +1321,82 @@ spec:
                   description: EnvironmentHold pins one environment of a Pipeline
                     to a rollback Bundle.
                   properties:
+                    actor:
+                      description: |-
+                        Actor is CreatedBy's actor stamp (docs/actors.md), checked by the
+                        chart's actor admission policy; the HoldCreated AuditEvent names it.
+                      properties:
+                        agent:
+                          description: Agent is the AgentIdentity name, when kind
+                            is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        asserted:
+                          description: |-
+                            Asserted holds what the client says about itself. It is recorded as
+                            written and never used for a security decision.
+                          properties:
+                            client:
+                              description: Client is the tool that wrote the record
+                                (for example kardinal/0.12.0).
+                              maxLength: 128
+                              type: string
+                            model:
+                              description: Model is the AI model the client says it
+                                runs.
+                              maxLength: 128
+                              type: string
+                            session:
+                              description: Session is the client's session or run
+                                identifier.
+                              maxLength: 128
+                              type: string
+                          type: object
+                        kind:
+                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          enum:
+                          - human
+                          - agent
+                          - bot
+                          - controller
+                          maxLength: 16
+                          type: string
+                        principal:
+                          description: Principal is the username the API server authenticated.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        sponsor:
+                          description: |-
+                            Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                            the record was written, when kind is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        via:
+                          description: |-
+                            Via says how the controller came to write the record: ui and api for a
+                            caller it authenticated, subscription and auto-rollback for its own
+                            Bundles. Only the controller may set it.
+                          enum:
+                          - ui
+                          - api
+                          - subscription
+                          - auto-rollback
+                          maxLength: 16
+                          type: string
+                      required:
+                      - kind
+                      - principal
+                      type: object
+                      x-kubernetes-validations:
+                      - message: actor.agent and actor.sponsor are set exactly when
+                          actor.kind is agent
+                        rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                          : (!has(self.agent) && !has(self.sponsor))'
+                      - message: a controller actor says why it acted (actor.via)
+                        rule: self.kind != 'controller' || has(self.via)
                     artifacts:
                       description: |-
                         Artifacts is the digest of the rollback Bundle's artifacts (type,
@@ -1558,6 +1634,129 @@ spec:
                 - message: set authorities, commits.requireSigned, or both
                   rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
                     && self.commits.requireSigned)
+              lastChange:
+                description: |-
+                  LastChange is who made the latest pause, resume or hold release, and
+                  why: kardinal pause, resume and release-hold, and the UI, write it in
+                  the same update as the change, and the chart's admission policies
+                  admit it only in the requester's name (by, and the actor stamp). The
+                  Pipeline reconciler names them in the change's AuditEvent; a change
+                  made without it (kubectl) is recorded with an unknown actor.
+                properties:
+                  action:
+                    description: |-
+                      Action is the change: Pause, Resume, PauseFleet, ResumeFleet or
+                      ReleaseHold.
+                    enum:
+                    - Pause
+                    - Resume
+                    - PauseFleet
+                    - ResumeFleet
+                    - ReleaseHold
+                    maxLength: 16
+                    type: string
+                  actor:
+                    description: |-
+                      Actor is By's actor stamp (docs/actors.md), checked by the chart's
+                      actor admission policy.
+                    properties:
+                      agent:
+                        description: Agent is the AgentIdentity name, when kind is
+                          agent.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      asserted:
+                        description: |-
+                          Asserted holds what the client says about itself. It is recorded as
+                          written and never used for a security decision.
+                        properties:
+                          client:
+                            description: Client is the tool that wrote the record
+                              (for example kardinal/0.12.0).
+                            maxLength: 128
+                            type: string
+                          model:
+                            description: Model is the AI model the client says it
+                              runs.
+                            maxLength: 128
+                            type: string
+                          session:
+                            description: Session is the client's session or run identifier.
+                            maxLength: 128
+                            type: string
+                        type: object
+                      kind:
+                        description: Kind is human, agent, bot or controller (docs/actors.md).
+                        enum:
+                        - human
+                        - agent
+                        - bot
+                        - controller
+                        maxLength: 16
+                        type: string
+                      principal:
+                        description: Principal is the username the API server authenticated.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      sponsor:
+                        description: |-
+                          Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                          the record was written, when kind is agent.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      via:
+                        description: |-
+                          Via says how the controller came to write the record: ui and api for a
+                          caller it authenticated, subscription and auto-rollback for its own
+                          Bundles. Only the controller may set it.
+                        enum:
+                        - ui
+                        - api
+                        - subscription
+                        - auto-rollback
+                        maxLength: 16
+                        type: string
+                    required:
+                    - kind
+                    - principal
+                    type: object
+                    x-kubernetes-validations:
+                    - message: actor.agent and actor.sponsor are set exactly when
+                        actor.kind is agent
+                      rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                        : (!has(self.agent) && !has(self.sponsor))'
+                    - message: a controller actor says why it acted (actor.via)
+                      rule: self.kind != 'controller' || has(self.via)
+                  by:
+                    description: By is the requester's username, as the API server
+                      authenticated it.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  id:
+                    description: |-
+                      ID is set anew by each write (a random id), so the same person making
+                      the same change twice writes two records: the Pipeline reconciler uses
+                      each record once (status.observedLastChange).
+                    maxLength: 32
+                    type: string
+                  reason:
+                    description: Reason says why (kardinal pause --reason).
+                    maxLength: 1024
+                    type: string
+                  target:
+                    description: |-
+                      Target is the fleet (PauseFleet, ResumeFleet) or the held environment
+                      (ReleaseHold); empty for the Pipeline.
+                    maxLength: 63
+                    type: string
+                required:
+                - action
+                - by
+                type: object
               maxConcurrentPromotions:
                 default: 0
                 description: |-
@@ -2158,6 +2357,82 @@ spec:
                   description: EnvironmentHold pins one environment of a Pipeline
                     to a rollback Bundle.
                   properties:
+                    actor:
+                      description: |-
+                        Actor is CreatedBy's actor stamp (docs/actors.md), checked by the
+                        chart's actor admission policy; the HoldCreated AuditEvent names it.
+                      properties:
+                        agent:
+                          description: Agent is the AgentIdentity name, when kind
+                            is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        asserted:
+                          description: |-
+                            Asserted holds what the client says about itself. It is recorded as
+                            written and never used for a security decision.
+                          properties:
+                            client:
+                              description: Client is the tool that wrote the record
+                                (for example kardinal/0.12.0).
+                              maxLength: 128
+                              type: string
+                            model:
+                              description: Model is the AI model the client says it
+                                runs.
+                              maxLength: 128
+                              type: string
+                            session:
+                              description: Session is the client's session or run
+                                identifier.
+                              maxLength: 128
+                              type: string
+                          type: object
+                        kind:
+                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          enum:
+                          - human
+                          - agent
+                          - bot
+                          - controller
+                          maxLength: 16
+                          type: string
+                        principal:
+                          description: Principal is the username the API server authenticated.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        sponsor:
+                          description: |-
+                            Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                            the record was written, when kind is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        via:
+                          description: |-
+                            Via says how the controller came to write the record: ui and api for a
+                            caller it authenticated, subscription and auto-rollback for its own
+                            Bundles. Only the controller may set it.
+                          enum:
+                          - ui
+                          - api
+                          - subscription
+                          - auto-rollback
+                          maxLength: 16
+                          type: string
+                      required:
+                      - kind
+                      - principal
+                      type: object
+                      x-kubernetes-validations:
+                      - message: actor.agent and actor.sponsor are set exactly when
+                          actor.kind is agent
+                        rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                          : (!has(self.agent) && !has(self.sponsor))'
+                      - message: a controller actor says why it acted (actor.via)
+                        rule: self.kind != 'controller' || has(self.via)
                     artifacts:
                       description: |-
                         Artifacts is the digest of the rollback Bundle's artifacts (type,
@@ -2206,6 +2481,30 @@ spec:
                 x-kubernetes-list-map-keys:
                 - environment
                 x-kubernetes-list-type: map
+              observedLastChange:
+                description: |-
+                  ObservedLastChange identifies the spec.lastChange the Pipeline
+                  reconciler last consumed (a hash): a record names who made the change it
+                  was written with, and a later change made without one (kubectl) is
+                  recorded with no actor, not with the earlier record's.
+                maxLength: 64
+                type: string
+              observedPaused:
+                description: |-
+                  ObservedPaused is spec.paused as the Pipeline reconciler last
+                  recorded it: the PipelinePaused and PipelineResumed AuditEvents are
+                  written from the difference, whichever client changed it. Unset until
+                  the first record (an upgrade records the current state, unaudited).
+                type: boolean
+              observedPausedFleets:
+                description: |-
+                  ObservedPausedFleets is spec.pausedFleets as last recorded, for the
+                  AuditEvents of a fleet's pause and resume.
+                items:
+                  type: string
+                maxItems: 100
+                type: array
+                x-kubernetes-list-type: set
               pendingAuditEvents:
                 description: |-
                   PendingAuditEvents are the HoldCreated, HoldReleased and
@@ -2291,6 +2590,10 @@ spec:
                           - VerdictRecorded
                           - VerdictRevoked
                           - FreezeExempted
+                          - PipelinePaused
+                          - PipelineResumed
+                          - FreezeStarted
+                          - FreezeLifted
                           type: string
                         actor:
                           description: |-

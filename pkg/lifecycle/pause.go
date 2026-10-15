@@ -5,6 +5,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -167,8 +169,12 @@ func IsPaused(ctx context.Context, c client.Reader, ns, pipeline string) (bool, 
 // idempotent. It returns ErrNotFound when the Pipeline does not exist, and
 // ErrConflict when a user PolicyGate has the freeze gate's name (spec.paused
 // stays set, so the pause takes effect once that gate is renamed or deleted).
-func Pause(ctx context.Context, c client.Client, ns, pipeline string) error {
-	p, err := setPaused(ctx, c, ns, pipeline, true)
+//
+// who, when set, is recorded as spec.lastChange in the same write: who paused
+// and why, for the PipelinePaused AuditEvent (Resume, SetPaused,
+// SetFleetPaused and ReleaseHold take it too).
+func Pause(ctx context.Context, c client.Client, ns, pipeline string, who *v1alpha1.PipelineChange) error {
+	p, err := setPaused(ctx, c, ns, pipeline, true, who)
 	if err != nil {
 		return err
 	}
@@ -182,8 +188,8 @@ func Pause(ctx context.Context, c client.Client, ns, pipeline string) error {
 
 // Resume clears spec.paused on the Pipeline and deletes its freeze gate. It is
 // idempotent. It returns ErrNotFound when the Pipeline does not exist.
-func Resume(ctx context.Context, c client.Client, ns, pipeline string) error {
-	if _, err := setPaused(ctx, c, ns, pipeline, false); err != nil {
+func Resume(ctx context.Context, c client.Client, ns, pipeline string, who *v1alpha1.PipelineChange) error {
+	if _, err := setPaused(ctx, c, ns, pipeline, false, who); err != nil {
 		return err
 	}
 	// As in Pause: without rights on PolicyGates the Pipeline reconciler
@@ -199,7 +205,7 @@ func Resume(ctx context.Context, c client.Client, ns, pipeline string) error {
 // UI user needs no rights on PolicyGates. A conflict with a concurrent write
 // is retried. It is idempotent and returns ErrNotFound when the Pipeline does
 // not exist.
-func SetPaused(ctx context.Context, c client.Client, ns, pipeline string, paused bool) error {
+func SetPaused(ctx context.Context, c client.Client, ns, pipeline string, paused bool, who *v1alpha1.PipelineChange) error {
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var p v1alpha1.Pipeline
 		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
@@ -212,6 +218,7 @@ func SetPaused(ctx context.Context, c client.Client, ns, pipeline string, paused
 			return nil
 		}
 		p.Spec.Paused = paused
+		recordChange(&p, who, pauseAction(paused), "")
 		return c.Update(ctx, &p)
 	})
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -223,7 +230,8 @@ func SetPaused(ctx context.Context, c client.Client, ns, pipeline string, paused
 // setPaused patches spec.paused with a merge patch. The patch carries no
 // resourceVersion, so a concurrent write to the Pipeline cannot make it fail
 // with a conflict.
-func setPaused(ctx context.Context, c client.Client, ns, pipeline string, paused bool) (*v1alpha1.Pipeline, error) {
+func setPaused(ctx context.Context, c client.Client, ns, pipeline string, paused bool,
+	who *v1alpha1.PipelineChange) (*v1alpha1.Pipeline, error) {
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -236,6 +244,7 @@ func setPaused(ctx context.Context, c client.Client, ns, pipeline string, paused
 	}
 	patch := client.MergeFrom(p.DeepCopy())
 	p.Spec.Paused = paused
+	recordChange(&p, who, pauseAction(paused), "")
 	if err := c.Patch(ctx, &p, patch); err != nil {
 		return nil, fmt.Errorf("patch pipeline %s/%s paused=%t: %w", ns, pipeline, paused, err)
 	}
@@ -259,7 +268,8 @@ func setPaused(ctx context.Context, c client.Client, ns, pipeline string, paused
 // ErrNotFound when the Pipeline does not exist. A resume of a fleet that is
 // not paused, or whose environment is no longer a fleet, removes the entry
 // if there is one and succeeds.
-func SetFleetPaused(ctx context.Context, c client.Client, ns, pipeline, fleet string, paused bool) error {
+func SetFleetPaused(ctx context.Context, c client.Client, ns, pipeline, fleet string, paused bool,
+	who *v1alpha1.PipelineChange) error {
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var p v1alpha1.Pipeline
 		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
@@ -283,6 +293,11 @@ func SetFleetPaused(ctx context.Context, c client.Client, ns, pipeline, fleet st
 			}
 			p.Spec.PausedFleets = slices.DeleteFunc(p.Spec.PausedFleets, func(f string) bool { return f == fleet })
 		}
+		action := v1alpha1.PipelineChangeResumeFleet
+		if paused {
+			action = v1alpha1.PipelineChangePauseFleet
+		}
+		recordChange(&p, who, action, fleet)
 		return c.Update(ctx, &p)
 	})
 	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrInvalid) {
@@ -313,4 +328,34 @@ func isFleetEnvironment(p *v1alpha1.Pipeline, env string) error {
 // FleetPaused reports whether fleet is in p's spec.pausedFleets.
 func FleetPaused(p *v1alpha1.Pipeline, fleet string) bool {
 	return p != nil && slices.Contains(p.Spec.PausedFleets, fleet)
+}
+
+// pauseAction is the spec.lastChange action of setting spec.paused.
+func pauseAction(paused bool) string {
+	if paused {
+		return v1alpha1.PipelineChangePause
+	}
+	return v1alpha1.PipelineChangeResume
+}
+
+// recordChange sets p's spec.lastChange to who's action on target: who
+// paused, resumed or released, and why, written with the change itself so
+// the Pipeline reconciler can name them in its AuditEvent
+// (docs/guides/security.md#audit-logging). A nil who records nothing.
+func recordChange(p *v1alpha1.Pipeline, who *v1alpha1.PipelineChange, action, target string) {
+	if who == nil || who.By == "" {
+		return
+	}
+	c := *who
+	c.Action, c.Target, c.ID = action, target, changeID()
+	p.Spec.LastChange = &c
+}
+
+// changeID is a random id for one spec.lastChange write.
+func changeID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "" // unreachable: crypto/rand does not fail on supported platforms
+	}
+	return hex.EncodeToString(b[:])
 }

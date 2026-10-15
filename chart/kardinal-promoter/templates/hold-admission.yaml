@@ -44,6 +44,21 @@ spec:
       expression: variables.oldHolds != variables.newHolds
     - name: added
       expression: variables.newHolds.filter(h, !(h in variables.oldHolds))
+    # spec.lastChange (#1939) names who made a pause, resume or hold release.
+    - name: oldChange
+      expression: >-
+        request.operation == 'UPDATE' && has(oldObject.spec.lastChange) ? oldObject.spec.lastChange : null
+    - name: newChange
+      expression: "has(object.spec.lastChange) ? object.spec.lastChange : null"
+    # The actor stamps this write adds (new holds, a new spec.lastChange):
+    # what needs no AgentIndex is checked here, always, so a stamp never
+    # names another principal even while the index is missing; the agent
+    # and sponsor are checked by <release>-actor-records.
+    - name: newStamps
+      expression: >-
+        variables.added.map(h, has(h.actor) ? h.actor : null) +
+        (variables.newChange != null && variables.newChange != variables.oldChange
+          ? [has(variables.newChange.actor) ? variables.newChange.actor : null] : [])
     - name: mayHold
       expression: >-
         authorizer.group('kardinal.io').resource('pipelines').subresource('hold')
@@ -70,6 +85,25 @@ spec:
           (!has(h.expiresAt) || timestamp(h.expiresAt) > timestamp(h.createdAt)))
       message: every new spec.holds entry needs createdAt, and an expiresAt after it if it has one
       reason: Invalid
+    # Who paused, resumed or released is the requester: a new or changed
+    # spec.lastChange names the caller (the controller writes the UI's).
+    - expression: >-
+        variables.exempt || variables.newChange == null || variables.newChange == variables.oldChange ||
+        variables.newChange.by == request.userInfo.username
+      messageExpression: >-
+        'spec.lastChange.by must be your own username "' + request.userInfo.username +
+        '"; kardinal pause, resume and unhold set it for you'
+      reason: Forbidden
+    - expression: >-
+        variables.exempt || variables.newStamps.all(s, s == null || (s.principal == request.userInfo.username && !has(s.via) &&
+          (request.userInfo.username.startsWith('system:serviceaccount:')
+            ? s.kind in ['bot', 'agent'] : s.kind in ['human', 'agent'])))
+      messageExpression: >-
+        'an actor stamp must name you (principal ' + request.userInfo.username +
+        '), with no via, and kind ' +
+        (request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot or agent' : 'human or agent') +
+        '; kardinal sets it for you'
+      reason: Forbidden
 ---
 {{- /* Bound like the identity policies: the watched namespace, the shard's
 namespaces (the default shard also the unlabelled ones), or every namespace

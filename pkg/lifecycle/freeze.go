@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -63,6 +64,9 @@ type FreezeRequest struct {
 	// The UI sets it for a caller whose rights are a namespace's
 	// (docs/design/18-actor-policy.md section 9.5).
 	OnlyOwn bool
+	// Stamp is CreatedBy's actor stamp, recorded on a new freeze (nil
+	// records none): the FreezeStarted AuditEvent names it.
+	Stamp *v1alpha1.Actor
 	// Now is the current time.
 	Now time.Time
 }
@@ -93,7 +97,7 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 			Start:  metav1.NewTime(req.Now.UTC().Truncate(time.Second)),
 			End:    end,
 			Reason: req.Reason,
-			Freeze: &v1alpha1.ChangeWindowFreeze{Actors: req.Actors, CreatedBy: req.CreatedBy},
+			Freeze: &v1alpha1.ChangeWindowFreeze{Actors: req.Actors, CreatedBy: req.CreatedBy, Actor: req.Stamp},
 		},
 	}
 	if req.Namespace != "" {
@@ -130,7 +134,10 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 // spec.freeze is never deleted (ErrConflict); a missing one is ErrNotFound.
 // With onlyBy set, only a freeze onlyBy made is deleted (ErrForbidden
 // otherwise): the UI sets it for a caller whose rights are a namespace's.
-func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string) error {
+// lift, when set, is written to spec.freeze.lifted just before the delete,
+// so the FreezeLifted AuditEvent names who lifted it; a caller who may not
+// update the window still deletes it, audited with an unknown actor.
+func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v1alpha1.FreezeLift) error {
 	var cw v1alpha1.ChangeWindow
 	if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -143,6 +150,16 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string) error {
 	}
 	if onlyBy != "" && cw.Spec.Freeze.CreatedBy != onlyBy {
 		return notYours(name, cw.Spec.Freeze.CreatedBy, "lift")
+	}
+	// The requester replaces a lift an earlier, failed unfreeze left.
+	if lift != nil && lift.By != "" && !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
+		cw.Spec.Freeze.Lifted = lift
+		if err := c.Update(ctx, &cw); err != nil && !apierrors.IsForbidden(err) {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("record who lifts freeze %s: %w", name, err)
+		}
 	}
 	if err := c.Delete(ctx, &cw, client.Preconditions{UID: &cw.UID}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete freeze %s: %w", name, err)

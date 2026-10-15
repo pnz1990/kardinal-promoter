@@ -693,13 +693,13 @@ func (in mcpPipelineOnly) check() error {
 
 func mcpPause(ctx context.Context, k *mcpServer, in mcpPipelineOnly) (*mcp.CallToolResult, error) {
 	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, pauseFn(w, c, ns, in.Pipeline)
+		return nil, pauseFn(w, c, ns, in.Pipeline, "")
 	})
 }
 
 func mcpResume(ctx context.Context, k *mcpServer, in mcpPipelineOnly) (*mcp.CallToolResult, error) {
 	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, resumeFn(w, c, ns, in.Pipeline)
+		return nil, resumeFn(w, c, ns, in.Pipeline, "")
 	})
 }
 

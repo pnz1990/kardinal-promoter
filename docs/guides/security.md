@@ -560,11 +560,33 @@ and turn it on after the export.
 | `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
-| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal rollback --hold`) appeared in, or left, `spec.holds`; or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
+| `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal hold`, `kardinal rollback --hold`) appeared in, or left, `spec.holds`, naming who held and who released it (`kardinal unhold --reason`); or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
+| `PipelinePaused` / `PipelineResumed` | A Pipeline, or one fleet of it (environment set), was paused or resumed (`kardinal pause` / `resume`, the UI, or a `spec.paused` / `spec.pausedFleets` edit), naming who and why (`--reason`); the environment is `*` for the whole Pipeline |
+| `FreezeStarted` / `FreezeLifted` | A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
+| `FreezeExempted` | A step went on through a freeze under an exemption (`kardinal override --freeze`), once per freeze, naming who made it |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 | `APIWrite` | A write through the UI API or the Bundle API (promote, roll back, create a version, approve, override, pause, resume, reject, release a hold), refused ones included (outcome `Failure`), naming the caller and the route ([API writes](#api-writes)) |
+
+Each record of a person's or an agent's action names its verified actor in `spec.actor`
+([Agents and the verified actor](../actors.md)): the stamp the change carried (a hold's,
+`spec.lastChange`, a rejection's, a freeze's), which the chart's actor admission policies check.
+A change made without kardinal, such as `kubectl patch` of `spec.paused` or `kubectl delete` of a
+freeze, is still recorded, with no actor and a message that says so: the Kubernetes audit log
+names who made it. A `spec.lastChange` names only the change it was written with: the Pipeline
+reconciler records the one it used (`status.observedLastChange`), so a later kubectl change is
+not attributed to it. A stamp that names someone other than the user the record names is never
+recorded.
+
+Admission checks a stamp in two parts. That it names the requester (its `principal`), carries no
+`via` (only the controller sets it) and has a kind that fits (`bot` or `agent` for a
+ServiceAccount, `human` or `agent` for anyone else) is checked always, by the hold-writes,
+bundle-rejection and freezes policies. That an agent's stamp names its registered agent and
+sponsor needs the AgentIndex: for these records it is checked by `<release>-actor-records`, which
+admits while the index is missing (a fresh install, until the controller builds it, so Pipeline
+writes never wait for it). In that window an agent's record can name another agent or sponsor,
+or claim `human` or `bot`; nothing else about it goes unchecked.
 
 The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
 them: a failed health check records `PromotionFailed` (or `RollbackStarted` with

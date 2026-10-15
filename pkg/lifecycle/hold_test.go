@@ -167,7 +167,7 @@ func TestReleaseHold(t *testing.T) {
 		{Environment: "prod", Bundle: "app-rollback-bbbbbb", Reason: "b", CreatedBy: "bob"},
 	}
 	c := newClient(t, p)
-	h, err := lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod")
+	h, err := lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "app-rollback-bbbbbb", h.Bundle)
 	assert.Equal(t, "bob", h.CreatedBy)
@@ -175,9 +175,9 @@ func TestReleaseHold(t *testing.T) {
 	require.Len(t, got.Spec.Holds, 1)
 	assert.Equal(t, "uat", got.Spec.Holds[0].Environment)
 
-	_, err = lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod")
+	_, err = lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod", nil)
 	require.ErrorIs(t, err, lifecycle.ErrNotFound)
-	_, err = lifecycle.ReleaseHold(context.Background(), c, ns, "nope", "prod")
+	_, err = lifecycle.ReleaseHold(context.Background(), c, ns, "nope", "prod", nil)
 	require.ErrorIs(t, err, lifecycle.ErrNotFound)
 }
 

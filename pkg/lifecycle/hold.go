@@ -341,7 +341,7 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 	}
 	at := metav1.NewTime(now.UTC())
 	hold := v1alpha1.EnvironmentHold{Environment: req.Environment, Bundle: plan.Bundle.Name,
-		Reason: req.HoldReason, CreatedBy: req.Actor, CreatedAt: &at, Artifacts: ArtifactDigest(plan.Bundle.Spec)}
+		Reason: req.HoldReason, CreatedBy: req.Actor, Actor: req.Stamp, CreatedAt: &at, Artifacts: ArtifactDigest(plan.Bundle.Spec)}
 	if req.ExpiresIn > 0 {
 		exp := metav1.NewTime(now.UTC().Add(req.ExpiresIn))
 		hold.ExpiresAt = &exp
@@ -354,7 +354,9 @@ func RollbackAndHold(ctx context.Context, c client.Client, req HoldRequest) (*Ro
 		return nil, nil, err
 	}
 	if err := CreateBundleAs(ctx, c, plan.Bundle, req.Creator); err != nil {
-		if _, relErr := ReleaseHold(ctx, writer, req.Namespace, req.Pipeline, req.Environment); relErr != nil {
+		undo := &v1alpha1.PipelineChange{By: req.Actor, Actor: req.Stamp,
+			Reason: "the rollback Bundle could not be created"}
+		if _, relErr := ReleaseHold(ctx, writer, req.Namespace, req.Pipeline, req.Environment, undo); relErr != nil {
 			return nil, nil, fmt.Errorf("create rollback bundle: %w (and removing the hold failed: %v)", err, relErr)
 		}
 		return nil, nil, fmt.Errorf("create rollback bundle: %w", err)
@@ -397,8 +399,10 @@ func heldConflict(pipeline string, h *v1alpha1.EnvironmentHold) error {
 }
 
 // ReleaseHold removes the hold of env from the Pipeline and returns it. A
-// Pipeline whose environment is not held is ErrNotFound.
-func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string) (*v1alpha1.EnvironmentHold, error) {
+// Pipeline whose environment is not held is ErrNotFound. who, when set, is
+// recorded as spec.lastChange in the same update (ReleaseHold of env), so
+// the HoldReleased AuditEvent names who released it.
+func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string, who *v1alpha1.PipelineChange) (*v1alpha1.EnvironmentHold, error) {
 	var released *v1alpha1.EnvironmentHold
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var p v1alpha1.Pipeline
@@ -425,6 +429,7 @@ func ReleaseHold(ctx context.Context, c client.Client, ns, pipeline, env string)
 			}
 		}
 		p.Spec.Holds = kept
+		recordChange(&p, who, v1alpha1.PipelineChangeReleaseHold, env)
 		return c.Update(ctx, &p)
 	})
 	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrConflict) {
@@ -442,6 +447,8 @@ type HoldCurrentRequest struct {
 	Reason string
 	// Actor is the hold's createdBy: the requesting Kubernetes user.
 	Actor string
+	// Stamp is Actor's actor stamp; nil records none.
+	Stamp *v1alpha1.Actor
 	// ExpiresIn, when positive, ends the hold that long after it is made.
 	ExpiresIn time.Duration
 	Now       time.Time
@@ -507,7 +514,7 @@ func HoldCurrent(ctx context.Context, c client.Client, req HoldCurrentRequest) (
 	}
 	at := metav1.NewTime(now.UTC())
 	h := v1alpha1.EnvironmentHold{Environment: req.Environment, Bundle: deployed, Reason: req.Reason,
-		CreatedBy: req.Actor, CreatedAt: &at, Artifacts: ArtifactDigest(b.Spec)}
+		CreatedBy: req.Actor, Actor: req.Stamp, CreatedAt: &at, Artifacts: ArtifactDigest(b.Spec)}
 	if req.ExpiresIn > 0 {
 		exp := metav1.NewTime(now.UTC().Add(req.ExpiresIn))
 		h.ExpiresAt = &exp

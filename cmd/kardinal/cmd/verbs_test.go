@@ -343,7 +343,7 @@ func TestHoldAndWhy(t *testing.T) {
 	assert.Empty(t, newBundles(t, c, "app-v1"), "nothing is rolled back")
 
 	buf.Reset()
-	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod"))
+	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod", ""))
 
 	globalOutput = "json"
 	t.Cleanup(func() { globalOutput = "" })

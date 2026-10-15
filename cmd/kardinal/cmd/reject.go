@@ -17,6 +17,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 func newRejectCmd() *cobra.Command {
@@ -88,7 +89,11 @@ func rejectFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, name, 
 	}
 	patch := sigs_client.MergeFromWithOptions(b.DeepCopy(), sigs_client.MergeFromWithOptimisticLock{})
 	at := metav1.NewTime(now.UTC().Truncate(time.Second))
-	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: id.Username, At: &at}
+	stamp, err := stampOf(ctx, c, id, actor.Where{Namespace: ns, Pipeline: b.Spec.Pipeline})
+	if err != nil {
+		return fmt.Errorf("reject: %w", err)
+	}
+	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: id.Username, At: &at, Actor: stamp}
 	if err := c.Patch(ctx, &b, patch); err != nil {
 		if apierrors.IsConflict(err) {
 			return fmt.Errorf("reject: bundle %s changed while rejecting it; run the command again: %w", name, err)

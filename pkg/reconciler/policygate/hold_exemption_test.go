@@ -220,7 +220,7 @@ func TestPolicyGateReconciler_HoldExemption(t *testing.T) {
 			assert.Len(t, auditEvents(t, c), 1)
 
 			// Released: the gate blocks the rollback again, audited.
-			_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "prod")
+			_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "prod", nil)
 			require.NoError(t, err)
 			_, err = r.Reconcile(ctx, req)
 			require.NoError(t, err)

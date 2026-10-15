@@ -170,7 +170,7 @@ func TestHold_EnvironmentHeldOnAnotherBundle(t *testing.T) {
 			require.NoError(t, c.Get(ctx, key, &got))
 			assert.Equal(t, rv, got.ResourceVersion, "a held step is not rewritten")
 
-			_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "test")
+			_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "test", nil)
 			require.NoError(t, err)
 			_, err = r.Reconcile(ctx, req)
 			require.NoError(t, err)

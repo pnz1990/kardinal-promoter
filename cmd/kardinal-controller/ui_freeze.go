@@ -120,9 +120,10 @@ func (s *uiAPIServer) handleFreeze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := lifecycle.FreezeName(req.Actors, req.Namespace)
-	if _, ok := s.stampFor(w, r, actor.Where{Namespace: auditNamespace(req.Namespace)},
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: auditNamespace(req.Namespace)},
 		accesslog.AuditTarget{Route: "/api/v1/ui/freeze", Environment: "*",
-			Message: "freeze " + req.Actors + " (" + name + "): " + req.Reason}); !ok {
+			Message: "freeze " + req.Actors + " (" + name + "): " + req.Reason})
+	if !ok {
 		return
 	}
 	writer, err := s.actionClient(r.Context(), "changewindows", freezeAction, req.Namespace, name)
@@ -137,7 +138,7 @@ func (s *uiAPIServer) handleFreeze(w http.ResponseWriter, r *http.Request) {
 	}
 	cw, _, err := lifecycle.Freeze(r.Context(), writer, lifecycle.FreezeRequest{Actors: req.Actors, Namespace: req.Namespace,
 		Reason: req.Reason, For: time.Duration(req.Minutes) * time.Minute, CreatedBy: user.Username,
-		OnlyOwn: !anyFreeze, Now: time.Now()})
+		OnlyOwn: !anyFreeze, Stamp: stamp, Now: time.Now()})
 	if err != nil {
 		s.writeLifecycleError(w, "freeze", err)
 		return
@@ -190,8 +191,9 @@ func (s *uiAPIServer) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	if !s.inScope(w, ns) {
 		return
 	}
-	if _, ok := s.stampFor(w, r, actor.Where{Namespace: auditNamespace(ns)},
-		accesslog.AuditTarget{Route: "/api/v1/ui/unfreeze", Environment: "*", Message: "unfreeze " + req.Name}); !ok {
+	stamp, ok := s.stampFor(w, r, actor.Where{Namespace: auditNamespace(ns)},
+		accesslog.AuditTarget{Route: "/api/v1/ui/unfreeze", Environment: "*", Message: "unfreeze " + req.Name})
+	if !ok {
 		return
 	}
 	writer, err := s.actionClient(r.Context(), "changewindows", freezeAction, ns, req.Name)
@@ -208,7 +210,8 @@ func (s *uiAPIServer) handleUnfreeze(w http.ResponseWriter, r *http.Request) {
 	if !anyFreeze {
 		onlyBy = user.Username
 	}
-	if err := lifecycle.Unfreeze(r.Context(), writer, req.Name, onlyBy); err != nil {
+	if err := lifecycle.Unfreeze(r.Context(), writer, req.Name, onlyBy,
+		&v1alpha1.FreezeLift{By: user.Username, Actor: stamp}); err != nil {
 		s.writeLifecycleError(w, "unfreeze", err)
 		return
 	}

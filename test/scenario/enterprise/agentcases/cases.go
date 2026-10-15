@@ -332,7 +332,7 @@ func Run(t *testing.T, phase Phase) {
 		ns := strings.SplitN(key, "/", 2)[0]
 		if heldBySuspension(ns, b) {
 			_, err := lifecycle.Reject(scenario.AsUser(w.Ctx, "oncall@example.com"), w.Client, ns, b,
-				"its agent was suspended", "oncall@example.com", w.Now())
+				"its agent was suspended", "oncall@example.com", nil, w.Now())
 			require.NoError(t, err)
 		}
 	}

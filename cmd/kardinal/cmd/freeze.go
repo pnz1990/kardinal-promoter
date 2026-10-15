@@ -116,7 +116,7 @@ func freezeFn(w io.Writer, c sigs_client.Client, actors, namespace, reason strin
 		return fmt.Errorf("freeze: %w", err)
 	}
 	cw, created, err := lifecycle.Freeze(ctx, c, lifecycle.FreezeRequest{Actors: actors, Namespace: namespace,
-		Reason: reason, For: d, CreatedBy: id.Username, Now: now})
+		Reason: reason, For: d, CreatedBy: id.Username, Stamp: bestStamp(c, actor.Where{Namespace: namespace}), Now: now})
 	if err != nil {
 		return fmt.Errorf("freeze: %w", err)
 	}
@@ -209,7 +209,11 @@ freeze is never deleted.`,
 
 // unfreezeFn is the testable implementation of unfreeze.
 func unfreezeFn(w io.Writer, c sigs_client.Client, name string) error {
-	if err := lifecycle.Unfreeze(context.Background(), c, name, ""); err != nil {
+	var lift *v1alpha1.FreezeLift
+	if id, err := identityOf(context.Background(), c); err == nil {
+		lift = &v1alpha1.FreezeLift{By: id.Username, Actor: bestStamp(c, actor.Where{})}
+	}
+	if err := lifecycle.Unfreeze(context.Background(), c, name, "", lift); err != nil {
 		return fmt.Errorf("unfreeze: %w", err)
 	}
 	if _, err := fmt.Fprintf(w, "Freeze %s lifted. Held steps go on within a minute.\n", name); err != nil {

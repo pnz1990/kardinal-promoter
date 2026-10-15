@@ -59,6 +59,10 @@ type Reconciler struct {
 	// reconciler first saw it (--freeze-exemption-max-minutes). Zero is
 	// DefaultMaxExemption.
 	MaxExemption time.Duration
+	// AuditNamespace is where the AuditEvents of a freeze of several or
+	// every namespace go (the controller's namespace); a freeze of one
+	// namespace is audited there.
+	AuditNamespace string
 }
 
 // Reconcile evaluates one ChangeWindow and writes its status when it changed.
@@ -80,6 +84,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get changewindow: %w", err)
+	}
+	// A freeze's lift is audited, with who (#1939), before its finalizer
+	// lets the window go; the audit never holds the window past a grace.
+	if !cw.DeletionTimestamp.IsZero() {
+		return r.finishFreezeAudit(ctx, &cw)
 	}
 
 	now := r.now()
@@ -134,10 +143,17 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			res.Err.Error()+"; the window is active (blocking) until the spec is fixed")
 	}
 
+	// A freeze's start is audited after its status is written: an audit
+	// write that fails never keeps a freeze from taking effect (#1939).
+	auditRetry := r.startFreezeAudit(ctx, &cw)
+
 	if next.IsZero() {
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: auditRetry}, nil
 	}
 	wait := next.Sub(now) + boundarySlack
+	if auditRetry > 0 && auditRetry < wait {
+		wait = auditRetry
+	}
 	if wait > maxRequeue {
 		wait = maxRequeue
 	}

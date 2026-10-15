@@ -1079,6 +1079,10 @@ spec:
                           - VerdictRecorded
                           - VerdictRevoked
                           - FreezeExempted
+                          - PipelinePaused
+                          - PipelineResumed
+                          - FreezeStarted
+                          - FreezeLifted
                           type: string
                         actor:
                           description: |-

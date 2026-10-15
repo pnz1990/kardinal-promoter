@@ -228,6 +228,12 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/status"]
   verbs: ["get", "update", "patch"]
+# The freeze audit finalizer (kardinal.io/freeze-audit): a freeze is deleted
+# only once its FreezeLifted AuditEvent is written. The freezes admission
+# policy admits the controller's writes only to freezes.
+- apiGroups: ["kardinal.io"]
+  resources: ["changewindows"]
+  verbs: ["patch"]
 # The agent registry (docs/actors.md): AgentIdentities read and their Ready
 # condition written; the AgentIndex (named after the release) created and its
 # status written (pkg/reconciler/agentidentity).

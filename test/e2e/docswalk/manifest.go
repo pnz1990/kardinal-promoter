@@ -70,7 +70,8 @@ var Manifest = map[string][]Block{
 		{Match: "# List all PolicyGates"},
 	},
 	"pause.md": {
-		{Match: "kardinal pause my-app\n"},
+		{Match: "kardinal pause my-app --reason"},
+		{Match: "kubectl get auditevents -n <namespace>", Skip: "a lookup with the reader's own namespace"},
 		{Match: "kardinal pause my-app --env prod"},
 	},
 	"agentic/connect-an-agent.md": {

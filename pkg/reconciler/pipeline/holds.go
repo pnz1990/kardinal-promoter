@@ -181,7 +181,8 @@ func holdKey(h *kardinalv1alpha1.EnvironmentHold) string {
 //
 // It returns when to come back for the next expiry (0: none), and whether it
 // updated the spec (the caller then stops: the update is reconciled anew).
-func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline) (time.Duration, bool, error) {
+func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline,
+	fresh *kardinalv1alpha1.PipelineChange) (time.Duration, bool, error) {
 	now := r.now()
 	var kept []kardinalv1alpha1.EnvironmentHold
 	expired := false
@@ -222,7 +223,8 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		current[holdKey(h)] = true
 		if !observed[holdKey(h)] {
 			entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldCreated, fmt.Sprintf(
-				"%s held %s on rollback %s: %s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h))))
+				"%s held %s on rollback %s: %s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h)),
+				stampOf(h.Actor, h.CreatedBy)))
 		}
 	}
 	for i := range p.Status.ObservedHolds {
@@ -230,12 +232,19 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		if current[holdKey(h)] {
 			continue
 		}
-		why := "released (spec.holds entry removed; the Kubernetes audit log, or the UI access log for a UI release, names who)"
+		why := "released (spec.holds entry removed without kardinal; the Kubernetes audit log names who)"
+		var stamp *kardinalv1alpha1.Actor
+		if by, reason, s := changeOf(fresh, kardinalv1alpha1.PipelineChangeReleaseHold, h.Environment); by != "" {
+			why, stamp = "released by "+by, s
+			if reason != "" {
+				why += ": " + reason
+			}
+		}
 		if h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time) {
-			why = "expired at " + h.ExpiresAt.UTC().Format(time.RFC3339) + ", removed by the controller"
+			why, stamp = "expired at "+h.ExpiresAt.UTC().Format(time.RFC3339)+", removed by the controller", nil
 		}
 		entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldReleased, fmt.Sprintf(
-			"hold of %s on rollback %s (held by %s: %s) %s", h.Environment, h.Bundle, orUnknown(h.CreatedBy), h.Reason, why)))
+			"hold of %s on rollback %s (held by %s: %s) %s", h.Environment, h.Bundle, orUnknown(h.CreatedBy), h.Reason, why), stamp))
 	}
 	chk := r.holdStates(ctx, p, now)
 	if chk.next > 0 && (next == 0 || chk.next < next) {
@@ -247,7 +256,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 	for _, h := range chk.reported {
 		entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldBundleMissing, fmt.Sprintf(
 			"rollback Bundle %s of the hold of %s (held by %s: %s) does not exist; the hold stays in effect until: %s",
-			h.Bundle, h.Environment, orUnknown(h.CreatedBy), h.Reason, releaseCommand(p, h))))
+			h.Bundle, h.Environment, orUnknown(h.CreatedBy), h.Reason, releaseCommand(p, h)), nil))
 	}
 	before := p.DeepCopy()
 	setHoldCondition(p, chk)
@@ -261,6 +270,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		// and store its record again.
 		patch := client.MergeFromWithOptions(p.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		p.Status.ObservedHolds = append([]kardinalv1alpha1.EnvironmentHold(nil), p.Spec.Holds...)
+		p.Status.ObservedLastChange = changeKey(p.Spec.LastChange)
 		p.Status.HoldStates = chk.states
 		setHoldCondition(p, chk)
 		for _, e := range entries {
@@ -327,7 +337,7 @@ const auditRetryDelay = 5 * time.Second
 // holdAuditEntry is the outbox entry of a hold change. Its name is fixed per
 // hold and action, so writing it again is a no-op.
 func (r *Reconciler) holdAuditEntry(p *kardinalv1alpha1.Pipeline, h *kardinalv1alpha1.EnvironmentHold,
-	action, msg string) kardinalv1alpha1.PendingAuditEvent {
+	action, msg string, stamp *kardinalv1alpha1.Actor) kardinalv1alpha1.PendingAuditEvent {
 	sum := sha256.Sum256([]byte(holdKey(h)))
 	suffix, outcome := "created", "Success"
 	switch action {
@@ -353,6 +363,7 @@ func (r *Reconciler) holdAuditEntry(p *kardinalv1alpha1.Pipeline, h *kardinalv1a
 			Action:       action,
 			Outcome:      outcome,
 			Message:      msg,
+			Actor:        stamp,
 		}, metav1.NewTime(r.now()))
 }
 

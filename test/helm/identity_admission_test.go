@@ -808,7 +808,7 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	// fleets (#1835) is bound the same way.
 	policies = append(policies, "kardinal-promoter-hold-writes", "kardinal-promoter-fleets")
 	// The actor policies (actor-admission.yaml) exempt the controller too.
-	policies = append(policies, "kardinal-promoter-actor", "kardinal-promoter-audit-actor")
+	policies = append(policies, "kardinal-promoter-actor", "kardinal-promoter-actor-records", "kardinal-promoter-audit-actor")
 	team := bindings("--set", "controller.namespaceShard=team-b")
 	// agent-identities matches a cluster-scoped kind: one binding, without a
 	// namespace selector, in every mode.

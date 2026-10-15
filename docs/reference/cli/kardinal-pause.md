@@ -30,7 +30,7 @@ kardinal pause <pipeline> [flags]
 ### Examples
 
 ```
-  kardinal pause my-app
+  kardinal pause my-app --reason "INC-4211: hold releases while we investigate"
   kardinal resume my-app
   kardinal pause my-app --env prod      # prod is a fleet: stop starting targets
   kardinal resume my-app --env prod
@@ -39,8 +39,9 @@ kardinal pause <pipeline> [flags]
 ### Options
 
 ```
-      --env string   pause only this fleet environment: no further target starts
-  -h, --help         help for pause
+      --env string      pause only this fleet environment: no further target starts
+  -h, --help            help for pause
+      --reason string   why, recorded with your name in the PipelinePaused AuditEvent
 ```
 
 ### Options inherited from parent commands

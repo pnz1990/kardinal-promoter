@@ -102,9 +102,9 @@ func TestHoldOf_Fleet(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(fleetPipeline()), &cp))
 	cp.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-a", Reason: "r"}}
 	require.NoError(t, c.Update(context.Background(), &cp))
-	_, err := lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod-us")
+	_, err := lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod-us", nil)
 	assert.ErrorContains(t, err, "held through its fleet prod; release the fleet with --env prod")
-	released, err := lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod")
+	released, err := lifecycle.ReleaseHold(context.Background(), c, ns, "app", "prod", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "app-rollback-a", released.Bundle)
 }

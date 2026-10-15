@@ -109,3 +109,21 @@ func stampOf(ctx context.Context, c sigs_client.Client, id Identity, w actor.Whe
 	a := assertedOf()
 	return actor.Stamp(r, &a), nil
 }
+
+// changeBy is the spec.lastChange record of a pause, resume or hold release
+// by this CLI's user: the username the API server authenticates, the actor
+// stamp and reason (the Pipeline reconciler names them in the change's
+// AuditEvent). Without an identity it warns and records none: the change is
+// still made, and audited with an unknown actor.
+func changeBy(ctx context.Context, c sigs_client.Client, reason string, w actor.Where) (*v1alpha1.PipelineChange, error) {
+	id, err := identityOf(ctx, c)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "warning: the change records no actor (%v); its AuditEvent names none\n", err)
+		return nil, nil
+	}
+	stamp, err := stampOf(ctx, c, id, w)
+	if err != nil {
+		return nil, err
+	}
+	return &v1alpha1.PipelineChange{By: id.Username, Reason: reason, Actor: stamp}, nil
+}

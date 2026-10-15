@@ -2609,7 +2609,7 @@ func TestBundleReconciler_HeldRollbackIsNotSuperseded(t *testing.T) {
 	require.NoError(t, c.Get(ctx, key, &got))
 	assert.NotEqual(t, "Superseded", got.Status.Phase, "the held rollback is never superseded")
 
-	_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "prod")
+	_, err = lifecycle.ReleaseHold(ctx, c, "default", "nginx-demo", "prod", nil)
 	require.NoError(t, err)
 	_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	require.NoError(t, err)

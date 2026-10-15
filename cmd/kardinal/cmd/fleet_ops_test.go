@@ -37,7 +37,7 @@ func lcFleetPipeline(n int) *v1alpha1.Pipeline {
 func TestFleetPauseCmd(t *testing.T) {
 	c := lcClient(t, lcFleetPipeline(3))
 	var buf bytes.Buffer
-	require.NoError(t, fleetPauseFn(&buf, c, "default", "app", "prod", true))
+	require.NoError(t, fleetPauseFn(&buf, c, "default", "app", "prod", true, ""))
 	assert.Equal(t, "Fleet prod of pipeline app paused. No further target starts; the targets in flight finish.\n"+
 		"Resume with: kardinal resume app --env prod\n", buf.String())
 	var p v1alpha1.Pipeline
@@ -45,14 +45,14 @@ func TestFleetPauseCmd(t *testing.T) {
 	assert.Equal(t, []string{"prod"}, p.Spec.PausedFleets)
 	assert.False(t, p.Spec.Paused)
 
-	err := fleetPauseFn(&buf, c, "default", "app", "prod-t01", true)
+	err := fleetPauseFn(&buf, c, "default", "app", "prod-t01", true, "")
 	require.ErrorIs(t, err, lifecycle.ErrInvalid)
 	assert.ErrorContains(t, err, "pause app --env prod-t01: prod-t01 is a target of fleet prod")
-	err = fleetPauseFn(&buf, c, "default", "app", "uat", true)
+	err = fleetPauseFn(&buf, c, "default", "app", "uat", true, "")
 	assert.ErrorContains(t, err, "pause the whole pipeline with kardinal pause app")
 
 	buf.Reset()
-	require.NoError(t, fleetPauseFn(&buf, c, "default", "app", "prod", false))
+	require.NoError(t, fleetPauseFn(&buf, c, "default", "app", "prod", false, ""))
 	assert.Contains(t, buf.String(), "Fleet prod of pipeline app resumed.")
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, &p))
 	assert.Empty(t, p.Spec.PausedFleets)

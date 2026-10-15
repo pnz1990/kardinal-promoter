@@ -339,7 +339,7 @@ func TestJourneyActorPolicy_FreezeAgentsNotHumans(t *testing.T) {
 	assert.Equal(t, "", w.step(areq).Status.State)
 	assert.Equal(t, psrec.StatePromoting, w.step(hreq).Status.State, "a person's version is not held")
 
-	require.NoError(t, lifecycle.Unfreeze(w.ctx, w.c, name, ""))
+	require.NoError(t, lifecycle.Unfreeze(w.ctx, w.c, name, "", nil))
 	_, err = ar.Reconcile(w.ctx, areq)
 	require.NoError(t, err)
 	assert.Equal(t, psrec.StatePromoting, w.step(areq).Status.State)

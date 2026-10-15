@@ -275,10 +275,10 @@ func TestRollbackCmd_Hold(t *testing.T) {
 	require.ErrorIs(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "again", "alice", 0), lifecycle.ErrConflict)
 
 	buf.Reset()
-	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod"))
+	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod", ""))
 	assert.Contains(t, buf.String(), "Released the hold of app on prod (held on 1 ("+created[0].Name+") by alice")
 	assert.Empty(t, getP(c).Spec.Holds)
-	require.ErrorIs(t, releaseHoldFn(&buf, c, "default", "app", "prod"), lifecycle.ErrNotFound)
+	require.ErrorIs(t, releaseHoldFn(&buf, c, "default", "app", "prod", ""), lifecycle.ErrNotFound)
 }
 
 // TestRollbackCmd_HoldFlags (#1528): --reason without --hold is refused
@@ -354,7 +354,7 @@ func TestMutations_JSON(t *testing.T) {
 	assert.Equal(t, []string{"app-v1", "app-v2", url}, []string{held.RollbackOf, held.Replaces, held.URL})
 
 	buf.Reset()
-	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod"))
+	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod", ""))
 	var released releasedHold
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &released), buf.String())
 	assert.Equal(t, releasedHold{Pipeline: "app", Namespace: "default", Environment: "prod", Bundle: held.Bundle,

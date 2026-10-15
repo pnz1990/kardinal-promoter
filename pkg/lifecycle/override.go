@@ -141,7 +141,11 @@ func AppendOverride(ctx context.Context, c client.Client, gate *v1alpha1.PolicyG
 // someone else wrote in between is reported, not overwritten. Errors wrap
 // ErrNotFound (no Bundle), ErrInvalid (no reason) and ErrConflict (already
 // rejected, or changed meanwhile).
-func Reject(ctx context.Context, c client.Client, ns, name, reason, by string, now time.Time) (*v1alpha1.Bundle, error) {
+//
+// stamp is by's actor stamp (nil records none): the BundleRejected
+// AuditEvent names it.
+func Reject(ctx context.Context, c client.Client, ns, name, reason, by string, stamp *v1alpha1.Actor,
+	now time.Time) (*v1alpha1.Bundle, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return nil, fmt.Errorf("reject: a reason is required: %w", ErrInvalid)
@@ -158,7 +162,7 @@ func Reject(ctx context.Context, c client.Client, ns, name, reason, by string, n
 	}
 	patch := client.MergeFromWithOptions(b.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	at := metav1.NewTime(now.UTC().Truncate(time.Second))
-	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: by, At: &at}
+	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: by, At: &at, Actor: stamp}
 	if err := c.Patch(ctx, &b, patch); err != nil {
 		if apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("reject: bundle %s changed while rejecting it; try again: %w", name, ErrConflict)
