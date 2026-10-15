@@ -39,6 +39,9 @@ var styledValues = []string{
 	"|\n  a\n# a comment after",
 	"|\n  a\n\n\n",
 	">2-\n   explicit\n   ",
+	"\"quoted over\n  # two lines, not a comment\"",
+	"'single over\n  #two lines, it''s text'",
+	"\"0\n#\"", // the second crasher: a quoted line that starts with #
 }
 
 // styledDocs are documents of styledValues: alone, before another key,

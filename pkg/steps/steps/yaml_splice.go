@@ -184,6 +184,41 @@ func (s *splicer) descend(key, o, e *yaml.Node, finish int) bool {
 	return false
 }
 
+// quotedEnd is the line (1-based) of the closing quote of the quoted
+// scalar n, or 0 when n is not quoted or the quote is not found.
+func (s *splicer) quotedEnd(n *yaml.Node) int {
+	if n == nil || n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) == 0 || n.Line < 1 || n.Line > len(s.lines) {
+		return 0
+	}
+	q := byte('"')
+	if n.Style&yaml.SingleQuotedStyle != 0 {
+		q = '\''
+	}
+	line, col := n.Line, n.Column // col is the opening quote (1-based)
+	text := s.lines[line-1]
+	if col-1 >= len(text) || text[col-1] != q {
+		return 0
+	}
+	i := col // the byte after the opening quote
+	for {
+		for ; i < len(text); i++ {
+			switch {
+			case q == '"' && text[i] == '\\':
+				i++ // an escape: the next byte is not the closing quote
+			case text[i] == q && q == '\'' && i+1 < len(text) && text[i+1] == '\'':
+				i++ // '' is a quote inside the scalar
+			case text[i] == q:
+				return line
+			}
+		}
+		line++
+		if line > len(s.lines) {
+			return 0
+		}
+		text, i = s.lines[line-1], 0
+	}
+}
+
 // blankFrom reports whether every line from line (1-based) to the end of
 // the file is blank: spaces and tabs only.
 func (s *splicer) blankFrom(line int) bool {
@@ -206,7 +241,9 @@ func (s *splicer) blankFrom(line int) bool {
 func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 	last := lastScalar(v)
 	if last == nil || last.Style&(yaml.LiteralStyle|yaml.FoldedStyle) == 0 {
-		return s.trim(start, end, true)
+		// A quoted scalar may span lines, and a line of it may start with
+		// "#" ("0: \"\n#\""): its text, not a comment (#1965).
+		return max(s.trim(start, end, true), min(s.quotedEnd(last), end))
 	}
 	for l := end; l > start; l-- {
 		line := s.lines[l-1]
