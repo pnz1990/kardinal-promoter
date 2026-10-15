@@ -779,26 +779,47 @@ func TestReleaseDryRun(t *testing.T) {
 	}
 	assert.Equal(t, 8, built, "the binaries, both images, the chart and the release body, as the release job builds them")
 
-	// Nothing a dispatch runs can reach a credential: no job that runs on a
-	// dispatch (preflight, test, the dry run), and not the workflow's env,
-	// names a secret or the job token, in a step's run, env or with, or the
-	// job's env (QA on #1935: a secret and a curl POST in a build step of both
-	// jobs kept the steps equal).
+	// Nothing a dispatch runs can reach a credential (QA on #1935). Only
+	// preflight, test and the dry run run on a dispatch; every other job
+	// runs on a tag push only. No job calls a reusable workflow or passes it
+	// secrets. And no ${{ }} of a dispatch job, or of the workflow env, names
+	// secrets or the job token in any form (secrets.X, secrets['X'],
+	// toJSON(secrets), github.token, github['token']).
 	var raw struct {
 		Env  map[string]any            `json:"env"`
 		Jobs map[string]map[string]any `json:"jobs"`
 	}
 	require.NoError(t, yaml.Unmarshal(data, &raw))
-	credential := regexp.MustCompile(`secrets\.|github\.token`)
-	env, err := yaml.Marshal(raw.Env)
-	require.NoError(t, err)
-	assert.NotRegexp(t, credential, string(env), "the workflow env")
-	for _, job := range []string{"preflight", "test", "dry-run"} {
-		j, ok := raw.Jobs[job]
-		require.True(t, ok, job)
-		out, err := yaml.Marshal(j)
+	expr := regexp.MustCompile(`\$\{\{(.*?)\}\}`)
+	credential := regexp.MustCompile(`secrets|github\s*(\.\s*token|\[)`)
+	exposes := func(v any) []string {
+		out, err := yaml.Marshal(v)
 		require.NoError(t, err)
-		assert.NotRegexp(t, credential, string(out), "job %s runs on a dispatch: it may use no secret and no job token", job)
+		var bad []string
+		for _, m := range expr.FindAllStringSubmatch(string(out), -1) {
+			if credential.MatchString(m[1]) {
+				bad = append(bad, m[0])
+			}
+		}
+		return bad
+	}
+	assert.Empty(t, exposes(raw.Env), "the workflow env")
+	onDispatch := map[string]bool{"preflight": true, "test": true, "dry-run": true}
+	for name, j := range raw.Jobs {
+		assert.NotContains(t, j, "uses", "job %s calls a reusable workflow", name)
+		assert.NotContains(t, j, "secrets", "job %s passes secrets", name)
+		cond, _ := j["if"].(string)
+		switch {
+		case name == "dry-run":
+			assert.Equal(t, "github.event_name == 'workflow_dispatch'", cond)
+		case onDispatch[name]:
+			assert.Empty(t, cond, "job %s runs on a tag and on a dispatch", name)
+		default:
+			assert.Equal(t, "github.event_name == 'push'", cond, "job %s is not on the dispatch allowlist: it must run on a tag push only", name)
+		}
+		if onDispatch[name] {
+			assert.Empty(t, exposes(j), "job %s runs on a dispatch: no secret and no job token", name)
+		}
 	}
 
 	for _, s := range releaseJobs(t)["preflight"].Steps {
