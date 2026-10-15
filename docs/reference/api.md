@@ -1209,7 +1209,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
 | `spec.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
 | `spec.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
-| `spec.stepType` | string | yes | StepType identifies the built-in step to execute. Examples: git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check. |
+| `spec.stepType` | string | yes | StepType names the built-in step that writes this promotion's change, as the environment's update strategy and layout select it: kustomize-set-image, yaml-update, helm-set-image, argocd-set-image or render. It is informational; no step is executed from it. |
 | `spec.upstreamStates` | []string |  | UpstreamStates holds the resolved state of all upstream PromotionSteps. Each entry is a string like "Verified", set by the kro Graph controller via CEL expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2 pattern (issue 625) -- a single list scales to any number of upstream environments. kro scans list items for CEL references, so each entry creates a DAG edge. |
 | `status` | object |  | PromotionStepStatus defines the observed state of a PromotionStep. |
 | `status.bakeElapsedMinutes` | integer (int64) |  | BakeElapsedMinutes is the number of contiguous healthy minutes accumulated so far in the current bake window. Resets to 0 on health failure when policy=reset-on-alarm. When this reaches env.bake.minutes, the step transitions to Verified. |
