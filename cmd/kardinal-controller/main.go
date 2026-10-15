@@ -67,6 +67,7 @@ import (
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+	receiptrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionreceipt"
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	prstatusrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	renderrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/renderrun"
@@ -564,6 +565,8 @@ func main() {
 			"link-local, cloud metadata, unspecified and multicast addresses, which stay refused whatever "+
 			"this lists. Chart value: egress.allowlist. Also readable from KARDINAL_EGRESS_ALLOWLIST.")
 
+	receiptOpts := bindReceiptFlags(flag.CommandLine)
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -947,6 +950,37 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 
+	// Promotion receipts (docs/receipts.md): the step reconciler records
+	// them, the receipt reconciler signs and stores them.
+	var receipts *psreconciler.ReceiptConfig
+	if receiptOpts.enabled {
+		receiptNS := os.Getenv("POD_NAMESPACE")
+		if receiptNS == "" {
+			receiptNS = "kardinal-system"
+		}
+		clusterID, err := receiptOpts.clusterIdentity(context.Background(), mgr.GetAPIReader())
+		if err != nil {
+			logger.Fatal().Err(err).Msg("receipts")
+		}
+		transport := receiptTransport()
+		signer, err := receiptOpts.signer(mgr.GetClient(), receiptNS, transport)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("receipts")
+		}
+		receipts = receiptOpts.receiptConfig(clusterID)
+		if err := (&receiptrecon.Reconciler{
+			Client:    mgr.GetClient(),
+			APIReader: mgr.GetAPIReader(),
+			Signer:    signer,
+			OCI:       receiptOpts.ociSink(receiptNS, transport),
+			SCM:       scmProvider,
+			Providers: providers,
+		}).SetupWithManager(mgr); err != nil {
+			logger.Fatal().Err(err).Msg("unable to set up PromotionReceiptReconciler")
+		}
+		logger.Info().Str("mode", receiptOpts.mode).Str("cluster", clusterID).Msg("promotion receipts enabled")
+	}
+
 	if err := (&psreconciler.Reconciler{
 		ControllerUser:      controllerUser,
 		Workers:             *workers["promotionstep"],
@@ -968,6 +1002,7 @@ func main() {
 		// tokens from the controller's GitHub API.
 		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
 		SCMWaitTimeout:  scmWaitTimeout,
+		Receipts:        receipts,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

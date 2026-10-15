@@ -87,7 +87,7 @@ names the new Bundle.
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO
@@ -125,6 +125,7 @@ names the new Bundle.
 * [kardinal unhold](kardinal-unhold.md)	 - Release an environment's hold (kardinal hold, or rollback --hold)
 * [kardinal validate](kardinal-validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal verify](kardinal-verify.md)	 - Record a verdict on the version running in an environment (verify gates)
+* [kardinal verify-receipt](kardinal-verify-receipt.md)	 - Verify a signed promotion receipt: its signature, subject, environment and levels
 * [kardinal version](kardinal-version.md)	 - Print the CLI, controller, and kro (Graph) versions
 * [kardinal why](kardinal-why.md)	 - Say why an environment waits, and what moves it on
 

@@ -248,6 +248,10 @@ type Reconciler struct {
 	// Providers builds the clients of ScmProviders and ClusterScmProviders
 	// (spec.scmProvider). Nil serves only the controller's SCM.
 	Providers *scm.Registry
+
+	// Receipts, when set, turns promotion receipts on: a decision snapshot
+	// when a step starts and a PromotionReceipt when it is Verified.
+	Receipts *ReceiptConfig
 }
 
 // now returns the current time from NowFn, or time.Now when it is nil.
@@ -268,8 +272,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // auditPending wakes the reconciler when a status patch stores audit
-// records in the outbox: a create that failed in the reconcile that stored
-// them is retried by the next one (#1552).
+// records or a receipt in the outbox: a create that failed in the reconcile
+// that stored them is retried by the next one (#1552).
 var auditPending = predicate.Funcs{
 	CreateFunc:  func(event.CreateEvent) bool { return false },
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },
@@ -277,7 +281,8 @@ var auditPending = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		o, okOld := e.ObjectOld.(*v1alpha1.PromotionStep)
 		n, okNew := e.ObjectNew.(*v1alpha1.PromotionStep)
-		return okOld && okNew && audit.Pending(o.Status.PendingAuditEvents, n.Status.PendingAuditEvents)
+		return okOld && okNew && (audit.Pending(o.Status.PendingAuditEvents, n.Status.PendingAuditEvents) ||
+			(o.Status.PendingReceipt == nil && n.Status.PendingReceipt != nil))
 	},
 }
 
@@ -302,6 +307,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// first (#1552). A failure does not block the promotion: the records
 	// stay in status and the reconcile is requeued to retry them.
 	auditErr := r.flushAudit(ctx, &ps)
+	// So does a receipt the Verified transition stored (receipt outbox).
+	if err := r.flushReceipt(ctx, &ps); err != nil {
+		auditErr = errors.Join(auditErr, err)
+	}
 
 	// A deleted step only closes its PR (FinalizerClosePR). Otherwise the
 	// finalizer follows the state before and after this reconcile: it is on
@@ -335,7 +344,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
 		return prFinalizerSyncFailed(log, err)
 	}
-	return retryAudit(res, auditErr, len(ps.Status.PendingAuditEvents)), nil
+	pending := len(ps.Status.PendingAuditEvents)
+	if ps.Status.PendingReceipt != nil {
+		pending++
+	}
+	return retryAudit(res, auditErr, pending), nil
 }
 
 // auditRetryDelay is how soon a reconcile whose audit outbox still holds
@@ -946,8 +959,10 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	// step starts. The PolicyGate reconciler re-evaluates a new step's gates
 	// at once (it watches PromotionStep creates), and its status write wakes
 	// this step (policyGateMapper). spec.when has no effect.
+	var gates []v1alpha1.PolicyGate
 	if len(ps.Spec.RequiredGates) > 0 {
-		msg, checkErr := r.checkRequiredGates(ctx, ps)
+		msg, read, checkErr := r.checkRequiredGates(ctx, ps)
+		gates = read
 		if checkErr != nil {
 			log.Warn().Err(checkErr).Msg("failed to check required gates — will retry")
 			return ctrl.Result{RequeueAfter: requeueGateWait}, nil
@@ -1002,6 +1017,11 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	// a restarted controller reads this field instead of recomputing the path,
 	// enabling crash-recovery without re-cloning.
 	ps.Status.WorkDir = r.workDir(ps)
+	// The decision snapshot: the gates the step starts on, in the same
+	// patch as Promoting (docs/receipts.md).
+	if r.Receipts != nil {
+		ps.Status.Decision = r.decision(ctx, ps, gates, pipeline, bundle)
+	}
 	if err := r.transition(ctx, base, ps, StatePromoting, fmt.Sprintf("initialized with %d steps", len(seq))); err != nil {
 		return ctrl.Result{}, fmt.Errorf("pending→promoting: %w", err)
 	}
@@ -2308,7 +2328,8 @@ func (r *Reconciler) heldOnRollback(ctx context.Context, ns string, h *v1alpha1.
 }
 
 // checkRequiredGates returns why a Pending step may not start yet, or "" when
-// every gate in ps.Spec.RequiredGates allows it. A gate holds the step when
+// every gate in ps.Spec.RequiredGates allows it, with the gates it read (the
+// decision snapshot records them, docs/receipts.md). A gate holds the step when
 // it is missing, not ready, or its result is older than the step: nil
 // status.lastEvaluatedAt, or lastEvaluatedAt before ps.CreationTimestamp.
 //
@@ -2321,29 +2342,31 @@ func (r *Reconciler) heldOnRollback(ctx context.Context, ns string, h *v1alpha1.
 // Graph-first: reads CRD fields only — no external calls. The step writes
 // only its own status.message. kro cannot hold a step that already exists
 // without pruning it (ledger G8, docs/design/16-graph-capability-ledger.md).
-func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.PromotionStep) (string, error) {
+func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.PromotionStep) (string, []v1alpha1.PolicyGate, error) {
+	gates := make([]v1alpha1.PolicyGate, 0, len(ps.Spec.RequiredGates))
 	for _, gateName := range ps.Spec.RequiredGates {
 		var gate v1alpha1.PolicyGate
 		if getErr := r.Get(ctx, types.NamespacedName{Name: gateName, Namespace: ps.Namespace}, &gate); getErr != nil {
 			if apierrors.IsNotFound(getErr) {
 				// Gate not (yet) created by the Graph, or deleted — not ready.
-				return fmt.Sprintf("waiting for gate %s", gateName), nil
+				return fmt.Sprintf("waiting for gate %s", gateName), nil, nil
 			}
-			return "", fmt.Errorf("get policy gate %s: %w", gateName, getErr)
+			return "", nil, fmt.Errorf("get policy gate %s: %w", gateName, getErr)
 		}
 		if !gate.Status.Ready {
 			// Name what the gate's author says it waits for, when its
 			// expression is what blocks (GATE-MESSAGE-01).
 			if msg := graph.BlockedMessage(&gate); msg != "" {
-				return fmt.Sprintf("waiting for gate %s: %s", gateName, msg), nil
+				return fmt.Sprintf("waiting for gate %s: %s", gateName, msg), nil, nil
 			}
-			return fmt.Sprintf("waiting for gate %s", gateName), nil
+			return fmt.Sprintf("waiting for gate %s", gateName), nil, nil
 		}
 		if gate.Status.LastEvaluatedAt == nil || gate.Status.LastEvaluatedAt.Before(&ps.CreationTimestamp) {
-			return fmt.Sprintf("waiting for gate %s to be re-evaluated", gateName), nil
+			return fmt.Sprintf("waiting for gate %s to be re-evaluated", gateName), nil, nil
 		}
+		gates = append(gates, gate)
 	}
-	return "", nil
+	return "", gates, nil
 }
 
 // healthCheckStart is when this promotion's health check started: the

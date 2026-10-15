@@ -1,0 +1,44 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+Promotion receipts (docs/receipts.md): only the controller creates, changes
+or deletes a PromotionReceipt, its status included. A receipt is evidence:
+anyone else's write could forge or remove it. The garbage collector and the
+namespace controller may delete receipts of a namespace being deleted.
+Shipped whether or not receipts.enabled is set, so no one can create a
+receipt the controller did not.
+*/}}
+{{- $fullname := include "kardinal-promoter.fullname" . }}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- $cleanup := list "system:serviceaccount:kube-system:generic-garbage-collector" "system:serviceaccount:kube-system:namespace-controller" "system:kube-controller-manager" }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $fullname }}-receipts
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["promotionreceipts", "promotionreceipts/status"]
+  variables:
+    # This release's controller and the other kardinal controllers listed in
+    # admission.controllerUsernames (exact usernames).
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    - name: cleanup
+      expression: request.userInfo.username in {{ $cleanup | toJson }}
+  validations:
+    - expression: variables.controller || (request.operation == 'DELETE' && variables.cleanup)
+      message: >-
+        only kardinal writes PromotionReceipts: a receipt is the signed record of a promotion,
+        and no one else may create, change or delete it (docs/receipts.md)
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "receipts") }}

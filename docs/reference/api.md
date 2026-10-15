@@ -27,6 +27,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [PRStatus](#prstatus) | `prstatuses.kardinal.io` | Namespaced | `prs` |
 | [Pipeline](#pipeline) | `pipelines.kardinal.io` | Namespaced | `pipe` |
 | [PolicyGate](#policygate) | `policygates.kardinal.io` | Namespaced | `pg` |
+| [PromotionReceipt](#promotionreceipt) | `promotionreceipts.kardinal.io` | Namespaced | `receipt`, `receipts` |
 | [PromotionStep](#promotionstep) | `promotionsteps.kardinal.io` | Namespaced | `ps` |
 | [RenderRun](#renderrun) | `renderruns.kardinal.io` | Namespaced |  |
 | [RollbackPolicy](#rollbackpolicy) | `rollbackpolicies.kardinal.io` | Namespaced | `rbp` |
@@ -1318,6 +1319,51 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.verdicts[].summary` | string |  | Summary is the verifier's summary. |
 | `status.verdicts[].verifier` | string | yes | Verifier names the writer (an actor sentence). |
 
+## PromotionReceipt
+
+`kardinal.io/v1alpha1`
+
+PromotionReceipt is the signed record of one promotion (docs/receipts.md). It has no owner: it outlives the Bundle, the Graph and the step.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object | yes | PromotionReceiptSpec is the record of one promotion that reached Verified. The PromotionStep reconciler creates it once, at the Verified transition; it never changes. |
+| `spec.pullRequest` | object |  | PullRequest is the promotion's PR, which the receipt reconciler comments on once the receipt is signed. Empty for a promotion without a PR (approval: auto). |
+| `spec.pullRequest.number` | integer | yes | Number is the PR number. |
+| `spec.pullRequest.repo` | string | yes | Repo is the repository, owner/name. |
+| `spec.pullRequest.scmProvider` | object |  | ScmProvider is the ScmProvider the PR was opened on; nil is the controller's own SCM. |
+| `spec.pullRequest.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `spec.pullRequest.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `spec.pullRequest.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
+| `spec.pullRequest.url` | string |  | URL is the PR's web address. |
+| `spec.statement` | string | yes | Statement is the in-toto statement (JSON): a SLSA verification summary (https://slsa.dev/verification_summary/v1) whose kardinalPromotion extension holds the record: the version, the actor, the gates as they were when the step started, the approvals, the checks and the change. |
+| `spec.statementDigest` | string | yes | StatementDigest is sha256:&lt;hex&gt; of Statement. A receipt whose statement does not match it is never signed (phase Failed). |
+| `status` | object |  | PromotionReceiptStatus is written by the receipt reconciler only. |
+| `status.attempts` | integer |  | Attempts counts the failed sign or store attempts since the last progress. |
+| `status.bundle` | string |  | Bundle is the Sigstore bundle (JSON, media type application/vnd.dev.sigstore.bundle.v0.3+json) of the signed statement: a DSSE envelope with the certificate or key hint, and the transparency log entry or timestamp when there is one. Set once. |
+| `status.conditions` | []object |  | Conditions are Signed and Stored, with reasons naming a failing sink. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
+| `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a failed sign or sink is tried again. |
+| `status.phase` | string |  | Phase is Pending, Signed, Stored or Failed. One of: `Pending`, `Signed`, `Stored`, `Failed`. |
+| `status.prComment` | boolean |  | PRComment is true once the receipt reconciler commented on the promotion's PR, so a retry does not comment twice. |
+| `status.signedBy` | object |  | SignedBy says who signed the receipt. |
+| `status.signedBy.identity` | string |  | Identity is the certificate's subject alternative name (keyless), or the key reference (kms) or the Secret (key). |
+| `status.signedBy.issuer` | string |  | Issuer is the OIDC issuer the certificate names (keyless). |
+| `status.signedBy.keyHint` | string |  | KeyHint is the base64 sha256 of the public key (key and kms). |
+| `status.signedBy.mode` | string | yes | Mode is keyless, key or kms. |
+| `status.stored` | []object |  | Stored lists the sinks holding the signed receipt. |
+| `status.stored[].at` | string (date-time) | yes | At is when the sink was written. |
+| `status.stored[].logIndex` | integer (int64) |  | LogIndex is the transparency log index, for sink rekor. |
+| `status.stored[].ref` | string |  | Ref is the OCI referrer (repository@sha256:...), for sink oci. |
+| `status.stored[].sink` | string | yes | Sink is crd, oci or rekor. |
+| `status.stored[].subject` | string |  | Subject is the image the OCI referrer refers to, for sink oci. |
+| `status.stored[].url` | string |  | URL is the transparency log, for sink rekor. |
+
 ## PromotionStep
 
 `kardinal.io/v1alpha1`
@@ -1398,6 +1444,56 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.consecutiveHealthFailures` | integer |  | ConsecutiveHealthFailures tracks the number of consecutive health-check failures for this step. Reset to 0 on a successful health check. Used by the auto-rollback policy in the pipeline environment spec. |
 | `status.contendedRetries` | integer |  | ContendedRetries is the number of consecutive retries of a git-push that lost to other writers of the base branch every time within one reconcile (the base branch kept moving). They have no limit, since contention is not a fault of the step, and do not use up the retries of retryCount; they only back off. Reset with retryCount. |
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery. |
+| `status.decision` | object |  | Decision is what the step started on: its required gates as it read them when it left Pending, and the policy versions. Written in the same patch as the move to Promoting when receipts are enabled, and cleared once the step's PromotionReceipt exists. |
+| `status.decision.gates` | []object |  | Gates are the required gates, in spec.requiredGates order. |
+| `status.decision.gates[].approvalRequired` | boolean |  | ApprovalRequired is true for a gate with spec.approval. |
+| `status.decision.gates[].approvals` | []object |  | Approvals are the gate's status.approvals. |
+| `status.decision.gates[].approvals[].actor` | object |  | Actor is who decided: the Approval's actor stamp (docs/actors.md). |
+| `status.decision.gates[].approvals[].actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `status.decision.gates[].approvals[].actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `status.decision.gates[].approvals[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `status.decision.gates[].approvals[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `status.decision.gates[].approvals[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `status.decision.gates[].approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.decision.gates[].approvals[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `status.decision.gates[].approvals[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `status.decision.gates[].approvals[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
+| `status.decision.gates[].approvals[].comment` | string |  | Comment is the approver's comment. |
+| `status.decision.gates[].approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
+| `status.decision.gates[].approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.decision.gates[].approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
+| `status.decision.gates[].approvals[].reason` | string |  | Reason says why a decision does not count. |
+| `status.decision.gates[].approvals[].user` | string | yes | User is the approver. |
+| `status.decision.gates[].evaluatedAt` | string (date-time) |  | EvaluatedAt is the gate's status.lastEvaluatedAt. |
+| `status.decision.gates[].expression` | string |  | Expression is the gate's CEL expression. |
+| `status.decision.gates[].message` | string |  | Message is the gate's message. |
+| `status.decision.gates[].name` | string | yes | Name is the gate instance. |
+| `status.decision.gates[].override` | object |  | Override is the override the gate passed by, when it did. |
+| `status.decision.gates[].override.actor` | object |  | Actor is its actor stamp. |
+| `status.decision.gates[].override.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `status.decision.gates[].override.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `status.decision.gates[].override.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `status.decision.gates[].override.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `status.decision.gates[].override.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `status.decision.gates[].override.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.decision.gates[].override.actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `status.decision.gates[].override.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `status.decision.gates[].override.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
+| `status.decision.gates[].override.createdBy` | string |  | CreatedBy is who created it. |
+| `status.decision.gates[].override.expiresAt` | string (date-time) |  | ExpiresAt is its expiresAt. |
+| `status.decision.gates[].override.reason` | string |  | Reason is its reason. |
+| `status.decision.gates[].override.verified` | boolean |  | Verified is true when the identity admission policy checked createdBy. |
+| `status.decision.gates[].ready` | boolean | yes | Ready is the gate's status.ready. |
+| `status.decision.gates[].reason` | string |  | Reason is the gate's status.reason. |
+| `status.decision.gates[].template` | string |  | Template is the gate template, namespace/name. |
+| `status.decision.gates[].templateDigest` | string |  | TemplateDigest is sha256:&lt;hex&gt; of the template's canonical spec. |
+| `status.decision.gates[].templateGeneration` | integer (int64) |  | TemplateGeneration is the template's metadata.generation. |
+| `status.decision.gates[].templateUID` | string |  | TemplateUID is the template's UID. |
+| `status.decision.omittedGates` | integer |  | OmittedGates counts the gates past MaxDecisionGates. |
+| `status.decision.pipelineGeneration` | integer (int64) |  | PipelineGeneration is the Pipeline's metadata.generation. |
+| `status.decision.pipelineSpecHash` | string |  | PipelineSpecHash is the Bundle's status.pipelineSpecHash. |
+| `status.decision.policyDigest` | string |  | PolicyDigest is sha256:&lt;hex&gt; of the canonical policy set: the Pipeline generation and spec hash, and each gate template's namespace, name, UID, generation and spec digest. |
+| `status.decision.takenAt` | string (date-time) | yes | TakenAt is when the step left Pending. |
 | `status.gitCredentialRetries` | integer |  | GitCredentialRetries is the number of consecutive retries of a git-clone or git-push that the remote refused while git had no credentials because spec.git.secretRef is not set, or names a Secret that does not exist or has no token key (condition GitCredentialMissing). These retries have no limit, so creating the Secret is enough for the step to continue, and they do not use up the retries of retryCount. Reset with retryCount, and when git has a token. |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for a healthy check: health.timeout after the health check began, moved to health.timeout after the moment a bake window stops. It does not apply while a bake window runs. A Graph CEL expression can observe this field to detect a stale health check. |
 | `status.hookRecords` | []object |  | HookRecords records each hook that ran for this step (HookRecord). |
@@ -1435,7 +1531,21 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].spec.request.method` | string | yes | Method is the HTTP method. |
 | `status.pendingAuditEvents[].spec.request.route` | string | yes | Route is the API route pattern, for example /api/v1/ui/pipelines/{name}/pause. |
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
+| `status.pendingReceipt` | object |  | PendingReceipt is the receipt outbox: the PromotionReceipt the step decided to create at Verified, stored in the same patch as the state, and removed once the receipt exists. |
+| `status.pendingReceipt.name` | string | yes | Name is the PromotionReceipt name. |
+| `status.pendingReceipt.spec` | object | yes | Spec is the PromotionReceipt spec. |
+| `status.pendingReceipt.spec.pullRequest` | object |  | PullRequest is the promotion's PR, which the receipt reconciler comments on once the receipt is signed. Empty for a promotion without a PR (approval: auto). |
+| `status.pendingReceipt.spec.pullRequest.number` | integer | yes | Number is the PR number. |
+| `status.pendingReceipt.spec.pullRequest.repo` | string | yes | Repo is the repository, owner/name. |
+| `status.pendingReceipt.spec.pullRequest.scmProvider` | object |  | ScmProvider is the ScmProvider the PR was opened on; nil is the controller's own SCM. |
+| `status.pendingReceipt.spec.pullRequest.scmProvider.kind` | string | yes | Kind is ScmProvider or ClusterScmProvider. One of: `ScmProvider`, `ClusterScmProvider`. |
+| `status.pendingReceipt.spec.pullRequest.scmProvider.name` | string | yes | Name is the provider's name; a ScmProvider is in the step's namespace. |
+| `status.pendingReceipt.spec.pullRequest.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
+| `status.pendingReceipt.spec.pullRequest.url` | string |  | URL is the PR's web address. |
+| `status.pendingReceipt.spec.statement` | string | yes | Statement is the in-toto statement (JSON): a SLSA verification summary (https://slsa.dev/verification_summary/v1) whose kardinalPromotion extension holds the record: the version, the actor, the gates as they were when the step started, the approvals, the checks and the change. |
+| `status.pendingReceipt.spec.statementDigest` | string | yes | StatementDigest is sha256:&lt;hex&gt; of Statement. A receipt whose statement does not match it is never signed (phase Failed). |
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
+| `status.receipt` | string |  | Receipt names the step's PromotionReceipt once it exists. |
 | `status.refreshMessage` | string |  | RefreshMessage says which objects the refresh was requested on, or why the request failed (the step then waits for the GitOps tool's own poll; a failed refresh never fails the step). |
 | `status.refreshRequestedAt` | string (date-time) |  | RefreshRequestedAt is when the step asked the GitOps tool its health check names (an Argo CD Application, or a Flux Kustomization and its GitRepository) to sync the promoted commit now (health.refresh). Set once, before the request is sent: a step asks at most once, also after a controller restart. For Flux it is the reconcile.fluxcd.io/requestedAt value sent. |
 | `status.refreshRevision` | string |  | RefreshRevision is the commit the refresh was requested for: the pushed commit or the PR merge commit, empty when the SCM did not report the merge commit. |

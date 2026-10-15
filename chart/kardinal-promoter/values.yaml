@@ -649,6 +649,63 @@ audit:
     # created in the last 10 minutes is kept even past it.
     maxPerPipeline: 1000
 
+# -- Signed promotion receipts (docs/receipts.md). Off by default: enabling
+# them creates a PromotionReceipt for every promotion that reaches Verified
+# afterwards, signed by the controller and, when configured, pushed as an
+# OCI referrer of each image and logged in Rekor. A receipt has no owner: it
+# outlives its Bundle. No promotion waits for a receipt.
+receipts:
+  # -- Create and sign receipts (--receipts).
+  enabled: false
+  # -- Identity of this cluster in each receipt's resourceUri
+  # (--receipt-cluster-id). Empty reads the kube-system Namespace UID; the
+  # chart then lets the controller get that one Namespace.
+  clusterID: ""
+  signing:
+    # -- keyless (Fulcio, with the controller's projected ServiceAccount
+    # token, audience sigstore), key (an ECDSA P-256 key in a Secret) or kms
+    # (a provider the controller image was built with).
+    mode: keyless
+    keyless:
+      # -- Fulcio URL. The public-good Fulcio accepts the OIDC issuers of
+      # EKS, GKE and AKS clusters; kind and on-prem clusters need a private
+      # Fulcio that trusts their issuer.
+      fulcioURL: https://fulcio.sigstore.dev
+      # -- Expiry of the projected token, seconds (at least 600).
+      tokenExpirationSeconds: 600
+    key:
+      # -- Secret in the release namespace holding the PEM private key
+      # (unencrypted PKCS #8 or SEC 1, ECDSA P-256). Anyone who can read it
+      # can sign receipts.
+      secretRef:
+        name: ""
+        key: cosign.key
+    # -- KMS key reference (mode kms), for example awskms:///alias/receipts.
+    kmsKey: ""
+    # -- RFC 3161 timestamp authority URL. Keyless signing needs a timestamp
+    # or a Rekor entry to prove the signing time.
+    tsaURL: ""
+  sinks:
+    oci:
+      # -- Push every receipt as an OCI referrer of each of its images.
+      enabled: false
+      # -- kubernetes.io/dockerconfigjson Secret in the release namespace
+      # with push credentials. Never a tenant's pull Secret.
+      secretRef:
+        name: ""
+      # -- Push every referrer to this repository instead of each image's own
+      # (as cosign's COSIGN_REPOSITORY), for images in a registry the
+      # controller may not write. verify-receipt --repository reads it.
+      repository: ""
+      # -- Push over plain HTTP (an in-cluster registry).
+      insecure: false
+    rekor:
+      # -- Rekor URL that logs every receipt signature; empty logs nothing.
+      url: ""
+      # -- Allow the public-good Rekor (rekor.sigstore.dev). It publishes each
+      # receipt's statement metadata: names, emails and pipeline names.
+      public: false
+
 # -- MetricCheck providers.
 metricCheck:
   cloudWatch:

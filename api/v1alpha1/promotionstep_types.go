@@ -506,6 +506,23 @@ type PromotionStepStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	PendingAuditEvents []PendingAuditEvent `json:"pendingAuditEvents,omitempty"`
+
+	// Decision is what the step started on: its required gates as it read
+	// them when it left Pending, and the policy versions. Written in the
+	// same patch as the move to Promoting when receipts are enabled, and
+	// cleared once the step's PromotionReceipt exists.
+	// +optional
+	Decision *PromotionDecision `json:"decision,omitempty"`
+
+	// PendingReceipt is the receipt outbox: the PromotionReceipt the step
+	// decided to create at Verified, stored in the same patch as the state,
+	// and removed once the receipt exists.
+	// +optional
+	PendingReceipt *PendingReceipt `json:"pendingReceipt,omitempty"`
+
+	// Receipt names the step's PromotionReceipt once it exists.
+	// +optional
+	Receipt string `json:"receipt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

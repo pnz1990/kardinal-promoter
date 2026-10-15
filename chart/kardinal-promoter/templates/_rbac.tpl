@@ -58,6 +58,18 @@ rules exist for. A new client call needs a row there and a rule here.
     - imageverifications
     - agentruns
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- if .Values.receipts.enabled }}
+# Promotion receipts (docs/receipts.md): the PromotionStep reconciler creates
+# each one at Verified, and the receipt reconciler writes its status. No
+# update or delete: a receipt's spec is immutable and it is never deleted by
+# the controller.
+- apiGroups: ["kardinal.io"]
+  resources: ["promotionreceipts"]
+  verbs: ["get", "list", "watch", "create"]
+- apiGroups: ["kardinal.io"]
+  resources: ["promotionreceipts/status"]
+  verbs: ["get", "update", "patch"]
+{{- end }}
 # ScmProviders: read (the translator, reconcilers and the webhook endpoint)
 # and their Ready condition written; the controller never creates them.
 - apiGroups: ["kardinal.io"]
@@ -317,6 +329,14 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["create"]
+{{- end }}
+{{- if and .Values.receipts.enabled (not .Values.receipts.clusterID) }}
+# Promotion receipts name the cluster by the kube-system Namespace UID
+# (receipts.clusterID empty), read once at start.
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
+  resourceNames: ["kube-system"]
 {{- end }}
 
 # The PolicyGate reconciler records an override's createdBy as verified only

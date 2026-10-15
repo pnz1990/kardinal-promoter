@@ -210,7 +210,7 @@ func TestLiveReport(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(root, "hack/e2e/live-report.sh"), "jobs.tsv")
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KIND=nightly (COUNT=1)",
-				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE=2026-11-10", "E2E_LIVE="+tc.e2eLive)
+				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE=2026-11-07", "E2E_LIVE="+tc.e2eLive)
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, string(out))
 			calls, err := os.ReadFile(filepath.Join(bin, "calls.log"))

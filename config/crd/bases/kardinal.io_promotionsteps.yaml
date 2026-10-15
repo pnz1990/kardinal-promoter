@@ -488,6 +488,291 @@ spec:
                   CurrentStepIndex is the index into the step sequence that the reconciler
                   is currently executing. Persisted to etcd for idempotent crash recovery.
                 type: integer
+              decision:
+                description: |-
+                  Decision is what the step started on: its required gates as it read
+                  them when it left Pending, and the policy versions. Written in the
+                  same patch as the move to Promoting when receipts are enabled, and
+                  cleared once the step's PromotionReceipt exists.
+                properties:
+                  gates:
+                    description: Gates are the required gates, in spec.requiredGates
+                      order.
+                    items:
+                      description: DecisionGate is one required gate as the step read
+                        it.
+                      properties:
+                        approvalRequired:
+                          description: ApprovalRequired is true for a gate with spec.approval.
+                          type: boolean
+                        approvals:
+                          description: Approvals are the gate's status.approvals.
+                          items:
+                            description: GateApprovalStatus records how the gate counted
+                              one approval.
+                            properties:
+                              actor:
+                                description: 'Actor is who decided: the Approval''s
+                                  actor stamp (docs/actors.md).'
+                                properties:
+                                  agent:
+                                    description: Agent is the AgentIdentity name,
+                                      when kind is agent.
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  asserted:
+                                    description: |-
+                                      Asserted holds what the client says about itself. It is recorded as
+                                      written and never used for a security decision.
+                                    properties:
+                                      client:
+                                        description: Client is the tool that wrote
+                                          the record (for example kardinal/0.12.0).
+                                        maxLength: 128
+                                        type: string
+                                      model:
+                                        description: Model is the AI model the client
+                                          says it runs.
+                                        maxLength: 128
+                                        type: string
+                                      session:
+                                        description: Session is the client's session
+                                          or run identifier.
+                                        maxLength: 128
+                                        type: string
+                                    type: object
+                                  kind:
+                                    description: Kind is human, agent, bot or controller
+                                      (docs/actors.md).
+                                    enum:
+                                    - human
+                                    - agent
+                                    - bot
+                                    - controller
+                                    maxLength: 16
+                                    type: string
+                                  principal:
+                                    description: Principal is the username the API
+                                      server authenticated.
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  sponsor:
+                                    description: |-
+                                      Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                                      the record was written, when kind is agent.
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  via:
+                                    description: |-
+                                      Via says how the controller came to write the record: ui and api for a
+                                      caller it authenticated, subscription and auto-rollback for its own
+                                      Bundles. Only the controller may set it.
+                                    enum:
+                                    - ui
+                                    - api
+                                    - subscription
+                                    - auto-rollback
+                                    maxLength: 16
+                                    type: string
+                                required:
+                                - kind
+                                - principal
+                                type: object
+                                x-kubernetes-validations:
+                                - message: actor.agent and actor.sponsor are set exactly
+                                    when actor.kind is agent
+                                  rule: 'self.kind == ''agent'' ? (has(self.agent)
+                                    && has(self.sponsor)) : (!has(self.agent) && !has(self.sponsor))'
+                                - message: a controller actor says why it acted (actor.via)
+                                  rule: self.kind != 'controller' || has(self.via)
+                              comment:
+                                description: Comment is the approver's comment.
+                                type: string
+                              counted:
+                                description: Counted reports whether the decision
+                                  counts for the gate.
+                                type: boolean
+                              decision:
+                                description: Decision is approve or reject.
+                                type: string
+                              firstSeenAt:
+                                description: FirstSeenAt is when the gate first saw
+                                  the decision.
+                                format: date-time
+                                type: string
+                              reason:
+                                description: Reason says why a decision does not count.
+                                type: string
+                              user:
+                                description: User is the approver.
+                                type: string
+                            required:
+                            - counted
+                            - decision
+                            - user
+                            type: object
+                          maxItems: 101
+                          type: array
+                        evaluatedAt:
+                          description: EvaluatedAt is the gate's status.lastEvaluatedAt.
+                          format: date-time
+                          type: string
+                        expression:
+                          description: Expression is the gate's CEL expression.
+                          type: string
+                        message:
+                          description: Message is the gate's message.
+                          type: string
+                        name:
+                          description: Name is the gate instance.
+                          type: string
+                        override:
+                          description: Override is the override the gate passed by,
+                            when it did.
+                          properties:
+                            actor:
+                              description: Actor is its actor stamp.
+                              properties:
+                                agent:
+                                  description: Agent is the AgentIdentity name, when
+                                    kind is agent.
+                                  maxLength: 253
+                                  minLength: 1
+                                  type: string
+                                asserted:
+                                  description: |-
+                                    Asserted holds what the client says about itself. It is recorded as
+                                    written and never used for a security decision.
+                                  properties:
+                                    client:
+                                      description: Client is the tool that wrote the
+                                        record (for example kardinal/0.12.0).
+                                      maxLength: 128
+                                      type: string
+                                    model:
+                                      description: Model is the AI model the client
+                                        says it runs.
+                                      maxLength: 128
+                                      type: string
+                                    session:
+                                      description: Session is the client's session
+                                        or run identifier.
+                                      maxLength: 128
+                                      type: string
+                                  type: object
+                                kind:
+                                  description: Kind is human, agent, bot or controller
+                                    (docs/actors.md).
+                                  enum:
+                                  - human
+                                  - agent
+                                  - bot
+                                  - controller
+                                  maxLength: 16
+                                  type: string
+                                principal:
+                                  description: Principal is the username the API server
+                                    authenticated.
+                                  maxLength: 253
+                                  minLength: 1
+                                  type: string
+                                sponsor:
+                                  description: |-
+                                    Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                                    the record was written, when kind is agent.
+                                  maxLength: 253
+                                  minLength: 1
+                                  type: string
+                                via:
+                                  description: |-
+                                    Via says how the controller came to write the record: ui and api for a
+                                    caller it authenticated, subscription and auto-rollback for its own
+                                    Bundles. Only the controller may set it.
+                                  enum:
+                                  - ui
+                                  - api
+                                  - subscription
+                                  - auto-rollback
+                                  maxLength: 16
+                                  type: string
+                              required:
+                              - kind
+                              - principal
+                              type: object
+                              x-kubernetes-validations:
+                              - message: actor.agent and actor.sponsor are set exactly
+                                  when actor.kind is agent
+                                rule: 'self.kind == ''agent'' ? (has(self.agent) &&
+                                  has(self.sponsor)) : (!has(self.agent) && !has(self.sponsor))'
+                              - message: a controller actor says why it acted (actor.via)
+                                rule: self.kind != 'controller' || has(self.via)
+                            createdBy:
+                              description: CreatedBy is who created it.
+                              type: string
+                            expiresAt:
+                              description: ExpiresAt is its expiresAt.
+                              format: date-time
+                              type: string
+                            reason:
+                              description: Reason is its reason.
+                              type: string
+                            verified:
+                              description: Verified is true when the identity admission
+                                policy checked createdBy.
+                              type: boolean
+                          type: object
+                        ready:
+                          description: Ready is the gate's status.ready.
+                          type: boolean
+                        reason:
+                          description: Reason is the gate's status.reason.
+                          type: string
+                        template:
+                          description: Template is the gate template, namespace/name.
+                          type: string
+                        templateDigest:
+                          description: TemplateDigest is sha256:<hex> of the template's
+                            canonical spec.
+                          type: string
+                        templateGeneration:
+                          description: TemplateGeneration is the template's metadata.generation.
+                          format: int64
+                          type: integer
+                        templateUID:
+                          description: TemplateUID is the template's UID.
+                          type: string
+                      required:
+                      - name
+                      - ready
+                      type: object
+                    maxItems: 64
+                    type: array
+                  omittedGates:
+                    description: OmittedGates counts the gates past MaxDecisionGates.
+                    type: integer
+                  pipelineGeneration:
+                    description: PipelineGeneration is the Pipeline's metadata.generation.
+                    format: int64
+                    type: integer
+                  pipelineSpecHash:
+                    description: PipelineSpecHash is the Bundle's status.pipelineSpecHash.
+                    type: string
+                  policyDigest:
+                    description: |-
+                      PolicyDigest is sha256:<hex> of the canonical policy set: the
+                      Pipeline generation and spec hash, and each gate template's namespace,
+                      name, UID, generation and spec digest.
+                    type: string
+                  takenAt:
+                    description: TakenAt is when the step left Pending.
+                    format: date-time
+                    type: string
+                required:
+                - takenAt
+                type: object
               gitCredentialRetries:
                 description: |-
                   GitCredentialRetries is the number of consecutive retries of a git-clone
@@ -804,10 +1089,93 @@ spec:
                   type: object
                 maxItems: 32
                 type: array
+              pendingReceipt:
+                description: |-
+                  PendingReceipt is the receipt outbox: the PromotionReceipt the step
+                  decided to create at Verified, stored in the same patch as the state,
+                  and removed once the receipt exists.
+                properties:
+                  name:
+                    description: Name is the PromotionReceipt name.
+                    type: string
+                  spec:
+                    description: Spec is the PromotionReceipt spec.
+                    properties:
+                      pullRequest:
+                        description: |-
+                          PullRequest is the promotion's PR, which the receipt reconciler
+                          comments on once the receipt is signed. Empty for a promotion without
+                          a PR (approval: auto).
+                        properties:
+                          number:
+                            description: Number is the PR number.
+                            minimum: 1
+                            type: integer
+                          repo:
+                            description: Repo is the repository, owner/name.
+                            minLength: 1
+                            type: string
+                          scmProvider:
+                            description: |-
+                              ScmProvider is the ScmProvider the PR was opened on; nil is the
+                              controller's own SCM.
+                            properties:
+                              kind:
+                                description: Kind is ScmProvider or ClusterScmProvider.
+                                enum:
+                                - ScmProvider
+                                - ClusterScmProvider
+                                type: string
+                              name:
+                                description: Name is the provider's name; a ScmProvider
+                                  is in the step's namespace.
+                                type: string
+                              uid:
+                                description: UID is the provider's metadata.uid when
+                                  the Graph was built.
+                                type: string
+                            required:
+                            - kind
+                            - name
+                            - uid
+                            type: object
+                          url:
+                            description: URL is the PR's web address.
+                            type: string
+                        required:
+                        - number
+                        - repo
+                        type: object
+                      statement:
+                        description: |-
+                          Statement is the in-toto statement (JSON): a SLSA verification summary
+                          (https://slsa.dev/verification_summary/v1) whose kardinalPromotion
+                          extension holds the record: the version, the actor, the gates as they
+                          were when the step started, the approvals, the checks and the change.
+                        maxLength: 262144
+                        minLength: 2
+                        type: string
+                      statementDigest:
+                        description: |-
+                          StatementDigest is sha256:<hex> of Statement. A receipt whose
+                          statement does not match it is never signed (phase Failed).
+                        pattern: ^sha256:[a-f0-9]{64}$
+                        type: string
+                    required:
+                    - statement
+                    - statementDigest
+                    type: object
+                required:
+                - name
+                - spec
+                type: object
               prURL:
                 description: |-
                   PRURL is the GitHub pull request URL opened for this promotion.
                   Set when the step enters WaitingForMerge state.
+                type: string
+              receipt:
+                description: Receipt names the step's PromotionReceipt once it exists.
                 type: string
               refreshMessage:
                 description: |-

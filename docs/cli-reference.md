@@ -56,6 +56,7 @@
 | [`kardinal validate`](reference/cli/kardinal-validate.md) | Validate Pipeline and PolicyGate YAML before applying to the cluster |
 | [`kardinal verify`](reference/cli/kardinal-verify.md) | Record a verdict on the version running in an environment (verify gates) |
 | [`kardinal verify list`](reference/cli/kardinal-verify-list.md) | List the verdicts on a version, and how its verify gates count them |
+| [`kardinal verify-receipt`](reference/cli/kardinal-verify-receipt.md) | Verify a signed promotion receipt: its signature, subject, environment and levels |
 | [`kardinal version`](reference/cli/kardinal-version.md) | Print the CLI, controller, and kro (Graph) versions |
 | [`kardinal why`](reference/cli/kardinal-why.md) | Say why an environment waits, and what moves it on |
 

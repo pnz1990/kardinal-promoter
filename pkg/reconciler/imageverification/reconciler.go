@@ -694,8 +694,12 @@ func (r *Reconciler) registryOptions(ctx context.Context, iv *v1alpha1.ImageVeri
 	return opts, nil
 }
 
-// dockerConfigKeychain is a keychain from a .dockerconfigjson. Its errors
-// never quote the content.
+// DockerConfigKeychain is a keychain from a .dockerconfigjson (the
+// receipt reconciler's OCI sink uses it too). Its errors never quote the
+// content.
+func DockerConfigKeychain(raw []byte) (authn.Keychain, error) { return dockerConfigKeychain(raw) }
+
+// dockerConfigKeychain is DockerConfigKeychain.
 func dockerConfigKeychain(raw []byte) (authn.Keychain, error) {
 	var cfg struct {
 		Auths map[string]struct {

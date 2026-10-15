@@ -143,6 +143,12 @@ case "$SUITE" in
   # check cannot find is missing from the hub, not from its API.
   multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh podinfo.sh spoke.sh)
     RUN='^TestMultiCluster_' ;;
+  # Signed promotion receipts (docs/receipts.md) with a static key, so no
+  # external Fulcio: components/kardinal.sh generates the key and points the
+  # OCI sink at the suite's registry (components/registry.sh). A suite of its
+  # own: receipts comment on every PR, which other suites count.
+  receipts) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh) RUN='^TestReceipts_'
+    export KARDINAL_E2E_RECEIPTS=1 ;;
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
     HELM_ARGS='--set controller.namespaceShard=default' ;;

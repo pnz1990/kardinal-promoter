@@ -73,6 +73,7 @@ func (r *Reconciler) transitionClosing(ctx context.Context, base, ps *v1alpha1.P
 	// delays them: the status patch that stored them wakes the reconciler
 	// (auditPending), and the next reconcile writes them first.
 	_ = r.flushAudit(ctx, ps)
+	_ = r.flushReceipt(ctx, ps)
 	r.recordTransition(ps, state, message)
 	return true, nil
 }
@@ -128,6 +129,17 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 		for _, e := range entries {
 			ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, e)
+		}
+		// The receipt is decided here, after the step statuses are closed,
+		// and stored in the same patch as Verified (the receipt outbox):
+		// the state cannot change without it. A receipt that cannot be
+		// built retries the transition.
+		if state == StateVerified && r.Receipts != nil && ps.Status.PendingReceipt == nil && ps.Status.Receipt == "" {
+			pending, err := r.pendingReceipt(ctx, ps)
+			if err != nil {
+				return false, err
+			}
+			ps.Status.PendingReceipt = pending
 		}
 	}
 	// Locked on the resourceVersion base was read at: a reconcile that read

@@ -735,6 +735,66 @@
         }
       }
     },
+    "receipts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "description": "--receipts: create and sign a PromotionReceipt for every promotion that reaches Verified."},
+        "clusterID": {"type": "string", "description": "--receipt-cluster-id; empty reads the kube-system Namespace UID."},
+        "signing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {"type": "string", "enum": ["keyless", "key", "kms"]},
+            "keyless": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "fulcioURL": {"type": "string", "pattern": "^https?://.+$"},
+                "tokenExpirationSeconds": {"type": "integer", "minimum": 600}
+              }
+            },
+            "key": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "secretRef": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {"name": {"type": "string"}, "key": {"type": "string", "minLength": 1}}
+                }
+              }
+            },
+            "kmsKey": {"type": "string"},
+            "tsaURL": {"type": "string", "pattern": "^(https?://.+)?$"}
+          }
+        },
+        "sinks": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "oci": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "secretRef": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string"}}},
+                "repository": {"type": "string"},
+                "insecure": {"type": "boolean"}
+              }
+            },
+            "rekor": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "url": {"type": "string", "pattern": "^(https?://.+)?$"},
+                "public": {"type": "boolean", "description": "Allow the public-good Rekor, which publishes each receipt's names, emails and pipeline names."}
+              }
+            }
+          }
+        }
+      }
+    },
     "scheduleClock": {
       "type": "object",
       "additionalProperties": false,

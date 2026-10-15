@@ -1,0 +1,278 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package promotionstep
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+)
+
+// ReceiptConfig turns promotion receipts on (docs/receipts.md): the step
+// takes a decision snapshot when it starts, and creates its
+// PromotionReceipt when it reaches Verified. The PromotionReceipt
+// reconciler signs and stores it; this reconciler makes no network call
+// for receipts.
+type ReceiptConfig struct {
+	// ClusterID identifies the cluster in the receipt's resourceUri: the
+	// kube-system Namespace UID.
+	ClusterID string
+	// ControllerVersion and ChartVersion are recorded in the receipt.
+	ControllerVersion string
+	ChartVersion      string
+}
+
+// Labels of a PromotionReceipt (the step's own).
+var receiptLabels = []string{"kardinal.io/pipeline", "kardinal.io/bundle", "kardinal.io/environment"}
+
+// gateOverridden is the start of a gate's status.reason while an override
+// is in effect (policygate overrides.go).
+const gateOverridden = "OVERRIDDEN by "
+
+// decision is the snapshot of gates, the required gates checkRequiredGates
+// just read, for a step leaving Pending. It reads each gate's template from
+// the cache; a template it cannot read is recorded without its versions.
+func (r *Reconciler) decision(ctx context.Context, ps *v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate,
+	pipeline *v1alpha1.Pipeline, bundle *v1alpha1.Bundle) *v1alpha1.PromotionDecision {
+	d := &v1alpha1.PromotionDecision{TakenAt: metav1.NewTime(r.now().UTC())}
+	if pipeline != nil {
+		d.PipelineGeneration = pipeline.Generation
+	}
+	if bundle != nil {
+		d.PipelineSpecHash = bundle.Status.PipelineSpecHash
+	}
+	for i := range gates {
+		if len(d.Gates) == v1alpha1.MaxDecisionGates {
+			d.OmittedGates = len(gates) - i
+			break
+		}
+		d.Gates = append(d.Gates, r.decisionGate(ctx, ps, &gates[i]))
+	}
+	d.PolicyDigest = receipt.PolicyDigest(d.PipelineGeneration, d.PipelineSpecHash, d.Gates)
+	return d
+}
+
+func (r *Reconciler) decisionGate(ctx context.Context, ps *v1alpha1.PromotionStep, g *v1alpha1.PolicyGate) v1alpha1.DecisionGate {
+	out := v1alpha1.DecisionGate{
+		Name: g.Name, Expression: g.Spec.Expression, Message: g.Spec.Message,
+		Ready: g.Status.Ready, Reason: g.Status.Reason, EvaluatedAt: g.Status.LastEvaluatedAt,
+		ApprovalRequired: g.Spec.Approval != nil, Approvals: g.Status.Approvals,
+	}
+	if len(out.Approvals) > 101 {
+		out.Approvals = out.Approvals[:101]
+	}
+	if strings.HasPrefix(g.Status.Reason, gateOverridden) {
+		out.Override = activeOverride(g, ps.Spec.Environment)
+	}
+	name, ns := g.Labels["kardinal.io/gate-template"], g.Labels[graph.LabelGateTemplateNamespace]
+	if name == "" {
+		return out
+	}
+	if ns == "" {
+		ns = g.Namespace
+	}
+	out.Template = ns + "/" + name
+	var tmpl v1alpha1.PolicyGate
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &tmpl); err != nil {
+		zerolog.Ctx(ctx).Debug().Err(err).Str("template", out.Template).Msg("receipt: gate template not read; recorded without its versions")
+		return out
+	}
+	out.TemplateUID, out.TemplateGeneration = string(tmpl.UID), tmpl.Generation
+	if dg, err := receipt.TemplateDigest(tmpl.Spec); err == nil {
+		out.TemplateDigest = dg
+	}
+	return out
+}
+
+// activeOverride is the override an overridden gate passed by: the first
+// spec.overrides entry for env (or every stage) that had not expired when
+// the gate was last evaluated. The gate's reason says one is in effect.
+func activeOverride(g *v1alpha1.PolicyGate, env string) *v1alpha1.DecisionOverride {
+	for i := range g.Spec.Overrides {
+		o := &g.Spec.Overrides[i]
+		if o.Stage != "" && o.Stage != env {
+			continue
+		}
+		if g.Status.LastEvaluatedAt != nil && !o.ExpiresAt.After(g.Status.LastEvaluatedAt.Time) {
+			continue
+		}
+		exp := o.ExpiresAt
+		return &v1alpha1.DecisionOverride{CreatedBy: o.CreatedBy, Reason: o.Reason, ExpiresAt: &exp,
+			Verified: policygate.OverrideVerified(g, o), Actor: o.Actor}
+	}
+	return &v1alpha1.DecisionOverride{Reason: g.Status.Reason}
+}
+
+// pendingReceipt is the receipt of ps at Verified, for the outbox. It reads
+// the Bundle, the Pipeline, the gates when the step has no snapshot (it
+// started before receipts were enabled), the step's per-promotion
+// MetricChecks and the Bundle's ImageVerification, all from the cache. An
+// error is retried with the transition.
+func (r *Reconciler) pendingReceipt(ctx context.Context, ps *v1alpha1.PromotionStep) (*v1alpha1.PendingReceipt, error) {
+	bundle, err := r.loadBundle(ctx, ps)
+	if err != nil {
+		return nil, err
+	}
+	pipeline, err := r.loadPipeline(ctx, ps)
+	if err != nil {
+		return nil, err
+	}
+	in := receipt.Input{
+		Name: receipt.Name(ps.Spec.BundleName, ps.Spec.Environment), ClusterID: r.Receipts.ClusterID,
+		ControllerVersion: r.Receipts.ControllerVersion, ChartVersion: r.Receipts.ChartVersion,
+		Now: r.now(), Bundle: bundle, Step: ps, Decision: ps.Status.Decision, Snapshot: ps.Status.Decision != nil,
+		HealthAdapter: findEnv(pipeline, ps.Spec.Environment).Health.Type,
+	}
+	if in.Decision == nil {
+		gates, err := r.readGates(ctx, ps)
+		if err != nil {
+			return nil, err
+		}
+		in.Decision = r.decision(ctx, ps, gates, pipeline, bundle)
+	}
+	var metrics v1alpha1.MetricCheckList
+	if err := r.List(ctx, &metrics, client.InNamespace(ps.Namespace), client.MatchingLabels{
+		"kardinal.io/bundle": ps.Spec.BundleName, "kardinal.io/environment": ps.Spec.Environment,
+	}); err != nil {
+		return nil, fmt.Errorf("list metric checks: %w", err)
+	}
+	in.Metrics = metrics.Items
+	var ivs v1alpha1.ImageVerificationList
+	if err := r.List(ctx, &ivs, client.InNamespace(ps.Namespace), client.MatchingLabels{
+		"kardinal.io/pipeline": ps.Spec.PipelineName, "kardinal.io/bundle": ps.Spec.BundleName,
+	}); err != nil {
+		return nil, fmt.Errorf("list image verifications: %w", err)
+	}
+	for i := range ivs.Items {
+		if ivs.Items[i].Status.Phase == v1alpha1.ImageVerificationVerified {
+			in.ImageVerification = &ivs.Items[i]
+		}
+	}
+	pr := receiptPR(ps)
+	if pr != nil {
+		in.PR = &receipt.PR{URL: pr.URL, Number: pr.Number, MergeCommit: ps.Status.Outputs["mergeCommitSHA"]}
+		if s := stepNamed(ps, "wait-for-merge"); s != nil && s.CompletedAt != nil {
+			in.PR.MergedAt = s.CompletedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+	} else {
+		in.Commit = ps.Status.Outputs["commitSHA"]
+	}
+	stmt, digest, err := receipt.Build(in)
+	if err != nil {
+		return nil, fmt.Errorf("build receipt: %w", err)
+	}
+	return &v1alpha1.PendingReceipt{Name: in.Name, Spec: v1alpha1.PromotionReceiptSpec{
+		Statement: string(stmt), StatementDigest: digest, PullRequest: pr,
+	}}, nil
+}
+
+// readGates reads the step's required gates, for a step without a
+// snapshot. A gate that no longer exists is skipped.
+func (r *Reconciler) readGates(ctx context.Context, ps *v1alpha1.PromotionStep) ([]v1alpha1.PolicyGate, error) {
+	var out []v1alpha1.PolicyGate
+	for _, name := range ps.Spec.RequiredGates {
+		var g v1alpha1.PolicyGate
+		err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ps.Namespace}, &g)
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("get policy gate %s: %w", name, err)
+		}
+		out = append(out, g)
+	}
+	return out, nil
+}
+
+// receiptPR is the step's PR, nil for a step that opened none.
+func receiptPR(ps *v1alpha1.PromotionStep) *v1alpha1.ReceiptPullRequest {
+	url := ps.Status.Outputs["prURL"]
+	if url == "" {
+		url = ps.Status.PRURL
+	}
+	if url == "" {
+		return nil
+	}
+	num, err := strconv.Atoi(ps.Status.Outputs["prNumber"])
+	if err != nil {
+		num = extractPRNumber(url)
+	}
+	repo := extractRepo(url)
+	if num <= 0 || repo == "" {
+		return nil
+	}
+	return &v1alpha1.ReceiptPullRequest{Repo: repo, Number: num, URL: url, ScmProvider: ps.Spec.ScmProvider}
+}
+
+func stepNamed(ps *v1alpha1.PromotionStep, name string) *v1alpha1.StepStatus {
+	for i := range ps.Status.Steps {
+		if ps.Status.Steps[i].Name == name {
+			return &ps.Status.Steps[i]
+		}
+	}
+	return nil
+}
+
+// flushReceipt creates the PromotionReceipt in ps's outbox
+// (status.pendingReceipt), then clears the outbox and the decision snapshot
+// and records status.receipt. A receipt that already exists counts as
+// written (a retry after a crash): its name derives from the Bundle and
+// the environment.
+func (r *Reconciler) flushReceipt(ctx context.Context, ps *v1alpha1.PromotionStep) error {
+	p := ps.Status.PendingReceipt
+	if p == nil {
+		return nil
+	}
+	labels := map[string]string{}
+	for _, k := range receiptLabels {
+		if v := ps.Labels[k]; v != "" {
+			labels[k] = v
+		}
+	}
+	labels["kardinal.io/pipeline"] = ps.Spec.PipelineName
+	labels["kardinal.io/bundle"] = ps.Spec.BundleName
+	labels["kardinal.io/environment"] = ps.Spec.Environment
+	rc := &v1alpha1.PromotionReceipt{
+		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: ps.Namespace, Labels: labels},
+		Spec:       p.Spec,
+	}
+	if err := r.Create(ctx, rc); err != nil && !apierrors.IsAlreadyExists(err) {
+		zerolog.Ctx(ctx).Error().Err(err).Str("receipt", p.Name).
+			Msg("failed to create PromotionReceipt; kept in status.pendingReceipt to retry")
+		return fmt.Errorf("create promotion receipt %s: %w", p.Name, err)
+	}
+	patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	decision := ps.Status.Decision
+	ps.Status.PendingReceipt, ps.Status.Decision, ps.Status.Receipt = nil, nil, p.Name
+	if err := r.Status().Patch(ctx, ps, patch); err != nil && !apierrors.IsNotFound(err) {
+		// The receipt exists: the next flush finds it (AlreadyExists).
+		ps.Status.PendingReceipt, ps.Status.Decision, ps.Status.Receipt = p, decision, ""
+		return fmt.Errorf("clear the receipt outbox: %w", err)
+	}
+	return nil
+}

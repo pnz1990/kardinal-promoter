@@ -83,6 +83,47 @@ spec:
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
+            {{- with .Values.receipts }}
+            {{- if .enabled }}
+            - --receipts=true
+            - --receipt-signing-mode={{ .signing.mode }}
+            {{- with .clusterID }}
+            - --receipt-cluster-id={{ . }}
+            {{- end }}
+            {{- if eq .signing.mode "keyless" }}
+            - --receipt-fulcio-url={{ .signing.keyless.fulcioURL }}
+            - --receipt-token-file=/var/run/secrets/sigstore/token
+            {{- end }}
+            {{- if eq .signing.mode "key" }}
+            - --receipt-key-secret={{ required "receipts.signing.key.secretRef.name is required with receipts.signing.mode key" .signing.key.secretRef.name }}
+            - --receipt-key-secret-key={{ .signing.key.secretRef.key }}
+            {{- end }}
+            {{- if eq .signing.mode "kms" }}
+            - --receipt-kms-key={{ required "receipts.signing.kmsKey is required with receipts.signing.mode kms" .signing.kmsKey }}
+            {{- end }}
+            {{- with .signing.tsaURL }}
+            - --receipt-tsa-url={{ . }}
+            {{- end }}
+            {{- with .sinks.rekor.url }}
+            - --receipt-rekor-url={{ . }}
+            {{- end }}
+            {{- if .sinks.rekor.public }}
+            - --receipt-rekor-public=true
+            {{- end }}
+            {{- if .sinks.oci.enabled }}
+            - --receipt-oci=true
+            {{- with .sinks.oci.secretRef.name }}
+            - --receipt-oci-secret={{ . }}
+            {{- end }}
+            {{- with .sinks.oci.repository }}
+            - --receipt-oci-repository={{ . }}
+            {{- end }}
+            {{- if .sinks.oci.insecure }}
+            - --receipt-oci-insecure=true
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.audit.retention.enabled }}
             - --audit-retention=true
             - --audit-retention-max-age={{ .Values.audit.retention.maxAge }}
@@ -250,6 +291,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # Recorded in promotion receipts.
+            - name: KARDINAL_CHART_VERSION
+              value: {{ .Chart.Version | quote }}
             # The container's memory limit in bytes: the controller sets the
             # Go runtime's soft memory limit (GOMEMLIMIT) to 90% of it. A
             # GOMEMLIMIT in controller.extraEnv takes precedence.
@@ -340,12 +384,28 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if and .Values.receipts.enabled (eq .Values.receipts.signing.mode "keyless") }}
+            - name: sigstore-token
+              mountPath: /var/run/secrets/sigstore
+              readOnly: true
+            {{- end }}
             {{- with .Values.controller.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if and .Values.receipts.enabled (eq .Values.receipts.signing.mode "keyless") }}
+        # Keyless receipt signing: a token for Fulcio only (audience
+        # sigstore), separate from the API server token (docs/receipts.md).
+        - name: sigstore-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: sigstore
+                  expirationSeconds: {{ .Values.receipts.signing.keyless.tokenExpirationSeconds }}
+                  path: token
+        {{- end }}
         {{- with .Values.controller.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

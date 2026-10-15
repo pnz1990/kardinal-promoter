@@ -70,6 +70,21 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--pprof-address` | string |  | Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only. |
 | `--promotionstep-workers` | int | `16` | How many PromotionSteps (git clone, commit, push, PR, health check) are reconciled at once. |
 | `--prstatus-workers` | int | `8` | How many PRStatuses (SCM polls) are reconciled at once. |
+| `--receipt-cluster-id` | string |  | Cluster identity in receipts' resourceUri; empty reads the kube-system Namespace UID. |
+| `--receipt-fulcio-url` | string | `"https://fulcio.sigstore.dev"` | Fulcio of keyless mode. |
+| `--receipt-key-secret` | string |  | Secret in the controller namespace holding the receipt signing key (mode key). |
+| `--receipt-key-secret-key` | string | `"cosign.key"` | Key of --receipt-key-secret holding the PEM private key. |
+| `--receipt-kms-key` | string |  | KMS key reference (mode kms), for a provider the controller was built with. |
+| `--receipt-oci` | bool | `false` | Push every receipt as an OCI referrer of each of its images. |
+| `--receipt-oci-insecure` | bool | `false` | Push receipt referrers over plain HTTP (an in-cluster registry). |
+| `--receipt-oci-repository` | string |  | Push receipt referrers to this repository instead of each image's own (as cosign's COSIGN_REPOSITORY). |
+| `--receipt-oci-secret` | string |  | kubernetes.io/dockerconfigjson Secret in the controller namespace with push credentials for --receipt-oci. |
+| `--receipt-rekor-public` | bool | `false` | Allow --receipt-rekor-url to be the public-good Rekor, which publishes each receipt's names, emails and pipeline names. |
+| `--receipt-rekor-url` | string |  | Rekor that logs every receipt signature; empty logs nothing. |
+| `--receipt-signing-mode` | string | `"keyless"` | How receipts are signed: keyless (Fulcio, with the controller's projected ServiceAccount token), key (an ECDSA P-256 key in --receipt-key-secret) or kms (--receipt-kms-key). |
+| `--receipt-token-file` | string | `"/var/run/secrets/sigstore/token"` | Projected ServiceAccount token (audience sigstore) keyless mode presents to Fulcio. |
+| `--receipt-tsa-url` | string |  | RFC 3161 timestamp authority that timestamps every receipt signature. |
+| `--receipts` | bool | `false` | Create a signed PromotionReceipt for every promotion that reaches Verified (docs/receipts.md). Chart value: receipts.enabled. |
 | `--render-cpu-limit` | string | `"1"` | CPU limit of a render Job. |
 | `--render-image` | string |  | The kardinal-render image the render Jobs of layout: branch environments run. Empty: layout: branch promotions fail with a message naming this flag. |
 | `--render-image-pull-policy` | string |  | imagePullPolicy of the render Jobs (default: Kubernetes'). |

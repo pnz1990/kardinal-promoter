@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"time"
 
@@ -84,6 +85,9 @@ type HistoryRow struct {
 	// Actor is who created the version (docs/actors.md): its stamp, or
 	// kind unknown with its v0.11 creator.
 	Actor v1alpha1.Actor
+	// Receipt is the step's PromotionReceipt (docs/receipts.md), nil when
+	// it has none.
+	Receipt *v1alpha1.PromotionReceipt
 }
 
 // historyEntry is one entry of kardinal history -o json|yaml.
@@ -103,14 +107,27 @@ type historyEntry struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// Actor is who created the version.
 	Actor v1alpha1.Actor `json:"actor"`
+	// Receipt is the promotion's signed receipt, when it has one.
+	Receipt *historyReceipt `json:"receipt,omitempty"`
+}
+
+// historyReceipt is a receipt in kardinal history -o json|yaml.
+type historyReceipt struct {
+	Name     string `json:"name"`
+	Phase    string `json:"phase"`
+	Verified bool   `json:"verified"`
 }
 
 // writeHistoryStructured writes rows as -o json|yaml asks.
 func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
 	out := make([]historyEntry, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
-			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC(), Actor: r.Actor})
+		e := historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
+			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC(), Actor: r.Actor}
+		if rc := r.Receipt; rc != nil {
+			e.Receipt = &historyReceipt{Name: rc.Name, Phase: phaseOr(rc.Status.Phase), Verified: receiptSigned(*rc)}
+		}
+		out = append(out, e)
 	}
 	return writeStructured(w, out)
 }
@@ -161,7 +178,11 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		versions[bundles[i].Name] = createdOf(&bundles[i]).Version
 		actors[bundles[i].Name] = bundleActor(&bundles[i])
 	}
+	receipts := pipelineReceipts(ctx, c, ns, pipeline)
 	for i := range rows {
+		if rc, ok := receipts[receiptKey{rows[i].Bundle, rows[i].Env}]; ok {
+			rows[i].Receipt = &rc
+		}
 		rows[i].Version = versions[rows[i].Bundle]
 		a, ok := actors[rows[i].Bundle]
 		if !ok {
@@ -340,15 +361,29 @@ func stepDuration(s v1alpha1.PromotionStep) (time.Duration, bool) {
 	return end.Sub(s.CreationTimestamp.Time), true
 }
 
-// formatHistoryTable writes the history table to w.
+// formatHistoryTable writes the history table to w. The RECEIPT column is
+// there only when a row has a receipt (docs/receipts.md).
 func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
+	receipts := slices.ContainsFunc(rows, func(r HistoryRow) bool { return r.Receipt != nil })
 	tw := style.NewTable(w, 3)
-	if _, err := fmt.Fprintln(tw, "VERSION\tACTION\tACTOR\tENV\tPR\tDURATION\tTIMESTAMP"); err != nil {
+	header := "VERSION\tACTION\tACTOR\tENV\tPR\tDURATION\tTIMESTAMP"
+	if receipts {
+		header += "\tRECEIPT"
+	}
+	if _, err := fmt.Fprintln(tw, header); err != nil {
 		return fmt.Errorf("write history header: %w", err)
 	}
 	for _, r := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			versionLabel(r.Version, r.Bundle), r.Action, actor.Describe(r.Actor), r.Env, r.PR, r.Duration, r.Timestamp); err != nil {
+		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s",
+			versionLabel(r.Version, r.Bundle), r.Action, actor.Describe(r.Actor), r.Env, r.PR, r.Duration, r.Timestamp)
+		if receipts {
+			mark := "--"
+			if r.Receipt != nil {
+				mark = receiptMark(*r.Receipt)
+			}
+			line += "\t" + mark
+		}
+		if _, err := fmt.Fprintln(tw, line); err != nil {
 			return fmt.Errorf("write history row: %w", err)
 		}
 	}
