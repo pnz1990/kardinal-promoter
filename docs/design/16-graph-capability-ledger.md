@@ -70,6 +70,8 @@ Rules:
 | [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
 | [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | No ref: the PolicyGate reconciler reads AgentIdentities (actor policy, #1843) | None filed |
 | [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | Not needed while AgentIdentities are read by the PolicyGate reconciler (G18) | None filed; related to G5 |
+| [G21](#g21-two-graphs-cannot-claim-from-one-shared-budget) | Two Graphs cannot claim from one shared budget: `includeWhen` and the wave filter evaluate a snapshot | Medium | Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main): the PromotionStep holds until the budget reconciler grants it | None filed |
+| [G22](#g22-a-graph-cannot-count-across-namespaces-without-reading-every-namespace) | A Graph cannot count objects across namespaces without its identity reading every namespace | Low | Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main): the budget reconciler counts and writes `AgentIdentity.status.usage` | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -454,13 +456,14 @@ Every row writes its result to its own CRD status; a new row needs the owner's a
 | Health on a later synced or applied commit: does it contain the promoted one (#1575) | `descends` in `pkg/reconciler/promotionstep/pr_rebase.go`, passed to the argocd and flux adapters as `CheckOptions.RevisionContains` | A git read of an external repository (the commit graph near the branch head), which a Graph node cannot make; the answer feeds the health check, which stays in the reconciler (row above) | None needed. A network read in the health path, approved by the coordinator as the owner's delegate (2026-10-09) because it is bounded: one `ls-remote` per repository per 30 s and one graph read per head and depth (20, then 500 commits), cached and shared by concurrent checks (singleflight), under a 30 s timeout. The cache holds no promotion state; the decision is written to the step's `status.message` |
 | Asking Argo CD or Flux to sync a promotion's commit (`health.refresh`) | `requestRefresh` in `pkg/reconciler/promotionstep/refresh.go`, `RequestRefresh` in `pkg/health/refresh.go`, on the first HealthChecking reconcile once the commit is in git | A Graph applies only objects it owns: a ref node is read-only, and an owned Application or Kustomization node would make kro the owner of the user's object. The request is a merge patch of one annotation (`argocd.argoproj.io/refresh`, `reconcile.fluxcd.io/requestedAt`) on the object the health check reads, not a status write. The step writes `status.refreshRequestedAt` (the time sent to Flux), `refreshRevision` and `refreshMessage` before it patches, so it asks at most once, and a failure only records why and leaves the step to the tool's poll. The `patch` the chart grants for it is confined to that annotation by the `<fullname>-gitops-writes` admission policy unless the controller may also `update` the object. Approved by the coordinator as the owner's delegate (2026-10-11), after Kargo's argocd-update | A patch-only node kind that sets metadata on an existing object without owning it. No ask: one annotation per promotion does not justify a primitive |
 | Gate results as SCM commit statuses while a PR waits for merge (#1452) | PromotionStep reconciler posts `kardinal/gates`; the gate results reach the step through a mirror `patch` node (G14) | Side effect on an external system | Out of scope for kro |
-| Holding an existing PromotionStep: pause (freeze gate), freezes (a ChangeWindow with `spec.freeze`, #1843) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused`, `holdIfFrozen` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. A freeze must also hold Graphs built before it existed, and its start, end and exemption expiry are times kro CEL cannot compare; a selector ref on ChangeWindows would need a cluster-wide grant for every Graph identity (G19). `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
+| Holding an existing PromotionStep: pause (freeze gate), freezes (a ChangeWindow with `spec.freeze`, #1843), agent budgets (planned, [24-agent-budgets.md](24-agent-budgets.md)) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused`, `holdIfFrozen`, `holdForBudget` (planned, not on main) and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. A freeze must also hold Graphs built before it existed, and its start, end and exemption expiry are times kro CEL cannot compare; a selector ref on ChangeWindows would need a cluster-wide grant for every Graph identity (G19). `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 | Auto-rollback Bundle creation | `createAutoRollback` in `pkg/reconciler/promotionstep/lifecycle.go`, built by `pkg/lifecycle`; the decision is `RollbackPolicy` `status.shouldRollback` | Creating a Bundle is a new Graph root, not a node of the failing Bundle's Graph | None needed |
 | Skip permissions (`intent.skip`) | `ValidateSkipPermissions` in `pkg/graph/skip.go`, when the Graph is built | The check decides which nodes exist; only the gate expressions run on the Graph | `includeWhen` over a SkipPermission ref, once G2 is solved |
 | PolicyGate re-evaluation timer | PolicyGate reconciler requeues at `recheckInterval` (default 5m); ScheduleClock ticks add re-evaluation | No time-based requeue in kro (see time, above) | KREP-025 |
-| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses, sibling Bundles and the version's AgentIdentity (`agent.*`, #1843) | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate`; the AgentIdentity read in `buildContext` | See the PolicyGate CEL row. The AgentIdentity would be a named `ref` node, but a cluster-scoped ref costs every Graph identity a cluster-wide grant and loses drift detection without a whole-kind watch (G18, G19) | Selector refs (KREP-003) cover the reads; time does not. For `agent.*`: the G18 and G19 fixes |
+| Cross-CRD reads for the gate context: MetricChecks, ChangeWindows, PRStatuses, sibling Bundles and the version's AgentIdentity (`agent.*`, #1843; `budget.*` from its `status.usage`, planned in [24-agent-budgets.md](24-agent-budgets.md)) | `buildMetricsContext`, `buildChangeWindowContext`, `buildPRContext`, `buildUpstreamContextWithHistory` in `pkg/reconciler/policygate`; the AgentIdentity read in `buildContext` | See the PolicyGate CEL row. The AgentIdentity would be a named `ref` node, but a cluster-scoped ref costs every Graph identity a cluster-wide grant and loses drift detection without a whole-kind watch (G18, G19) | Selector refs (KREP-003) cover the reads; time does not. For `agent.*`: the G18 and G19 fixes |
 | PR merge polling | PRStatus reconciler polls the SCM every 30 s; SCM webhooks only shorten the wait | External I/O | Out of scope for kro |
 | Agent index for admission (actors, #1834) | `pkg/reconciler/agentindex` writes the AgentIndex status that the `<release>-actor` ValidatingAdmissionPolicy reads as params | A ValidatingAdmissionPolicy cannot look up objects, so the registry must be one params object. A Graph could build it (selector `ref` plus `transformMapEntry`), but one conflicting AgentIdentity would fail the whole expression, and revocation would wait in kro's single Graph queue (G13). Planned in #1834 (not on main) | None needed: first-wins folding is not a Graph concern |
+| Agent budgets: rolling windows, the grant ledger and grants (planned, [24-agent-budgets.md](24-agent-budgets.md), not on main) | `pkg/reconciler/agentbudget` writes `AgentIdentity.status.usage`; the PromotionStep reconciler holds a step until its grant is listed | An agent's usage spans every Graph in every namespace, a claim must be taken by one writer (G21), counting across namespaces from a Graph needs a cluster-wide read (G22), and the windows need a clock (time row). The reconciler reads the clock only to write `evaluatedAt`, the window boundaries and `nextEvaluationAt`, and requeues; steps and gates compare stored fields | None: a cross-Graph claim is not a Graph concern (G21) |
 | AuditEvent retention | `pkg/reconciler/auditretention` reads the clock to delete records older than `--audit-retention-max-age` | Housekeeping like `historyLimit`: no promotion decision reads it, and AuditEvents have no owner whose change could trigger it, so it is a leader Runnable | None needed |
 
 **Upstream work: time.**
@@ -1024,6 +1027,79 @@ parent informer already does.
 
 ---
 
+## G21: Two Graphs cannot claim from one shared budget
+
+**Need.** An agent may have at most `maxConcurrent` promotions in flight in prod, counted over
+every Pipeline and namespace it works in ([24-agent-budgets.md](24-agent-budgets.md)). When two
+of its versions become ready for prod at once with one place left, exactly one PromotionStep may
+start. Each version has its own Graph.
+
+**kro today.** A Graph can test a shared value, but it cannot take a share of it:
+
+- A scalar `ref` is one GET at reconcile time, a snapshot of that moment
+  (`pkg/graphengine/executor/simple.go:1209-1216`). A ref is read-only: kro never writes to it
+  (`simple.go:1220-1227` for selector refs; the scalar path at `1180-1217` only reads).
+- The Graph controller reconciles several Graphs at once (`MaxConcurrentReconciles`,
+  `pkg/controller/graph/controller.go:782-786`; kardinal installs 8 workers). Two Graphs read the
+  same remaining count in parallel and both admit.
+- With one worker the result is the same: the second Graph reads the shared object before
+  anything has recorded the first Graph's admission, because no Graph can write that record.
+- `readyWhen` holds nothing in a standalone Graph (G1) and may reference only its own node (G3),
+  so it cannot serialise either.
+
+**Minimal Graph that shows it.** Two Graphs in two namespaces, each with a `ref` to the
+ConfigMap `budget` (`data.remaining: "1"`) and a ConfigMap node with
+`includeWhen: ["${int(budget.data.remaining) > 0}"]`. Create both Graphs at once: both create
+their ConfigMap.
+
+**kardinal workaround.** Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main). The
+PromotionStep is the request: it holds in Pending (`holdForBudget`) until the AgentIdentity's
+`status.usage.<release>.grants` lists it. One budget reconciler per agent grants requests in
+order and writes the ledger with an optimistic lock, so a grant computed from a stale ledger is
+refused by the API server. The translator also folds the agent's `maxConcurrent` and
+`maxUnavailable` into each fleet target's DAG entry, so the Graph creates no more steps than the
+budget could grant.
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** None that fits kro's model: a claim is a write to a
+shared object, and kro's nodes either own an object or only read it. A "lease" node kind that
+takes one of N slots of a shared object would make kro a scheduler. Not worth asking: the
+reconciler that owns the budget is the intended shape (an owned object whose controller writes
+status).
+
+---
+
+## G22: A Graph cannot count across namespaces without reading every namespace
+
+**Need.** An agent's usage is the count of its promotions in every tenant namespace. A Graph in
+one tenant's namespace would need that count, but must not see the other tenants' objects.
+
+**kro today.** A selector `ref` with an empty `metadata.namespace` lists across all namespaces
+(`pkg/graphengine/executor/simple.go:1228-1233`, `1263-1266`, `1288-1292`), as the Graph's
+impersonated ServiceAccount (`pkg/controller/graph/impersonation.go`, G16). That identity then
+needs `list` and `watch` on PromotionSteps and Bundles in every namespace (a ClusterRoleBinding,
+G19), and the listed objects, whole, enter the Graph's CEL scope. kro has no read that returns
+only a count or a projection, and no way to read with an identity other than the Graph's.
+
+**Minimal Graph that shows it.** A Graph in namespace `team-a` with a selector `ref` on
+PromotionSteps, `namespace: ""` and `matchLabels: {kardinal.io/pipeline: checkout}`, and a `def`
+node `${size(steps)}`. It works only once `team-a`'s Graph ServiceAccount may list PromotionSteps
+cluster-wide, after which `team-a`'s Graph can read every tenant's steps.
+
+**kardinal workaround.** Planned in [24-agent-budgets.md](24-agent-budgets.md) (not on main). The
+budget reconciler, which already runs with the controller's cluster-wide read, counts and writes
+only the counts and a ledger of Bundle UIDs (no tenant names) to `AgentIdentity.status.usage`.
+No Graph reads it (G18, G19, G20 make a ref costly; G21 makes it insufficient).
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** None worth asking: aggregating other tenants' objects
+is not a Graph concern. If kro ever offers a read identity for `ref` targets (G19's ask), it
+would not remove the tenant exposure, only the RBAC plumbing.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -1181,6 +1257,8 @@ blocks above.
 | G18 ref watch check | Put the ref's name in the watch access review | Yes, small fix |
 | G19 cluster-scoped refs | A read identity for `ref` targets, or kinds kro reads as itself | Yes, with G5 |
 | G20 ref wakes on every write | Opt-in generation-only wake for a scalar `ref` | Yes: the pause would read the Pipeline instead of rebuilding the Graph |
+| G21 cross-Graph claim | None that fits kro (a slot-taking node would make kro a scheduler) | No: the budget reconciler is the intended shape |
+| G22 cross-namespace counts | None (a count-only read would still read every tenant) | No |
 
 ### Hazards found
 
