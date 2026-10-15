@@ -41,7 +41,7 @@ describe('pipelineState', () => {
       p({ name: 'broken', failedStepCount: 1, environmentStates: { prod: 'Promoting' } }),
       p({ name: 'stopped', paused: true, blockerCount: 1 }),
     ]
-    expect(computeFleetHealth(fleet)).toEqual({ total: 5, healthy: 1, blocked: 1, ciRed: 1, promoting: 1, paused: 1 })
+    expect(computeFleetHealth(fleet)).toEqual({ total: 5, healthy: 1, blocked: 1, ciRed: 1, promoting: 1, paused: 1, agents: 0 })
     expect(filterPipelines(fleet, 'blocked').map(x => x.name)).toEqual(['held'])
     expect(filterPipelines(fleet, 'promoting').map(x => x.name)).toEqual(['moving'])
   })

@@ -44,7 +44,7 @@ function ApprovalsLoading() {
   return <Skeleton label="Loading approvals…" rows={3} className="app-lazy" />
 }
 import type { StageCommand } from './stage/StageDrawer'
-import { DrawerPlaceholder } from './stage/DrawerPlaceholder'
+import { DrawerColumnReserve, DrawerPlaceholder } from './stage/DrawerPlaceholder'
 import { BundleTimeline } from './components/BundleTimeline'
 // The palette and the comparison panel load when first opened: not part of the initial load.
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })))
@@ -768,6 +768,8 @@ export function App() {
 
   return (
     <div className="app" data-narrow={narrow ? '' : undefined}>
+      {/* An /env/ link takes the drawer's column from the first render (#1859). */}
+      <DrawerColumnReserve active={!!stageEnv && !!urlState.pipeline} />
       {/* The first Tab stop: past the sidebar to the main content. */}
       <a className="skip-link" href="#main-content"
         onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>

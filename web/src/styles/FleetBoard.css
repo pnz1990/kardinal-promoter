@@ -334,3 +334,6 @@
   .fleet-board__head { grid-template-columns: 1fr; }
   .fleet-line { grid-template-columns: 1fr; gap: 0.5rem; }
 }
+
+/* A version an agent shipped: its glyph after the version, quiet. */
+.fleet-station__agent { margin-inline-start: var(--k-space-1); vertical-align: middle; color: var(--k-ink-3); }

@@ -7,6 +7,8 @@
 // no Pipeline is selected. The data comes from GET /api/v1/ui/pipelines
 // (deployed, activeBundleVersion, environmentStates, environmentTopology).
 
+import { isAgent } from '../actor'
+import { Icon } from '../ui/Icon'
 import { useChangeHalo } from '../useChangeHalo'
 import { Fragment, useRef, type CSSProperties } from 'react'
 import { hasCommandModifier, rovingFocus, rovingItems, useRovingFocus } from '../useRovingFocus'
@@ -122,10 +124,14 @@ function StationPlate({ s, pipeline, now, onSelect }: {
       data-changed={changed || undefined}
       data-fleet={s.fleet ? true : undefined}
       onClick={() => onSelect(pipeline.name, pipeline.namespace, s.env)}
-      aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}
+      aria-label={`${pipeline.name} ${s.env}: ${s.version ? `${s.version}, ` : ''}${s.actor ? `shipped by ${s.actor.text}, ` : ''}${s.alsoRuns ? `with ${s.alsoRuns} from ${s.alsoFrom}, ` : ''}${stationNote(s, now)}`}
     >
       <span className="fleet-station__env">{s.env}</span>
-      <span className="fleet-station__version" title={s.bundle || undefined}>{s.version || s.bundle || '—'}</span>
+      <span className="fleet-station__version" title={[s.bundle, s.actor && `shipped by ${s.actor.text}`].filter(Boolean).join(', ') || undefined}>
+        {s.version || s.bundle || '—'}
+        {/* An agent's version is marked; the name stays in the title and the label. */}
+        {isAgent(s.actor) && <Icon name="agent" className="fleet-station__agent" />}
+      </span>
       {s.alsoRuns && (
         <span className="fleet-station__also" title={`from ${s.alsoFrom}`}>+ {s.alsoRuns}</span>
       )}

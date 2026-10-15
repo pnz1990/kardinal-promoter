@@ -15,6 +15,8 @@
 // #338: Shift-click selects a second version for comparison (the chip's tooltip says so).
 // When two versions are selected, a "Compare" button appears.
 // #532: Phase-driven visual properties use CSS classes (bundle-chip--{phase}).
+import { actorOfBundle } from '../actor'
+import { Icon } from '../ui/Icon'
 import { useEffect, useRef } from 'react'
 import type { Bundle } from '../types'
 import { useRovingFocus } from '../useRovingFocus'
@@ -166,6 +168,7 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
           const isSelected = b.name === selectedBundle
           const isCompare = b.name === compareBundle
           const phase = displayState('bundle', b.phase || 'Unknown')
+          const shipped = actorOfBundle(b)
           const chipClass = ['bundle-chip', phaseCSSClass(b.phase), isSelected ? 'bundle-chip--selected' : '', isCompare ? 'bundle-chip--compare' : ''].filter(Boolean).join(' ')
           return (
             <button
@@ -182,7 +185,7 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
               onPointerEnter={() => { if (!isSelected) onPreview?.(b.name) }}
               onFocus={() => { if (!isSelected) onPreview?.(b.name) }}
               onBlur={() => onPreview?.(null)}
-              title={`${b.name}: ${phase.label}${(b.type || 'image') === 'image' ? '' : `, ${bundleTypeLabel(b.type)} version`}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click or c to compare'}`}
+              title={`${b.name}: ${phase.label}${(b.type || 'image') === 'image' ? '' : `, ${bundleTypeLabel(b.type)} version`}${shipped ? `, shipped by ${shipped.text}` : ''}${isCompare ? ' (comparison target)' : ''}${isSelected ? '' : '\nShift-click or c to compare'}`}
               aria-pressed={isSelected}
               data-roving-default={isSelected || undefined}
               className={chipClass}
@@ -192,6 +195,7 @@ export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundl
               <span className="bundle-chip__dot" aria-hidden="true">{phase.glyph}</span>
               <span className="bundle-chip__name">{bundleVersion(b)}</span>
               <BundleTypeBadge type={b.type} compact />
+              {shipped?.kind === 'agent' && <><Icon name="agent" className="bundle-chip__agent" /><span className="sr-only">shipped by {shipped.text}</span></>}
               {/* The followed tick says so in words, not only in the thread's red. */}
               {isSelected
                 ? <span className="bundle-chip__phase">Following · {phase.label}</span>

@@ -8,6 +8,8 @@
 // the user the UI authenticated) and the equivalent kardinal approve
 // command.
 
+import { ActorBadge } from '../ui/ActorBadge'
+import { actorOfUser } from '../actor'
 import type { GateApproval, GateDecision } from '../types'
 import CopyButton from './CopyButton'
 import { ApprovalActions } from './ApprovalActions'
@@ -60,7 +62,7 @@ function DecisionRow({ d, now }: { d: GateDecision; now: number }) {
   const age = d.firstSeenAt ? formatRelativeAge(d.firstSeenAt, now) : ''
   return (
     <li className="approval-decision" data-decision={d.decision} data-counted={d.counted}>
-      <span className="approval-decision__user">{d.user}</span>
+      <span className="approval-decision__user"><ActorBadge actor={actorOfUser(d.user)!} compact /></span>
       <span className="approval-decision__verb">{verb}</span>
       {age && <span className="approval-decision__age">{age}</span>}
       {!d.counted && (

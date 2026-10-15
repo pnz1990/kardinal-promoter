@@ -12,7 +12,7 @@
 // shows prod's version while a newer one is in uat (UX-AUDIT U2, the
 // PipelineLaneView bug). The followed Bundle is the incoming version.
 
-import type { Bundle, EnvironmentHold, GraphNode, GraphResponse, Pipeline, GateApproval, PolicyGate } from '../types'
+import type { Bundle, EnvironmentHold, GraphNode, GraphResponse, Pipeline, GateApproval, PolicyGate, ActorRef } from '../types'
 import { displayState, heldByGate, heldByRollback, type DisplayState, type Tone } from './display'
 import { environmentUpstreams, groupByDepth } from '../fleetModel'
 import { GRAPH } from './geometry'
@@ -40,6 +40,8 @@ export interface Running {
   verifiedAt?: string
   /** The other half of what it runs: "config abc1234" under an image Bundle (#1353). */
   alsoRuns?: string
+  /** Who shipped it (docs/actors.md), when known. */
+  actor?: ActorRef
 }
 
 /** The followed Bundle in one environment, when it is not what runs there. */
@@ -52,6 +54,8 @@ export interface Incoming {
   prURL?: string
   startedAt?: string
   message?: string
+  /** Who shipped it (docs/actors.md), when known. */
+  actor?: ActorRef
 }
 
 export interface Station {
@@ -158,6 +162,13 @@ export const TONE_ORDER: Tone[] = ['failed', 'blocked', 'held', 'promoting', 'wa
 export interface Followed {
   bundle: Bundle
   graph?: GraphResponse
+}
+
+/** A Bundle's verified actor as the short ref the pipeline list carries. */
+function refOfBundle(b?: Bundle): ActorRef | undefined {
+  const a = b?.actor
+  if (!a || a.kind === 'unknown' || !b?.actorText) return undefined
+  return { kind: a.kind, agent: a.agent, sponsor: a.sponsor, text: b.actorText }
 }
 
 /** What a Bundle ships, short: its image tag(s), else its config commit, else its name. */
@@ -296,11 +307,13 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
       version: pe.version || pe.bundle,
       verifiedAt: d?.verifiedAt ?? pe.since,
       alsoRuns: d?.configVersion || d?.imagesVersion || undefined,
+      actor: d?.bundle === pe.bundle ? d.actor : refOfBundle(opts.bundles?.find(b => b.name === pe.bundle)),
     } : d ? {
       bundle: d.bundle,
       version: d.version || d.bundle,
       verifiedAt: d.verifiedAt,
       alsoRuns: d.configVersion || d.imagesVersion || undefined,
+      actor: d.actor,
     } : undefined
     const step = steps.get(e.name)
     const gates: GateMark[] = (gatesInto.get(e.name) ?? []).map(g => ({
@@ -343,6 +356,7 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
       prURL: step?.prURL ?? (pe?.incomingBundle === followedName ? pe?.prURL : undefined),
       startedAt: step?.startedAt,
       message: step?.message,
+      actor: refOfBundle(followed.bundle),
     } : undefined
 
     stations.set(e.name, {
@@ -515,7 +529,8 @@ export function stationLabel(st: Station, age: (iso?: string) => string): string
     const a = age(st.running.verifiedAt)
     parts.push(`runs ${st.running.version}${a ? `, ${a} ago` : ''}`)
   } else parts.push('nothing deployed')
-  if (st.incoming && st.incoming.version !== st.running?.version) parts.push(`incoming ${st.incoming.version}`)
+  if (st.running?.actor) parts.push(`shipped by ${st.running.actor.text}`)
+  if (st.incoming && st.incoming.version !== st.running?.version) parts.push(`incoming ${st.incoming.version}${st.incoming.actor ? `, shipped by ${st.incoming.actor.text}` : ''}`)
   if (st.gates.length > 0) {
     const pass = st.gates.filter(g => g.state === 'Pass').length
     const block = st.gates.filter(g => g.holding)

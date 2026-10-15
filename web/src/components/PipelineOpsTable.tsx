@@ -5,6 +5,8 @@
 // the pipeline list page (#462). Shows operators the signals they need to triage
 // at a glance: blocked gates, failed steps, stale inventory, last merge time.
 
+import { ActorBadge } from '../ui/ActorBadge'
+import { actorOfRef } from '../actor'
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
 import { StatusChip } from '../ui/Chips'
@@ -238,6 +240,7 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                       // The active version by its tag, as everywhere; the Bundle name is the title.
                       <div className="ops-table__bundle" title={p.activeBundleName}>
                         {truncateEnd(p.activeBundleVersion || p.activeBundleName, 20)}
+                        {p.activeBundleActor && <> · <ActorBadge actor={actorOfRef(p.activeBundleActor)!} compact /></>}
                       </div>
                     )}
                   </td>

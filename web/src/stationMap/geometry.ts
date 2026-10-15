@@ -236,8 +236,9 @@ function detailTextWidth(st: Station): number {
   // The incoming version and its state are two lines ("→ 1.4.2", "Held by gate x · #42").
   const lines = [
     st.env.length * NAME_CH,
-    ((st.running?.version.length ?? 16) + 8) * MONO_CH,
-    st.incoming ? (st.incoming.version.length + 2) * MONO_CH : 0,
+    // " · agent" after a version an agent shipped (StationMap's AGENT_MARK).
+    ((st.running?.version.length ?? 16) + 8 + (st.running?.actor?.kind === 'agent' ? 8 : 0)) * MONO_CH,
+    st.incoming ? (st.incoming.version.length + 2 + (st.incoming.actor?.kind === 'agent' ? 8 : 0)) * MONO_CH : 0,
     st.incoming ? (st.incoming.display.label.length + 10) * MONO_CH : 0,
   ]
   return Math.max(...lines)

@@ -274,3 +274,22 @@ describe('FleetHealthBar', () => {
     expect(screen.getByRole('button', { name: '2 pipelines currently promoting' })).toBeInTheDocument()
   })
 })
+
+describe('the Agents filter (#1908)', () => {
+  it('counts and keeps the pipelines where an agent shipped what runs or what is on its way', () => {
+    const byAgent = makePipeline({ name: 'a', activeBundleActor: { kind: 'agent' as const, agent: 'fixer', sponsor: 'alice', text: 'agent fixer for alice' } })
+    const runsAgent = makePipeline({ name: 'b', deployed: { prod: { bundle: 'b-1', version: '1', actor: { kind: 'agent' as const, agent: 'fixer', sponsor: 'alice', text: 'agent fixer for alice' } } } })
+    const human = makePipeline({ name: 'c', activeBundleActor: { kind: 'human', text: 'bob' } })
+    expect(computeFleetHealth([byAgent, runsAgent, human]).agents).toBe(2)
+    expect(filterPipelines([byAgent, runsAgent, human], 'agents').map(p => p.name)).toEqual(['a', 'b'])
+  })
+
+  it('shows the Agents badge only when an agent shipped something, and toggles filter=agents', () => {
+    const onFilterChange = vi.fn()
+    const { rerender } = render(<FleetHealthBar pipelines={[makePipeline()]} activeFilter="all" onFilterChange={onFilterChange} />)
+    expect(screen.queryByRole('button', { name: /an agent shipped/ })).not.toBeInTheDocument()
+    rerender(<FleetHealthBar pipelines={[makePipeline({ activeBundleActor: { kind: 'agent' as const, agent: 'fixer', sponsor: 'alice', text: 'agent fixer for alice' } })]} activeFilter="all" onFilterChange={onFilterChange} />)
+    fireEvent.click(screen.getByRole('button', { name: '1 pipeline running or receiving a version an agent shipped' }))
+    expect(onFilterChange).toHaveBeenCalledWith('agents')
+  })
+})

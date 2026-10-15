@@ -738,6 +738,14 @@
         "additionalProperties": false,
         "description": "uiPipelineResponse is the JSON shape for a Pipeline in the UI API.",
         "properties": {
+          "activeBundleActor": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiActorRef"
+              }
+            ],
+            "description": "ActiveBundleActor is who shipped the active Bundle (the Agents filter); absent when that is not known."
+          },
           "activeBundleName": {
             "type": "string"
           },
@@ -1750,6 +1758,31 @@
         ],
         "type": "object"
       },
+      "uiActorRef": {
+        "additionalProperties": false,
+        "description": "uiActorRef is who shipped a version, in short, for the views that list many versions (the fleet board, the Agents filter, the station map): the Bundle's actor kind, its agent and sponsor, and the sentence the Bundle API's actorText gives.",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "Kind is human, agent, bot or controller.",
+            "type": "string"
+          },
+          "sponsor": {
+            "type": "string"
+          },
+          "text": {
+            "description": "Text is the actor as one sentence (\"agent fixer for alice\").",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
       "uiApprovalRequest": {
         "additionalProperties": false,
         "description": "uiApprovalRequest is the body of POST /api/v1/ui/approvals.",
@@ -1838,6 +1871,14 @@
         "additionalProperties": false,
         "description": "uiDeployed is what one environment runs, for the fleet board.",
         "properties": {
+          "actor": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiActorRef"
+              }
+            ],
+            "description": "Actor is who shipped Bundle (docs/actors.md); absent when that is not known (a Bundle from before actor stamps, or one that is gone)."
+          },
           "bundle": {
             "type": "string"
           },

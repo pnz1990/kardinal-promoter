@@ -122,6 +122,9 @@ type uiPipelineResponse struct {
 	// ActiveBundleVersion is what the active Bundle ships (scm.BundleVersion:
 	// the image tag, or "config <sha>"), for the fleet board.
 	ActiveBundleVersion string `json:"activeBundleVersion,omitempty"`
+	// ActiveBundleActor is who shipped the active Bundle (the Agents filter);
+	// absent when that is not known.
+	ActiveBundleActor *uiActorRef `json:"activeBundleActor,omitempty"`
 	// Deployed is, per environment, the Bundle whose change the environment
 	// runs: the newest PromotionStep there that landed its change
 	// (lifecycle.DeployedIn, as kardinal status reports). Environments
@@ -148,6 +151,32 @@ type uiDeployed struct {
 	ConfigVersion string `json:"configVersion,omitempty"`
 	ImagesFrom    string `json:"imagesFrom,omitempty"`
 	ImagesVersion string `json:"imagesVersion,omitempty"`
+	// Actor is who shipped Bundle (docs/actors.md); absent when that is not
+	// known (a Bundle from before actor stamps, or one that is gone).
+	Actor *uiActorRef `json:"actor,omitempty"`
+}
+
+// uiActorRef is who shipped a version, in short, for the views that list many
+// versions (the fleet board, the Agents filter, the station map): the
+// Bundle's actor kind, its agent and sponsor, and the sentence the Bundle
+// API's actorText gives.
+type uiActorRef struct {
+	// Kind is human, agent, bot or controller.
+	Kind    string `json:"kind"`
+	Agent   string `json:"agent,omitempty"`
+	Sponsor string `json:"sponsor,omitempty"`
+	// Text is the actor as one sentence ("agent fixer for alice").
+	Text string `json:"text"`
+}
+
+// actorRefOf is b's actor in short, or nil when it is not known: no stamp
+// (actor.OrUnknown's kind unknown) or no Bundle.
+func actorRefOf(b *v1alpha1.Bundle) *uiActorRef {
+	if b == nil || b.Spec.Actor == nil {
+		return nil
+	}
+	a := *b.Spec.Actor
+	return &uiActorRef{Kind: a.Kind, Agent: a.Agent, Sponsor: a.Sponsor, Text: actor.Describe(a)}
 }
 
 // pick returns pointers to the steps at idx.
@@ -196,6 +225,7 @@ func deployedByEnv(p *v1alpha1.Pipeline, byEnv map[string][]*v1alpha1.PromotionS
 		d := uiDeployed{Bundle: dep.Bundle}
 		if b := bundles[dep.Bundle]; b != nil {
 			d.Version = version(dep.Bundle, b.Spec)
+			d.Actor = actorRefOf(b)
 		}
 		if b := bundles[dep.ConfigFrom]; b != nil {
 			d.ConfigFrom = dep.ConfigFrom
@@ -844,6 +874,7 @@ func pipelineListResponse(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bund
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
 			resp.ActiveBundleVersion = scm.BundleVersion(ab.bundle.Spec)
+			resp.ActiveBundleActor = actorRefOf(ab.bundle)
 			if len(ab.envStates) > 0 {
 				resp.EnvironmentStates = ab.envStates
 			}

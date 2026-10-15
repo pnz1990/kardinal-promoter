@@ -63,6 +63,19 @@ person (a failed promotion, a blocking gate, a hold) says so on its line, and th
 top narrows the board to those. **⊞ Ops** in the sidebar (or **Show the operations table** in the palette) lists the same
 pipelines as a sortable table.
 
+### Who shipped a version
+
+Every view names who shipped a version the same way, from its verified actor
+([Actors](actors.md)): a person by name, an agent by name with its sponsor ("fixer for alice"), a
+bot (a ServiceAccount) as `namespace/name`, and the controller as kardinal. A glyph says the kind,
+and the words say it too. What an agent's client asserted about itself, such as its model, is in the
+title, labelled as asserted. You see it in the stage drawer (**Shipped by**, and the history), in
+approvals (who decided), on the version strip, on the fleet board's stations and in the operations
+table. A version an agent shipped is marked `· agent` on the map and with the agent glyph on the
+fleet board. When an agent shipped what a pipeline runs or what is on its way, the filter bar shows
+**Agents**, which keeps those pipelines (`filter=agents`). A version shipped before actor stamps
+existed names nobody.
+
 ## The pipeline page
 
 The top line names the pipeline, its state and where its newest version is, with **Pause** and
