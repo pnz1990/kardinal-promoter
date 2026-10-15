@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,6 +48,26 @@ func TestOrphanPages(t *testing.T) {
 		"file docs/lonely.md: a docs page neither in mkdocs.yml nor linked from another page",
 		"file docs/reference/api.md: a docs page neither in mkdocs.yml nor linked from another page",
 	}, orphanPages(r))
+}
+
+// TestBuildOutput: a committed docs site (mkdocs.yml's site_dir, or mkdocs'
+// sitemap.xml or search index anywhere) is reported once per directory.
+func TestBuildOutput(t *testing.T) {
+	assert.Empty(t, buildOutput(fakeRepo(map[string]string{"mkdocs.yml": "site_name: x\n", "docs/index.md": "", "docs/sitemap.md": ""})))
+	assert.Equal(t, []string{
+		"file site/: committed docs-site build output (mkdocs); docs.yml builds the site from source: git rm -r it and keep it in .gitignore",
+	}, buildOutput(fakeRepo(map[string]string{"mkdocs.yml": "site_name: x\n", "site/index.html": "", "site/a/index.html": ""})))
+	got := buildOutput(fakeRepo(map[string]string{
+		"mkdocs.yml":                   "site_name: x\nsite_dir: public/\n",
+		"public/index.html":            "",
+		"out/sitemap.xml":              "",
+		"old/search/search_index.json": "",
+		"site/kept.txt":                "", // not the site_dir any more
+	}))
+	assert.Len(t, got, 3)
+	for i, d := range []string{"file old/:", "file out/:", "file public/:"} {
+		assert.True(t, strings.HasPrefix(got[i], d), got[i])
+	}
 }
 
 func TestOrphanAssets(t *testing.T) {
@@ -156,6 +177,6 @@ func TestRepoIsClean(t *testing.T) {
 	require.NoError(t, err)
 	allow, err := readAllow(filepath.Join(root, allowFile))
 	require.NoError(t, err)
-	found := append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...)
+	found := append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...)
 	assert.Empty(t, filter(found, allow, map[string]bool{"file": true}))
 }

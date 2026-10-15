@@ -10,7 +10,10 @@
 //   - docs pages that are neither in mkdocs.yml nor linked from another page;
 //     files under docs/assets, docs/stylesheets and docs/javascripts that
 //     nothing names;
-//   - scripts and Go programs under hack/ and scripts/ that nothing calls.
+//   - scripts and Go programs under hack/ and scripts/ that nothing calls;
+//   - committed build output of the docs site: mkdocs.yml's site_dir (site/
+//     by default), or a sitemap.xml or search/search_index.json anywhere.
+//     docs.yml builds and deploys the site from source.
 //
 // hack/hygiene/allow.txt lists the intentional exceptions, each with its
 // reason; an entry that no longer matches anything is reported too, so the
@@ -97,6 +100,36 @@ func (r *repo) mentioned(needle string, skip func(string) bool, in func(string) 
 		}
 	}
 	return false
+}
+
+// siteDir is mkdocs.yml's site_dir.
+var siteDir = regexp.MustCompile(`(?m)^site_dir:\s*["']?([^"'\s#]+)`)
+
+// buildOutput reports committed docs-site build output, once per directory:
+// the files under mkdocs.yml's site_dir, and any directory holding mkdocs'
+// sitemap.xml or search/search_index.json.
+func buildOutput(r *repo) []string {
+	dir := "site"
+	if m := siteDir.FindStringSubmatch(r.text["mkdocs.yml"]); m != nil {
+		dir = strings.TrimSuffix(m[1], "/")
+	}
+	dirs := map[string]bool{}
+	for _, f := range r.files {
+		switch {
+		case strings.HasPrefix(f, dir+"/"):
+			dirs[dir+"/"] = true
+		case path.Base(f) == "sitemap.xml":
+			dirs[path.Dir(f)+"/"] = true
+		case strings.HasSuffix(f, "/search/search_index.json") || f == "search/search_index.json":
+			dirs[path.Dir(path.Dir(f))+"/"] = true
+		}
+	}
+	var out []string
+	for d := range dirs {
+		out = append(out, "file "+d+": committed docs-site build output (mkdocs); docs.yml builds the site from source: git rm -r it and keep it in .gitignore")
+	}
+	sort.Strings(out)
+	return out
 }
 
 // orphanPages lists docs pages that are neither in mkdocs.yml nor linked from
@@ -315,7 +348,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	found := append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...)
+	found := append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...)
 	kinds := map[string]bool{"file": true}
 	if !*skipDeadcode {
 		dc, err := deadcode(*root, *bin)

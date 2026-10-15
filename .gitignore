@@ -56,3 +56,6 @@ test-results/
 # Python bytecode (hack/docs-station-map is a MkDocs hook)
 __pycache__/
 *.pyc
+
+# The docs site mkdocs builds (docs.yml deploys it); never committed (make hygiene).
+/site/
