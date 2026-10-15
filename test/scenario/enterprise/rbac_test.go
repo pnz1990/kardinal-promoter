@@ -23,11 +23,11 @@ import (
 const release = scenario.Release
 
 func rm(i int) (string, []string) {
-	return fmt.Sprintf("rm-%02d@corp.example.com", i), []string{team(i) + "-release", "system:authenticated"}
+	return fmt.Sprintf("rm-%02d@corp.example.com", i), []string{Team(i) + "-release", "system:authenticated"}
 }
 
 func dev(i int) (string, []string) {
-	return fmt.Sprintf("dev-%02d@corp.example.com", i), []string{team(i) + "-dev", "system:authenticated"}
+	return fmt.Sprintf("dev-%02d@corp.example.com", i), []string{Team(i) + "-dev", "system:authenticated"}
 }
 
 // teamBindings binds, in each team's namespace, <release>-approver to the
@@ -35,7 +35,7 @@ func dev(i int) (string, []string) {
 func teamBindings(teams int) []rbacv1.RoleBinding {
 	var out []rbacv1.RoleBinding
 	for i := 1; i <= teams; i++ {
-		ns := team(i)
+		ns := Team(i)
 		out = append(out,
 			rbacv1.RoleBinding{ObjectMeta: objectMeta(ns, "release-managers"), RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: release + "-approver"},
 				Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: ns + "-release"}}},
@@ -63,7 +63,7 @@ func tenancyViolations(authz authorizer.Authorizer, teams int) []string {
 	reads := []string{"pipelines", "bundles", "policygates", "promotionsteps", "approvals", "auditevents", "prstatuses"}
 	for i := 1; i <= teams; i++ {
 		for j := 1; j <= teams; j++ {
-			own, ns := i == j, team(j)
+			own, ns := i == j, Team(j)
 			u, g := rm(i)
 			for _, res := range reads {
 				for _, verb := range []string{"get", "list", "watch"} {
@@ -127,14 +127,14 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 	leaky := *authz
 	leaky.clusterRoleBindings = append(append([]rbacv1.ClusterRoleBinding(nil), c.CRBs...), rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "leak"}, RoleRef: rbacv1.RoleRef{Kind: "ClusterRole", Name: release + "-approver"},
-		Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: team(1) + "-release"}}})
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.GroupKind, Name: Team(1) + "-release"}}})
 	assert.NotEmpty(t, tenancyViolations(&leaky, teams), "a cluster-wide approver binding must show as a tenancy violation")
 
 	u1, g1 := rm(1)
 	u2, g2 := rm(2)
 	approval := func(username string, groups []string) map[string]interface{} {
 		return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Approval",
-			"metadata": map[string]interface{}{"namespace": team(1), "name": "a",
+			"metadata": map[string]interface{}{"namespace": Team(1), "name": "a",
 				"labels": map[string]interface{}{"kardinal.io/bundle": "app-01-1-1-0", "kardinal.io/environment": "prod"}},
 			"spec": map[string]interface{}{"bundle": "app-01-1-1-0", "bundleUID": "u1", "environment": "prod", "user": username,
 				"groups": toIfaces(groups), "decision": "approve"},
@@ -142,7 +142,7 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 	}
 	bundle := func(by string) map[string]interface{} {
 		b := map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
-			"metadata": map[string]interface{}{"namespace": team(1), "name": "app-01-1-1-0"},
+			"metadata": map[string]interface{}{"namespace": Team(1), "name": "app-01-1-1-0"},
 			"spec":     map[string]interface{}{"type": "image", "pipeline": "app-01"}}
 		if by != "" {
 			b["spec"].(map[string]interface{})["rejected"] = map[string]interface{}{"by": by, "reason": "bad"}
@@ -151,7 +151,7 @@ func TestEnterprise_TenantRBAC(t *testing.T) {
 	}
 	var namespaces []string
 	for i := 1; i <= teams; i++ {
-		namespaces = append(namespaces, team(i))
+		namespaces = append(namespaces, Team(i))
 	}
 	policies := []string{release + "-approvals", release + "-bundle-rejection"}
 	cases := []struct {

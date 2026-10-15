@@ -37,10 +37,11 @@ func MatrixRows(t *testing.T) [][]string {
 }
 
 // MatrixParts is how many packages the matrix runs in
-// (test/scenario/matrix/part1..3): each is a go test process of its own, so
-// CI's shards spread the matrix and each part stays within a shard's
-// two-minute budget under -race.
-const MatrixParts = 3
+// (test/scenario/matrix/part1..12): each is a go test process of its own,
+// so CI's shards spread the matrix, and each part takes at most 45 s under
+// -race on CI (test/hack TestScenarioDurations holds every scenario package
+// under 60 s in hack/ci/test-durations.txt).
+const MatrixParts = 12
 
 // RunMatrix runs part (1-based) of MatrixRows: every MatrixParts-th row,
 // each in a World of its own and in parallel (RunCombo).

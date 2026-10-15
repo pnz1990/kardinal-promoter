@@ -12,6 +12,6 @@ import (
 
 func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
 
-// TestScenarioMatrix runs part 3 of the three parts of the scenario matrix
-// (scenario.MatrixRows).
+// TestScenarioMatrix runs part 3 of the scenario.MatrixParts parts of the
+// scenario matrix (scenario.MatrixRows).
 func TestScenarioMatrix(t *testing.T) { scenario.RunMatrix(t, 3) }

@@ -501,7 +501,7 @@ jobs:
         env:
           KARDINAL_SCENARIO_ENTERPRISE: full
           KUBECONFIG: /dev/null
-        run: go test ./test/scenario/enterprise/ -count=1 -timeout 15m -v -run 'TestEnterprise_'
+        run: go test ./test/scenario/enterprise/... -count=1 -timeout 15m -v -run 'TestEnterprise_'
 
   # ── golangci-lint ────────────────────────────────────────────────────────────
   golangci-lint:

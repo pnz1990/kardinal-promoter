@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package enterprise
+package agents
 
 import (
 	"encoding/json"
@@ -29,6 +29,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario"
+	"github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise"
 )
 
 // agentSize is the agent load: Identities AgentIdentities registered, of
@@ -40,10 +41,10 @@ type agentSize struct{ Teams, PipelinesPerTeam, Identities, Agents, Bursts, Prob
 // fullAgents is CI's scenario-enterprise job (KARDINAL_SCENARIO_ENTERPRISE=
 // full): 2,000 AgentIdentities, half the index's 4,000-subject bound, and 50
 // agents across 20 teams. quickAgents keeps go test ./... fast, with a
-// 64 KiB bound to overflow.
+// 32 KiB bound to overflow.
 var (
 	fullAgents  = agentSize{Teams: 20, PipelinesPerTeam: 3, Identities: 2000, Agents: 50, Bursts: 3, Probes: 4000}
-	quickAgents = agentSize{Teams: 4, PipelinesPerTeam: 2, Identities: 200, Agents: 8, Bursts: 2, Probes: 500, IndexBytes: 64 << 10}
+	quickAgents = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 90, Agents: 6, Bursts: 2, Probes: 300, IndexBytes: 32 << 10}
 )
 
 func agentSizeFromEnv() agentSize {
@@ -91,7 +92,7 @@ func agentRegistry(sz agentSize) registry {
 	created := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	for i := 0; i < sz.Identities; i++ {
 		name := fmt.Sprintf("agent-%04d", i)
-		ns := team(1 + i%sz.Teams)
+		ns := enterprise.Team(1 + i%sz.Teams)
 		sponsor := fmt.Sprintf("sponsor-%02d@corp.example.com", rng.IntN(30))
 		subj := []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: ns, Name: name}}
 		switch rng.IntN(10) {
@@ -103,7 +104,7 @@ func agentRegistry(sz agentSize) registry {
 		scope := v1alpha1.AgentScope{Namespaces: []string{ns}}
 		switch rng.IntN(8) {
 		case 0:
-			scope.Pipelines = []string{pipelineName(1)}
+			scope.Pipelines = []string{enterprise.PipelineName(1)}
 		case 1:
 			scope.Namespaces = []string{"team-0*"}
 		case 2:
@@ -153,10 +154,10 @@ func agentRegistry(sz agentSize) registry {
 	}
 	// One active agent per team in turn, each on its own Pipeline.
 	for k := 0; k < sz.Agents; k++ {
-		ns := team(1 + k%sz.Teams)
+		ns := enterprise.Team(1 + k%sz.Teams)
 		if k/sz.Teams < len(candidates[ns]) {
 			a := candidates[ns][k/sz.Teams]
-			a.pipeline = pipelineName(1 + k/sz.Teams%sz.PipelinesPerTeam)
+			a.pipeline = enterprise.PipelineName(1 + k/sz.Teams%sz.PipelinesPerTeam)
 			reg.active = append(reg.active, a)
 		}
 	}
@@ -169,7 +170,7 @@ func agentRegistry(sz agentSize) registry {
 	for i := 0; i < 400; i++ {
 		reg.people = append(reg.people, scenario.Identity{Username: fmt.Sprintf("person-%03d@corp.example.com", i),
 			Groups: []string{fmt.Sprintf("team-%02d-dev", 1+i%sz.Teams), "system:authenticated"}})
-		ns := team(1 + i%sz.Teams)
+		ns := enterprise.Team(1 + i%sz.Teams)
 		reg.bots = append(reg.bots, scenario.Identity{Username: fmt.Sprintf("system:serviceaccount:%s:bot-%03d", ns, i),
 			Groups: scenario.ServiceAccountGroups(ns)})
 	}
@@ -200,9 +201,9 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 	w := scenario.NewWorld(t, scenario.Options{PolicyNamespaces: []string{scenario.PolicyNS}, Watch: true, Tick: 30 * time.Second,
 		Actors: true, MaxIndexBytes: sz.IndexBytes})
 	require.NoError(t, w.Client.Create(w.Ctx, scenario.TenantObjects(scenario.PolicyNS)[0]))
-	w.MustApply(orgGates()...)
+	w.MustApply(enterprise.OrgGates()...)
 	for i := 1; i <= sz.Teams; i++ {
-		tenant(t, w, team(i), sz.PipelinesPerTeam, i%2 == 0)
+		enterprise.Tenant(t, w, enterprise.Team(i), sz.PipelinesPerTeam, i%2 == 0)
 	}
 
 	// Register the agents and build the index, as the controller does.
@@ -250,7 +251,7 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 			newest[a.ns+"/"+a.pipeline] = b.Name
 			shipper[a.ns+"/"+b.Name] = a
 			// The same agent in a team it is not scoped to.
-			other := team(1 + (teamIndex(a.ns))%sz.Teams)
+			other := enterprise.Team(1 + (teamIndex(a.ns))%sz.Teams)
 			o := scenario.ImageBundle(other, a.pipeline, "9.9.9")
 			cliErr, _, err = w.CreateBundle(a.id, o)
 			require.NoError(t, err)
@@ -339,9 +340,9 @@ func TestEnterprise_AgentLoad(t *testing.T) {
 	t.Logf("%d agents, %d versions over %d bursts (%d agents suspended after the first): %d rounds, %s, reconciles %v",
 		sz.Agents, len(shipper), sz.Bursts, len(suspended), w.Rounds(), time.Since(start).Round(time.Second), w.Reconciles())
 	checkAgentStamps(t, w, sz, reg, shipper)
-	checkIsolation(t, w, size{Teams: sz.Teams, PipelinesPerTeam: sz.PipelinesPerTeam})
+	enterprise.CheckIsolation(t, w, enterprise.Size{Teams: sz.Teams, PipelinesPerTeam: sz.PipelinesPerTeam})
 	// A version lives through the bursts after it: the bound is per burst.
-	checkBounded(t, w, maxPerObject*sz.Bursts)
+	enterprise.CheckBounded(t, w, enterprise.MaxPerObject*sz.Bursts)
 
 	overflowAtScale(t, w, reg, sz)
 	n, last := w.Errors()
@@ -363,7 +364,7 @@ func approveAs(w *scenario.World) error {
 	if err := w.Client.List(w.Ctx, &gates); err != nil {
 		return err
 	}
-	rm := scenario.Identity{Username: releaseManager, Groups: []string{releaseManagers, "system:authenticated"}}
+	rm := scenario.Identity{Username: enterprise.ReleaseManager, Groups: []string{enterprise.ReleaseManagers, "system:authenticated"}}
 	for _, g := range gates.Items {
 		b, env := g.Labels["kardinal.io/bundle"], g.Labels["kardinal.io/environment"]
 		if g.Spec.Approval == nil || b == "" || g.Status.Ready {
@@ -374,7 +375,7 @@ func approveAs(w *scenario.World) error {
 			return err
 		}
 		_, _, err = lifecycle.RecordApproval(w.CtxOf(rm), w.Client, lifecycle.ApprovalRequest{Namespace: g.Namespace, Bundle: b,
-			Environment: env, User: rm.Username, Groups: []string{releaseManagers}, Decision: lifecycle.DecisionApprove, Actor: stamp})
+			Environment: env, User: rm.Username, Groups: []string{enterprise.ReleaseManagers}, Decision: lifecycle.DecisionApprove, Actor: stamp})
 		if err != nil && !strings.Contains(err.Error(), "never promotes again") && !strings.Contains(err.Error(), "already") {
 			return fmt.Errorf("approve %s/%s: %w", g.Namespace, b, err)
 		}
@@ -415,7 +416,7 @@ func probes(reg registry, idx *v1alpha1.AgentIndexStatus, sz agentSize, n int) (
 	for i := 0; i < n; i++ {
 		var u user.Info
 		var id scenario.Identity
-		ns := team(1 + rng.IntN(sz.Teams))
+		ns := enterprise.Team(1 + rng.IntN(sz.Teams))
 		switch c := rng.IntN(100); {
 		case c < 35:
 			id = pick(reg.agents)
@@ -458,7 +459,7 @@ func probes(reg registry, idx *v1alpha1.AgentIndexStatus, sz agentSize, n int) (
 				stamp = &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: u.GetName(), Agent: e.Agent, Sponsor: e.Sponsor}
 			}
 		}
-		pl := pipelineName(1 + rng.IntN(sz.PipelinesPerTeam))
+		pl := enterprise.PipelineName(1 + rng.IntN(sz.PipelinesPerTeam))
 		env := []string{"dev", "staging", "prod"}[rng.IntN(3)]
 		pr := probe{u: u, where: actor.Where{Namespace: ns}}
 		var err error
@@ -546,11 +547,11 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 	t.Helper()
 	c, err := scenario.RenderChart()
 	require.NoError(t, err)
-	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c, []string{release + "-actor"}, nil), nil)
+	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c, []string{scenario.Release + "-actor"}, nil), nil)
 	require.NoError(t, err)
 	t.Cleanup(stop)
 	for i := 1; i <= sz.Teams; i++ {
-		require.NoError(t, api.EnsureNamespace(team(i)))
+		require.NoError(t, api.EnsureNamespace(enterprise.Team(i)))
 	}
 	require.NoError(t, api.EnsureNamespace("ci"))
 	prs, err := probes(reg, &idx.Status, sz, sz.Probes)
@@ -588,7 +589,7 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 			}
 		}
 		if err != nil {
-			assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy '"+release+"-actor'", "probe %d", i)
+			assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy '"+scenario.Release+"-actor'", "probe %d", i)
 			assert.NotContains(t, err.Error(), "resulted in error", "probe %d: a refusal names its reason", i)
 		}
 	}
@@ -669,7 +670,7 @@ func checkAgentStamps(t *testing.T, w *scenario.World, sz agentSize, reg registr
 		psrec.AuditActionPromotionSuperseded: true}
 	audited := 0
 	for i := 1; i <= sz.Teams; i++ {
-		ns := team(i)
+		ns := enterprise.Team(i)
 		var bl v1alpha1.BundleList
 		require.NoError(t, w.Client.List(w.Ctx, &bl, client.InNamespace(ns)))
 		stamps := map[string]v1alpha1.Actor{}
@@ -737,7 +738,7 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 		for j := 0; j < 16; j++ {
 			subj = append(subj, v1alpha1.AgentSubject{Kind: "User", Name: fmt.Sprintf("oidc:%s-%04d-%02d", strings.Repeat("o", 230), i, j)})
 		}
-		a := scenario.AgentIdentityOf(fmt.Sprintf("bulk-%04d", i), subj, []string{team(1)}, true)
+		a := scenario.AgentIdentityOf(fmt.Sprintf("bulk-%04d", i), subj, []string{enterprise.Team(1)}, true)
 		w.MustApply(a)
 		names = append(names, a.Name)
 	}
@@ -772,3 +773,5 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	require.NoError(t, err)
 	assert.Empty(t, refused, "the agent ships again")
 }
+
+func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
