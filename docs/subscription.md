@@ -389,6 +389,7 @@ Complete manifests for the image and git sources are in
 | `status.lastSeenRevision` | With `pathGlob`: the branch head the last poll read up to |
 | `status.lastRefreshRequest` | The `kardinal.io/refresh` value the last poll answered |
 | `status.observedPathGlob` | The `pathGlob` of the last successful poll |
+| `status.observedSelection` | A hash of the tag selection (`strategy`, the tag filters, `discoveryLimit`) `lastSeenDigest` was chosen with |
 | `status.conditions[type=Ready]` | `True` while polling; `False` with the reason (`SecretNotReferenceable`, `SecretNotFound`, `SecretUnreadable`, `SecretHasNoCredentials`, `WatchFailed`, `InvalidSpec`) |
 | `status.message` | Error details when phase=Error |
 
@@ -397,6 +398,18 @@ Complete manifests for the image and git sources are in
 The first poll records the current digest in `status.lastSeenDigest` as a baseline and
 creates no version: an artifact that already existed when the Subscription was created is
 not promoted. Each later poll that sees a different digest creates one version.
+
+Editing what selects the tag also records a new baseline and creates no version. For an
+image Subscription that is `strategy`, `tagFilter`, `excludeTagFilter`, `allowTags`,
+`ignoreTags`, `semverConstraint` and `discoveryLimit`. For a Helm Subscription it is its
+filters. The poll after the edit records what the new selection picks, in
+`status.lastSeenDigest` and `status.observedSelection` (a hash of those fields), and the
+next new artifact under it is a version. A new selection can pick an older artifact, for
+example `strategy: Lexical` instead of `NewestBuild`, and promoting it would roll the
+environments back. An edit that picks the same way, such as `interval`, the order of
+`allowTags` or a default spelled out, is not a new baseline. The same applies to `pathGlob`
+(see [Path filtering](#path-filtering-pathglob)). A Subscription whose baseline predates
+`status.observedSelection` keeps it, and its first poll after an upgrade records the selection.
 
 Before creating a version the controller lists the Subscription's versions (label
 `kardinal.io/subscription`). When the newest one is already for the digest (label

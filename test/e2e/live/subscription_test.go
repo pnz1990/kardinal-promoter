@@ -229,6 +229,51 @@ func TestSub_ImageTagFilter(t *testing.T) {
 	assert.Len(t, bundles(t, e, a.ns), 1)
 }
 
+// TestSub_ImageSelectionEdit checks that editing what selects the tag is a
+// new baseline (#1943): a NewestBuild Subscription tracks the newest build;
+// changing strategy to Lexical selects an older build that only sorts last,
+// which is recorded (status.observedSelection changes) and creates no Bundle,
+// so nothing rolls back; the next new tag under the new selection is a Bundle.
+//
+// Covers SUB-OCI-05.
+func TestSub_ImageSelectionEdit(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := pausedApp(t, e, e.Namespace(t), "test")
+	reg := framework.NewRegistry(t)
+	repo := a.ns + "/podinfo"
+	older := reg.Copy(t, "6.13.0", repo, "build-old") // the oldest build sorts last
+	newest := reg.Copy(t, "6.15.0", repo, "build-new")
+	reg.Copy(t, "6.14.0", repo, "build-mid")
+
+	spec := imageSub(reg.Ref(repo), `^build-`, "30s")
+	spec.Image.Strategy = v1alpha1.TagStrategyNewestBuild
+	newSub(t, e, a.ns, "builds", spec)
+	s := waitBaseline(t, e, a.ns, "builds", newest)
+	assert.Equal(t, "build-new", s.Status.LastSeenTag)
+	before := s.Status.ObservedSelection
+	require.NotEmpty(t, before, "the baseline records its selection")
+
+	cur := getSub(t, e, a.ns, "builds")
+	cur.Spec.Image.Strategy = v1alpha1.TagStrategyLexical
+	require.NoError(t, e.Client.Update(context.Background(), cur))
+	s = waitSub(t, e, a.ns, "builds", "the poll of the edited strategy", func(st v1alpha1.SubscriptionStatus) bool {
+		return st.ObservedSelection != before
+	})
+	assert.Equal(t, older, s.Status.LastSeenDigest, "Lexical selects build-old")
+	assert.Equal(t, "build-old", s.Status.LastSeenTag)
+	assert.Empty(t, s.Status.LastBundleCreated, "an edited selection is a baseline, not a version")
+	assert.Empty(t, subBundles(t, e, a.ns, "builds"), "the older build is not promoted")
+
+	d := reg.Copy(t, "6.14.0", repo, "build-zz") // sorts after build-old
+	poke(t, e, a.ns, "builds")
+	s = waitSub(t, e, a.ns, "builds", "a Bundle for build-zz", func(st v1alpha1.SubscriptionStatus) bool {
+		return st.LastBundleCreated != ""
+	})
+	assert.Equal(t, "builds-build-zz-"+digestHex(d)[:8], s.Status.LastBundleCreated)
+	assert.Len(t, subBundles(t, e, a.ns, "builds"), 1)
+}
+
 // TestSub_ImageMovingTag checks a Subscription on one moving tag (tagFilter
 // ^main$): each push of main with a new digest creates a new Bundle, named
 // after the tag and the new digest, so the pushes do not collide.

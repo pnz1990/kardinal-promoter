@@ -1528,6 +1528,7 @@ Subscription watches an OCI registry, a Git repository or a Helm chart repositor
 | `status.lastSeenTag` | string |  | LastSeenTag is the image tag, short commit SHA or chart version of lastSeenDigest. |
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
 | `status.observedPathGlob` | string |  | ObservedPathGlob is the spec.git.pathGlob the last successful poll used. When the glob changes, the next poll records a new baseline and creates no Bundle. |
+| `status.observedSelection` | string |  | ObservedSelection identifies the tag selection (spec.image strategy, tagFilter, excludeTagFilter, allowTags, ignoreTags, semverConstraint and discoveryLimit; or the spec.helm filters) lastSeenDigest was chosen with. When the selection changes, the next poll records a new baseline and creates no Bundle: a new selection picking another, perhaps older, artifact is not a new artifact. |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |
 
 ## Verdict

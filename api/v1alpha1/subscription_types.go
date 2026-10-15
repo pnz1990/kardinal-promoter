@@ -327,6 +327,15 @@ type SubscriptionStatus struct {
 	// +optional
 	ObservedPathGlob string `json:"observedPathGlob,omitempty"`
 
+	// ObservedSelection identifies the tag selection (spec.image strategy,
+	// tagFilter, excludeTagFilter, allowTags, ignoreTags, semverConstraint and
+	// discoveryLimit; or the spec.helm filters) lastSeenDigest was chosen
+	// with. When the selection changes, the next poll records a new baseline
+	// and creates no Bundle: a new selection picking another, perhaps older,
+	// artifact is not a new artifact.
+	// +optional
+	ObservedSelection string `json:"observedSelection,omitempty"`
+
 	// Conditions: Ready is True while the Subscription polls its source
 	// (phase Watching) and False with the reason otherwise, for example
 	// SecretNotReferenceable, SecretNotFound or WatchFailed.
