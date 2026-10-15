@@ -70,6 +70,7 @@ Rules:
 | [G17](#g17-a-graph-adopts-an-object-someone-else-created) | kro adopts an existing object of the name it applies and keeps fields its template does not set | High | Admission: only kro and the controller create Graph-only kinds; no update turns an existing PolicyGate or MetricCheck into an instance | None filed |
 | [G18](#g18-the-ref-watch-check-ignores-the-refs-name) | The ref watch check drops the ref's name, so a name-limited grant silently loses drift detection | Medium | No ref: the PolicyGate reconciler reads AgentIdentities (actor policy, #1843) | None filed |
 | [G19](#g19-a-namespaced-graph-identity-needs-a-cluster-wide-grant-to-read-a-cluster-scoped-ref) | A namespaced Graph identity needs a ClusterRoleBinding to read a cluster-scoped ref | Low | Not needed while AgentIdentities are read by the PolicyGate reconciler (G18) | None filed; related to G5 |
+| [G25](#g25-a-ref-cannot-be-optional) | A `ref` to a missing object or an unserved kind holds every node that reads it; a gate cannot decide what "absent" means | Low | Not needed: the error-budget gate reads Prometheus through MetricCheck ([26-error-budget-gate.md](26-error-budget-gate.md)) | None filed |
 
 Smaller constraints that shape the translator are in [Notes](#notes-constraints-we-design-around).
 
@@ -1024,6 +1025,57 @@ parent informer already does.
 
 ---
 
+## G25: A ref cannot be optional
+
+**Need.** The error-budget gate ([26-error-budget-gate.md §3](26-error-budget-gate.md#3-where-the-budget-comes-from-options))
+compared reading an SLO object (Sloth `PrometheusServiceLevel`, Pyrra `ServiceLevelObjective`)
+through a `ref` node. A gate that reads such an object must decide for itself what a missing SLO
+means: fail closed for prod, fail open for a team that has not written its SLO yet. The Graph would
+have to publish "absent" instead of holding the nodes that read it.
+
+**kro today.** A scalar `ref` whose object is not found returns `ErrNotReady`
+(`pkg/graphengine/executor/simple.go:1211-1214`); the executor records the node Unresolved and
+requeues (`simple.go:428-431`), and every node whose template reads it is data-pending. A dynamic-GVK
+`ref` whose kind is not served gets `errSchemaNotReady` from `mappingFor` (`simple.go:1402-1406`)
+and is Unresolved the same way (`simple.go:424-427`); a literal GVK that is not served fails the
+compile of the whole Graph (`pkg/graphengine/compiler/context.go:266-279`, G4). There is no field
+that makes a `ref` publish `null` or an empty object when absent. A selector `ref` comes close: an
+empty collection is ready (`pkg/graphengine/runtime/node.go:249-252`), so a dependent could test
+`size(slos) == 0`. It needs a label on the object (a label selector cannot select by name), and it
+does not help with an unserved kind.
+
+**Minimal Graph that shows it.**
+
+```yaml
+nodes:
+  - id: slo
+    ref: {apiVersion: pyrra.dev/v1alpha1, kind: ServiceLevelObjective, metadata: {name: absent}}
+  - id: gate
+    template:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: {name: gate}
+      data: {sloKnown: '${has(slo.metadata) ? "true" : "false"}'}
+```
+
+`gate` is never applied while `slo` is missing; there is no way to write `"false"`.
+
+**kardinal workaround.** None needed. Neither tool writes the budget into its CR's status (Sloth
+v0.16.0 `pkg/kubernetes/api/sloth/v1/types.go:220-234`, Pyrra v0.10.2
+`kubernetes/api/v1alpha1/servicelevelobjective_types.go:243-247`), so the gate reads Prometheus
+through a MetricCheck preset, whose reconciler reports "no data" in its own status and lets the gate
+decide in CEL.
+
+**Upstream work.** None filed.
+
+**Smallest change, no upstream work yet.** An opt-in on a scalar `ref`, for example
+`ref.optional: true`, that publishes the node as `null` (or `{}`) when the object is NotFound or its
+kind is not served, marks the node ready, and keeps the watch (or the SchemaWatcher re-enqueue) so a
+later create reconciles the Graph. Templates test it with `has()`. Only worth asking for if a
+kardinal feature needs a ref to an object the user may not have created.
+
+---
+
 ## Notes: constraints we design around
 
 These are not gaps, but the translator has to work around them.
@@ -1181,6 +1233,7 @@ blocks above.
 | G18 ref watch check | Put the ref's name in the watch access review | Yes, small fix |
 | G19 cluster-scoped refs | A read identity for `ref` targets, or kinds kro reads as itself | Yes, with G5 |
 | G20 ref wakes on every write | Opt-in generation-only wake for a scalar `ref` | Yes: the pause would read the Pipeline instead of rebuilding the Graph |
+| G25 optional ref | `ref.optional: true` publishes `null` for a missing object or unserved kind | Not now: no kardinal feature needs it (the error-budget gate reads Prometheus) |
 
 ### Hazards found
 
