@@ -73,6 +73,7 @@ func TestAudit_Retention(t *testing.T) {
 			Namespace: framework.ControllerNamespace}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, "audit-retention")
 
 	restore := e.PatchController(t, func(spec *corev1.PodSpec) {
 		framework.SetArg(spec, "audit-retention", "true")

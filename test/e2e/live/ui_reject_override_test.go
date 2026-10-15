@@ -64,6 +64,7 @@ func uiRejectOverrideSetup(t *testing.T, e *framework.Env) (ns, bundle string, u
 	}
 	_, err := e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, "", crb.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
 	})

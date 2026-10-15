@@ -1084,6 +1084,7 @@ func TestUI_APITokenReview(t *testing.T) {
 	}
 	_, err = e.Kube.RbacV1().RoleBindings(trNS).Create(ctx, binding, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, trNS, binding.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().RoleBindings(trNS).Delete(context.Background(), binding.Name, metav1.DeleteOptions{})
 	})
@@ -1187,6 +1188,7 @@ func TestUI_APIRequesterTokenReview(t *testing.T) {
 	}
 	_, err = e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, "", crb.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
 	})

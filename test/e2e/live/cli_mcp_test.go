@@ -128,6 +128,7 @@ func TestCLI_MCP(t *testing.T) {
 		RoleRef:  rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "kardinal-agent-read"},
 		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "reader", Namespace: a.ns}}}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, a.ns, "reader")
 	readerKubeconfig := saKubeconfig(t, e, a.ns, "reader")
 
 	// Read-only: the read tools, and ship refused.

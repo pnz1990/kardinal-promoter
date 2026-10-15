@@ -280,6 +280,7 @@ func TestGate_VerifyOnePartyUIDTimeout(t *testing.T) {
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "alice@example.com"}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, a.ns, "alice-promoter")
 	r := c.Exec(framework.CLIOptions{Kubeconfig: alice}, c.Args(a.ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V2)...)
 	require.Equal(t, 0, r.Code, r.Output())
 	var bundle string
@@ -343,6 +344,7 @@ func TestGate_VerifyByPerson(t *testing.T) {
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: "carol@example.com"}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, a.ns, "carol-verifier")
 	as := func(args ...string) framework.CLIResult {
 		return c.Exec(framework.CLIOptions{Kubeconfig: carol}, c.Args(a.ns, args...)...)
 	}
@@ -413,12 +415,13 @@ func TestUI_BrowserVerdicts(t *testing.T) {
 	const evidence = "https://ci.example.com/explore/1"
 	verify := func(user string, args ...string) {
 		t.Helper()
-		_, err := e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
+		rb, err := e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "verifier-", Namespace: a.ns},
 			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: verifierRole},
 			Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: user}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
+		waitBoundNamed(t, e, a.ns, rb.Name)
 		r := c.Exec(framework.CLIOptions{Kubeconfig: userKubeconfig(t, e, a.ns, user)},
 			c.Args(a.ns, append([]string{"verify", pipelineName, "uat", "--check", "explore"}, args...)...)...)
 		require.Equal(t, 0, r.Code, r.Output())
