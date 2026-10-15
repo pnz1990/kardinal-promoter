@@ -92,6 +92,7 @@ pattern of its tests.
 | `upgrade` | Forgejo, Argo CD, kardinal-promoter v0.8.1 with its bundled Graph controller and no kro; the test follows the upgrade guide, so a cluster serves one run. Runs on 1.35 and 1.37 | `TestUpgrade_*` |
 | `upgrade-v090` | Forgejo, Argo CD, kro and kardinal-promoter v0.9.0 as released; the test follows "Upgrading from v0.9.0", so a cluster serves one run. Runs on 1.35 and 1.37 | `TestUpgradeV090_*` |
 | `upgrade-v0100` | Forgejo, Argo CD, kro and kardinal-promoter v0.10.0 as released; the test follows "Upgrading from v0.10.0", so a cluster serves one run. Runs on 1.35 and 1.37 | `TestUpgradeV0100_*` |
+| `upgrade-v0110` | Forgejo, kro and kardinal-promoter v0.11.0 as released; the test builds an estate (30 Pipelines in 5 namespaces: pr-review, approvals, a fleet, a hold, a pause, versions in every phase) and follows "Upgrading from v0.11.0", so a cluster serves one run. Runs on 1.35 (the oldest supported minor) and 1.37 | `TestUpgradeV0110_*` |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
 | `shard` | Forgejo, Argo CD, and two controllers splitting the namespaces: the main release as shard `default`, `components/shard.sh`'s release as shard `b` | `TestShard_*` |
 | `scale` | Forgejo behind Toxiproxy, Prometheus Operator and Prometheus, two controller replicas built with `-race` | `TestScale_*` (see [Scale suite](#scale-suite)) |
