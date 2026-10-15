@@ -363,6 +363,13 @@ func TestRefreshOutsidePipelineNamespace(t *testing.T) {
 			"server": "https://spoke.example:6443", "namespace": dest}}
 		return app
 	}
+	// destApp deploys to the Pipeline's namespace, default, of the cluster
+	// that dest (destination.server or destination.name) names.
+	destApp := func(key, value string) runtime.Object {
+		app := argoApplication("p-test", oldSHA)
+		app.Object["spec"] = map[string]interface{}{"destination": map[string]interface{}{key: value, "namespace": "default"}}
+		return app
+	}
 	remoteKs := func() runtime.Object {
 		ks := tenantKsIn("flux-system")
 		spec := ks.Object["spec"].(map[string]interface{})
@@ -421,6 +428,15 @@ func TestRefreshOutsidePipelineNamespace(t *testing.T) {
 				fluxKustomizationFrom("default", "p-test", "GitRepository", "repo", "flux-system"), gitRepository("flux-system", "repo")}},
 			wantPatches: []string{"gitrepositories flux-system/repo", "kustomizations default/p-test"},
 			wantMsg:     "refresh requested: GitRepository flux-system/repo, Kustomization default/p-test"},
+		{name: "an Application deploying to that namespace of a cluster named by destination.name",
+			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{destApp("name", "spoke")}},
+			wantMsg: "refresh skipped (Application argocd/p-test: outside the Pipeline's namespace default"},
+		{name: "destination.name in-cluster",
+			rc:          refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{destApp("name", "in-cluster")}},
+			wantPatches: []string{"applications argocd/p-test"}, wantMsg: "refresh requested: Application argocd/p-test"},
+		{name: "destination.server https://kubernetes.default.svc/ (trailing slash)",
+			rc:          refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{destApp("server", "https://kubernetes.default.svc/")}},
+			wantPatches: []string{"applications argocd/p-test"}, wantMsg: "refresh requested: Application argocd/p-test"},
 		{name: "an Application deploying to that namespace on another cluster",
 			rc:      refreshCase{env: argo, status: pushed, dynObjs: []runtime.Object{spokeApp("default")}},
 			wantMsg: "refresh skipped (Application argocd/p-test: outside the Pipeline's namespace default"},
