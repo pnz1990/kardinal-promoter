@@ -1,0 +1,25 @@
+# hack/ci/docs-tests.txt
+#
+# The Go test packages that read the repository's docs (docs/, README.md,
+# mkdocs.yml, overrides/): ci.yml's docs-tests job runs them when a pull
+# request changes the docs and no Go (#1903), so a docs edit that breaks one
+# (a stale generated reference, a CLI line that no longer parses, a coverage
+# anchor, a changelog link) fails the pull request instead of main.
+# test/hack TestCIDocsTests finds every test package with a string literal
+# naming one of those paths and fails unless it is listed here, or listed
+# with ! and the reason its tests do not read the repository's docs.
+cmd/kardinal-controller
+cmd/kardinal/cmd
+hack/gen-api-docs
+hack/gen-reference-docs/refdocs
+hack/hygiene
+pkg/display
+pkg/reconciler/notificationhook
+pkg/reconciler/policygate
+test/examples
+test/hack
+!pkg/reconciler/promotionstep README.md is a file its tests write into scratch git repositories
+!pkg/scm README.md is a file its tests write into scratch git repositories
+!pkg/source its README.md and docs/notes.md are files of the scratch repositories it serves
+!pkg/steps/steps README.md is a file its tests write into scratch git repositories
+!pkg/steps/steps/sharedbranch README.md is a file its tests write into the scratch remote

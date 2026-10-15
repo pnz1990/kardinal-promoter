@@ -27,9 +27,55 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  # ── Docs and YAML lint (always runs) ─────────────────────────────────────────
+  # ── What changed: which jobs a pull request runs ──────────────────────────
+  # A pull request runs only the jobs of the areas it changes
+  # (hack/ci/changes.sh: go, web, chart, docs, workflows), so a docs-only
+  # pull request does not take a full CI run from the shared runners (#1903).
+  # A change to .github/, go.mod or go.sum runs everything, and pushes to main
+  # always do. A skipped job counts as passed for branch protection; "build"
+  # fails when this job fails, so a broken diff cannot skip the checks.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.areas.outputs.go }}
+      web: ${{ steps.areas.outputs.web }}
+      chart: ${{ steps.areas.outputs.chart }}
+      docs: ${{ steps.areas.outputs.docs }}
+      workflows: ${{ steps.areas.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # A pull request checks out its merge commit, whose first parent is
+          # the base branch's head: the two-commit diff is the pull request's.
+          fetch-depth: 2
+      - name: The areas this change touches
+        id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          changed="$RUNNER_TEMP/changed"
+          if [ "$EVENT" = pull_request ]; then
+            # --no-renames: a moved file counts at both paths (git mv
+            # examples/a.yaml docs/a.yaml changes examples/ too).
+            git diff --no-renames --name-only HEAD^1 HEAD > "$changed"
+          else
+            : > "$changed"
+            export ALL=1
+          fi
+          bash hack/ci/changes.sh < "$changed" | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### Areas"
+            bash hack/ci/changes.sh < "$changed" | sed 's/^/- /'
+            echo
+            echo "$(wc -l < "$changed") files changed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Docs and YAML lint (docs, Go or chart changes) ─────────────────────────────────────────
   docs-lint:
     name: docs-lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true' || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -84,6 +130,8 @@ jobs:
   # ci-health.yml keeps the durations current.
   checks:
     name: build checks
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -156,6 +204,8 @@ jobs:
 
   test:
     name: go test (${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -194,20 +244,74 @@ jobs:
           echo "shard $SHARD/$SHARDS: ${#packages[@]} packages"
           go test -race -count=1 -timeout 120s "${packages[@]}"
 
+  # The Go tests that read the docs (hack/ci/docs-tests.txt: generated
+  # references, CLI lines, coverage anchors, changelog links) for a pull
+  # request that changes the docs and no Go: the shards, which run them
+  # otherwise, are skipped then (#1903).
+  docs-tests:
+    name: docs tests
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.go != 'true' && needs.changes.outputs.chart != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Restore the Go race cache
+        # Saved by the go-cache job on main; see there.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-race-${{ runner.os }}-
+      - name: Install Helm
+        # test/examples renders charts with helm template.
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: go test -race the packages whose tests read the docs
+        run: |
+          mapfile -t packages < <(awk '$0 !~ /^#/ && $0 !~ /^!/ && NF { print "./" $1 "/" }' hack/ci/docs-tests.txt)
+          echo "${#packages[@]} packages: ${packages[*]}"
+          go test -race -count=1 -timeout 120s "${packages[@]}"
+
   build:
     name: build
-    needs: [checks, test]
-    # Runs when a needed job failed too (and fails), not when the run was
-    # cancelled.
+    needs: [changes, checks, test, docs-tests]
+    # Runs when a needed job failed or was skipped too (and decides), not
+    # when the run was cancelled.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require the build checks and every test shard to pass
         env:
+          CHANGES: ${{ needs.changes.result }}
+          GO: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true' }}
           CHECKS: ${{ needs.checks.result }}
           TESTS: ${{ needs.test.result }}
+          DOCS: ${{ needs.changes.outputs.docs == 'true' }}
+          DOCS_TESTS: ${{ needs.docs-tests.result }}
         run: |
-          echo "build checks: $CHECKS, go test shards: $TESTS"
+          echo "changes: $CHANGES (Go jobs run: $GO), build checks: $CHECKS, go test shards: $TESTS"
+          if [ "$CHANGES" != success ]; then
+            echo "::error::the changes job did not pass ($CHANGES): which checks to run is unknown"
+            exit 1
+          fi
+          if [ "$GO" != true ]; then
+            # The Go tests that read the docs ran in docs-tests instead.
+            if [ "$DOCS" = true ] && [ "$DOCS_TESTS" != success ]; then
+              echo "::error::the docs changed and the docs tests did not pass ($DOCS_TESTS)"
+              exit 1
+            fi
+            echo "no Go, chart or workflow change: the build checks and the test shards did not need to run"
+            exit 0
+          fi
           if [ "$CHECKS" != success ] || [ "$TESTS" != success ]; then
             echo "::error::build checks ($CHECKS) and every go test shard ($TESTS) must pass"
             exit 1
@@ -274,6 +378,8 @@ jobs:
   # ── Integration tests: reconcilers via fake client (no cluster needed) ────────
   integration:
     name: integration tests
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -301,6 +407,8 @@ jobs:
   # writes it under testdata/fuzz/<target>/: commit it with the fix.
   fuzz:
     name: fuzz
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -338,6 +446,8 @@ jobs:
   # the full size without -race, which would take it past ten minutes.
   scenario-enterprise:
     name: scenario enterprise (full size)
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -366,6 +476,8 @@ jobs:
   # ── golangci-lint ────────────────────────────────────────────────────────────
   golangci-lint:
     name: golangci-lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -399,6 +511,8 @@ jobs:
   # (knip) runs in the frontend job, which has node_modules.
   hygiene:
     name: hygiene
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true' || needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -423,6 +537,8 @@ jobs:
   # ── Security scan ────────────────────────────────────────────────────────────
   govulncheck:
     name: govulncheck
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -439,6 +555,8 @@ jobs:
   # ── go.sum integrity ─────────────────────────────────────────────────────────
   go-sum-integrity:
     name: go.sum integrity
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -450,11 +568,14 @@ jobs:
         run: go mod verify
 
   # ── Trivy filesystem vulnerability scan ──────────────────────────────────────
+  # Runs for web changes too: it scans web/package-lock.json.
   # Scans Go module dependencies for HIGH/CRITICAL CVEs and blocks CI on findings.
   # Uses filesystem scan (no Docker image build required) — complements the
   # release.yml image scan and govulncheck for defense-in-depth.
   trivy-fs:
     name: trivy vulnerability scan
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -472,6 +593,8 @@ jobs:
   # ── Journey tests (fake-client, no cluster required) ────────────────────────
   e2e-stubs:
     name: e2e stubs compile
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -514,6 +637,8 @@ jobs:
   # ── create-bundle composite action tests ──────────────────────────────────
   action-tests:
     name: action-tests
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -523,6 +648,8 @@ jobs:
   # ── Frontend build ───────────────────────────────────────────────────────────
   frontend:
     name: frontend build
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -589,6 +716,8 @@ jobs:
   # only newer API servers accept must never ship again (#1835).
   envtest:
     name: envtest (${{ matrix.k8s }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -627,6 +756,8 @@ jobs:
   # ── Helm chart lint (only when chart directory exists) ───────────────────────
   helm-lint:
     name: helm lint
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

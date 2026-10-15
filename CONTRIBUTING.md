@@ -153,6 +153,12 @@ date with `main`. A pull request merges when its own head is green and it has no
   ready pull request also changes. A maintainer merges it by hand, after rebasing it onto the
   current `main` and seeing CI green there; several risky pull requests go together on one
   train branch with one CI run.
+- **Path-scoped pull request CI.** A pull request runs only the CI jobs of the areas it changes
+  (`hack/ci/changes.sh`): Go jobs for Go, tests, `hack/`, examples or the chart; the frontend job for
+  `web/`; helm lint for the chart; docs-lint for the docs or Go. A docs-only pull request runs
+  docs-lint and the checks every pull request runs, and is green in a few minutes. A change to
+  `.github/`, `go.mod` or `go.sum` runs everything. The skipped jobs' required checks report as
+  passed, and `build` fails when the `changes` job does.
 - **CI on `main`.** Every merge runs CI on `main`, and a run on `main` is never cancelled by the
   next merge (pull request runs are: a new push cancels the old run). `build` passes when the
   build checks (tidy, vet, build, license headers, CRD schemas) and every `go test -race`
