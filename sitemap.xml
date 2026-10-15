@@ -173,6 +173,14 @@
          <lastmod>2026-10-15</lastmod>
     </url>
     <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/agentic/freezes/</loc>
+         <lastmod>2026-10-15</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/agentic/policy/</loc>
+         <lastmod>2026-10-15</lastmod>
+    </url>
+    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/agentic/threat-model/</loc>
          <lastmod>2026-10-15</lastmod>
     </url>
@@ -341,6 +349,10 @@
          <lastmod>2026-10-15</lastmod>
     </url>
     <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-freeze/</loc>
+         <lastmod>2026-10-15</lastmod>
+    </url>
+    <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-get-auditevents/</loc>
          <lastmod>2026-10-15</lastmod>
     </url>
@@ -446,6 +458,10 @@
     </url>
     <url>
          <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-status/</loc>
+         <lastmod>2026-10-15</lastmod>
+    </url>
+    <url>
+         <loc>https://pnz1990.github.io/kardinal-promoter/reference/cli/kardinal-unfreeze/</loc>
          <lastmod>2026-10-15</lastmod>
     </url>
     <url>

@@ -566,6 +566,117 @@
         ],
         "type": "object"
       },
+      "Freeze": {
+        "additionalProperties": false,
+        "description": "uiFreeze is one freeze (a ChangeWindow with spec.freeze) for the banner.",
+        "properties": {
+          "active": {
+            "description": "Active is whether it holds promotions now.",
+            "type": "boolean"
+          },
+          "actors": {
+            "description": "Actors is agents or everyone.",
+            "type": "string"
+          },
+          "createdBy": {
+            "description": "CreatedBy is who froze, as admission verified it.",
+            "type": "string"
+          },
+          "exemptions": {
+            "description": "Exemptions is how many exemptions are in effect.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "name": {
+            "description": "Name is the ChangeWindow's name.",
+            "type": "string"
+          },
+          "namespaces": {
+            "description": "Namespaces limits the freeze; empty is every namespace.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Reason is why.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Scope says whom and where it holds (\"agents, every namespace\").",
+            "type": "string"
+          },
+          "since": {
+            "description": "Since and Until (empty: until unfrozen) are RFC 3339 times.",
+            "type": "string"
+          },
+          "until": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "actors",
+          "createdBy",
+          "exemptions",
+          "name",
+          "namespaces",
+          "reason",
+          "scope",
+          "since"
+        ],
+        "type": "object"
+      },
+      "FreezeRequest": {
+        "additionalProperties": false,
+        "description": "uiFreezeRequest is the body of POST /api/v1/ui/freeze.",
+        "properties": {
+          "actors": {
+            "description": "Actors is agents (an agent freeze) or everyone (stop-the-line).",
+            "type": "string"
+          },
+          "minutes": {
+            "description": "Minutes ends the freeze after that long; 0 lasts until unfrozen.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "namespace": {
+            "description": "Namespace limits the freeze to one namespace; empty is every namespace.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason is shown on every held step. Required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actors",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "FreezesResponse": {
+        "additionalProperties": false,
+        "description": "uiFreezesResponse is the body of GET /api/v1/ui/freezes.",
+        "properties": {
+          "freezes": {
+            "items": {
+              "$ref": "#/components/schemas/Freeze"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "freezes"
+        ],
+        "type": "object"
+      },
       "GateOverrideRequest": {
         "additionalProperties": false,
         "description": "uiGateOverrideRequest is the body of POST /api/v1/ui/gates/{name}/approve.",
@@ -1580,6 +1691,20 @@
         ],
         "type": "object"
       },
+      "UnfreezeRequest": {
+        "additionalProperties": false,
+        "description": "uiUnfreezeRequest is the body of POST /api/v1/ui/unfreeze.",
+        "properties": {
+          "name": {
+            "description": "Name is the freeze's ChangeWindow name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "ValidateCELRequest": {
         "additionalProperties": false,
         "description": "uiValidateCELRequest is the body of POST /api/v1/ui/validate-cel.",
@@ -1660,7 +1785,7 @@
             "type": "string"
           },
           "verb": {
-            "description": "Verb and Resource (with Subresource) name one of the UI's actions: create bundles, create approvals, update policygates/override, update pipelines/pause, update pipelines/hold or update bundles/reject.",
+            "description": "Verb and Resource (with Subresource) name one of the UI's actions: create bundles, create approvals, update policygates/override, update pipelines/pause, update pipelines/hold, update bundles/reject or update changewindows/freeze (checked cluster-wide).",
             "type": "string"
           }
         },
@@ -2512,7 +2637,7 @@
     },
     "/api/v1/ui/access": {
       "post": {
-        "description": "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, pipelines/hold, bundles/reject), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most 32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30s and limited per user and in total, for this endpoint only (429 past either, saying which); a denial is an answer (allowed: false), not a 403. Without TokenReview every check is allowed and no user is named, except create approvals (an approval names who decided).",
+        "description": "Answers only for the UI's actions (create bundles, create approvals, update policygates/override, pipelines/pause, pipelines/hold, bundles/reject, changewindows/freeze checked cluster-wide), in a DNS-1123 namespace (the --watch-namespace one when set) with DNS-1123 names; at most 32 checks in 16 KiB, each distinct check reviewed once. In TokenReview mode each check is a SubjectAccessReview for the verified caller, cached for 30s and limited per user and in total, for this endpoint only (429 past either, saying which); a denial is an answer (allowed: false), not a 403. Without TokenReview every check is allowed and no user is named, except create approvals (an approval names who decided).",
         "operationId": "checkAccess",
         "requestBody": {
           "content": {
@@ -2866,6 +2991,107 @@
           {}
         ],
         "summary": "The labels, glyphs and tones of every state, the words the CLI uses",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/freeze": {
+      "post": {
+        "description": "Needs TokenReview UI auth and update on the virtual subresource changewindows/freeze, cluster-wide or in the namespace the freeze is limited to. The controller writes the freezing ChangeWindow with the caller as spec.freeze.createdBy.",
+        "operationId": "freeze",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FreezeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Freeze agents, or stop the line for everyone (kardinal freeze)",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/freezes": {
+      "get": {
+        "operationId": "listFreezes",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreezesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "List the freezes (ChangeWindows with spec.freeze) for the UI's banner",
         "tags": [
           "UI"
         ]
@@ -3672,6 +3898,68 @@
           {}
         ],
         "summary": "The Kubernetes Events of a PromotionStep, newest first",
+        "tags": [
+          "UI"
+        ]
+      }
+    },
+    "/api/v1/ui/unfreeze": {
+      "post": {
+        "description": "Needs TokenReview UI auth and update on changewindows/freeze, as the freeze it lifts.",
+        "operationId": "unfreeze",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnfreezeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "security": [
+          {
+            "uiToken": []
+          },
+          {}
+        ],
+        "summary": "Lift a freeze (kardinal unfreeze)",
         "tags": [
           "UI"
         ]
