@@ -22,8 +22,8 @@ import (
 // Round budgets: a promotion through four environments with PRs takes about
 // 25 rounds; the budgets leave room for retries.
 const (
-	maxRounds   = 160
-	blockRounds = 6
+	MaxRounds   = 160
+	BlockRounds = 6
 )
 
 // RunCombo runs one scenario of the matrix: it sets c up in a World of its
@@ -46,7 +46,7 @@ func RunCombo(t *testing.T, c Combo) {
 		}
 	})
 	require.NoError(t, p.Setup(w))
-	w.MustApply(agentFixture(ns)...)
+	w.MustApply(AgentFixture(ns)...)
 	w.Metrics.Set(MetricQuery, metricPassing)
 	if block && c.Gate == "metric" {
 		w.Metrics.Set(MetricQuery, metricFailing)
@@ -92,10 +92,10 @@ func RunCombo(t *testing.T, c Combo) {
 	switch c.Outcome {
 	case "success":
 		p.Ship(t, w, v1)
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
 			fail("bundle %s not Verified", v1.Name)
 		}
-		p.expectRunning(t, w, v1.Spec.Images[0].Tag, p.Envs...)
+		p.ExpectRunning(t, w, v1.Spec.Images[0].Tag, p.Envs...)
 		p.expectGatesReady(t, w, v1.Name)
 		p.expectPRs(t, w, v1.Name)
 	case "healthfail":
@@ -103,7 +103,7 @@ func RunCombo(t *testing.T, c Combo) {
 			w.GitOps.Fail(ns, e, "1.1.0")
 		}
 		p.Ship(t, w, v1)
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Failed" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Failed" }) {
 			fail("bundle %s not Failed", v1.Name)
 		}
 		failed := 0
@@ -117,29 +117,29 @@ func RunCombo(t *testing.T, c Combo) {
 			}
 		}
 		assert.Positive(t, failed, "a step failed its health check")
-		p.expectRunning(t, w, "1.1.0", p.upstreamOf(p.GateEnvs)...)
+		p.ExpectRunning(t, w, "1.1.0", p.upstreamOf(p.GateEnvs)...)
 	case "gateblock":
 		p.Ship(t, w, v1)
 		p.runBlocked(t, w, v1.Name, fail)
 		require.NoError(t, p.Open(w, v1.Name))
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
 			fail("bundle %s not Verified once the gate opened", v1.Name)
 		}
-		p.expectRunning(t, w, "1.1.0", p.Envs...)
+		p.ExpectRunning(t, w, "1.1.0", p.Envs...)
 	case "superseded":
 		p.Ship(t, w, v1)
 		p.runBlocked(t, w, v1.Name, fail)
 		v2 := ImageBundle(ns, PipelineName, "1.2.0")
 		p.Ship(t, w, v2)
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Superseded" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Superseded" }) {
 			fail("bundle %s not Superseded by %s", v1.Name, v2.Name)
 		}
 		p.runBlocked(t, w, v2.Name, fail)
 		require.NoError(t, p.Open(w, v2.Name))
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v2.Name] == "Verified" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v2.Name] == "Verified" }) {
 			fail("bundle %s not Verified", v2.Name)
 		}
-		p.expectRunning(t, w, "1.2.0", p.Envs...)
+		p.ExpectRunning(t, w, "1.2.0", p.Envs...)
 		for _, e := range p.GateEnvs {
 			s, ok := w.Steps(ns, v1.Name)[e]
 			assert.False(t, ok && s.Status.State == "Verified", "superseded %s promoted %s", v1.Name, e)
@@ -149,11 +149,11 @@ func RunCombo(t *testing.T, c Combo) {
 		p.runBlocked(t, w, v1.Name, fail)
 		_, err := lifecycle.Reject(AsUser(w.Ctx, "oncall@example.com"), w.Client, ns, v1.Name, "scenario: bad build", "oncall@example.com", w.Now())
 		require.NoError(t, err)
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Rejected" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Rejected" }) {
 			fail("bundle %s not Rejected", v1.Name)
 		}
 		require.NoError(t, p.Open(w, v1.Name))
-		for i := 0; i < blockRounds; i++ {
+		for i := 0; i < BlockRounds; i++ {
 			w.Round()
 		}
 		assert.Equal(t, "Rejected", w.BundlePhase(ns)[v1.Name], "a rejected Bundle stays rejected")
@@ -164,7 +164,7 @@ func RunCombo(t *testing.T, c Combo) {
 		}
 	case "rollback":
 		p.Ship(t, w, v1)
-		if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
+		if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v1.Name] == "Verified" }) {
 			fail("bundle %s not Verified", v1.Name)
 		}
 		v2 := ImageBundle(ns, PipelineName, "1.2.0")
@@ -182,7 +182,7 @@ func RunCombo(t *testing.T, c Combo) {
 			_, failedOrSuperseded := map[string]bool{"Failed": true, "Superseded": true}[w.BundlePhase(ns)[v2.Name]]
 			return failedOrSuperseded && rollbackVerified(w, ns)
 		}
-		if !w.RunUntil(maxRounds, rolledBack) {
+		if !w.RunUntil(MaxRounds, rolledBack) {
 			fail("environments %v not rolled back to 1.1.0", p.GateEnvs)
 		}
 	default:
@@ -237,7 +237,7 @@ func (p *Plan) upstreamOf(envs []string) []string {
 
 // runBlocked runs until bundle has promoted every environment its gate does
 // not hold and then checks, both ways, that the gate holds: for
-// blockRounds more rounds no gated environment gets a Verified step, the
+// BlockRounds more rounds no gated environment gets a Verified step, the
 // gate instance reports not ready, and the Bundle is still Promoting.
 func (p *Plan) runBlocked(t *testing.T, w *World, bundle string, fail func(string, ...interface{})) {
 	t.Helper()
@@ -251,10 +251,10 @@ func (p *Plan) runBlocked(t *testing.T, w *World, bundle string, fail func(strin
 		}
 		return !w.InFlight(p.NS, bundle)
 	}
-	if !w.RunUntil(maxRounds, settled) {
+	if !w.RunUntil(MaxRounds, settled) {
 		fail("bundle %s did not reach the gate (environments %v Verified)", bundle, others)
 	}
-	for i := 0; i < blockRounds; i++ {
+	for i := 0; i < BlockRounds; i++ {
 		w.Round()
 	}
 	if ph := w.BundlePhase(p.NS)[bundle]; ph != "Promoting" {
@@ -295,7 +295,7 @@ func (p *Plan) expectGatesReady(t *testing.T, w *World, bundle string) {
 	assert.True(t, ready, "the %s gate of %s is ready", p.Gate.Name, bundle)
 }
 
-func (p *Plan) expectRunning(t *testing.T, w *World, tag string, envs ...string) {
+func (p *Plan) ExpectRunning(t *testing.T, w *World, tag string, envs ...string) {
 	t.Helper()
 	run := p.Running(w)
 	for _, e := range envs {

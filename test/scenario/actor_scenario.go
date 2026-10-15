@@ -31,19 +31,19 @@ const (
 	dualUser   = "oidc:dual"
 )
 
-func saUser(name string) string { return actor.ServiceAccountPrefix + agentNS + ":" + name }
+func SAUser(name string) string { return actor.ServiceAccountPrefix + agentNS + ":" + name }
 
 // ActorIdentities are who creates a scenario's versions, by DimActor value
 // (and the refused actors of ActorRefusals).
 var ActorIdentities = map[string]Identity{
 	"human":       {Username: "dev@corp.example.com", Groups: []string{"developers", "system:authenticated"}},
-	"bot":         {Username: saUser("builder"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
-	"agent":       {Username: saUser(fixerSA), Groups: []string{"system:serviceaccounts", "system:authenticated"}, Asserted: v1alpha1.AssertedActor{Model: "model-x", Session: "run-42", Client: "kardinal/scenario"}},
+	"bot":         {Username: SAUser("builder"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	"agent":       {Username: SAUser(fixerSA), Groups: []string{"system:serviceaccounts", "system:authenticated"}, Asserted: v1alpha1.AssertedActor{Model: "model-x", Session: "run-42", Client: "kardinal/scenario"}},
 	"agent-group": {Username: triageUser, Groups: []string{triageGrp, "system:authenticated"}},
-	"suspended":   {Username: saUser("parked"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
-	"outofscope":  {Username: saUser("elsewhere"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
-	"conflict":    {Username: saUser("second"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
-	"nowhere":     {Username: saUser("nowhere"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	"suspended":   {Username: SAUser("parked"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	"outofscope":  {Username: SAUser("elsewhere"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	"conflict":    {Username: SAUser("second"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
+	"nowhere":     {Username: SAUser("nowhere"), Groups: []string{"system:serviceaccounts", "system:authenticated"}},
 	// A user that is agent dual and, by group, agent triage.
 	"two-agents": {Username: dualUser, Groups: []string{triageGrp, "system:authenticated"}},
 }
@@ -86,7 +86,7 @@ func wantCreatedBy(a string) string {
 // Its runs vote as their own ServiceAccounts; its subject is the
 // ServiceAccount it verifies with from outside the cluster.
 func qaIdentity(ns string) *v1alpha1.AgentIdentity {
-	a := AgentIdentityOf(QAAgent, []v1alpha1.AgentSubject{saSubject(QAAgent)}, []string{ns}, false)
+	a := AgentIdentityOf(QAAgent, []v1alpha1.AgentSubject{SASubject(QAAgent)}, []string{ns}, false)
 	a.Spec.Sponsor.User = QASponsor
 	return a
 }
@@ -98,11 +98,11 @@ func AgentIdentityOf(name string, subjects []v1alpha1.AgentSubject, namespaces [
 			Scope: v1alpha1.AgentScope{Namespaces: namespaces}, Suspended: suspended}}
 }
 
-func saSubject(name string) v1alpha1.AgentSubject {
+func SASubject(name string) v1alpha1.AgentSubject {
 	return v1alpha1.AgentSubject{Kind: "ServiceAccount", Namespace: agentNS, Name: name}
 }
 
-// agentFixture are the AgentIdentities of a scenario cluster in tenant ns,
+// AgentFixture are the AgentIdentities of a scenario cluster in tenant ns,
 // oldest first: fixer and triage may act in ns; parked is suspended;
 // elsewhere may act only in another namespace; first and second both list
 // ci/shared, so second (the newer) is not ready and its own subject ci/second
@@ -111,7 +111,7 @@ func saSubject(name string) v1alpha1.AgentSubject {
 // about the stamp and admission, not the approval the default autonomy
 // (approve) asks of an agent's version (docs/design/18-actor-policy.md
 // section 7, covered by the actor policy journeys).
-func agentFixture(ns string) []client.Object {
+func AgentFixture(ns string) []client.Object {
 	objs := agentIdentities(ns)
 	for _, o := range objs {
 		o.(*v1alpha1.AgentIdentity).Spec.Autonomy = v1alpha1.AutonomyAuto
@@ -121,13 +121,13 @@ func agentFixture(ns string) []client.Object {
 
 func agentIdentities(ns string) []client.Object {
 	return []client.Object{
-		AgentIdentityOf("first", []v1alpha1.AgentSubject{saSubject("shared")}, []string{ns}, false),
-		AgentIdentityOf("fixer", []v1alpha1.AgentSubject{saSubject(fixerSA)}, []string{ns}, false),
+		AgentIdentityOf("first", []v1alpha1.AgentSubject{SASubject("shared")}, []string{ns}, false),
+		AgentIdentityOf("fixer", []v1alpha1.AgentSubject{SASubject(fixerSA)}, []string{ns}, false),
 		AgentIdentityOf("triage", []v1alpha1.AgentSubject{{Kind: "Group", Name: triageGrp}}, []string{"team-*"}, false),
-		AgentIdentityOf("parked", []v1alpha1.AgentSubject{saSubject("parked")}, []string{ns}, true),
-		AgentIdentityOf("elsewhere", []v1alpha1.AgentSubject{saSubject("elsewhere")}, []string{"other-team"}, false),
-		AgentIdentityOf("second", []v1alpha1.AgentSubject{saSubject("shared"), saSubject("second")}, []string{ns}, false),
-		AgentIdentityOf("nowhere", []v1alpha1.AgentSubject{saSubject("nowhere")}, nil, false),
+		AgentIdentityOf("parked", []v1alpha1.AgentSubject{SASubject("parked")}, []string{ns}, true),
+		AgentIdentityOf("elsewhere", []v1alpha1.AgentSubject{SASubject("elsewhere")}, []string{"other-team"}, false),
+		AgentIdentityOf("second", []v1alpha1.AgentSubject{SASubject("shared"), SASubject("second")}, []string{ns}, false),
+		AgentIdentityOf("nowhere", []v1alpha1.AgentSubject{SASubject("nowhere")}, nil, false),
 		AgentIdentityOf("dual", []v1alpha1.AgentSubject{{Kind: "User", Name: dualUser}}, []string{ns}, false),
 		qaIdentity(ns),
 	}
@@ -184,7 +184,7 @@ var ActorRefusals = []ActorRefusal{
 			return id, agentStamp(id, "parked")
 		},
 		Fix: func(w *World, p *Plan) error {
-			return w.editAgent("parked", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = false })
+			return w.EditAgent("parked", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = false })
 		}, Shipper: "suspended"},
 	{Actor: "outofscope", Message: "agent elsewhere may not act here (namespace team-a, pipeline app)", CLI: actor.ErrOutOfScope,
 		Write: func(w *World, p *Plan, b *v1alpha1.Bundle) (Identity, *v1alpha1.Actor) {
@@ -192,7 +192,7 @@ var ActorRefusals = []ActorRefusal{
 			return id, agentStamp(id, "elsewhere")
 		},
 		Fix: func(w *World, p *Plan) error {
-			return w.editAgent("elsewhere", func(a *v1alpha1.AgentIdentity) {
+			return w.EditAgent("elsewhere", func(a *v1alpha1.AgentIdentity) {
 				a.Spec.Scope.Namespaces = append(a.Spec.Scope.Namespaces, p.NS)
 			})
 		}, Shipper: "outofscope"},
@@ -209,7 +209,7 @@ var ActorRefusals = []ActorRefusal{
 			if err == nil || !strings.Contains(err.Error(), "suspend agent first before deleting it") {
 				return fmt.Errorf("deleting an AgentIdentity that is not suspended: want the agent-identities policy's refusal, got %v", err)
 			}
-			if err := w.editAgent("first", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = true }); err != nil {
+			if err := w.EditAgent("first", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = true }); err != nil {
 				return err
 			}
 			return w.Client.Delete(AsUser(w.Ctx, AdminUser, AdminGroups...), first)
@@ -222,7 +222,7 @@ var ActorRefusals = []ActorRefusal{
 			return id, agentStamp(id, "nowhere")
 		},
 		Fix: func(w *World, p *Plan) error {
-			return w.editAgent("nowhere", func(a *v1alpha1.AgentIdentity) { a.Spec.Scope.Namespaces = []string{p.NS} })
+			return w.EditAgent("nowhere", func(a *v1alpha1.AgentIdentity) { a.Spec.Scope.Namespaces = []string{p.NS} })
 		}, Shipper: "nowhere"},
 	// A user that matches two agents (its username and a group) is refused,
 	// whichever of them it stamps, until one registration goes.
@@ -232,7 +232,7 @@ var ActorRefusals = []ActorRefusal{
 			return id, agentStamp(id, "dual")
 		},
 		Fix: func(w *World, p *Plan) error {
-			if err := w.editAgent("dual", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = true }); err != nil {
+			if err := w.EditAgent("dual", func(a *v1alpha1.AgentIdentity) { a.Spec.Suspended = true }); err != nil {
 				return err
 			}
 			return w.Client.Delete(AsUser(w.Ctx, AdminUser, AdminGroups...), &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "dual"}})
@@ -295,8 +295,8 @@ func ActorRefusalOf(a string) *ActorRefusal {
 	return nil
 }
 
-// editAgent changes AgentIdentity name as the cluster admin.
-func (w *World) editAgent(name string, edit func(*v1alpha1.AgentIdentity)) error {
+// EditAgent changes AgentIdentity name as the cluster admin.
+func (w *World) EditAgent(name string, edit func(*v1alpha1.AgentIdentity)) error {
 	var a v1alpha1.AgentIdentity
 	if err := w.Client.Get(w.Ctx, types.NamespacedName{Name: name}, &a); err != nil {
 		return fmt.Errorf("get agent %s: %w", name, err)
@@ -321,10 +321,10 @@ func (w *World) IndexReady() bool {
 // fails the test when it is refused.
 func (p *Plan) Ship(t *testing.T, w *World, b *v1alpha1.Bundle) {
 	t.Helper()
-	ship(t, w, p.Actor, b)
+	ShipAs(t, w, p.Actor, b)
 }
 
-func ship(t *testing.T, w *World, who string, b *v1alpha1.Bundle) {
+func ShipAs(t *testing.T, w *World, who string, b *v1alpha1.Bundle) {
 	t.Helper()
 	cliErr, refused, err := w.CreateBundle(ActorIdentities[who], b)
 	require.NoError(t, err)
@@ -344,7 +344,7 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 	var before *v1alpha1.Bundle
 	if r.Index {
 		before = ImageBundle(ns, PipelineName, "1.1.0")
-		ship(t, w, "human", before)
+		ShipAs(t, w, "human", before)
 		w.Round()
 	}
 	if r.Stalls {
@@ -354,7 +354,7 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 		require.NoError(t, r.Break(w, p))
 	}
 	if r.Actor == "index-overflow" {
-		if !w.RunUntil(blockRounds, func() bool { return !w.IndexReady() }) {
+		if !w.RunUntil(BlockRounds, func() bool { return !w.IndexReady() }) {
 			fail("the agent index stayed Ready past its bound")
 		}
 		var idx v1alpha1.AgentIndex
@@ -394,7 +394,7 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 			assert.Contains(t, strings.Join(reasons, "; "), r.Message)
 		}
 	}
-	for i := 0; i < blockRounds; i++ {
+	for i := 0; i < BlockRounds; i++ {
 		w.Round()
 	}
 	var got v1alpha1.Bundle
@@ -403,7 +403,7 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 	if before != nil {
 		// The controller and kro are not judged: the version admitted
 		// before the outage promotes through it.
-		if !r.Stalls && !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[before.Name] == "Verified" }) {
+		if !r.Stalls && !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[before.Name] == "Verified" }) {
 			fail("%s: bundle %s admitted before the outage not Verified during it", r.Actor, before.Name)
 		}
 		// Still refused while the index is out.
@@ -415,15 +415,15 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 	if r.Fix != nil {
 		require.NoError(t, r.Fix(w, p))
 	}
-	if !w.RunUntil(blockRounds, w.IndexReady) {
+	if !w.RunUntil(BlockRounds, w.IndexReady) {
 		fail("%s: the agent index is not Ready once fixed", r.Actor)
 	}
 	w.Round()
-	if before != nil && !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[before.Name] == "Verified" }) {
+	if before != nil && !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[before.Name] == "Verified" }) {
 		fail("%s: bundle %s admitted before the outage not Verified after it", r.Actor, before.Name)
 	}
-	ship(t, w, r.Shipper, v)
-	if !w.RunUntil(maxRounds, func() bool { return w.BundlePhase(ns)[v.Name] == "Verified" }) {
+	ShipAs(t, w, r.Shipper, v)
+	if !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[v.Name] == "Verified" }) {
 		fail("%s: bundle %s not Verified once the cluster was put right", r.Actor, v.Name)
 	}
 	stored := w.Bundle(ns, v.Name)
@@ -435,7 +435,7 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 	} else {
 		assert.Equal(t, wantStamp(r.Shipper), *a)
 	}
-	p.expectRunning(t, w, "1.2.0", p.Envs...)
+	p.ExpectRunning(t, w, "1.2.0", p.Envs...)
 }
 
 // checkActors checks that every version carries its creator's stamp, the

@@ -1,0 +1,69 @@
+# The relative cost of each scenario matrix row: its seconds under
+# go test -race -cpu 4 -p 4 ./test/scenario/matrix/... (contended).
+# RunMatrix splits the rows into the MatrixParts parts by these, longest
+# first, each to the part with the least so far. A row not listed counts as
+# the median. To refresh: run that command with -json and take each
+# TestScenarioMatrix/<row> pass Elapsed.
+2.05 argocd/argoRollouts/cel.org/fleet/direct/github/success/human
+3.92 argocd/argoRollouts/cel.org/linear/direct/github/success/conflict
+3.06 argocd/argoRollouts/cel.org/linear/direct/github/success/forged
+4.17 argocd/argoRollouts/cel.org/linear/direct/github/success/index-notready
+3.58 argocd/argoRollouts/cel.org/linear/direct/github/success/suspended
+3.69 argocd/argoRollouts/cel.org/linear/direct/github/success/two-agents
+3.39 argocd/argoRollouts/cel.team/linear/direct/github/success/agent-as-human
+3.53 argocd/argoRollouts/cel.team/linear/direct/github/success/human
+4.96 argocd/argoRollouts/cel.team/linear/direct/github/success/index-missing
+4.78 argocd/argoRollouts/cel.team/linear/direct/github/success/index-overflow
+3.79 argocd/argoRollouts/cel.team/linear/direct/github/success/nowhere
+3.65 argocd/argoRollouts/cel.team/linear/direct/github/success/outofscope
+1.95 argocd/argoRollouts/cel.team/linear/pr-review/github/success/human
+4.54 argocd/argoRollouts/verify.org/waves/direct/github/gateblock/bot
+4.31 argocd/argocd/approval.org/fanout/direct/gitlab/healthfail/bot
+4.80 argocd/deployment/metric.team/fanin/direct/forgejo/gateblock/agent
+5.73 argocd/flagger/changewindow.org/waves/direct/github/superseded/agent-group
+3.45 argocd/flux/soak.team/linear/direct/gitlab/rejected/agent
+7.42 argocd/resource/upstream.org/linear/direct/forgejo/rollback/bot
+4.95 helm/argoRollouts/approval.team/fanin/pr-review/github/rejected/bot
+4.63 helm/argocd/cel.org/waves/pr-review/forgejo/success/agent
+14.35 helm/argocd/verify.team/fleet/direct/gitlab/rollback/agent-group
+5.16 helm/deployment/changewindow.team/linear/pr-review/gitlab/healthfail/human
+9.91 helm/flagger/metric.org/fanout/pr-review/github/rollback/agent-group
+6.38 helm/flux/upstream.team/fleet/pr-review/github/gateblock/human
+7.19 helm/resource/soak.org/fanout/pr-review/github/superseded/human
+7.59 kustomize/argoRollouts/cel.team/linear/pr-review/forgejo/superseded/human
+6.98 kustomize/argoRollouts/metric.team/waves/pr-review/gitlab/healthfail/agent-group
+12.48 kustomize/argoRollouts/soak.org/linear/pr-review/github/rollback/human
+9.73 kustomize/argocd/changewindow.org/fanin/direct/github/rollback/human
+5.95 kustomize/deployment/cel.team/fanout/pr-review/forgejo/rejected/agent-group
+5.45 kustomize/deployment/changewindow.team/linear/pr-review/github/rejected/human
+5.69 kustomize/deployment/soak.org/linear/pr-review/github/gateblock/human
+5.07 kustomize/deployment/soak.team/fanin/pr-review/github/success/bot
+10.79 kustomize/deployment/upstream.org/fanin/pr-review/github/superseded/agent
+5.30 kustomize/deployment/upstream.team/linear/pr-review/github/rejected/human
+5.01 kustomize/flagger/approval.org/linear/pr-review/forgejo/gateblock/human
+4.82 kustomize/flagger/soak.org/fleet/pr-review/github/healthfail/agent
+4.08 kustomize/flagger/upstream.team/linear/pr-review/github/healthfail/human
+5.01 kustomize/flagger/verify.org/linear/pr-review/github/healthfail/human
+6.86 kustomize/flux/changewindow.team/linear/pr-review/github/superseded/human
+4.79 kustomize/flux/metric.org/fleet/pr-review/github/rejected/human
+4.59 kustomize/flux/verify.team/fanout/pr-review/forgejo/success/bot
+6.32 kustomize/resource/approval.team/linear/pr-review/github/healthfail/agent-group
+7.37 kustomize/resource/cel.org/fleet/direct/gitlab/superseded/agent
+5.13 kustomize/resource/cel.org/linear/pr-review/github/gateblock/human
+8.16 rendered/argoRollouts/changewindow.team/fanout/pr-review/forgejo/gateblock/agent
+6.21 rendered/argoRollouts/upstream.org/waves/pr-review/github/success/human
+8.82 rendered/argocd/metric.org/linear/direct/github/superseded/bot
+7.75 rendered/argocd/soak.team/waves/pr-review/github/rejected/agent-group
+14.63 rendered/deployment/approval.org/fleet/pr-review/github/superseded/agent-group
+20.82 rendered/deployment/approval.team/waves/pr-review/github/rollback/agent
+8.97 rendered/flagger/cel.org/fanin/pr-review/gitlab/success/agent-group
+10.06 rendered/flux/cel.team/fanin/pr-review/github/healthfail/human
+7.63 rendered/resource/verify.org/fanin/direct/github/rejected/human
+6.14 yaml/argoRollouts/soak.team/fleet/pr-review/forgejo/healthfail/bot
+5.05 yaml/argocd/upstream.org/fanout/direct/gitlab/gateblock/agent-group
+11.41 yaml/deployment/verify.team/linear/pr-review/github/superseded/agent
+4.85 yaml/flagger/cel.org/fanin/pr-review/github/rejected/bot
+3.74 yaml/flux/approval.team/waves/pr-review/github/success/human
+13.83 yaml/flux/cel.team/linear/pr-review/github/rollback/agent-group
+6.27 yaml/resource/changewindow.team/fleet/pr-review/github/success/bot
+3.94 yaml/resource/metric.org/waves/pr-review/github/success/human

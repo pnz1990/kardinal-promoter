@@ -12,7 +12,7 @@ import (
 
 func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
 
-// TestScenarioMatrix runs part 1 of the three parts of the scenario matrix
-// (scenario.MatrixRows). Covers SCEN-MATRIX-01,
+// TestScenarioMatrix runs part 1 of the scenario.MatrixParts parts of the
+// scenario matrix (scenario.MatrixRows). Covers SCEN-MATRIX-01,
 // SCEN-REJECT-01, SCEN-ACTOR-01, SCEN-VERIFY-01.
 func TestScenarioMatrix(t *testing.T) { scenario.RunMatrix(t, 1) }
