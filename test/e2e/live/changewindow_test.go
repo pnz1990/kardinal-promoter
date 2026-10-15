@@ -130,7 +130,7 @@ func allowedHours(now time.Time, loc *time.Location) (string, time.Weekday) {
 // this hour today does not block; the same hours on another day, or UTC's
 // hours read in Tokyo, block prod until the window is edited to allow now.
 //
-// Covers CW-02.
+// Covers CW-02, CLI-WHY-WINDOW-01.
 func TestGate_RecurringWindowSchedule(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -171,6 +171,19 @@ func TestGate_RecurringWindowSchedule(t *testing.T) {
 	e.WaitGateReady(t, a.ns, bundle, "prod", "timezone", false, "= false", gateTimeout)
 	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
 	assertEnvAt(t, a, "prod", fixtures.V1)
+
+	// kardinal why says when the first blocking window opens, to the minute
+	// (the other day's hours, from half an hour ago in Tokyo), and its
+	// commands name the namespace, which is not the kubeconfig's (#1940).
+	start := now.Add(-30 * time.Minute).In(tokyo)
+	opens := time.Date(start.Year(), start.Month(), start.Day(), start.Hour(), start.Minute(), 0, 0, tokyo)
+	for opens.Weekday() != other {
+		opens = opens.AddDate(0, 0, 1)
+	}
+	why := e.MustKardinal(t, a.ns, "why", pipelineName, "prod")
+	assert.Contains(t, why, "by itself at "+opens.UTC().Format("Monday 15:04 UTC")+", in about ", why)
+	assert.Contains(t, why, "when ChangeWindow "+otherDay+" allows it", why)
+	assert.Contains(t, why, "--gate other-day --reason <why> -n "+a.ns, why)
 
 	editWindow(t, e, otherDay, func(s *v1alpha1.ChangeWindowSpec) { s.Schedule.AllowedDays = []string{day.String()} })
 	editWindow(t, e, wrongTZ, func(s *v1alpha1.ChangeWindowSpec) { s.Schedule.Timezone = "UTC" })

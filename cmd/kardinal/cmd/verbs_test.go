@@ -460,9 +460,10 @@ func TestRechecks_Golden(t *testing.T) {
 // Covers CLI-VERBS-01.
 func TestExplainHints(t *testing.T) {
 	var errb bytes.Buffer
-	prev := errOut
+	prev, prevNS := errOut, contextNamespace
 	errOut = &errb
-	t.Cleanup(func() { errOut = prev })
+	contextNamespace = func() string { return "default" } // the commands need no -n
+	t.Cleanup(func() { errOut, contextNamespace = prev, prevNS })
 	at := time.Now().Add(-time.Hour)
 	approval := explainGateInstance("demo", "b1", "prod", "cab", "true", false, true, "waiting for approvals: 0 of 1")
 	approval.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}

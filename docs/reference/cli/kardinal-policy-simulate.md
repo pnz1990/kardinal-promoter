@@ -7,7 +7,7 @@ Simulate PolicyGate evaluation for a hypothetical promotion context
 Evaluate the gates of <env> as the controller would, for a Bundle that went
 through every upstream environment, at --time (UTC; default now) with
 --soak-minutes upstream. Nothing is written. The first line is RESULT: PASS or
-RESULT: BLOCKED, then each blocking gate with its message and the next hour it
+RESULT: BLOCKED, then each blocking gate with its message and the next time it
 would pass; it exits 0 either way.
 
 Selects the PolicyGates the controller attaches to the environment (the
@@ -26,8 +26,10 @@ stale now.
 --soak-minutes is the soak time of every upstream environment
 (upstream.<env>.soakMinutes and bundle.upstreamSoakMinutes).
 
-A blocked gate shows the next hour, within 7 days, at which it would pass with
-the same inputs. Gates that do not depend on time show no window.
+A blocked gate shows the next time, within 7 days, at which it would pass with
+the same inputs: a whole hour (schedule.* changes by the hour), or the minute a
+ChangeWindow changes (one that opens at 04:25 shows 04:25). Gates that do not
+depend on time show no window.
 
 The first line is RESULT: PASS or RESULT: BLOCKED. A blocked result then lists
 each blocking gate with its message and next window. Last comes one row per

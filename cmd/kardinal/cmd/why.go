@@ -201,6 +201,8 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 	if id, err := identityOf(ctx, c); err == nil {
 		me = &id
 	}
+	// The ChangeWindows a window gate reads, to say when it opens.
+	windows := changeWindows(ctx, c, gates.Items)
 	var answers []whyAnswer
 	// The newest version failed: that comes first, for every environment
 	// when it failed before any step, else for the one whose step failed.
@@ -211,7 +213,7 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 		if envFilter != "" && e.Name != envFilter {
 			continue
 		}
-		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, whyNow()))
+		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, windows, whyNow()))
 	}
 	return answers, nil
 }
@@ -251,7 +253,8 @@ func versionLabel(version, bundle string) string {
 // gate (an approval, or another gate), waiting for a PR, failed, promoting,
 // waiting for an upstream environment, or nothing to wait for.
 func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, envs []v1alpha1.PipelineEnvironmentStatus,
-	gates []v1alpha1.PolicyGate, steps []v1alpha1.PromotionStep, byName map[string]*v1alpha1.Bundle, me *Identity, now time.Time) whyAnswer {
+	gates []v1alpha1.PolicyGate, steps []v1alpha1.PromotionStep, byName map[string]*v1alpha1.Bundle, me *Identity,
+	windows []v1alpha1.ChangeWindow, now time.Time) whyAnswer {
 	incoming := e.IncomingBundle
 	incomingVersion := e.IncomingVersion
 	if incoming == "" && e.State != "" && e.State != "Verified" {
@@ -271,7 +274,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		if incoming != "" {
 			a.lines = append(a.lines, version)
 		}
-		a.lines = append(a.lines, whyLine{"Next", "kardinal resume " + p.Name})
+		a.lines = append(a.lines, whyLine{"Next", "kardinal resume " + p.Name + nsArg(p.Namespace)})
 		return a
 	}
 	if h := lifecycle.HoldOf(p, e.Name); h != nil && !h.Expired(now) {
@@ -293,7 +296,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		if h.ExpiresAt != nil {
 			a.lines = append(a.lines, whyLine{"Until", h.ExpiresAt.UTC().Format(time.RFC3339)})
 		}
-		a.lines = append(a.lines, whyLine{"Next", fmt.Sprintf("kardinal unhold %s %s", p.Name, e.Name)})
+		a.lines = append(a.lines, whyLine{"Next", fmt.Sprintf("kardinal unhold %s %s%s", p.Name, e.Name, nsArg(p.Namespace))})
 		return a
 	}
 	if len(e.BlockedBy) > 0 {
@@ -319,10 +322,10 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			if b := byName[incoming]; b != nil {
 				author, known = lifecycle.BundleAuthor(b), true
 			}
-			return whyGate(p, e.Name, version, mine, me, author, known, byName[incoming], now)
+			return whyGate(p, e.Name, version, mine, me, author, known, byName[incoming], windows, now)
 		}
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
-			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s", p.Name, e.Name)}}}
+			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s%s", p.Name, e.Name, nsArg(p.Namespace))}}}
 	}
 	state := display.Step(e.State)
 	switch {
@@ -346,9 +349,9 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			a.lines = append(a.lines, whyLine{"Why", msg})
 			a.quoted = append(a.quoted, "Why")
 		}
-		a.lines = append(a.lines, whyLine{"Next", fmt.Sprintf("kardinal logs %s %s", p.Name, e.Name)})
+		a.lines = append(a.lines, whyLine{"Next", fmt.Sprintf("kardinal logs %s %s%s", p.Name, e.Name, nsArg(p.Namespace))})
 		if e.Bundle != "" {
-			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal rollback %s %s, back to %s", p.Name, e.Name, running)})
+			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal rollback %s %s%s, back to %s", p.Name, e.Name, nsArg(p.Namespace), running)})
 		}
 		return a
 	case state.Tone == display.TonePromoting:
@@ -365,9 +368,53 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		return whyAnswer{sentence: fmt.Sprintf("%s is about to promote %s.", e.Name, versionLabel(incomingVersion, incoming))}
 	case e.Bundle == "":
 		return whyAnswer{sentence: fmt.Sprintf("%s has no version yet.", e.Name),
-			lines: []whyLine{{"Next", fmt.Sprintf("kardinal ship %s --image <ref>", p.Name)}}}
+			lines: []whyLine{{"Next", fmt.Sprintf("kardinal ship %s --image <ref>%s", p.Name, nsArg(p.Namespace))}}}
+	}
+	if b, where := onItsWay(p, e, envs, byName); b != nil {
+		// A newer version is on its way, still upstream (#1940).
+		return whyAnswer{sentence: fmt.Sprintf("%s runs %s; %s is on its way (%s).", e.Name, running,
+			versionLabel(versionOf(byName, b.Name), b.Name), where),
+			lines: []whyLine{{"Follow", fmt.Sprintf("kardinal status %s%s -w", p.Name, nsArg(p.Namespace))}}}
 	}
 	return whyAnswer{sentence: fmt.Sprintf("%s runs %s and nothing is waiting.", e.Name, running)}
+}
+
+// onItsWay is the newest version of p in flight that is newer than what e
+// runs and has not reached e yet, and where it is in words ("live in dev",
+// "promoting in uat"); nil when there is none.
+func onItsWay(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, envs []v1alpha1.PipelineEnvironmentStatus,
+	byName map[string]*v1alpha1.Bundle) (*v1alpha1.Bundle, string) {
+	running := byName[e.Bundle]
+	var newest *v1alpha1.Bundle
+	for _, b := range byName {
+		inFlight := b.Status.Phase == "" || b.Status.Phase == "Available" || b.Status.Phase == "Promoting"
+		if b.Spec.Pipeline != p.Name || !inFlight || lifecycle.Halted(b) || b.Name == e.Bundle ||
+			(running != nil && lifecycle.CompareCreation(b, running) <= 0) {
+			continue
+		}
+		if newest == nil || lifecycle.CompareCreation(b, newest) > 0 {
+			newest = b
+		}
+	}
+	if newest == nil {
+		return nil, ""
+	}
+	var live, promoting []string
+	for _, o := range envs {
+		switch newest.Name {
+		case o.IncomingBundle:
+			promoting = append(promoting, o.Name)
+		case o.Bundle:
+			live = append(live, o.Name)
+		}
+	}
+	switch {
+	case len(promoting) > 0:
+		return newest, "promoting in " + strings.Join(promoting, ", ")
+	case len(live) > 0:
+		return newest, "live in " + strings.Join(live, ", ")
+	}
+	return newest, "not in any environment yet"
 }
 
 // whyGate is why's answer for gates that hold an environment: the first
@@ -376,7 +423,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 // read, and then nothing is said about its creator. b is the version's
 // Bundle (nil when not read): a soak gate's progress is read from it at now.
 func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1.PolicyGate, me *Identity, author v1alpha1.Actor, known bool,
-	b *v1alpha1.Bundle, now time.Time) whyAnswer {
+	b *v1alpha1.Bundle, windows []v1alpha1.ChangeWindow, now time.Time) whyAnswer {
 	g := gates[0]
 	name := gateDisplayName(g)
 	var a whyAnswer
@@ -396,14 +443,14 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 			a.sentence = fmt.Sprintf("%s is held by gate %s: nobody can approve this version.", env, name)
 			a.lines = []whyLine{version,
 				{"Why", unapprovable(st.Block, author.Principal)},
-				{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>", p.Name)},
-				{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)}}
+				{"Next", fmt.Sprintf("ship it again as yourself: kardinal ship %s --image <ref>%s", p.Name, nsArg(p.Namespace))},
+				{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>%s", p.Name, env, name, nsArg(p.Namespace))}}
 			if st.Block == lifecycle.ApprovalTooMany {
 				a.lines[2].value = fmt.Sprintf("delete the stale Approvals: kubectl get approvals -n %s", p.Namespace)
 			}
 			break
 		}
-		by, next := approvalBy(st, me != nil && !creatorHeld, fmt.Sprintf("kardinal approve %s %s", p.Name, env))
+		by, next := approvalBy(st, me != nil && !creatorHeld, fmt.Sprintf("kardinal approve %s %s%s", p.Name, env, nsArg(p.Namespace)))
 		a.sentence = fmt.Sprintf("%s is waiting for %s.", env, by)
 		a.lines = []whyLine{version,
 			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, st.Approved, st.Required)},
@@ -418,8 +465,8 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 				who = strings.Join(by[:len(by)-1], ", ") + " and " + who
 			}
 			a.sentence = fmt.Sprintf("%s was rejected by %s.", env, who)
-			a.lines[2].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>", p.Name)
-			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)})
+			a.lines[2].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>%s", p.Name, nsArg(p.Namespace))
+			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>%s", p.Name, env, name, nsArg(p.Namespace))})
 		}
 	default:
 		a.sentence = fmt.Sprintf("%s is held by gate %s.", env, name)
@@ -438,14 +485,20 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 		if every == "" {
 			every = "5m"
 		}
-		override := fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>", p.Name, env, name)
-		follow := fmt.Sprintf("kardinal status %s -w follows it", p.Name)
+		override := fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>%s", p.Name, env, name, nsArg(p.Namespace))
+		follow := fmt.Sprintf("kardinal status %s%s -w follows it", p.Name, nsArg(p.Namespace))
 		// A gate that opens by itself is waited for; the override (a
 		// recorded bypass) is only the alternative.
 		switch {
 		case isSoak && soak.opens() != "":
 			a.lines = append(a.lines, whyLine{"Opens", "by itself " + soak.opens() + "; rechecked every " + every},
 				whyLine{"Next", fmt.Sprintf("wait: it opens by itself %s (%s)", soak.opens(), follow)},
+				whyLine{"Or", override})
+		case windowOpens(&g, windows, now) != "":
+			// A ChangeWindow gate opens when its window does (#1940).
+			opens := windowOpens(&g, windows, now)
+			a.lines = append(a.lines, whyLine{"Opens", "by itself " + opens + ", when ChangeWindow " + windowOfGate(&g) + " allows it; rechecked every " + every},
+				whyLine{"Next", fmt.Sprintf("wait: it opens by itself %s (%s)", opens, follow)},
 				whyLine{"Or", override})
 		case rechecks(&g):
 			a.lines = append(a.lines, whyLine{"Opens", "by itself when the expression passes; rechecked every " + every},
@@ -580,11 +633,15 @@ policy cannot be met. These come from the server's own tally of the gate's
 Approvals, so why and the controller agree; any other gate: its message, Rule its expression, Now its last evaluation
 (for a soak gate, how far the version soaked: "soak 0.4 of 3 min in uat"),
 Opens when it opens and how often it is rechecked ("by itself in about
-2m36s" for a soak gate); Next: kardinal approve; for a gate that opens by
+2m36s" for a soak gate; "by itself at Thursday 04:25 UTC, in about 18m" for
+a gate that only reads a ChangeWindow); Next: kardinal approve; for a gate that opens by
 itself, wait, with kardinal override only as Or; else kardinal override); its PR waits to be merged (PR and its URL); the version
 failed (Why the step's message; Next: kardinal logs, or roll back); it is
-promoting; it waits for an upstream environment; it has no version yet; or
-nothing is waiting ("prod runs 1.5.0 and nothing is waiting.").
+promoting; it waits for an upstream environment; it has no version yet; a
+newer version is on its way, still upstream ("prod runs 1.4.0; 1.5.0 is on
+its way (live in test)."); or nothing is waiting ("prod runs 1.5.0 and
+nothing is waiting."). Every command names -n <namespace> when the
+pipeline's namespace is not the kubeconfig context's.
 
 why shows the gates the version started with. A version gets its gates when
 it starts promoting, so a gate created or edited later applies to the
@@ -630,12 +687,22 @@ func failureFix(p *v1alpha1.Pipeline, f *v1alpha1.PipelineFailedVersion) string 
 		return "kro could not run the Graph kardinal built for this version: check that the installed kro is at least the " +
 			"version the chart's kro.version annotation names (helm show chart kardinal-promoter; " +
 			"https://pnz1990.github.io/kardinal-promoter/installation/#install-kro), upgrade kardinal if a release fixes it, " +
-			"or report it with this message; then ship the version again (kardinal ship " + p.Name + " ...)"
+			"or report it with this message; then ship the version again (kardinal ship " + p.Name + nsArg(p.Namespace) + " ...)"
 	case "StepFailed":
 		if f.Environment != "" {
-			return fmt.Sprintf("fix what %s reports, then ship the version again, or roll it back: kardinal rollback %s --env %s",
-				f.Environment, p.Name, f.Environment)
+			return fmt.Sprintf("fix what %s reports, then ship the version again, or roll it back: kardinal rollback %s --env %s%s",
+				f.Environment, p.Name, f.Environment, nsArg(p.Namespace))
 		}
 	}
 	return ""
+}
+
+// nsArg is " -n <ns>" when a command for ns must name it, as kardinal inbox
+// does: ns is not the kubeconfig context's namespace, so the printed command
+// runs as is when copied (#1940).
+func nsArg(ns string) string {
+	if ns == "" || ns == contextNamespace() {
+		return ""
+	}
+	return " -n " + ns
 }

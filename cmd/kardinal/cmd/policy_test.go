@@ -461,8 +461,11 @@ func TestPolicySimulate_GateMetricsNamespace(t *testing.T) {
 	}
 }
 
-// A blocked gate shows the next hour it would pass with the same inputs, and
-// no window when time alone cannot unblock it.
+// A blocked gate shows the next time it would pass with the same inputs (a
+// whole hour, or the minute a ChangeWindow changes), and no window when time
+// alone cannot unblock it.
+//
+// Covers CLI-SIMULATE-WINDOW-01.
 func TestPolicySimulate_NextWindow(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -475,11 +478,16 @@ func TestPolicySimulate_NextWindow(t *testing.T) {
 		{name: "business hours", expr: "schedule.hour >= 9 && schedule.hour < 17", time: "Tuesday 8pm", want: "Next window: Wednesday 09:00 UTC"},
 		{name: "soak (E2E-06)", expr: "bundle.upstreamSoakMinutes >= 30", time: "Saturday 3pm"},
 		{name: "never", expr: "false", time: "Tuesday 10am"},
+		// #1940: a ChangeWindow that opens at 04:25 is found at 04:25, not at 05:00.
+		{name: "change window to the minute", expr: `changewindow.isAllowed("prod-hours")`, time: "Thursday 4:07am",
+			want: "Next window: Thursday 04:25 UTC"},
 	}
+	hours := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "prod-hours"},
+		Spec: v1alpha1.ChangeWindowSpec{Type: "recurring", Schedule: &v1alpha1.ChangeWindowSchedule{AllowedHours: "04:25-24:00"}}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			c := policyClient(t, policyPipeline("demo", "test", "prod"), policyGate("gate", "platform-policies", "prod", tt.expr))
+			c := policyClient(t, policyPipeline("demo", "test", "prod"), policyGate("gate", "platform-policies", "prod", tt.expr), hours.DeepCopy())
 			out, err := runSimulate(t, c, simulateOptions{Time: tt.time})
 			require.NoError(t, err)
 			assert.Contains(t, out, "RESULT: BLOCKED")

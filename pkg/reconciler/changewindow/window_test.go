@@ -133,3 +133,34 @@ func TestEvaluate_ReasonIsStableBetweenBoundaries(t *testing.T) {
 	assert.Equal(t, a.Reason, b.Reason)
 	assert.Contains(t, a.Reason, "Europe/Berlin")
 }
+
+// TestOpensAtAndTransitions (#1940): when a window next stops blocking, to
+// the minute, and the instants it can change at.
+func TestOpensAtAndTransitions(t *testing.T) {
+	hours := kardinalv1alpha1.ChangeWindowSpec{Type: changewindow.TypeRecurring,
+		Schedule: &kardinalv1alpha1.ChangeWindowSchedule{AllowedHours: "04:25-24:00"}}
+	at := func(s string) time.Time { tt, err := time.Parse(time.RFC3339, s); require.NoError(t, err); return tt }
+
+	got, ok := changewindow.OpensAt(hours, at("2026-10-15T04:07:00Z"))
+	assert.True(t, ok)
+	assert.Equal(t, at("2026-10-15T04:25:00Z"), got, "the minute it opens, not the next hour")
+	got, ok = changewindow.OpensAt(hours, at("2026-10-15T10:00:00Z"))
+	assert.True(t, ok)
+	assert.Equal(t, at("2026-10-15T10:00:00Z"), got, "open now")
+
+	blackout := kardinalv1alpha1.ChangeWindowSpec{Type: changewindow.TypeBlackout,
+		Start: metav1.NewTime(at("2026-10-15T00:00:00Z")), End: metav1.NewTime(at("2026-10-16T06:30:00Z"))}
+	got, ok = changewindow.OpensAt(blackout, at("2026-10-15T12:00:00Z"))
+	assert.True(t, ok)
+	assert.Equal(t, at("2026-10-16T06:30:00Z"), got)
+
+	freeze := kardinalv1alpha1.ChangeWindowSpec{Type: changewindow.TypeBlackout, Start: metav1.NewTime(at("2026-10-15T00:00:00Z")),
+		Freeze: &kardinalv1alpha1.ChangeWindowFreeze{Actors: kardinalv1alpha1.FreezeEveryone}}
+	_, ok = changewindow.OpensAt(freeze, at("2026-10-15T12:00:00Z"))
+	assert.False(t, ok, "a freeze without end opens when it is lifted, not by itself")
+	_, ok = changewindow.OpensAt(kardinalv1alpha1.ChangeWindowSpec{Type: "nonsense"}, at("2026-10-15T12:00:00Z"))
+	assert.False(t, ok, "an invalid window blocks")
+
+	tr := changewindow.Transitions(hours, at("2026-10-15T04:07:00Z"), at("2026-10-16T04:07:00Z"))
+	assert.Equal(t, []time.Time{at("2026-10-15T04:25:00Z"), at("2026-10-16T00:00:00Z")}, tr)
+}

@@ -239,3 +239,46 @@ func (s *schedule) next(t time.Time) time.Time {
 	}
 	return best
 }
+
+// maxTransitions bounds the walk over a window's transitions (OpensAt,
+// Transitions): a recurring window has at most three candidate boundaries a
+// day, so this covers more than a week.
+const maxTransitions = 64
+
+// OpensAt is the first instant, from now on, at which the window described
+// by spec does not block: now itself when it does not block now. It is false
+// when the window blocks for good (a freeze without end, an invalid spec) or
+// past maxTransitions boundaries. kardinal why and explain say when a
+// ChangeWindow gate opens with it (#1940).
+func OpensAt(spec kardinalv1alpha1.ChangeWindowSpec, now time.Time) (time.Time, bool) {
+	t := now
+	for range maxTransitions {
+		r := Evaluate(spec, t)
+		if !r.Active {
+			return t, true
+		}
+		if r.Next.IsZero() {
+			return time.Time{}, false
+		}
+		t = r.Next
+	}
+	return time.Time{}, false
+}
+
+// Transitions are the instants after from and up to until at which the
+// window described by spec can change (Result.Next, followed), in order.
+// kardinal policy simulate evaluates a gate at each of them, so a window
+// that opens at 04:25 is found at 04:25 and not at the next whole hour.
+func Transitions(spec kardinalv1alpha1.ChangeWindowSpec, from, until time.Time) []time.Time {
+	var out []time.Time
+	t := from
+	for range maxTransitions {
+		next := Evaluate(spec, t).Next
+		if next.IsZero() || next.After(until) {
+			break
+		}
+		out = append(out, next)
+		t = next
+	}
+	return out
+}

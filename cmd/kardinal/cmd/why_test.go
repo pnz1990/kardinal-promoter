@@ -18,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,12 +46,15 @@ func whyBundle(name, tag string) *v1alpha1.Bundle {
 // TestWhy_Golden (C7): why answers each case in a sentence, then the
 // version, what holds it and the command that moves it on; no kind names.
 //
-// Covers CLI-WHY-01.
+// Covers CLI-WHY-01, CLI-WHY-ONITSWAY-01.
 func TestWhy_Golden(t *testing.T) {
 	now := time.Date(2026, 10, 11, 9, 3, 0, 0, time.UTC)
 	prev := whyNow
 	whyNow = func() time.Time { return now }
 	t.Cleanup(func() { whyNow = prev })
+	prevNS := contextNamespace
+	contextNamespace = func() string { return "default" } // the golden's commands need no -n
+	t.Cleanup(func() { contextNamespace = prevNS })
 	since := metav1.NewTime(now.Add(-90 * time.Second))
 	stubIdentity(t, Identity{Username: "kubernetes-admin", Groups: []string{"system:masters", "system:authenticated"}})
 	cases := []struct {
@@ -285,6 +289,25 @@ func TestWhy_Golden(t *testing.T) {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-b", Version: "1.5.0", State: "Verified"}}
 			return nil
 		}, false},
+		// #1940: a newer version still upstream is on its way.
+		{"nothing waits here, a newer version is on its way", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{
+				{Name: "test", Bundle: "demo-b", Version: "1.5.0", State: "Verified"},
+				{Name: "prod", Bundle: "demo-a", Version: "1.4.0", State: "Verified"}}
+			a, b := whyBundle("demo-a", "1.4.0"), whyBundle("demo-b", "1.5.0")
+			a.Status.Phase = "Verified"
+			return []sigs_client.Object{a, b}
+		}, false},
+		// #1940: a ChangeWindow gate says when its window opens, to the minute.
+		{"a ChangeWindow gate", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
+			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+				IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"prod-hours"}}}
+			g := explainGateInstance("demo", "demo-b", "prod", "prod-hours", `changewindow.isAllowed("prod-hours")`, false, true,
+				`changewindow.isAllowed("prod-hours") = false`)
+			cw := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "prod-hours"},
+				Spec: v1alpha1.ChangeWindowSpec{Type: "recurring", Schedule: &v1alpha1.ChangeWindowSchedule{AllowedHours: "09:30-17:00"}}}
+			return []sigs_client.Object{g, cw}
+		}, false},
 		{"no version yet", "prod", func(p *v1alpha1.Pipeline) []sigs_client.Object {
 			p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod"}}
 			return nil
@@ -334,4 +357,52 @@ func TestWhy_Golden(t *testing.T) {
 	want, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, string(want), golden.String())
+}
+
+// TestWhy_HintsNameTheNamespace (#1940): a command why and explain print
+// names -n <ns> when the pipeline's namespace is not the kubeconfig
+// context's, as kardinal inbox does, so it runs as is when copied; in the
+// context's namespace it does not.
+func TestWhy_HintsNameTheNamespace(t *testing.T) {
+	stubIdentity(t, Identity{Username: "kubernetes-admin"})
+	setup := func() sigs_client.Client {
+		p := policyPipeline("demo", "test", "prod")
+		p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "demo-a", Version: "1.4.0",
+			IncomingBundle: "demo-b", IncomingVersion: "1.5.0", State: "Pending", BlockedBy: []string{"prod-approval", "soak"}}}
+		p.Spec.Holds = nil
+		approval := explainGateInstance("demo", "demo-b", "prod", "prod-approval", "true", false, true, "waiting for approvals: 0 of 1")
+		approval.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+		soak := explainGateInstance("demo", "demo-b", "prod", "soak", "schedule.hour >= 9", false, true, "outside hours")
+		at := time.Now().Add(-time.Hour)
+		return policyClient(t, p, approval, soak, explainBundle("demo-b", "Promoting", at), explainStep("demo", "demo-b", "test", "Verified", "", at))
+	}
+	commands := func(out string) []string {
+		var cmds []string
+		for _, l := range strings.Split(out, "\n") {
+			if i := strings.Index(l, "kardinal "); i >= 0 {
+				cmds = append(cmds, strings.TrimSpace(l[i:]))
+			}
+		}
+		return cmds
+	}
+	prev := contextNamespace
+	t.Cleanup(func() { contextNamespace = prev })
+	for _, here := range []string{"elsewhere", "default"} {
+		contextNamespace = func() string { return here }
+		c := setup()
+		var why, table, explain bytes.Buffer
+		setForTest(t, &errOut, io.Writer(&explain)) // explain's hints go to stderr
+		require.NoError(t, whyFn(context.Background(), &why, c, "default", "demo", "prod"))
+		require.NoError(t, explainHinted(&table, c, "default", "demo", "prod", false))
+		require.NotEmpty(t, commands(explain.String()), "explain hints:\n%s", explain.String())
+		cmds := append(commands(why.String()), commands(explain.String())...)
+		require.NotEmpty(t, cmds, "why:\n%s\nexplain:\n%s", why.String(), explain.String())
+		for _, cmd := range cmds {
+			if here == "default" {
+				assert.NotContains(t, cmd, " -n ", "in the context's namespace: %s", cmd)
+			} else {
+				assert.Contains(t, cmd, " -n default", "outside the context's namespace: %s", cmd)
+			}
+		}
+	}
 }

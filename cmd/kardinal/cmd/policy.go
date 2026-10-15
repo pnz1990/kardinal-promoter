@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
@@ -294,7 +296,7 @@ func newPolicySimulateCmd() *cobra.Command {
 		Long: `Evaluate the gates of <env> as the controller would, for a Bundle that went
 through every upstream environment, at --time (UTC; default now) with
 --soak-minutes upstream. Nothing is written. The first line is RESULT: PASS or
-RESULT: BLOCKED, then each blocking gate with its message and the next hour it
+RESULT: BLOCKED, then each blocking gate with its message and the next time it
 would pass; it exits 0 either way.`,
 		Example: `  kardinal policy simulate my-app prod --time "Saturday 3pm"
   # RESULT: BLOCKED
@@ -366,6 +368,36 @@ type simulateOptions struct {
 
 // nextWindowSearchHours bounds the next-window search to one week.
 const nextWindowSearchHours = 7 * 24
+
+// nextWindowCandidates are the instants after simTime, within a week, at
+// which a blocked gate may pass, in order: every whole hour (schedule.*
+// changes by the hour) and every instant a ChangeWindow can change at, so a
+// window that opens at 04:25 is found at 04:25 (#1940). ChangeWindows the
+// caller may not read add nothing.
+func nextWindowCandidates(ctx context.Context, c sigs_client.Client, simTime time.Time) []time.Time {
+	until := simTime.Truncate(time.Hour).Add(nextWindowSearchHours * time.Hour)
+	seen := map[time.Time]bool{}
+	var out []time.Time
+	add := func(t time.Time) {
+		if t.After(simTime) && !t.After(until) && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for h := 1; h <= nextWindowSearchHours; h++ {
+		add(simTime.Truncate(time.Hour).Add(time.Duration(h) * time.Hour))
+	}
+	var windows v1alpha1.ChangeWindowList
+	if err := c.List(ctx, &windows); err == nil {
+		for i := range windows.Items {
+			for _, t := range changewindow.Transitions(windows.Items[i].Spec, simTime, until) {
+				add(t.UTC())
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b time.Time) int { return a.Compare(b) })
+	return out
+}
 
 // simulateGate is one gate's result in a simulation: whether it passes, the
 // reason the evaluation gave, the message to show (the gate's, else the
@@ -514,6 +546,7 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	ev.metricsAt = opts.Now.UTC()
 
 	rep := &simulateReport{Pipeline: pipe.Name, Environment: opts.Env, Time: simTime, Gates: []simulateGate{}}
+	candidates := nextWindowCandidates(ctx, c, simTime)
 	if opts.Version != "" {
 		rep.Bundle = bundle.Name
 	}
@@ -530,10 +563,8 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		}
 		if !pass {
 			rep.Blocked = true
-			// Hour by hour from the next whole hour, same inputs.
-			start := simTime.Truncate(time.Hour)
-			for h := 1; h <= nextWindowSearchHours; h++ {
-				t := start.Add(time.Duration(h) * time.Hour)
+			// At each candidate instant in turn, same inputs.
+			for _, t := range candidates {
 				ok, _, err := ev.evaluate(ctx, key, t)
 				if err != nil {
 					return nil, err
@@ -879,8 +910,10 @@ stale now.
 --soak-minutes is the soak time of every upstream environment
 (upstream.<env>.soakMinutes and bundle.upstreamSoakMinutes).
 
-A blocked gate shows the next hour, within 7 days, at which it would pass with
-the same inputs. Gates that do not depend on time show no window.
+A blocked gate shows the next time, within 7 days, at which it would pass with
+the same inputs: a whole hour (schedule.* changes by the hour), or the minute a
+ChangeWindow changes (one that opens at 04:25 shows 04:25). Gates that do not
+depend on time show no window.
 
 The first line is RESULT: PASS or RESULT: BLOCKED. A blocked result then lists
 each blocking gate with its message and next window. Last comes one row per
