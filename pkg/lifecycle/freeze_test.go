@@ -240,7 +240,203 @@ func TestFreeze_RefusesAFreezeBeingLifted(t *testing.T) {
 	_, _, err = Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeAgents, Namespace: "payments", Reason: "INC-2", CreatedBy: "alice", Now: time.Now()})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrConflict), "%v", err)
-	assert.Contains(t, err.Error(), "freeze kardinal-freeze-agents-payments is being lifted; try again in a few seconds")
+	assert.Contains(t, err.Error(), "freeze kardinal-freeze-agents-payments is being lifted; try again shortly (up to 2 minutes; the controller must be running)")
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents-payments"}, &cw))
 	assert.Equal(t, "INC-1", cw.Spec.Reason, "not updated")
+}
+
+// unfreezeFixture is a fake client holding freeze kardinal-freeze-everyone
+// (with the audit finalizer the controller adds), and its interceptors.
+func unfreezeFixture(t *testing.T, funcs interceptor.Funcs) (client.Client, client.Client) {
+	t.Helper()
+	s := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	base := fake.NewClientBuilder().WithScheme(s).Build()
+	_, _, err := Freeze(context.Background(), base, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-1", CreatedBy: "alice", Now: time.Now()})
+	require.NoError(t, err)
+	var cw v1alpha1.ChangeWindow
+	require.NoError(t, base.Get(context.Background(), types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw))
+	cw.Finalizers = []string{"kardinal.io/freeze-audit"}
+	cw.UID = "uid-1" // the fake client assigns none
+	require.NoError(t, base.Update(context.Background(), &cw))
+	return interceptor.NewClient(base, funcs), base
+}
+
+func getFreeze(t *testing.T, c client.Client) v1alpha1.ChangeWindow {
+	t.Helper()
+	var cw v1alpha1.ChangeWindow
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw))
+	return cw
+}
+
+// TestUnfreeze_Races (#2036 QA-2): a re-freeze between unfreeze's mark and
+// its delete wins (the freeze is not deleted and unfreeze says it changed);
+// an unfreeze that loses the mark to another one that already lifted the
+// freeze succeeds without renaming who lifted it; an unfreeze of a freeze
+// already being deleted changes nothing; and a delete that went through
+// although its call failed keeps the mark that names who lifted it.
+func TestUnfreeze_Races(t *testing.T) {
+	ctx := context.Background()
+	bob, erin := &v1alpha1.FreezeLift{By: "bob"}, &v1alpha1.FreezeLift{By: "erin"}
+
+	t.Run("a re-freeze between the mark and the delete wins", func(t *testing.T) {
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			_, _, err := Freeze(ctx, cl, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-2", CreatedBy: "alice", Now: time.Now()})
+			require.NoError(t, err)
+			return cl.Delete(ctx, obj, opts...)
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+		assert.Contains(t, err.Error(), "changed while it was being lifted")
+		cw := getFreeze(t, base)
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "the re-frozen freeze is not deleted")
+		assert.Equal(t, "INC-2", cw.Spec.Reason)
+		assert.Nil(t, cw.Spec.Freeze.Lifted)
+	})
+
+	t.Run("losing the mark to an unfreeze that lifted it", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !raced {
+				raced = true
+				// Erin's unfreeze gets there first.
+				require.NoError(t, Unfreeze(ctx, cl, "kardinal-freeze-everyone", "", erin))
+			}
+			return cl.Update(ctx, obj, opts...)
+		}})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+		cw := getFreeze(t, base)
+		assert.False(t, cw.DeletionTimestamp.IsZero())
+		assert.Equal(t, erin, cw.Spec.Freeze.Lifted, "who lifted it first stays recorded")
+	})
+
+	t.Run("a re-freeze between the read and the mark wins", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !raced {
+				raced = true
+				_, _, err := Freeze(ctx, cl, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-2", CreatedBy: "carol", Now: time.Now()})
+				require.NoError(t, err)
+			}
+			return cl.Update(ctx, obj, opts...)
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+		assert.Contains(t, err.Error(), "changed while it was being lifted")
+		cw := getFreeze(t, base)
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "carol's freeze is not lifted")
+		assert.Equal(t, "INC-2", cw.Spec.Reason)
+		assert.Nil(t, cw.Spec.Freeze.Lifted)
+	})
+
+	t.Run("a mark that keeps conflicting gives up after 4 attempts", func(t *testing.T) {
+		updates := 0
+		gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
+			updates++
+			return apierrors.NewConflict(gr, "kardinal-freeze-everyone", errors.New("modified"))
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "record who lifts freeze kardinal-freeze-everyone")
+		assert.Equal(t, 4, updates)
+		assert.True(t, getFreeze(t, base).DeletionTimestamp.IsZero(), "not deleted")
+	})
+
+	t.Run("a freeze deleted between the read and the mark", func(t *testing.T) {
+		for _, answer := range []string{"not found", "conflict"} {
+			t.Run(answer, func(t *testing.T) {
+				gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+				c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					// Someone else lifts it and the controller finishes its audit.
+					cw := getFreeze(t, cl)
+					cw.Finalizers = nil
+					require.NoError(t, cl.Update(ctx, &cw))
+					require.NoError(t, cl.Delete(ctx, &cw))
+					if answer == "conflict" {
+						return apierrors.NewConflict(gr, cw.Name, errors.New("modified"))
+					}
+					return cl.Update(ctx, obj, opts...)
+				}})
+				require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob), "lifted meanwhile is lifted")
+				var cw v1alpha1.ChangeWindow
+				assert.True(t, apierrors.IsNotFound(base.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw)))
+			})
+		}
+	})
+
+	t.Run("a freeze deleted and created again with the same spec is another freeze", func(t *testing.T) {
+		raced := false
+		gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if raced {
+				return cl.Update(ctx, obj, opts...)
+			}
+			raced = true
+			old := getFreeze(t, cl)
+			old.Finalizers = nil
+			require.NoError(t, cl.Update(ctx, &old))
+			require.NoError(t, cl.Delete(ctx, &old))
+			again := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: old.Name, UID: "uid-2", Labels: old.Labels},
+				Spec: *old.Spec.DeepCopy()}
+			require.NoError(t, cl.Create(ctx, again))
+			return apierrors.NewConflict(gr, old.Name, errors.New("modified"))
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+		cw := getFreeze(t, base)
+		assert.Equal(t, "uid-2", string(cw.UID))
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "the new freeze is not lifted")
+	})
+
+	t.Run("another unfreeze's mark alone is not a change", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !raced {
+				raced = true
+				// Erin has written her mark; her delete is still to come.
+				cw := getFreeze(t, cl)
+				cw.Spec.Freeze.Lifted = erin
+				require.NoError(t, cl.Update(ctx, &cw))
+			}
+			return cl.Update(ctx, obj, opts...)
+		}})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+		cw := getFreeze(t, base)
+		assert.False(t, cw.DeletionTimestamp.IsZero(), "lifted")
+	})
+
+	t.Run("an overlapping unfreeze that deleted it first is not a change", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if !raced {
+				raced = true
+				require.NoError(t, Unfreeze(ctx, cl, "kardinal-freeze-everyone", "", erin))
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob), "lifted, not \"frozen again?\"")
+		assert.False(t, getFreeze(t, base).DeletionTimestamp.IsZero())
+	})
+
+	t.Run("an unfreeze of a freeze already being deleted", func(t *testing.T) {
+		c, base := unfreezeFixture(t, interceptor.Funcs{})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", erin))
+		assert.Equal(t, bob, getFreeze(t, base).Spec.Freeze.Lifted, "not renamed by the second unfreeze")
+	})
+
+	t.Run("a delete that went through though its call failed", func(t *testing.T) {
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			require.NoError(t, cl.Delete(ctx, obj, opts...))
+			return context.DeadlineExceeded
+		}})
+		require.Error(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+		cw := getFreeze(t, base)
+		assert.False(t, cw.DeletionTimestamp.IsZero())
+		assert.Equal(t, bob, cw.Spec.Freeze.Lifted, "the mark of the deletion that happened is kept")
+	})
 }

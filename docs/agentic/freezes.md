@@ -76,9 +76,12 @@ waits for it. A freeze being deleted (by `kardinal unfreeze`, the UI or `kubectl
 kept by the finalizer) is gone for everything else at once: it holds no step, takes no
 `kardinal override --freeze` exemption, is not listed by `kardinal freeze`, the UI or the MCP
 `freezes` tool, and is false in a gate's `changewindow.<name>`. Freezing its scope again
-meanwhile is refused with `freeze <name> is being lifted; try again in a few seconds`.
+meanwhile is refused with `freeze <name> is being lifted; try again shortly (up to 2 minutes; the controller must be running)`.
 `spec.freeze.lifted` only names who lifts it: when the delete fails, `kardinal unfreeze` reports
-the error and takes the mark back, and the freeze stays in force.
+the error and takes the mark back, and the freeze stays in force. A freeze frozen again while an
+unfreeze is under way is not deleted: the unfreeze says it changed, and you run it again if you
+still mean to lift it. A second unfreeze of a freeze already being deleted changes nothing, so the
+record names who lifted it first.
 
 An audit write never holds a freeze back. A freeze takes effect (its status is written) whether
 or not its `FreezeStarted` record could be written; a failed write is retried, with a
