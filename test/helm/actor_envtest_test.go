@@ -295,6 +295,13 @@ func TestActorsOnAPIServer(t *testing.T) {
 	require.Contains(t, err.Error(), "spec.lastChange.by must be your own username")
 	require.Error(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Actor: hu("bob")}),
 		"18c a forged stamp")
+	// A person stamped as an agent: hold-writes admits the kind, only
+	// -actor-records (which the label lets match, #1936) knows alice is no
+	// agent.
+	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Actor: ag("alice", "fixer", "alice")})
+	require.Error(t, err, "18c a person stamped as an agent")
+	require.Contains(t, err.Error(), "kardinal-promoter-actor-records")
+	require.Contains(t, err.Error(), "actor must be {kind: human, principal: alice")
 	require.Error(t, pauseAs(as(fx), &v1alpha1.PipelineChange{Action: "Pause", By: fx, Actor: hu(fx)}),
 		"18c an agent stamped human")
 	require.NoError(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Reason: "INC-7", Actor: hu("alice")}),
@@ -315,6 +322,10 @@ func TestActorsOnAPIServer(t *testing.T) {
 	rb.Labels = map[string]string{"kardinal.io/actor-check": "true"}
 	rb.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("bob")}
 	require.Error(t, as("alice").Update(ctx, rb), "18c a rejection with a forged stamp")
+	rb.Spec.Rejected.Actor = ag("alice", "fixer", "alice")
+	err = as("alice").Update(ctx, rb)
+	require.Error(t, err, "18c a rejection by a person stamped as an agent")
+	require.Contains(t, err.Error(), "kardinal-promoter-actor-records", "only -actor-records knows alice is no agent")
 	rb.Spec.Rejected.Actor = hu("alice")
 	require.NoError(t, as("alice").Update(ctx, rb), "18c a rejection stamped")
 
