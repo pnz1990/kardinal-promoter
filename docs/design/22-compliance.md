@@ -229,12 +229,17 @@ pack's own digest is printed at the end, so the exporter can note it in the tick
 | | Mechanism | For | Against |
 |---|---|---|---|
 | (a) | SHA-256 per file in the manifest | Detects corruption and edits after export | Proves nothing about who produced it: whoever edits a file can rewrite the manifest |
-| (b) | Sign the manifest (sigstore-go, keyless or a key) | Origin and integrity of the pack | The exporter signs what the cluster held at export; it cannot prove records were not deleted before |
+| (b) | The CLI signs the manifest (sigstore-go, keyless or a key) | Origin and integrity of the pack | The CLI runs with the caller's kubeconfig. It cannot use the controller's ServiceAccount identity (keyless) or read its key Secret without granting auditors the signing key, so the signature would be the exporter's anyway. It also cannot prove records were not deleted before export. |
+| (b') | The controller signs the pack's manifest digest on request | The controller's identity, as for receipts | A new API surface that signs whatever digest a caller sends: a signing oracle, unless it rebuilds the pack itself |
+| (b'') | The exporter signs the pack with cosign (`cosign sign-blob`, or `cosign attest-blob` with the manifest as predicate), under their own identity | No signing code or key in kardinal. The signature names who exported, which is what an auditor asks. The exporter's key custody and policy apply. | One more step for the exporter; the user page gives the command |
 | (c) | Rely on per-promotion signed receipts (21-receipts) inside the pack | Each promotion's record was signed by the controller when it happened; deletion of a record leaves a gap a receipt chain can show | Only promotions, not every AuditEvent; planned |
 
-**Choice: (a) now, (b) and (c) with 21-receipts**, using the same signer the receipt reconciler
-uses (`--sign`), so there is one signing configuration. The spec is honest about (a): it is a
-checksum, not a signature, and the user page says so.
+**Choice: (a) and (c), with signing left to the exporter (b'').**
+- `kardinal audit evidence-pack` has no `--sign`. It writes the per-file SHA-256 manifest (a) and, with 21-receipts, `receipts.ndjson`: each promotion's record as the controller signed it when it happened (c). `kardinal verify-receipt --file` checks those offline.
+- The pack itself is signed by whoever exports it, with cosign. The user page gives `cosign sign-blob --bundle pack.tar.gz.sigstore.json pack.tar.gz` (keyless or `--key`) and the matching `cosign verify-blob`.
+- (b) and (b') are rejected. A CLI signature could only be the exporter's identity, which cosign already gives without kardinal holding signing code. A controller-side signer for packs would sign digests it did not compute.
+
+The spec is honest about (a): it is a checksum, not a signature, and the user page says so.
 
 ### 4.4 What period the cluster can still prove
 
@@ -304,7 +309,7 @@ The agentic section links it from "What kardinal enforces today".
 | # | Question | Options | Choice and why |
 |---|---|---|---|
 | C1 | Pack format | directory; tar.gz; zip; OCI artifact | **tar.gz + manifest** (4.2): one streamable file, standard tools |
-| C2 | Integrity | hashes; signed manifest; signed receipts | **Hashes now, signing with 21-receipts' signer** (4.3); stated as a checksum, not a signature |
+| C2 | Integrity | hashes; signed manifest; signed receipts | **Hashes, and the controller-signed receipts inside the pack; the exporter signs the pack with cosign** (4.3). Stated as a checksum, not a signature. |
 | C3 | Period coverage | cluster only, with coverage; external archive; SIEM only | **Cluster, with coverage reported** (4.4); SIEM export recommended as the archive |
 | C4 | Mapping source | docs only; Go table; OSCAL | **Go table** (4.5), generating both `controls.json` and the page |
 | C5 | DORA "Art. 17" | map Art. 17 as change management; map Art. 9(4)(e) + RTS only; map both, labelled | **Both, labelled** (3.5): Art. 17 is incident management in the Regulation |
@@ -320,7 +325,7 @@ The agentic section links it from "What kardinal enforces today".
   hashes match the files, coverage reports a kind the scheme lacks and a forbidden kind, a
   period older than the oldest AuditEvent fails with the export advice, deterministic order.
 - **Live e2e** (core, COUNT=2, coverage rows): a promotion with an approval and an override,
-  then a pack: every record of the promotion is in it, hashes verify with `sha256sum -c`, and a
+  then a pack: every record of the promotion is in it, hashes verify with `sha256sum -c`, the user page's `cosign sign-blob` and `verify-blob` commands work on the pack (key mode), the receipts in it verify with `kardinal verify-receipt --file` offline, and a
   user bound to `<release>-auditor` only can produce it.
 - **Scale**: 100,000 AuditEvents exported with memory bounded by one page (the scale suite's
   profile records the CLI's peak RSS).
