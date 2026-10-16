@@ -5,7 +5,6 @@ package steps
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -511,16 +510,26 @@ func sameData(out []byte, edited *yaml.Node) (bool, error) {
 	return reflect.DeepEqual(want, have), nil
 }
 
-// errAliasExpansion refuses a document whose aliases name aliases of
-// aliases, so that its data is exponentially larger than its text (a
-// "billion laughs" document: 460 bytes took two minutes to compare, #2078).
-var errAliasExpansion = errors.New("the file's YAML aliases expand to far more values than it holds " +
-	"(aliases of aliases, nested); kardinal does not edit it")
+// errAliasExpansion refuses a document whose aliases and merge keys
+// expand its data far past its text (a "billion laughs" document: 460 bytes
+// took two minutes to compare, #2078).
+var errAliasExpansion = fmt.Errorf("the file's YAML aliases and merge keys expand to more than %d values, "+
+	"far more than the file holds; kardinal does not edit it", aliasFloor)
 
-// aliasBudget is how many nodes nodeData may visit in n: ten times the
-// nodes n holds, and at least 10,000. A document without aliases visits
-// each node once; one whose aliases repeat whole subtrees, as values files
-// do, stays within it.
+// The bound of nodeData, as yaml.v3's own alias guard (allowedAliasRatio)
+// is in spirit: the visits allowed grow with the document. A document may
+// visit aliasRatio times its nodes, and at least aliasFloor nodes whatever
+// its size: values files whose shared blocks are merged or aliased into
+// hundreds of entries stay far within it (a 40-key defaults block merged
+// into 300 services visits about 25,000), and 2^20 visits take well under a
+// second. Variables, so a test can pin them.
+var (
+	aliasFloor = 1 << 20
+	aliasRatio = 10
+)
+
+// aliasBudget is how many nodes nodeData may visit in n (aliasFloor,
+// aliasRatio).
 func aliasBudget(n *yaml.Node) int {
 	count := 0
 	var walk func(*yaml.Node)
@@ -531,7 +540,7 @@ func aliasBudget(n *yaml.Node) int {
 		}
 	}
 	walk(n)
-	return max(10*count, 10_000)
+	return max(aliasRatio*count, aliasFloor)
 }
 
 // dataReader reads the data of a document (nodeData), visiting at most

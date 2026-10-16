@@ -23,7 +23,7 @@ fi
 pkg=$1 target=$2 fuzztime=$3 json=${4:-}
 corpus="${pkg#./}/testdata/fuzz/$target"
 
-listing() { ls -A "$corpus" 2>/dev/null | sort; }
+listing() { find "$corpus" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort; }
 before=$(listing)
 
 out=$(mktemp)
