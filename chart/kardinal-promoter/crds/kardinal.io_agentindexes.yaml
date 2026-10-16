@@ -22,6 +22,15 @@ spec:
     - jsonPath: .status.observedIdentities
       name: Identities
       type: integer
+    - jsonPath: .status.bytes
+      name: Bytes
+      type: integer
+    - jsonPath: .status.maxBytes
+      name: Max
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="NearFull")].status
+      name: NearFull
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -54,10 +63,17 @@ spec:
           status:
             description: AgentIndexStatus maps every registered subject to its agent.
             properties:
+              bytes:
+                description: |-
+                  Bytes is the size of the index's entries as its bound counts them
+                  (each entry's JSON, its key and 4 bytes, blocked entries included),
+                  also when it is over the bound and written empty.
+                format: int64
+                type: integer
               conditions:
                 description: |-
-                  Conditions: Ready; IndexFull when an entry was left out to keep the
-                  index under its size limit.
+                  Conditions: Ready (False, reason IndexFull, when the entries are over
+                  MaxBytes); NearFull (True from 80% of MaxBytes).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -155,6 +171,12 @@ spec:
                   type: object
                 description: Groups maps a group to its agent.
                 type: object
+              maxBytes:
+                description: |-
+                  MaxBytes is the bound on Bytes: past it the index is not Ready
+                  (IndexFull) and the writes the actor policy checks are refused.
+                format: int64
+                type: integer
               observedIdentities:
                 description: ObservedIdentities is how many AgentIdentities the index
                   was built from.

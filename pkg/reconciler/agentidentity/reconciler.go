@@ -32,6 +32,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 // ConditionReady is the condition both kinds carry.
@@ -199,7 +200,10 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 			"refuses the writes the actor policy checks"
 	}
 	meta.SetStatusCondition(&want.Conditions, cond)
+	want.Bytes, want.MaxBytes = int64(reg.Bytes), int64(reg.MaxBytes)
+	meta.SetStatusCondition(&want.Conditions, nearFull(reg, idx.Generation))
 	if equalIndex(idx.Status, want) {
+		r.setIndexMetrics(reg)
 		return reconcile.Result{}, r.statuses(ctx, &idx, ids, reg)
 	}
 	// The index first, then the statuses: admission decides with the index,
@@ -215,10 +219,55 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	if err := r.Status().Patch(ctx, &idx, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return reconcile.Result{}, fmt.Errorf("patch agent index %s status: %w", r.Name, err)
 	}
+	r.setIndexMetrics(reg)
 	zerolog.Ctx(ctx).Info().Str("agentindex", r.Name).Int("identities", reg.Index.ObservedIdentities).
 		Int("users", len(want.Users)).Int("groups", len(want.Groups)).Msg("agent index written")
 	r.dropManagedFields(ctx, &idx)
 	return reconcile.Result{}, r.statuses(ctx, &idx, ids, reg)
+}
+
+// setIndexMetrics records the index's size once its status says it. Only
+// the reconciler that keeps the index current (the leader's) does: a
+// replica's start-up build (StatusesDisabled) would leave a value that no
+// longer changes.
+func (r *IndexReconciler) setIndexMetrics(reg actor.Registry) {
+	if r.StatusesDisabled {
+		return
+	}
+	observability.AgentIndexBytes.Set(float64(reg.Bytes))
+	observability.AgentIndexMaxBytes.Set(float64(reg.MaxBytes))
+}
+
+// NearFullPercent is the share of the bound from which the AgentIndex is
+// NearFull (#2076): kardinal supports up to 4,000 AgentIdentities, about 80%
+// of the bound (docs/operate.md#scale-and-limits).
+const NearFullPercent = 80
+
+// ConditionNearFull is the AgentIndex condition that warns, before the
+// bound refuses writes, that the index is close to it.
+const ConditionNearFull = "NearFull"
+
+// nearFull is the NearFull condition of reg: True from NearFullPercent of
+// the bound, with the size, the share and how many more AgentIdentities of
+// the average size fit.
+func nearFull(reg actor.Registry, generation int64) metav1.Condition {
+	c := metav1.Condition{Type: ConditionNearFull, Status: metav1.ConditionFalse, Reason: "HasRoom", ObservedGeneration: generation}
+	if reg.MaxBytes <= 0 {
+		return c
+	}
+	pct := 100 * reg.Bytes / reg.MaxBytes
+	room := ""
+	if n := reg.Index.ObservedIdentities; n > 0 && reg.Bytes > 0 && reg.Bytes < reg.MaxBytes {
+		room = fmt.Sprintf("; about %d more AgentIdentities of the average size (%d bytes) fit",
+			(reg.MaxBytes-reg.Bytes)*n/reg.Bytes, reg.Bytes/n)
+	}
+	c.Message = fmt.Sprintf("the entries take %d bytes of %d (%d%%)%s", reg.Bytes, reg.MaxBytes, pct, room)
+	if pct >= NearFullPercent {
+		c.Status, c.Reason = metav1.ConditionTrue, "NearFull"
+		c.Message += fmt.Sprintf("; past %d bytes the index is not Ready and kardinal refuses the writes the actor "+
+			"policy checks: remove AgentIdentities or subjects", reg.MaxBytes)
+	}
+	return c
 }
 
 // dropManagedFields clears the index's metadata.managedFields after a

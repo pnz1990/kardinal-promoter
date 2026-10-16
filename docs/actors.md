@@ -163,6 +163,13 @@ The AgentIdentity is ready unless it is invalid:
 The subjects of an AgentIdentity that is not ready are refused, with its reason, rather than
 treated as people.
 
+The index records how full it is: `status.bytes` (its entries, as the bound counts them) and
+`status.maxBytes`, and a `NearFull` condition, True from 80% of the bound, whose message says
+how many more AgentIdentities of the average size fit. `kubectl get agentindex` shows them; the
+chart's `KardinalAgentIndexNearFull` and `KardinalAgentIndexFull` alerts fire on the
+`kardinal_agent_index_bytes` and `kardinal_agent_index_max_bytes` metrics
+([Monitoring](guides/monitoring.md#included-alerts)).
+
 `scope.pipelines` applies to the versions an agent creates and the gate overrides it records
 (a gate instance names its Pipeline). An Approval is checked against `scope.namespaces` and
 `scope.environments` only: it names a Bundle, not a Pipeline, so give an agent that approves a
