@@ -120,11 +120,21 @@ func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) (*kardinalv1
 // FreezeActive reports whether freeze window w is active, from the status
 // its reconciler writes (status.active). A status behind the spec counts as
 // active: a new or edited freeze holds at once, and fails closed. A freeze
-// being deleted is lifted, though its finalizer keeps it until FreezeLifted
-// is recorded and the unfreeze's spec.freeze.lifted write leaves its status
-// a generation behind.
+// being lifted (FreezeLifting) is not active, though its finalizer keeps it
+// until FreezeLifted is recorded and the unfreeze's spec.freeze.lifted write
+// leaves its status a generation behind.
 func FreezeActive(w *kardinalv1alpha1.ChangeWindow) bool {
-	return w.Spec.Freeze != nil && w.DeletionTimestamp.IsZero() && (statusBehind(w) || w.Status.Active)
+	return w.Spec.Freeze != nil && !FreezeLifting(w) && (statusBehind(w) || w.Status.Active)
+}
+
+// FreezeLifting reports whether freeze window w is being lifted: deleted
+// (its kardinal.io/freeze-audit finalizer keeps it until the FreezeLifted
+// record is written, up to two minutes) or with spec.freeze.lifted, which
+// kardinal unfreeze and the UI write just before the delete. Every consumer
+// that lists freezes treats such a window as gone (#2034): it holds nothing,
+// takes no exemption, shows no banner and blocks no gate.
+func FreezeLifting(w *kardinalv1alpha1.ChangeWindow) bool {
+	return w.Spec.Freeze != nil && (!w.DeletionTimestamp.IsZero() || w.Spec.Freeze.Lifted != nil)
 }
 
 // statusBehind reports whether w's status does not describe its spec yet:
@@ -141,7 +151,7 @@ func FreezesFor(windows []kardinalv1alpha1.ChangeWindow, t FreezeTarget) []Freez
 	var out []FreezeMatch
 	for i := range windows {
 		w := &windows[i]
-		if !FreezeActive(w) || !w.DeletionTimestamp.IsZero() || !FreezeSelects(w.Spec.Freeze, t) {
+		if !FreezeActive(w) || !FreezeSelects(w.Spec.Freeze, t) {
 			continue
 		}
 		e, until := exemptionFor(w, t)

@@ -177,7 +177,10 @@ func notYours(name, by, verb string) error {
 		"(the chart's freezer role), not a namespace's: %w", name, by, verb, ErrForbidden)
 }
 
-// ListFreezes returns the ChangeWindows with spec.freeze, sorted by name.
+// ListFreezes returns the ChangeWindows with spec.freeze, sorted by name,
+// without those being lifted (changewindow.FreezeLifting): a deleted freeze
+// its audit finalizer still keeps, or one kardinal unfreeze marked lifted.
+// The CLI, the UI and the MCP tools list freezes through it.
 func ListFreezes(ctx context.Context, c client.Reader) ([]v1alpha1.ChangeWindow, error) {
 	var list v1alpha1.ChangeWindowList
 	if err := c.List(ctx, &list); err != nil {
@@ -185,7 +188,7 @@ func ListFreezes(ctx context.Context, c client.Reader) ([]v1alpha1.ChangeWindow,
 	}
 	var out []v1alpha1.ChangeWindow
 	for _, cw := range list.Items {
-		if cw.Spec.Freeze != nil {
+		if cw.Spec.Freeze != nil && !changewindow.FreezeLifting(&cw) {
 			out = append(out, cw)
 		}
 	}

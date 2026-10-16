@@ -113,8 +113,22 @@ func TestExemptFromFreezes(t *testing.T) {
 	lifted.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "carol"}
 	lifted.Finalizers = []string{"kardinal.io/freeze-audit"}
 	lifted.DeletionTimestamp = &metav1.Time{Time: now.Add(-time.Second)}
+	// Marked lifted, not deleted yet (the unfreeze's delete is still to
+	// come): no exemption either (#2034).
+	marked := window("e-marked", true)
+	marked.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "carol"}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(window("a-cluster", true), window("b-billing", true, "billing"),
-		window("c-ended", false), lifted).Build()
+		window("c-ended", false), lifted, marked).Build()
+
+	// The CLI, UI and MCP list freezes through ListFreezes: neither lifting
+	// one is listed (#2034).
+	listed, err := ListFreezes(ctx, c)
+	require.NoError(t, err)
+	var listedNames []string
+	for _, f := range listed {
+		listedNames = append(listedNames, f.Name)
+	}
+	assert.Equal(t, []string{"a-cluster", "b-billing", "c-ended"}, listedNames)
 
 	stamp := &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}
 	names, err := ExemptFromFreezes(ctx, c, ExemptRequest{Namespace: "payments", Pipeline: "checkout", Environment: "prod",

@@ -33,6 +33,20 @@ func activeFreeze(actors string, exemptions ...v1alpha1.FreezeExemption) *v1alph
 	}
 }
 
+// liftingFreeze is activeFreeze as kardinal unfreeze leaves it:
+// spec.freeze.lifted written (its status a generation behind) and, with
+// deleted, its delete held by the freeze audit finalizer.
+func liftingFreeze(actors string, deleted bool) *v1alpha1.ChangeWindow {
+	w := activeFreeze(actors)
+	w.Generation = 2
+	w.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "carol"}
+	if deleted {
+		w.Finalizers = []string{"kardinal.io/freeze-audit"}
+		w.DeletionTimestamp = &metav1.Time{Time: time.Date(2026, 10, 14, 9, 59, 0, 0, time.UTC)}
+	}
+	return w
+}
+
 // TestFreeze_HoldsStep: an active freeze holds the steps it selects at the
 // safe points pause uses (before start, before the next git step), whoever
 // started them for stop-the-line and only agents' versions for an agent
@@ -60,6 +74,10 @@ func TestFreeze_HoldsStep(t *testing.T) {
 		{name: "an exemption lets the step through and is audited", author: person,
 			freeze: activeFreeze("everyone", exemption), wantExempt: true},
 		{name: "no freeze", author: agent},
+		// #2034: lifted by kardinal unfreeze (marked, or deleted and kept by
+		// the audit finalizer) holds nothing.
+		{name: "a freeze marked lifted holds nothing", author: person, freeze: liftingFreeze("everyone", false)},
+		{name: "a deleted freeze its finalizer keeps holds nothing", author: person, freeze: liftingFreeze("everyone", true)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

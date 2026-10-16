@@ -998,6 +998,12 @@ func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time
 
 	result := make(map[string]interface{}, len(list.Items))
 	for _, cw := range list.Items {
+		if changewindow.FreezeLifting(&cw) {
+			// A freeze being lifted blocks nothing (#2034), though its audit
+			// finalizer keeps it for up to two minutes.
+			result[cw.Name] = false
+			continue
+		}
 		res := changewindow.Evaluate(cw.Spec, now)
 		// The ChangeWindow reconciler reports an invalid spec once per
 		// generation (a Warning log and Event, and the Valid condition); every

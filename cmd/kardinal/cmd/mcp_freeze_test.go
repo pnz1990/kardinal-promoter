@@ -52,10 +52,18 @@ func TestMCP_Freeze(t *testing.T) {
 	}
 	assert.Equal(t, map[string]string{v1alpha1.FreezeAgents: "", v1alpha1.FreezeEveryone: "default"}, holds)
 
+	// A freeze being lifted (kardinal unfreeze marked it, #2034) is not listed.
+	lifting := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-lifting"},
+		Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(),
+			Freeze: &v1alpha1.ChangeWindowFreeze{Actors: v1alpha1.FreezeEveryone, CreatedBy: "carol",
+				Lifted: &v1alpha1.FreezeLift{By: "carol"}}}}
+	require.NoError(t, c.Create(context.Background(), lifting))
+
 	res, body = call(t, cs, "freezes", map[string]any{})
 	require.False(t, res.IsError, "%v", body)
 	items, _ := body["result"].([]any)
 	require.Len(t, items, 2, "%v", body)
+	assert.NotContains(t, fmt.Sprint(items), "kardinal-freeze-lifting")
 	assertOnlyLabelled(t, "freezes", body, injection)
 
 	tools, err := cs.ListTools(context.Background(), nil)

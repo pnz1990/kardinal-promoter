@@ -5,6 +5,7 @@ package changewindow_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -92,6 +94,32 @@ func TestFreezeAudit(t *testing.T) {
 	lifted = freezeAudits(t, c, "payments")[changewindow.AuditActionFreezeLifted]
 	assert.Nil(t, lifted.Spec.Actor)
 	assert.Contains(t, lifted.Spec.Message, "deleted without kardinal unfreeze; the Kubernetes audit log names who")
+}
+
+// TestFreezeAudit_LongName (#2034): a freeze named after a long namespace
+// (kardinal-freeze-agents-<namespace>, longer than a label value's 63
+// characters) is audited: its AuditEvents carry a label-safe form of the
+// name, which the API server would otherwise refuse, keeping a deleted
+// freeze for the whole audit grace.
+func TestFreezeAudit_LongName(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	ns := "e2e-testgate-freezeagentsandstoptheline-cb39f208"
+	w := freezeWindow("kardinal-freeze-agents-"+ns, kardinalv1alpha1.FreezeAgents, []string{ns})
+	w.UID = "uid-long"
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(w).WithStatusSubresource(w).Build()
+	r := &changewindow.Reconciler{Client: c, AuditNamespace: "kardinal-system",
+		NowFn: func() time.Time { return at("2026-10-15T09:00:00Z") }}
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: w.Name}})
+	require.NoError(t, err)
+	started, ok := freezeAudits(t, c, ns)[changewindow.AuditActionFreezeStarted]
+	require.True(t, ok, "the FreezeStarted AuditEvent is written")
+	for k, v := range started.Labels {
+		assert.Empty(t, validation.IsValidLabelValue(v), "label %s=%q is a valid label value", k, v)
+	}
+	label := started.Labels["kardinal.io/changewindow"]
+	assert.True(t, strings.HasPrefix(label, "kardinal-freeze-agents-e2e-testgate"), label)
 }
 
 // TestFreezeAudit_WriteFailures covers the QA finding on #2001 (B2): a

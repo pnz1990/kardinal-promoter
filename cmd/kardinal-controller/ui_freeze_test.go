@@ -77,11 +77,20 @@ func TestUIFreeze(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, call("POST", "/api/v1/ui/unfreeze", `{"name":"kardinal-freeze-everyone-payments"}`, "").Code)
 	assert.Equal(t, http.StatusConflict, call("POST", "/api/v1/ui/unfreeze", `{"name":"holiday"}`, "bob").Code)
 	assert.Equal(t, http.StatusNotFound, call("POST", "/api/v1/ui/unfreeze", `{"name":"nope"}`, "bob").Code)
+	// The freeze audit finalizer keeps the window after the unfreeze: the
+	// banner no longer lists it (#2034).
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "kardinal-freeze-everyone-payments"}, &cw))
+	cw.Finalizers = []string{"kardinal.io/freeze-audit"}
+	require.NoError(t, c.Update(context.Background(), &cw))
 	require.Equal(t, http.StatusOK, call("POST", "/api/v1/ui/unfreeze", `{"name":"kardinal-freeze-everyone-payments"}`, "bob").Code)
+	w = call("GET", "/api/v1/ui/freezes", "", "bob")
+	require.Equal(t, http.StatusOK, w.Code)
+	list = uiFreezesResponse{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
+	assert.Empty(t, list.Freezes, "a freeze being lifted is not shown")
 	var all v1alpha1.ChangeWindowList
 	require.NoError(t, c.List(context.Background(), &all))
-	require.Len(t, all.Items, 1)
-	assert.Equal(t, "holiday", all.Items[0].Name)
+	require.Len(t, all.Items, 2, "its audit finalizer keeps it until FreezeLifted is written")
 }
 
 // freezeAccess is an access reviewer that grants, per user, verbs on
