@@ -100,6 +100,22 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	if res, stop, err := beforePush(ctx, state, !force); stop {
 		return res, err
 	}
+	// The commit about to be pushed to the PR branch joins the step's push
+	// history before the push: a controller that dies after the push and
+	// before the step's next status write still has it, and a PR a reviewer
+	// merged with it as its head is the step's own (#2065). A commit
+	// recorded whose push then failed is harmless: no PR can carry it.
+	if force && state.RecordPushed != nil {
+		if hr, ok := state.GitClient.(scm.HeadCommitReader); ok {
+			if sha, err := hr.HeadCommit(ctx, state.WorkDir); err == nil && sha != "" {
+				history := strings.Join(appendPushed(PushedSHAs(state.Outputs), sha), ",")
+				if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHAs: history}); err != nil {
+					return parentsteps.StepResult{Status: parentsteps.StepFailed,
+						Message: fmt.Sprintf("recording the commit to push to %s failed: %v", branch, err)}, err
+				}
+			}
+		}
+	}
 	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
 	rebases := 0
 	if !force && errors.Is(err, scm.ErrNonFastForward) {

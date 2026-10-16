@@ -400,9 +400,10 @@ func TestGitPushStep_RecordsPushedSHA(t *testing.T) {
 }
 
 // TestGitPushStep_RecordsPushedHistory (#2065): a push to the PR branch
-// records, before open-pr runs (StepState.RecordPushed), the commit it pushed
-// and the history of the step's pushes: the earlier ones first, the new one
-// last, each once, the last 8 kept. A restarted run pushes a new commit, and
+// records (StepState.RecordPushed) the history of the step's pushes before
+// the push, the new commit included, and the pushed commit after it, before
+// open-pr runs: the earlier ones first, the new one last, each once, the last
+// 8 kept. A failed push records the commit in the history only. A restarted run pushes a new commit, and
 // a PR an earlier run opened and a reviewer merged carries an earlier one.
 func TestGitPushStep_RecordsPushedHistory(t *testing.T) {
 	git := &headGitClient{sha: "h9"}
@@ -419,9 +420,21 @@ func TestGitPushStep_RecordsPushedHistory(t *testing.T) {
 	res, err := runStep(t, "git-push", state)
 	require.NoError(t, err)
 	assert.Equal(t, "h2,h3,h4,h5,h6,h7,h8,h9", res.Outputs[steps.OutputPushedSHAs], "the last 8")
-	require.Len(t, recorded, 1, "recorded before open-pr")
-	assert.Equal(t, "h9", recorded[0][steps.OutputPushedSHA])
-	assert.Equal(t, "h2,h3,h4,h5,h6,h7,h8,h9", recorded[0][steps.OutputPushedSHAs])
+	require.Len(t, recorded, 2, "recorded before the push, and after it, before open-pr")
+	assert.Equal(t, map[string]string{steps.OutputPushedSHAs: "h2,h3,h4,h5,h6,h7,h8,h9"}, recorded[0],
+		"the history first: a controller that dies right after the push still has the commit")
+	assert.Equal(t, "h9", recorded[1][steps.OutputPushedSHA], "the pushed commit once the push succeeded")
+	assert.Equal(t, "h2,h3,h4,h5,h6,h7,h8,h9", recorded[1][steps.OutputPushedSHAs])
+
+	// A failed push: the history has the commit, pushedSHA is not set.
+	recorded = nil
+	git.pushErrs = []error{errors.New("denied")}
+	state.Outputs = map[string]string{steps.OutputPushedSHA: "h8", steps.OutputPushedSHAs: "h8"}
+	_, err = runStep(t, "git-push", state)
+	require.Error(t, err)
+	require.Len(t, recorded, 1)
+	assert.Equal(t, map[string]string{steps.OutputPushedSHAs: "h8,h9"}, recorded[0])
+	git.pushErrs = nil
 
 	// The same commit again (a push retried) is not listed twice.
 	state.Outputs = map[string]string{steps.OutputPushedSHA: "h9", steps.OutputPushedSHAs: "h8,h9"}
