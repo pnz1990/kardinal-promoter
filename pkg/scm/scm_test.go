@@ -499,11 +499,13 @@ func TestGitLabProvider_OpenPR_AlreadyExists(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 			{
-				"iid":           88,
-				"web_url":       "https://gitlab.com/owner/repo/-/merge_requests/88",
-				"state":         "opened",
-				"source_branch": "feature",
-				"target_branch": "main",
+				"iid":               88,
+				"web_url":           "https://gitlab.com/owner/repo/-/merge_requests/88",
+				"state":             "opened",
+				"source_branch":     "feature",
+				"target_branch":     "main",
+				"source_project_id": 1,
+				"target_project_id": 1,
 			},
 		})
 	}))
@@ -779,8 +781,9 @@ func TestForgejoProvider_OpenPR_AlreadyExists(t *testing.T) {
 			{
 				"number":   55,
 				"html_url": "https://forgejo.example.com/owner/repo/pulls/55",
-				"head":     map[string]interface{}{"label": "owner:feature"},
-				"base":     map[string]interface{}{"ref": "main"},
+				"state":    "open",
+				"head":     map[string]interface{}{"ref": "feature", "label": "owner:feature", "repo_id": 1},
+				"base":     map[string]interface{}{"ref": "main", "repo_id": 1},
 			},
 		})
 	}))

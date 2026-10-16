@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -534,9 +535,9 @@ func TestAzureDevOpsContract_OpenPRReusesExisting(t *testing.T) {
 		wantCalls int
 	}{
 		{name: "active PR for the branch is reused", create: duplicate,
-			list: list(adoPullRequest(12, "active", adoBranch, adoWebURL)), wantURL: adoPR12WebURL, wantCalls: 2},
+			list: list(adoPullRequest(12, "active", adoBranch, adoWebURL)), wantURL: adoPR12WebURL, wantCalls: 3},
 		{name: "no active PR for the branch", create: duplicate, list: list(),
-			wantErr: "ADO PR already exists for branch kardinal/web-app-v2/prod into main but could not find it in active PRs", wantCalls: 2},
+			wantErr: "the SCM refused to open the PR of kardinal/web-app-v2/prod into main, but no open PR from this repository's branch exists", wantCalls: 3},
 		{name: "other refusal is not a duplicate",
 			create: apiReply{http.StatusBadRequest, adoError("GitPullRequestCannotBeActivated",
 				"TF401398: The pull request cannot be activated because the source and/or the target branch no longer exists, or the requested refs are not branches")},
@@ -544,7 +545,9 @@ func TestAzureDevOpsContract_OpenPRReusesExisting(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			api := newFakeAPI(t, map[string]apiReply{"POST " + adoPRsPath: tt.create, "GET " + adoPRsPath: tt.list})
+			api := newFakeAPI(t, map[string]apiReply{"POST " + adoPRsPath: tt.create, "GET " + adoPRsPath: tt.list,
+				// The lookup reads the repository's ID first.
+				"GET " + strings.TrimSuffix(adoPRsPath, "/pullrequests"): {http.StatusOK, mustJSON(t, adoRepository(""))}})
 			prURL, n, err := newAzureDevOps(t, api.URL, "").OpenPR(context.Background(), "contoso/Web/web-app", "t", "b", adoBranch, "main")
 			calls := api.Calls()
 			require.Len(t, calls, tt.wantCalls)
@@ -558,14 +561,17 @@ func TestAzureDevOpsContract_OpenPRReusesExisting(t *testing.T) {
 			if tt.wantCalls < 2 {
 				return
 			}
-			get := calls[1]
+			assert.Equal(t, strings.TrimSuffix(adoPRsPath, "/pullrequests"), calls[1].Path, "the repository's ID")
+			get := calls[2]
 			assert.Equal(t, http.MethodGet, get.Method)
 			assert.Equal(t, adoPRsPath, get.Path)
 			assert.Equal(t, url.Values{
-				"searchCriteria.sourceRefName": {"refs/heads/kardinal/web-app-v2/prod"},
-				"searchCriteria.targetRefName": {"refs/heads/main"},
-				"searchCriteria.status":        {"active"},
-				"api-version":                  {"7.1"},
+				"searchCriteria.sourceRefName":      {"refs/heads/kardinal/web-app-v2/prod"},
+				"searchCriteria.targetRefName":      {"refs/heads/main"},
+				"searchCriteria.sourceRepositoryId": {"3411ebc1-d5aa-464f-9615-0b527bc66719"},
+				"searchCriteria.repositoryId":       {"3411ebc1-d5aa-464f-9615-0b527bc66719"},
+				"searchCriteria.status":             {"active"},
+				"api-version":                       {"7.1"},
 			}, get.Query)
 			assertADORequest(t, get)
 		})

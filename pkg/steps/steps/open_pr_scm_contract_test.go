@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -63,6 +64,8 @@ func openPRState(t *testing.T, gitURL string, p scm.SCMProvider, rollbackOf stri
 	state.SCM = p
 	state.Pipeline.Git.URL = gitURL
 	state.Git.URL = gitURL
+	// git-push ran before open-pr: the commit it pushed to the PR branch.
+	state.Outputs["pushedSHA"] = testPushed
 	if rollbackOf != "" {
 		state.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: rollbackOf, Author: "ci"}
 		state.Bundle.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.28.0"}}
@@ -87,6 +90,9 @@ func TestOpenPRStep_BitbucketCloud(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, requests := fakeSCMAPI(t, func(r *http.Request) (int, string) {
+				if r.Method == http.MethodGet && r.URL.Path == path {
+					return http.StatusOK, `{"values":[]}` // no open PR of the branch yet
+				}
 				if r.Method != http.MethodPost || r.URL.Path != path {
 					return http.StatusNotFound, `{"type":"error","error":{"message":"Resource not found"}}`
 				}
@@ -107,7 +113,10 @@ func TestOpenPRStep_BitbucketCloud(t *testing.T) {
 			assert.NotContains(t, result.Message, "adding labels failed")
 
 			reqs := requests()
-			require.Len(t, reqs, 1, "one PR create and no label request")
+			require.Len(t, reqs, 2, "the lookup of an open PR, one PR create and no label request")
+			assert.Equal(t, http.MethodGet, reqs[0].Method, "open-pr looks for an open PR of its branch first")
+			assert.Equal(t, path, reqs[0].Path)
+			reqs = reqs[1:]
 			assert.Equal(t, http.MethodPost, reqs[0].Method)
 			assert.Equal(t, path, reqs[0].Path)
 			assert.Equal(t, "Bearer bb-access-token", reqs[0].Auth)
@@ -160,6 +169,10 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, requests := fakeSCMAPI(t, func(r *http.Request) (int, string) {
 				switch {
+				case r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(prs, "/pullrequests"):
+					return http.StatusOK, `{"id":"repo-id"}` // the lookup reads the repository's ID
+				case r.Method == http.MethodGet && r.URL.Path == prs:
+					return http.StatusOK, `{"value":[]}` // no active PR of the branch yet
 				case r.Method == http.MethodPost && r.URL.Path == prs:
 					return http.StatusCreated, `{"pullRequestId":12,"status":"active",` +
 						`"repository":{"name":"web-app","project":{"name":"Web"},"webUrl":"https://dev.azure.com/contoso/Web/_git/web-app"}}`
@@ -182,7 +195,10 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 			assert.NotContains(t, result.Message, "adding labels failed")
 
 			reqs := requests()
-			require.Len(t, reqs, 1+len(tt.wantLabels))
+			require.Len(t, reqs, 3+len(tt.wantLabels))
+			assert.Equal(t, http.MethodGet, reqs[0].Method, "open-pr reads the repository's ID")
+			assert.Equal(t, http.MethodGet, reqs[1].Method, "then looks for an active PR of its branch")
+			reqs = reqs[2:]
 			assert.Equal(t, prs, reqs[0].Path)
 			assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte(":ado-pat")), reqs[0].Auth)
 			assert.Equal(t, tt.wantTitle, reqs[0].Body["title"])
@@ -201,7 +217,12 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 
 	t.Run("tags refused", func(t *testing.T) {
 		srv, _ := fakeSCMAPI(t, func(r *http.Request) (int, string) {
-			if r.URL.Path == prs {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(prs, "/pullrequests"):
+				return http.StatusOK, `{"id":"repo-id"}`
+			case r.Method == http.MethodGet && r.URL.Path == prs:
+				return http.StatusOK, `{"value":[]}`
+			case r.URL.Path == prs:
 				return http.StatusCreated, `{"pullRequestId":12,"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web-app"}}`
 			}
 			return http.StatusForbidden, `{"message":"TF401027: You need the Git 'PullRequestContribute' permission to perform this action.","typeKey":"GitNeedsPermissionException"}`

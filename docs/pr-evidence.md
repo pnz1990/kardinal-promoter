@@ -359,3 +359,54 @@ commit at the head of the branch and counts the change as its own, not as an env
 that already had the version. It looks at the head commit only: if another commit landed on
 top in the meantime, the retry records `noChanges` and the deployment metrics miss that one
 deployment.
+
+A `pr-review` promotion retried the same way keeps its pull request too. Its PR branch is
+`kardinal/<namespace hash>/<bundle>/<environment>`, and git-push records the commit it pushed
+there (`status.outputs.pushedSHA`) before open-pr runs, so a retry finds the PR an earlier attempt
+opened. A PR counts as the promotion's own only when it is:
+
+- from that branch of the repository itself, never a fork's branch of the same name (each SCM's
+  source repository or project is checked, not the branch name); and
+- headed by the recorded commit, or by commits on top of it (as wait-for-merge accepts a
+  reviewer's fixup).
+
+What the retry does:
+
+- **Still open:** open-pr adopts it before opening one, and opens no second PR.
+- **Open, but its head does not contain kardinal's commit** (someone else committed to the branch
+  and replaced it): kardinal neither adopts the PR nor rebuilds the branch over their commit,
+  just as it never rebuilds a PR branch with someone else's commits on a moved base. It opens no
+  PR either, because the SCM would refuse the duplicate.
+- **No open PR, and the branch's head does not contain kardinal's commit** (someone pushed over
+  it, and the PR that carried their commit was closed): kardinal opens no PR from the branch. That
+  PR would carry kardinal's evidence without kardinal's change, and its merge would count as the
+  environment's approval. Before every PR it opens, kardinal checks that the branch's head is, or
+  contains, its commit.
+
+In both cases the step fails against its normal retry budget, about 4.5 minutes, and then is
+Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message names the head
+and kardinal's commit, and the head is kept in `status.outputs.prForeignHead`. The way to go on
+is to reset the branch to kardinal's commit (`git push --force origin
+<pushedSHA>:refs/heads/<branch>`) while the step retries. Once it has failed, promote again
+(`kardinal promote <pipeline> <environment>`, or ship a new version). Closing the PR does not
+help, because the branch still carries the other commit.
+- **Already merged** (the controller restarted after opening it, and a reviewer merged it in
+  between): the retry finds nothing to commit, because the base branch has the change. It then
+  looks up the merged PR of its branch, with a commit the step pushed as its head
+  (`status.outputs.pushedSHAs` keeps the last eight, each recorded before it is pushed: a
+  restarted run pushes a new commit, while the PR a reviewer merged carries an earlier one), and
+  records the
+  merge as for any PR: the step's outputs name the PR, its merge commit and who merged it (asked
+  of the SCM), and the `PRMerged` AuditEvent is written. Only a PR opened after the PromotionStep
+  was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is
+  not taken for this one.
+- **Neither, or no recorded commit:** the step records `noChanges`, as before.
+
+One case is accepted: a PR that someone opens by hand on kardinal's branch, in the repository
+itself and after kardinal's push, carries kardinal's commit and is adopted with that person's
+title and body. Only someone who can push to the repository can do that, and they could push
+the branch anyway.
+
+A lookup that fails with a transient error (5xx, a rate limit, a network error) is retried. One
+that fails with a permanent error (401, 403, 404) fails the step with the cause. Neither is
+taken as "no PR".

@@ -237,6 +237,11 @@ const ReasonClosePRFailed = "ClosePRFailed"
 // left open because the controller could not tell whether the step comes back.
 const ReasonPRLeftOpen = "PRLeftOpen"
 
+// ReasonPRBranchForeignCommit is the Warning Event reason of an open PR of
+// kardinal's branch whose head does not contain kardinal's commit: open-pr
+// neither adopts it nor rebuilds the branch over it (#2075).
+const ReasonPRBranchForeignCommit = "PRBranchForeignCommit"
+
 // comeback is whether, and how, a new step for a deleted step's environment
 // comes after it.
 type comeback int

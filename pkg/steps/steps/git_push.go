@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -99,6 +100,22 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	if res, stop, err := beforePush(ctx, state, !force); stop {
 		return res, err
 	}
+	// The commit about to be pushed to the PR branch joins the step's push
+	// history before the push: a controller that dies after the push and
+	// before the step's next status write still has it, and a PR a reviewer
+	// merged with it as its head is the step's own (#2065). A commit
+	// recorded whose push then failed is harmless: no PR can carry it.
+	if force && state.RecordPushed != nil {
+		if hr, ok := state.GitClient.(scm.HeadCommitReader); ok {
+			if sha, err := hr.HeadCommit(ctx, state.WorkDir); err == nil && sha != "" {
+				history := strings.Join(appendPushed(PushedSHAs(state.Outputs), sha), ",")
+				if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHAs: history}); err != nil {
+					return parentsteps.StepResult{Status: parentsteps.StepFailed,
+						Message: fmt.Sprintf("recording the commit to push to %s failed: %v", branch, err)}, err
+				}
+			}
+		}
+	}
 	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
 	rebases := 0
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
@@ -126,6 +143,19 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		if hr, ok := state.GitClient.(scm.HeadCommitReader); ok {
 			if sha, err := hr.HeadCommit(ctx, state.WorkDir); err == nil && sha != "" {
 				outputs[OutputPushedSHA] = sha
+			}
+		}
+		// Recorded before open-pr runs: a PR of the branch is kardinal's
+		// only when its head is this commit, or, for a PR already merged,
+		// one of the commits this step pushed before (open-pr, #2065).
+		if outputs[OutputPushedSHA] != "" {
+			outputs[OutputPushedSHAs] = strings.Join(appendPushed(PushedSHAs(state.Outputs), outputs[OutputPushedSHA]), ",")
+		}
+		if outputs[OutputPushedSHA] != "" && state.RecordPushed != nil {
+			if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHA: outputs[OutputPushedSHA],
+				OutputPushedSHAs: outputs[OutputPushedSHAs], "branch": branch}); err != nil {
+				return parentsteps.StepResult{Status: parentsteps.StepFailed,
+					Message: fmt.Sprintf("pushed %s; recording the pushed commit failed: %v", branch, err)}, err
 			}
 		}
 	}
@@ -160,6 +190,42 @@ func beforePush(ctx context.Context, state *parentsteps.StepState, direct bool) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("check before push: %v", err)},
 			true, fmt.Errorf("check before push: %w", err)
 	}
+}
+
+// OutputPushedSHAs (status.outputs.pushedSHAs) lists, oldest first, the
+// last maxPushedSHAs commits git-push pushed to the step's PR branch. A
+// restarted step pushes a new commit (its commit time differs), so a PR an
+// earlier run opened and a reviewer merged carries an earlier one: open-pr
+// adopts a merged PR whose head is any of them (#2065).
+const OutputPushedSHAs = "pushedSHAs"
+
+// maxPushedSHAs bounds OutputPushedSHAs.
+const maxPushedSHAs = 8
+
+// PushedSHAs is the commits the step pushed to its PR branch: the
+// pushedSHAs history, and pushedSHA (a step from before the history, or
+// its latest push).
+func PushedSHAs(outputs map[string]string) []string {
+	var out []string
+	for _, sha := range strings.Split(outputs[OutputPushedSHAs], ",") {
+		if sha != "" {
+			out = append(out, sha)
+		}
+	}
+	if sha := outputs[OutputPushedSHA]; sha != "" && !slices.Contains(out, sha) {
+		out = append(out, sha)
+	}
+	return out
+}
+
+// appendPushed adds sha to list, once, keeping the last maxPushedSHAs.
+func appendPushed(list []string, sha string) []string {
+	list = slices.DeleteFunc(list, func(s string) bool { return s == sha })
+	list = append(list, sha)
+	if len(list) > maxPushedSHAs {
+		list = list[len(list)-maxPushedSHAs:]
+	}
+	return list
 }
 
 // OutputPushedSHA is the git-push output (status.outputs.pushedSHA) naming

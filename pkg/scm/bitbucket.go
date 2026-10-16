@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -115,51 +114,11 @@ func (b *BitbucketProvider) OpenPR(ctx context.Context, repo, title, body, head,
 	if err := b.do(ctx, http.MethodPost, path, payload, &result); err != nil {
 		// Bitbucket returns 400 with "There are already open pull requests" when a PR exists.
 		if isBitbucketExistingPRErr(err) {
-			return b.findExistingPR(ctx, workspace, repoSlug, head, base)
+			return b.adoptRefused(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open Bitbucket PR %s: %w", repo, err)
 	}
 	return result.Links.HTML.Href, result.ID, nil
-}
-
-// bitbucketPRBranch is the source or destination of a Bitbucket pullrequest.
-type bitbucketPRBranch struct {
-	Branch struct {
-		Name string `json:"name"`
-	} `json:"branch"`
-}
-
-// findExistingPR finds the open PR from sourceBranch into destBranch. A PR
-// from the same branch into another destination is not the one Bitbucket
-// refused to duplicate.
-func (b *BitbucketProvider) findExistingPR(ctx context.Context, workspace, repoSlug, sourceBranch, destBranch string) (string, int, error) {
-	var result struct {
-		Values []struct {
-			ID          int               `json:"id"`
-			State       string            `json:"state"`
-			Source      bitbucketPRBranch `json:"source"`
-			Destination bitbucketPRBranch `json:"destination"`
-			Links       struct {
-				HTML struct {
-					Href string `json:"href"`
-				} `json:"html"`
-			} `json:"links"`
-		} `json:"values"`
-	}
-	// Filter on the server by source and destination branch (C06-scm-health-15).
-	quote := func(s string) string { return strings.ReplaceAll(s, `"`, `\"`) }
-	q := fmt.Sprintf(`source.branch.name="%s" AND destination.branch.name="%s" AND state="OPEN"`,
-		quote(sourceBranch), quote(destBranch))
-	path := fmt.Sprintf("/2.0/repositories/%s/%s/pullrequests?pagelen=50&q=%s", workspace, repoSlug, url.QueryEscape(q))
-	if err := b.do(ctx, http.MethodGet, path, nil, &result); err != nil {
-		return "", 0, fmt.Errorf("list Bitbucket PRs for %s/%s: %w", workspace, repoSlug, err)
-	}
-	for _, pr := range result.Values {
-		if pr.Source.Branch.Name == sourceBranch && pr.Destination.Branch.Name == destBranch {
-			return pr.Links.HTML.Href, pr.ID, nil
-		}
-	}
-	return "", 0, fmt.Errorf("bitbucket PR exists for branch %s into %s but could not find it in open PRs", sourceBranch, destBranch)
 }
 
 // isBitbucketExistingPRErr returns true when Bitbucket rejected PR creation because

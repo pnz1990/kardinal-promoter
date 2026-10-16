@@ -129,6 +129,12 @@ type StepState struct {
 	// the creating user. Empty when it is not recorded.
 	CreatedBy string
 
+	// PromotionCreatedAt is when the PromotionStep was created. A PR this
+	// promotion opened is not older, so a step that looks up its own merged
+	// PR by its head branch (open-pr, #2065) does not adopt the PR of an
+	// earlier Bundle with the same name. Zero means unknown.
+	PromotionCreatedAt time.Time
+
 	// RollbackFrom names the Bundle a rollback Bundle replaces: its
 	// kardinal.io/rollback-from annotation. Empty for a promotion.
 	RollbackFrom string
@@ -190,6 +196,14 @@ type StepState struct {
 	// It wraps ErrStalePush when the push is refused for that reason.
 	BeforePush func(ctx context.Context, direct bool) error
 
+	// RecordPushed, when set, writes outputs to the PromotionStep's status
+	// right after git-push pushed kardinal's PR branch, before open-pr runs:
+	// the commit pushed (pushedSHA) is then recorded for every PR kardinal
+	// opens, also when the controller dies before the reconcile's own status
+	// write. open-pr adopts a PR of the branch only when its head is that
+	// commit (#2065). An error fails the push step, which is retried.
+	RecordPushed func(ctx context.Context, outputs map[string]string) error
+
 	// Render is set only in the kardinal-render Job, which runs the render
 	// of a layout: branch environment (git-clone, the image update,
 	// render-manifests, git-commit and git-push). The controller never sets
@@ -199,6 +213,40 @@ type StepState struct {
 	// LiveRenders is the RenderRun of a layout: branch environment, as the
 	// Graph mirrors it onto the PromotionStep (spec.live.renders).
 	LiveRenders []v1alpha1.LiveRenderRun
+}
+
+// OutputPRForeignHead (status.outputs.prForeignHead) records the head of an
+// open PR of kardinal's branch that does not contain kardinal's commit
+// (ForeignPRHeadError), until open-pr opens or adopts its PR.
+const OutputPRForeignHead = "prForeignHead"
+
+// ForeignPRHeadError is kardinal's PR branch, or an open PR of it (PR is
+// set), whose head does not contain the commit kardinal pushed
+// (status.outputs.pushedSHA): someone else pushed to the branch, replacing
+// kardinal's commit. open-pr neither adopts the PR, nor opens one from the
+// branch (it would carry kardinal's evidence without kardinal's change),
+// nor rebuilds the branch (kardinal never force-pushes over someone else's
+// commit, as refreshPRBranch does not): the step fails against its retry
+// budget, and the reconciler emits a Warning Event and records the head
+// (status.outputs.prForeignHead).
+type ForeignPRHeadError struct {
+	PR           int
+	URL          string
+	Branch       string
+	Head, Pushed string
+}
+
+func (e *ForeignPRHeadError) Error() string {
+	what := fmt.Sprintf("kardinal's branch %s has head %s, which does not contain %s, the commit kardinal pushed: "+
+		"someone else pushed to it, and kardinal opens no PR from it", e.Branch, e.Head, e.Pushed)
+	if e.PR != 0 {
+		what = fmt.Sprintf("PR #%d (%s) is open from kardinal's branch %s, but its head %s does not contain %s, the commit kardinal pushed: "+
+			"someone else committed to the branch, and kardinal does not adopt the PR", e.PR, e.URL, e.Branch, e.Head, e.Pushed)
+	}
+	return what + fmt.Sprintf(" or push over their commit. To go on, reset the branch to kardinal's commit "+
+		"(git push --force origin %s:refs/heads/%s): the step retries for about 4.5 minutes (its retry budget), "+
+		"and once it has failed, promote again (kardinal promote <pipeline> <environment>, or ship a new version)",
+		e.Pushed, e.Branch)
 }
 
 // ErrStalePush marks a push BeforePush refused because the promotion is

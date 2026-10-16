@@ -554,13 +554,13 @@ func TestBitbucketCloudContract_OpenPRReusesExisting(t *testing.T) {
 			name:    "no open PR for the branch",
 			create:  duplicate,
 			list:    page(),
-			wantErr: "bitbucket PR exists for branch kardinal/web-app-v2/prod into main but could not find it in open PRs", wantCalls: 2,
+			wantErr: "the SCM refused to open the PR of kardinal/web-app-v2/prod into main, but no open PR from this repository's branch exists", wantCalls: 2,
 		},
 		{
 			name:    "open PR from the branch into another destination is not reused",
 			create:  duplicate,
 			list:    page(into(bbPullRequest(4, "OPEN", bbBranch, ""), "release")),
-			wantErr: "bitbucket PR exists for branch kardinal/web-app-v2/prod into main but could not find it in open PRs", wantCalls: 2,
+			wantErr: "the SCM refused to open the PR of kardinal/web-app-v2/prod into main, but no open PR from this repository's branch exists", wantCalls: 2,
 		},
 		{
 			name:    "other refusal is not a duplicate",
@@ -589,6 +589,8 @@ func TestBitbucketCloudContract_OpenPRReusesExisting(t *testing.T) {
 			assert.Equal(t, bbPRPath, list.Path)
 			assert.Equal(t, url.Values{
 				"pagelen": {"50"},
+				"state":   {"OPEN"},
+				"sort":    {"-created_on"},
 				"q":       {`source.branch.name="kardinal/web-app-v2/prod" AND destination.branch.name="main" AND state="OPEN"`},
 			}, list.Query)
 			assertBitbucketAuth(t, list)

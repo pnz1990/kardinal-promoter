@@ -78,6 +78,24 @@ func routedAPI(t *testing.T, routes map[string][]apiReply) (*httptest.Server, fu
 	}
 }
 
+// lookedUpFirst checks that open-pr first looked for an open PR of its head
+// branch (route, a GET with its filter) and returns the calls after it.
+func lookedUpFirst(t *testing.T, calls []apiCall, route string) []apiCall {
+	t.Helper()
+	require.NotEmpty(t, calls)
+	assert.True(t, strings.HasPrefix(calls[0].Route, route+"?"), "the first call looks up an open PR: %s", calls[0].Route)
+	return calls[1:]
+}
+
+// adoRepoRead checks that an Azure DevOps lookup first read the repository's
+// ID (route) and returns the calls after it.
+func adoRepoRead(t *testing.T, calls []apiCall, route string) []apiCall {
+	t.Helper()
+	require.NotEmpty(t, calls)
+	assert.True(t, strings.HasPrefix(calls[0].Route, route+"?"), "the first call reads the repository ID: %s", calls[0].Route)
+	return calls[1:]
+}
+
 // routes lists the routes of calls, in order.
 func routes(calls []apiCall) []string {
 	out := make([]string, 0, len(calls))
@@ -134,6 +152,7 @@ func assertMergePending(t *testing.T, outputs map[string]string, want scm.MergeO
 // reconciler. Covers SCM-PRCTL-GH-01.
 func TestOpenPRControls_GitHub(t *testing.T) {
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET /repos/acme/web/pulls":                        {{200, `[]`}},
 		"POST /repos/acme/web/pulls":                       {{201, `{"number":5,"html_url":"https://github.com/acme/web/pull/5"}`}},
 		"POST /repos/acme/web/issues/5/labels":             {{200, `[]`}},
 		"POST /repos/acme/web/pulls/5/requested_reviewers": {{201, `{}`}},
@@ -148,7 +167,7 @@ func TestOpenPRControls_GitHub(t *testing.T) {
 	assert.NotContains(t, result.Message, "failed")
 	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "squash", CommitTitle: "deploy 1.29.0 to prod (#5)", CommitBody: "Bundle nginx-demo-v1-29-0"})
 
-	got := calls()
+	got := lookedUpFirst(t, calls(), "GET /repos/acme/web/pulls")
 	assert.Equal(t, []string{"POST /repos/acme/web/pulls", "POST /repos/acme/web/issues/5/labels",
 		"POST /repos/acme/web/pulls/5/requested_reviewers", "POST /repos/acme/web/issues/5/assignees"}, routes(got),
 		"no merge or auto-merge call from open-pr")
@@ -167,6 +186,7 @@ func TestOpenPRControls_GitHub(t *testing.T) {
 func TestOpenPRControls_GitLab(t *testing.T) {
 	const mr = "/api/v4/projects/acme%2Fweb/merge_requests/3"
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET /api/v4/projects/acme%2Fweb/merge_requests":  {{200, `[]`}},
 		"POST /api/v4/projects/acme%2Fweb/merge_requests": {{201, `{"iid":3,"web_url":"https://gitlab.com/acme/web/-/merge_requests/3"}`}},
 		"PUT " + mr:         {{200, `{}`}},
 		"GET " + mr:         {{200, `{"reviewers":[{"id":7}],"assignees":[]}`}},
@@ -182,7 +202,7 @@ func TestOpenPRControls_GitLab(t *testing.T) {
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
 	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "squash", CommitTitle: "deploy 1.29.0 to prod (#3)", CommitBody: "Bundle nginx-demo-v1-29-0"})
 
-	got := calls()
+	got := lookedUpFirst(t, calls(), "GET /api/v4/projects/acme%2Fweb/merge_requests")
 	assert.Equal(t, []string{
 		"POST /api/v4/projects/acme%2Fweb/merge_requests",
 		"PUT " + mr,                                                  // labels
@@ -211,6 +231,7 @@ func TestOpenPRControls_GitLab(t *testing.T) {
 func TestOpenPRControls_Forgejo(t *testing.T) {
 	const repo = "/api/v1/repos/acme/web"
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET " + repo + "/pulls":                        {{200, `[]`}},
 		"POST " + repo + "/pulls":                       {{201, `{"number":4,"html_url":"https://forgejo.example/acme/web/pulls/4"}`}},
 		"GET " + repo + "/labels":                       {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
 		"POST " + repo + "/labels":                      {{201, `{"id":3}`}},
@@ -226,7 +247,7 @@ func TestOpenPRControls_Forgejo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
 	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "rebase", CommitTitle: "deploy 1.29.0 to prod (#4)", CommitBody: "Bundle nginx-demo-v1-29-0"})
-	got := calls()
+	got := lookedUpFirst(t, calls(), "GET "+repo+"/pulls")
 	assert.Equal(t, []string{"POST " + repo + "/pulls", "GET " + repo + "/labels?limit=50&page=1", "POST " + repo + "/labels",
 		"POST " + repo + "/issues/4/labels", "POST " + repo + "/pulls/4/requested_reviewers", "GET " + repo + "/issues/4",
 		"PATCH " + repo + "/issues/4"}, routes(got))
@@ -242,6 +263,7 @@ func TestOpenPRControls_Forgejo(t *testing.T) {
 func TestOpenPRControls_Bitbucket(t *testing.T) {
 	const pr = "/2.0/repositories/acme/web/pullrequests/7"
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET /2.0/repositories/acme/web/pullrequests":  {{200, `{"values":[]}`}},
 		"POST /2.0/repositories/acme/web/pullrequests": {{201, `{"id":7,"links":{"html":{"href":"https://bitbucket.org/acme/web/pull-requests/7"}}}`}},
 		"GET " + pr: {{200, `{"title":"deploy","reviewers":[{"uuid":"{b0b}","account_id":"557058:b0b"}]}`}},
 		"PUT " + pr: {{200, `{}`}},
@@ -252,7 +274,7 @@ func TestOpenPRControls_Bitbucket(t *testing.T) {
 		&v1alpha1.PRConfig{Reviewers: []string{"{a11ce}", "557058:0c7"}}))
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
-	got := calls()
+	got := lookedUpFirst(t, calls(), "GET /2.0/repositories/acme/web/pullrequests")
 	assert.Equal(t, []string{"POST /2.0/repositories/acme/web/pullrequests", "GET " + pr, "PUT " + pr}, routes(got))
 	assert.Equal(t, map[string]interface{}{"title": "deploy", "reviewers": []interface{}{
 		map[string]interface{}{"uuid": "{b0b}"}, map[string]interface{}{"uuid": "{a11ce}"}, map[string]interface{}{"account_id": "557058:0c7"},
@@ -281,6 +303,8 @@ func TestOpenPRControls_Bitbucket(t *testing.T) {
 func TestOpenPRControls_AzureDevOps(t *testing.T) {
 	const repo = "/contoso/Web/_apis/git/repositories/web"
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET " + repo:                                         {{200, `{"id":"repo-id"}`}},
+		"GET " + repo + "/pullrequests":                       {{200, `{"value":[]}`}},
 		"POST " + repo + "/pullrequests":                      {{201, `{"pullRequestId":12,"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}`}},
 		"POST " + repo + "/pullRequests/12/labels":            {{200, `{}`}},
 		"PUT " + repo + "/pullRequests/12/reviewers/alice-id": {{200, `{}`}},
@@ -300,7 +324,7 @@ func TestOpenPRControls_AzureDevOps(t *testing.T) {
 		"POST " + repo + "/pullRequests/12/labels?api-version=7.1", "POST " + repo + "/pullRequests/12/labels?api-version=7.1",
 		"POST " + repo + "/pullRequests/12/labels?api-version=7.1",
 		"PUT " + repo + "/pullRequests/12/reviewers/alice-id?api-version=7.1", "PUT " + repo + "/pullRequests/12/reviewers/team-id?api-version=7.1"},
-		routes(calls()))
+		routes(lookedUpFirst(t, adoRepoRead(t, calls(), "GET "+repo), "GET "+repo+"/pullrequests")))
 }
 
 // TestOpenPRControls_Failures: a template that does not render fails the
@@ -326,6 +350,7 @@ func TestOpenPRControls_Failures(t *testing.T) {
 
 	t.Run("controls refused after the PR", func(t *testing.T) {
 		srv, calls := routedAPI(t, map[string][]apiReply{
+			"GET " + repo + "/pulls":                        {{200, `[]`}},
 			"POST " + repo + "/pulls":                       {opened},
 			"GET " + repo + "/labels":                       {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
 			"POST " + repo + "/issues/4/labels":             {{200, `[]`}},
@@ -360,6 +385,7 @@ func TestOpenPRControls_Failures(t *testing.T) {
 
 	t.Run("a later PR without errors clears the output", func(t *testing.T) {
 		srv, _ := routedAPI(t, map[string][]apiReply{
+			"GET " + repo + "/pulls":            {{200, `[]`}},
 			"POST " + repo + "/pulls":           {opened},
 			"GET " + repo + "/labels":           {{200, `[{"id":1,"name":"kardinal"},{"id":2,"name":"kardinal/promotion"}]`}},
 			"POST " + repo + "/issues/4/labels": {{200, `[]`}},
@@ -384,6 +410,7 @@ func TestOpenPRControls_Failures(t *testing.T) {
 func TestOpenPRControls_BitbucketDC(t *testing.T) {
 	const prs = "/rest/api/1.0/projects/PLAT/repos/web/pull-requests"
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET " + prs:                       {{200, `{"isLastPage":true,"values":[]}`}},
 		"POST " + prs:                      {{201, `{"id":12,"version":0,"links":{"self":[{"href":"https://git.example.com/projects/PLAT/repos/web/pull-requests/12"}]}}`}},
 		"POST " + prs + "/12/participants": {{200, `{}`}},
 	})
@@ -399,7 +426,7 @@ func TestOpenPRControls_BitbucketDC(t *testing.T) {
 	assert.Equal(t, parentsteps.StepSuccess, result.Status, result.Message)
 	assert.Equal(t, "https://git.example.com/projects/PLAT/repos/web/pull-requests/12", result.Outputs["prURL"])
 	assertMergePending(t, result.Outputs, scm.MergeOptions{Method: "squash", CommitTitle: "deploy 1.29.0 to prod (#12)"})
-	got := calls()
+	got := lookedUpFirst(t, calls(), "GET "+prs)
 	assert.Equal(t, []string{"POST " + prs, "POST " + prs + "/12/participants"}, routes(got))
 	assert.Equal(t, "deploy 1.29.0 to prod", got[0].Body["title"])
 	assert.Equal(t, map[string]interface{}{"user": map[string]interface{}{"name": "alice"}, "role": "REVIEWER"}, got[1].Body)
@@ -413,6 +440,111 @@ func TestOpenPRControls_BitbucketDC(t *testing.T) {
 			assert.ErrorIs(t, err, parentsteps.ErrPermanent)
 			assert.Contains(t, result.Message, "pr."+name+" is not supported by the bitbucket-datacenter SCM provider")
 			assert.Empty(t, calls())
+		})
+	}
+}
+
+// TestOpenPR_AdoptsTheOpenPROfItsBranch: open-pr looks for an open PR of its
+// head branch before it opens one, and adopts it without a create, on every
+// provider, when it is from the repository's own branch with the commit
+// git-push pushed. A fork's PR from a branch of the same name is not adopted
+// (#2075 QA): open-pr opens its own. A re-run (a controller that crashed after open-pr) does not rely
+// on the SCM refusing a second PR: Bitbucket Cloud updates the existing
+// PR's title and description instead of refusing, so a create would
+// overwrite them.
+//
+// Covers SCM-OPEN-FIRST-01.
+// lookupRoutes answers list with body; on Azure DevOps it also answers the
+// repository read the lookup makes first.
+func lookupRoutes(list, body string) map[string][]apiReply {
+	routes := map[string][]apiReply{list: {{200, body}}}
+	if repo, ok := strings.CutSuffix(list, "/pullrequests"); ok && strings.Contains(list, "/_apis/git/") {
+		routes[repo] = []apiReply{{200, `{"id":"repo-id"}`}}
+	}
+	return routes
+}
+
+func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
+	const head = "kardinal/nginx-demo-v1-29-0/prod"
+	for _, tc := range []struct {
+		provider, gitURL, list, body, wantURL string
+		// fork turns body into a fork's PR from a branch of the same name.
+		fork func(body string) string
+	}{
+		{"github", "https://github.com/acme/web.git", "GET /repos/acme/web/pulls",
+			`[{"number":5,"html_url":"https://github.com/acme/web/pull/5","head":{"ref":"` + head + `","sha":"` + testPushed + `","repo":{"full_name":"acme/web"}},"base":{"ref":"main"}}]`,
+			"https://github.com/acme/web/pull/5", func(b string) string {
+				return strings.Replace(b, `"full_name":"acme/web"`, `"full_name":"attacker/web"`, 1)
+			}},
+		{"gitlab", "https://gitlab.com/acme/web.git", "GET /api/v4/projects/acme%2Fweb/merge_requests",
+			`[{"iid":5,"web_url":"https://gitlab.com/acme/web/-/merge_requests/5","state":"opened","sha":"` + testPushed + `","source_branch":"` + head + `","target_branch":"main","source_project_id":1,"target_project_id":1}]`,
+			"https://gitlab.com/acme/web/-/merge_requests/5", func(b string) string {
+				return strings.Replace(b, `"source_project_id":1`, `"source_project_id":999`, 1)
+			}},
+		{"forgejo", "https://forgejo.example/acme/web.git", "GET /api/v1/repos/acme/web/pulls",
+			`[{"number":5,"html_url":"https://forgejo.example/acme/web/pulls/5","state":"open","head":{"ref":"` + head + `","sha":"` + testPushed + `","repo_id":1},"base":{"ref":"main","repo_id":1}}]`,
+			"https://forgejo.example/acme/web/pulls/5", func(b string) string { return strings.Replace(b, `"repo_id":1},"base"`, `"repo_id":99},"base"`, 1) }},
+		{"bitbucket", "https://bitbucket.org/acme/web.git", "GET /2.0/repositories/acme/web/pullrequests",
+			`{"values":[{"id":5,"state":"OPEN","source":{"branch":{"name":"` + head + `"},"commit":{"hash":"` + testPushed[:12] + `"},"repository":{"full_name":"acme/web"}},"destination":{"branch":{"name":"main"},"repository":{"full_name":"acme/web"}},"links":{"html":{"href":"https://bitbucket.org/acme/web/pull-requests/5"}}}]}`,
+			"https://bitbucket.org/acme/web/pull-requests/5", func(b string) string {
+				return strings.Replace(b, `"repository":{"full_name":"acme/web"}},"destination"`, `"repository":{"full_name":"attacker/web"}},"destination"`, 1)
+			}},
+		{"bitbucket-datacenter", "https://git.example.com/scm/PLAT/web.git", "GET /rest/api/1.0/projects/PLAT/repos/web/pull-requests",
+			`{"isLastPage":true,"values":[{"id":5,"state":"OPEN","fromRef":{"id":"refs/heads/` + head + `","latestCommit":"` + testPushed + `","repository":{"slug":"web","project":{"key":"PLAT"}}},"toRef":{"id":"refs/heads/main","repository":{"slug":"web","project":{"key":"PLAT"}}},"links":{"self":[{"href":"https://git.example.com/projects/PLAT/repos/web/pull-requests/5"}]}}]}`,
+			"https://git.example.com/projects/PLAT/repos/web/pull-requests/5", func(b string) string {
+				return strings.Replace(b, `"project":{"key":"PLAT"}}},"toRef"`, `"project":{"key":"~ATTACKER"}}},"toRef"`, 1)
+			}},
+		{"azuredevops", "https://dev.azure.com/contoso/Web/_git/web", "GET /contoso/Web/_apis/git/repositories/web/pullrequests",
+			`{"value":[{"pullRequestId":5,"status":"active","sourceRefName":"refs/heads/` + head + `","targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"` + testPushed + `"},"repository":{"id":"repo-id","webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}]}`,
+			"https://dev.azure.com/contoso/Web/_git/web/pullrequest/5", func(b string) string {
+				return strings.Replace(b, `"status":"active",`, `"status":"active","forkSource":{"repository":{"name":"web-fork"}},`, 1)
+			}},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			srv, calls := routedAPI(t, lookupRoutes(tc.list, tc.body))
+			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
+			require.NoError(t, err)
+			state := controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{})
+			result, _ := runOpenPR(t, state)
+			assert.Equal(t, "5", result.Outputs["prNumber"], result.Message)
+			assert.Equal(t, tc.wantURL, result.Outputs["prURL"])
+			assert.Contains(t, result.Message, "already open, from an earlier run of this promotion")
+			for _, c := range calls() {
+				assert.False(t, strings.HasPrefix(c.Route, "POST "+strings.TrimPrefix(tc.list, "GET ")+"?") ||
+					c.Route == "POST "+strings.TrimPrefix(tc.list, "GET "), "no PR create: %s", c.Route)
+			}
+		})
+		t.Run(tc.provider+": another head commit is not adopted", func(t *testing.T) {
+			// A PR on kardinal's branch whose head is not the commit
+			// git-push pushed (someone pushed to the branch): not adopted,
+			// and no create, whose refused duplicate would adopt it; the
+			// step fails (ForeignPRHeadError) and retries against its budget.
+			srv, calls := routedAPI(t, lookupRoutes(tc.list, strings.ReplaceAll(tc.body, testPushed[:12], "deadbeefcafe")))
+			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
+			require.NoError(t, err)
+			result, err := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))
+			var foreign *parentsteps.ForeignPRHeadError
+			require.ErrorAs(t, err, &foreign, "failed against the retry budget")
+			assert.Equal(t, parentsteps.StepFailed, result.Status)
+			assert.Contains(t, result.Message, "the commit kardinal pushed")
+			assert.Empty(t, result.Outputs["prNumber"])
+			for _, c := range calls() {
+				assert.False(t, strings.HasPrefix(c.Route, "POST "), "no create: %s", c.Route)
+			}
+		})
+		t.Run(tc.provider+": a fork's PR is not adopted", func(t *testing.T) {
+			// The only open PR of the branch name is a fork's: open-pr opens
+			// its own (the fake has no create route, so the create fails).
+			srv, calls := routedAPI(t, lookupRoutes(tc.list, tc.fork(tc.body)))
+			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
+			require.NoError(t, err)
+			result, _ := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))
+			assert.Empty(t, result.Outputs["prNumber"], "the fork's PR #5 is not kardinal's")
+			created := false
+			for _, c := range calls() {
+				created = created || strings.HasPrefix(c.Route, "POST ")
+			}
+			assert.True(t, created, "open-pr opens its own PR: %v", routes(calls()))
 		})
 	}
 }

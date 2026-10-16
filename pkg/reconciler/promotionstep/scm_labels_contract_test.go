@@ -73,12 +73,13 @@ func fakeAPI(t *testing.T, tokenHeader, want string, routes map[string]apiRespon
 // PR is left open. It returns the first two requests, the create and the
 // label request.
 func labelsRefused(t *testing.T, gitURL string, p scm.SCMProvider, calls func() []apiCall,
-	status, prURL, prNumber, wantErr string) []apiCall {
+	lookup, status, prURL, prNumber, wantErr string) []apiCall {
 	t.Helper()
 	pl := makePipeline("p")
 	pl.Spec.Git.URL = gitURL
 	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), pl)
-	ps.Status.CurrentStepIndex = 4 // open-pr, then wait-for-merge
+	ps.Status.CurrentStepIndex = 4                                                                 // open-pr, then wait-for-merge
+	ps.Status.Outputs = map[string]string{"pushedSHA": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"} // git-push ran
 	ps.Spec.PRStatusRef = "prs"
 	c := newClient(t, ps, openPRStatus("prs", "", 0), pl, makeBundle("b1", "p"))
 	r := &promotionstep.Reconciler{Client: c, SCM: p, GitClient: &mockGit{},
@@ -100,6 +101,11 @@ func labelsRefused(t *testing.T, gitURL string, p scm.SCMProvider, calls func() 
 	assert.Equal(t, wantErr, got.Status.Outputs["prLabelsError"])
 
 	all := calls()
+	require.NotEmpty(t, all)
+	// open-pr first looks for an open PR of its branch (lookup), finds none,
+	// and opens one.
+	assert.Equal(t, lookup, all[0].Route, "the lookup of an open PR comes first")
+	all = all[1:]
 	require.Greater(t, len(all), 2, "the PR create, the label request and the status reads: %+v", all)
 	for _, c := range all[2:] {
 		if strings.Contains(c.Route, "/statuses/") {
@@ -124,6 +130,7 @@ func TestLabelsRefused_GitHub(t *testing.T) {
 			`"documentation_url":"https://docs.github.com/rest/issues/labels#add-labels-to-an-issue","status":"403"}`
 	)
 	srv, calls := fakeAPI(t, "Authorization", "Bearer gh-token", map[string]apiResponse{
+		"GET /repos/acme/web-app/pulls": {http.StatusOK, `[]`},
 		"POST /repos/acme/web-app/pulls": {http.StatusCreated,
 			`{"number":7,"state":"open","html_url":"https://github.com/acme/web-app/pull/7"}`},
 		labels: {http.StatusForbidden, refused},
@@ -132,7 +139,7 @@ func TestLabelsRefused_GitHub(t *testing.T) {
 	p, err := scm.NewProvider("github", "gh-token", srv.URL, "")
 	require.NoError(t, err)
 
-	got := labelsRefused(t, "https://github.com/acme/web-app.git", p, calls, status,
+	got := labelsRefused(t, "https://github.com/acme/web-app.git", p, calls, "GET /repos/acme/web-app/pulls", status,
 		"https://github.com/acme/web-app/pull/7", "7",
 		"add labels to PR acme/web-app#7: GitHub API POST /repos/acme/web-app/issues/7/labels: status 403: "+refused)
 	assert.Equal(t, "POST /repos/acme/web-app/pulls", got[0].Route)
@@ -154,6 +161,7 @@ func TestLabelsRefused_GitLab(t *testing.T) {
 		refused = `{"message":"403 Forbidden"}`
 	)
 	srv, calls := fakeAPI(t, "PRIVATE-TOKEN", "gl-token", map[string]apiResponse{
+		"GET /api/v4/projects/acme%2Fweb-app/merge_requests": {http.StatusOK, `[]`},
 		"POST /api/v4/projects/acme%2Fweb-app/merge_requests": {http.StatusCreated,
 			`{"id":1207,"iid":7,"state":"opened","web_url":"https://gitlab.example.com/acme/web-app/-/merge_requests/7"}`},
 		mr:     {http.StatusForbidden, refused},
@@ -162,7 +170,8 @@ func TestLabelsRefused_GitLab(t *testing.T) {
 	p, err := scm.NewProvider("gitlab", "gl-token", srv.URL, "")
 	require.NoError(t, err)
 
-	got := labelsRefused(t, "https://gitlab.example.com/acme/web-app.git", p, calls, status,
+	got := labelsRefused(t, "https://gitlab.example.com/acme/web-app.git", p, calls,
+		"GET /api/v4/projects/acme%2Fweb-app/merge_requests", status,
 		"https://gitlab.example.com/acme/web-app/-/merge_requests/7", "7",
 		"add labels to MR acme/web-app!7: GitLab API PUT /api/v4/projects/acme%2Fweb-app/merge_requests/7: status 403: "+refused)
 	assert.Equal(t, "POST /api/v4/projects/acme%2Fweb-app/merge_requests", got[0].Route)

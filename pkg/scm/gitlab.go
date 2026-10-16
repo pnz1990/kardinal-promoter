@@ -93,38 +93,11 @@ func (g *GitLabProvider) OpenPR(ctx context.Context, repo, title, body, head, ba
 		// GitLab returns 409 Conflict when an open MR from the source branch
 		// into the target branch already exists.
 		if isGitLabExistingMRErr(err) {
-			return g.findExistingMR(ctx, repo, head, base)
+			return g.adoptRefused(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open MR %s: %w", repo, err)
 	}
 	return result.WebURL, result.IID, nil
-}
-
-// findExistingMR finds the open MR from sourceBranch into targetBranch.
-// GitLab refuses a duplicate only for the same source and target branch, so
-// an open MR from the branch into another target is not the one it refused
-// and must not be reused.
-func (g *GitLabProvider) findExistingMR(ctx context.Context, repo, sourceBranch, targetBranch string) (string, int, error) {
-	projectID := encodeProjectID(repo)
-	var mrs []struct {
-		IID          int    `json:"iid"`
-		WebURL       string `json:"web_url"`
-		SourceBranch string `json:"source_branch"`
-		TargetBranch string `json:"target_branch"`
-		State        string `json:"state"`
-	}
-	q := url.Values{"state": {"opened"}, "per_page": {"100"}, "source_branch": {sourceBranch}, "target_branch": {targetBranch}}
-	if err := g.do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v4/projects/%s/merge_requests?%s", projectID, q.Encode()),
-		nil, &mrs); err != nil {
-		return "", 0, fmt.Errorf("list MRs to find existing %s: %w", sourceBranch, err)
-	}
-	for _, mr := range mrs {
-		if mr.SourceBranch == sourceBranch && mr.TargetBranch == targetBranch {
-			return mr.WebURL, mr.IID, nil
-		}
-	}
-	return "", 0, fmt.Errorf("MR already exists for %s into %s but could not find it in open MRs", sourceBranch, targetBranch)
 }
 
 // isGitLabExistingMRErr returns true when GitLab rejected the MR creation with 409

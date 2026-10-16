@@ -438,15 +438,6 @@ func checkChaos(t *testing.T, base, run chaosRun) {
 	}
 	assert.Equal(t, base.perPromotion, run.perPromotion, "the PRs of the run without crashes")
 	want := maps.Clone(base.audit)
-	for k := range base.audit {
-		// #2065: a PR merged before the crashed controller recorded it is
-		// never recorded; the restarted step finds the change on the base
-		// branch (noChanges). Remove this when #2065 is fixed.
-		if promotion, ok := strings.CutSuffix(k, " PRMerged Success"); ok && run.audit[k] == 0 && run.noChanges[promotion] {
-			t.Logf("known #2065: %s has no PRMerged record", promotion)
-			delete(want, k)
-		}
-	}
 	assert.Equal(t, want, run.audit, "the AuditEvents of the run without crashes: none lost, none twice")
 	assert.Empty(t, run.pending, "no AuditEvent left in an outbox")
 	for k, n := range run.steps {

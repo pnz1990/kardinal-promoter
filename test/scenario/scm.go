@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -54,6 +55,9 @@ type PR struct {
 	Reviewers []string
 	Assignees []string
 	AutoMerge bool
+	// OpenedAt and MergedAt are when the PR was opened and merged, as the
+	// SCM reports them (created_at, merged_at).
+	OpenedAt, MergedAt time.Time
 }
 
 // SCMServer fakes the pull request API of GitHub, GitLab or Forgejo over
@@ -159,13 +163,18 @@ func (s *SCMServer) MergeAs(repo string, number int, user string) error {
 	}
 	head, base := p.Head, p.Base
 	s.mu.Unlock()
+	// The PR's head is its branch's head when it merges, as on the SCM.
+	headSHA := s.headSHA(repo, head)
 	sha, err := s.git.Merge(s.repoURL(repo), head, base)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p.State, p.MergeSHA, p.MergedBy = "merged", sha, user
+	p.State, p.MergeSHA, p.MergedBy, p.MergedAt = "merged", sha, user, time.Now().UTC()
+	if headSHA != "" {
+		p.HeadSHA = headSHA
+	}
 	return nil
 }
 
@@ -274,7 +283,8 @@ func (s *SCMServer) openPR(repo, title, body, head, base string) (*PR, bool) {
 			return p, false
 		}
 	}
-	p := &PR{Repo: repo, Number: s.nextNumber(repo), Title: title, Body: body, Head: head, Base: base, State: "open"}
+	p := &PR{Repo: repo, Number: s.nextNumber(repo), Title: title, Body: body, Head: head, Base: base, State: "open",
+		OpenedAt: time.Now().UTC()}
 	s.mu.Unlock()
 	p.HeadSHA = s.headSHA(repo, head)
 	s.mu.Lock()
@@ -289,7 +299,19 @@ func (s *SCMServer) webURL(p *PR) string {
 	return fmt.Sprintf("https://%s/%s/pull/%d", SCMHost[s.Kind], p.Repo, p.Number)
 }
 
+// refreshHead sets an open PR's head to its branch's head: a push to the
+// branch moves the PR, as on the SCM.
+func (s *SCMServer) refreshHead(p *PR) {
+	if p.State != "open" {
+		return
+	}
+	if sha := s.headSHA(p.Repo, p.Head); sha != "" {
+		p.HeadSHA = sha
+	}
+}
+
 func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
+	s.refreshHead(p)
 	state := p.State
 	if state == "merged" {
 		state = "closed"
@@ -302,12 +324,20 @@ func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
 	if p.MergedBy != "" {
 		mergedBy = map[string]interface{}{"login": p.MergedBy}
 	}
+	var mergedAt interface{}
+	if p.State == "merged" {
+		mergedAt = p.MergedAt.Format(time.RFC3339)
+	}
 	return map[string]interface{}{
-		"merged_by": mergedBy,
-		"number":    p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
+		"merged_by":  mergedBy,
+		"created_at": p.OpenedAt.Format(time.RFC3339), "merged_at": mergedAt,
+		"number": p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
 		"merge_commit_sha": p.MergeSHA, "node_id": fmt.Sprintf("PR_%d", p.Number), "title": p.Title, "body": p.Body,
-		"head":   map[string]interface{}{"ref": p.Head, "label": p.Head, "sha": p.HeadSHA},
-		"base":   map[string]interface{}{"ref": p.Base},
+		// Every PR is from a branch of the repository itself (the fake has
+		// no forks): the head and base name the same repository.
+		"head": map[string]interface{}{"ref": p.Head, "label": p.Head, "sha": p.HeadSHA,
+			"repo_id": 1, "repo": map[string]interface{}{"full_name": p.Repo}},
+		"base":   map[string]interface{}{"ref": p.Base, "repo_id": 1, "repo": map[string]interface{}{"full_name": p.Repo}},
 		"labels": labels, "mergeable": true,
 	}
 }
@@ -529,6 +559,7 @@ var gitlabRoutes = []route{
 }
 
 func (s *SCMServer) mrJSON(p *PR) map[string]interface{} {
+	s.refreshHead(p)
 	state := map[string]string{"open": "opened", "closed": "closed", "merged": "merged"}[p.State]
 	var mergeUser interface{}
 	if p.MergedBy != "" {
@@ -537,6 +568,10 @@ func (s *SCMServer) mrJSON(p *PR) map[string]interface{} {
 	return map[string]interface{}{
 		"merge_user": mergeUser,
 		"iid":        p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
+		"created_at": p.OpenedAt.Format(time.RFC3339),
+		// Every MR is from a branch of the project itself (the fake has no
+		// forks).
+		"source_project_id": 1, "target_project_id": 1,
 		"source_branch": p.Head, "target_branch": p.Base, "sha": p.HeadSHA, "merge_commit_sha": p.MergeSHA,
 		"labels": p.Labels, "detailed_merge_status": "mergeable", "reviewers": []interface{}{}, "assignees": []interface{}{},
 	}

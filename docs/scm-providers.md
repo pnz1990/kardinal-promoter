@@ -36,6 +36,32 @@ Bitbucket Cloud, Azure DevOps and Bitbucket Data Center are newer and less teste
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
 PRs by their `[kardinal] Rollback` title instead.
 
+Before it opens a PR, kardinal looks for an open PR from its branch into the target branch
+and adopts it, on every provider. It never relies on the SCM refusing a second one:
+Bitbucket Cloud updates the existing PR instead, which would overwrite its title and
+description.
+
+Only kardinal's own PR is adopted. It must come from the repository's own branch: a fork's
+branch of the same name never matches. Each SCM's source-repository field is checked:
+
+| Provider | Field checked |
+|---|---|
+| GitHub | `head.repo` |
+| GitLab | `source_project_id` |
+| Forgejo / Gitea | `head.repo_id` |
+| Bitbucket Cloud | `source.repository` |
+| Bitbucket Data Center | `fromRef.repository` |
+| Azure DevOps | the list asks for PRs whose source branch is in the repository (`searchCriteria.sourceRepositoryId`, the repository's ID, which kardinal reads first; an unreadable ID is an error), and keeps those whose `repository.id` is that ID and that have no `forkSource` |
+
+Its head must also be, or contain, the commit kardinal pushed, and so must the branch's head
+before kardinal opens a PR from it. Otherwise nothing is adopted or opened, and the branch is not
+rebuilt over the other commit: the step fails, with a `PRBranchForeignCommit` Warning Event that
+says how to go on ([PR evidence](pr-evidence.md)). A PR opened by hand on kardinal's branch in the repository itself,
+after kardinal's push, carries kardinal's commit and is adopted with its own title and body:
+only someone who can push the branch anyway can do that. A PR that another run opens between
+the lookup and the create is still adopted, from the repository's own branch only, when the SCM
+refuses the duplicate.
+
 SCM webhooks are delivered to `POST /webhook/scm` on the webhook port (`8083`). Without
 `--webhook-secret` the endpoint rejects every event with `401`, and merges are detected by
 PR status polling instead.

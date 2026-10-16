@@ -93,49 +93,11 @@ func (f *ForgejoProvider) OpenPR(ctx context.Context, repo, title, body, head, b
 		fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner, name), payload, &result); err != nil {
 		// Forgejo/Gitea returns 409 when a PR already exists for the same head/base.
 		if isForgejoExistingPRErr(err) {
-			return f.findExistingPR(ctx, owner, name, head, base)
+			return f.adoptRefused(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open PR %s: %w", repo, err)
 	}
 	return result.HTMLURL, result.Number, nil
-}
-
-// findExistingPR lists open PRs for the repository and returns the one from
-// head into base. Forgejo/Gitea refuse a duplicate only for the same head and
-// base, so an open PR from head into another branch is not the one refused
-// and must not be reused.
-func (f *ForgejoProvider) findExistingPR(ctx context.Context, owner, repo, head, base string) (string, int, error) {
-	type pull struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		Head    struct {
-			Ref   string `json:"ref"`
-			Label string `json:"label"`
-		} `json:"head"`
-		Base struct {
-			Ref string `json:"ref"`
-		} `json:"base"`
-	}
-	// The list API has no head filter, so read every page (C06-scm-health-15).
-	for page := 1; page <= maxListPages; page++ {
-		var prs []pull
-		if err := f.do(ctx, http.MethodGet,
-			fmt.Sprintf("/api/v1/repos/%s/%s/pulls?state=open&limit=%d&page=%d", owner, repo, forgejoPageSize, page),
-			nil, &prs); err != nil {
-			return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
-		}
-		for _, pr := range prs {
-			// The head label is "owner:branch" in Forgejo
-			sameHead := pr.Head.Ref == head || pr.Head.Label == head || strings.HasSuffix(pr.Head.Label, ":"+head)
-			if sameHead && pr.Base.Ref == base {
-				return pr.HTMLURL, pr.Number, nil
-			}
-		}
-		if len(prs) < forgejoPageSize {
-			break
-		}
-	}
-	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs", head, base)
 }
 
 // isForgejoExistingPRErr returns true when Forgejo rejected the PR creation

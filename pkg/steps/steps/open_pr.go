@@ -45,22 +45,28 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "SCM provider not configured"}, nil
 	}
 
-	if noChanges(state) {
-		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}, nil
-	}
-
-	// Idempotency: skip if PR already opened.
+	// Idempotency: skip if PR already opened. A PR this promotion recorded
+	// is its change even when a later run finds the base branch already
+	// has it (the PR merged): wait-for-merge records the merge (#2065).
 	if prURL, ok := state.Outputs["prURL"]; ok && prURL != "" {
+		out := map[string]string{"prURL": prURL}
+		if noChanges(state) {
+			out[outputNoChanges] = "false"
+		}
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,
 			Message: "PR already open: " + prURL,
-			Outputs: map[string]string{"prURL": prURL},
+			Outputs: out,
 		}, nil
 	}
 
 	branch, ok := state.Outputs["branch"]
 	if !ok || branch == "" {
 		branch = PRBranch(state.Namespace, state.BundleName, state.Environment.Name)
+	}
+
+	if noChanges(state) {
+		return adoptMergedPR(ctx, state, branch)
 	}
 
 	data := scm.PRBody{
@@ -131,7 +137,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
 
-	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, rendered.Title, rendered.Body, branch, state.Git.Branch)
+	prURL, prNum, adopted, err := openOrAdoptPR(ctx, state, repo, rendered.Title, rendered.Body, branch)
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
@@ -150,9 +156,18 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		}
 	}
 	message := fmt.Sprintf("PR #%d: %s", prNum, prURL)
+	switch adopted {
+	case adoptedOwnHead:
+		message += " (already open, from an earlier run of this promotion)"
+	case adoptedOnTop:
+		message += " (already open, from an earlier run of this promotion; its branch has commits on top of kardinal's)"
+	}
 	outputs := map[string]string{
 		"prURL":    prURL,
 		"prNumber": fmt.Sprintf("%d", prNum),
+	}
+	if state.Outputs[parentsteps.OutputPRForeignHead] != "" {
+		outputs[parentsteps.OutputPRForeignHead] = "" // resolved
 	}
 	if labelsErr := state.SCM.AddLabelsToPR(ctx, repo, prNum, baseLabels); labelsErr != nil {
 		// Non-fatal: the PR exists; report the missing labels. The output
@@ -181,6 +196,219 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		Status:  parentsteps.StepSuccess,
 		Message: message,
 		Outputs: outputs,
+	}, nil
+}
+
+// adoption says how open-pr got its PR.
+type adoption int
+
+const (
+	opened         adoption = iota // OpenPR created it (or adopted a refused duplicate)
+	adoptedOwnHead                 // an open PR whose head is kardinal's commit
+	adoptedOnTop                   // an open PR whose head contains kardinal's commit
+)
+
+// prHistoryDepth bounds the history of the PR branch read to tell whether
+// its head contains kardinal's commit.
+const prHistoryDepth = 50
+
+// openOrAdoptPR returns the open PR of branch into the base branch when
+// there is one that is kardinal's, adopted, and otherwise opens it. A step
+// re-run after a crash then adopts the PR it opened without relying on the
+// SCM to refuse a second one (Bitbucket Cloud updates the existing PR
+// instead, overwriting its title and description).
+//
+// Kardinal's PR is one from the repository's own branch (the lookup never
+// returns a fork's PR of a branch with the same name) whose head is, or
+// contains, the commit git-push just pushed (status.outputs.pushedSHA):
+// commits on top of kardinal's are accepted, as wait-for-merge accepts them.
+// An open PR of the branch whose head does not contain it (someone else
+// committed to the branch, replacing kardinal's commit) is not adopted, the
+// branch is not rebuilt over their commit, and it is never handed to
+// OpenPR, whose refused duplicate would adopt it: it is a
+// ForeignPRHeadError, which fails the step against its retry budget.
+// Without a recorded commit (a git client that cannot read HEAD) nothing is
+// adopted and OpenPR runs, as before.
+func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, adoption, error) {
+	pushed := state.Outputs[OutputPushedSHA]
+	if pushed == "" {
+		prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+		return prURL, prNum, opened, err
+	}
+	if finder, ok := state.SCM.(scm.OpenPRFinder); ok {
+		pr, err := finder.FindOpenPR(ctx, repo, branch, state.Git.Branch)
+		switch {
+		case errors.Is(err, errors.ErrUnsupported):
+		case err != nil:
+			return "", 0, opened, fmt.Errorf("look up an open PR of %s: %w", branch, err)
+		case pr != nil && scm.SameCommit(pr.HeadSHA, pushed):
+			return pr.URL, pr.Number, adoptedOwnHead, nil
+		case pr != nil:
+			contains, _, err := branchContains(ctx, state, branch, pr.HeadSHA, pushed)
+			switch {
+			case errors.Is(err, errNoHistory):
+			case err != nil:
+				return "", 0, opened, fmt.Errorf("PR #%d's head %s is not kardinal's commit %s, and reading branch %s failed: %w",
+					pr.Number, pr.HeadSHA, pushed, branch, err)
+			case contains:
+				return pr.URL, pr.Number, adoptedOnTop, nil
+			}
+			return "", 0, opened, &parentsteps.ForeignPRHeadError{PR: pr.Number, URL: pr.URL, Branch: branch, Head: pr.HeadSHA, Pushed: pushed}
+		}
+	}
+	// No PR of the branch: before opening one, its head must contain
+	// kardinal's commit. Someone may have pushed over it, and then closed the
+	// PR that carried their commit: a PR opened now would carry kardinal's
+	// evidence without kardinal's change, and its merge would count as the
+	// environment's approval. A git client that can read neither the
+	// branch's head nor its history checks nothing, as before.
+	contains, head, err := branchHeadContains(ctx, state, branch, pushed)
+	switch {
+	case errors.Is(err, errNoHistory):
+	case err != nil:
+		return "", 0, opened, fmt.Errorf("read the head of kardinal's branch %s before opening its PR: %w", branch, err)
+	case !contains:
+		return "", 0, opened, &parentsteps.ForeignPRHeadError{Branch: branch, Head: head, Pushed: pushed}
+	}
+	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+	return prURL, prNum, opened, err
+}
+
+// errNoHistory is a git client that cannot read a branch's head or history.
+var errNoHistory = errors.New("the git client cannot read the branch's history")
+
+// branchHeadContains reports whether branch's head on the remote, which it
+// returns, is or contains commit pushed. The head is read first (git
+// ls-remote), and the history only when it is not pushed.
+func branchHeadContains(ctx context.Context, state *parentsteps.StepState, branch, pushed string) (bool, string, error) {
+	var head string
+	if hr, ok := state.GitClient.(scm.BranchHeadReader); ok {
+		var err error
+		head, err = hr.RemoteBranchHead(ctx, state.Git.URL, branch, state.Git.Auth())
+		if err != nil {
+			return false, "", err
+		}
+		if head == "" {
+			return false, "", fmt.Errorf("branch %s does not exist on the remote", branch)
+		}
+		if scm.SameCommit(head, pushed) {
+			return true, head, nil
+		}
+	}
+	// From the head ls-remote read, or the history's tip without it.
+	return branchContains(ctx, state, branch, head, pushed)
+}
+
+// branchContains reports whether commit head of branch (the branch's head
+// when head is empty, which it returns) is commit pushed or has it among
+// its last prHistoryDepth ancestors. A head that is not in what was read
+// does not contain it: nothing that cannot be checked counts. A git client
+// that cannot read the branch's history is errNoHistory.
+func branchContains(ctx context.Context, state *parentsteps.StepState, branch, head, pushed string) (bool, string, error) {
+	gr, ok := state.GitClient.(scm.BranchGraphReader)
+	if !ok {
+		return false, head, errNoHistory
+	}
+	tip, graph, err := gr.BranchGraph(ctx, state.Git.URL, branch, state.Git.Auth(), prHistoryDepth)
+	if err != nil {
+		return false, head, err
+	}
+	if head == "" {
+		head = tip
+	}
+	var start string
+	for sha := range graph {
+		if scm.SameCommit(sha, head) {
+			start = sha
+		}
+	}
+	if start == "" {
+		return false, head, nil
+	}
+	seen := map[string]bool{}
+	queue := []string{start}
+	for len(queue) > 0 {
+		sha := queue[0]
+		queue = queue[1:]
+		if seen[sha] {
+			continue
+		}
+		seen[sha] = true
+		if scm.SameCommit(sha, pushed) {
+			return true, head, nil
+		}
+		queue = append(queue, graph[sha].Parents...)
+	}
+	return false, head, nil
+}
+
+// prClockSkew is how much older than the PromotionStep a PR adoptMergedPR
+// adopts may look: the SCM's clock and the cluster's can differ.
+const prClockSkew = time.Minute
+
+// adoptMergedPR handles a run of a PR-opening step whose git-commit found
+// nothing to commit (#2065). The base branch already having the change is
+// not, by itself, a promotion without a PR: an earlier run may have opened
+// this promotion's PR (its head branch is deterministic) and a reviewer
+// merged it before the step recorded it, when the controller crashed after
+// open-pr. Such a PR is adopted when it is this promotion's: from the
+// repository's own branch, not a fork's, with the commit the step pushed
+// (pushedSHA) as its head, and opened after the step was created. Its
+// number and URL become the step's
+// outputs, so wait-for-merge hands it to the PRStatus, which records the
+// merge and the SCM-verified merger like any other (the PRMerged
+// AuditEvent, #1939). Without such a PR the step has no changes, as
+// before. A lookup that fails is retried, never taken as "no PR"; a
+// permanent one (401, 403, 404) fails the step.
+func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch string) (parentsteps.StepResult, error) {
+	noPR := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}
+	finder, ok := state.SCM.(scm.MergedPRFinder)
+	if !ok {
+		return noPR, nil
+	}
+	repo, err := scm.RepoFromURL(state.Pipeline.Git.URL)
+	if err != nil {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+	}
+	// Only a PR whose head is a commit this promotion pushed to its branch
+	// is its own: git-push records them (pushedSHA, and the pushedSHAs
+	// history, since a restarted run pushes a new commit) before open-pr
+	// runs. Without one there is nothing to compare, and nothing is adopted.
+	pushed := PushedSHAs(state.Outputs)
+	if len(pushed) == 0 {
+		return noPR, nil
+	}
+	var since time.Time
+	if !state.PromotionCreatedAt.IsZero() {
+		since = state.PromotionCreatedAt.Add(-prClockSkew)
+	}
+	pr, err := finder.FindMergedPR(ctx, repo, branch, state.Git.Branch, pushed, since)
+	switch {
+	case errors.Is(err, errors.ErrUnsupported):
+		return noPR, nil
+	case err != nil && scm.IsPermanentError(err):
+		msg := fmt.Sprintf("nothing to commit; looking up a merged PR of %s failed: %s", branch, permanentSCMReason(err))
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("%s: %v", msg, err)},
+			parentsteps.Permanent(fmt.Errorf("%s: %w", msg, err))
+	case err != nil:
+		return parentsteps.StepResult{
+			Status:       parentsteps.StepPending,
+			Message:      fmt.Sprintf("nothing to commit; looking up a merged PR of %s failed, retrying in %s: %v", branch, scmRetryInterval, err),
+			RequeueAfter: scmRetryInterval,
+		}, nil
+	case pr == nil:
+		return noPR, nil
+	}
+	zerolog.Ctx(ctx).Info().Int("pr", pr.Number).Str("branch", branch).
+		Msg("nothing to commit: this promotion's PR was merged before the step recorded it; adopting it")
+	return parentsteps.StepResult{
+		Status:  parentsteps.StepSuccess,
+		Message: fmt.Sprintf("PR #%d: %s (opened by an earlier run of this promotion, already merged)", pr.Number, pr.URL),
+		Outputs: map[string]string{
+			"prURL":         pr.URL,
+			"prNumber":      fmt.Sprintf("%d", pr.Number),
+			outputNoChanges: "false",
+		},
 	}, nil
 }
 
