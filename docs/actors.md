@@ -77,7 +77,7 @@ Who paused, resumed or released a Pipeline, and who rejected a Bundle, is checke
 the write that records it carries the label `kardinal.io/actor-check: "true"` (`kardinal pause`,
 `resume`, `hold`, `release-hold`, `reject`, the UI and the MCP tools set it), and the
 `<release>-actor-record-marker` policy refuses such a write without it, by anyone but the
-controller. So `<release>-actor-records` converts the index only for those writes, not for the
+controller, when the record carries an actor stamp (one without a stamp has nothing to check). So `<release>-actor-records` converts the index only for those writes, not for the
 controller's many Pipeline and Bundle updates. The label stays on the object; later writes to it
 pay that cost too.
 
