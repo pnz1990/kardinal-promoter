@@ -3,6 +3,63 @@
 Sizing, concurrency and shutdown for clusters with many Pipelines and Bundles. To split the work
 between several controllers, see [Sharding controllers](sharding.md).
 
+## Scale and limits
+
+What kardinal is tested at, and the limits that bound it. Supported: **up to 4,000
+AgentIdentities per cluster**. That is about 80% of the agent index's bound, and admission
+stays under 50 ms (below). The rest of this section is the measured numbers.
+
+Measured with the agent scale scenario (`test/scenario/enterprise/agents/scale`, full size,
+which the release gate runs). Every write goes through the API server's
+ValidatingAdmissionPolicy plugin with the chart's policies.
+
+- 5,000 AgentIdentities, 200 Pipelines in 50 tenant namespaces, and 98 agents shipping 3
+  bursts of versions at once.
+- People approve prod and review PRs.
+- Each burst converges in 23 controller rounds: every version Verified in every
+  environment.
+
+| Write | Admission p50 | Admission p99 |
+|---|---|---|
+| A Bundle created by an agent | 42 ms | 47 ms |
+| An Approval created by a person | 42 ms | 47 ms |
+| A gate instance created or updated by kro | 0.05 ms | 0.2 ms |
+
+The p99 is each write's fastest of three admissions, on an otherwise idle core. A loaded
+API server or a garbage-collection pause makes one request slower; the cost of admitting it
+is the same.
+
+### The agent index
+
+The actor policies read one object per installation, the
+[agent index](actors.md#how-the-actor-is-verified), as their parameter.
+
+- **Admission cost.** Admitting a Bundle or an Approval reads the whole index, so its cost
+  grows with the number of AgentIdentities (44 ms at 4,200 on kube-apiserver, #1959; 47 ms at
+  5,000 above). kro's gate writes do not read it.
+- **The size bound.** The index is bounded at **1 MiB** of entries. An AgentIdentity takes
+  about 210 bytes: one ServiceAccount or user subject, a namespace scope and a sponsor. One
+  that lists more subjects, namespaces, Pipelines or environments takes more.
+
+| AgentIdentities | Index size | Of the 1 MiB bound |
+|---|---|---|
+| 1,000 | 202 KiB | 20% |
+| 2,000 | 407 KiB | 40% |
+| 4,000 | 815 KiB | 80% |
+| 5,000 | 1,019 KiB | 99.5% |
+
+At about **5,000** AgentIdentities of that size, the index is full.
+
+- A full index is not Ready (`IndexFull`).
+- kardinal then refuses every write the actor policy checks, people's included, until
+  AgentIdentities or subjects are removed.
+- Keep under 4,000 AgentIdentities, or fewer if yours list several subjects or scopes.
+- Watch the index's Ready condition:
+  `kubectl get agentindex kardinal-promoter -o jsonpath='{.status.conditions}'`.
+
+The index does not yet report its own size (#2076). An index per namespace, which would
+lift the bound, is planned for v0.13 (#2071).
+
 ## Sizing kro
 
 kro keeps every Graph it reconciles in memory: its compiled program and its watches, 3 to 6 MB
