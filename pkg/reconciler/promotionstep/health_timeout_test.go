@@ -23,6 +23,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -379,4 +380,24 @@ func failingEnvironments(envs ...string) []client.Object {
 	b1 := makeBundle("b1", "p")
 	b1.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2-bad"}}
 	return append(objs, b0, b1)
+}
+
+// TestRollbackFindsAnEarlierRollback: a rollback of the failing Bundle in
+// the environment that exists already, under a name of another scheme (one
+// a v0.11 controller gave a long name), is found by its labels, annotation
+// and intent and reused: the step names it and nothing more is created.
+func TestRollbackFindsAnEarlierRollback(t *testing.T) {
+	legacy := makeBundle("b1-rollback-alarm-0a1b2c3d", "p")
+	legacy.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "p"}
+	legacy.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "b1"}
+	legacy.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}
+	c := newClient(t, append(failingEnvironments("prod-eu"), legacy)...)
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
+	_, err := r.Reconcile(context.Background(), reqFor("step-prod-eu"))
+	require.NoError(t, err)
+	got := getStep(t, c, "step-prod-eu")
+	assert.Equal(t, "RollingBack", got.Status.State, got.Status.Message)
+	assert.Contains(t, got.Status.Message, "rollback Bundle b1-rollback-alarm-0a1b2c3d created")
+	assert.Equal(t, map[string]string{"prod-eu": "b1-rollback-alarm-0a1b2c3d"}, rollbackTargets(t, c), "no second rollback")
 }

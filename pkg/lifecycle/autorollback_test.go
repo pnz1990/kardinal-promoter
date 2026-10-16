@@ -120,3 +120,34 @@ func TestAutoRollbackNameIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, taken, "prod-eu's own")
 }
+
+// TestAutoRollbackName_Readable: a shortened name still reads as a rollback
+// of its Bundle (the Bundle's start and "-rollback-"), and no two of many
+// Bundle and environment names of every length share one.
+func TestAutoRollbackName_Readable(t *testing.T) {
+	seen := map[string]string{}
+	for _, b := range []int{1, 9, 20, 40, 43, 44, 52, 60, 63} {
+		bundle := strings.Repeat("b", b-1) + "1"
+		for e := 1; e <= 63; e += 2 {
+			env := strings.Repeat("e", e-1) + "z"
+			for _, source := range []string{"alarm", "policy", "alarm-" + env, "policy-" + env} {
+				full := bundle + "-rollback-" + source
+				got := lifecycle.AutoRollbackName(bundle, source)
+				assert.LessOrEqual(t, len(got), 63, full)
+				assert.Empty(t, validation.IsValidLabelValue(got), full)
+				assert.Empty(t, validation.IsDNS1123Subdomain(got), full)
+				if len(full) <= 63 {
+					assert.Equal(t, full, got, "a name that fits is unchanged")
+				} else {
+					assert.Contains(t, got, "-rollback-", "%s still says rollback", got)
+					assert.True(t, strings.HasPrefix(got, bundle[:min(len(bundle), 30)]), "%s starts with its Bundle", got)
+				}
+				if other, ok := seen[got]; ok {
+					assert.Equal(t, other, full, "%s and %s share %s", other, full, got)
+				}
+				seen[got] = full
+			}
+		}
+	}
+	t.Logf("%d names, none shared", len(seen))
+}

@@ -397,7 +397,7 @@ the version and Pipeline names in the body. A rollback from the CLI or UI is nam
 (`onHealthFailure: rollback`) or `<bundle>-rollback-policy` (RollbackPolicy). When several
 environments of the version fail at once (fan-out, waves, a fleet's targets in flight together),
 each other environment's rollback is `<failing bundle>-rollback-alarm-<environment>` (or
-`-policy-<environment>`). A name longer than 63 characters is shortened and ends in a hash. Every rollback PR is labelled `kardinal/rollback`.
+`-policy-<environment>`). A name longer than 63 characters is shortened to the start of the Bundle's name, `-rollback-` and a hash. Every rollback PR is labelled `kardinal/rollback`.
 Bitbucket Cloud and Bitbucket Data Center have no PR labels; find rollback PRs there by their `[kardinal] Rollback ...` title.
 
 The rollback commit is a new commit, not a `git revert`. The history is always append-only.
