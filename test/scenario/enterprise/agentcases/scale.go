@@ -6,10 +6,12 @@ package agentcases
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,6 +84,15 @@ func RunScale(t *testing.T) {
 		mode, sz.Identities, sz.Teams*sz.PipelinesPerTeam, sz.Teams, len(idx.Status.Users), len(idx.Status.Groups),
 		len(raw)>>10, sz.bound()>>10, time.Since(start).Round(time.Millisecond))
 
+	// The index's size as the controller bounds it (actor.Evaluate: each
+	// entry's JSON, its key and 4 bytes), and the identities that would
+	// fill it at this registry's mix.
+	used := indexBytes(idx.Status)
+	perID := float64(used) / float64(sz.Identities)
+	t.Logf("%s: the index is %d bytes of %d (%.0f%%), %.0f bytes per AgentIdentity: full at about %d AgentIdentities",
+		mode, used, sz.bound(), 100*float64(used)/float64(sz.bound()), perID, int(float64(sz.bound())/perID))
+	assert.LessOrEqual(t, used, budget.int(t, "index.bytes"), "the agent index's size (%s)", PerfBaseline)
+
 	w.Actors = append(w.Actors, scenario.Reviewer, approveAs)
 	w.RecordAdmissions(true)
 	maxRounds, maxReconciles := 0, 0.0
@@ -128,9 +139,9 @@ func RunScale(t *testing.T) {
 		p50, p99, top := quantiles(lat[k])
 		t.Logf("admission in the bursts %-45s n=%-6d p50 %-9s p99 %-9s max %s", k, len(lat[k]), p50, p99, top)
 	}
-	// The budgets hold the p99 of each write's admission timed three times,
-	// its fastest: a host's load and a GC pause lengthen one timing, not the
-	// cost of admitting the write (#2035).
+	// The budgets hold the p99 of each write's fastest admission over
+	// three passes: a host's load and a GC pause lengthen one timing, not
+	// the cost of admitting the write (#2035).
 	timed := timeAdmissions(t, w, reg)
 	for _, c := range []struct{ key, budget string }{
 		{"Bundle CREATE by serviceaccount", "admission.p99.agent-bundle-create"},
@@ -142,7 +153,7 @@ func RunScale(t *testing.T) {
 			continue
 		}
 		p50, p99, top := quantiles(ds)
-		t.Logf("admission, fastest of 3 %-45s n=%-6d p50 %-9s p99 %-9s max %s", c.key, len(ds), p50, p99, top)
+		t.Logf("admission, fastest of %d passes %-45s n=%-6d p50 %-9s p99 %-9s max %s", admissionPasses, c.key, len(ds), p50, p99, top)
 		assert.LessOrEqual(t, p99, budget.duration(t, c.budget), "p99 admission of %s (%d writes; %s)", c.key, len(ds), PerfBaseline)
 	}
 	n, last := w.Errors()
@@ -153,20 +164,19 @@ func RunScale(t *testing.T) {
 
 // timeAdmissions admits again, writing nothing (World.AdmitCreate), a copy
 // of every version the agents shipped (as its agent), of every Approval
-// (as its approver) and of every gate instance (as kro), each three times,
-// and returns the fastest of each, by the keys of AdmissionLatencies.
+// (as its approver) and of every gate instance (as kro), in admissionPasses
+// passes over them all, and returns each write's fastest timing, by the
+// keys of AdmissionLatencies. A pass takes minutes at full size, so a
+// spell of load on the host or a GC pause slows one write's timing in one
+// pass, not in all of them.
 func timeAdmissions(t *testing.T, w *scenario.World, reg registry) map[string][]time.Duration {
 	t.Helper()
-	out := map[string][]time.Duration{}
-	fastest := func(key string, ctx context.Context, o client.Object) {
-		best := time.Duration(math.MaxInt64)
-		for i := 0; i < 3; i++ {
-			start := time.Now()
-			require.NoError(t, w.AdmitCreate(ctx, o), "%s %s/%s", key, o.GetNamespace(), o.GetName())
-			best = min(best, time.Since(start))
-		}
-		out[key] = append(out[key], best)
+	type write struct {
+		key string
+		ctx context.Context
+		obj client.Object
 	}
+	var writes []write
 	agentOf := map[string]scenario.Identity{}
 	for _, a := range reg.active {
 		agentOf[a.id.Username] = a.id
@@ -184,7 +194,7 @@ func timeAdmissions(t *testing.T, w *scenario.World, reg registry) map[string][]
 		}
 		b.ObjectMeta = metav1.ObjectMeta{Namespace: b.Namespace, Name: b.Name + "-again", Labels: b.Labels, Annotations: b.Annotations}
 		b.Status = v1alpha1.BundleStatus{}
-		fastest("Bundle CREATE by serviceaccount", w.CtxOf(id), b)
+		writes = append(writes, write{"Bundle CREATE by serviceaccount", w.CtxOf(id), b})
 	}
 	var approvals v1alpha1.ApprovalList
 	require.NoError(t, w.Client.List(w.Ctx, &approvals))
@@ -192,7 +202,7 @@ func timeAdmissions(t *testing.T, w *scenario.World, reg registry) map[string][]
 	for i := range approvals.Items {
 		a := approvals.Items[i].DeepCopy()
 		a.ObjectMeta = metav1.ObjectMeta{Namespace: a.Namespace, Name: a.Name + "-again", Labels: a.Labels, Annotations: a.Annotations}
-		fastest("Approval CREATE by user", w.CtxOf(rm), a)
+		writes = append(writes, write{"Approval CREATE by user", w.CtxOf(rm), a})
 	}
 	var gates v1alpha1.PolicyGateList
 	require.NoError(t, w.Client.List(w.Ctx, &gates))
@@ -204,9 +214,41 @@ func timeAdmissions(t *testing.T, w *scenario.World, reg registry) map[string][]
 		g.ObjectMeta = metav1.ObjectMeta{Namespace: g.Namespace, Name: g.Name + "-again", Labels: g.Labels, Annotations: g.Annotations}
 		g.Status = v1alpha1.PolicyGateStatus{}
 		kro := scenario.Identity{Username: scenario.GraphUser(g.Namespace), Groups: scenario.ServiceAccountGroups(g.Namespace)}
-		fastest("PolicyGate CREATE by kro", w.CtxOf(kro), g)
+		writes = append(writes, write{"PolicyGate CREATE by kro", w.CtxOf(kro), g})
+	}
+	best := make([]time.Duration, len(writes))
+	for i := range best {
+		best[i] = time.Duration(math.MaxInt64)
+	}
+	for pass := 0; pass < admissionPasses; pass++ {
+		runtime.GC()
+		for i, wr := range writes {
+			start := time.Now()
+			require.NoError(t, w.AdmitCreate(wr.ctx, wr.obj), "%s %s/%s", wr.key, wr.obj.GetNamespace(), wr.obj.GetName())
+			best[i] = min(best[i], time.Since(start))
+		}
+	}
+	out := map[string][]time.Duration{}
+	for i, wr := range writes {
+		out[wr.key] = append(out[wr.key], best[i])
 	}
 	return out
+}
+
+// admissionPasses is how many times timeAdmissions times each write.
+const admissionPasses = 3
+
+// indexBytes is the size of idx as actor.Evaluate counts it against the
+// bound.
+func indexBytes(idx v1alpha1.AgentIndexStatus) int {
+	n := 0
+	for _, m := range []map[string]v1alpha1.AgentIndexEntry{idx.Users, idx.Groups} {
+		for k, e := range m {
+			raw, _ := json.Marshal(e)
+			n += len(raw) + len(k) + 4
+		}
+	}
+	return n
 }
 
 func sumReconciles(w *scenario.World) int {

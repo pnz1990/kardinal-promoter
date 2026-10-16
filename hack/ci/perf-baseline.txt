@@ -17,20 +17,22 @@
 # plugin with the chart's policies, as #1959's envtest bound
 # (TestActorPolicyLatencyOnAPIServer: p99 under 50ms, 44ms at 4,200 agents)
 # times them on kube-apiserver, after the bursts: every agent's version,
-# Approval and gate instance admitted again (writing nothing) three times,
-# its fastest timing kept, so that a host's load or a GC pause does not
-# count (#2035). Measured in full on #1959 (dev host): agents' Bundle
+# Approval and gate instance admitted again (writing nothing) in three
+# passes over them all, each write's fastest timing kept, so that a spell of
+# load on the host or a GC pause does not count (#2035). Measured in full on #1959 (dev host): agents' Bundle
 # creates and people's Approvals p50 42ms, p99 46ms; kro's gate creates
 # p99 0.16ms. Bundles and Approvals convert the whole index per request,
 # linear in its size, so their budget is #1959's 50ms at 4,200 agents
 # scaled to 5,000 (#2071); kro's guards #1936's fix (it converted the
 # index too, tens of ms, before it). Quick mode runs under -race and keeps
 # wide budgets.
+scale.quick.index.bytes 1048576
 scale.quick.burst.rounds 30
 scale.quick.burst.reconciles-per-version 450
 scale.quick.admission.p99.agent-bundle-create 500ms
 scale.quick.admission.p99.person-approval-create 500ms
 scale.quick.admission.p99.kro-gate-create 500ms
+scale.full.index.bytes 1048576
 scale.full.burst.rounds 30
 scale.full.burst.reconciles-per-version 600
 scale.full.admission.p99.agent-bundle-create 60ms
