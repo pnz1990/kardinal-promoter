@@ -367,17 +367,20 @@ opened. A PR counts as the promotion's own only when it is:
 
 - from that branch of the repository itself, never a fork's branch of the same name (each SCM's
   source repository or project is checked, not the branch name); and
-- headed by the recorded commit.
+- headed by the recorded commit, or by commits on top of it (as wait-for-merge accepts a
+  reviewer's fixup).
 
 What the retry does:
 
-- **Still open:** open-pr adopts it before opening one, and opens no second PR. An open PR of the
-  branch with another head commit (someone pushed to the branch) is not adopted, and no PR is
-  created for it, because the SCM would refuse the duplicate. Instead the step starts its steps
-  again: git-push force-pushes kardinal's commit to the branch, the PR now carries it, and
-  open-pr adopts it. What merges is kardinal's commit. If someone keeps pushing, the step gives
-  up after three restarts in one reconcile and retries with backoff; the step's message names
-  both commits.
+- **Still open:** open-pr adopts it before opening one, and opens no second PR.
+- **Open, but its head does not contain kardinal's commit** (someone else committed to the branch
+  and replaced it): kardinal neither adopts the PR nor rebuilds the branch over their commit,
+  just as it never rebuilds a PR branch with someone else's commits on a moved base. It opens no
+  PR either, because the SCM would refuse the duplicate. The step fails against its normal retry
+  budget, then is Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message
+  names the PR, its head and kardinal's commit, and the head is kept in
+  `status.outputs.prForeignHead`. To go on, close the PR, or reset the branch to kardinal's
+  commit (`git push --force origin <pushedSHA>:refs/heads/<branch>`).
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
   looks up the merged PR of its branch, with the recorded commit as its head, and records the

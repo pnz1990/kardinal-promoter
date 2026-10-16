@@ -1421,18 +1421,42 @@ func TestOpenPR_NothingToCommit(t *testing.T) {
 	})
 }
 
+// graphGitClient is a git client that reads a branch's commit graph and
+// counts pushes.
+type graphGitClient struct {
+	mockGitClient
+	graph  map[string]scm.GraphCommit
+	pushes int
+}
+
+func (g *graphGitClient) BranchGraph(context.Context, string, string, scm.GitAuth, int) (string, map[string]scm.GraphCommit, error) {
+	return "", g.graph, nil
+}
+
+func (g *graphGitClient) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
+	g.pushes++
+	return nil
+}
+
 // TestOpenPR_AdoptsOnlyItsOwnOpenPR (#2075 QA): open-pr adopts the open PR
 // of its branch only when its head is the commit git-push pushed. Another
-// head commit (someone pushed to kardinal's branch) is not adopted, and no
-// create that the SCM's refused duplicate would adopt is sent: the sequence
-// restarts, so git-push pushes kardinal's commit again. Without a recorded push there is no lookup: open-pr opens
+// head that does not contain it (someone else committed to the branch) is
+// not adopted, the branch is not pushed over, and no create that the SCM's
+// refused duplicate would adopt is sent: a ForeignPRHeadError fails the step
+// against its retry budget. A head with commits on top of kardinal's is
+// adopted. Without a recorded push there is no lookup: open-pr opens
 // its PR as before.
 func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 	step, err := parentsteps.Lookup("open-pr")
 	require.NoError(t, err)
-	run := func(t *testing.T, s scm.SCMProvider, outputs map[string]string) (parentsteps.StepResult, error) {
+	// run runs open-pr with SCM s, the outputs of the steps before it and,
+	// when given, git client git.
+	run := func(t *testing.T, s scm.SCMProvider, outputs map[string]string, git ...scm.GitClient) (parentsteps.StepResult, error) {
 		t.Helper()
 		state := makeState(t, &mockGitClient{}, &mockSCMProvider{})
+		if len(git) > 0 {
+			state.GitClient = git[0]
+		}
 		state.SCM = s
 		state.Environment.Approval = "pr-review"
 		state.Outputs = outputs
@@ -1445,14 +1469,44 @@ func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 		assert.Equal(t, "5", res.Outputs["prNumber"])
 		assert.Zero(t, m.openPRCalls)
 	})
-	t.Run("another head commit: not adopted, no create, the sequence restarts", func(t *testing.T) {
-		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5", HeadSHA: "deadbeefcafe"}}
-		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed})
+	t.Run("a head on top of kardinal's commit: adopted", func(t *testing.T) {
+		// A reviewer's fixup on top of kardinal's commit, as wait-for-merge
+		// accepts it.
+		g := &graphGitClient{graph: map[string]scm.GraphCommit{
+			"f1x0000000000000000000000000000000000000": {Parents: []string{testPushed}},
+			testPushed: {Parents: []string{"base000000000000000000000000000000000000"}},
+		}}
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5",
+			HeadSHA: "f1x0000000000000000000000000000000000000"}}
+		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed}, g)
 		require.NoError(t, err)
-		assert.Equal(t, parentsteps.StepRestart, res.Status, "git-push pushes kardinal's commit again")
-		assert.Contains(t, res.Message, "is not "+testPushed+", the commit kardinal pushed")
+		assert.Equal(t, "5", res.Outputs["prNumber"])
+		assert.Contains(t, res.Message, "commits on top of kardinal's")
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("a head without kardinal's commit: not adopted, no create, no push, fails against the retry budget", func(t *testing.T) {
+		g := &graphGitClient{graph: map[string]scm.GraphCommit{
+			"deadbeefcafe0000000000000000000000000000": {Parents: []string{"base000000000000000000000000000000000000"}},
+		}}
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5",
+			HeadSHA: "deadbeefcafe0000000000000000000000000000"}}
+		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed}, g)
+		var foreign *parentsteps.ForeignPRHeadError
+		require.ErrorAs(t, err, &foreign)
+		assert.NotErrorIs(t, err, parentsteps.ErrPermanent, "retried, against the budget")
+		assert.Equal(t, "deadbeefcafe0000000000000000000000000000", foreign.Head)
+		assert.Equal(t, parentsteps.StepFailed, res.Status)
+		assert.Contains(t, res.Message, "does not contain "+testPushed)
+		assert.Contains(t, res.Message, "Close the PR, or reset the branch to kardinal's commit")
 		assert.Empty(t, res.Outputs["prNumber"])
 		assert.Zero(t, m.openPRCalls, "no create: its refused duplicate would adopt that PR")
+		assert.Zero(t, g.pushes, "never pushed over someone else's commit")
+	})
+	t.Run("a git client that cannot read the branch: not adopted", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, HeadSHA: "deadbeefcafe"}}
+		_, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed})
+		var foreign *parentsteps.ForeignPRHeadError
+		require.ErrorAs(t, err, &foreign)
 	})
 	t.Run("no PR: opened", func(t *testing.T) {
 		m := &finderSCM{mockSCMProvider: &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/7", prNumber: 7}}

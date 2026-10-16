@@ -138,14 +138,6 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	}
 
 	prURL, prNum, adopted, err := openOrAdoptPR(ctx, state, repo, rendered.Title, rendered.Body, branch)
-	if errors.Is(err, errPRHeadMoved) {
-		// A retry would resume here and see the same head. A restart runs
-		// git-push again, which force-pushes kardinal's commit to its
-		// branch; the PR then carries it and is adopted. The engine bounds
-		// the restarts and then retries with backoff.
-		return parentsteps.StepResult{Status: parentsteps.StepRestart,
-			Message: err.Error() + "; pushing kardinal's commit to the branch again"}, nil
-	}
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
@@ -164,12 +156,18 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		}
 	}
 	message := fmt.Sprintf("PR #%d: %s", prNum, prURL)
-	if adopted {
+	switch adopted {
+	case adoptedOwnHead:
 		message += " (already open, from an earlier run of this promotion)"
+	case adoptedOnTop:
+		message += " (already open, from an earlier run of this promotion; its branch has commits on top of kardinal's)"
 	}
 	outputs := map[string]string{
 		"prURL":    prURL,
 		"prNumber": fmt.Sprintf("%d", prNum),
+	}
+	if state.Outputs[parentsteps.OutputPRForeignHead] != "" {
+		outputs[parentsteps.OutputPRForeignHead] = "" // resolved
 	}
 	if labelsErr := state.SCM.AddLabelsToPR(ctx, repo, prNum, baseLabels); labelsErr != nil {
 		// Non-fatal: the PR exists; report the missing labels. The output
@@ -201,6 +199,19 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	}, nil
 }
 
+// adoption says how open-pr got its PR.
+type adoption int
+
+const (
+	opened         adoption = iota // OpenPR created it (or adopted a refused duplicate)
+	adoptedOwnHead                 // an open PR whose head is kardinal's commit
+	adoptedOnTop                   // an open PR whose head contains kardinal's commit
+)
+
+// prHistoryDepth bounds the history of the PR branch read to tell whether
+// its head contains kardinal's commit.
+const prHistoryDepth = 50
+
 // openOrAdoptPR returns the open PR of branch into the base branch when
 // there is one that is kardinal's, adopted, and otherwise opens it. A step
 // re-run after a crash then adopts the PR it opened without relying on the
@@ -208,37 +219,80 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 // instead, overwriting its title and description).
 //
 // Kardinal's PR is one from the repository's own branch (the lookup never
-// returns a fork's PR of a branch with the same name) whose head commit is
-// the one git-push just pushed (status.outputs.pushedSHA). An open PR of
-// the branch with another head commit (someone pushed to kardinal's
-// branch, or the SCM has not caught up with the push yet) is not adopted
-// and is never handed to OpenPR, whose refused duplicate would adopt it: it
-// is errPRHeadMoved, and open-pr restarts the sequence, so git-push pushes
-// kardinal's commit to the branch again and the PR then carries it. Without
-// a recorded commit (a git client that cannot read HEAD) nothing is adopted
-// and OpenPR runs, as before.
-func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, bool, error) {
+// returns a fork's PR of a branch with the same name) whose head is, or
+// contains, the commit git-push just pushed (status.outputs.pushedSHA):
+// commits on top of kardinal's are accepted, as wait-for-merge accepts them.
+// An open PR of the branch whose head does not contain it (someone else
+// committed to the branch, replacing kardinal's commit) is not adopted, the
+// branch is not rebuilt over their commit, and it is never handed to
+// OpenPR, whose refused duplicate would adopt it: it is a
+// ForeignPRHeadError, which fails the step against its retry budget.
+// Without a recorded commit (a git client that cannot read HEAD) nothing is
+// adopted and OpenPR runs, as before.
+func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, adoption, error) {
 	pushed := state.Outputs[OutputPushedSHA]
 	if finder, ok := state.SCM.(scm.OpenPRFinder); ok && pushed != "" {
 		pr, err := finder.FindOpenPR(ctx, repo, branch, state.Git.Branch)
 		switch {
 		case errors.Is(err, errors.ErrUnsupported):
 		case err != nil:
-			return "", 0, false, fmt.Errorf("look up an open PR of %s: %w", branch, err)
+			return "", 0, opened, fmt.Errorf("look up an open PR of %s: %w", branch, err)
 		case pr != nil && scm.SameCommit(pr.HeadSHA, pushed):
-			return pr.URL, pr.Number, true, nil
+			return pr.URL, pr.Number, adoptedOwnHead, nil
 		case pr != nil:
-			return "", 0, false, fmt.Errorf("%w: PR #%d (%s) is open from kardinal's branch %s, but its head commit %q is not %s, the commit kardinal pushed",
-				errPRHeadMoved, pr.Number, pr.URL, branch, pr.HeadSHA, pushed)
+			contains, err := headContains(ctx, state, branch, pr.HeadSHA, pushed)
+			if err != nil {
+				return "", 0, opened, fmt.Errorf("PR #%d's head %s is not kardinal's commit %s, and reading branch %s failed: %w",
+					pr.Number, pr.HeadSHA, pushed, branch, err)
+			}
+			if contains {
+				return pr.URL, pr.Number, adoptedOnTop, nil
+			}
+			return "", 0, opened, &parentsteps.ForeignPRHeadError{PR: pr.Number, URL: pr.URL, Branch: branch, Head: pr.HeadSHA, Pushed: pushed}
 		}
 	}
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
-	return prURL, prNum, false, err
+	return prURL, prNum, opened, err
 }
 
-// errPRHeadMoved is an open PR of kardinal's branch whose head is not the
-// commit kardinal pushed.
-var errPRHeadMoved = errors.New("the PR's head is not kardinal's commit")
+// headContains reports whether commit head of branch is commit pushed or
+// has it among its last prHistoryDepth ancestors. A git client that cannot
+// read the branch's history, or a head that is not in what it read, does
+// not contain it: nothing is adopted that cannot be checked.
+func headContains(ctx context.Context, state *parentsteps.StepState, branch, head, pushed string) (bool, error) {
+	gr, ok := state.GitClient.(scm.BranchGraphReader)
+	if !ok {
+		return false, nil
+	}
+	_, graph, err := gr.BranchGraph(ctx, state.Git.URL, branch, state.Git.Auth(), prHistoryDepth)
+	if err != nil {
+		return false, err
+	}
+	var start string
+	for sha := range graph {
+		if scm.SameCommit(sha, head) {
+			start = sha
+		}
+	}
+	if start == "" {
+		return false, nil
+	}
+	seen := map[string]bool{}
+	queue := []string{start}
+	for len(queue) > 0 {
+		sha := queue[0]
+		queue = queue[1:]
+		if seen[sha] {
+			continue
+		}
+		seen[sha] = true
+		if scm.SameCommit(sha, pushed) {
+			return true, nil
+		}
+		queue = append(queue, graph[sha].Parents...)
+	}
+	return false, nil
+}
 
 // prClockSkew is how much older than the PromotionStep a PR adoptMergedPR
 // adopts may look: the SCM's clock and the cluster's can differ.

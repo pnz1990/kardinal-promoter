@@ -55,6 +55,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -1374,6 +1375,19 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	cred gitCredential, stepTimeoutSeconds int) (ctrl.Result, error) {
 	idx := ps.Status.CurrentStepIndex
 	retryable := errors.Unwrap(execErr) != nil && !errors.Is(execErr, steps.ErrPermanent)
+	// An open PR of kardinal's branch whose head does not contain kardinal's
+	// commit (someone else committed to the branch): it is neither adopted
+	// nor rebuilt over, and the step retries against its budget. Each try
+	// says so in a Warning Event, and the head is kept in the step's
+	// evidence (status.outputs.prForeignHead) (#2075).
+	var foreign *steps.ForeignPRHeadError
+	if errors.As(execErr, &foreign) {
+		if ps.Status.Outputs == nil {
+			ps.Status.Outputs = map[string]string{}
+		}
+		ps.Status.Outputs[steps.OutputPRForeignHead] = foreign.Head
+		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonPRBranchForeignCommit, "Promote", foreign.Error())
+	}
 	// A git-clone or git-push that the remote refused for lack of
 	// credentials, while the Pipeline gives git none, says which, and keeps
 	// retrying past the limit so that creating the Secret is enough (B48).

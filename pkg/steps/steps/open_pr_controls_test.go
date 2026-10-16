@@ -518,13 +518,14 @@ func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 			// A PR on kardinal's branch whose head is not the commit
 			// git-push pushed (someone pushed to the branch): not adopted,
 			// and no create, whose refused duplicate would adopt it; the
-			// sequence restarts so git-push pushes kardinal's commit again.
+			// step fails (ForeignPRHeadError) and retries against its budget.
 			srv, calls := routedAPI(t, lookupRoutes(tc.list, strings.ReplaceAll(tc.body, testPushed[:12], "deadbeefcafe")))
 			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
 			require.NoError(t, err)
 			result, err := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))
-			require.NoError(t, err)
-			assert.Equal(t, parentsteps.StepRestart, result.Status, "git-push pushes kardinal's commit again")
+			var foreign *parentsteps.ForeignPRHeadError
+			require.ErrorAs(t, err, &foreign, "failed against the retry budget")
+			assert.Equal(t, parentsteps.StepFailed, result.Status)
 			assert.Contains(t, result.Message, "the commit kardinal pushed")
 			assert.Empty(t, result.Outputs["prNumber"])
 			for _, c := range calls() {

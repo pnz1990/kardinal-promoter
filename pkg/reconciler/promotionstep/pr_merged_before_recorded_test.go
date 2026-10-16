@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -190,58 +191,96 @@ func TestPushedCommitStoredBeforeOpenPR(t *testing.T) {
 	assert.Equal(t, pushedBeforeCrash, got.Status.Outputs["pushedSHA"])
 }
 
-// countingPushGit counts the pushes of pushedHeadGit.
-type countingPushGit struct {
+// graphPushGit is pushedHeadGit that counts pushes and reads the PR
+// branch's commit graph.
+type graphPushGit struct {
 	pushedHeadGit
+	graph  map[string]scm.GraphCommit
 	pushes int
 }
 
-func (g *countingPushGit) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
+func (g *graphPushGit) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
 	g.pushes++
 	return nil
 }
 
-// movedHeadSCM has PR #5 open on kardinal's branch with another head commit
-// at first; once kardinal pushed again it carries kardinal's commit, as the
-// SCM moves a PR's head with its branch.
-type movedHeadSCM struct {
+func (g *graphPushGit) BranchGraph(context.Context, string, string, scm.GitAuth, int) (string, map[string]scm.GraphCommit, error) {
+	return "", g.graph, nil
+}
+
+// openHeadSCM has PR #5 open on kardinal's branch with head head.
+type openHeadSCM struct {
 	*mockSCM
-	git   *countingPushGit
-	finds int
+	head string
 }
 
-func (m *movedHeadSCM) FindOpenPR(context.Context, string, string, string) (*scm.FoundPR, error) {
-	m.finds++
-	head := "deadbeefcafe0000000000000000000000000000"
-	if m.git.pushes > 1 {
-		head = pushedBeforeCrash
-	}
-	return &scm.FoundPR{Number: 5, URL: "https://github.com/test/repo/pull/5", HeadSHA: head}, nil
+func (m *openHeadSCM) FindOpenPR(context.Context, string, string, string) (*scm.FoundPR, error) {
+	return &scm.FoundPR{Number: 5, URL: "https://github.com/test/repo/pull/5", HeadSHA: m.head}, nil
 }
 
-// TestOpenPRWithAnotherHeadRepushes (#2075 QA): an open PR of kardinal's
-// branch whose head is not the commit kardinal pushed (someone pushed to the
-// branch) is not adopted and gets no create. open-pr restarts the sequence,
-// git-push pushes kardinal's commit again, and the PR, now carrying it, is
-// adopted: kardinal's commit is what merges.
+const foreignHead = "deadbeefcafe0000000000000000000000000000"
+
+// TestOpenPRWithAForeignHead (#2075 QA): an open PR of kardinal's branch
+// whose head does not contain kardinal's commit (someone else committed to
+// the branch) is not adopted, gets no create, and the branch is never pushed
+// over it. Each try is a Warning Event naming the head and what to do, the
+// head is kept in the step's evidence (status.outputs.prForeignHead), and the
+// step fails once its retry budget is spent: retries resume at open-pr and
+// push nothing. A head with commits on top of kardinal's is adopted.
 //
 // Covers SCM-OPEN-FIRST-01.
-func TestOpenPRWithAnotherHeadRepushes(t *testing.T) {
-	prs := stepPRStatus(v1alpha1.PRStatusSpec{}, 1, 1, v1alpha1.PRStatusStatus{})
-	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
-	ps.Status.CurrentStepIndex = 2 // git-commit
-	ps.Spec.PRStatusRef = prs.Name
-	c := newClient(t, ps, prs, makePipeline("p"), makeBundle("b1", "p"))
-	g := &countingPushGit{}
-	s := &movedHeadSCM{mockSCM: &mockSCM{open: true}, git: g}
-	r := &promotionstep.Reconciler{Client: c, SCM: s, GitClient: g,
-		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
-	reconcileStep(t, r, "step")
+func TestOpenPRWithAForeignHead(t *testing.T) {
+	setup := func(t *testing.T, head string, graph map[string]scm.GraphCommit) (client.Client, *promotionstep.Reconciler, *graphPushGit, *openHeadSCM, *events.FakeRecorder, *time.Time) {
+		t.Helper()
+		prs := stepPRStatus(v1alpha1.PRStatusSpec{}, 1, 1, v1alpha1.PRStatusStatus{})
+		ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
+		ps.Status.CurrentStepIndex = 2 // git-commit
+		ps.Spec.PRStatusRef = prs.Name
+		c := newClient(t, ps, prs, makePipeline("p"), makeBundle("b1", "p"))
+		g := &graphPushGit{graph: graph}
+		s := &openHeadSCM{mockSCM: &mockSCM{open: true}, head: head}
+		rec := events.NewFakeRecorder(100)
+		now := time.Now()
+		r := &promotionstep.Reconciler{Client: c, SCM: s, GitClient: g, Recorder: rec, NowFn: func() time.Time { return now },
+			WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+		return c, r, g, s, rec, &now
+	}
 
-	got := getStep(t, c, "step")
-	assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
-	assert.Equal(t, "5", got.Status.Outputs["prNumber"])
-	assert.Equal(t, 2, g.pushes, "kardinal's commit was pushed again")
-	assert.Equal(t, 2, s.finds)
-	assert.Zero(t, s.openCalled, "no create")
+	t.Run("a foreign head fails loudly, bounded, without a push", func(t *testing.T) {
+		c, r, g, s, rec, now := setup(t, foreignHead, map[string]scm.GraphCommit{foreignHead: {Parents: []string{"base"}}})
+		reconcileStep(t, r, "step")
+		got := getStep(t, c, "step")
+		assert.Equal(t, "Promoting", got.Status.State, "retried")
+		assert.Contains(t, got.Status.Message, "does not contain "+pushedBeforeCrash)
+		assert.Contains(t, got.Status.Message, "Close the PR, or reset the branch to kardinal's commit")
+		assert.Equal(t, foreignHead, got.Status.Outputs["prForeignHead"], "the foreign head is in the step's evidence")
+		require.NotEmpty(t, rec.Events)
+		ev := <-rec.Events
+		assert.Contains(t, ev, "Warning PRBranchForeignCommit")
+		assert.Contains(t, ev, foreignHead)
+
+		for i := 0; i < 10 && getStep(t, c, "step").Status.State != "Failed"; i++ {
+			*now = now.Add(time.Hour) // past every retry delay
+			reconcileStep(t, r, "step")
+		}
+		got = getStep(t, c, "step")
+		assert.Equal(t, "Failed", got.Status.State, "the retry budget is spent: %s", got.Status.Message)
+		assert.Equal(t, 1, g.pushes, "only kardinal's own push, before open-pr; never over the foreign commit")
+		assert.Zero(t, s.openCalled, "no create")
+		assert.Empty(t, got.Status.Outputs["prNumber"])
+	})
+
+	t.Run("a head on top of kardinal's commit is adopted", func(t *testing.T) {
+		const fixup = "f1x0000000000000000000000000000000000000"
+		c, r, g, s, _, _ := setup(t, fixup, map[string]scm.GraphCommit{
+			fixup:             {Parents: []string{pushedBeforeCrash}},
+			pushedBeforeCrash: {Parents: []string{"base"}},
+		})
+		reconcileStep(t, r, "step")
+		got := getStep(t, c, "step")
+		assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+		assert.Equal(t, "5", got.Status.Outputs["prNumber"])
+		assert.Equal(t, 1, g.pushes)
+		assert.Zero(t, s.openCalled)
+	})
 }
