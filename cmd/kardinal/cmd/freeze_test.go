@@ -90,7 +90,7 @@ func TestFreezeCommands(t *testing.T) {
 	out.Reset()
 	err := freezeFn(&out, c, v1alpha1.FreezeEveryone, "payments", "again", 0, now)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "freeze kardinal-freeze-everyone-payments is being lifted; try again in a few seconds")
+	assert.Contains(t, err.Error(), "freeze kardinal-freeze-everyone-payments is being lifted; try again shortly (up to 2 minutes; the controller must be running)")
 }
 
 // TestFreezeFlags: the scope flags name one actor set and one scope.

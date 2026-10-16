@@ -121,7 +121,7 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 		if !out.DeletionTimestamp.IsZero() {
 			// Updating it would report a freeze that vanishes when its
 			// FreezeLifted record is written (#2034).
-			return fmt.Errorf("freeze %s is being lifted; try again in a few seconds: %w", name, ErrConflict)
+			return fmt.Errorf("freeze %s is being lifted; try again shortly (up to 2 minutes; the controller must be running): %w", name, ErrConflict)
 		}
 		if req.OnlyOwn && out.Spec.Freeze.CreatedBy != req.CreatedBy {
 			return notYours(name, out.Spec.Freeze.CreatedBy, "change")
@@ -146,47 +146,65 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 // so the FreezeLifted AuditEvent names who lifted it; a caller who may not
 // update the window still deletes it, audited with an unknown actor. A
 // delete that fails takes the mark back and returns the error: the freeze
-// is still in force (#2034).
+// is still in force (#2034). A freeze already being deleted is left as it
+// is (its first lifter stays recorded), and one changed since it was read,
+// such as frozen again, is not deleted (ErrConflict). A mark another
+// writer raced is read again.
 func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v1alpha1.FreezeLift) error {
-	var cw v1alpha1.ChangeWindow
-	if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("no freeze %s: %w", name, ErrNotFound)
+	for attempt := 0; ; attempt++ {
+		var cw v1alpha1.ChangeWindow
+		if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("no freeze %s: %w", name, ErrNotFound)
+			}
+			return fmt.Errorf("get freeze %s: %w", name, err)
 		}
-		return fmt.Errorf("get freeze %s: %w", name, err)
-	}
-	if cw.Spec.Freeze == nil {
-		return fmt.Errorf("ChangeWindow %s is not a freeze; delete it with kubectl if you mean to: %w", name, ErrConflict)
-	}
-	if onlyBy != "" && cw.Spec.Freeze.CreatedBy != onlyBy {
-		return notYours(name, cw.Spec.Freeze.CreatedBy, "lift")
-	}
-	// The requester replaces a lift an earlier, failed unfreeze left.
-	marked := false
-	if lift != nil && lift.By != "" && !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
-		previous := cw.Spec.Freeze.Lifted
-		cw.Spec.Freeze.Lifted = lift
-		err := c.Update(ctx, &cw)
-		switch {
-		case err == nil:
-			marked = true
-		case apierrors.IsNotFound(err):
+		if cw.Spec.Freeze == nil {
+			return fmt.Errorf("ChangeWindow %s is not a freeze; delete it with kubectl if you mean to: %w", name, ErrConflict)
+		}
+		if onlyBy != "" && cw.Spec.Freeze.CreatedBy != onlyBy {
+			return notYours(name, cw.Spec.Freeze.CreatedBy, "lift")
+		}
+		if !cw.DeletionTimestamp.IsZero() {
+			// Already being lifted: who lifted it first stays recorded.
 			return nil
-		case apierrors.IsForbidden(err):
-			cw.Spec.Freeze.Lifted = previous
-		default:
-			return fmt.Errorf("record who lifts freeze %s: %w", name, err)
 		}
-	}
-	if err := c.Delete(ctx, &cw, client.Preconditions{UID: &cw.UID}); err != nil && !apierrors.IsNotFound(err) {
+		// The requester replaces a lift an earlier, failed unfreeze left.
+		marked := false
+		if lift != nil && lift.By != "" && !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
+			mark := cw.DeepCopy()
+			mark.Spec.Freeze.Lifted = lift
+			err := c.Update(ctx, mark)
+			switch {
+			case err == nil:
+				marked, cw = true, *mark
+			case apierrors.IsNotFound(err):
+				return nil
+			case apierrors.IsConflict(err) && attempt < 3:
+				continue // another unfreeze or a re-freeze wrote it: read it again
+			case apierrors.IsForbidden(err):
+				// Deleted without who lifted it: the record names no one.
+			default:
+				return fmt.Errorf("record who lifts freeze %s: %w", name, err)
+			}
+		}
+		// The ResourceVersion precondition keeps a freeze changed since it was
+		// read (frozen again with a new reason or end) from being deleted.
+		err := c.Delete(ctx, &cw, client.Preconditions{UID: &cw.UID, ResourceVersion: &cw.ResourceVersion})
+		if err == nil || apierrors.IsNotFound(err) {
+			return nil
+		}
 		if marked {
 			// The freeze stays in force: take back the mark, so it names
 			// no one who did not lift it.
 			clearLift(ctx, c, name, lift)
 		}
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("freeze %s changed while it was being lifted (frozen again?); run kardinal unfreeze %s again if you mean to lift it: %w",
+				name, name, ErrConflict)
+		}
 		return fmt.Errorf("delete freeze %s: %w", name, err)
 	}
-	return nil
 }
 
 // clearLift removes spec.freeze.lifted from freeze name when it is still
