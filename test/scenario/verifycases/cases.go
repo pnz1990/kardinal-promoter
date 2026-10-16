@@ -76,17 +76,21 @@ func explore(required, maxFailures, count int, inconclusive string, retries int)
 func gateReason(g v1alpha1.PolicyGate) string { return g.Status.Reason }
 
 // smokeCheck is the second check of the two-check case, whose own run
-// votes once smokeVotes is set.
+// votes once its case sets votes.
 const smokeCheck = "smoke"
-
-var smokeVotes atomic.Bool
 
 // misdirectingAgent runs both checks: the explore run writes its Verdict for
 // smoke in dev (labels and spec; admission checks neither), and smoke's own
-// run waits until smokeVotes, then passes.
-func misdirectingAgent(run v1alpha1.AgentRun) scenario.AgentResult {
+// run waits until votes, then passes. votes is the case's own: a package
+// variable stayed set for the next run of the test (go test -count=3, the
+// release gate's unit-race step).
+func misdirectingAgent(votes *atomic.Bool) scenario.Agent {
+	return func(run v1alpha1.AgentRun) scenario.AgentResult { return misdirected(votes, run) }
+}
+
+func misdirected(votes *atomic.Bool, run v1alpha1.AgentRun) scenario.AgentResult {
 	if run.Spec.Check == smokeCheck {
-		if !smokeVotes.Load() {
+		if !votes.Load() {
 			return scenario.AgentResult{Wait: true}
 		}
 		return pass("smoke passes")
@@ -124,6 +128,9 @@ const Parts = 3
 // admission policies, the Graph copies the Verdicts into the gate and the
 // gate counts them.
 func Run(t *testing.T, part, parts int) {
+	// smokeVotes lets the two-check case's smoke run vote; each Run (each
+	// -count) has its own.
+	var smokeVotes atomic.Bool
 	runs := []verifyRun{
 		{name: "quorum: 2 of 3 runs, one fail tolerated", policy: explore(2, 1, 3, "", 0), shipper: "human",
 			attempts: nil, // by run below
@@ -197,7 +204,7 @@ func Run(t *testing.T, part, parts int) {
 				expectProd(t, w, p, b, true)
 			}},
 		{name: "a run's Verdict for another check and environment does not count there", policy: explore(1, 0, 1, "", 0),
-			shipper: "human", agent: misdirectingAgent,
+			shipper: "human", agent: misdirectingAgent(&smokeVotes),
 			setup: func(t *testing.T, w *scenario.World, p *scenario.Plan) {
 				// A second verify gate on prod: check smoke on dev, the same
 				// agent allowed. Its own run waits until smokeVotes.
