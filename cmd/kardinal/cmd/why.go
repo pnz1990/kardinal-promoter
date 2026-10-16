@@ -184,11 +184,10 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 	if err := c.List(ctx, &gates, sigs_client.InNamespace(ns), sel); err != nil {
 		return nil, fmt.Errorf("list policy gates: %w", err)
 	}
-	envs := p.Status.Environments
+	envs := currentEnvironments(p, bundles.Items, steps.Items, gates.Items)
 	failed := p.Status.FailedVersion
-	if len(envs) == 0 {
+	if len(p.Status.Environments) == 0 {
 		// A controller that predates status.environments (and failedVersion).
-		envs = pipelinerec.ProjectEnvironments(p, bundles.Items, steps.Items, gates.Items, nil, time.Time{})
 		failed = pipelinerec.FailedVersion(p.Name, bundles.Items)
 	}
 	byName := map[string]*v1alpha1.Bundle{}
@@ -216,6 +215,46 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, windows, whyNow()))
 	}
 	return answers, nil
+}
+
+// currentEnvironments is p's environments as the objects just read show
+// them. The controller writes a step's move between running states into
+// status.environments up to 2 seconds late (#1719), so an environment
+// whose step just started could read "has no version yet" (#2022). why
+// projects each environment that has a step again, the way the controller
+// does (retired Bundles' steps included), keeping status.environments'
+// since times. An environment without a step here (with its Bundle) keeps
+// its status entry: a fleet's targets are resolved by the controller only.
+func currentEnvironments(p *v1alpha1.Pipeline, bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep,
+	gates []v1alpha1.PolicyGate) []v1alpha1.PipelineEnvironmentStatus {
+	all := lifecycle.AddRetiredSteps(steps, bundles, map[string]string{lifecycle.LabelPipeline: p.Name})
+	fresh := pipelinerec.ProjectEnvironments(p, bundles, all, gates, p.Status.Environments, time.Time{})
+	if len(p.Status.Environments) == 0 {
+		return fresh
+	}
+	// The projection counts a step only with its Bundle.
+	known := map[string]bool{}
+	for i := range bundles {
+		known[bundles[i].Name] = true
+	}
+	stepped := map[string]bool{}
+	for _, s := range all {
+		if s.Spec.PipelineName == p.Name && known[s.Spec.BundleName] {
+			stepped[s.Spec.Environment] = true
+		}
+	}
+	byName := map[string]v1alpha1.PipelineEnvironmentStatus{}
+	for _, e := range fresh {
+		byName[e.Name] = e
+	}
+	out := make([]v1alpha1.PipelineEnvironmentStatus, len(p.Status.Environments))
+	for i, e := range p.Status.Environments {
+		if f, ok := byName[e.Name]; ok && stepped[e.Name] {
+			e = f
+		}
+		out[i] = e
+	}
+	return out
 }
 
 // writeWhy writes one answer: the sentence, then each detail with its

@@ -274,7 +274,8 @@ These fields are for reading: no controller decision uses them. A step moving be
 states (promoting, waiting for its PR, checking health) shows within about 2 seconds: the
 controller writes every such change of that window in one status update, so a large Pipeline is
 not rewritten for each step. A step that ends (Live, failed), a version's phase and a gate's
-result show at once. `kubectl get kardinal` lists the
+result show at once. `kardinal why` (and the MCP `why` tool) reads the steps themselves, so it
+names a step's state without that delay. `kubectl get kardinal` lists the
 kinds users write (Pipelines, Bundles, PolicyGates, MetricChecks, ChangeWindows, Subscriptions,
 NotificationHooks, ScmProviders, ClusterScmProviders); `kubectl get kardinal-all` adds the ones
 the controller generates (PromotionSteps, PRStatuses, AuditEvents, …).
