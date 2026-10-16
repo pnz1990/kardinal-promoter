@@ -384,6 +384,13 @@ const leaderElectionFlowSchema = "FlowSchema /kardinal-promoter-kardinal-system-
 // is the one ClusterRoleBinding the upgrade adds.
 const agentDirectoryBinding = "ClusterRoleBinding /kardinal-promoter-agent-directory-reader"
 
+// agentIndex is the AgentIndex the chart creates empty for the actor policy
+// to read as its param (v0.12, #1959): the API server refuses every write
+// the policy matches while the param is missing, so the index must exist
+// before the controller runs. It is the one object of a kardinal kind the
+// upgrade adds (helm.sh/resource-policy: keep).
+const agentIndex = "AgentIndex /kardinal-promoter"
+
 // kroSystem is the kro-system Namespace.
 func (u *upgrade) kroSystem(t *testing.T) *corev1.Namespace {
 	t.Helper()
@@ -696,27 +703,29 @@ spec:
 	// The Graph identity and leader election are new in v0.9; past them the
 	// chart only adds admission policies (identity, holds, Graph objects...),
 	// the leader election's API priority (FlowSchema), ClusterRoles of its
-	// own and the agent directory's ClusterRoleBinding (v0.12): no other
-	// workload or binding appears with the upgrade (#1560: listing each policy broke on every feature).
+	// own, the agent directory's ClusterRoleBinding and the actor policy's
+	// AgentIndex (v0.12): no other workload or binding appears with the
+	// upgrade (#1560: listing each policy broke on every feature).
 	assert.Subset(t, added, []string{
 		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
 		"ClusterRole /kardinal-promoter-kro-watch",
 		leaderElectionFlowSchema,
 		"Role kardinal-system/kardinal-promoter-leader-election", "RoleBinding kardinal-system/kardinal-promoter-leader-election",
 		"ValidatingAdmissionPolicy /kardinal-promoter-hold-writes", "ValidatingAdmissionPolicyBinding /kardinal-promoter-hold-writes",
-		agentDirectoryBinding,
+		agentDirectoryBinding, agentIndex,
 	}, "objects the new chart adds")
 	for _, o := range added {
 		// The leader election Lease's own API priority (#1592): the one
-		// FlowSchema of the chart, and the agent directory's one
-		// ClusterRoleBinding, each by its exact name.
-		ok := o == leaderElectionFlowSchema || o == agentDirectoryBinding ||
+		// FlowSchema of the chart, the agent directory's one
+		// ClusterRoleBinding and the actor policy's AgentIndex, each by its
+		// exact name.
+		ok := o == leaderElectionFlowSchema || o == agentDirectoryBinding || o == agentIndex ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicy /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ValidatingAdmissionPolicyBinding /kardinal-promoter-") ||
 			strings.HasPrefix(o, "ClusterRole /kardinal-promoter-") ||
 			strings.HasPrefix(o, "Role kardinal-system/kardinal-promoter-") ||
 			strings.HasPrefix(o, "RoleBinding kardinal-system/kardinal-promoter-")
-		assert.True(t, ok, "the upgrade adds %s, which is not an admission policy, FlowSchema or role of the chart", o)
+		assert.True(t, ok, "the upgrade adds %s, which is not an admission policy, FlowSchema, role or the AgentIndex of the chart", o)
 	}
 	framework.Eventually(t, time.Minute, "v0.8.1's Graph controller and CRDs deleted", func(ctx context.Context) (bool, string) {
 		if _, err := e.Kube.AppsV1().Deployments("kro-system").Get(ctx, "graph-controller", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
