@@ -81,7 +81,7 @@ func (r *Reconciler) holdIfEnvironmentHeld(ctx context.Context, log zerolog.Logg
 	if h == nil {
 		return false, ctrl.Result{}, nil
 	}
-	msg := lifecycle.HeldMessage(ps.Spec.PipelineName, h)
+	msg := lifecycle.HeldMessage(ps.Spec.PipelineName, h, r.heldOnRollback(ctx, ps.Namespace, h))
 	if ps.Status.Message != msg {
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.Message = msg
