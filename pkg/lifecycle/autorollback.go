@@ -5,39 +5,25 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 )
 
-// maxBundleNameLen keeps Bundle names within the 63-character limit of the
-// kardinal.io/bundle label that the Graph puts on the Bundle's PromotionSteps.
-const maxBundleNameLen = 63
-
 // AutoRollbackName returns the fixed name of the automatic rollback Bundle
-// that source (for example "alarm" or "policy") creates for the failing Bundle
-// bundle. The name is deterministic, so a retried reconcile reuses the Bundle
-// instead of creating another, and at most 63 characters long: a long Bundle
-// name is shortened and suffixed with a hash so names stay distinct.
+// that source (for example "alarm", "policy", or "alarm-<environment>")
+// creates for the failing Bundle bundle: bundle-rollback-source. It is
+// deterministic, so a retried reconcile or a restarted controller finds the
+// Bundle again, and a valid object name and kardinal.io/bundle label value:
+// a name over 63 characters is shortened with a hash of the whole name
+// (labelvalue.Fit), so different names stay different.
 func AutoRollbackName(bundle, source string) string {
-	name := bundle + "-rollback-" + source
-	if len(name) <= maxBundleNameLen {
-		return name
-	}
-	sum := sha256.Sum256([]byte(name))
-	suffix := "-rollback-" + source + "-" + hex.EncodeToString(sum[:])[:8]
-	keep := maxBundleNameLen - len(suffix)
-	if keep < 1 {
-		return strings.TrimLeft(suffix, "-")[:maxBundleNameLen]
-	}
-	return strings.TrimRight(bundle[:keep], "-.") + suffix
+	return labelvalue.Fit(bundle + "-rollback-" + source)
 }
 
 // AutoRollbackNameIn is AutoRollbackName for the rollback of bundle in env:
