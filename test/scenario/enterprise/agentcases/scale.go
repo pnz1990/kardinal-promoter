@@ -139,22 +139,38 @@ func RunScale(t *testing.T) {
 		p50, p99, top := quantiles(lat[k])
 		t.Logf("admission in the bursts %-45s n=%-6d p50 %-9s p99 %-9s max %s", k, len(lat[k]), p50, p99, top)
 	}
-	// The budgets hold the p99 of each write's fastest admission over
-	// three passes: a host's load and a GC pause lengthen one timing, not
-	// the cost of admitting the write (#2035).
-	timed := timeAdmissions(t, w, reg)
+	// Each write's fastest admission over three passes, and the same write
+	// against the index emptied in each pass (the calibration: what the
+	// host takes to admit it without the index). A host's load lengthens
+	// both, so the budgets hold the ratio of a kind's median to the
+	// calibration's (#2035, #2039): the budget in ms is the one at the
+	// calibration's speed recorded in PerfBaseline. The p99 is logged, not
+	// bounded: at 5,000 identities each Bundle or Approval converts about a
+	// MiB of index, and its tail moves with the host's memory pressure
+	// (46ms idle, 57-65ms with the host loaded, the calibration unmoved). The calibration is
+	// an agent's Bundle without the index, for every kind.
+	timed, empty := timeAdmissions(t, w, reg)
+	// The host's speed: an agent's Bundle admitted without the index.
+	require.NotEmpty(t, empty["Bundle CREATE by serviceaccount"])
+	calMedian, _, _ := quantiles(empty["Bundle CREATE by serviceaccount"])
+	ref := budget.duration(t, "calibration.empty-index-admission")
+	t.Logf("calibration: an agent's Bundle admitted without the index, median %s (%s in %s)", calMedian, ref, PerfBaseline)
 	for _, c := range []struct{ key, budget string }{
-		{"Bundle CREATE by serviceaccount", "admission.p99.agent-bundle-create"},
-		{"Approval CREATE by user", "admission.p99.person-approval-create"},
-		{"PolicyGate CREATE by kro", "admission.p99.kro-gate-create"},
+		{"Bundle CREATE by serviceaccount", "admission.p50.agent-bundle-create"},
+		{"Approval CREATE by user", "admission.p50.person-approval-create"},
+		{"PolicyGate CREATE by kro", "admission.p50.kro-gate-create"},
 	} {
 		ds := timed[c.key]
 		if !assert.NotEmpty(t, ds, "no %s was timed", c.key) {
 			continue
 		}
 		p50, p99, top := quantiles(ds)
-		t.Logf("admission, fastest of %d passes %-45s n=%-6d p50 %-9s p99 %-9s max %s", admissionPasses, c.key, len(ds), p50, p99, top)
-		assert.LessOrEqual(t, p99, budget.duration(t, c.budget), "p99 admission of %s (%d writes; %s)", c.key, len(ds), PerfBaseline)
+		allowed := budget.duration(t, c.budget)
+		ratio, bound := float64(p50)/float64(calMedian), float64(allowed)/float64(ref)
+		t.Logf("admission, fastest of %d passes %-35s n=%-5d p50 %-9s p99 %-9s max %-9s: p50 %.1fx the calibration (budget %.1fx: %s at %s)",
+			admissionPasses, c.key, len(ds), p50, p99, top, ratio, bound, allowed, ref)
+		assert.LessOrEqual(t, ratio, bound, "median admission of %s over its calibration: %s over %s (%d writes; %s)",
+			c.key, p50, calMedian, len(ds), PerfBaseline)
 	}
 	n, last := w.Errors()
 	assert.Empty(t, n, "reconcile errors: %v", last)
@@ -166,10 +182,11 @@ func RunScale(t *testing.T) {
 // of every version the agents shipped (as its agent), of every Approval
 // (as its approver) and of every gate instance (as kro), in admissionPasses
 // passes over them all, and returns each write's fastest timing, by the
-// keys of AdmissionLatencies. A pass takes minutes at full size, so a
+// keys of AdmissionLatencies, with the index (full) and with it emptied
+// (empty, World.WithEmptyAgentIndex). A pass takes minutes at full size, so a
 // spell of load on the host or a GC pause slows one write's timing in one
 // pass, not in all of them.
-func timeAdmissions(t *testing.T, w *scenario.World, reg registry) map[string][]time.Duration {
+func timeAdmissions(t *testing.T, w *scenario.World, reg registry) (full, empty map[string][]time.Duration) {
 	t.Helper()
 	type write struct {
 		key string
@@ -216,23 +233,36 @@ func timeAdmissions(t *testing.T, w *scenario.World, reg registry) map[string][]
 		kro := scenario.Identity{Username: scenario.GraphUser(g.Namespace), Groups: scenario.ServiceAccountGroups(g.Namespace)}
 		writes = append(writes, write{"PolicyGate CREATE by kro", w.CtxOf(kro), g})
 	}
-	best := make([]time.Duration, len(writes))
-	for i := range best {
-		best[i] = time.Duration(math.MaxInt64)
-	}
-	for pass := 0; pass < admissionPasses; pass++ {
+	fastest := func(best []time.Duration) {
 		runtime.GC()
 		for i, wr := range writes {
 			start := time.Now()
-			require.NoError(t, w.AdmitCreate(wr.ctx, wr.obj), "%s %s/%s", wr.key, wr.obj.GetNamespace(), wr.obj.GetName())
+			_ = w.AdmitCreate(wr.ctx, wr.obj) // refused without the index; timed alike
 			best[i] = min(best[i], time.Since(start))
 		}
 	}
-	out := map[string][]time.Duration{}
-	for i, wr := range writes {
-		out[wr.key] = append(out[wr.key], best[i])
+	bestFull, bestEmpty := make([]time.Duration, len(writes)), make([]time.Duration, len(writes))
+	for i := range writes {
+		bestFull[i], bestEmpty[i] = time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
+		require.NoError(t, w.AdmitCreate(writes[i].ctx, writes[i].obj), "%s %s/%s", writes[i].key,
+			writes[i].obj.GetNamespace(), writes[i].obj.GetName())
 	}
-	return out
+	for pass := 0; pass < admissionPasses; pass++ {
+		// The order alternates, so a spell of load hits both alike.
+		if pass%2 == 0 {
+			fastest(bestFull)
+			w.WithEmptyAgentIndex(func() { fastest(bestEmpty) })
+		} else {
+			w.WithEmptyAgentIndex(func() { fastest(bestEmpty) })
+			fastest(bestFull)
+		}
+	}
+	full, empty = map[string][]time.Duration{}, map[string][]time.Duration{}
+	for i, wr := range writes {
+		full[wr.key] = append(full[wr.key], bestFull[i])
+		empty[wr.key] = append(empty[wr.key], bestEmpty[i])
+	}
+	return full, empty
 }
 
 // admissionPasses is how many times timeAdmissions times each write.

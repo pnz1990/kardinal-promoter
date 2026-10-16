@@ -287,6 +287,24 @@ func (w *World) admitPatched(ctx context.Context, c client.WithWatch, sub string
 	return err
 }
 
+// WithEmptyAgentIndex runs fn with the admission plugin serving the stored
+// AgentIndex with no entries (Ready, as the controller wrote it): a
+// calibration of what a write's admission costs without the index. The
+// stored index is served again after it.
+func (w *World) WithEmptyAgentIndex(fn func()) {
+	w.T.Helper()
+	var idx v1alpha1.AgentIndex
+	if err := w.store.Get(w.Ctx, types.NamespacedName{Name: Release}, &idx); err != nil {
+		w.T.Fatalf("get agent index: %v", err)
+	}
+	idx.Status.Users, idx.Status.Groups = map[string]v1alpha1.AgentIndexEntry{}, map[string]v1alpha1.AgentIndexEntry{}
+	if err := w.api.SetAgentIndex(&idx); err != nil {
+		w.T.Fatal(err)
+	}
+	defer w.indexDirty.Store(true)
+	fn()
+}
+
 // syncIndex serves the stored AgentIndex to the admission plugin.
 func (w *World) syncIndex(ctx context.Context, c client.Reader) error {
 	var idx v1alpha1.AgentIndex
