@@ -1787,3 +1787,47 @@ func TestChartAggregatedClusterRolesLeaveRulesUnset(t *testing.T) {
 		assert.Positive(t, aggregated, "args %v: the chart renders the aggregated admin ClusterRole", args)
 	}
 }
+
+// TestChartAPIServerEndpointsNamespaceMode (#1870, v0.12 gate): in
+// namespace mode no ClusterRole of the chart holds the EndpointSlice read
+// (the cluster-scoped ClusterRole holds only cluster-scoped kinds), and the
+// Role in default grants get on the kubernetes EndpointSlice alone; in
+// cluster mode the manager ClusterRole grants it.
+func TestChartAPIServerEndpointsNamespaceMode(t *testing.T) {
+	docs := render(t, "kardinal-promoter", "--set", "controller.watchNamespace="+releaseNS)
+	v := newRBACView(t, docs)
+	// The ClusterRoles bound to the controller cluster-wide (the AgentRun
+	// reader ClusterRole is bound per namespace, to a run's ServiceAccount).
+	for _, crb := range v.crbs {
+		if !boundTo(crb.Subjects, releaseNS, "kardinal-promoter") {
+			continue
+		}
+		for _, r := range v.clusterRoles[crb.RoleRef.Name].Rules {
+			assert.NotContains(t, r.Resources, "endpointslices",
+				"ClusterRole %s, bound to the controller, holds a namespaced EndpointSlice rule in namespace mode", crb.RoleRef.Name)
+		}
+	}
+	allowed := func(v rbacView, ns, verb, name string) bool {
+		return v.allowed(releaseNS, "kardinal-promoter", ns, "discovery.k8s.io", "endpointslices", verb, name)
+	}
+	assert.True(t, allowed(v, "default", "get", "kubernetes"), "the Role in default grants the kubernetes EndpointSlice")
+	assert.False(t, allowed(v, "default", "get", "other"), "and no other EndpointSlice")
+	assert.False(t, allowed(v, "default", "list", ""), "nor a list")
+	assert.False(t, allowed(v, "team-b", "get", "kubernetes"), "nor in another namespace")
+	role, ok := v.roles["default/kardinal-promoter-apiserver-endpoints"]
+	require.True(t, ok, "the Role in default: %v", keysOf(v.roles))
+	require.Len(t, role.Rules, 1)
+	assert.Equal(t, []string{"kubernetes"}, role.Rules[0].ResourceNames)
+
+	c := newRBACView(t, render(t, "kardinal-promoter"))
+	assert.True(t, allowed(c, "default", "get", "kubernetes"), "cluster mode: the manager ClusterRole grants it")
+	assert.False(t, allowed(c, "default", "get", "other"), "cluster mode: by name only")
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

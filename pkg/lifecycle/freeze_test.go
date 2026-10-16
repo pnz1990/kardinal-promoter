@@ -6,6 +6,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -313,6 +314,45 @@ func TestUnfreeze_Races(t *testing.T) {
 		cw := getFreeze(t, base)
 		assert.False(t, cw.DeletionTimestamp.IsZero(), "lifted")
 		assert.Equal(t, bob, cw.Spec.Freeze.Lifted, "and bob is who lifted it")
+	})
+
+	t.Run("status writes that keep moving it give up after 6 deletes", func(t *testing.T) {
+		deletes := 0
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes++
+			cw := getFreeze(t, cl)
+			cw.Annotations = map[string]string{"kardinal.io/freeze-audited": fmt.Sprint(deletes)}
+			require.NoError(t, cl.Update(ctx, &cw))
+			return cl.Delete(ctx, obj, opts...)
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+		assert.Equal(t, 6, deletes, "bounded: the first try and 5 more")
+		cw := getFreeze(t, base)
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "not lifted")
+		assert.Nil(t, cw.Spec.Freeze.Lifted, "the mark is taken back")
+	})
+
+	t.Run("a mark written on an earlier pass is taken back when a later pass fails", func(t *testing.T) {
+		deletes := 0
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes++
+			if deletes == 1 {
+				cw := getFreeze(t, cl)
+				cw.Annotations = map[string]string{"kardinal.io/freeze-audited": "started"}
+				require.NoError(t, cl.Update(ctx, &cw))
+				return cl.Delete(ctx, obj, opts...)
+			}
+			return errors.New("etcdserver: request timed out")
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "request timed out")
+		assert.Equal(t, 2, deletes)
+		cw := getFreeze(t, base)
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "not lifted")
+		assert.Nil(t, cw.Spec.Freeze.Lifted, "bob's mark from the first pass names no one who lifted it")
 	})
 
 	t.Run("losing the mark to an unfreeze that lifted it", func(t *testing.T) {
