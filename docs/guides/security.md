@@ -1138,7 +1138,9 @@ For every `/api/v1/ui/*` request the controller:
 
    A ServiceAccount token for the API server's audience, the token every Pod mounts, is
    refused by both APIs even with the opt-in: a ServiceAccount can always mint a token for
-   `kardinal-promoter`. Opt in only if you trust kardinal and every hop to it with tokens that
+   `kardinal-promoter`. A 401 from these rules names the rule in its body (`unauthorized: token
+   audience is not kardinal-promoter; ...` or `unauthorized: a ServiceAccount token ...`), and so
+   does the access log; any other 401 says only `unauthorized`. Opt in only if you trust kardinal and every hop to it with tokens that
    also work against the API server. Putting the API server's own audience in
    `tokenReview.audiences` is refused at startup (the controller reads it from its own
    ServiceAccount token), so the opt-in stays explicit.

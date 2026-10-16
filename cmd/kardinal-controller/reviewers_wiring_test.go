@@ -223,13 +223,13 @@ func fakeAudienceAPI(t *testing.T) *rest.Config {
 	return &rest.Config{Host: srv.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}
 }
 
-// TestReviewers_AudienceIsPerAPI (#1930): the UI API's opt-in to the API
-// server's audience, which SSO needs, does not reach the Bundle API, even
-// though both share one TokenReview cache. A Pod's default ServiceAccount
-// token is refused by both, whatever the opt-ins. With the Bundle API's own
-// opt-in, an OIDC token creates Bundles, and the Pod's token still does not.
-//
-// Covers TOKENREVIEW-AUD-02.
+// TestReviewers_AudienceIsPerAPI (#1930): each API's opt-in to the API
+// server's audience applies to that API only, though both share one
+// TokenReview cache: the UI's (SSO) does not reach the Bundle API, and the
+// Bundle API's own, set alone, admits an OIDC token there while the UI
+// still refuses it. A Pod's default ServiceAccount token is refused by both
+// whatever the opt-ins. Each 401 names the rule that refused it: the API's
+// opt-in is off, or the token is a ServiceAccount's.
 func TestReviewers_AudienceIsPerAPI(t *testing.T) {
 	const bundle = `{"pipeline":"app","namespace":"team-a","type":"image","images":[{"repository":"r","tag":"1"}]}`
 	postBundle := func(h http.HandlerFunc, token string) *httptest.ResponseRecorder {
@@ -239,23 +239,41 @@ func TestReviewers_AudienceIsPerAPI(t *testing.T) {
 		h(w, req)
 		return w
 	}
+	// The outcomes: a status code, or a 401 and the rule that refused it.
+	const (
+		noOptIn = "401: this API does not accept the API server's audience"
+		saToken = "401: a ServiceAccount token for the API server's audience"
+	)
+	reasons := map[string]string{noOptIn: "does not accept the API server's", saToken: "a ServiceAccount token for the API server's audience is refused"}
 	tests := []struct {
-		name        string
-		bundleOptIn bool
-		uiWant      map[string]int
-		bundlesWant map[string]int
+		name                 string
+		uiOptIn, bundleOptIn bool
+		uiWant, bundlesWant  map[string]string
 	}{
-		{"SSO on the UI only", false,
-			map[string]int{"oidc-alice": http.StatusOK, "pod-default": http.StatusUnauthorized, "ci": http.StatusOK},
-			map[string]int{"oidc-alice": http.StatusUnauthorized, "pod-default": http.StatusUnauthorized, "ci": http.StatusCreated}},
-		{"the Bundle API opts in too", true,
-			map[string]int{"oidc-alice": http.StatusOK, "pod-default": http.StatusUnauthorized, "ci": http.StatusOK},
-			map[string]int{"oidc-alice": http.StatusCreated, "pod-default": http.StatusUnauthorized, "ci": http.StatusCreated}},
+		{"SSO on the UI only", true, false,
+			map[string]string{"oidc-alice": "200", "pod-default": saToken, "ci": "200"},
+			map[string]string{"oidc-alice": noOptIn, "pod-default": noOptIn, "ci": "201"}},
+		{"the Bundle API opts in alone", false, true,
+			map[string]string{"oidc-alice": noOptIn, "pod-default": noOptIn, "ci": "200"},
+			map[string]string{"oidc-alice": "201", "pod-default": saToken, "ci": "201"}},
+		{"both opt in", true, true,
+			map[string]string{"oidc-alice": "200", "pod-default": saToken, "ci": "200"},
+			map[string]string{"oidc-alice": "201", "pod-default": saToken, "ci": "201"}},
+	}
+	check := func(t *testing.T, api, tok, want string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		reason, refused := reasons[want]
+		if !refused {
+			assert.Equal(t, want, fmt.Sprint(rec.Code), "%s, %s: %s", api, tok, rec.Body.String())
+			return
+		}
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, "%s, %s: %s", api, tok, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), reason, "%s, %s: the 401 names the rule", api, tok)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := fakeAudienceAPI(t)
-			review := reviewOptions{audiences: []string{uiauth.DefaultAudience}, acceptAPIServer: true,
+			review := reviewOptions{audiences: []string{uiauth.DefaultAudience}, acceptAPIServer: tt.uiOptIn,
 				bundleAcceptAPIServer: tt.bundleOptIn, shared: &sharedReviewers{}}
 			auth, err := buildUIAuth(cfg, uiAuthFlags{tokenReview: true, review: review})
 			require.NoError(t, err)
@@ -265,15 +283,17 @@ func TestReviewers_AudienceIsPerAPI(t *testing.T) {
 			bundles := newBundleAPIServer(bundleAPIClient(), "", "default")
 			bundles.enableTokenReview(tokens, access)
 
-			// The UI first, so each token's review is in the shared cache
-			// when the Bundle API sees it.
+			// One API first, so each token's review is in the shared cache
+			// when the other sees it; then the other way round.
 			for _, tok := range []string{"oidc-alice", "pod-default", "ci"} {
-				rec := uiAuthDo(t, ui, http.MethodGet, "/api/v1/ui/pipelines", "Bearer "+tok, "")
-				assert.Equal(t, tt.uiWant[tok], rec.Code, "UI API, %s: %s", tok, rec.Body.String())
+				check(t, "UI API", tok, tt.uiWant[tok], uiAuthDo(t, ui, http.MethodGet, "/api/v1/ui/pipelines", "Bearer "+tok, ""))
 			}
 			for _, tok := range []string{"oidc-alice", "pod-default", "ci"} {
-				rec := postBundle(bundles.Handler(), tok)
-				assert.Equal(t, tt.bundlesWant[tok], rec.Code, "Bundle API, %s: %s", tok, rec.Body.String())
+				check(t, "Bundle API", tok, tt.bundlesWant[tok], postBundle(bundles.Handler(), tok))
+			}
+			for _, tok := range []string{"oidc-alice", "pod-default", "ci"} {
+				check(t, "UI API, after the Bundle API", tok, tt.uiWant[tok],
+					uiAuthDo(t, ui, http.MethodGet, "/api/v1/ui/pipelines", "Bearer "+tok, ""))
 			}
 		})
 	}

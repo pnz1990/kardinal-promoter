@@ -30,8 +30,11 @@ import (
 //     as OIDC is (here the static token file, which ignores audiences too);
 //   - a CI ServiceAccount token minted for kardinal-promoter.
 //
-// The UI API opts in to the API server's audience (SSO) and the Bundle API
-// does not. They share one reviewer, as the controller builds them.
+// Each API's opt-in to the API server's audience is tried alone: the UI's
+// (SSO), and the Bundle API's (bundleAPI.acceptAPIServerAudience), which
+// admits the person's token there while the UI refuses it. The APIs share
+// one reviewer, as the controller builds them, and every refusal names its
+// rule.
 //
 // Covers TOKENREVIEW-AUD-02.
 func TestTokenReviewAudienceOnAPIServer(t *testing.T) {
@@ -74,20 +77,45 @@ func TestTokenReviewAudienceOnAPIServer(t *testing.T) {
 		require.True(t, st.Authenticated, "the API server authenticates %s: %+v", name, st)
 	}
 
-	tests := []struct {
-		api    string
-		accept bool
-		want   map[string]bool
+	// Each configuration: which API opts in to the API server's audience,
+	// and what each API then does with each token: accepts it, refuses it
+	// because the API did not opt in, or refuses it as a ServiceAccount's.
+	const ok, noOptIn, saToken = "accepted", "this API does not accept the API server's audience",
+		"a ServiceAccount token for the API server's audience is refused"
+	for _, cfgCase := range []struct {
+		name               string
+		uiOptIn, bundleOpt bool
+		ui, bundles        map[string]string
 	}{
-		{"UI API (SSO opt-in)", true, map[string]bool{"pod-default": false, "person": true, "ci": true}},
-		{"Bundle API (no opt-in)", false, map[string]bool{"pod-default": false, "person": false, "ci": true}},
-	}
-	for _, tt := range tests {
-		reviewer := uiauth.RequireAudience(base, audiences, tt.accept)
-		for name, tok := range tokens {
-			st, err := reviewer.Review(ctx, tok)
-			require.NoError(t, err)
-			assert.Equal(t, tt.want[name], st.Authenticated, "%s, %s: %+v", tt.api, name, st)
+		{"the UI opts in (SSO)", true, false,
+			map[string]string{"pod-default": saToken, "person": ok, "ci": ok},
+			map[string]string{"pod-default": noOptIn, "person": noOptIn, "ci": ok}},
+		{"only the Bundle API opts in", false, true,
+			map[string]string{"pod-default": noOptIn, "person": noOptIn, "ci": ok},
+			map[string]string{"pod-default": saToken, "person": ok, "ci": ok}},
+	} {
+		// The base accepts the API server's audience when either API opts
+		// in, as the controller builds it (cmd/kardinal-controller newReviewers).
+		shared, err := uiauth.NewKubeTokenReviewer(cfg, audiences, cfgCase.uiOptIn || cfgCase.bundleOpt)
+		require.NoError(t, err)
+		for api, c := range map[string]struct {
+			accept bool
+			want   map[string]string
+		}{"UI API": {cfgCase.uiOptIn, cfgCase.ui}, "Bundle API": {cfgCase.bundleOpt, cfgCase.bundles}} {
+			reviewer := uiauth.RequireAudience(shared, audiences, c.accept)
+			for name, tok := range tokens {
+				st, err := reviewer.Review(ctx, tok)
+				require.NoError(t, err)
+				where := cfgCase.name + ", " + api + ", " + name
+				if c.want[name] == ok {
+					assert.True(t, st.Authenticated, "%s: %+v", where, st)
+					continue
+				}
+				assert.False(t, st.Authenticated, "%s: %+v", where, st)
+				reason, refused := uiauth.AudienceRefusal(st)
+				assert.True(t, refused, "%s: refused by the audience rule: %+v", where, st)
+				assert.Contains(t, reason, c.want[name], where)
+			}
 		}
 	}
 }
