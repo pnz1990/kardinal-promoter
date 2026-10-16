@@ -382,6 +382,7 @@ const (
 	inWatched accessScope = iota // every namespace the controller reconciles
 	inRelease                    // the controller's own namespace
 	inCluster                    // cluster-scoped resource
+	inDefault                    // the default namespace (the kubernetes Service)
 )
 
 type apiAccess struct {
@@ -433,7 +434,7 @@ func controllerAccess() []apiAccess {
 		{"multicluster.x-k8s.io", "clusterprofiles", []string{"get", "list"}, inWatched, "", "pipeline fleets.go: fleet selector kind ClusterProfile (uncached List)"},
 		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout); agentrun reconciler.go: agent Jobs"},
 		{"networking.k8s.io", "networkpolicies", []string{"get", "create"}, inWatched, "", "agentrun reconciler.go networkPolicy (create, adopt check)"},
-		{"discovery.k8s.io", "endpointslices", []string{"get"}, inCluster, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
+		{"discovery.k8s.io", "endpointslices", []string{"get"}, inDefault, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
 		{"", "serviceaccounts", []string{"delete"}, inWatched, "", "agentrun reconciler.go revoke: a run's own ServiceAccount"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-writer", "agentrun reconciler.go ensureAccess"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-reader", "agentrun reconciler.go ensureAccess"},
@@ -528,6 +529,8 @@ func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc ap
 		namespaces = []string{releaseNS}
 	case inCluster:
 		namespaces = []string{""}
+	case inDefault:
+		namespaces = []string{"default"}
 	}
 	for _, ns := range namespaces {
 		for _, verb := range acc.verbs {

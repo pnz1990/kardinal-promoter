@@ -302,7 +302,7 @@ func TestDocs_Walkthrough(t *testing.T) {
 
 	// ── pause.md ────────────────────────────────────────────────────────
 	ps := "pause.md"
-	w.must(ps, "kardinal pause my-app\n", "my-app", "demo")
+	w.must(ps, "kardinal pause my-app --reason", "my-app", "demo")
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: "demo"}, &p))
 	assert.False(t, p.Spec.Paused, "the block pauses, then resumes")
 	walkFleet(t, w)

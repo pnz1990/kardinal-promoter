@@ -205,19 +205,27 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 		if err == nil || apierrors.IsNotFound(err) {
 			return nil
 		}
+		if apierrors.IsConflict(err) {
+			// Another unfreeze may have lifted it meanwhile (its mark moved
+			// the ResourceVersion): that is no reason to complain.
+			var now v1alpha1.ChangeWindow
+			gerr := c.Get(ctx, types.NamespacedName{Name: name}, &now)
+			if apierrors.IsNotFound(gerr) || (gerr == nil && !now.DeletionTimestamp.IsZero()) {
+				return nil
+			}
+			// Only its status or metadata moved (the controller records the
+			// freeze as it starts: its finalizer, status.active): the freeze
+			// asked for is still the one there, so lift it again.
+			if gerr == nil && sameFreeze(first, &now) && attempt < 5 {
+				continue
+			}
+		}
 		if marked {
 			// The freeze stays in force: take back the mark, so it names
 			// no one who did not lift it.
 			clearLift(ctx, c, name, lift)
 		}
 		if apierrors.IsConflict(err) {
-			// Another unfreeze may have lifted it meanwhile (its mark moved
-			// the ResourceVersion): that is no reason to complain.
-			var now v1alpha1.ChangeWindow
-			if gerr := c.Get(ctx, types.NamespacedName{Name: name}, &now); apierrors.IsNotFound(gerr) ||
-				(gerr == nil && !now.DeletionTimestamp.IsZero()) {
-				return nil
-			}
 			return changedMeanwhile(name)
 		}
 		return fmt.Errorf("delete freeze %s: %w", name, err)
