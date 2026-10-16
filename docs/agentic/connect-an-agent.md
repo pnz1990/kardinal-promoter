@@ -1,8 +1,7 @@
 # Connect an agent
 
-!!! info "New in v0.12.0 (unreleased)"
-    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
-    it. The [changelog](../changelog.md#unreleased) lists every unreleased change.
+!!! info "New in v0.12.0"
+    v0.11.0 and earlier do not have this. The [changelog](../changelog.md) lists every v0.12.0 change.
 
 `kardinal mcp` serves kardinal to an AI agent as a local
 [Model Context Protocol](https://modelcontextprotocol.io/) server. The agent starts it as a
