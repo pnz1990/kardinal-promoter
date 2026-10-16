@@ -587,10 +587,24 @@ Admission checks a stamp in two parts. That it names the requester (its `princip
 `via` (only the controller sets it) and has a kind that fits (`bot` or `agent` for a
 ServiceAccount, `human` or `agent` for anyone else) is checked always, by the hold-writes,
 bundle-rejection and freezes policies. That an agent's stamp names its registered agent and
-sponsor needs the AgentIndex: for these records it is checked by `<release>-actor-records`, which
-admits while the index is missing (a fresh install, until the controller builds it, so Pipeline
-writes never wait for it). In that window an agent's record can name another agent or sponsor,
-or claim `human` or `bot`; nothing else about it goes unchecked.
+sponsor needs the AgentIndex. For a hold, a `spec.lastChange` and a rejection it is checked by
+`<release>-actor-records`, which admits while the index is missing (a fresh install, until the
+controller builds it, so Pipeline writes and Bundle updates never wait for it). In that window
+admission cannot tell an agent's stamp from a forged one: anyone may write a stamp of kind
+`agent` naming any agent and sponsor, and an agent may stamp itself `bot` (a ServiceAccount) or
+`human` (a user or a member of a registered group); the stamp still names the requester as its
+principal and carries no `via`.
+
+The controller therefore checks every such stamp against the AgentIndex again before an AuditEvent
+records it, and agents fail closed: a stamp of kind `agent` is recorded only when the index says
+the requester itself (a username or ServiceAccount the AgentIdentity lists) is that agent of that
+sponsor, and never while the index is missing or not ready. The stamp of an agent registered by
+group is never recorded on these three records: the controller cannot see the requester's groups,
+so it cannot confirm membership, and admission confirms it only while the index exists. A
+non-agent stamp of a user the index names as an agent is not recorded either. A stamp that is not recorded leaves the record with no actor, and its message says why
+(`actor stamp not recorded: ...`). People's and bots' stamps are recorded during an index outage
+as at any time. A freeze and its lift are checked by `<release>-actor`, which refuses every
+ChangeWindow write while the index is missing, so they have no such window.
 
 The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
 them: a failed health check records `PromotionFailed` (or `RollbackStarted` with

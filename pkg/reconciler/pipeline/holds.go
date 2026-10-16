@@ -182,7 +182,7 @@ func holdKey(h *kardinalv1alpha1.EnvironmentHold) string {
 // It returns when to come back for the next expiry (0: none), and whether it
 // updated the spec (the caller then stops: the update is reconciled anew).
 func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline,
-	fresh *kardinalv1alpha1.PipelineChange) (time.Duration, bool, error) {
+	rec changeRecord) (time.Duration, bool, error) {
 	now := r.now()
 	var kept []kardinalv1alpha1.EnvironmentHold
 	expired := false
@@ -222,9 +222,10 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		h := &p.Spec.Holds[i]
 		current[holdKey(h)] = true
 		if !observed[holdKey(h)] {
+			stamp, note := rec.stamp(h.Actor, h.CreatedBy)
 			entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldCreated, fmt.Sprintf(
-				"%s held %s on rollback %s: %s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h)),
-				stampOf(h.Actor, h.CreatedBy)))
+				"%s held %s on rollback %s: %s%s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h), note),
+				stamp))
 		}
 	}
 	for i := range p.Status.ObservedHolds {
@@ -234,11 +235,12 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		}
 		why := "released (spec.holds entry removed without kardinal; the Kubernetes audit log names who)"
 		var stamp *kardinalv1alpha1.Actor
-		if by, reason, s := changeOf(fresh, kardinalv1alpha1.PipelineChangeReleaseHold, h.Environment); by != "" {
+		if by, reason, s, note := rec.changeOf(kardinalv1alpha1.PipelineChangeReleaseHold, h.Environment); by != "" {
 			why, stamp = "released by "+by, s
 			if reason != "" {
 				why += ": " + reason
 			}
+			why += note
 		}
 		if h.ExpiresAt != nil && !now.Before(h.ExpiresAt.Time) {
 			why, stamp = "expired at "+h.ExpiresAt.UTC().Format(time.RFC3339)+", removed by the controller", nil

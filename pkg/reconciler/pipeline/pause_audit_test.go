@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
@@ -304,4 +305,134 @@ func TestPipelineHolds_RepeatedIdenticalRelease(t *testing.T) {
 	for _, e := range released {
 		assert.Contains(t, e.Spec.Message, "released by alice: fixed")
 	}
+}
+
+// TestPipelinePauseAudit_AgentStampVerified (#2024 QA): the record carries
+// an agent stamp only when the AgentIndex vouches for it. While the index is
+// missing, admission cannot check an agent's agent and sponsor, so QA's case
+// (a person stamping agent fixer of carol) is admitted; the controller does
+// not record that stamp (agents fail closed), says why, and still records a
+// person's own stamp.
+func TestPipelinePauseAudit_AgentStampVerified(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		stamp *kardinalv1alpha1.Actor
+		kept  bool
+	}{
+		{"a person stamping agent, index missing", &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorAgent,
+			Principal: "alice", Agent: "fixer", Sponsor: "carol"}, false},
+		{"a person's own stamp, index missing", &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman,
+			Principal: "alice"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makePipelineWithEnvs("app", "default", "test")
+			c := newClientWithIndex(newPipelineScheme(), p)
+			r := &pipeline.Reconciler{Client: c, Now: time.Now,
+				Agents: &actor.Source{Reader: c, Name: "kardinal-promoter"}} // no AgentIndex in the cluster
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+			_, err := r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			require.NoError(t, lifecycle.Pause(ctx, c, "default", "app", &kardinalv1alpha1.PipelineChange{By: "alice", Actor: tc.stamp}))
+			var cur kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+			cur.Generation++
+			require.NoError(t, c.Update(ctx, &cur))
+			_, err = r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			paused := auditsOf(t, c, pipeline.AuditActionPipelinePaused)
+			require.Len(t, paused, 1)
+			assert.Contains(t, paused[0].Spec.Message, "alice paused pipeline app")
+			if tc.kept {
+				assert.Equal(t, tc.stamp, paused[0].Spec.Actor)
+			} else {
+				assert.Nil(t, paused[0].Spec.Actor, "an agent stamp the AgentIndex cannot vouch for is not recorded")
+				assert.Contains(t, paused[0].Spec.Message, "actor stamp not recorded: its agent stamp could not be verified")
+			}
+		})
+	}
+}
+
+// agentIndex is the release's AgentIndex naming fixer, ready or not.
+func agentIndex(ready bool) *kardinalv1alpha1.AgentIndex {
+	st := metav1.ConditionTrue
+	if !ready {
+		st = metav1.ConditionFalse
+	}
+	return &kardinalv1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+		Status: kardinalv1alpha1.AgentIndexStatus{
+			Users:      map[string]kardinalv1alpha1.AgentIndexEntry{"system:serviceaccount:ci:fixer": {Agent: "fixer", Sponsor: "alice"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: st, Reason: "Built", LastTransitionTime: metav1.Now()}}}}
+}
+
+// TestPipelineHolds_CreatedStampVerified (#2024 QA): a hold's HoldCreated
+// record carries its agent stamp only when the AgentIndex vouches for it: a
+// person's agent-stamped hold is recorded without one, with the index
+// missing or present; the real agent's hold keeps it.
+func TestPipelineHolds_CreatedStampVerified(t *testing.T) {
+	const fx = "system:serviceaccount:ci:fixer"
+	at := metav1.NewTime(time.Date(2026, 10, 15, 4, 0, 0, 0, time.UTC))
+	forged := &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorAgent, Principal: "bob", Agent: "fixer", Sponsor: "alice"}
+	real := &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorAgent, Principal: fx, Agent: "fixer", Sponsor: "alice"}
+	for _, tc := range []struct {
+		name  string
+		index bool
+		by    string
+		stamp *kardinalv1alpha1.Actor
+		kept  bool
+	}{
+		{"a person stamped agent, index missing", false, "bob", forged, false},
+		{"a person stamped agent, index present", true, "bob", forged, false},
+		{"the agent, index present", true, fx, real, true},
+		{"the agent, index missing", false, fx, real, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makePipelineWithEnvs("app", "default", "test", "prod")
+			p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-rollback-1", Reason: "INC",
+				CreatedBy: tc.by, CreatedAt: &at, Actor: tc.stamp}}
+			objs := []client.Object{p, holdBundle("app-rollback-1")}
+			if tc.index {
+				objs = append(objs, agentIndex(true))
+			}
+			c := newClientWithIndex(newPipelineScheme(), objs...)
+			r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return at.Time },
+				Agents: &actor.Source{Reader: c, Name: "kardinal-promoter"}}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}})
+			require.NoError(t, err)
+			created := auditsOf(t, c, pipeline.AuditActionHoldCreated)
+			require.Len(t, created, 1)
+			if tc.kept {
+				assert.Equal(t, tc.stamp, created[0].Spec.Actor)
+			} else {
+				assert.Nil(t, created[0].Spec.Actor)
+				assert.Contains(t, created[0].Spec.Message, "actor stamp not recorded")
+			}
+		})
+	}
+}
+
+// TestPipelinePauseAudit_IndexNotReady (#2024 QA): an AgentIndex that exists
+// but is not Ready vouches for nothing: the real agent's stamp is not
+// recorded either.
+func TestPipelinePauseAudit_IndexNotReady(t *testing.T) {
+	ctx := context.Background()
+	const fx = "system:serviceaccount:ci:fixer"
+	p := makePipelineWithEnvs("app", "default", "test")
+	c := newClientWithIndex(newPipelineScheme(), p, agentIndex(false))
+	r := &pipeline.Reconciler{Client: c, Now: time.Now, Agents: &actor.Source{Reader: c, Name: "kardinal-promoter"}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	_, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, lifecycle.Pause(ctx, c, "default", "app", &kardinalv1alpha1.PipelineChange{By: fx,
+		Actor: &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorAgent, Principal: fx, Agent: "fixer", Sponsor: "alice"}}))
+	var cur kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+	cur.Generation++
+	require.NoError(t, c.Update(ctx, &cur))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	paused := auditsOf(t, c, pipeline.AuditActionPipelinePaused)
+	require.Len(t, paused, 1)
+	assert.Nil(t, paused[0].Spec.Actor)
+	assert.Contains(t, paused[0].Spec.Message, "could not be verified")
 }

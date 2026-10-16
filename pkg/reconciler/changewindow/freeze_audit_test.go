@@ -165,3 +165,35 @@ func TestFreezeAudit_WriteFailures(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKeyFromObject(other), &got)), "let go after the grace")
 }
+
+// TestFreezeAudit_DropsAStampOfSomeoneElse (#2001 QA): a freeze's stamp
+// that names someone other than who froze or lifted it is not recorded.
+func TestFreezeAudit_DropsAStampOfSomeoneElse(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	cw := freezeWindow("kardinal-freeze-everyone", kardinalv1alpha1.FreezeEveryone, nil) // createdBy alice
+	cw.UID = "uid-x"
+	cw.Spec.Freeze.Actor = &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "mallory"}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cw).WithStatusSubresource(cw).Build()
+	r := &changewindow.Reconciler{Client: c, AuditNamespace: "kardinal-system",
+		NowFn: func() time.Time { return at("2026-10-15T09:00:00Z") }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cw.Name}}
+	_, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	started := freezeAudits(t, c, "kardinal-system")[changewindow.AuditActionFreezeStarted]
+	assert.Contains(t, started.Spec.Message, "alice froze")
+	assert.Nil(t, started.Spec.Actor, "mallory's stamp on alice's freeze is dropped")
+
+	var w kardinalv1alpha1.ChangeWindow
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &w))
+	w.Spec.Freeze.Lifted = &kardinalv1alpha1.FreezeLift{By: "bob",
+		Actor: &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "mallory"}}
+	require.NoError(t, c.Update(ctx, &w))
+	require.NoError(t, c.Delete(ctx, &w))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	lifted := freezeAudits(t, c, "kardinal-system")[changewindow.AuditActionFreezeLifted]
+	assert.Contains(t, lifted.Spec.Message, "bob lifted")
+	assert.Nil(t, lifted.Spec.Actor)
+}

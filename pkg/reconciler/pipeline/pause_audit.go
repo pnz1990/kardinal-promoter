@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 )
 
@@ -38,7 +40,7 @@ const (
 // (the Pipeline's generation), so a re-run writes nothing new. The first
 // record (status.observedPaused unset, an upgrade) is taken unaudited.
 func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger, p *kardinalv1alpha1.Pipeline,
-	fresh *kardinalv1alpha1.PipelineChange) error {
+	rec changeRecord) error {
 	paused := p.Spec.Paused
 	fleets := slices.Clone(p.Spec.PausedFleets)
 	slices.Sort(fleets)
@@ -54,16 +56,16 @@ func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger
 			if paused {
 				action = kardinalv1alpha1.PipelineChangePause
 			}
-			entries = append(entries, r.pauseAuditEntry(p, fresh, action, ""))
+			entries = append(entries, r.pauseAuditEntry(p, rec, action, ""))
 		}
 		for _, f := range fleets {
 			if !slices.Contains(observedFleets, f) {
-				entries = append(entries, r.pauseAuditEntry(p, fresh, kardinalv1alpha1.PipelineChangePauseFleet, f))
+				entries = append(entries, r.pauseAuditEntry(p, rec, kardinalv1alpha1.PipelineChangePauseFleet, f))
 			}
 		}
 		for _, f := range observedFleets {
 			if !slices.Contains(fleets, f) {
-				entries = append(entries, r.pauseAuditEntry(p, fresh, kardinalv1alpha1.PipelineChangeResumeFleet, f))
+				entries = append(entries, r.pauseAuditEntry(p, rec, kardinalv1alpha1.PipelineChangeResumeFleet, f))
 			}
 		}
 	}
@@ -91,7 +93,7 @@ func (r *Reconciler) reconcilePauseAudit(ctx context.Context, log zerolog.Logger
 // of p, or of its fleet target. Who did it is spec.lastChange when that
 // records this change; else the actor is unknown and the message says where
 // to look.
-func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, fresh *kardinalv1alpha1.PipelineChange,
+func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, rec changeRecord,
 	action, target string) kardinalv1alpha1.PendingAuditEvent {
 	auditAction, verb := AuditActionPipelineResumed, "resumed"
 	if action == kardinalv1alpha1.PipelineChangePause || action == kardinalv1alpha1.PipelineChangePauseFleet {
@@ -101,11 +103,12 @@ func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, fresh *kardin
 	if target != "" {
 		what = "fleet " + target + " of pipeline " + p.Name
 	}
-	by, why, stamp := changeOf(fresh, action, target)
+	by, why, stamp, note := rec.changeOf(action, target)
 	msg := fmt.Sprintf("%s %s %s", orUnknown(by), verb, what)
 	if why != "" {
 		msg += ": " + why
 	}
+	msg += note
 	if by == "" {
 		msg = fmt.Sprintf("%s %s (spec changed without kardinal; the Kubernetes audit log names who)", what, verb)
 	}
@@ -132,26 +135,49 @@ func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, fresh *kardin
 		}, metav1.NewTime(r.now()))
 }
 
-// changeOf is who made the change action on target, from fresh (the
-// spec.lastChange not yet consumed, freshChange) when it records that change:
-// the username, the reason and the actor stamp. A stamp that names someone
-// other than by is dropped (admission refuses one; this is the second line).
-// An empty by means the change was made without a record (kubectl, an older
-// client), or with a record already consumed by an earlier change.
-func changeOf(fresh *kardinalv1alpha1.PipelineChange, action, target string) (by, why string, stamp *kardinalv1alpha1.Actor) {
-	if fresh == nil || fresh.Action != action || fresh.Target != target {
-		return "", "", nil
-	}
-	return fresh.By, fresh.Reason, stampOf(fresh.Actor, fresh.By)
+// changeRecord is what a reconcile names a change's author from: the
+// spec.lastChange not yet consumed (fresh, freshChange), and the AgentIndex
+// that vouches for agent stamps (nil, with why, when missing or not ready).
+type changeRecord struct {
+	fresh  *kardinalv1alpha1.PipelineChange
+	idx    *kardinalv1alpha1.AgentIndexStatus
+	idxErr error
 }
 
-// stampOf is stamp when it names by, else nil: an AuditEvent never carries a
-// stamp of someone other than the user its record names.
-func stampOf(stamp *kardinalv1alpha1.Actor, by string) *kardinalv1alpha1.Actor {
-	if stamp == nil || stamp.Principal != by {
-		return nil
+// changeRecord reads p's record of its last change and the AgentIndex.
+func (r *Reconciler) changeRecord(ctx context.Context, p *kardinalv1alpha1.Pipeline) changeRecord {
+	rec := changeRecord{fresh: freshChange(p), idxErr: errors.New("no AgentIndex is configured (--agent-index)")}
+	if r.Agents != nil {
+		rec.idx, rec.idxErr = r.Agents.Index(ctx)
 	}
-	return stamp
+	return rec
+}
+
+// changeOf is who made the change action on target, from rec.fresh when it
+// records that change: the username, the reason, the actor stamp the
+// AgentIndex vouches for (stamp), and why a stamp was not recorded (note,
+// for the message). An empty by means the change was made without a record
+// (kubectl, an older client), or with a record already consumed by an
+// earlier change.
+func (rec changeRecord) changeOf(action, target string) (by, why string, stamp *kardinalv1alpha1.Actor, note string) {
+	f := rec.fresh
+	if f == nil || f.Action != action || f.Target != target {
+		return "", "", nil, ""
+	}
+	stamp, note = rec.stamp(f.Actor, f.By)
+	return f.By, f.Reason, stamp, note
+}
+
+// stamp is the actor stamp a record of by's change may carry
+// (actor.VerifyStamp: one naming someone else, or an agent the AgentIndex
+// does not vouch for, is not recorded), and the message note saying why one
+// was not.
+func (rec changeRecord) stamp(stamp *kardinalv1alpha1.Actor, by string) (*kardinalv1alpha1.Actor, string) {
+	got, why := actor.VerifyStamp(stamp, by, rec.idx, rec.idxErr)
+	if why == "" {
+		return got, ""
+	}
+	return got, " (actor stamp not recorded: " + why + ")"
 }
 
 // freshChange is p's spec.lastChange when no earlier change consumed it
