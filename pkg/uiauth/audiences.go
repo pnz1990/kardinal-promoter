@@ -79,6 +79,20 @@ func CheckAudiences(audiences, apiServer []string) error {
 // token (system:serviceaccount:<namespace>:<name>).
 const serviceAccountUserPrefix = "system:serviceaccount:"
 
+// audienceRefusalPrefix starts the Error of a refusal by RequireAudience.
+// Unlike the API server's own errors, such a reason names only kardinal's
+// rule, so Middleware returns it in the 401 body (AudienceRefusal).
+const audienceRefusalPrefix = "kardinal audience rule: "
+
+// AudienceRefusal returns why RequireAudience refused st, and false when st
+// is not such a refusal (an invalid token, an API server error).
+func AudienceRefusal(st *authv1.TokenReviewStatus) (string, bool) {
+	if st == nil || st.Authenticated {
+		return "", false
+	}
+	return strings.CutPrefix(st.Error, audienceRefusalPrefix)
+}
+
 // audiencePolicy is one API's rule over a shared TokenReviewer (#1930).
 type audiencePolicy struct {
 	inner           TokenReviewer
@@ -112,10 +126,10 @@ func (p *audiencePolicy) Review(ctx context.Context, token string) (*authv1.Toke
 	switch {
 	case !p.acceptAPIServer:
 		return &authv1.TokenReviewStatus{Authenticated: false,
-			Error: fmt.Sprintf("token audience is not %s", want)}, nil
+			Error: audienceRefusalPrefix + fmt.Sprintf("token audience is not %s; this API does not accept the API server's audience", want)}, nil
 	case strings.HasPrefix(st.User.Username, serviceAccountUserPrefix):
 		return &authv1.TokenReviewStatus{Authenticated: false,
-			Error: fmt.Sprintf("a ServiceAccount token for the API server's audience is refused: mint one for %s "+
+			Error: audienceRefusalPrefix + fmt.Sprintf("a ServiceAccount token for the API server's audience is refused: mint one for %s "+
 				"(kubectl create token <sa> --audience %s)", want, DefaultAudience)}, nil
 	}
 	return st, nil

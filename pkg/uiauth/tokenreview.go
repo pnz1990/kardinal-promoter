@@ -181,9 +181,15 @@ func MiddlewareFor(next http.Handler, reviewer TokenReviewer, prefix, realm stri
 			return
 		}
 		if !status.Authenticated {
-			// O3: TokenReview returned Authenticated=false.
+			// O3: TokenReview returned Authenticated=false. A refusal by
+			// the API's audience rule says which rule (it names no token
+			// detail); any other says only unauthorized.
 			w.Header().Set("Www-Authenticate", challenge)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			msg := "unauthorized"
+			if reason, ok := AudienceRefusal(status); ok {
+				msg += ": " + reason
+			}
+			http.Error(w, msg, http.StatusUnauthorized)
 			return
 		}
 

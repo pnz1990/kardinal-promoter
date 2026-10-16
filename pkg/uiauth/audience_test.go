@@ -5,6 +5,9 @@ package uiauth
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -148,4 +151,39 @@ func TestRequireAudience(t *testing.T) {
 	}
 	_, err := RequireAudience(staticReviewer{err: assert.AnError}, kardinal, true).Review(context.Background(), "t")
 	assert.ErrorIs(t, err, assert.AnError, "an API failure stays an error (503)")
+}
+
+// TestMiddleware_AudienceRefusalSaysWhich: a 401 from an API's audience rule
+// names the rule (the opt-in is off, or the token is a ServiceAccount's), so
+// a caller and the access log can tell them apart. Any other refusal, such
+// as the API server's own error for a bad token, says only unauthorized.
+func TestMiddleware_AudienceRefusalSaysWhich(t *testing.T) {
+	sa := authv1.TokenReviewStatus{Authenticated: true, User: authv1.UserInfo{Username: "system:serviceaccount:a:default"},
+		Audiences: []string{apiServerAudience}}
+	for _, tc := range []struct {
+		name     string
+		reviewer TokenReviewer
+		want     string
+	}{
+		{"opt-in off", RequireAudience(staticReviewer{st: &sa}, []string{DefaultAudience}, false),
+			"unauthorized: token audience is not kardinal-promoter; this API does not accept the API server's audience"},
+		{"ServiceAccount", RequireAudience(staticReviewer{st: &sa}, []string{DefaultAudience}, true),
+			"unauthorized: a ServiceAccount token for the API server's audience is refused"},
+		{"API server error is not shown", staticReviewer{st: &authv1.TokenReviewStatus{Error: "token has expired; issuer x"}}, "unauthorized"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := MiddlewareFor(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				tc.reviewer, "/api/", "test")
+			req := httptest.NewRequest(http.MethodGet, "/api/x", nil)
+			req.Header.Set("Authorization", "Bearer t")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			if tc.want == "unauthorized" {
+				assert.Equal(t, "unauthorized\n", rec.Body.String())
+			} else {
+				assert.True(t, strings.HasPrefix(rec.Body.String(), tc.want), rec.Body.String())
+			}
+		})
+	}
 }

@@ -413,7 +413,8 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 // Pod's default ServiceAccount token (a TokenRequest without an audience, as
 // the kubelet mounts) gets 401 from both APIs, although its ServiceAccount
 // holds the promoter role, and the same ServiceAccount's token for
-// kardinal-promoter still creates Bundles and reads the UI.
+// kardinal-promoter still creates Bundles and reads the UI. Each 401 names
+// its rule: the UI refuses a ServiceAccount, the Bundle API the audience.
 //
 // Covers TOKENREVIEW-AUD-02.
 func TestUI_APIServerAudienceOptInStaysOnUI(t *testing.T) {
@@ -468,10 +469,17 @@ func TestUI_APIServerAudienceOptInStaysOnUI(t *testing.T) {
 		return true, ""
 	})
 
+	// Both 401, for different rules: the UI opted in, so it refuses the
+	// token as a ServiceAccount's; the Bundle API did not, so the UI's
+	// opt-in does not reach it and it refuses the audience.
 	r := framework.UIClient{BaseURL: v.UIURL, Token: podToken.Status.Token}.Get(t, uiAPI+"/pipelines")
 	assert.Equal(t, http.StatusUnauthorized, r.Status, "a Pod's default token on the UI, with the UI's opt-in: %s", r)
+	assert.Contains(t, r.Body, "a ServiceAccount token for the API server's audience is refused",
+		"the UI accepts the API server's audience and refuses the ServiceAccount: %s", r)
 	code, body := postBundle(t, v.URL, podToken.Status.Token, ns)
 	assert.Equal(t, http.StatusUnauthorized, code, "a Pod's default token on the Bundle API, with only the UI's opt-in: %s", body)
+	assert.Contains(t, body, "this API does not accept the API server's audience",
+		"the Bundle API refuses the audience itself: the UI's opt-in does not reach it: %s", body)
 
 	r = framework.UIClient{BaseURL: v.UIURL, Token: promoter.token}.Get(t, uiAPI+"/pipelines")
 	assert.Equal(t, http.StatusOK, r.Status, "the kardinal-promoter token on the UI: %s", r)
