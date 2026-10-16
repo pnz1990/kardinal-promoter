@@ -17,6 +17,7 @@ package promotionreceipt
 
 import (
 	"context"
+	"crypto"
 	"errors"
 	"fmt"
 	"io"
@@ -34,13 +35,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
@@ -346,4 +350,90 @@ func TestReconcile_OCIAllowedRepositories(t *testing.T) {
 	assert.False(t, (&OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}).allowed("ghcr.io/acme-evil/app"), "a path prefix, not a string prefix")
 	assert.True(t, (&OCISink{Repository: "ghcr.io/acme/receipts", AllowedRepositories: []string{"x/"}}).allowed("anything"),
 		"a fixed repository is the admin's own")
+}
+
+// findingSCM is a commentSCM that can search its PR's comments.
+type findingSCM struct {
+	commentSCM
+	searches int
+}
+
+func (f *findingSCM) HasPRComment(_ context.Context, _ string, _ int, marker string) (bool, error) {
+	f.searches++
+	for _, c := range f.comments {
+		if strings.Contains(c, marker) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// TestReconcile_OnceDespiteConflicts: the status write after a signature,
+// and the one after the PR comment, each meet a conflict once. The
+// reconciler re-reads the receipt and records what it did: one signature
+// (one certificate, one Rekor entry), one comment. A comment whose status
+// write never landed is found by the search before posting, and is not
+// posted again.
+//
+// Covers RECEIPT-SIGN-05, RECEIPT-PR-03.
+func TestReconcile_OnceDespiteConflicts(t *testing.T) {
+	secret, pub := keySecret(t)
+	conflicts := map[string]bool{}
+	inner := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+		WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+		WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+			patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			rc := obj.(*v1alpha1.PromotionReceipt)
+			stage := "sign"
+			if rc.Status.PRComment {
+				stage = "comment"
+			}
+			if !conflicts[stage] {
+				conflicts[stage] = true
+				// Someone else's write lands first.
+				var cur v1alpha1.PromotionReceipt
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rc), &cur))
+				cur.Annotations = map[string]string{"touched": stage}
+				require.NoError(t, c.Update(ctx, &cur))
+				return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "promotionreceipts"}, rc.Name,
+					errors.New("the object has been modified"))
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		}}).Build()
+	signs := 0
+	key := SecretKey(inner, "kardinal-system", "receipt-key", "cosign.key")
+	s := &findingSCM{}
+	r := &Reconciler{Client: inner, SCM: s, NowFn: func() time.Time { return now },
+		Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+			signs++
+			return key(ctx)
+		}}}
+	// Reconciled as the controller does: an error is requeued.
+	run := func(times int) *v1alpha1.PromotionReceipt {
+		key := types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}
+		for i := 0; i < times; i++ {
+			_, _ = r.Reconcile(context.Background(), ctrlruntime.Request{NamespacedName: key})
+		}
+		var rc v1alpha1.PromotionReceipt
+		require.NoError(t, inner.Get(context.Background(), key, &rc))
+		return &rc
+	}
+	rc := run(6)
+	assert.True(t, conflicts["sign"] && conflicts["comment"], "both writes met a conflict")
+	assert.Equal(t, 1, signs, "signed once")
+	assert.Len(t, s.comments, 1, "commented once")
+	assert.Contains(t, s.comments[0], CommentMarker(rc))
+	assert.True(t, rc.Status.PRComment)
+	_, err := receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+	require.NoError(t, err)
+
+	// The comment was posted but its status write was lost: the search
+	// finds it and nothing is posted.
+	base := rc.DeepCopy()
+	rc.Status.PRComment = false
+	require.NoError(t, inner.Status().Patch(context.Background(), rc, client.MergeFrom(base)))
+	rc = run(2)
+	assert.Len(t, s.comments, 1, "not posted again")
+	assert.True(t, rc.Status.PRComment)
+	assert.Contains(t, conditionOf(rc, ConditionPRCommented).Message, "already has the receipt's comment")
 }

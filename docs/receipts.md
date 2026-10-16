@@ -142,6 +142,10 @@ checkout-1-5-0-prod   checkout   prod   checkout-1-5-0   Stored   2m
   (every sink holds it), `Failed` (its statement does not match `spec.statementDigest`: it was
   changed, and is never signed).
 - **Conditions**: `Signed`, `Stored` and `PRCommented`, with reasons naming a failing sink.
+- **Signed once**: a status write that meets a conflict after signing re-reads the receipt and
+  records the same signature, rather than signing again (a second certificate and, with Rekor,
+  a second log entry). A controller that crashes between signing and its status write signs
+  again on restart: both signatures verify.
 - **No owner**: a receipt outlives its Bundle, the Graph and the step. Deleting a Bundle does
   not delete its receipts. kardinal keeps every receipt unless you set
   `receipts.retention.maxAge` (for example `8760h`): the leader then deletes the receipts
@@ -192,7 +196,11 @@ It checks, and exits non-zero when any check fails:
   "Promotion receipt: `checkout-1-5-0-prod`, signed by …, stored in …. Verify: `kardinal
   verify-receipt checkout prod --bundle checkout-1-5-0`". The receipt records the PR too, so
   the two point at each other. A comment that keeps failing is given up after 10 attempts
-  (condition `PRCommented=False`, reason `GaveUp`).
+  (condition `PRCommented=False`, reason `GaveUp`). The comment ends with a hidden marker,
+  `<!-- kardinal-receipt:<namespace>/<receipt> -->`: on GitHub, GitLab and Forgejo/Gitea the
+  controller searches the PR for it before posting, so a post whose status write was lost (a
+  crash) is not posted again. On Bitbucket and Azure DevOps, which kardinal does not search,
+  such a crash can post a second comment.
 - **`kardinal history`** adds a RECEIPT column once a promotion has one: "verified" when it is
   signed.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to

@@ -27,6 +27,7 @@ package promotionreceipt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -206,16 +207,26 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 		return r.retry(ctx, base, rc, now)
 	}
 	at := metav1.NewTime(now.UTC())
-	rc.Status.Bundle, rc.Status.SignedBy, rc.Status.Phase = string(signed.Bundle), &signed.SignedBy, v1alpha1.ReceiptSigned
-	rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{Sink: v1alpha1.ReceiptSinkCRD, At: at})
-	if signed.LogIndex != nil {
-		rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{
-			Sink: v1alpha1.ReceiptSinkRekor, LogIndex: signed.LogIndex, URL: r.Signer.RekorURL, At: at})
+	record := func(rc *v1alpha1.PromotionReceipt) bool {
+		if rc.Status.Bundle != "" {
+			return false // signed meanwhile: that signature stands
+		}
+		rc.Status.Bundle, rc.Status.SignedBy, rc.Status.Phase = string(signed.Bundle), &signed.SignedBy, v1alpha1.ReceiptSigned
+		rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{Sink: v1alpha1.ReceiptSinkCRD, At: at})
+		if signed.LogIndex != nil {
+			rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{
+				Sink: v1alpha1.ReceiptSinkRekor, LogIndex: signed.LogIndex, URL: r.Signer.RekorURL, At: at})
+		}
+		rc.Status.Attempts, rc.Status.NextRetryAt = 0, nil
+		setCondition(rc, ConditionSigned, metav1.ConditionTrue, "Signed", "signed by "+signerText(&signed.SignedBy), now)
+		return true
 	}
-	rc.Status.Attempts, rc.Status.NextRetryAt = 0, nil
-	setCondition(rc, ConditionSigned, metav1.ConditionTrue, "Signed", "signed by "+signerText(&signed.SignedBy), now)
+	record(rc)
 	zerolog.Ctx(ctx).Info().Str("receipt", rc.Name).Str("mode", signed.SignedBy.Mode).Msg("promotion receipt signed")
-	return ctrlruntime.Result{Requeue: true}, r.patch(ctx, base, rc)
+	// A conflict re-applies this signature to the stored receipt instead of
+	// signing again: a second signature would be a second certificate and,
+	// with Rekor, a second public log entry.
+	return ctrlruntime.Result{Requeue: true}, r.patchKeeping(ctx, base, rc, record)
 }
 
 // ociStored reports whether every image subject of rc has its referrer.
@@ -326,9 +337,21 @@ func (r *Reconciler) sinkFailed(ctx context.Context, base, rc *v1alpha1.Promotio
 func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, now time.Time) (ctrlruntime.Result, error) {
 	pr := rc.Spec.PullRequest
 	provider, err := r.scmFor(ctx, rc)
+	found := false
 	if err == nil {
 		sctx, cancel := context.WithTimeout(ctx, sinkTimeout)
-		err = provider.CommentOnPR(sctx, pr.Repo, pr.Number, CommentBody(rc))
+		// Search before posting: a post whose status write did not land (a
+		// crash, a conflict) is not posted again. A provider that cannot
+		// search is posted to, and its status write is retried on a conflict.
+		if f, ok := provider.(scm.PRCommentFinder); ok {
+			found, err = f.HasPRComment(sctx, pr.Repo, pr.Number, CommentMarker(rc))
+			if errors.Is(err, scm.ErrCommentSearchUnsupported) {
+				err = nil
+			}
+		}
+		if err == nil && !found {
+			err = provider.CommentOnPR(sctx, pr.Repo, pr.Number, CommentBody(rc))
+		}
 		cancel()
 	}
 	if err != nil {
@@ -343,9 +366,44 @@ func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionRe
 		setCondition(rc, ConditionPRCommented, metav1.ConditionFalse, "CommentFailed", err.Error(), now)
 		return r.retry(ctx, base, rc, now)
 	}
-	rc.Status.PRComment, rc.Status.Attempts, rc.Status.NextRetryAt = true, 0, nil
-	setCondition(rc, ConditionPRCommented, metav1.ConditionTrue, "Commented", fmt.Sprintf("commented on PR #%d", pr.Number), now)
-	return ctrlruntime.Result{}, r.patch(ctx, base, rc)
+	msg := fmt.Sprintf("commented on PR #%d", pr.Number)
+	if found {
+		msg = fmt.Sprintf("PR #%d already has the receipt's comment", pr.Number)
+	}
+	commented := func(rc *v1alpha1.PromotionReceipt) bool {
+		if rc.Status.PRComment {
+			return false
+		}
+		rc.Status.PRComment, rc.Status.Attempts, rc.Status.NextRetryAt = true, 0, nil
+		setCondition(rc, ConditionPRCommented, metav1.ConditionTrue, "Commented", msg, now)
+		return true
+	}
+	commented(rc)
+	return ctrlruntime.Result{}, r.patchKeeping(ctx, base, rc, commented)
+}
+
+// patchKeeping patches rc's status like patch, and on a conflict re-reads
+// the receipt and re-applies apply to it, so what an external call just did
+// (a signature, a PR comment) is recorded rather than done again. apply
+// returns false when the stored receipt already has it.
+func (r *Reconciler) patchKeeping(ctx context.Context, base, rc *v1alpha1.PromotionReceipt,
+	apply func(*v1alpha1.PromotionReceipt) bool) error {
+	err := r.patch(ctx, base, rc)
+	for i := 0; i < 5 && apierrors.IsConflict(err); i++ {
+		var cur v1alpha1.PromotionReceipt
+		if gerr := r.Get(ctx, ctrl.ObjectKeyFromObject(rc), &cur); gerr != nil {
+			if apierrors.IsNotFound(gerr) {
+				return nil
+			}
+			return fmt.Errorf("re-read promotion receipt %s: %w", rc.Name, gerr)
+		}
+		curBase := cur.DeepCopy()
+		if !apply(&cur) {
+			return nil
+		}
+		err = r.patch(ctx, curBase, &cur)
+	}
+	return err
 }
 
 func (r *Reconciler) scmFor(ctx context.Context, rc *v1alpha1.PromotionReceipt) (scm.SCMProvider, error) {
@@ -366,11 +424,17 @@ func (r *Reconciler) scmFor(ctx context.Context, rc *v1alpha1.PromotionReceipt) 
 	return res.Provider, nil
 }
 
+// CommentMarker is the hidden marker of rc's PR comment, which the search
+// before posting looks for.
+func CommentMarker(rc *v1alpha1.PromotionReceipt) string {
+	return "<!-- kardinal-receipt:" + rc.Namespace + "/" + rc.Name + " -->"
+}
+
 // CommentBody is the PR comment of a signed receipt.
 func CommentBody(rc *v1alpha1.PromotionReceipt) string {
 	pipeline, env, bundle := rc.Labels["kardinal.io/pipeline"], rc.Labels["kardinal.io/environment"], rc.Labels["kardinal.io/bundle"]
-	return fmt.Sprintf("Promotion receipt: `%s`, signed by %s, stored in %s.\n\nVerify: `kardinal verify-receipt %s %s --bundle %s`",
-		rc.Name, signerText(rc.Status.SignedBy), sinks(rc), pipeline, env, bundle)
+	return fmt.Sprintf("Promotion receipt: `%s`, signed by %s, stored in %s.\n\nVerify: `kardinal verify-receipt %s %s --bundle %s`\n\n%s",
+		rc.Name, signerText(rc.Status.SignedBy), sinks(rc), pipeline, env, bundle, CommentMarker(rc))
 }
 
 func signerText(s *v1alpha1.ReceiptSigner) string {
