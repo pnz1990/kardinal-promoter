@@ -307,7 +307,7 @@
             "type": "string"
           },
           "commitTime": {
-            "description": "CommitTime is when the source commit (CommitSHA) was made, for CI to set (`kardinal create bundle --commit-time`). The lead time metrics (status.metrics.commitToProductionMinutes, the Pipeline's deploymentMetrics) start at it; without it they start at the Bundle's creation, which leaves out the build.",
+            "description": "CommitTime is when the source commit (CommitSHA) was made, for CI to set (`kardinal create bundle --commit-time`). The lead time metrics (status.metrics.commitToProductionMinutes, the Pipeline's deploymentMetrics) start at it; without it they start at the Bundle's creation, which leaves out the build. The Bundle API and the CLI refuse a zero time, one more than 5 minutes in the future and one more than a year old; a time after the Bundle's creation or more than a year before it is ignored.",
             "format": "date-time",
             "type": [
               "string",
@@ -1050,7 +1050,7 @@
             "type": "integer"
           },
           "leadTimeFromCommit": {
-            "description": "LeadTimeFromCommit is how many of the sampled Bundles' lead times start at spec.provenance.commitTime; the others start at the Bundle's creation. Rollback Bundles always start at their creation.",
+            "description": "LeadTimeFromCommit is how many of the sampled Bundles' lead times start at spec.provenance.commitTime; the others start at the Bundle's creation. Rollback Bundles have no lead time and are not counted.",
             "format": "int32",
             "type": "integer"
           },
@@ -1065,7 +1065,7 @@
             "type": "integer"
           },
           "p50CommitToProdMinutes": {
-            "description": "P50CommitToProdMinutes is the median time (minutes) from the commit to the final environment reaching Verified, over the sample window. A Bundle's commit time is spec.provenance.commitTime when CI set it; otherwise the Bundle's creation, which leaves out the build (LeadTimeFromCommit counts the Bundles measured from the commit).",
+            "description": "P50CommitToProdMinutes is the median time (minutes) from the commit to the final environment reaching Verified, over the sample window. A Bundle's commit time is spec.provenance.commitTime when CI set it; otherwise the Bundle's creation, which leaves out the build (LeadTimeFromCommit counts the Bundles measured from the commit). Rollback Bundles are left out: they restore a change, they do not ship one.",
             "format": "int64",
             "type": "integer"
           },

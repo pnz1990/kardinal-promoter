@@ -144,7 +144,9 @@ func TestRenderFromCRD_LeadTimeAndRollbacks(t *testing.T) {
 	}{
 		{0, "(from Bundle creation)"},
 		{4, "(from the commit)"},
-		{1, "(from the commit for 1, Bundle creation for 3)"},
+		// The sample also counts versions with no lead time (rollbacks), so
+		// the others' count is not known (#1985, QA).
+		{1, "(from the commit for 1, Bundle creation for any others)"},
 	}
 	for _, tc := range tests {
 		var buf bytes.Buffer
@@ -156,4 +158,63 @@ func TestRenderFromCRD_LeadTimeAndRollbacks(t *testing.T) {
 		assert.Equal(t, "0.0%", metricValue(out, "auto_rollback_rate"))
 		assert.Equal(t, "25.0%", metricValue(out, "rollback_rate"))
 	}
+}
+
+// TestRenderFromCRD_OnlyRollbacks: a sample of rollbacks only has no lead
+// time, so the rows read "-" instead of 0 "from Bundle creation".
+func TestRenderFromCRD_OnlyRollbacks(t *testing.T) {
+	var buf bytes.Buffer
+	dm := v1alpha1.PipelineDeploymentMetrics{SampleSize: 2, RollbackRateMillis: 1000}
+	require.NoError(t, renderFromCRD(&buf, "demo", "prod", &dm, time.Now()))
+	out := buf.String()
+	for _, row := range []string{"p50_commit_to_prod", "p90_commit_to_prod"} {
+		assert.Equal(t, "-", metricValue(out, row), row)
+	}
+	assert.Contains(t, out, "(only rollbacks Verified; they have no lead time)")
+}
+
+// TestMetrics_LeadTimeNote (#1985, QA): the computed lead_time_avg counts
+// the versions measured from their commit, and leaves rollbacks out of the
+// samples (a rollback's commit is the restored build's).
+func TestMetrics_LeadTimeNote(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	pipe := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+		Spec:       v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "uat"}, {Name: "prod"}}},
+	}
+	bundle := func(name string, created time.Time, prov *v1alpha1.BundleProvenance) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "demo", Provenance: prov},
+		}
+	}
+	verified := func(bundleName string, at time.Time) *v1alpha1.PromotionStep {
+		s := &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundleName + "-uat", Namespace: "default",
+				Labels: map[string]string{"kardinal.io/pipeline": "demo"}},
+			Spec:   v1alpha1.PromotionStepSpec{PipelineName: "demo", BundleName: bundleName, Environment: "uat"},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		}
+		s.Status.Conditions = []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue,
+			LastTransitionTime: metav1.NewTime(at)}}
+		return s
+	}
+	created := now.Add(-3 * time.Hour)
+	commit := metav1.NewTime(created.Add(-time.Hour))
+	objs := []sigs_client.Object{
+		pipe,
+		// 2h from its commit.
+		bundle("a", created, &v1alpha1.BundleProvenance{CommitTime: &commit}), verified("a", created.Add(time.Hour)),
+		// 1h from creation.
+		bundle("b", created, nil), verified("b", created.Add(time.Hour)),
+		// A rollback: not a sample, though its commit time is set.
+		bundle("rb", created, &v1alpha1.BundleProvenance{RollbackOf: "a", CommitTime: &commit}), verified("rb", created.Add(time.Minute)),
+	}
+	c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(objs...).Build()
+	var buf bytes.Buffer
+	require.NoError(t, metricsFn(&buf, c, "default", "demo", "uat", 1, now))
+	out := buf.String()
+	assert.Equal(t, "1h30m", metricValue(out, "lead_time_avg"))
+	assert.Contains(t, out, "(from the commit for 1, Bundle creation for 1 to uat verified, 2 samples)")
+	assert.Equal(t, "1", metricValue(out, "rollback_count"))
 }

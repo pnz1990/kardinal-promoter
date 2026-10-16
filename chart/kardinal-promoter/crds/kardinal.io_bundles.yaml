@@ -275,7 +275,10 @@ spec:
                       set (`kardinal create bundle --commit-time`). The lead time metrics
                       (status.metrics.commitToProductionMinutes, the Pipeline's
                       deploymentMetrics) start at it; without it they start at the Bundle's
-                      creation, which leaves out the build.
+                      creation, which leaves out the build. The Bundle API and the CLI
+                      refuse a zero time, one more than 5 minutes in the future and one more
+                      than a year old; a time after the Bundle's creation or more than a year
+                      before it is ignored.
                     format: date-time
                     type: string
                   rollbackOf:
