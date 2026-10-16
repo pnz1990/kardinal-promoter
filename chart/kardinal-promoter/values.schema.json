@@ -396,6 +396,9 @@
         },
         "tokenReview": {
           "type": "boolean"
+        },
+        "acceptAPIServerAudience": {
+          "type": "boolean"
         }
       }
     },

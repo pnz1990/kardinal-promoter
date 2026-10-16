@@ -959,6 +959,8 @@ var everyValue = []string{
 	"--set", "ui.auth.allowStaticTokenWithTokenReview=true",
 	"--set", "tokenReview.audiences={kardinal-promoter,ci}",
 	"--set", "tokenReview.acceptAPIServerAudience=true",
+	"--set", "bundleAPI.tokenReview=true",
+	"--set", "bundleAPI.acceptAPIServerAudience=true",
 	"--set", "ui.corsAllowedOrigins={https://a.example.com,https://b.example.com}",
 }
 
@@ -986,19 +988,21 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"policy-namespaces":                     "platform-policies",
-		"scm-provider":                          "gitlab",
-		"scm-api-url":                           "https://gitlab.example.com",
-		"scm-allowed-repositories":              "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
-		"gates-commit-status":                   "false",
-		"health-refresh":                        "false",
-		"health-refresh-namespaces":             "default=team-*,ops=*",
-		"gates-status-context":                  "acme/gates",
-		"ui-tokenreview-auth":                   "true",
-		"cors-allowed-origins":                  "https://a.example.com,https://b.example.com",
-		"ui-auth-static-overrides-tokenreview":  "true",
-		"tokenreview-audiences":                 "kardinal-promoter,ci",
-		"tokenreview-accept-apiserver-audience": "true",
+		"policy-namespaces":                                "platform-policies",
+		"scm-provider":                                     "gitlab",
+		"scm-api-url":                                      "https://gitlab.example.com",
+		"scm-allowed-repositories":                         "gitlab.example.com/acme/*,gitlab.example.com/platform/**",
+		"gates-commit-status":                              "false",
+		"health-refresh":                                   "false",
+		"health-refresh-namespaces":                        "default=team-*,ops=*",
+		"gates-status-context":                             "acme/gates",
+		"ui-tokenreview-auth":                              "true",
+		"cors-allowed-origins":                             "https://a.example.com,https://b.example.com",
+		"ui-auth-static-overrides-tokenreview":             "true",
+		"tokenreview-audiences":                            "kardinal-promoter,ci",
+		"tokenreview-accept-apiserver-audience":            "true",
+		"bundle-api-tokenreview-auth":                      "true",
+		"bundle-api-tokenreview-accept-apiserver-audience": "true",
 	}
 	for k, v := range wantArgs {
 		assert.Equal(t, v, args[k], "--%s", k)

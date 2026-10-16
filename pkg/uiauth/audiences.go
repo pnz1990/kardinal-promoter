@@ -4,11 +4,14 @@
 package uiauth
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+
+	authv1 "k8s.io/api/authentication/v1"
 )
 
 // ServiceAccountTokenPath is where a Pod's ServiceAccount token is mounted.
@@ -70,4 +73,50 @@ func CheckAudiences(audiences, apiServer []string) error {
 		}
 	}
 	return nil
+}
+
+// serviceAccountUserPrefix starts the username of every ServiceAccount
+// token (system:serviceaccount:<namespace>:<name>).
+const serviceAccountUserPrefix = "system:serviceaccount:"
+
+// audiencePolicy is one API's rule over a shared TokenReviewer (#1930).
+type audiencePolicy struct {
+	inner           TokenReviewer
+	audiences       []string
+	acceptAPIServer bool
+}
+
+// RequireAudience applies one API's audience rule to the reviews of inner,
+// which may be shared by several APIs (one cache, one rate limit) and built
+// to accept the API server's audience for any of them. A token is accepted
+// when its review names one of audiences. Any other authenticated token
+// (the API server's audience, or an authenticator that is not
+// audience-aware, such as OIDC) is accepted only when acceptAPIServer is
+// set, and never for a ServiceAccount: a ServiceAccount can always mint a
+// token for kardinal's audience, so its API server token (the one every
+// Pod mounts) is refused. The rule is applied after inner's cache, so a
+// token one API accepts is never accepted by another through it.
+func RequireAudience(inner TokenReviewer, audiences []string, acceptAPIServer bool) TokenReviewer {
+	return &audiencePolicy{inner: inner, audiences: audiences, acceptAPIServer: acceptAPIServer}
+}
+
+func (p *audiencePolicy) Review(ctx context.Context, token string) (*authv1.TokenReviewStatus, error) {
+	st, err := p.inner.Review(ctx, token)
+	if err != nil || st == nil || !st.Authenticated || hasAudience(st.Audiences, p.audiences) {
+		return st, err
+	}
+	want := strings.Join(p.audiences, " or ")
+	if want == "" {
+		want = "an audience of kardinal's"
+	}
+	switch {
+	case !p.acceptAPIServer:
+		return &authv1.TokenReviewStatus{Authenticated: false,
+			Error: fmt.Sprintf("token audience is not %s", want)}, nil
+	case strings.HasPrefix(st.User.Username, serviceAccountUserPrefix):
+		return &authv1.TokenReviewStatus{Authenticated: false,
+			Error: fmt.Sprintf("a ServiceAccount token for the API server's audience is refused: mint one for %s "+
+				"(kubectl create token <sa> --audience %s)", want, DefaultAudience)}, nil
+	}
+	return st, nil
 }

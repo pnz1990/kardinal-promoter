@@ -407,3 +407,74 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 		assert.Contains(t, err.Error(), r.msg, r.name)
 	}
 }
+
+// TestUI_APIServerAudienceOptInStaysOnUI (#1930): with the UI API's opt-in to
+// the API server's audience, which SSO needs, and no Bundle API opt-in, a
+// Pod's default ServiceAccount token (a TokenRequest without an audience, as
+// the kubelet mounts) gets 401 from both APIs, although its ServiceAccount
+// holds the promoter role, and the same ServiceAccount's token for
+// kardinal-promoter still creates Bundles and reads the UI.
+//
+// Covers TOKENREVIEW-AUD-02.
+func TestUI_APIServerAudienceOptInStaysOnUI(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: pipelineName, Namespace: ns},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://git.example/kardinal/" + ns + ".git", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test", Path: fixtures.Path("test"), Approval: "auto",
+				Update: v1alpha1.UpdateConfig{Strategy: "kustomize"}}},
+		}}
+	require.NoError(t, e.Client.Create(ctx, p))
+	// Hold the Bundle the kardinal token creates at its first environment.
+	e.CreateGate(t, framework.Gate(ns, "hold", "test", "false", recheck))
+
+	v := e.ControllerVariant(t, ns, []string{"--ui-tokenreview-auth=true", "--bundle-api-tokenreview-auth=true",
+		"--tokenreview-accept-apiserver-audience=true"})
+	crb := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: v.Name + "-tokenreview"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: tokenReviewClusterRole},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: v.Name, Namespace: framework.ControllerNamespace}},
+	}
+	_, err := e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
+	require.NoError(t, err)
+	waitBoundNamed(t, e, "", crb.Name)
+	t.Cleanup(func() {
+		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
+	})
+	promoter := newRoleUser(t, e, ns, "promoter", framework.ControllerDeployment+"-promoter")
+	podToken, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, promoter.name, &authnv1.TokenRequest{
+		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](600)}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	framework.Eventually(t, time.Minute, "the bindings to take effect", func(ctx context.Context) (bool, string) {
+		for _, c := range []struct {
+			who  string
+			attr authzv1.ResourceAttributes
+		}{
+			{"system:serviceaccount:" + framework.ControllerNamespace + ":" + v.Name, authzv1.ResourceAttributes{Verb: "create", Group: "authentication.k8s.io", Resource: "tokenreviews"}},
+			{promoter.username(), authzv1.ResourceAttributes{Namespace: ns, Verb: "create", Group: "kardinal.io", Resource: "bundles"}},
+		} {
+			sar, err := e.Kube.AuthorizationV1().SubjectAccessReviews().Create(ctx, &authzv1.SubjectAccessReview{
+				Spec: authzv1.SubjectAccessReviewSpec{User: c.who, ResourceAttributes: &c.attr}}, metav1.CreateOptions{})
+			if err != nil {
+				return false, err.Error()
+			}
+			if !sar.Status.Allowed {
+				return false, fmt.Sprintf("%s cannot %s %s", c.who, c.attr.Verb, c.attr.Resource)
+			}
+		}
+		return true, ""
+	})
+
+	r := framework.UIClient{BaseURL: v.UIURL, Token: podToken.Status.Token}.Get(t, uiAPI+"/pipelines")
+	assert.Equal(t, http.StatusUnauthorized, r.Status, "a Pod's default token on the UI, with the UI's opt-in: %s", r)
+	code, body := postBundle(t, v.URL, podToken.Status.Token, ns)
+	assert.Equal(t, http.StatusUnauthorized, code, "a Pod's default token on the Bundle API, with only the UI's opt-in: %s", body)
+
+	r = framework.UIClient{BaseURL: v.UIURL, Token: promoter.token}.Get(t, uiAPI+"/pipelines")
+	assert.Equal(t, http.StatusOK, r.Status, "the kardinal-promoter token on the UI: %s", r)
+	code, body = postBundle(t, v.URL, promoter.token, ns)
+	assert.Equal(t, http.StatusCreated, code, "the kardinal-promoter token on the Bundle API: %s", body)
+}

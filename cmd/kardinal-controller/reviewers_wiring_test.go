@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -55,9 +56,8 @@ func TestReviewers_RateLimitIsWiredAndShared(t *testing.T) {
 	auth, err := buildUIAuth(cfg, uiAuthFlags{tokenReview: true, review: review})
 	require.NoError(t, err)
 	ui := newUIHandler(bundleAPIClient(), nil, nil, auth, "", nil, zerolog.Nop())
-	tokens, access, _, err := newReviewers(cfg, review)
+	tokens, access, _, err := newReviewers(cfg, review, reviewForBundles)
 	require.NoError(t, err)
-	assert.Same(t, auth.tokens, tokens, "one reviewer for both APIs")
 	bundles := newBundleAPIServer(bundleAPIClient(), "", "default")
 	bundles.enableTokenReview(tokens, access)
 
@@ -85,7 +85,7 @@ func TestNewReviewers_RefusesAPIServerAudience(t *testing.T) {
 	_, _, _, err := newReviewers(cfg, reviewOptions{
 		audiences:          []string{uiauth.DefaultAudience, "https://kubernetes.default.svc"},
 		apiServerAudiences: uiauth.APIServerAudiences("/nonexistent"),
-	})
+	}, reviewForUI)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--tokenreview-accept-apiserver-audience")
 }
@@ -136,7 +136,7 @@ func TestReviewers_AccessFloodLeavesOthersAlone(t *testing.T) {
 	auth, err := buildUIAuth(cfg, uiAuthFlags{tokenReview: true, review: review})
 	require.NoError(t, err)
 	ui := newUIHandler(bundleAPIClient(), nil, nil, auth, "", nil, zerolog.Nop())
-	tokens, access, _, err := newReviewers(cfg, review)
+	tokens, access, _, err := newReviewers(cfg, review, reviewForBundles)
 	require.NoError(t, err)
 	bundles := newBundleAPIServer(bundleAPIClient(), "", "default")
 	bundles.enableTokenReview(tokens, access)
@@ -174,4 +174,123 @@ func TestReviewers_AccessFloodLeavesOthersAlone(t *testing.T) {
 	w := httptest.NewRecorder()
 	bundles.Handler()(w, req)
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+}
+
+// fakeAudienceAPI is an API server that authenticates tokens the way the
+// real one does for the three callers of #1930, and allows every
+// SubjectAccessReview:
+//   - "pod-default": a Pod's default ServiceAccount token. It is for the API
+//     server's audience, so only a review without spec.audiences
+//     authenticates it, and the review names that audience.
+//   - "oidc-alice": an OIDC ID token, from an authenticator that is not
+//     audience-aware: a review for kardinal-promoter refuses it, and a
+//     review without spec.audiences authenticates it naming no audience.
+//   - "ci": a ServiceAccount token minted for kardinal-promoter.
+func fakeAudienceAPI(t *testing.T) *rest.Config {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/tokenreviews"):
+			var tr authv1.TokenReview
+			_ = json.NewDecoder(r.Body).Decode(&tr)
+			forAPIServer := len(tr.Spec.Audiences) == 0
+			switch {
+			case tr.Spec.Token == "pod-default" && forAPIServer:
+				tr.Status = authv1.TokenReviewStatus{Authenticated: true, Audiences: []string{"https://kubernetes.default.svc"},
+					User: authv1.UserInfo{Username: "system:serviceaccount:team-a:default",
+						Groups: []string{"system:serviceaccounts", "system:serviceaccounts:team-a", "system:authenticated"}}}
+			case tr.Spec.Token == "oidc-alice" && forAPIServer:
+				tr.Status = authv1.TokenReviewStatus{Authenticated: true,
+					User: authv1.UserInfo{Username: "oidc:alice", Groups: []string{"oidc:release-managers", "system:authenticated"}}}
+			case tr.Spec.Token == "ci" && slices.Contains(tr.Spec.Audiences, uiauth.DefaultAudience):
+				tr.Status = authv1.TokenReviewStatus{Authenticated: true, Audiences: []string{uiauth.DefaultAudience},
+					User: authv1.UserInfo{Username: "system:serviceaccount:team-a:ci"}}
+			}
+			tr.APIVersion, tr.Kind = "authentication.k8s.io/v1", "TokenReview"
+			_ = json.NewEncoder(w).Encode(&tr)
+		case strings.HasSuffix(r.URL.Path, "/subjectaccessreviews"):
+			var sar authzv1.SubjectAccessReview
+			_ = json.NewDecoder(r.Body).Decode(&sar)
+			sar.Status = authzv1.SubjectAccessReviewStatus{Allowed: true}
+			sar.APIVersion, sar.Kind = "authorization.k8s.io/v1", "SubjectAccessReview"
+			_ = json.NewEncoder(w).Encode(&sar)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return &rest.Config{Host: srv.URL, QPS: -1, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}
+}
+
+// TestReviewers_AudienceIsPerAPI (#1930): the UI API's opt-in to the API
+// server's audience, which SSO needs, does not reach the Bundle API, even
+// though both share one TokenReview cache. A Pod's default ServiceAccount
+// token is refused by both, whatever the opt-ins. With the Bundle API's own
+// opt-in, an OIDC token creates Bundles, and the Pod's token still does not.
+//
+// Covers TOKENREVIEW-AUD-02.
+func TestReviewers_AudienceIsPerAPI(t *testing.T) {
+	const bundle = `{"pipeline":"app","namespace":"team-a","type":"image","images":[{"repository":"r","tag":"1"}]}`
+	postBundle := func(h http.HandlerFunc, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/bundles", strings.NewReader(bundle))
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h(w, req)
+		return w
+	}
+	tests := []struct {
+		name        string
+		bundleOptIn bool
+		uiWant      map[string]int
+		bundlesWant map[string]int
+	}{
+		{"SSO on the UI only", false,
+			map[string]int{"oidc-alice": http.StatusOK, "pod-default": http.StatusUnauthorized, "ci": http.StatusOK},
+			map[string]int{"oidc-alice": http.StatusUnauthorized, "pod-default": http.StatusUnauthorized, "ci": http.StatusCreated}},
+		{"the Bundle API opts in too", true,
+			map[string]int{"oidc-alice": http.StatusOK, "pod-default": http.StatusUnauthorized, "ci": http.StatusOK},
+			map[string]int{"oidc-alice": http.StatusCreated, "pod-default": http.StatusUnauthorized, "ci": http.StatusCreated}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := fakeAudienceAPI(t)
+			review := reviewOptions{audiences: []string{uiauth.DefaultAudience}, acceptAPIServer: true,
+				bundleAcceptAPIServer: tt.bundleOptIn, shared: &sharedReviewers{}}
+			auth, err := buildUIAuth(cfg, uiAuthFlags{tokenReview: true, review: review})
+			require.NoError(t, err)
+			ui := newUIHandler(bundleAPIClient(), nil, nil, auth, "", nil, zerolog.Nop())
+			tokens, access, _, err := newReviewers(cfg, review, reviewForBundles)
+			require.NoError(t, err)
+			bundles := newBundleAPIServer(bundleAPIClient(), "", "default")
+			bundles.enableTokenReview(tokens, access)
+
+			// The UI first, so each token's review is in the shared cache
+			// when the Bundle API sees it.
+			for _, tok := range []string{"oidc-alice", "pod-default", "ci"} {
+				rec := uiAuthDo(t, ui, http.MethodGet, "/api/v1/ui/pipelines", "Bearer "+tok, "")
+				assert.Equal(t, tt.uiWant[tok], rec.Code, "UI API, %s: %s", tok, rec.Body.String())
+			}
+			for _, tok := range []string{"oidc-alice", "pod-default", "ci"} {
+				rec := postBundle(bundles.Handler(), tok)
+				assert.Equal(t, tt.bundlesWant[tok], rec.Code, "Bundle API, %s: %s", tok, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestNewReviewers_NoAudienceNeedsThatAPIsOptIn: with no audience
+// configured, an API without its own opt-in to the API server's audience
+// would accept no token; the controller refuses to start and names the
+// API's flag, even when the other API opted in.
+func TestNewReviewers_NoAudienceNeedsThatAPIsOptIn(t *testing.T) {
+	cfg, _ := fakeReviewAPI(t)
+	_, _, _, err := newReviewers(cfg, reviewOptions{acceptAPIServer: true}, reviewForBundles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--bundle-api-tokenreview-accept-apiserver-audience")
+	_, _, _, err = newReviewers(cfg, reviewOptions{bundleAcceptAPIServer: true}, reviewForUI)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--tokenreview-accept-apiserver-audience")
+	_, _, _, err = newReviewers(cfg, reviewOptions{acceptAPIServer: true}, reviewForUI)
+	require.NoError(t, err)
 }

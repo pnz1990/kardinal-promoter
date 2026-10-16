@@ -1127,13 +1127,21 @@ For every `/api/v1/ui/*` request the controller:
    (`--tokenreview-audiences`, default `kardinal-promoter`) and checks that the API server
    returns one of them in `status.audiences`. An invalid token, or one for another audience,
    gets `401`. A token for the `kardinal-promoter` audience is refused by the API server
-   itself, so kardinal cannot replay it there. Kubeconfig tokens and default ServiceAccount
-   tokens are for the API server's audience and are refused unless you opt in with
-   `tokenReview.acceptAPIServerAudience=true` (`--tokenreview-accept-apiserver-audience`).
-   Opt in only if you trust kardinal and every hop to it with tokens that also work against
-   the API server. Putting the API server's own audience in `tokenReview.audiences` is
-   refused at startup (the controller reads it from its own ServiceAccount token), so the
-   opt-in stays explicit.
+   itself, so kardinal cannot replay it there. Kubeconfig tokens and OIDC ID tokens are for
+   the API server's audience and are refused unless you opt in, separately for each API:
+    - the UI API with `tokenReview.acceptAPIServerAudience=true`
+      (`--tokenreview-accept-apiserver-audience`), which [single sign-on](#option-3-single-sign-on-through-an-oidc-proxy)
+      needs;
+    - the Bundle API with `bundleAPI.acceptAPIServerAudience=true`
+      (`--bundle-api-tokenreview-accept-apiserver-audience`). CI does not need it: mint a token
+      for `kardinal-promoter` instead.
+
+   A ServiceAccount token for the API server's audience, the token every Pod mounts, is
+   refused by both APIs even with the opt-in: a ServiceAccount can always mint a token for
+   `kardinal-promoter`. Opt in only if you trust kardinal and every hop to it with tokens that
+   also work against the API server. Putting the API server's own audience in
+   `tokenReview.audiences` is refused at startup (the controller reads it from its own
+   ServiceAccount token), so the opt-in stays explicit.
 2. Checks every object the request reads with a `SubjectAccessReview` for that user, and every
    write either on the object or, for pause, resume and gate approval, on its
    [action subresource](#user-roles). A denied check gets `403` naming the verb, resource and
@@ -1261,6 +1269,8 @@ This is Option 2 with three pieces in front of it, and needs no change to kardin
     The OIDC authenticator is not audience-aware: it authenticates the ID token but returns no
     audience, so the review for `kardinal-promoter` refuses it and only the review for the API
     server's audience accepts it ([Option 2](#option-2-kubernetes-tokens-tokenreview), step 1).
+    The opt-in applies to the UI API only. The Bundle API keeps accepting only tokens for
+    `kardinal-promoter`, and neither API accepts a Pod's default ServiceAccount token.
     `ui.allowedHosts` is needed because the proxy passes the browser's `Host` header
     ([Host names](#host-names-dns-rebinding)).
 

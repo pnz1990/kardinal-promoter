@@ -362,9 +362,18 @@ func main() {
 	var tokenReviewAcceptAPIServer bool
 	flag.BoolVar(&tokenReviewAcceptAPIServer, "tokenreview-accept-apiserver-audience",
 		os.Getenv("KARDINAL_TOKENREVIEW_ACCEPT_APISERVER_AUDIENCE") == "true",
-		"Also accept tokens for the API server's own audience (kubeconfig and default ServiceAccount tokens). "+
-			"Such a token also works against the API server, so kardinal could replay it; off by default. "+
-			"Chart value: tokenReview.acceptAPIServerAudience.")
+		"Also accept tokens for the API server's own audience on the UI API (--ui-tokenreview-auth): kubeconfig "+
+			"tokens and the OIDC ID tokens an SSO proxy forwards. Such a token also works against the API server, so "+
+			"kardinal could replay it; off by default. ServiceAccount tokens for the API server's audience (the one "+
+			"every Pod mounts) are refused even then. The Bundle API has its own switch, "+
+			"--bundle-api-tokenreview-accept-apiserver-audience. Chart value: tokenReview.acceptAPIServerAudience.")
+	var bundleTokenReviewAcceptAPIServer bool
+	flag.BoolVar(&bundleTokenReviewAcceptAPIServer, "bundle-api-tokenreview-accept-apiserver-audience",
+		os.Getenv("KARDINAL_BUNDLE_API_TOKENREVIEW_ACCEPT_APISERVER_AUDIENCE") == "true",
+		"Also accept tokens for the API server's own audience on POST /api/v1/bundles (--bundle-api-tokenreview-auth). "+
+			"Off by default: CI can mint a token for kardinal's audience, and --tokenreview-accept-apiserver-audience "+
+			"(for the UI's SSO) does not apply here. ServiceAccount tokens for the API server's audience are refused "+
+			"even then. Chart value: bundleAPI.acceptAPIServerAudience.")
 	var uiAllowStaticWithTokenReview bool
 	flag.BoolVar(&uiAllowStaticWithTokenReview, "ui-auth-static-overrides-tokenreview", false,
 		"Start even when both --ui-auth-token and --ui-tokenreview-auth are set; the static token then wins and "+
@@ -1156,7 +1165,7 @@ func main() {
 	}
 	bundleAPIToken := bundleToken
 	review := reviewOptions{audiences: splitCSV(tokenReviewAudiences), acceptAPIServer: tokenReviewAcceptAPIServer,
-		apiServerAudiences: uiauth.APIServerAudiences(uiauth.ServiceAccountTokenPath), shared: &sharedReviewers{}}
+		bundleAcceptAPIServer: bundleTokenReviewAcceptAPIServer, apiServerAudiences: uiauth.APIServerAudiences(uiauth.ServiceAccountTokenPath), shared: &sharedReviewers{}}
 	mux := http.NewServeMux()
 	mux.Handle("/webhook/scm", tracing.Handler("webhook.scm", webhookSrv.Handler()))
 	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
@@ -1181,7 +1190,7 @@ func main() {
 		bundleAPI.reader = mgr.GetAPIReader()
 		bundleAPI.actors = actors
 		if bundleTokenReviewAuth {
-			tokens, access, _, err := newReviewers(mgr.GetConfig(), review)
+			tokens, access, _, err := newReviewers(mgr.GetConfig(), review, reviewForBundles)
 			if err != nil {
 				logger.Fatal().Err(err).Msg("bundle API TokenReview auth")
 			}
