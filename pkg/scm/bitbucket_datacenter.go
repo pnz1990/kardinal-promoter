@@ -192,42 +192,11 @@ func (b *BitbucketDCProvider) OpenPR(ctx context.Context, repo, title, body, hea
 		// branch twice, an archived repository); only a duplicate is reused.
 		if apiErr, ok := statusIs(err, http.StatusConflict); ok &&
 			(strings.Contains(apiErr.Body, "DuplicatePullRequestException") || strings.Contains(apiErr.Body, "existingPullRequest")) {
-			return b.findExistingPR(ctx, repo, head, base)
+			return b.adoptRefused(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open Bitbucket Data Center PR %s: %w", repo, err)
 	}
 	return pr.webURL(), pr.ID, nil
-}
-
-// findExistingPR finds the open pull request from head into base.
-func (b *BitbucketDCProvider) findExistingPR(ctx context.Context, repo, head, base string) (string, int, error) {
-	path, err := b.prPath(repo)
-	if err != nil {
-		return "", 0, err
-	}
-	start := 0
-	for page := 0; page < maxListPages; page++ {
-		q := url.Values{"state": {"OPEN"}, "direction": {"OUTGOING"}, "at": {"refs/heads/" + head},
-			"limit": {"100"}, "start": {fmt.Sprint(start)}}
-		var res struct {
-			Values        []bbdcPR `json:"values"`
-			IsLastPage    bool     `json:"isLastPage"`
-			NextPageStart int      `json:"nextPageStart"`
-		}
-		if err := b.do(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &res); err != nil {
-			return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
-		}
-		for _, pr := range res.Values {
-			if pr.FromRef.ID == "refs/heads/"+head && pr.ToRef.ID == "refs/heads/"+base {
-				return pr.webURL(), pr.ID, nil
-			}
-		}
-		if res.IsLastPage {
-			break
-		}
-		start = res.NextPageStart
-	}
-	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs: %w", head, base, errNoOpenPR)
 }
 
 // getPR reads one pull request.

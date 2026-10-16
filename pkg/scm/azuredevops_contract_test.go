@@ -536,7 +536,7 @@ func TestAzureDevOpsContract_OpenPRReusesExisting(t *testing.T) {
 		{name: "active PR for the branch is reused", create: duplicate,
 			list: list(adoPullRequest(12, "active", adoBranch, adoWebURL)), wantURL: adoPR12WebURL, wantCalls: 2},
 		{name: "no active PR for the branch", create: duplicate, list: list(),
-			wantErr: "ADO PR already exists for branch kardinal/web-app-v2/prod into main but could not find it in active PRs", wantCalls: 2},
+			wantErr: "the SCM refused to open the PR of kardinal/web-app-v2/prod into main, but no open PR from this repository's branch exists", wantCalls: 2},
 		{name: "other refusal is not a duplicate",
 			create: apiReply{http.StatusBadRequest, adoError("GitPullRequestCannotBeActivated",
 				"TF401398: The pull request cannot be activated because the source and/or the target branch no longer exists, or the requested refs are not branches")},

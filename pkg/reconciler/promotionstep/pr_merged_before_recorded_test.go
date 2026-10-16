@@ -29,17 +29,23 @@ func (nothingToCommitGit) CommitAll(context.Context, string, string, string, str
 // mergedFinderSCM is an SCM that finds a merged PR by its head branch.
 type mergedFinderSCM struct {
 	*mockSCM
-	found *scm.MergedPR
+	found *scm.FoundPR
 	err   error
 	heads []string
+	shas  []string
 	since []time.Time
 }
 
-func (m *mergedFinderSCM) FindMergedPR(_ context.Context, _, head, _ string, since time.Time) (*scm.MergedPR, error) {
+func (m *mergedFinderSCM) FindMergedPR(_ context.Context, _, head, _, headSHA string, since time.Time) (*scm.FoundPR, error) {
 	m.heads = append(m.heads, head)
+	m.shas = append(m.shas, headSHA)
 	m.since = append(m.since, since)
 	return m.found, m.err
 }
+
+// pushedBeforeCrash is the commit the crashed run pushed to the PR branch,
+// which git-push recorded (RecordPushed) before open-pr ran.
+const pushedBeforeCrash = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
 
 // TestPRMergedBeforeTheStepRecordedIt (#2065): the controller crashed after
 // open-pr created the PR and before the step recorded it, and a reviewer
@@ -58,6 +64,7 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 		ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
 		ps.CreationTimestamp.Time = time.Now().Add(-10 * time.Minute).Truncate(time.Second)
 		ps.Status.CurrentStepIndex = 2 // git-commit: the restart has cloned the base branch
+		ps.Status.Outputs = map[string]string{"pushedSHA": pushedBeforeCrash}
 		ps.Spec.PRStatusRef = prs.Name
 		c := newClient(t, ps, prs, makePipeline("p"), makeBundle("b1", "p"))
 		r := &promotionstep.Reconciler{Client: c, SCM: s, GitClient: &nothingToCommitGit{},
@@ -79,7 +86,7 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 	t.Run("its merged PR is adopted and its merge recorded", func(t *testing.T) {
 		// The SCM says PR #7 is merged, as it is.
 		s := &mergedFinderSCM{mockSCM: &mockSCM{merged: true},
-			found: &scm.MergedPR{Number: 7, URL: "https://github.com/test/repo/pull/7", OpenedAt: time.Now().Add(-5 * time.Minute)}}
+			found: &scm.FoundPR{Number: 7, URL: "https://github.com/test/repo/pull/7", HeadSHA: pushedBeforeCrash, OpenedAt: time.Now().Add(-5 * time.Minute)}}
 		c, r, ps := setup(t, s)
 		reconcileStep(t, r, "step")
 
@@ -92,6 +99,7 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 		require.Len(t, s.heads, 1)
 		assert.Contains(t, s.heads[0], "/b1/prod", "looked up by the step's own head branch")
 		assert.Equal(t, ps.CreationTimestamp.Add(-time.Minute), s.since[0], "only PRs this promotion could have opened")
+		assert.Equal(t, pushedBeforeCrash, s.shas[0], "only a PR with the commit the crashed run pushed")
 		var prs v1alpha1.PRStatus
 		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "prs-step"}, &prs))
 		assert.Equal(t, 7, prs.Spec.PRNumber, "the PRStatus polls the adopted PR")
@@ -134,4 +142,50 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 		assert.Contains(t, got.Status.Message, "looking up a merged PR of")
 		assert.Contains(t, got.Status.Message, "retrying")
 	})
+}
+
+// pushedHeadGit is a git client that reports the commit it pushed.
+type pushedHeadGit struct{ mockGit }
+
+func (pushedHeadGit) HeadCommit(context.Context, string) (string, error) {
+	return pushedBeforeCrash, nil
+}
+
+// storedPushSCM checks, when open-pr creates the PR, that the step's stored
+// status already names the commit git-push pushed.
+type storedPushSCM struct {
+	*mockSCM
+	t      *testing.T
+	c      client.Client
+	stored []string
+}
+
+func (s *storedPushSCM) OpenPR(ctx context.Context, repo, title, body, head, base string) (string, int, error) {
+	var ps v1alpha1.PromotionStep
+	require.NoError(s.t, s.c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "step"}, &ps))
+	s.stored = append(s.stored, ps.Status.Outputs["pushedSHA"])
+	return s.mockSCM.OpenPR(ctx, repo, title, body, head, base)
+}
+
+// TestPushedCommitStoredBeforeOpenPR (#2075 QA): git-push writes the commit
+// it pushed to the PR branch (pushedSHA) to the PromotionStep's status
+// before open-pr creates the PR. Every PR kardinal opens then has a
+// recorded commit, also when the controller dies right after the create, so
+// a restarted step can tell its own PR (that head commit) from anyone
+// else's.
+func TestPushedCommitStoredBeforeOpenPR(t *testing.T) {
+	prs := stepPRStatus(v1alpha1.PRStatusSpec{}, 1, 1, v1alpha1.PRStatusStatus{})
+	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
+	ps.Status.CurrentStepIndex = 3 // git-push
+	ps.Spec.PRStatusRef = prs.Name
+	c := newClient(t, ps, prs, makePipeline("p"), makeBundle("b1", "p"))
+	s := &storedPushSCM{mockSCM: &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/9", prNumber: 9}, t: t, c: c}
+	r := &promotionstep.Reconciler{Client: c, SCM: s, GitClient: &pushedHeadGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, "step")
+
+	require.Equal(t, []string{pushedBeforeCrash}, s.stored, "the pushed commit is stored when the PR is created")
+	got := getStep(t, c, "step")
+	assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, pushedBeforeCrash, got.Status.Outputs["pushedSHA"])
 }

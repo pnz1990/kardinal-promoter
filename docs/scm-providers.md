@@ -39,8 +39,24 @@ PRs by their `[kardinal] Rollback` title instead.
 Before it opens a PR, kardinal looks for an open PR from its branch into the target branch
 and adopts it, on every provider. It never relies on the SCM refusing a second one:
 Bitbucket Cloud updates the existing PR instead, which would overwrite its title and
-description. A PR that another run opens between the lookup and the create is still adopted
-when the SCM refuses the duplicate.
+description.
+
+Only kardinal's own PR is adopted. It must come from the repository's own branch: a fork's
+branch of the same name never matches. Each SCM's source-repository field is checked:
+
+| Provider | Field checked |
+|---|---|
+| GitHub | `head.repo` |
+| GitLab | `source_project_id` |
+| Forgejo / Gitea | `head.repo_id` |
+| Bitbucket Cloud | `source.repository` |
+| Bitbucket Data Center | `fromRef.repository` |
+| Azure DevOps | no `forkSource` |
+
+Its head commit must also be the one kardinal pushed. An open PR of the branch with another
+head commit fails the step loudly instead of being adopted. A PR that another run opens between
+the lookup and the create is still adopted, from the repository's own branch only, when the SCM
+refuses the duplicate.
 
 SCM webhooks are delivered to `POST /webhook/scm` on the webhook port (`8083`). Without
 `--webhook-secret` the endpoint rejects every event with `401`, and merges are detected by

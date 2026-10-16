@@ -1119,6 +1119,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 	state := r.stepState(ctx, log, ps, pipeline, env, bundle, seq, workDir, cred, provider)
 	state.BeforePush = r.pushGuard(ps, base, state)
+	state.RecordPushed = r.recordPushed(ps, base, state)
 
 	prevIdx := ps.Status.CurrentStepIndex
 	// An auto promotion pushing to its base branch waits for the branch's

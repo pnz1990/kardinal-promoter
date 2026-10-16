@@ -1347,22 +1347,32 @@ func TestUpdateStepTypeInSequence(t *testing.T) {
 	}
 }
 
-// finderSCM is mockSCMProvider that finds a merged PR by its head branch.
+// finderSCM is mockSCMProvider that finds an open and a merged PR by their
+// head branch.
 type finderSCM struct {
 	*mockSCMProvider
-	pr  *scm.MergedPR
-	err error
+	open, merged *scm.FoundPR
+	err          error
+	mergedSHA    []string // the headSHA of every FindMergedPR call
 }
 
-func (f *finderSCM) FindMergedPR(context.Context, string, string, string, time.Time) (*scm.MergedPR, error) {
-	return f.pr, f.err
+func (f *finderSCM) FindOpenPR(context.Context, string, string, string) (*scm.FoundPR, error) {
+	return f.open, f.err
 }
+
+func (f *finderSCM) FindMergedPR(_ context.Context, _, _, _, headSHA string, _ time.Time) (*scm.FoundPR, error) {
+	f.mergedSHA = append(f.mergedSHA, headSHA)
+	return f.merged, f.err
+}
+
+const testPushed = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
 
 // TestOpenPR_NothingToCommit (#2065): a PR-opening step whose git-commit
 // found nothing to commit records the PR this promotion opened, the one in
-// its outputs or the merged one of its head branch, instead of no changes;
-// it opens no second PR. A permanent lookup error fails the step; none of
-// them is taken as "no PR".
+// its outputs or the merged one of its own branch whose head is the commit
+// it pushed (pushedSHA), instead of no changes; it opens no second PR.
+// Without a recorded push nothing is adopted. A permanent lookup error
+// fails the step; none of them is taken as "no PR".
 func TestOpenPR_NothingToCommit(t *testing.T) {
 	step, err := parentsteps.Lookup("open-pr")
 	require.NoError(t, err)
@@ -1382,22 +1392,82 @@ func TestOpenPR_NothingToCommit(t *testing.T) {
 		assert.Equal(t, "false", res.Outputs["noChanges"], "its PR brought the change")
 		assert.Zero(t, m.openPRCalls)
 	})
-	t.Run("its merged PR, found by its head branch", func(t *testing.T) {
-		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, pr: &scm.MergedPR{Number: 6, URL: "https://github.com/owner/repo/pull/6"}}
-		res := run(t, m, map[string]string{"noChanges": "true"})
+	t.Run("its merged PR, with the pushed commit", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{},
+			merged: &scm.FoundPR{Number: 6, URL: "https://github.com/owner/repo/pull/6", HeadSHA: testPushed}}
+		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
 		assert.Equal(t, parentsteps.StepSuccess, res.Status)
 		assert.Equal(t, map[string]string{"prURL": "https://github.com/owner/repo/pull/6", "prNumber": "6", "noChanges": "false"}, res.Outputs)
+		assert.Equal(t, []string{testPushed}, m.mergedSHA, "only a PR with the commit kardinal pushed")
 		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("no recorded push: nothing is adopted", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, merged: &scm.FoundPR{Number: 6, HeadSHA: testPushed}}
+		res := run(t, m, map[string]string{"noChanges": "true"})
+		assert.Equal(t, parentsteps.StepSuccess, res.Status)
+		assert.Empty(t, res.Outputs["prNumber"])
+		assert.Empty(t, m.mergedSHA, "no lookup without a commit to compare")
 	})
 	t.Run("a permanent lookup error fails", func(t *testing.T) {
 		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, err: &scm.APIError{Provider: "GitHub", StatusCode: http.StatusForbidden}}
-		res := run(t, m, map[string]string{"noChanges": "true"})
+		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
 		assert.Equal(t, parentsteps.StepFailed, res.Status)
 		assert.Contains(t, res.Message, "HTTP 403")
 	})
 	t.Run("an SCM that cannot look up keeps no changes", func(t *testing.T) {
-		res := run(t, &mockSCMProvider{}, map[string]string{"noChanges": "true"})
+		res := run(t, &mockSCMProvider{}, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
 		assert.Equal(t, parentsteps.StepSuccess, res.Status)
 		assert.Empty(t, res.Outputs["prNumber"])
+	})
+}
+
+// TestOpenPR_AdoptsOnlyItsOwnOpenPR (#2075 QA): open-pr adopts the open PR
+// of its branch only when its head is the commit git-push pushed. Another
+// head commit (someone pushed to kardinal's branch) is not adopted and fails
+// the step, retryably, without a create that the SCM's refused duplicate
+// would adopt. Without a recorded push there is no lookup: open-pr opens
+// its PR as before.
+func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+	run := func(t *testing.T, s scm.SCMProvider, outputs map[string]string) (parentsteps.StepResult, error) {
+		t.Helper()
+		state := makeState(t, &mockGitClient{}, &mockSCMProvider{})
+		state.SCM = s
+		state.Environment.Approval = "pr-review"
+		state.Outputs = outputs
+		return step.Execute(context.Background(), state)
+	}
+	t.Run("the pushed commit: adopted", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5", HeadSHA: testPushed[:12]}}
+		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed})
+		require.NoError(t, err)
+		assert.Equal(t, "5", res.Outputs["prNumber"])
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("another head commit: not adopted, no create, retried", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5", HeadSHA: "deadbeefcafe"}}
+		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed})
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, parentsteps.ErrPermanent, "retried")
+		assert.Equal(t, parentsteps.StepFailed, res.Status)
+		assert.Contains(t, res.Message, "is not "+testPushed+", the commit kardinal pushed")
+		assert.Empty(t, res.Outputs["prNumber"])
+		assert.Zero(t, m.openPRCalls, "no create: its refused duplicate would adopt that PR")
+	})
+	t.Run("no PR: opened", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/7", prNumber: 7}}
+		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed})
+		require.NoError(t, err)
+		assert.Equal(t, "7", res.Outputs["prNumber"])
+		assert.Equal(t, 1, m.openPRCalls)
+	})
+	t.Run("no recorded push: no lookup, opened", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/7", prNumber: 7},
+			open: &scm.FoundPR{Number: 5, HeadSHA: testPushed}}
+		res, err := run(t, m, map[string]string{})
+		require.NoError(t, err)
+		assert.Equal(t, "7", res.Outputs["prNumber"])
+		assert.Equal(t, 1, m.openPRCalls)
 	})
 }

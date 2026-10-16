@@ -512,7 +512,8 @@ func TestAzureDevOpsProvider_PRURL(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				pr := map[string]interface{}{"pullRequestId": 7, "repository": map[string]string{"webUrl": tc.webURL}}
+				pr := map[string]interface{}{"pullRequestId": 7, "status": "active", "repository": map[string]string{"webUrl": tc.webURL},
+					"sourceRefName": "refs/heads/kardinal/b/prod", "targetRefName": "refs/heads/main"}
 				switch {
 				case r.Method == http.MethodPost && tc.exists:
 					w.WriteHeader(http.StatusConflict)
@@ -640,7 +641,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				_, _ = w.Write([]byte(`[]`))
 				return
 			}
-			_, _ = w.Write([]byte(`[{"number":3,"html_url":"https://github.com/o/r/pull/3","head":{"ref":"kardinal/b/prod"},"base":{"ref":"main"}}]`))
+			_, _ = w.Write([]byte(`[{"number":3,"html_url":"https://github.com/o/r/pull/3","head":{"ref":"kardinal/b/prod","repo":{"full_name":"o/r"}},"base":{"ref":"main"}}]`))
 		}))
 		defer srv.Close()
 		u, n, err := scm.NewGitHubProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
@@ -659,7 +660,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				_, _ = w.Write([]byte(`[]`))
 				return
 			}
-			_, _ = w.Write([]byte(`[{"iid":4,"web_url":"https://gitlab.com/g/p/-/merge_requests/4","source_branch":"kardinal/b/prod","target_branch":"main"}]`))
+			_, _ = w.Write([]byte(`[{"iid":4,"web_url":"https://gitlab.com/g/p/-/merge_requests/4","state":"opened","source_branch":"kardinal/b/prod","target_branch":"main","source_project_id":1,"target_project_id":1}]`))
 		}))
 		defer srv.Close()
 		_, n, err := scm.NewGitLabProvider("t", srv.URL, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main")
@@ -677,7 +678,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				_, _ = w.Write([]byte(`{"values":[]}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"values":[{"id":5,"source":{"branch":{"name":"kardinal/b/prod"}},"destination":{"branch":{"name":"main"}},` +
+			_, _ = w.Write([]byte(`{"values":[{"id":5,"state":"OPEN","source":{"branch":{"name":"kardinal/b/prod"},"repository":{"full_name":"ws/r"}},"destination":{"branch":{"name":"main"},"repository":{"full_name":"ws/r"}},` +
 				`"links":{"html":{"href":"https://bitbucket.org/ws/r/pull-requests/5"}}}]}`))
 		}))
 		defer srv.Close()
@@ -715,7 +716,8 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 					prs = append(prs, map[string]interface{}{"number": 100 + i, "head": map[string]string{"ref": fmt.Sprintf("renovate/%d", i)}})
 				}
 			} else {
-				prs = append(prs, map[string]interface{}{"number": 6, "html_url": "https://f.example/o/r/pulls/6", "head": map[string]string{"ref": head, "label": head}, "base": map[string]string{"ref": "main"}})
+				prs = append(prs, map[string]interface{}{"number": 6, "html_url": "https://f.example/o/r/pulls/6", "state": "open",
+					"head": map[string]interface{}{"ref": head, "label": head, "repo_id": 1}, "base": map[string]interface{}{"ref": "main", "repo_id": 1}})
 			}
 			_ = json.NewEncoder(w).Encode(prs)
 		}))
@@ -754,7 +756,7 @@ func TestFindExistingPR_SameBaseOnly(t *testing.T) {
 				var out []map[string]interface{}
 				for _, p := range prs {
 					out = append(out, map[string]interface{}{"number": p[0], "html_url": fmt.Sprintf("https://github.com/o/r/pull/%d", p[0]),
-						"head": map[string]string{"ref": head}, "base": map[string]string{"ref": p[1].(string)}})
+						"head": map[string]interface{}{"ref": head, "repo": map[string]string{"full_name": "o/r"}}, "base": map[string]string{"ref": p[1].(string)}})
 				}
 				_ = json.NewEncoder(w).Encode(out)
 			},
@@ -776,7 +778,7 @@ func TestFindExistingPR_SameBaseOnly(t *testing.T) {
 				var out []map[string]interface{}
 				for _, p := range prs {
 					out = append(out, map[string]interface{}{"iid": p[0], "web_url": fmt.Sprintf("https://gitlab.com/g/p/-/merge_requests/%d", p[0]),
-						"state": "opened", "source_branch": head, "target_branch": p[1]})
+						"state": "opened", "source_branch": head, "target_branch": p[1], "source_project_id": 1, "target_project_id": 1})
 				}
 				_ = json.NewEncoder(w).Encode(out)
 			},
@@ -798,7 +800,8 @@ func TestFindExistingPR_SameBaseOnly(t *testing.T) {
 				var out []map[string]interface{}
 				for _, p := range prs {
 					out = append(out, map[string]interface{}{"number": p[0], "html_url": fmt.Sprintf("https://f.example/o/r/pulls/%d", p[0]),
-						"head": map[string]string{"ref": head, "label": "o:" + head}, "base": map[string]string{"ref": p[1].(string)}})
+						"state": "open", "head": map[string]interface{}{"ref": head, "label": "o:" + head, "repo_id": 1},
+						"base": map[string]interface{}{"ref": p[1].(string), "repo_id": 1}})
 				}
 				_ = json.NewEncoder(w).Encode(out)
 			},

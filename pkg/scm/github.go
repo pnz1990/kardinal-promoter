@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -110,40 +109,11 @@ func (g *GitHubProvider) OpenPR(ctx context.Context, repo, title, body, head, ba
 		// GitHub returns 422 when an open PR from head into base already
 		// exists. In that case, find that PR and return it.
 		if isExistingPRErr(err) {
-			return g.findExistingPR(ctx, repo, head, base)
+			return g.adoptRefused(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open PR %s: %w", repo, err)
 	}
 	return result.HTMLURL, result.Number, nil
-}
-
-// findExistingPR finds the open PR from head into base. GitHub refuses a
-// duplicate only for the same head and base, so an open PR from head into
-// another branch is not the one it refused and must not be reused.
-func (g *GitHubProvider) findExistingPR(ctx context.Context, repo, head, base string) (string, int, error) {
-	var prs []struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		Head    struct {
-			Ref string `json:"ref"`
-		} `json:"head"`
-		Base struct {
-			Ref string `json:"ref"`
-		} `json:"base"`
-	}
-	// Filter on the server by head and base branch: in a busy repository the
-	// PR may not be on the first page of all open PRs (C06-scm-health-15).
-	owner, _, _ := strings.Cut(repo, "/")
-	q := url.Values{"state": {"open"}, "per_page": {"100"}, "head": {owner + ":" + head}, "base": {base}}
-	if err := g.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls?%s", repo, q.Encode()), nil, &prs); err != nil {
-		return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
-	}
-	for _, pr := range prs {
-		if pr.Head.Ref == head && pr.Base.Ref == base {
-			return pr.HTMLURL, pr.Number, nil
-		}
-	}
-	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs: %w", head, base, errNoOpenPR)
 }
 
 // isExistingPRErr returns true when the GitHub API rejected the PR creation with 422

@@ -63,6 +63,8 @@ func openPRState(t *testing.T, gitURL string, p scm.SCMProvider, rollbackOf stri
 	state.SCM = p
 	state.Pipeline.Git.URL = gitURL
 	state.Git.URL = gitURL
+	// git-push ran before open-pr: the commit it pushed to the PR branch.
+	state.Outputs["pushedSHA"] = testPushed
 	if rollbackOf != "" {
 		state.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: rollbackOf, Author: "ci"}
 		state.Bundle.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.28.0"}}

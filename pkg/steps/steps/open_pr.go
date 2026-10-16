@@ -194,20 +194,33 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 }
 
 // openOrAdoptPR returns the open PR of branch into the base branch when
-// there is one, adopted, and otherwise opens it. A step re-run after a
-// crash then adopts the PR it opened without relying on the SCM to refuse a
-// second one (Bitbucket Cloud updates the existing PR instead, overwriting
-// its title and description). The SCM's refusal is still handled, by
-// adopting, for a PR created between the lookup and OpenPR.
+// there is one that is kardinal's, adopted, and otherwise opens it. A step
+// re-run after a crash then adopts the PR it opened without relying on the
+// SCM to refuse a second one (Bitbucket Cloud updates the existing PR
+// instead, overwriting its title and description).
+//
+// Kardinal's PR is one from the repository's own branch (the lookup never
+// returns a fork's PR of a branch with the same name) whose head commit is
+// the one git-push just pushed (status.outputs.pushedSHA). An open PR of
+// the branch with another head commit is not adopted and fails the step,
+// loudly and retried: someone pushed to kardinal's branch, or the SCM has not
+// caught up with the push yet. It is never handed to OpenPR either, whose
+// refused duplicate would adopt it. Without a recorded commit (a git client
+// that cannot read HEAD) nothing is adopted and OpenPR runs, as before.
 func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, bool, error) {
-	if finder, ok := state.SCM.(scm.OpenPRFinder); ok {
-		prURL, prNum, found, err := finder.FindOpenPR(ctx, repo, branch, state.Git.Branch)
+	pushed := state.Outputs[OutputPushedSHA]
+	if finder, ok := state.SCM.(scm.OpenPRFinder); ok && pushed != "" {
+		pr, err := finder.FindOpenPR(ctx, repo, branch, state.Git.Branch)
 		switch {
 		case errors.Is(err, errors.ErrUnsupported):
 		case err != nil:
 			return "", 0, false, fmt.Errorf("look up an open PR of %s: %w", branch, err)
-		case found:
-			return prURL, prNum, true, nil
+		case pr != nil && scm.SameCommit(pr.HeadSHA, pushed):
+			return pr.URL, pr.Number, true, nil
+		case pr != nil:
+			return "", 0, false, fmt.Errorf("PR #%d (%s) is open from kardinal's branch %s, but its head commit %q is not %s, the commit kardinal pushed: "+
+				"it is not adopted; if someone pushed to the branch, close the PR (a retry pushes the branch again)",
+				pr.Number, pr.URL, branch, pr.HeadSHA, pushed)
 		}
 	}
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
@@ -223,11 +236,15 @@ const prClockSkew = time.Minute
 // not, by itself, a promotion without a PR: an earlier run may have opened
 // this promotion's PR (its head branch is deterministic) and a reviewer
 // merged it before the step recorded it, when the controller crashed after
-// open-pr. Such a PR is adopted: its number and URL become the step's
+// open-pr. Such a PR is adopted when it is this promotion's: from the
+// repository's own branch, not a fork's, with the commit the step pushed
+// (pushedSHA) as its head, and opened after the step was created. Its
+// number and URL become the step's
 // outputs, so wait-for-merge hands it to the PRStatus, which records the
 // merge and the SCM-verified merger like any other (the PRMerged
 // AuditEvent, #1939). Without such a PR the step has no changes, as
-// before. A lookup that fails is retried, never taken as "no PR".
+// before. A lookup that fails is retried, never taken as "no PR"; a
+// permanent one (401, 403, 404) fails the step.
 func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch string) (parentsteps.StepResult, error) {
 	noPR := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}
 	finder, ok := state.SCM.(scm.MergedPRFinder)
@@ -238,11 +255,18 @@ func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch str
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
+	// Only a PR whose head is the commit this promotion pushed to its
+	// branch is its own: git-push records it (pushedSHA) before open-pr
+	// runs. Without it there is nothing to compare, and nothing is adopted.
+	pushed := state.Outputs[OutputPushedSHA]
+	if pushed == "" {
+		return noPR, nil
+	}
 	var since time.Time
 	if !state.PromotionCreatedAt.IsZero() {
 		since = state.PromotionCreatedAt.Add(-prClockSkew)
 	}
-	pr, err := finder.FindMergedPR(ctx, repo, branch, state.Git.Branch, since)
+	pr, err := finder.FindMergedPR(ctx, repo, branch, state.Git.Branch, pushed, since)
 	switch {
 	case errors.Is(err, errors.ErrUnsupported):
 		return noPR, nil

@@ -78,7 +78,8 @@ func labelsRefused(t *testing.T, gitURL string, p scm.SCMProvider, calls func() 
 	pl := makePipeline("p")
 	pl.Spec.Git.URL = gitURL
 	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), pl)
-	ps.Status.CurrentStepIndex = 4 // open-pr, then wait-for-merge
+	ps.Status.CurrentStepIndex = 4                                                                 // open-pr, then wait-for-merge
+	ps.Status.Outputs = map[string]string{"pushedSHA": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"} // git-push ran
 	ps.Spec.PRStatusRef = "prs"
 	c := newClient(t, ps, openPRStatus("prs", "", 0), pl, makeBundle("b1", "p"))
 	r := &promotionstep.Reconciler{Client: c, SCM: p, GitClient: &mockGit{},

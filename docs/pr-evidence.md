@@ -361,15 +361,30 @@ top in the meantime, the retry records `noChanges` and the deployment metrics mi
 deployment.
 
 A `pr-review` promotion retried the same way keeps its pull request too. Its PR branch is
-`kardinal/<namespace hash>/<bundle>/<environment>`, so a retry finds the PR an earlier attempt
-opened:
+`kardinal/<namespace hash>/<bundle>/<environment>`, and git-push records the commit it pushed
+there (`status.outputs.pushedSHA`) before open-pr runs, so a retry finds the PR an earlier attempt
+opened. A PR counts as the promotion's own only when it is:
 
-- **Still open:** open-pr adopts it before opening one, and opens no second PR.
+- from that branch of the repository itself, never a fork's branch of the same name (each SCM's
+  source repository or project is checked, not the branch name); and
+- headed by the recorded commit.
+
+What the retry does:
+
+- **Still open:** open-pr adopts it before opening one, and opens no second PR. An open PR of the
+  branch with another head commit (someone pushed to the branch) is not adopted: the step fails
+  with a message naming both commits and is retried. It does not open a PR of its own either,
+  because the SCM would refuse the duplicate. Close that PR, and the retry pushes the branch and
+  opens kardinal's.
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
-  looks up the merged PR of its branch and records the merge as for any PR: the step's outputs
-  name the PR, its merge commit and who merged it (asked of the SCM), and the `PRMerged`
-  AuditEvent is written. Only a PR opened after the PromotionStep was created, less a minute
-  for clock skew, counts, so an earlier Bundle of the same name is not taken for this one.
-- **Neither:** the step records `noChanges`, as before. A lookup that fails is retried; it is
-  never taken as "no PR".
+  looks up the merged PR of its branch, with the recorded commit as its head, and records the
+  merge as for any PR: the step's outputs name the PR, its merge commit and who merged it (asked
+  of the SCM), and the `PRMerged` AuditEvent is written. Only a PR opened after the PromotionStep
+  was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is
+  not taken for this one.
+- **Neither, or no recorded commit:** the step records `noChanges`, as before.
+
+A lookup that fails with a transient error (5xx, a rate limit, a network error) is retried. One
+that fails with a permanent error (401, 403, 404) fails the step with the cause. Neither is
+taken as "no PR".

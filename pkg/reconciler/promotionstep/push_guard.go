@@ -94,7 +94,21 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 	if state.Outputs[outputPushIntent] != "" {
 		return nil
 	}
-	at := r.now().UTC().Format(time.RFC3339Nano)
+	return r.recordOutputs(ctx, ps, base, state, map[string]string{outputPushIntent: r.now().UTC().Format(time.RFC3339Nano)})
+}
+
+// recordPushed is StepState.RecordPushed for ps: git-push's PR-branch
+// commit (pushedSHA, #2065), written like the push intent.
+func (r *Reconciler) recordPushed(ps, base *v1alpha1.PromotionStep, state *steps.StepState) func(context.Context, map[string]string) error {
+	return func(ctx context.Context, outputs map[string]string) error {
+		return r.recordOutputs(ctx, ps, base, state, outputs)
+	}
+}
+
+// recordOutputs writes outputs into status.outputs of ps in a status write
+// of its own, and keeps them in base and state.Outputs so the reconcile's
+// own status write keeps them too.
+func (r *Reconciler) recordOutputs(ctx context.Context, ps, base *v1alpha1.PromotionStep, state *steps.StepState, outputs map[string]string) error {
 	// Locked on the resourceVersion this reconcile read: a copy whose status
 	// is stale fails with a Conflict and the step is retried from a fresh
 	// read, so the write never turns a stale copy into a current one. A
@@ -107,7 +121,9 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 	if written.Status.Outputs == nil {
 		written.Status.Outputs = map[string]string{}
 	}
-	written.Status.Outputs[outputPushIntent] = at
+	for k, v := range outputs {
+		written.Status.Outputs[k] = v
+	}
 	if err := r.patchStatusLocked(ctx, before, written); err != nil {
 		return fmt.Errorf("%w of %s: %w", errPushIntent, ps.Name, err)
 	}
@@ -124,12 +140,16 @@ func (r *Reconciler) recordPushIntent(ctx context.Context, ps, base *v1alpha1.Pr
 		if base.Status.Outputs == nil {
 			base.Status.Outputs = map[string]string{}
 		}
-		base.Status.Outputs[outputPushIntent] = at
+		for k, v := range outputs {
+			base.Status.Outputs[k] = v
+		}
 	}
 	if state.Outputs == nil {
 		state.Outputs = map[string]string{}
 	}
-	state.Outputs[outputPushIntent] = at
+	for k, v := range outputs {
+		state.Outputs[k] = v
+	}
 	return nil
 }
 

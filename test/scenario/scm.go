@@ -278,11 +278,15 @@ func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
 		mergedAt = p.MergedAt.Format(time.RFC3339)
 	}
 	return map[string]interface{}{
-		"created_at": p.OpenedAt.Format(time.RFC3339), "merged_at": mergedAt,
+		"created_at":        p.OpenedAt.Format(time.RFC3339),
+		"source_project_id": 1, "target_project_id": 1, "merged_at": mergedAt,
 		"number": p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
 		"merge_commit_sha": p.MergeSHA, "node_id": fmt.Sprintf("PR_%d", p.Number), "title": p.Title, "body": p.Body,
-		"head":   map[string]interface{}{"ref": p.Head, "label": p.Head, "sha": p.HeadSHA},
-		"base":   map[string]interface{}{"ref": p.Base},
+		// Every PR is from a branch of the repository itself (the fake has
+		// no forks): the head and base name the same repository.
+		"head": map[string]interface{}{"ref": p.Head, "label": p.Head, "sha": p.HeadSHA,
+			"repo_id": 1, "repo": map[string]interface{}{"full_name": p.Repo}},
+		"base":   map[string]interface{}{"ref": p.Base, "repo_id": 1, "repo": map[string]interface{}{"full_name": p.Repo}},
 		"labels": labels, "mergeable": true,
 	}
 }

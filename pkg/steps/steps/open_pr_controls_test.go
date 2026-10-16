@@ -436,7 +436,9 @@ func TestOpenPRControls_BitbucketDC(t *testing.T) {
 
 // TestOpenPR_AdoptsTheOpenPROfItsBranch: open-pr looks for an open PR of its
 // head branch before it opens one, and adopts it without a create, on every
-// provider. A re-run (a controller that crashed after open-pr) does not rely
+// provider, when it is from the repository's own branch with the commit
+// git-push pushed. A fork's PR from a branch of the same name is not adopted
+// (#2075 QA): open-pr opens its own. A re-run (a controller that crashed after open-pr) does not rely
 // on the SCM refusing a second PR: Bitbucket Cloud updates the existing
 // PR's title and description instead of refusing, so a create would
 // overwrite them.
@@ -446,25 +448,37 @@ func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 	const head = "kardinal/nginx-demo-v1-29-0/prod"
 	for _, tc := range []struct {
 		provider, gitURL, list, body, wantURL string
+		// fork turns body into a fork's PR from a branch of the same name.
+		fork func(body string) string
 	}{
 		{"github", "https://github.com/acme/web.git", "GET /repos/acme/web/pulls",
-			`[{"number":5,"html_url":"https://github.com/acme/web/pull/5","head":{"ref":"` + head + `"},"base":{"ref":"main"}}]`,
-			"https://github.com/acme/web/pull/5"},
+			`[{"number":5,"html_url":"https://github.com/acme/web/pull/5","head":{"ref":"` + head + `","sha":"` + testPushed + `","repo":{"full_name":"acme/web"}},"base":{"ref":"main"}}]`,
+			"https://github.com/acme/web/pull/5", func(b string) string {
+				return strings.Replace(b, `"full_name":"acme/web"`, `"full_name":"attacker/web"`, 1)
+			}},
 		{"gitlab", "https://gitlab.com/acme/web.git", "GET /api/v4/projects/acme%2Fweb/merge_requests",
-			`[{"iid":5,"web_url":"https://gitlab.com/acme/web/-/merge_requests/5","source_branch":"` + head + `","target_branch":"main"}]`,
-			"https://gitlab.com/acme/web/-/merge_requests/5"},
+			`[{"iid":5,"web_url":"https://gitlab.com/acme/web/-/merge_requests/5","state":"opened","sha":"` + testPushed + `","source_branch":"` + head + `","target_branch":"main","source_project_id":1,"target_project_id":1}]`,
+			"https://gitlab.com/acme/web/-/merge_requests/5", func(b string) string {
+				return strings.Replace(b, `"source_project_id":1`, `"source_project_id":999`, 1)
+			}},
 		{"forgejo", "https://forgejo.example/acme/web.git", "GET /api/v1/repos/acme/web/pulls",
-			`[{"number":5,"html_url":"https://forgejo.example/acme/web/pulls/5","head":{"ref":"` + head + `"},"base":{"ref":"main"}}]`,
-			"https://forgejo.example/acme/web/pulls/5"},
+			`[{"number":5,"html_url":"https://forgejo.example/acme/web/pulls/5","state":"open","head":{"ref":"` + head + `","sha":"` + testPushed + `","repo_id":1},"base":{"ref":"main","repo_id":1}}]`,
+			"https://forgejo.example/acme/web/pulls/5", func(b string) string { return strings.Replace(b, `"repo_id":1},"base"`, `"repo_id":99},"base"`, 1) }},
 		{"bitbucket", "https://bitbucket.org/acme/web.git", "GET /2.0/repositories/acme/web/pullrequests",
-			`{"values":[{"id":5,"source":{"branch":{"name":"` + head + `"}},"destination":{"branch":{"name":"main"}},"links":{"html":{"href":"https://bitbucket.org/acme/web/pull-requests/5"}}}]}`,
-			"https://bitbucket.org/acme/web/pull-requests/5"},
+			`{"values":[{"id":5,"state":"OPEN","source":{"branch":{"name":"` + head + `"},"commit":{"hash":"` + testPushed[:12] + `"},"repository":{"full_name":"acme/web"}},"destination":{"branch":{"name":"main"},"repository":{"full_name":"acme/web"}},"links":{"html":{"href":"https://bitbucket.org/acme/web/pull-requests/5"}}}]}`,
+			"https://bitbucket.org/acme/web/pull-requests/5", func(b string) string {
+				return strings.Replace(b, `"repository":{"full_name":"acme/web"}},"destination"`, `"repository":{"full_name":"attacker/web"}},"destination"`, 1)
+			}},
 		{"bitbucket-datacenter", "https://git.example.com/scm/PLAT/web.git", "GET /rest/api/1.0/projects/PLAT/repos/web/pull-requests",
-			`{"isLastPage":true,"values":[{"id":5,"fromRef":{"id":"refs/heads/` + head + `"},"toRef":{"id":"refs/heads/main"},"links":{"self":[{"href":"https://git.example.com/projects/PLAT/repos/web/pull-requests/5"}]}}]}`,
-			"https://git.example.com/projects/PLAT/repos/web/pull-requests/5"},
+			`{"isLastPage":true,"values":[{"id":5,"state":"OPEN","fromRef":{"id":"refs/heads/` + head + `","latestCommit":"` + testPushed + `","repository":{"slug":"web","project":{"key":"PLAT"}}},"toRef":{"id":"refs/heads/main","repository":{"slug":"web","project":{"key":"PLAT"}}},"links":{"self":[{"href":"https://git.example.com/projects/PLAT/repos/web/pull-requests/5"}]}}]}`,
+			"https://git.example.com/projects/PLAT/repos/web/pull-requests/5", func(b string) string {
+				return strings.Replace(b, `"project":{"key":"PLAT"}}},"toRef"`, `"project":{"key":"~ATTACKER"}}},"toRef"`, 1)
+			}},
 		{"azuredevops", "https://dev.azure.com/contoso/Web/_git/web", "GET /contoso/Web/_apis/git/repositories/web/pullrequests",
-			`{"value":[{"pullRequestId":5,"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}]}`,
-			"https://dev.azure.com/contoso/Web/_git/web/pullrequest/5"},
+			`{"value":[{"pullRequestId":5,"status":"active","sourceRefName":"refs/heads/` + head + `","targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"` + testPushed + `"},"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}]}`,
+			"https://dev.azure.com/contoso/Web/_git/web/pullrequest/5", func(b string) string {
+				return strings.Replace(b, `"status":"active",`, `"status":"active","forkSource":{"repository":{"name":"web-fork"}},`, 1)
+			}},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
 			srv, calls := routedAPI(t, map[string][]apiReply{tc.list: {{200, tc.body}}})
@@ -479,6 +493,36 @@ func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 				assert.False(t, strings.HasPrefix(c.Route, "POST "+strings.TrimPrefix(tc.list, "GET ")+"?") ||
 					c.Route == "POST "+strings.TrimPrefix(tc.list, "GET "), "no PR create: %s", c.Route)
 			}
+		})
+		t.Run(tc.provider+": another head commit is not adopted", func(t *testing.T) {
+			// A PR on kardinal's branch whose head is not the commit
+			// git-push pushed (someone pushed to the branch, or opened the
+			// PR by hand after pushing): not adopted, and no create, whose
+			// refused duplicate would adopt it.
+			srv, calls := routedAPI(t, map[string][]apiReply{tc.list: {{200, strings.ReplaceAll(tc.body, testPushed[:12], "deadbeefcafe")}}})
+			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
+			require.NoError(t, err)
+			result, err := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))
+			require.Error(t, err)
+			assert.Contains(t, result.Message, "the commit kardinal pushed")
+			assert.Empty(t, result.Outputs["prNumber"])
+			for _, c := range calls() {
+				assert.False(t, strings.HasPrefix(c.Route, "POST "), "no create: %s", c.Route)
+			}
+		})
+		t.Run(tc.provider+": a fork's PR is not adopted", func(t *testing.T) {
+			// The only open PR of the branch name is a fork's: open-pr opens
+			// its own (the fake has no create route, so the create fails).
+			srv, calls := routedAPI(t, map[string][]apiReply{tc.list: {{200, tc.fork(tc.body)}}})
+			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
+			require.NoError(t, err)
+			result, _ := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))
+			assert.Empty(t, result.Outputs["prNumber"], "the fork's PR #5 is not kardinal's")
+			created := false
+			for _, c := range calls() {
+				created = created || strings.HasPrefix(c.Route, "POST ")
+			}
+			assert.True(t, created, "open-pr opens its own PR: %v", routes(calls()))
 		})
 	}
 }

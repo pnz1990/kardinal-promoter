@@ -196,6 +196,14 @@ type StepState struct {
 	// It wraps ErrStalePush when the push is refused for that reason.
 	BeforePush func(ctx context.Context, direct bool) error
 
+	// RecordPushed, when set, writes outputs to the PromotionStep's status
+	// right after git-push pushed kardinal's PR branch, before open-pr runs:
+	// the commit pushed (pushedSHA) is then recorded for every PR kardinal
+	// opens, also when the controller dies before the reconcile's own status
+	// write. open-pr adopts a PR of the branch only when its head is that
+	// commit (#2065). An error fails the push step, which is retried.
+	RecordPushed func(ctx context.Context, outputs map[string]string) error
+
 	// Render is set only in the kardinal-render Job, which runs the render
 	// of a layout: branch environment (git-clone, the image update,
 	// render-manifests, git-commit and git-push). The controller never sets

@@ -128,6 +128,14 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 				outputs[OutputPushedSHA] = sha
 			}
 		}
+		// Recorded before open-pr runs: a PR of the branch is kardinal's
+		// only when its head is this commit (open-pr, #2065).
+		if outputs[OutputPushedSHA] != "" && state.RecordPushed != nil {
+			if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHA: outputs[OutputPushedSHA], "branch": branch}); err != nil {
+				return parentsteps.StepResult{Status: parentsteps.StepFailed,
+					Message: fmt.Sprintf("pushed %s; recording the pushed commit failed: %v", branch, err)}, err
+			}
+		}
 	}
 	msg := "pushed " + branch
 	if rebases > 0 {
