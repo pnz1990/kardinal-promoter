@@ -306,6 +306,14 @@
             "description": "CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters. An image Subscription records the commit the image's build recorded in org.opencontainers.image.revision (a full SHA), and none when the image names none. Versions a Subscription created before v0.12.0 may hold the image digest instead, which the pattern still accepts so they stay valid.",
             "type": "string"
           },
+          "commitTime": {
+            "description": "CommitTime is when the source commit (CommitSHA) was made, for CI to set (`kardinal create bundle --commit-time`). The lead time metrics (status.metrics.commitToProductionMinutes, the Pipeline's deploymentMetrics) start at it; without it they start at the Bundle's creation, which leaves out the build.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "rollbackOf": {
             "description": "RollbackOf is the name of the Bundle this Bundle rolls back (if any).",
             "type": "string"
@@ -1014,7 +1022,7 @@
         "description": "PipelineDeploymentMetrics holds aggregate promotion efficiency metrics for a Pipeline. Computed by PipelineReconciler from the last 30 Verified Bundles for this pipeline. Displayed by `kardinal metrics` and the UI pipeline detail view.",
         "properties": {
           "autoRollbackRateMillis": {
-            "description": "AutoRollbackRateMillis is the fraction of sampled Bundles that are rollbacks (spec.provenance.rollbackOf is set), manual (`kardinal rollback`, the UI) or automatic, expressed as integer thousandths (e.g. 83 = 8.3%). Stored as integer to avoid floating-point in CRD YAML.",
+            "description": "AutoRollbackRateMillis is the fraction of sampled Bundles that are rollbacks the controller started on its own (onHealthFailure: rollback, a RollbackPolicy: label kardinal.io/reason=AutoRollback), expressed as integer thousandths (e.g. 83 = 8.3%). Rollbacks a person started (`kardinal rollback`, the UI) count in RollbackRateMillis only. Stored as integer to avoid floating-point in CRD YAML.",
             "format": "int32",
             "type": "integer"
           },
@@ -1041,6 +1049,11 @@
             "format": "int32",
             "type": "integer"
           },
+          "leadTimeFromCommit": {
+            "description": "LeadTimeFromCommit is how many of the sampled Bundles' lead times start at spec.provenance.commitTime; the others start at the Bundle's creation. Rollback Bundles always start at their creation.",
+            "format": "int32",
+            "type": "integer"
+          },
           "meanTimeToRestoreMinutes": {
             "description": "MeanTimeToRestoreMinutes is the mean, in whole minutes, from each failed deployment reaching a final environment to the first later Bundle Verified in every final environment it targets, in every region (DORA time to restore). Failures not restored yet are not counted.",
             "format": "int64",
@@ -1052,17 +1065,22 @@
             "type": "integer"
           },
           "p50CommitToProdMinutes": {
-            "description": "P50CommitToProdMinutes is the median time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window.",
+            "description": "P50CommitToProdMinutes is the median time (minutes) from the commit to the final environment reaching Verified, over the sample window. A Bundle's commit time is spec.provenance.commitTime when CI set it; otherwise the Bundle's creation, which leaves out the build (LeadTimeFromCommit counts the Bundles measured from the commit).",
             "format": "int64",
             "type": "integer"
           },
           "p90CommitToProdMinutes": {
-            "description": "P90CommitToProdMinutes is the 90th-percentile time (minutes) from Bundle creation to the final environment reaching Verified, over the sample window.",
+            "description": "P90CommitToProdMinutes is the 90th-percentile time (minutes) from the commit (as for P50CommitToProdMinutes) to the final environment reaching Verified, over the sample window.",
             "format": "int64",
             "type": "integer"
           },
           "restoredFailures": {
             "description": "RestoredFailures is the number of failed deployments in meanTimeToRestoreMinutes.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "rollbackRateMillis": {
+            "description": "RollbackRateMillis is the fraction of sampled Bundles that are rollbacks of any kind (spec.provenance.rollbackOf is set): automatic or started by a person, in integer thousandths.",
             "format": "int32",
             "type": "integer"
           },

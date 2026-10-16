@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -331,9 +332,11 @@ func TestPipeline_PathStaysInRepo(t *testing.T) {
 // -1 never shows. Then three Bundles reach prod, which bakes for a minute:
 // V2; V3, held by a gate an operator overrides; and a rollback to V2. After
 // each, the metrics count the rollouts and the sample, the override (1 of 2,
-// then 1 of 3), the rollback (1 of 3, though it was not automatic), 0 stale
-// days, and the p50 and p90 of the whole minutes from each Bundle's creation
-// to its prod step's Verified condition.
+// then 1 of 3), the rollback (1 of 3 in rollbackRateMillis, and none in
+// autoRollbackRateMillis: a person started it), 0 stale days, and the p50
+// and p90 of the whole minutes from each Bundle's commit
+// (--commit-time, V3 only) or creation to its prod step's Verified
+// condition (#1942).
 //
 // Covers PIPE-DORA-01.
 func TestPipeline_DeploymentMetrics(t *testing.T) {
@@ -356,14 +359,15 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 		e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
 		bundles = append(bundles, bundle)
 	}
-	check := func(interventions, rollbacks int) {
+	check := func(interventions, autoRollbacks, rollbacks, fromCommit int) {
 		t.Helper()
 		n := len(bundles)
 		got := waitPipeline(t, e, a.ns, pipelineName, 2*time.Minute, fmt.Sprintf("metrics of %d Bundles", n),
 			func(p *v1alpha1.Pipeline) (bool, string) {
 				m := p.Status.DeploymentMetrics
 				return m != nil && m.SampleSize == n && m.OperatorInterventionRateMillis == interventions &&
-					m.AutoRollbackRateMillis == rollbacks, fmt.Sprintf("%+v", m)
+					m.AutoRollbackRateMillis == autoRollbacks && m.RollbackRateMillis == rollbacks &&
+					m.LeadTimeFromCommit == fromCommit, fmt.Sprintf("%+v", m)
 			}).Status.DeploymentMetrics
 		var leads []int64
 		for _, b := range bundles {
@@ -379,16 +383,20 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 	}
 
 	promote(e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2))
-	check(0, 0)
+	check(0, 0, 0, 0)
 
 	gate := operatorHold(a.ns, "prod")
 	require.NoError(t, e.Client.Create(ctx, gate))
-	held := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	// CI says when the commit was made: V3's lead time starts there, ten
+	// minutes before the Bundle (#1942).
+	commitTime := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	held := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3, "--commit-time", commitTime)
 	e.WaitStepState(t, a.ns, pipelineName, held, "test", "Verified", promoteTimeout)
 	a.overrideHold(t, held, "prod")
 	promote(held)
 	require.NoError(t, e.Client.Delete(ctx, gate))
-	check(500, 0)
+	check(500, 0, 0, 1)
+	assert.GreaterOrEqual(t, leadMinutes(t, a, held), int64(10), "V3's lead time includes the ten minutes before its Bundle")
 
 	out := e.MustKardinal(t, a.ns, "rollback", pipelineName, "--env", "prod")
 	m := regexp.MustCompile(`Bundle (\S+) created \(rollbackOf=(\S+)\)`).FindStringSubmatch(out)
@@ -396,7 +404,8 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 	assert.Equal(t, bundles[0], m[2], "the rollback restores the V2 Bundle")
 	promote(m[1])
 	a.running(t, "prod", imageV2, "the rollback is deployed")
-	check(333, 333)
+	// A rollback a person started is a rollback, not an automatic one.
+	check(333, 0, 333, 1)
 }
 
 // operatorHold is a PolicyGate named hold that blocks env until an operator
@@ -460,7 +469,8 @@ func leadMinutes(t *testing.T, a *app, bundle string) int64 {
 	require.True(t, ok, "%s has a prod step", bundle)
 	c := findCond(ps.Status.Conditions, "Verified")
 	require.Equal(t, metav1.ConditionTrue, c.Status, "%s prod step Verified condition", bundle)
-	return int64(c.LastTransitionTime.Sub(a.bundle(t, bundle).CreationTimestamp.Time).Minutes())
+	start, _ := lifecycle.LeadTimeStart(a.bundle(t, bundle))
+	return int64(c.LastTransitionTime.Sub(start).Minutes())
 }
 
 // TestPipeline_GitSecretNotReferenceable checks #1506: a git Secret without

@@ -355,7 +355,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		FromBundle:  rp.Spec.BundleRef,
 		Actor:       "kardinal-controller (auto-rollback via RollbackPolicy)",
 		Name:        rollbackName,
-		Reason:      "AutoRollback",
+		Reason:      lifecycle.ReasonAutoRollback,
 		Now:         r.now(),
 		Automatic:   true,
 	})

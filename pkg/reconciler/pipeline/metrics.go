@@ -134,27 +134,37 @@ func ComputeDeploymentMetrics(
 	sampleSize := len(verified)
 
 	// --- Lead time (commit → final env Verified) ---
+	// From spec.provenance.commitTime when CI set it, else from the Bundle's
+	// creation (lifecycle.LeadTimeStart, #1942).
 	leadMinutes := make([]int64, 0, sampleSize)
+	fromCommit := 0
 	for _, vb := range verified {
-		lead := vb.verifiedAt.Sub(vb.bundle.CreationTimestamp.UTC())
+		start, commit := lifecycle.LeadTimeStart(vb.bundle)
+		lead := vb.verifiedAt.Sub(start)
 		if lead > 0 {
 			leadMinutes = append(leadMinutes, int64(lead.Minutes()))
+			if commit {
+				fromCommit++
+			}
 		}
 	}
 	sort.Slice(leadMinutes, func(i, j int) bool { return leadMinutes[i] < leadMinutes[j] })
 	p50, p90 := percentiles(leadMinutes)
 
-	// --- Auto-rollback rate ---
-	// A Bundle is considered a rollback deployment when spec.provenance.rollbackOf is set
-	// (written by `kardinal rollback`). This is set at creation time, not at Verified time,
-	// so it's reliable even when status.metrics is not yet populated.
-	rollbackCount := 0
+	// --- Rollback rates ---
+	// A rollback Bundle has spec.provenance.rollbackOf, set at creation. The
+	// automatic rate counts only the ones the controller started
+	// (lifecycle.AutoRollback); a rollback a person asked for counts in the
+	// overall rate only (#1942).
+	rollbackCount, autoCount := 0, 0
 	for _, vb := range verified {
 		if vb.bundle.Spec.Provenance != nil && vb.bundle.Spec.Provenance.RollbackOf != "" {
 			rollbackCount++
+			if lifecycle.AutoRollback(vb.bundle) {
+				autoCount++
+			}
 		}
 	}
-	rollbackRateMillis := ratioMillis(rollbackCount, sampleSize)
 
 	// --- Operator intervention rate ---
 	// Counts bundles with at least one PolicyGate override: the Bundle
@@ -186,7 +196,9 @@ func ComputeDeploymentMetrics(
 		RolloutsLast30Days:             rolloutsLast30,
 		P50CommitToProdMinutes:         p50,
 		P90CommitToProdMinutes:         p90,
-		AutoRollbackRateMillis:         rollbackRateMillis,
+		LeadTimeFromCommit:             fromCommit,
+		AutoRollbackRateMillis:         ratioMillis(autoCount, sampleSize),
+		RollbackRateMillis:             ratioMillis(rollbackCount, sampleSize),
 		OperatorInterventionRateMillis: interventionRateMillis,
 		StaleProdDays:                  staleProdDays,
 		SampleSize:                     sampleSize,
@@ -271,11 +283,6 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// healthCheckStepName is the last step of every step sequence. Its startedAt
-// is when the change reached the environment: the engine runs it right after
-// git-push (auto) or the merge (pr-review).
-const healthCheckStepName = "health-check"
-
 // stability is the DORA stability pair over the last metricsLookbackBundles
 // deployments to the final environment.
 type stability struct {
@@ -290,21 +297,16 @@ type deployment struct {
 	failed     bool
 }
 
-// stepDeployedAt returns when s's change reached its environment: the
-// startedAt of its health-check step. ok is false when it never did (the
+// stepDeployedAt returns when s's change reached its environment
+// (lifecycle.DeployedAt: the startedAt of its health-check step, also for a
+// step rebuilt from a retired Bundle's record). ok is false when it never did (the
 // step failed or is still before git-push or the merge), and for a no-op
 // promotion (outputs.noChanges: the environment already had the change).
 func stepDeployedAt(s *kardinalv1alpha1.PromotionStep) (time.Time, bool) {
 	if s.Status.Outputs["noChanges"] == "true" {
 		return time.Time{}, false
 	}
-	for i := range s.Status.Steps {
-		st := &s.Status.Steps[i]
-		if st.Name == healthCheckStepName && st.StartedAt != nil {
-			return st.StartedAt.UTC(), true
-		}
-	}
-	return time.Time{}, false
+	return lifecycle.DeployedAt(s)
 }
 
 // computeStability computes the change failure rate and the time to restore

@@ -6,6 +6,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,14 +71,49 @@ func RetiredStepOf(s *v1alpha1.PromotionStep) v1alpha1.RetiredStep {
 		at := metav1.NewTime(t)
 		r.VerifiedAt = &at
 	}
+	for i := range s.Status.Steps {
+		if st := &s.Status.Steps[i]; st.Name == StepHealthCheck && st.StartedAt != nil {
+			r.DeployedAt = st.StartedAt.DeepCopy()
+			break
+		}
+	}
+	r.NoChanges = s.Status.Outputs["noChanges"] == "true"
 	return r
 }
+
+// annotationRetiredDeployedAt carries, on a step StepFromRetired rebuilt,
+// the record's deployment time (DeployedAt). The step is never written to
+// the cluster.
+const annotationRetiredDeployedAt = "kardinal.io/retired-deployed-at"
+
+// DeployedAt returns when s's change reached its environment: the startedAt
+// of its health-check step, or for a step rebuilt from a retired record the
+// record's deployment time. ok is false when it never did.
+func DeployedAt(s *v1alpha1.PromotionStep) (time.Time, bool) {
+	for i := range s.Status.Steps {
+		if st := &s.Status.Steps[i]; st.Name == StepHealthCheck && st.StartedAt != nil {
+			return st.StartedAt.UTC(), true
+		}
+	}
+	if v := s.Annotations[annotationRetiredDeployedAt]; v != "" && s.Labels[LabelRetired] == "true" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// StepHealthCheck is the last step of every promotion's step sequence. Its
+// startedAt is when the change reached the environment (after git-push, or
+// the merge of the PR): the deployment metrics' deployment time.
+const StepHealthCheck = "health-check"
 
 // StepFromRetired rebuilds, in memory, the PromotionStep that record r of
 // Bundle b was taken from: its name, labels, spec.pipelineName,
 // spec.bundleName, spec.environment, spec.stepType, creationTimestamp,
-// status.state, status.message, status.prURL, status.healthCheckExpiry and
-// the Verified condition. The step carries LabelRetired.
+// status.state, status.message, status.prURL, status.healthCheckExpiry, the
+// Verified condition, outputs.noChanges and the deployment time
+// (DeployedAt reads it). The step carries LabelRetired.
 func StepFromRetired(b *v1alpha1.Bundle, r v1alpha1.RetiredStep) v1alpha1.PromotionStep {
 	s := v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{
@@ -109,6 +145,22 @@ func StepFromRetired(b *v1alpha1.Bundle, r v1alpha1.RetiredStep) v1alpha1.Promot
 			Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified",
 			LastTransitionTime: *r.VerifiedAt,
 		}}
+	}
+	// The health-check start, which the deployment metrics count a
+	// deployment from (#1944), as an annotation: the step's status.steps
+	// stay empty, so no reader shows a step sequence the record does not
+	// have. A record written before DeployedAt existed has a
+	// healthCheckExpiry once its health check started: its creation time
+	// stands in for the start, which it can only precede.
+	deployed := r.DeployedAt
+	if deployed == nil && r.HealthCheckExpiry != nil {
+		deployed = &r.CreatedAt
+	}
+	if deployed != nil {
+		s.Annotations = map[string]string{annotationRetiredDeployedAt: deployed.UTC().Format(time.RFC3339)}
+	}
+	if r.NoChanges {
+		s.Status.Outputs = map[string]string{"noChanges": "true"}
 	}
 	return s
 }

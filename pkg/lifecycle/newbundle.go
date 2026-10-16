@@ -5,7 +5,9 @@ package lifecycle
 
 import (
 	"fmt"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -60,6 +62,28 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 		if err := graph.ValidateCIRunURL(spec.Provenance.CIRunURL); err != nil {
 			return err
 		}
+		if err := validateCommitTime(spec.Provenance.CommitTime, time.Now()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// commitTimeSkew is how far in the future a provenance.commitTime may be:
+// CI runners' clocks drift a little from the API server's.
+const commitTimeSkew = 5 * time.Minute
+
+// validateCommitTime refuses a provenance.commitTime that is zero or later
+// than now (beyond commitTimeSkew): the lead time metrics start at it
+// (LeadTimeStart), and neither can be when a commit was made.
+func validateCommitTime(t *metav1.Time, now time.Time) error {
+	switch {
+	case t == nil:
+		return nil
+	case t.IsZero():
+		return fmt.Errorf("provenance.commitTime is the zero time; leave it unset when the commit time is not known")
+	case t.After(now.Add(commitTimeSkew)):
+		return fmt.Errorf("provenance.commitTime %s is in the future (now %s)", t.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
 	}
 	return nil
 }

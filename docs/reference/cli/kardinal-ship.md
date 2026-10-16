@@ -71,6 +71,7 @@ kardinal ship <pipeline> --image <ref> [flags]
       --author string             Author or CI actor of the build (provenance)
       --ci-run-url string         Absolute http(s) URL of the CI run that built the Bundle (provenance)
       --commit string             Source commit SHA that produced the Bundle (provenance)
+      --commit-time string        When the source commit was made, RFC 3339 (provenance; lead time starts at it, e.g. "$(git show -s --format=%cI)")
       --config-commit string      Commit SHA of the config repository to promote; required for config and mixed Bundles
       --config-repo string        Git URL of the config repository (default: the Pipeline's git.url)
       --dry-run                   Preview the promotion graph without creating any cluster resources

@@ -67,10 +67,12 @@ func newCreateBundleCmd() *cobra.Command {
 		Short: "Create a Bundle to trigger promotion through a Pipeline",
 		Long: `Create a Bundle: the version to promote through <pipeline>. An image Bundle
 needs --image; a config Bundle --config-commit; a mixed one both. --commit,
---author and --ci-run-url record its provenance for the PR body and the UI.
+--author and --ci-run-url record its provenance for the PR body and the UI;
+--commit-time, when the commit was made, starts the lead time metrics.
 --dry-run shows the promotion graph and creates nothing.`,
 		Example: `  kardinal create bundle my-app --image ghcr.io/org/my-app:sha-abc1234 \
-    --commit abc1234 --author "$GITHUB_ACTOR" --ci-run-url "$RUN_URL"
+    --commit abc1234 --commit-time "$(git show -s --format=%cI)" \
+    --author "$GITHUB_ACTOR" --ci-run-url "$RUN_URL"
   kardinal create bundle my-app --type config --config-commit 9f8e7d6`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -105,6 +107,8 @@ func addBundleFlags(cmd *cobra.Command, opts *createBundleOptions, dryRun *bool)
 	cmd.Flags().StringVar(&opts.Author, "author", "", "Author or CI actor of the build (provenance)")
 	cmd.Flags().StringVar(&opts.CIRunURL, "ci-run-url", "",
 		"Absolute http(s) URL of the CI run that built the Bundle (provenance)")
+	cmd.Flags().StringVar(&opts.CommitTime, "commit-time", "",
+		"When the source commit was made, RFC 3339 (provenance; lead time starts at it, e.g. \"$(git show -s --format=%cI)\")")
 	cmd.Flags().BoolVar(dryRun, "dry-run", false,
 		"Preview the promotion graph without creating any cluster resources")
 	compactAbove := graph.DefaultCompactAbove
@@ -122,6 +126,9 @@ type createBundleOptions struct {
 	Commit       string
 	Author       string
 	CIRunURL     string
+	// CommitTime is --commit-time: when the source commit was made
+	// (RFC 3339), the start of the lead time metrics.
+	CommitTime string
 	// CompactAbove is the controller's --graph-compact-above, for --dry-run;
 	// nil means graph.DefaultCompactAbove.
 	CompactAbove *int
@@ -149,8 +156,16 @@ func (o createBundleOptions) bundleSpec(pipeline string) (v1alpha1.BundleSpec, e
 	if o.ConfigRepo != "" || o.ConfigCommit != "" {
 		spec.ConfigRef = &v1alpha1.ConfigRef{GitRepo: o.ConfigRepo, CommitSHA: o.ConfigCommit}
 	}
-	if o.Commit != "" || o.Author != "" || o.CIRunURL != "" {
+	if o.Commit != "" || o.Author != "" || o.CIRunURL != "" || o.CommitTime != "" {
 		spec.Provenance = &v1alpha1.BundleProvenance{CommitSHA: o.Commit, Author: o.Author, CIRunURL: o.CIRunURL}
+	}
+	if o.CommitTime != "" {
+		t, err := time.Parse(time.RFC3339, o.CommitTime)
+		if err != nil {
+			return v1alpha1.BundleSpec{}, fmt.Errorf("create bundle: --commit-time %q is not an RFC 3339 time (git show -s --format=%%cI prints one)", o.CommitTime)
+		}
+		ct := metav1.NewTime(t)
+		spec.Provenance.CommitTime = &ct
 	}
 	if err := lifecycle.ValidateNewBundle(&spec); err != nil {
 		return v1alpha1.BundleSpec{}, flagMessage(err)

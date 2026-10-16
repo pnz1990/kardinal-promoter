@@ -757,29 +757,33 @@ func TestCLI_Reports(t *testing.T) {
 		return dm != nil && dm.SampleSize == 2, fmt.Sprintf("%+v", dm)
 	})
 	mc := cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName))
-	require.Len(t, mc, 12, "%v", mc)
+	require.Len(t, mc, 13, "%v", mc)
 	assert.Equal(t, [][]string{
 		{"METRIC", "VALUE", "NOTES"},
 		{"pipeline", "podinfo", "(controller: last 2 bundles verified in prod)"},
 		{"target_env", "prod"},
 		{"rollouts_last_30d", "2"},
-		{"p50_commit_to_prod", fmt.Sprintf("%dm", dm.P50CommitToProdMinutes)},
-		{"p90_commit_to_prod", fmt.Sprintf("%dm", dm.P90CommitToProdMinutes)},
-		{"auto_rollback_rate", fmt.Sprintf("%.1f%%", float64(dm.AutoRollbackRateMillis)/10), fmt.Sprintf("(%d per thousand)", dm.AutoRollbackRateMillis)},
+		{"p50_commit_to_prod", fmt.Sprintf("%dm", dm.P50CommitToProdMinutes), "(from Bundle creation)"},
+		{"p90_commit_to_prod", fmt.Sprintf("%dm", dm.P90CommitToProdMinutes), "(from Bundle creation)"},
+		{"auto_rollback_rate", fmt.Sprintf("%.1f%%", float64(dm.AutoRollbackRateMillis)/10),
+			fmt.Sprintf("(%d per thousand, started by the controller)", dm.AutoRollbackRateMillis)},
+		{"rollback_rate", fmt.Sprintf("%.1f%%", float64(dm.RollbackRateMillis)/10),
+			fmt.Sprintf("(%d per thousand, automatic or by a person)", dm.RollbackRateMillis)},
 		{"operator_intervention_rate", fmt.Sprintf("%.1f%%", float64(dm.OperatorInterventionRateMillis)/10), fmt.Sprintf("(%d per thousand)", dm.OperatorInterventionRateMillis)},
 		{"stale_prod_days", fmt.Sprintf("%d", dm.StaleProdDays)},
 		{"change_failure_rate", "0.0%", "(0 of 2 deployments failed)"},
 		{"time_to_restore", "-", "(no restored failure)"},
-	}, mc[:11])
-	assert.Equal(t, "metrics_age", mc[11][0])
-	assert.Regexp(t, `^\d+(s|m\d+s)$`, mc[11][1])
-	assert.Equal(t, "(last computed by controller)", mc[11][2])
+	}, mc[:12])
+	assert.Equal(t, "metrics_age", mc[12][0])
+	assert.Regexp(t, `^\d+(s|m\d+s)$`, mc[12][1])
+	assert.Equal(t, "(last computed by controller)", mc[12][2])
 	assert.Equal(t, "0.0%", mc[6][1], "no automatic rollback")
+	assert.Equal(t, "0.0%", mc[7][1], "no rollback")
 	// metrics_age is the only row that changes between the two calls.
 	explicit := cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--env", "prod", "--days", "30"))
-	require.Len(t, explicit, 12, "%v", explicit)
-	assert.Equal(t, mc[:11], explicit[:11], "the defaults are the last environment and 30 days")
-	assert.Equal(t, "metrics_age", explicit[11][0])
+	require.Len(t, explicit, 13, "%v", explicit)
+	assert.Equal(t, mc[:12], explicit[:12], "the defaults are the last environment and 30 days")
+	assert.Equal(t, "metrics_age", explicit[12][0])
 
 	lead := regexp.MustCompile(`^(\d+s|\d+m\d+s)$`)
 	mc = cells(c.Must(a.ns, "metrics", "--pipeline", pipelineName, "--days", "7"))
@@ -792,7 +796,7 @@ func TestCLI_Reports(t *testing.T) {
 		{"target_env", "prod"},
 		{"bundles_total", "2"},
 		{"deployment_frequency", "0.29/day", "(2 verified in target env)"},
-		{"lead_time_avg", "<lead>", "(creation to prod verified, 2 samples)"},
+		{"lead_time_avg", "<lead>", "(from Bundle creation to prod verified, 2 samples)"},
 		{"change_fail_rate", "0.0%", "(0 failed / 2 total)"},
 		{"rollback_count", "0"},
 	}, mc)
@@ -800,7 +804,7 @@ func TestCLI_Reports(t *testing.T) {
 	require.Len(t, mc, 8, "%v", mc)
 	assert.Equal(t, []string{"pipeline", "podinfo", "(last 30 days)"}, mc[1])
 	assert.Equal(t, []string{"deployment_frequency", "0.07/day", "(2 verified in target env)"}, mc[4])
-	assert.Equal(t, "(creation to test verified, 2 samples)", mc[5][2])
+	assert.Equal(t, "(from Bundle creation to test verified, 2 samples)", mc[5][2])
 	for _, tc := range []struct {
 		args []string
 		want string

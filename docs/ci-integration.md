@@ -186,6 +186,7 @@ created when a check fails.
 kardinal create bundle my-app -n my-team \
   --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" \
   --commit "${GITHUB_SHA}" \
+  --commit-time "$(git show -s --format=%cI "${GITHUB_SHA}")" \
   --author "${GITHUB_ACTOR}" \
   --ci-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
@@ -415,6 +416,7 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 - PR evidence showing who built the image and from which commit
 - Gate expressions that reference provenance (e.g., `bundle.provenance.author != "dependabot[bot]"`)
 - Audit trail linking deployments back to source changes
+- Lead time from the commit: with `commitTime` (`kardinal create bundle --commit-time "$(git show -s --format=%cI)"`), `commitToProductionMinutes` and the Pipeline's p50/p90 lead time include the CI build and test time
 
 | Field | Description | Example |
 |---|---|---|
@@ -422,6 +424,7 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | `ciRunURL` | URL of the CI run: an absolute `http://` or `https://` URL | `https://github.com/.../runs/12345` |
 | `author` | Who or what triggered the build | `engineer-name`, `dependabot[bot]` |
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
+| `commitTime` | When the commit was made (RFC 3339); the lead time metrics start at it, else at the version's creation, which leaves out the build. The Bundle API and `kardinal create bundle` refuse a zero time or one more than 5 minutes in the future; a commit time after the version's creation (set with kubectl) is ignored | `2026-04-09T09:52:13Z` |
 
 The PR body and the UI link `ciRunURL`, so it is checked when a version is created. It must be
 empty or an absolute `http://` or `https://` URL with a host, without user info

@@ -2101,7 +2101,8 @@ func allVerified(envs []kardinalv1alpha1.EnvironmentStatus, expected []string) b
 // computeBundleMetrics derives the deployment metrics of a Bundle whose
 // expected environments are all Verified.
 //
-// K-05: commitToProductionMinutes is the time from Bundle creation to the last
+// K-05: commitToProductionMinutes is the time from the commit
+// (lifecycle.LeadTimeStart: spec.provenance.commitTime, else Bundle creation) to the last
 // expected environment reaching HealthCheckedAt. bakeResets sums the bake
 // resets of the Bundle's PromotionSteps. operatorInterventions counts the
 // entries in spec.overrides of the Bundle's gate instances (the PolicyGates
@@ -2124,8 +2125,8 @@ func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
 		}
 	}
 	m := &kardinalv1alpha1.BundleMetrics{}
-	if created := b.CreationTimestamp.Time; !created.IsZero() && latest.After(created) {
-		m.CommitToProductionMinutes = int64(latest.Sub(created).Minutes())
+	if start, _ := lifecycle.LeadTimeStart(b); !start.IsZero() && latest.After(start) {
+		m.CommitToProductionMinutes = int64(latest.Sub(start).Minutes())
 	}
 	for i := range steps {
 		m.BakeResets += steps[i].Status.BakeResets
