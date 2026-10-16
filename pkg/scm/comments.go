@@ -121,3 +121,99 @@ func (g *guardedProvider) HasPRComment(ctx context.Context, repo string, prNumbe
 	}
 	return f.HasPRComment(ctx, repo, prNumber, marker)
 }
+
+// HasPRComment searches a Bitbucket Cloud pull request's comments, following
+// the API's next links.
+func (b *BitbucketProvider) HasPRComment(ctx context.Context, repo string, prNumber int, marker string) (bool, error) {
+	workspace, repoSlug, err := splitBitbucketRepo(repo)
+	if err != nil {
+		return false, err
+	}
+	for page := 1; page <= maxCommentPages; page++ {
+		var got struct {
+			Values []struct {
+				Content struct {
+					Raw string `json:"raw"`
+				} `json:"content"`
+			} `json:"values"`
+			Next string `json:"next"`
+		}
+		path := fmt.Sprintf("/2.0/repositories/%s/%s/pullrequests/%d/comments?pagelen=100&page=%d", workspace, repoSlug, prNumber, page)
+		if err := b.do(ctx, http.MethodGet, path, nil, &got); err != nil {
+			return false, fmt.Errorf("search comments of Bitbucket PR %s#%d: %w", repo, prNumber, err)
+		}
+		for _, c := range got.Values {
+			if strings.Contains(c.Content.Raw, marker) {
+				return true, nil
+			}
+		}
+		if got.Next == "" {
+			return false, nil
+		}
+	}
+	return false, nil
+}
+
+// HasPRComment searches a Bitbucket Data Center pull request's activities
+// for a comment, page by page.
+func (b *BitbucketDCProvider) HasPRComment(ctx context.Context, repo string, prNumber int, marker string) (bool, error) {
+	path, err := b.prPath(repo)
+	if err != nil {
+		return false, err
+	}
+	start := 0
+	for page := 1; page <= maxCommentPages; page++ {
+		var got struct {
+			Values []struct {
+				Action  string `json:"action"`
+				Comment *struct {
+					Text string `json:"text"`
+				} `json:"comment"`
+			} `json:"values"`
+			IsLastPage    bool `json:"isLastPage"`
+			NextPageStart int  `json:"nextPageStart"`
+		}
+		if err := b.do(ctx, http.MethodGet, fmt.Sprintf("%s/%d/activities?start=%d&limit=100", path, prNumber, start), nil, &got); err != nil {
+			return false, fmt.Errorf("search comments of Bitbucket Data Center PR %s#%d: %w", repo, prNumber, err)
+		}
+		for _, a := range got.Values {
+			if a.Action == "COMMENTED" && a.Comment != nil && strings.Contains(a.Comment.Text, marker) {
+				return true, nil
+			}
+		}
+		if got.IsLastPage || got.NextPageStart <= start {
+			return false, nil
+		}
+		start = got.NextPageStart
+	}
+	return false, nil
+}
+
+// HasPRComment searches an Azure DevOps pull request's comment threads
+// (the API returns them all at once).
+func (a *AzureDevOpsProvider) HasPRComment(ctx context.Context, repo string, prNumber int, marker string) (bool, error) {
+	org, project, repoName, err := splitADORepo(repo)
+	if err != nil {
+		return false, err
+	}
+	var got struct {
+		Value []struct {
+			Comments []struct {
+				Content string `json:"content"`
+			} `json:"comments"`
+		} `json:"value"`
+	}
+	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullrequests/%d/threads?api-version=%s",
+		org, project, repoName, prNumber, azureDevOpsAPIVersion)
+	if err := a.do(ctx, http.MethodGet, path, nil, &got); err != nil {
+		return false, fmt.Errorf("search comments of ADO PR %s#%d: %w", repo, prNumber, err)
+	}
+	for _, t := range got.Value {
+		for _, c := range t.Comments {
+			if strings.Contains(c.Content, marker) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}

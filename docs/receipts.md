@@ -204,10 +204,10 @@ It checks, and exits non-zero when any check fails:
   verify-receipt checkout prod --bundle checkout-1-5-0`". The receipt records the PR too, so
   the two point at each other. A comment that keeps failing is given up after 10 attempts
   (condition `PRCommented=False`, reason `GaveUp`). The comment ends with a hidden marker,
-  `<!-- kardinal-receipt:<namespace>/<receipt> -->`: on GitHub, GitLab and Forgejo/Gitea the
-  controller searches the PR for it before posting, so a post whose status write was lost (a
-  crash) is not posted again. On Bitbucket and Azure DevOps, which kardinal does not search,
-  such a crash can post a second comment.
+  `<!-- kardinal-receipt:<namespace>/<receipt> -->`: the controller searches the PR's comments
+  for it before posting (GitHub, GitLab, Forgejo/Gitea, Bitbucket Cloud and Data Center,
+  Azure DevOps), so a post whose status write was lost (a crash) is not posted again. The
+  search reads at most 20 pages of comments, oldest first.
 - **`kardinal history`** adds a RECEIPT column once a promotion has one: "verified" when it is
   signed.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to
