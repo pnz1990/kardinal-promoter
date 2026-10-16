@@ -372,9 +372,12 @@ it only writes to Git. Instead of talking to Argo CD or Flux:
 1. `PromotionStepReconciler` opens a Git pull request with the updated image reference.
 2. A human (or automated process) merges the PR.
 3. kardinal asks ArgoCD or Flux to sync the commit now (an annotation on the Application, or
-   on the Kustomization and its GitRepository, once per step;
-   [Sync on promotion](health-adapters.md#sync-on-promotion)); without that request, or when
-   it fails, they find the change at their next poll. They sync the cluster.
+   on the Kustomization and its GitRepository, once per step; `health.refreshTarget` names the
+   object when the health check reads a Rollout, a Canary or a Deployment). It does so only for
+   the Pipeline's own objects, those in its namespace or deploying there, and those
+   `health.refresh.namespaces` admits ([Sync on promotion](health-adapters.md#sync-on-promotion)).
+   Without that request, or when it fails or is skipped, they find the change at their next
+   poll. They sync the cluster.
 4. kardinal's **health check** then queries ArgoCD or Flux to confirm sync is complete
    before advancing the DAG.
 

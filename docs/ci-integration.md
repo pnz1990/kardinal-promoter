@@ -194,7 +194,8 @@ kardinal create bundle my-app --type config \
   --config-repo https://github.com/myorg/app-config --config-commit "${CONFIG_SHA}"
 ```
 
-`--commit`, `--author` and `--ci-run-url` set `spec.provenance`. See
+`--commit`, `--author` and `--ci-run-url` set `spec.provenance`. In v0.12.0 (unreleased) the
+API server refuses an author over 256 characters or a CI run URL over 2048. See
 [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
 
 #### Wait for the outcome in CI

@@ -44,7 +44,7 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
     ---
 
     Give Claude Code, Codex or Cursor a local MCP server with its own least-privilege identity:
-    read-only by default, with a policy pre-flight.
+    read-only by default, with a policy pre-flight. New in v0.12.0 (unreleased).
 
     [:octicons-arrow-right-24: Connect an agent](agentic/connect-an-agent.md)
 

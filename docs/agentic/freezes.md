@@ -1,5 +1,9 @@
 # Freeze agents, stop the line
 
+!!! info "New in v0.12.0 (unreleased)"
+    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
+    it. The [changelog](../changelog.md#unreleased) lists every unreleased change.
+
 A freeze holds promotions until it is lifted, in every Graph, including versions already on
 their way. An **agent freeze** holds the versions agents created and lets people's through. A
 **stop-the-line** holds every version. The controller enforces it, not the agent: an agent

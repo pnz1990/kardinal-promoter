@@ -25,7 +25,7 @@ While the Pipeline is paused it has a `Paused` condition. `True` (reason `Freeze
 
 ## Who paused, and why
 
-Each pause and resume, of a Pipeline or of one fleet, is an AuditEvent: `PipelinePaused` or
+In v0.12.0 (unreleased), each pause and resume, of a Pipeline or of one fleet, is an AuditEvent: `PipelinePaused` or
 `PipelineResumed`, naming who and why (`--reason`, optional, on `pause` and `resume`) and their
 verified actor ([Audit logging](guides/security.md#audit-logging)). kardinal records who in the
 same write as the pause (`spec.lastChange`), and the chart's admission policies admit only your

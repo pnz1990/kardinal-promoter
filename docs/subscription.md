@@ -83,7 +83,8 @@ spec:
     commitSHA: 7a98d10da0777741569e3c6bfb7e04d02c091005
 ```
 
-`provenance.commitSHA` is the source commit the image's build recorded in
+In v0.12.0 (unreleased; v0.11.0 set it to the image digest), `provenance.commitSHA` is the
+source commit the image's build recorded in
 `org.opencontainers.image.revision`, as `docker buildx --label` and the OCI metadata actions
 write it. kardinal looks, in order, at the annotation of the image's manifest; for a
 multi-architecture index, at the index's own annotation, then the annotation of its
