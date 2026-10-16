@@ -35,18 +35,28 @@ import (
 // opens, or sooner (the seeds take turns).
 type chaosSize struct{ Teams, PipelinesPerTeam, Waves, Seeds, Crashes, ReviewDelay int }
 
-// quickChaos keeps go test ./... under its budget; fullChaos is the release
-// gate's (KARDINAL_SCENARIO_ENTERPRISE=full). KARDINAL_CHAOS_SEEDS sets the
-// number of seeds of either.
+// quickChaos keeps go test ./... under its budget. fullChaos is CI's
+// scenario-enterprise job's (KARDINAL_SCENARIO_ENTERPRISE=full) with 16
+// seeds: 24 took its runner 8.8 of the 15 minutes it gives go test. The
+// release gate (KARDINAL_SCENARIO_CHAOS=full) runs gateChaosSeeds of them.
+// The targeted crashes run in every size. KARDINAL_CHAOS_SEEDS sets the
+// number of seeds of any.
 var (
 	quickChaos = chaosSize{Teams: 2, PipelinesPerTeam: 1, Waves: 1, Seeds: 2, Crashes: 4, ReviewDelay: 2}
-	fullChaos  = chaosSize{Teams: 4, PipelinesPerTeam: 2, Waves: 3, Seeds: 24, Crashes: 8, ReviewDelay: 2}
+	fullChaos  = chaosSize{Teams: 4, PipelinesPerTeam: 2, Waves: 3, Seeds: 16, Crashes: 8, ReviewDelay: 2}
 )
+
+// gateChaosSeeds is the release gate's number of seeds: its enterprise step
+// has 30 minutes, and a full-size seed takes about 20 s of a core.
+const gateChaosSeeds = 32
 
 func chaosSizeFromEnv(t *testing.T) chaosSize {
 	sz := quickChaos
-	if os.Getenv("KARDINAL_SCENARIO_ENTERPRISE") == "full" {
+	if os.Getenv("KARDINAL_SCENARIO_ENTERPRISE") == "full" || os.Getenv("KARDINAL_SCENARIO_CHAOS") == "full" {
 		sz = fullChaos
+	}
+	if os.Getenv("KARDINAL_SCENARIO_CHAOS") == "full" {
+		sz.Seeds = gateChaosSeeds
 	}
 	if v := os.Getenv("KARDINAL_CHAOS_SEEDS"); v != "" {
 		n, err := strconv.Atoi(v)

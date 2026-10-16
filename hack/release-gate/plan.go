@@ -488,7 +488,9 @@ func unitSteps(r *Repo, o Options) []Step {
 		MinTests: 2,
 		// KARDINAL_SCENARIO_SCALE=full: the agent scale scenario at its full
 		// 5,000 AgentIdentities, which PR CI runs at 2,000.
-		Script: `KARDINAL_SCENARIO_ENTERPRISE=full KARDINAL_SCENARIO_SCALE=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}
+		// KARDINAL_SCENARIO_CHAOS=full: the controller restarts with 32
+		// seeds, which PR CI runs 16 of.
+		Script: `KARDINAL_SCENARIO_ENTERPRISE=full KARDINAL_SCENARIO_SCALE=full KARDINAL_SCENARIO_CHAOS=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}
 	if !r.Enterprise {
 		ent.Script = ""
 		ent.Missing = "no test/scenario/enterprise on this commit (#1860)"
