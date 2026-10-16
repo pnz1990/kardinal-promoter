@@ -91,7 +91,13 @@ func TestAttestationContext(t *testing.T) {
 		{"attestations.vulns.scannedAt == '2026-10-14T08:00:00Z'", true, ""}, // the oldest scan
 		{"'CVE-2026-0003' in attestations.vulns.effectiveIDs && size(attestations.vulns.effectiveIDs) == 1", true, ""},
 		{"attestations.tests.verified", false, ""}, // one image has none
-		{`json.unmarshal(attestations.tests.predicate).result == "PASSED"`, true, ""},
+		// Only the first image has the predicate: it is left out, not
+		// taken from that image (it would pass a version whose second
+		// image has no passing tests).
+		{`json.unmarshal(attestations.tests.predicate).result == "PASSED"`, false, "no such key"},
+		{`attestations.tests.images.all(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")`, false, ""},
+		{`attestations.tests.images.exists(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")`, true, ""},
+		{"attestations.provenance.signer == 'release' && size(attestations.provenance.images) == 2", true, ""},
 		{`json.unmarshal(attestations.sbom.predicate).name != ""`, false, "no such key"},
 		{"attestations.missing.verified", false, "no such key"},
 	} {
@@ -150,4 +156,62 @@ func TestImageVerificationRequests(t *testing.T) {
 
 func updateEvent(o, n client.Object) event.UpdateEvent {
 	return event.UpdateEvent{ObjectOld: o, ObjectNew: n}
+}
+
+// TestAttestationContext_ImagesDisagree: for a version with several images,
+// a field that identifies one image's attestation is set only when every
+// image agrees on it. Built from two repositories, by two builders, signed
+// by two authorities: sourceURI, builderID, signer and the scanner are left
+// out, so a gate on them fails closed instead of checking the first image;
+// images checks each one; the aggregates stay.
+func TestAttestationContext_ImagesDisagree(t *testing.T) {
+	iv := attestedIV("app-v1-verify", "app-v1", time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC), "Verified")
+	for i := range iv.Status.Attestations {
+		a := &iv.Status.Attestations[i]
+		if a.Image != "ghcr.io/acme/web@sha256:bb" {
+			continue
+		}
+		if a.SLSA != nil {
+			a.SLSA.SourceURI, a.SLSA.BuilderID = "git+https://github.com/attacker/fork", "https://other-builder.example"
+			a.Signer, a.Authority = "dev", "dev"
+		}
+		if a.Vulns != nil {
+			a.Vulns.Scanner = "grype"
+		}
+	}
+	r := attestationReconciler(t, iv)
+	gate := &kardinalv1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "prod-gate", Namespace: "default",
+		Labels: map[string]string{labelPipeline: "app", labelEnvironment: "prod", labelBundle: "app-v1"}}}
+	for _, tc := range []struct {
+		expr string
+		want bool
+		err  string
+	}{
+		{"attestations.provenance.slsa.sourceURI == 'git+https://github.com/acme/app'", false, "no such key"},
+		{"attestations.provenance.slsa.builderID == 'https://builder.example'", false, "no such key"},
+		{"attestations.provenance.signer == 'release'", false, "no such key"},
+		{"attestations.vulns.scanner == 'trivy'", false, "no such key"},
+		{"attestations.provenance.images.all(i, i.slsa.sourceURI == 'git+https://github.com/acme/app')", false, ""},
+		{"attestations.provenance.images.all(i, i.signer in ['release', 'dev'])", true, ""},
+		{"attestations.provenance.slsa.sourceCommit == 'abc123def' && attestations.provenance.slsa.buildLevel == 2", true, ""},
+		{"attestations.vulns.effective.high == 2", true, ""},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			gate.Spec.Expression = tc.expr
+			celCtx, _, err := r.buildContext(t.Context(), gate, "app-v1")
+			require.NoError(t, err)
+			ok, reason, err := r.eval.evaluate(t.Context(), tc.expr, celCtx)
+			if tc.err != "" {
+				assert.False(t, ok, "fails closed")
+				if err != nil {
+					assert.Contains(t, err.Error(), tc.err)
+				} else {
+					assert.Contains(t, reason, tc.err)
+				}
+				return
+			}
+			require.NoError(t, err, reason)
+			assert.Equal(t, tc.want, ok, reason)
+		})
+	}
 }

@@ -31,20 +31,28 @@ const (
 	sigstoreBundlePrefix = "application/vnd.dev.sigstore.bundle"
 	// predicateTypeAnnotation names the in-toto predicate of a Sigstore
 	// bundle referrer (cosign sets it, and so do kardinal's promotion
-	// receipts). A referrer that names another predicate than an image
-	// signature's is skipped before it counts against maxSignatures, so
-	// attestations (receipts, SBOMs, provenance) cannot crowd out the
-	// image's signatures. One that names none is read and checked.
+	// receipts). A referrer that names a predicate the policy does not
+	// verify (an image signature's or a named attestation's) is skipped
+	// before it is counted. One that names none is read and checked.
 	predicateTypeAnnotation = "dev.sigstore.bundle.predicateType"
+	// receiptAnnotation marks kardinal's own promotion receipts
+	// (docs/receipts.md). They are VSAs, the predicate type a policy may
+	// name to raise a build level, and an image gets one per environment it
+	// reaches: they are skipped before they are counted, so they never
+	// crowd out the builder's attestations or a signature.
+	receiptAnnotation = "kardinal.io/receipt"
 	// cosignSignatureAnnotation holds a legacy signature, base64.
 	cosignSignatureAnnotation = "dev.cosignproject.cosign/signature"
 	// cosignCertificateAnnotation holds a legacy keyless certificate.
 	cosignCertificateAnnotation = "dev.sigstore.cosign/certificate"
 	// maxSignatureBytes bounds what is read per signature blob.
 	maxSignatureBytes = 1 << 20
-	// maxSignatures bounds the Sigstore bundles read per image, signatures
-	// and attestations together.
-	maxSignatures = 64
+	// maxSignatures bounds the signature bundles read per image, and
+	// maxAttestations the attestation bundles. The budgets are separate,
+	// so no number of attestations crowds out a signature. A bundle that
+	// names no predicate counts against each budget it is read for.
+	maxSignatures   = 32
+	maxAttestations = 64
 )
 
 // RegistryOptions say how to reach the registries of one ImageVerification.
@@ -138,17 +146,18 @@ func (r *OCIRegistry) Signatures(ctx context.Context, repository, digest string,
 		if err != nil {
 			return Signatures{}, fmt.Errorf("referrers of %s: %w", ref, err)
 		}
-		read := 0
+		signatures, attestations := 0, 0
 		for _, d := range m.Manifests {
-			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || read >= maxSignatures {
+			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || d.Annotations[receiptAnnotation] != "" {
 				continue
 			}
 			// A referrer that names its predicate is read only for the
 			// signature or an attestation type the policy names; one that
 			// names none may be either, and verification decides.
 			p, named := d.Annotations[predicateTypeAnnotation]
-			signature := !named || p == CosignSignPredicate
-			attestation := (!named && len(opts.AttestationTypes) > 0) || (named && slices.Contains(opts.AttestationTypes, p))
+			signature := (!named || p == CosignSignPredicate) && signatures < maxSignatures
+			attestation := ((!named && len(opts.AttestationTypes) > 0) || (named && slices.Contains(opts.AttestationTypes, p))) &&
+				attestations < maxAttestations
 			if !signature && !attestation {
 				continue
 			}
@@ -156,11 +165,12 @@ func (r *OCIRegistry) Signatures(ctx context.Context, repository, digest string,
 			if err != nil {
 				return Signatures{}, fmt.Errorf("read bundle %s: %w", d.Digest, err)
 			}
-			read++
 			if signature {
+				signatures++
 				out.Bundles = append(out.Bundles, b)
 			}
 			if attestation {
+				attestations++
 				out.Attestations = append(out.Attestations, b)
 			}
 		}

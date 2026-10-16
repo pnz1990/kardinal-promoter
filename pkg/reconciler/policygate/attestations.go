@@ -28,9 +28,10 @@ const maxContextIDs = 50
 // ImageVerification (label kardinal.io/bundle), with verified (it is
 // Verified) and, per attestation policy name, the results of its images
 // folded into one: verified when every image's verified, the lowest SLSA
-// build level, the summed vulnerability counts, the oldest scan time, and
-// the first image's signer, source and predicate (left out when omitted,
-// so an expression that reads it fails and the gate blocks). A version
+// build level, the summed vulnerability counts, the oldest scan time, the
+// signer, source and predicate only when every image agrees on them (left
+// out otherwise, and when omitted, so an expression that reads it fails and
+// the gate blocks), and each image's own result under images. A version
 // with no ImageVerification has verified false and no names: an expression
 // that reads a name fails closed.
 func (r *Reconciler) buildAttestationContext(ctx context.Context, ns, bundle string) (map[string]interface{}, error) {
@@ -69,25 +70,38 @@ func (r *Reconciler) buildAttestationContext(ctx context.Context, ns, bundle str
 }
 
 // foldAttestation is one attestation name's CEL value from its results,
-// one per image.
+// one per image. The aggregates are safe for a gate whatever the number of
+// images: verified when every image is, the lowest SLSA build level, the
+// summed counts, the oldest scan. A field that identifies one image's
+// attestation (signer, authority, digest, predicate, the SLSA builder,
+// source and level source, the scanner) is set only when every image has
+// the same non-empty value; otherwise it is left out, so an expression that
+// reads it fails and the gate blocks, instead of deciding on the first
+// image only. images lists each image's own value for expressions that
+// check them one by one (attestations.<name>.images.all(i, ...)).
 func foldAttestation(results []kardinalv1alpha1.AttestationResult) map[string]interface{} {
-	first := results[0]
 	verified := true
-	for _, r := range results {
-		verified = verified && r.Verified
+	images := make([]interface{}, 0, len(results))
+	for i := range results {
+		verified = verified && results[i].Verified
+		images = append(images, imageAttestation(&results[i]))
 	}
 	v := map[string]interface{}{
 		"verified":      verified,
-		"signer":        first.Signer,
-		"authority":     first.Authority,
-		"predicateType": first.PredicateType,
-		"digest":        first.Digest,
+		"predicateType": results[0].PredicateType,
+		"images":        images,
 	}
-	if first.Predicate != "" {
-		v["predicate"] = first.Predicate
-	}
-	if first.SLSA != nil {
-		level := int64(first.SLSA.BuildLevel)
+	same(v, "signer", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Signer })
+	same(v, "authority", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Authority })
+	same(v, "digest", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Digest })
+	same(v, "predicate", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Predicate })
+	if slices.ContainsFunc(results, func(r kardinalv1alpha1.AttestationResult) bool { return r.SLSA != nil }) {
+		level := int64(-1)
+		for _, r := range results {
+			if r.SLSA != nil && (level < 0 || int64(r.SLSA.BuildLevel) < level) {
+				level = int64(r.SLSA.BuildLevel)
+			}
+		}
 		for _, r := range results {
 			if r.SLSA == nil {
 				level = 0
@@ -95,19 +109,26 @@ func foldAttestation(results []kardinalv1alpha1.AttestationResult) map[string]in
 				level = l
 			}
 		}
-		v["slsa"] = map[string]interface{}{
-			"buildLevel":   level,
-			"levelSource":  first.SLSA.LevelSource,
-			"builderID":    first.SLSA.BuilderID,
-			"sourceCommit": first.SLSA.SourceCommit,
-			"sourceURI":    first.SLSA.SourceURI,
+		slsa := map[string]interface{}{"buildLevel": level}
+		slsaField := func(f func(*kardinalv1alpha1.SLSAResult) string) func(*kardinalv1alpha1.AttestationResult) string {
+			return func(r *kardinalv1alpha1.AttestationResult) string {
+				if r.SLSA == nil {
+					return ""
+				}
+				return f(r.SLSA)
+			}
 		}
+		same(slsa, "levelSource", results, slsaField(func(s *kardinalv1alpha1.SLSAResult) string { return s.LevelSource }))
+		same(slsa, "builderID", results, slsaField(func(s *kardinalv1alpha1.SLSAResult) string { return s.BuilderID }))
+		same(slsa, "sourceCommit", results, slsaField(func(s *kardinalv1alpha1.SLSAResult) string { return s.SourceCommit }))
+		same(slsa, "sourceURI", results, slsaField(func(s *kardinalv1alpha1.SLSAResult) string { return s.SourceURI }))
+		v["slsa"] = slsa
 	}
-	if first.Vulns != nil {
+	if slices.ContainsFunc(results, func(r kardinalv1alpha1.AttestationResult) bool { return r.Vulns != nil }) {
 		var before, effective kardinalv1alpha1.SeverityCounts
 		ids := []interface{}{}
 		seen := map[string]bool{}
-		scannedAt := first.Vulns.ScannedAt
+		scannedAt := ""
 		statements := int64(0)
 		for _, r := range results {
 			if r.Vulns == nil {
@@ -127,14 +148,22 @@ func foldAttestation(results []kardinalv1alpha1.AttestationResult) map[string]in
 			statements += int64(r.Vulns.VEXStatements)
 		}
 		vulns := map[string]interface{}{
-			"scanner":        first.Vulns.Scanner,
-			"scannerVersion": first.Vulns.ScannerVersion,
-			"scannedAt":      scannedAt,
-			"before":         counts(before),
-			"effective":      counts(effective),
-			"effectiveIDs":   ids,
-			"vexStatements":  statements,
+			"scannedAt":     scannedAt,
+			"before":        counts(before),
+			"effective":     counts(effective),
+			"effectiveIDs":  ids,
+			"vexStatements": statements,
 		}
+		vulnField := func(f func(*kardinalv1alpha1.VulnsResult) string) func(*kardinalv1alpha1.AttestationResult) string {
+			return func(r *kardinalv1alpha1.AttestationResult) string {
+				if r.Vulns == nil {
+					return ""
+				}
+				return f(r.Vulns)
+			}
+		}
+		same(vulns, "scanner", results, vulnField(func(s *kardinalv1alpha1.VulnsResult) string { return s.Scanner }))
+		same(vulns, "scannerVersion", results, vulnField(func(s *kardinalv1alpha1.VulnsResult) string { return s.ScannerVersion }))
 		v["vulns"] = vulns
 		// The scan's fields are also on the attestation itself, so
 		// attestations.vulns.effective.critical reads as the spec's
@@ -142,6 +171,62 @@ func foldAttestation(results []kardinalv1alpha1.AttestationResult) map[string]in
 		for k, val := range vulns {
 			v[k] = val
 		}
+	}
+	return v
+}
+
+// same sets m[key] to the value every result has for field, when they all
+// have the same non-empty one, and leaves it out otherwise.
+func same(m map[string]interface{}, key string, results []kardinalv1alpha1.AttestationResult,
+	field func(*kardinalv1alpha1.AttestationResult) string) {
+	want := field(&results[0])
+	if want == "" {
+		return
+	}
+	for i := range results[1:] {
+		if field(&results[i+1]) != want {
+			return
+		}
+	}
+	m[key] = want
+}
+
+// imageAttestation is one image's result, an element of
+// attestations.<name>.images. Fields the result does not have are left
+// out, as for the folded value.
+func imageAttestation(r *kardinalv1alpha1.AttestationResult) map[string]interface{} {
+	v := map[string]interface{}{"image": r.Image, "verified": r.Verified}
+	for k, val := range map[string]string{"signer": r.Signer, "authority": r.Authority, "digest": r.Digest, "predicate": r.Predicate} {
+		if val != "" {
+			v[k] = val
+		}
+	}
+	if r.SLSA != nil {
+		slsa := map[string]interface{}{"buildLevel": int64(r.SLSA.BuildLevel)}
+		for k, val := range map[string]string{"levelSource": r.SLSA.LevelSource, "builderID": r.SLSA.BuilderID,
+			"sourceCommit": r.SLSA.SourceCommit, "sourceURI": r.SLSA.SourceURI} {
+			if val != "" {
+				slsa[k] = val
+			}
+		}
+		v["slsa"] = slsa
+	}
+	if r.Vulns != nil {
+		ids := make([]interface{}, 0, len(r.Vulns.EffectiveIDs))
+		for _, id := range r.Vulns.EffectiveIDs {
+			if len(ids) < maxContextIDs {
+				ids = append(ids, id)
+			}
+		}
+		vulns := map[string]interface{}{"before": counts(r.Vulns.Before), "effective": counts(r.Vulns.Effective),
+			"effectiveIDs": ids, "vexStatements": int64(r.Vulns.VEXStatements)}
+		for k, val := range map[string]string{"scanner": r.Vulns.Scanner, "scannerVersion": r.Vulns.ScannerVersion,
+			"scannedAt": r.Vulns.ScannedAt} {
+			if val != "" {
+				vulns[k] = val
+			}
+		}
+		v["vulns"] = vulns
 	}
 	return v
 }

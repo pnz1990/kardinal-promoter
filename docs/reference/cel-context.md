@@ -421,19 +421,27 @@ expression that reads a name is an evaluation error and the gate blocks (fail cl
 |---|---|---|---|
 | `attestations.verified` | bool | `true` | Always; the version's ImageVerification is Verified |
 | `attestations.<name>.verified` | bool | `true` | Each policy name; every image has a verified attestation |
-| `attestations.<name>.signer` | string | `"release"` | The key authority's name or the certificate identity |
+| `attestations.<name>.signer` | string | `"release"` | The key authority's name or the certificate identity, when every image has the same one |
 | `attestations.<name>.predicateType` | string | `"https://slsa.dev/provenance/v1"` | Each policy name |
 | `attestations.<name>.slsa.buildLevel` | int | `3` | With `slsa`; 0 to 3, the lowest image's |
-| `attestations.<name>.slsa.levelSource` | string | `"builder"` | `builder` or `vsa` |
-| `attestations.<name>.slsa.builderID` | string | `"https://github.com/slsa-framework/..."` | SLSA provenance |
-| `attestations.<name>.slsa.sourceCommit` | string | `"1a2b3c4d..."` | The provenance's `gitCommit` dependency |
-| `attestations.<name>.slsa.sourceURI` | string | `"git+https://github.com/myorg/app"` | Its URI |
+| `attestations.<name>.slsa.levelSource` | string | `"builder"` | `builder` or `vsa`, when every image has the same one |
+| `attestations.<name>.slsa.builderID` | string | `"https://github.com/slsa-framework/..."` | SLSA provenance, when every image has the same one |
+| `attestations.<name>.slsa.sourceCommit` | string | `"1a2b3c4d..."` | The provenance's `gitCommit` dependency, when every image has the same one |
+| `attestations.<name>.slsa.sourceURI` | string | `"git+https://github.com/myorg/app"` | Its URI, when every image has the same one |
 | `attestations.<name>.effective.critical` | int | `0` | A scan; also `high`, `medium`, `low`, `unknown`; after VEX |
 | `attestations.<name>.before.critical` | int | `2` | A scan; before VEX |
 | `attestations.<name>.effectiveIDs` | list | `["CVE-2026-1234"]` | A scan; effective critical and high IDs, at most 50 |
 | `attestations.<name>.scannedAt` | string | `"2026-10-14T09:00:00Z"` | A scan; RFC 3339 |
-| `attestations.<name>.scanner` | string | `"trivy"` | A scan |
-| `attestations.<name>.predicate` | string | `'{"result":"PASSED"}'` | Canonical JSON, at most 64 KiB; read it with `json.unmarshal(...)` |
+| `attestations.<name>.scanner` | string | `"trivy"` | A scan, when every image has the same one |
+| `attestations.<name>.predicate` | string | `'{"result":"PASSED"}'` | Canonical JSON, at most 64 KiB; read it with `json.unmarshal(...)`; when every image has the same one |
+| `attestations.<name>.images` | list | `[{"image": "ghcr.io/myorg/app@sha256:...", "verified": true, ...}]` | Each image's own result: `image`, `verified`, and `signer`, `authority`, `digest`, `predicate`, `slsa`, `vulns` as above, when it has them |
+
+A version with several images folds them into one value per name: `verified` when every
+image is, the lowest build level, the summed counts and the oldest scan. A field that names one
+image's attestation (its signer, digest, predicate, builder, source, level source or scanner)
+is set only when every image has the same value. Otherwise it is left out, and an expression
+that reads it fails, so the gate blocks rather than deciding on one image. To check each image,
+use `images`: `attestations.provenance.images.all(i, i.slsa.sourceURI == "git+https://github.com/myorg/app")`.
 
 A scan's fields are also under `attestations.<name>.vulns` (`attestations.vulns.vulns.effective.high`).
 
@@ -448,6 +456,6 @@ expression: 'attestations.vulns.effective.critical == 0 && attestations.vulns.ef
 ```
 
 ```yaml
-# The test-result attestation passed
-expression: 'json.unmarshal(attestations.tests.predicate).result == "PASSED"'
+# Every image's test-result attestation passed
+expression: 'attestations.tests.images.all(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")'
 ```

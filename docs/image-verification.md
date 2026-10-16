@@ -71,10 +71,12 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
   `--new-bundle-format`. Key and keyless. The bundle must be a cosign image signature: a DSSE
   in-toto statement with predicate type `https://sigstore.dev/cosign/sign/v1` whose subject is the
   image digest. Attestations (SBOM, provenance) and plain message signatures attached to the same
-  image are not signatures of it, whoever signed them. Up to 64 bundles are read per image,
-  signatures and the [attestations](#attestations) the policy names together; a referrer whose
-  `dev.sigstore.bundle.predicateType` annotation names another predicate is skipped before it
-  counts, so other attestations attached to the image cannot crowd out its signatures.
+  image are not signatures of it, whoever signed them. Up to 32 signature bundles and 64 bundles
+  of the [attestations](#attestations) the policy names are read per image, each against its own
+  limit. A referrer whose `dev.sigstore.bundle.predicateType` annotation names a predicate the
+  policy does not verify is skipped before it counts, and so are kardinal's own
+  [promotion receipts](design/21-receipts.md) (annotation `kardinal.io/receipt`). Other attestations on
+  the image therefore cannot crowd out its signatures or the attestations the policy reads.
 - **Legacy cosign signatures** in the `sha256-<digest>.sig` tag (cosign v2's default): key
   authorities only. A keyless signature must be a Sigstore bundle.
 
@@ -220,8 +222,17 @@ finding is **effective** unless the latest OpenVEX statement for its ID (or an a
 that names the image (`<repository>@<digest>`, the digest, or its `pkg:oci` purl), says
 `not_affected` or `fixed`; `affected` and `under_investigation` keep it. The status counts the
 findings by severity (critical, high, medium, low, unknown) before and after VEX, and lists the IDs
-of the effective critical and high ones (at most 50). How old a scan may be is a gate's decision:
-`attestations.vulns.scannedAt`.
+of the effective critical and high ones (at most 50). A gate cannot yet judge how old a scan
+is: `attestations.vulns.scannedAt` is recorded, but gate CEL has no current time to compare it
+with, and the result is not refreshed once the version is Verified (see Timing). A maximum scan
+age is planned (#2044).
+
+**Several images.** A version with several images gets one value per attestation name in
+gates: verified when every image is, the lowest build level, the summed counts and the oldest
+scan. The signer, digest, predicate, builder, source and scanner are set there only when every
+image has the same one. Otherwise an expression that reads them fails, and the gate blocks.
+`attestations.<name>.images` holds each image's own result, for checks one image at a time
+([`attestations.*`](reference/cel-context.md#attestations)).
 
 **Bounds.** Each attestation's predicate is kept as canonical JSON (sorted keys) of at most 64 KiB,
 and a status holds at most 256 KiB of them; the largest are dropped first. A dropped predicate keeps

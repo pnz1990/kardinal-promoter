@@ -162,3 +162,61 @@ func TestOCIRegistry_AttestationsDoNotCrowdOutSignatures(t *testing.T) {
 	}
 	assert.Contains(t, texts, string(sig))
 }
+
+// TestOCIRegistry_ReceiptsDoNotCrowdOutAttestations: a policy that verifies
+// VSAs (to raise a build level) reads the builder's VSA and the image
+// signature although the image carries 70 of kardinal's promotion receipts,
+// VSAs too (kardinal.io/receipt), and 80 SBOM attestations the policy also
+// names: receipts are never read, and attestations have their own budget.
+func TestOCIRegistry_ReceiptsDoNotCrowdOutAttestations(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(srv.Close)
+	host := mustHost(t, srv.URL)
+	ctx := context.Background()
+	img, err := random.Image(256, 1)
+	require.NoError(t, err)
+	d, err := img.Digest()
+	require.NoError(t, err)
+	repo := host + "/app"
+	ref, err := name.NewDigest(repo+"@"+d.String(), name.Insecure)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ref, img))
+	insecure := []name.Option{name.Insecure}
+	key, err := signtest.NewKey()
+	require.NoError(t, err)
+
+	const vsa, spdx = "https://slsa.dev/verification_summary/v1", "https://spdx.dev/Document"
+	for i := range 70 {
+		b, err := key.BundleWithPredicate(repo, d.String(), vsa)
+		require.NoError(t, err)
+		require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), b,
+			map[string]string{"dev.sigstore.bundle.predicateType": vsa, "kardinal.io/receipt": "true", "e2e/n": fmt.Sprint(i)}, insecure))
+	}
+	for i := range 80 {
+		b, err := key.BundleWithPredicate(repo, d.String(), spdx)
+		require.NoError(t, err)
+		require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), b,
+			map[string]string{"dev.sigstore.bundle.predicateType": spdx, "e2e/n": fmt.Sprint(i)}, insecure))
+	}
+	builderVSA, err := key.BundleWithPredicate(repo, d.String(), vsa)
+	require.NoError(t, err)
+	require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), builderVSA,
+		map[string]string{"dev.sigstore.bundle.predicateType": vsa, "e2e/n": "builder"}, insecure))
+	sig, err := key.Bundle(repo, d.String())
+	require.NoError(t, err)
+	require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), sig,
+		map[string]string{"dev.sigstore.bundle.predicateType": iv.CosignSignPredicate}, insecure))
+
+	r := &iv.OCIRegistry{Transport: http.DefaultTransport}
+	got, err := r.Signatures(ctx, repo, d.String(), iv.RegistryOptions{Insecure: []string{host}, AttestationTypes: []string{vsa}})
+	require.NoError(t, err)
+	require.Len(t, got.Bundles, 1, "the signature")
+	assert.Equal(t, string(sig), string(got.Bundles[0]))
+	require.Len(t, got.Attestations, 1, "the builder's VSA; no receipt")
+	assert.Equal(t, string(builderVSA), string(got.Attestations[0]))
+
+	got, err = r.Signatures(ctx, repo, d.String(), iv.RegistryOptions{Insecure: []string{host}, AttestationTypes: []string{vsa, spdx}})
+	require.NoError(t, err)
+	assert.Len(t, got.Bundles, 1, "the signature, whatever the number of attestations")
+	assert.Len(t, got.Attestations, 64, "attestations are bounded on their own")
+}
