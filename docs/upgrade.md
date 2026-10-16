@@ -78,7 +78,31 @@ under v0.11.0 keeps working:
 The next release targets the same kro as v0.11.0, so kro is not upgraded.
 
 **1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section
-lists every change since v0.11.0.
+lists every change since v0.11.0; its "Before you upgrade" list is what can change for you:
+
+- **Kubernetes 1.35 or later.** The chart's `kubeVersion` refuses an older cluster. Check the
+  server version first:
+
+  ```bash
+  kubectl version
+  ```
+
+- **Sync on promotion is scoped to the Pipeline's own objects.** The controller now asks Argo
+  CD or Flux to sync only an Application or Kustomization in the Pipeline's namespace or
+  deploying there. Applications that deploy to other namespaces, objects in `argocd` or
+  `flux-system` that name no destination namespace, and Applications for another cluster are
+  skipped, and their steps wait for the tool's poll. Admit them with `health.refresh.namespaces`
+  (for example `default=my-app-*`, or `default=argocd`) in the values you upgrade with, or
+  `["*=*"]` for v0.11.0's behaviour ([Sync on promotion](health-adapters.md#sync-on-promotion)).
+- **Image Subscriptions' `provenance.commitSHA`** is the commit the build recorded in
+  `org.opencontainers.image.revision`, or empty, instead of the image digest. A gate or PR
+  template that reads it on those versions should read `images[0].digest` for the digest.
+- **Free text has length limits**: a Bundle's `provenance.author` (256 characters) and
+  `ciRunURL` (2048), a gate override's `reason` (1024) and a ChangeWindow's `reason` (1024).
+  Objects already stored over a limit stay writable while that field is unchanged.
+- **Agents are new.** Nothing changes for agents until you register one with an
+  `AgentIdentity`; a registered agent's versions then wait for a person in each environment
+  unless its `autonomy` is `auto` ([Actor-aware policy](agentic/policy.md#autonomy-per-environment)).
 
 **2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
 v0.11.0 chart installed, so `--force-conflicts` is required:
