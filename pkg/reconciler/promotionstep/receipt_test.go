@@ -289,3 +289,29 @@ func TestReceiptJourney_TemplateAsTranslated(t *testing.T) {
 	assert.Equal(t, strings.TrimPrefix(translated, "sha256:"), gate.TemplateDigest["sha256"])
 	assert.NotEqual(t, strings.TrimPrefix(graph.GateTemplateDigest(tmpl.Spec), "sha256:"), gate.TemplateDigest["sha256"])
 }
+
+// TestReceiptJourney_NewestImageVerification (#1951 finding 7): after a
+// policy edit a Bundle has two Verified ImageVerifications; the receipt
+// records the newest by creation time, though the list returns it first.
+//
+// Covers RECEIPT-JOURNEY-05.
+func TestReceiptJourney_NewestImageVerification(t *testing.T) {
+	f := newReceiptFixture(t, true, nil)
+	ctx := context.Background()
+	iv := func(name, signer string, created time.Time) {
+		v := &v1alpha1.ImageVerification{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default",
+			CreationTimestamp: metav1.NewTime(created),
+			Labels:            map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1"}}}
+		require.NoError(t, f.c.Create(ctx, v))
+		v.Status.Phase = v1alpha1.ImageVerificationVerified
+		v.Status.Images = []v1alpha1.ImageVerificationResult{{Image: "nginx", Verified: true, Signer: signer}}
+		require.NoError(t, f.c.Update(ctx, v)) // the fixture has no status subresource for it
+	}
+	at := time.Date(2026, 10, 14, 8, 0, 0, 0, time.UTC)
+	iv("a-after-the-edit", "new-policy", at.Add(time.Hour))
+	iv("z-before-the-edit", "old-policy", at)
+	f.toVerified(t)
+	_, st := f.receipt(t)
+	require.Len(t, st.Predicate.Kardinal.Checks.ImageVerification, 1)
+	assert.Equal(t, "new-policy", st.Predicate.Kardinal.Checks.ImageVerification[0].By)
+}

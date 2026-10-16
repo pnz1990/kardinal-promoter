@@ -183,9 +183,16 @@ func (r *Reconciler) pendingReceipt(ctx context.Context, ps *v1alpha1.PromotionS
 	}); err != nil {
 		return nil, fmt.Errorf("list image verifications: %w", err)
 	}
+	// The newest Verified one: after a policy edit there are two, and list
+	// order is not creation order (as the attestation context reads them).
 	for i := range ivs.Items {
-		if ivs.Items[i].Status.Phase == v1alpha1.ImageVerificationVerified {
-			in.ImageVerification = &ivs.Items[i]
+		iv := &ivs.Items[i]
+		if iv.Status.Phase != v1alpha1.ImageVerificationVerified {
+			continue
+		}
+		if cur := in.ImageVerification; cur == nil || cur.CreationTimestamp.Before(&iv.CreationTimestamp) ||
+			(cur.CreationTimestamp.Equal(&iv.CreationTimestamp) && cur.Name < iv.Name) {
+			in.ImageVerification = iv
 		}
 	}
 	pr := receiptPR(ps)
