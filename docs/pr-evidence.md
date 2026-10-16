@@ -372,10 +372,12 @@ opened. A PR counts as the promotion's own only when it is:
 What the retry does:
 
 - **Still open:** open-pr adopts it before opening one, and opens no second PR. An open PR of the
-  branch with another head commit (someone pushed to the branch) is not adopted: the step fails
-  with a message naming both commits and is retried. It does not open a PR of its own either,
-  because the SCM would refuse the duplicate. Close that PR, and the retry pushes the branch and
-  opens kardinal's.
+  branch with another head commit (someone pushed to the branch) is not adopted, and no PR is
+  created for it, because the SCM would refuse the duplicate. Instead the step starts its steps
+  again: git-push force-pushes kardinal's commit to the branch, the PR now carries it, and
+  open-pr adopts it. What merges is kardinal's commit. If someone keeps pushing, the step gives
+  up after three restarts in one reconcile and retries with backoff; the step's message names
+  both commits.
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
   looks up the merged PR of its branch, with the recorded commit as its head, and records the
@@ -384,6 +386,11 @@ What the retry does:
   was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is
   not taken for this one.
 - **Neither, or no recorded commit:** the step records `noChanges`, as before.
+
+One case is accepted: a PR that someone opens by hand on kardinal's branch, in the repository
+itself and after kardinal's push, carries kardinal's commit and is adopted with that person's
+title and body. Only someone who can push to the repository can do that, and they could push
+the branch anyway.
 
 A lookup that fails with a transient error (5xx, a rate limit, a network error) is retried. One
 that fails with a permanent error (401, 403, 404) fails the step with the cause. Neither is

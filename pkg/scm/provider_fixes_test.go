@@ -512,9 +512,11 @@ func TestAzureDevOpsProvider_PRURL(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				pr := map[string]interface{}{"pullRequestId": 7, "status": "active", "repository": map[string]string{"webUrl": tc.webURL},
+				pr := map[string]interface{}{"pullRequestId": 7, "status": "active", "repository": map[string]string{"id": "repo-id", "webUrl": tc.webURL},
 					"sourceRefName": "refs/heads/kardinal/b/prod", "targetRefName": "refs/heads/main"}
 				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/_apis/git/repositories/repo"):
+					_, _ = w.Write([]byte(`{"id":"repo-id"}`))
 				case r.Method == http.MethodPost && tc.exists:
 					w.WriteHeader(http.StatusConflict)
 					_, _ = w.Write([]byte(`{"message":"TF401179: An active pull request for the source and target branch already exists."}`))

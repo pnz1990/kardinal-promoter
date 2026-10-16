@@ -1423,9 +1423,9 @@ func TestOpenPR_NothingToCommit(t *testing.T) {
 
 // TestOpenPR_AdoptsOnlyItsOwnOpenPR (#2075 QA): open-pr adopts the open PR
 // of its branch only when its head is the commit git-push pushed. Another
-// head commit (someone pushed to kardinal's branch) is not adopted and fails
-// the step, retryably, without a create that the SCM's refused duplicate
-// would adopt. Without a recorded push there is no lookup: open-pr opens
+// head commit (someone pushed to kardinal's branch) is not adopted, and no
+// create that the SCM's refused duplicate would adopt is sent: the sequence
+// restarts, so git-push pushes kardinal's commit again. Without a recorded push there is no lookup: open-pr opens
 // its PR as before.
 func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 	step, err := parentsteps.Lookup("open-pr")
@@ -1445,12 +1445,11 @@ func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 		assert.Equal(t, "5", res.Outputs["prNumber"])
 		assert.Zero(t, m.openPRCalls)
 	})
-	t.Run("another head commit: not adopted, no create, retried", func(t *testing.T) {
+	t.Run("another head commit: not adopted, no create, the sequence restarts", func(t *testing.T) {
 		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, open: &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5", HeadSHA: "deadbeefcafe"}}
 		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed})
-		require.Error(t, err)
-		assert.NotErrorIs(t, err, parentsteps.ErrPermanent, "retried")
-		assert.Equal(t, parentsteps.StepFailed, res.Status)
+		require.NoError(t, err)
+		assert.Equal(t, parentsteps.StepRestart, res.Status, "git-push pushes kardinal's commit again")
 		assert.Contains(t, res.Message, "is not "+testPushed+", the commit kardinal pushed")
 		assert.Empty(t, res.Outputs["prNumber"])
 		assert.Zero(t, m.openPRCalls, "no create: its refused duplicate would adopt that PR")

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -168,6 +169,8 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, requests := fakeSCMAPI(t, func(r *http.Request) (int, string) {
 				switch {
+				case r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(prs, "/pullrequests"):
+					return http.StatusOK, `{"id":"repo-id"}` // the lookup reads the repository's ID
 				case r.Method == http.MethodGet && r.URL.Path == prs:
 					return http.StatusOK, `{"value":[]}` // no active PR of the branch yet
 				case r.Method == http.MethodPost && r.URL.Path == prs:
@@ -192,9 +195,10 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 			assert.NotContains(t, result.Message, "adding labels failed")
 
 			reqs := requests()
-			require.Len(t, reqs, 2+len(tt.wantLabels))
-			assert.Equal(t, http.MethodGet, reqs[0].Method, "open-pr looks for an active PR of its branch first")
-			reqs = reqs[1:]
+			require.Len(t, reqs, 3+len(tt.wantLabels))
+			assert.Equal(t, http.MethodGet, reqs[0].Method, "open-pr reads the repository's ID")
+			assert.Equal(t, http.MethodGet, reqs[1].Method, "then looks for an active PR of its branch")
+			reqs = reqs[2:]
 			assert.Equal(t, prs, reqs[0].Path)
 			assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte(":ado-pat")), reqs[0].Auth)
 			assert.Equal(t, tt.wantTitle, reqs[0].Body["title"])
@@ -213,7 +217,12 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 
 	t.Run("tags refused", func(t *testing.T) {
 		srv, _ := fakeSCMAPI(t, func(r *http.Request) (int, string) {
-			if r.URL.Path == prs {
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == strings.TrimSuffix(prs, "/pullrequests"):
+				return http.StatusOK, `{"id":"repo-id"}`
+			case r.Method == http.MethodGet && r.URL.Path == prs:
+				return http.StatusOK, `{"value":[]}`
+			case r.URL.Path == prs:
 				return http.StatusCreated, `{"pullRequestId":12,"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web-app"}}`
 			}
 			return http.StatusForbidden, `{"message":"TF401027: You need the Git 'PullRequestContribute' permission to perform this action.","typeKey":"GitNeedsPermissionException"}`

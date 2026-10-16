@@ -479,11 +479,22 @@ func (a *AzureDevOpsProvider) listPRs(ctx context.Context, repo, head, base stri
 	if merged {
 		status = "completed"
 	}
+	// The PR's source repository is checked positively: Azure DevOps names
+	// it only on a fork's PR (forkSource), and omits it on every other one,
+	// so "no forkSource" alone would trust a field's absence. The list asks
+	// for PRs whose source branch is in this repository, by its ID; a
+	// repository whose ID cannot be read is an error, never "no PR".
+	repoID, err := a.repositoryID(ctx, org, project, repoName)
+	if err != nil {
+		return nil, err
+	}
 	query := url.Values{
-		"searchCriteria.sourceRefName": {"refs/heads/" + head},
-		"searchCriteria.targetRefName": {"refs/heads/" + base},
-		"searchCriteria.status":        {status},
-		"api-version":                  {azureDevOpsAPIVersion},
+		"searchCriteria.sourceRefName":      {"refs/heads/" + head},
+		"searchCriteria.targetRefName":      {"refs/heads/" + base},
+		"searchCriteria.sourceRepositoryId": {repoID},
+		"searchCriteria.repositoryId":       {repoID},
+		"searchCriteria.status":             {status},
+		"api-version":                       {azureDevOpsAPIVersion},
 	}
 	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullrequests?%s", org, project, repoName, query.Encode())
 	var result struct {
@@ -500,6 +511,7 @@ func (a *AzureDevOpsProvider) listPRs(ctx context.Context, repo, head, base stri
 				CommitID string `json:"commitId"`
 			} `json:"lastMergeSourceCommit"`
 			Repository struct {
+				ID     string `json:"id"`
 				WebURL string `json:"webUrl"`
 			} `json:"repository"`
 		} `json:"value"`
@@ -510,13 +522,31 @@ func (a *AzureDevOpsProvider) listPRs(ctx context.Context, repo, head, base stri
 	var out []FoundPR
 	for _, pr := range result.Value {
 		fork := len(pr.ForkSource) > 0 && string(pr.ForkSource) != "null"
-		if fork || pr.Status != status || pr.SourceRefName != "refs/heads/"+head || pr.TargetRefName != "refs/heads/"+base {
+		// The target is this repository: a response that names another, or
+		// none, is not trusted.
+		thisRepo := strings.EqualFold(pr.Repository.ID, repoID)
+		if fork || !thisRepo || pr.Status != status || pr.SourceRefName != "refs/heads/"+head || pr.TargetRefName != "refs/heads/"+base {
 			continue
 		}
 		out = append(out, FoundPR{Number: pr.PullRequestID, HeadSHA: pr.LastMergeSourceCommit.CommitID, OpenedAt: pr.CreationDate,
 			URL: a.prWebURL(pr.Repository.WebURL, org, project, repoName, pr.PullRequestID)})
 	}
 	return out, nil
+}
+
+// repositoryID is the ID of org/project/repoName.
+func (a *AzureDevOpsProvider) repositoryID(ctx context.Context, org, project, repoName string) (string, error) {
+	var repo struct {
+		ID string `json:"id"`
+	}
+	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s?api-version=%s", org, project, repoName, azureDevOpsAPIVersion)
+	if err := a.do(ctx, http.MethodGet, path, nil, &repo); err != nil {
+		return "", fmt.Errorf("read the ID of ADO repository %s/%s/%s: %w", org, project, repoName, err)
+	}
+	if repo.ID == "" {
+		return "", fmt.Errorf("ADO repository %s/%s/%s: the API returned no ID", org, project, repoName)
+	}
+	return repo.ID, nil
 }
 
 // FindOpenPR implements OpenPRFinder.

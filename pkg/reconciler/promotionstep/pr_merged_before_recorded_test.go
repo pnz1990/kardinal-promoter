@@ -189,3 +189,59 @@ func TestPushedCommitStoredBeforeOpenPR(t *testing.T) {
 	assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
 	assert.Equal(t, pushedBeforeCrash, got.Status.Outputs["pushedSHA"])
 }
+
+// countingPushGit counts the pushes of pushedHeadGit.
+type countingPushGit struct {
+	pushedHeadGit
+	pushes int
+}
+
+func (g *countingPushGit) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
+	g.pushes++
+	return nil
+}
+
+// movedHeadSCM has PR #5 open on kardinal's branch with another head commit
+// at first; once kardinal pushed again it carries kardinal's commit, as the
+// SCM moves a PR's head with its branch.
+type movedHeadSCM struct {
+	*mockSCM
+	git   *countingPushGit
+	finds int
+}
+
+func (m *movedHeadSCM) FindOpenPR(context.Context, string, string, string) (*scm.FoundPR, error) {
+	m.finds++
+	head := "deadbeefcafe0000000000000000000000000000"
+	if m.git.pushes > 1 {
+		head = pushedBeforeCrash
+	}
+	return &scm.FoundPR{Number: 5, URL: "https://github.com/test/repo/pull/5", HeadSHA: head}, nil
+}
+
+// TestOpenPRWithAnotherHeadRepushes (#2075 QA): an open PR of kardinal's
+// branch whose head is not the commit kardinal pushed (someone pushed to the
+// branch) is not adopted and gets no create. open-pr restarts the sequence,
+// git-push pushes kardinal's commit again, and the PR, now carrying it, is
+// adopted: kardinal's commit is what merges.
+//
+// Covers SCM-OPEN-FIRST-01.
+func TestOpenPRWithAnotherHeadRepushes(t *testing.T) {
+	prs := stepPRStatus(v1alpha1.PRStatusSpec{}, 1, 1, v1alpha1.PRStatusStatus{})
+	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
+	ps.Status.CurrentStepIndex = 2 // git-commit
+	ps.Spec.PRStatusRef = prs.Name
+	c := newClient(t, ps, prs, makePipeline("p"), makeBundle("b1", "p"))
+	g := &countingPushGit{}
+	s := &movedHeadSCM{mockSCM: &mockSCM{open: true}, git: g}
+	r := &promotionstep.Reconciler{Client: c, SCM: s, GitClient: g,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, "step")
+
+	got := getStep(t, c, "step")
+	assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, "5", got.Status.Outputs["prNumber"])
+	assert.Equal(t, 2, g.pushes, "kardinal's commit was pushed again")
+	assert.Equal(t, 2, s.finds)
+	assert.Zero(t, s.openCalled, "no create")
+}

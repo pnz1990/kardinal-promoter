@@ -138,6 +138,14 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	}
 
 	prURL, prNum, adopted, err := openOrAdoptPR(ctx, state, repo, rendered.Title, rendered.Body, branch)
+	if errors.Is(err, errPRHeadMoved) {
+		// A retry would resume here and see the same head. A restart runs
+		// git-push again, which force-pushes kardinal's commit to its
+		// branch; the PR then carries it and is adopted. The engine bounds
+		// the restarts and then retries with backoff.
+		return parentsteps.StepResult{Status: parentsteps.StepRestart,
+			Message: err.Error() + "; pushing kardinal's commit to the branch again"}, nil
+	}
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
@@ -202,11 +210,13 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 // Kardinal's PR is one from the repository's own branch (the lookup never
 // returns a fork's PR of a branch with the same name) whose head commit is
 // the one git-push just pushed (status.outputs.pushedSHA). An open PR of
-// the branch with another head commit is not adopted and fails the step,
-// loudly and retried: someone pushed to kardinal's branch, or the SCM has not
-// caught up with the push yet. It is never handed to OpenPR either, whose
-// refused duplicate would adopt it. Without a recorded commit (a git client
-// that cannot read HEAD) nothing is adopted and OpenPR runs, as before.
+// the branch with another head commit (someone pushed to kardinal's
+// branch, or the SCM has not caught up with the push yet) is not adopted
+// and is never handed to OpenPR, whose refused duplicate would adopt it: it
+// is errPRHeadMoved, and open-pr restarts the sequence, so git-push pushes
+// kardinal's commit to the branch again and the PR then carries it. Without
+// a recorded commit (a git client that cannot read HEAD) nothing is adopted
+// and OpenPR runs, as before.
 func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, bool, error) {
 	pushed := state.Outputs[OutputPushedSHA]
 	if finder, ok := state.SCM.(scm.OpenPRFinder); ok && pushed != "" {
@@ -218,14 +228,17 @@ func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, titl
 		case pr != nil && scm.SameCommit(pr.HeadSHA, pushed):
 			return pr.URL, pr.Number, true, nil
 		case pr != nil:
-			return "", 0, false, fmt.Errorf("PR #%d (%s) is open from kardinal's branch %s, but its head commit %q is not %s, the commit kardinal pushed: "+
-				"it is not adopted; if someone pushed to the branch, close the PR (a retry pushes the branch again)",
-				pr.Number, pr.URL, branch, pr.HeadSHA, pushed)
+			return "", 0, false, fmt.Errorf("%w: PR #%d (%s) is open from kardinal's branch %s, but its head commit %q is not %s, the commit kardinal pushed",
+				errPRHeadMoved, pr.Number, pr.URL, branch, pr.HeadSHA, pushed)
 		}
 	}
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
 	return prURL, prNum, false, err
 }
+
+// errPRHeadMoved is an open PR of kardinal's branch whose head is not the
+// commit kardinal pushed.
+var errPRHeadMoved = errors.New("the PR's head is not kardinal's commit")
 
 // prClockSkew is how much older than the PromotionStep a PR adoptMergedPR
 // adopts may look: the SCM's clock and the cluster's can differ.

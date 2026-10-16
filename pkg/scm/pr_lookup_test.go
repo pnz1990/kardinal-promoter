@@ -48,6 +48,8 @@ type lookupProvider struct {
 	url           func(num int) string
 	// wantQuery holds request substrings that show the server-side filter.
 	wantQuery []string
+	// extra answers other GET paths (Azure DevOps reads the repository ID).
+	extra map[string]string
 }
 
 func iso(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -193,8 +195,10 @@ var lookupProviders = []lookupProvider{
 			return scm.NewAzureDevOpsProvider("t", u, "")
 		},
 		isMergedQuery: func(q string) bool { return strings.Contains(q, "searchCriteria.status=completed") },
-		wantQuery:     []string{"searchCriteria.sourceRefName=refs%2Fheads%2Fkardinal%2Fabc%2Fb1%2Fprod", "searchCriteria.targetRefName=refs%2Fheads%2Fmain"},
-		url:           func(n int) string { return fmt.Sprintf("https://dev.azure.com/org/proj/_git/repo/pullrequest/%d", n) },
+		wantQuery: []string{"searchCriteria.sourceRefName=refs%2Fheads%2Fkardinal%2Fabc%2Fb1%2Fprod", "searchCriteria.targetRefName=refs%2Fheads%2Fmain",
+			"searchCriteria.sourceRepositoryId=repo-id"},
+		extra: map[string]string{"/org/proj/_apis/git/repositories/repo": `{"id":"repo-id","name":"repo"}`},
+		url:   func(n int) string { return fmt.Sprintf("https://dev.azure.com/org/proj/_git/repo/pullrequest/%d", n) },
 		list: func(prs []lookupPR) string {
 			var out []string
 			for _, p := range prs {
@@ -205,7 +209,7 @@ var lookupProviders = []lookupProvider{
 				}
 				out = append(out, fmt.Sprintf(`{"pullRequestId":%d,"status":"%s","creationDate":"%s",%s`+
 					`"sourceRefName":"refs/heads/%s","targetRefName":"refs/heads/%s","lastMergeSourceCommit":{"commitId":"%s"},`+
-					`"repository":{"webUrl":"https://dev.azure.com/org/proj/_git/repo"}}`,
+					`"repository":{"id":"repo-id","webUrl":"https://dev.azure.com/org/proj/_git/repo"}}`,
 					p.num, status, iso(p.created), fork, p.head, p.base, p.sha))
 			}
 			return `{"value":[` + strings.Join(out, ",") + `]}`
@@ -219,8 +223,12 @@ func serveLookup(t *testing.T, lp lookupProvider, openList, mergedList []lookupP
 	var queries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodGet, r.Method, "a lookup only reads")
-		queries = append(queries, r.URL.RawQuery)
 		w.Header().Set("Content-Type", "application/json")
+		if body, ok := lp.extra[r.URL.Path]; ok {
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		queries = append(queries, r.URL.RawQuery)
 		if lp.isMergedQuery(r.URL.RawQuery) {
 			_, _ = w.Write([]byte(lp.list(mergedList)))
 			return
@@ -373,6 +381,48 @@ func TestFindPR_ForgejoWithoutRepoIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, 9, got.Number)
+}
+
+// TestFindPR_AzureDevOpsFailsClosed (#2075 QA): Azure DevOps names a PR's
+// source repository only on a fork's PR (forkSource), so the lookup asks for
+// PRs whose source branch is in this repository, by its ID. A repository
+// whose ID cannot be read is an error, never "no PR", and a PR the response
+// says targets another repository is not kardinal's.
+//
+// Covers SCM-OPEN-FIRST-01.
+func TestFindPR_AzureDevOpsFailsClosed(t *testing.T) {
+	pr := `{"value":[{"pullRequestId":5,"status":"active","creationDate":"2026-10-16T05:00:00Z","sourceRefName":"refs/heads/` + lookupHead +
+		`","targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"` + pushedCommit + `"},"repository":{"id":"%s"}}]}`
+	serve := func(repo string, prRepoID string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/repositories/repo") {
+				if repo == "" {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(repo))
+				return
+			}
+			_, _ = fmt.Fprintf(w, pr, prRepoID)
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	got, err := scm.NewAzureDevOpsProvider("t", serve(`{"id":"repo-id"}`, "repo-id"), "").FindOpenPR(context.Background(), "org/proj/repo", lookupHead, lookupBase)
+	require.NoError(t, err)
+	require.NotNil(t, got, "this repository's own PR")
+
+	got, err = scm.NewAzureDevOpsProvider("t", serve("", "repo-id"), "").FindOpenPR(context.Background(), "org/proj/repo", lookupHead, lookupBase)
+	require.Error(t, err, "the repository ID cannot be read")
+	assert.Nil(t, got)
+
+	got, err = scm.NewAzureDevOpsProvider("t", serve(`{"name":"repo"}`, "repo-id"), "").FindOpenPR(context.Background(), "org/proj/repo", lookupHead, lookupBase)
+	require.Error(t, err, "no ID in the response")
+	assert.Nil(t, got)
+
+	got, err = scm.NewAzureDevOpsProvider("t", serve(`{"id":"repo-id"}`, "other-repo"), "").FindOpenPR(context.Background(), "org/proj/repo", lookupHead, lookupBase)
+	require.NoError(t, err)
+	assert.Nil(t, got, "a PR of another repository")
 }
 
 // TestFindMergedPR_ErrorsAreErrors: a failing lookup is an error, never "no

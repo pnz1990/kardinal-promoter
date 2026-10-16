@@ -87,6 +87,15 @@ func lookedUpFirst(t *testing.T, calls []apiCall, route string) []apiCall {
 	return calls[1:]
 }
 
+// adoRepoRead checks that an Azure DevOps lookup first read the repository's
+// ID (route) and returns the calls after it.
+func adoRepoRead(t *testing.T, calls []apiCall, route string) []apiCall {
+	t.Helper()
+	require.NotEmpty(t, calls)
+	assert.True(t, strings.HasPrefix(calls[0].Route, route+"?"), "the first call reads the repository ID: %s", calls[0].Route)
+	return calls[1:]
+}
+
 // routes lists the routes of calls, in order.
 func routes(calls []apiCall) []string {
 	out := make([]string, 0, len(calls))
@@ -294,6 +303,7 @@ func TestOpenPRControls_Bitbucket(t *testing.T) {
 func TestOpenPRControls_AzureDevOps(t *testing.T) {
 	const repo = "/contoso/Web/_apis/git/repositories/web"
 	srv, calls := routedAPI(t, map[string][]apiReply{
+		"GET " + repo:                                         {{200, `{"id":"repo-id"}`}},
 		"GET " + repo + "/pullrequests":                       {{200, `{"value":[]}`}},
 		"POST " + repo + "/pullrequests":                      {{201, `{"pullRequestId":12,"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}`}},
 		"POST " + repo + "/pullRequests/12/labels":            {{200, `{}`}},
@@ -314,7 +324,7 @@ func TestOpenPRControls_AzureDevOps(t *testing.T) {
 		"POST " + repo + "/pullRequests/12/labels?api-version=7.1", "POST " + repo + "/pullRequests/12/labels?api-version=7.1",
 		"POST " + repo + "/pullRequests/12/labels?api-version=7.1",
 		"PUT " + repo + "/pullRequests/12/reviewers/alice-id?api-version=7.1", "PUT " + repo + "/pullRequests/12/reviewers/team-id?api-version=7.1"},
-		routes(lookedUpFirst(t, calls(), "GET "+repo+"/pullrequests")))
+		routes(lookedUpFirst(t, adoRepoRead(t, calls(), "GET "+repo), "GET "+repo+"/pullrequests")))
 }
 
 // TestOpenPRControls_Failures: a template that does not render fails the
@@ -444,6 +454,16 @@ func TestOpenPRControls_BitbucketDC(t *testing.T) {
 // overwrite them.
 //
 // Covers SCM-OPEN-FIRST-01.
+// lookupRoutes answers list with body; on Azure DevOps it also answers the
+// repository read the lookup makes first.
+func lookupRoutes(list, body string) map[string][]apiReply {
+	routes := map[string][]apiReply{list: {{200, body}}}
+	if repo, ok := strings.CutSuffix(list, "/pullrequests"); ok && strings.Contains(list, "/_apis/git/") {
+		routes[repo] = []apiReply{{200, `{"id":"repo-id"}`}}
+	}
+	return routes
+}
+
 func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 	const head = "kardinal/nginx-demo-v1-29-0/prod"
 	for _, tc := range []struct {
@@ -475,13 +495,13 @@ func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 				return strings.Replace(b, `"project":{"key":"PLAT"}}},"toRef"`, `"project":{"key":"~ATTACKER"}}},"toRef"`, 1)
 			}},
 		{"azuredevops", "https://dev.azure.com/contoso/Web/_git/web", "GET /contoso/Web/_apis/git/repositories/web/pullrequests",
-			`{"value":[{"pullRequestId":5,"status":"active","sourceRefName":"refs/heads/` + head + `","targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"` + testPushed + `"},"repository":{"webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}]}`,
+			`{"value":[{"pullRequestId":5,"status":"active","sourceRefName":"refs/heads/` + head + `","targetRefName":"refs/heads/main","lastMergeSourceCommit":{"commitId":"` + testPushed + `"},"repository":{"id":"repo-id","webUrl":"https://dev.azure.com/contoso/Web/_git/web"}}]}`,
 			"https://dev.azure.com/contoso/Web/_git/web/pullrequest/5", func(b string) string {
 				return strings.Replace(b, `"status":"active",`, `"status":"active","forkSource":{"repository":{"name":"web-fork"}},`, 1)
 			}},
 	} {
 		t.Run(tc.provider, func(t *testing.T) {
-			srv, calls := routedAPI(t, map[string][]apiReply{tc.list: {{200, tc.body}}})
+			srv, calls := routedAPI(t, lookupRoutes(tc.list, tc.body))
 			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
 			require.NoError(t, err)
 			state := controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{})
@@ -496,14 +516,15 @@ func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 		})
 		t.Run(tc.provider+": another head commit is not adopted", func(t *testing.T) {
 			// A PR on kardinal's branch whose head is not the commit
-			// git-push pushed (someone pushed to the branch, or opened the
-			// PR by hand after pushing): not adopted, and no create, whose
-			// refused duplicate would adopt it.
-			srv, calls := routedAPI(t, map[string][]apiReply{tc.list: {{200, strings.ReplaceAll(tc.body, testPushed[:12], "deadbeefcafe")}}})
+			// git-push pushed (someone pushed to the branch): not adopted,
+			// and no create, whose refused duplicate would adopt it; the
+			// sequence restarts so git-push pushes kardinal's commit again.
+			srv, calls := routedAPI(t, lookupRoutes(tc.list, strings.ReplaceAll(tc.body, testPushed[:12], "deadbeefcafe")))
 			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
 			require.NoError(t, err)
 			result, err := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))
-			require.Error(t, err)
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepRestart, result.Status, "git-push pushes kardinal's commit again")
 			assert.Contains(t, result.Message, "the commit kardinal pushed")
 			assert.Empty(t, result.Outputs["prNumber"])
 			for _, c := range calls() {
@@ -513,7 +534,7 @@ func TestOpenPR_AdoptsTheOpenPROfItsBranch(t *testing.T) {
 		t.Run(tc.provider+": a fork's PR is not adopted", func(t *testing.T) {
 			// The only open PR of the branch name is a fork's: open-pr opens
 			// its own (the fake has no create route, so the create fails).
-			srv, calls := routedAPI(t, map[string][]apiReply{tc.list: {{200, tc.fork(tc.body)}}})
+			srv, calls := routedAPI(t, lookupRoutes(tc.list, tc.fork(tc.body)))
 			p, err := scm.NewProvider(tc.provider, "tok", srv.URL, "")
 			require.NoError(t, err)
 			result, _ := runOpenPR(t, controlsState(t, tc.gitURL, p, &v1alpha1.PRConfig{}))

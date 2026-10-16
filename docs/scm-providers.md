@@ -53,8 +53,11 @@ branch of the same name never matches. Each SCM's source-repository field is che
 | Bitbucket Data Center | `fromRef.repository` |
 | Azure DevOps | no `forkSource` |
 
-Its head commit must also be the one kardinal pushed. An open PR of the branch with another
-head commit fails the step loudly instead of being adopted. A PR that another run opens between
+Its head commit must also be the one kardinal pushed. For an open PR of the branch with another
+head commit, kardinal pushes its commit to the branch again and then adopts the PR, rather than
+adopting the other commit. A PR opened by hand on kardinal's branch in the repository itself,
+after kardinal's push, carries kardinal's commit and is adopted with its own title and body:
+only someone who can push the branch anyway can do that. A PR that another run opens between
 the lookup and the create is still adopted, from the repository's own branch only, when the SCM
 refuses the duplicate.
 
