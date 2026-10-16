@@ -424,7 +424,7 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | `ciRunURL` | URL of the CI run: an absolute `http://` or `https://` URL | `https://github.com/.../runs/12345` |
 | `author` | Who or what triggered the build | `engineer-name`, `dependabot[bot]` |
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
-| `commitTime` | When the commit was made (RFC 3339); the lead time metrics start at it, else at the version's creation, which leaves out the build. The Bundle API and `kardinal create bundle` refuse a zero time or one more than 5 minutes in the future; a commit time after the version's creation (set with kubectl) is ignored | `2026-04-09T09:52:13Z` |
+| `commitTime` | When the commit was made (RFC 3339); the lead time metrics start at it, else at the version's creation, which leaves out the build. The Bundle API and `kardinal create bundle` refuse a zero time, one more than 5 minutes in the future, and one more than a year old; a commit time after the version's creation or more than a year before it (set with kubectl) is ignored | `2026-04-09T09:52:13Z` |
 
 The PR body and the UI link `ciRunURL`, so it is checked when a version is created. It must be
 empty or an absolute `http://` or `https://` URL with a host, without user info

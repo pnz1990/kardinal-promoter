@@ -1363,6 +1363,8 @@ type PipelineDeploymentMetrics struct {
 	// Bundle's commit time is spec.provenance.commitTime when CI set it;
 	// otherwise the Bundle's creation, which leaves out the build
 	// (LeadTimeFromCommit counts the Bundles measured from the commit).
+	// Rollback Bundles are left out: they restore a change, they do not
+	// ship one.
 	// +optional
 	P50CommitToProdMinutes int64 `json:"p50CommitToProdMinutes,omitempty"`
 
@@ -1374,7 +1376,7 @@ type PipelineDeploymentMetrics struct {
 
 	// LeadTimeFromCommit is how many of the sampled Bundles' lead times
 	// start at spec.provenance.commitTime; the others start at the Bundle's
-	// creation. Rollback Bundles always start at their creation.
+	// creation. Rollback Bundles have no lead time and are not counted.
 	// +optional
 	LeadTimeFromCommit int `json:"leadTimeFromCommit,omitempty"`
 

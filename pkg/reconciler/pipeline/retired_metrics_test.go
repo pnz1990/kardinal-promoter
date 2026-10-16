@@ -94,8 +94,8 @@ func TestStepFromRetired_DeployedAt(t *testing.T) {
 // TestComputeDeploymentMetrics_LeadTimeFromCommit (#1942): the lead time
 // starts at spec.provenance.commitTime when CI set it, so the build counts
 // (live: commit 03:44:26, Bundle 03:46:57, prod 03:49:01 reported 1 minute,
-// not 4); without it, at the Bundle's creation. A rollback starts at its
-// creation: its commit is the restored build's.
+// not 4); without it, at the Bundle's creation. A rollback has no lead
+// time: its commit is the restored build's, and it ships no change.
 func TestComputeDeploymentMetrics_LeadTimeFromCommit(t *testing.T) {
 	p := makePipelineWithEnvs("app", "default", "prod")
 	commit := t0.Add(-150 * time.Second)
@@ -112,6 +112,40 @@ func TestComputeDeploymentMetrics_LeadTimeFromCommit(t *testing.T) {
 	m := pipeline.ComputeDeploymentMetrics(p, []kardinalv1alpha1.Bundle{withCommit, plain, rb}, steps, t0.Add(3*time.Hour))
 	require.NotNil(t, m)
 	assert.Equal(t, 1, m.LeadTimeFromCommit, "only v1 is measured from its commit")
-	assert.Equal(t, int64(2), m.P50CommitToProdMinutes, "v2 and rb: 2 minutes from creation")
+	assert.Equal(t, int64(4), m.P50CommitToProdMinutes, "of v2 (2 minutes from creation) and v1; rb is left out")
 	assert.Equal(t, int64(4), m.P90CommitToProdMinutes, "v1: 4.5 minutes from its commit")
+}
+
+// TestComputeDeploymentMetrics_RollbacksHaveNoLeadTime (#1985, QA): DORA's
+// lead time for changes leaves rollbacks out. Three fast rollbacks among
+// three releases pulled the p50 from 30 minutes down to 20. They still
+// count in the rollback rates.
+func TestComputeDeploymentMetrics_RollbacksHaveNoLeadTime(t *testing.T) {
+	p := makePipelineWithEnvs("app", "default", "prod")
+	var bundles []kardinalv1alpha1.Bundle
+	var steps []kardinalv1alpha1.PromotionStep
+	at := t0
+	add := func(name, rollbackOf string, lead time.Duration) {
+		b := bundleAt(name, at)
+		if rollbackOf != "" {
+			commit := t0.Add(-24 * time.Hour)
+			b.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{RollbackOf: rollbackOf, CommitTime: mt(commit)}
+		}
+		bundles = append(bundles, b)
+		steps = append(steps, *makeVerifiedStep(name, "app", "prod", "default", at.Add(lead)))
+		at = at.Add(time.Hour)
+	}
+	add("v1", "", 20*time.Minute)
+	add("rb1", "v1", time.Minute)
+	add("v2", "", 30*time.Minute)
+	add("rb2", "v2", time.Minute)
+	add("v3", "", 40*time.Minute)
+	add("rb3", "v3", time.Minute)
+	m := pipeline.ComputeDeploymentMetrics(p, bundles, steps, at)
+	require.NotNil(t, m)
+	assert.Equal(t, 6, m.SampleSize)
+	assert.Equal(t, int64(30), m.P50CommitToProdMinutes, "the median of v1, v2 and v3")
+	assert.Equal(t, int64(40), m.P90CommitToProdMinutes)
+	assert.Equal(t, 0, m.LeadTimeFromCommit, "a rollback's commit time is not counted")
+	assert.Equal(t, 500, m.RollbackRateMillis, "rollbacks still count in the rollback rate")
 }

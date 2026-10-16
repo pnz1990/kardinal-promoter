@@ -336,7 +336,7 @@ func TestPipeline_PathStaysInRepo(t *testing.T) {
 // autoRollbackRateMillis: a person started it), 0 stale days, and the p50
 // and p90 of the whole minutes from each Bundle's commit
 // (--commit-time, V3 only) or creation to its prod step's Verified
-// condition (#1942).
+// condition, rollbacks left out (#1942).
 //
 // Covers PIPE-DORA-01.
 func TestPipeline_DeploymentMetrics(t *testing.T) {
@@ -369,15 +369,20 @@ func TestPipeline_DeploymentMetrics(t *testing.T) {
 					m.AutoRollbackRateMillis == autoRollbacks && m.RollbackRateMillis == rollbacks &&
 					m.LeadTimeFromCommit == fromCommit, fmt.Sprintf("%+v", m)
 			}).Status.DeploymentMetrics
+		// A rollback has no lead time (lifecycle.IsRollback).
 		var leads []int64
 		for _, b := range bundles {
+			if lifecycle.IsRollback(a.bundle(t, b)) {
+				continue
+			}
 			leads = append(leads, leadMinutes(t, a, b))
 		}
 		sort.Slice(leads, func(i, j int) bool { return leads[i] < leads[j] })
+		l := len(leads)
 		assert.Equal(t, n, got.RolloutsLast30Days, "rollouts")
 		assert.Equal(t, 0, got.StaleProdDays, "prod was promoted today")
-		assert.Equal(t, leads[n*50/100], got.P50CommitToProdMinutes, "p50 of %v", leads)
-		assert.Equal(t, leads[n*90/100], got.P90CommitToProdMinutes, "p90 of %v", leads)
+		assert.Equal(t, leads[l*50/100], got.P50CommitToProdMinutes, "p50 of %v", leads)
+		assert.Equal(t, leads[l*90/100], got.P90CommitToProdMinutes, "p90 of %v", leads)
 		assert.GreaterOrEqual(t, got.P50CommitToProdMinutes, int64(1), "the prod bake alone takes a minute")
 		assert.NotNil(t, got.ComputedAt)
 	}

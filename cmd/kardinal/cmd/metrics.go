@@ -178,7 +178,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 
 	// Lead time and other bundle-level metrics.
 	for _, b := range pipelineBundles {
-		if vt, ok := verifiedAt[stepKey{b.Name, env}]; ok && !vt.IsZero() {
+		if vt, ok := verifiedAt[stepKey{b.Name, env}]; ok && !vt.IsZero() && !lifecycle.IsRollback(&b) {
 			start, fromCommit := lifecycle.LeadTimeStart(&b)
 			lead := vt.Sub(start)
 			if lead > 0 {
@@ -192,7 +192,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		if b.Status.Phase == "Failed" {
 			failCount++
 		}
-		if b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "" {
+		if lifecycle.IsRollback(&b) {
 			rollbackCount++
 		}
 	}
@@ -222,7 +222,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 
 	if leadTimeSamples > 0 {
 		_, _ = fmt.Fprintf(tw, "lead_time_avg\t%s\t(%s to %s verified, %d samples)\n",
-			formatDuration(avgLead), leadStartNote(leadFromCommit, leadTimeSamples), env, leadTimeSamples)
+			formatDuration(avgLead), leadStartNote(leadFromCommit, leadTimeSamples, true), env, leadTimeSamples)
 	} else {
 		_, _ = fmt.Fprintf(tw, "lead_time_avg\t-\t(no completed promotions to %s in window)\n", env)
 	}
@@ -249,17 +249,22 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
-// leadStartNote says where n lead times start: from the commit
+// leadStartNote says where the lead times start: from the commit
 // (spec.provenance.commitTime) for fromCommit of them, from the Bundle's
-// creation for the others.
-func leadStartNote(fromCommit, n int) string {
+// creation for the others. With exact, n is the number of lead times; else
+// n is the controller's sample size, which also counts the Verified
+// versions with no lead time (rollbacks, a lead of zero or less), so it
+// bounds the others' count without giving it.
+func leadStartNote(fromCommit, n int, exact bool) string {
 	switch {
 	case fromCommit == 0:
 		return "from Bundle creation"
 	case fromCommit >= n:
 		return "from the commit"
-	default:
+	case exact:
 		return fmt.Sprintf("from the commit for %d, Bundle creation for %d", fromCommit, n-fromCommit)
+	default:
+		return fmt.Sprintf("from the commit for %d, Bundle creation for any others", fromCommit)
 	}
 }
 
@@ -273,11 +278,16 @@ func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env 
 		pipelineName, dm.SampleSize, env)
 	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
 	_, _ = fmt.Fprintf(tw, "rollouts_last_30d\t%d\t\n", dm.RolloutsLast30Days)
-	if dm.SampleSize > 0 {
-		from := "(" + leadStartNote(dm.LeadTimeFromCommit, dm.SampleSize) + ")"
+	switch {
+	case dm.SampleSize > 0 && dm.RollbackRateMillis >= 1000:
+		// Every sampled version is a rollback: no lead time (#1942).
+		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t-\t(only rollbacks Verified; they have no lead time)\n")
+		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t-\t(only rollbacks Verified; they have no lead time)\n")
+	case dm.SampleSize > 0:
+		from := "(" + leadStartNote(dm.LeadTimeFromCommit, dm.SampleSize, false) + ")"
 		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t%s\n", dm.P50CommitToProdMinutes, from)
 		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t%s\n", dm.P90CommitToProdMinutes, from)
-	} else {
+	default:
 		_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t-\t(nothing Verified yet)\n")
 		_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t-\t(nothing Verified yet)\n")
 	}
