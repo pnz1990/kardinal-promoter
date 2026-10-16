@@ -42,10 +42,10 @@ it by its `kardinal.io/created-by` (or the Approval's `spec.user`), and its kind
 
 ## How the actor is verified
 
-The chart's `<release>-actor` ValidatingAdmissionPolicy checks every new version, Approval and
-gate override. It reads the agent registry from the `AgentIndex` named after the release, which
-the controller builds from the AgentIdentities, and admits a stamp only when it says exactly
-what the requester is:
+The chart's `<release>-actor` ValidatingAdmissionPolicy checks every new version and Approval,
+and `<release>-actor-overrides` every gate override. They read the agent registry from the
+`AgentIndex` named after the release, which the controller builds from the AgentIdentities, and
+admit a stamp only when it says exactly what the requester is:
 
 - the `principal` is the requester's username;
 - the `kind` is `agent` when the requester, or one of its groups, is a registered agent, `bot`
@@ -54,10 +54,42 @@ what the requester is:
 - only kardinal's controller sets `via`.
 
 Until the controller has built the index (`kubectl get agentindex` shows its Ready
-condition), the policy refuses every version, Approval and override it checks, people's
+condition), the policies refuse every version, Approval and override they check, people's
 included, with "kardinal's agent index is not ready yet", and the UI API and the Bundle API
-answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade,
-and after the index is deleted; the controller reports ready only once the index is.
+answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade;
+the controller reports ready only once the index is. Writes the policies do not check go on
+meanwhile: kro's gate instances, and the versions kardinal creates itself (automatic rollbacks,
+Subscriptions), so promotions already under way keep moving.
+
+The chart creates the index, empty, before the policies (Helm installs it first), and the
+`<release>-agent-index` policy lets only the controller delete it (one by one or with
+`kubectl delete agentindexes --all`) or write its status. If it is deleted anyway, with that
+policy's binding removed, the controller recreates it with the release's Helm labels and
+annotations, so the next `helm upgrade` adopts it; until the chart has created it in the first
+place, the controller waits for it. The API
+server refuses every write a policy with params matches while its param is missing ("no params
+found for policy binding with `Deny` parameterNotFoundAction"), before the policy's own rules
+run, so a missing index would stop kro's and kardinal's writes too. `helm uninstall` leaves the
+index (`helm.sh/resource-policy: keep`); delete it afterwards with
+`kubectl delete agentindex <release>`.
+
+Who paused, resumed or released a Pipeline, and who rejected a Bundle, is checked the same way:
+the write that records it carries the label `kardinal.io/actor-check: "true"` (`kardinal pause`,
+`resume`, `hold`, `release-hold`, `reject`, the UI and the MCP tools set it), and the
+`<release>-actor-record-marker` policy refuses such a write without it, by anyone but the
+controller. So `<release>-actor-records` converts the index only for those writes, not for the
+controller's many Pipeline and Bundle updates. The label stays on the object; later writes to it
+pay that cost too.
+
+A gate override is checked when the write that adds it carries the label
+`kardinal.io/override-check: "true"`: `kardinal override` and the UI set it, and the
+`<release>-override-marker` policy refuses an override added without it, by anyone but the
+controller. The label lets the API server leave kro's re-applies of a gate instance that was
+never overridden out of `<release>-actor-overrides`, which converts the whole index for each
+request it matches. The label stays on a gate once it has been overridden, so kro's later
+re-applies of that instance are matched and pay that cost; overrides are rare, so few gates
+carry it. Add it yourself if you write `spec.overrides` with `kubectl`, scripts or GitOps
+tools: the refusal names it.
 
 An agent must stamp what it writes; a person or a bot may leave the stamp out, as before
 v0.12. An agent that is suspended, or out of its scope, is refused. `kardinal` sets the stamp
@@ -123,12 +155,20 @@ The AgentIdentity is ready unless it is invalid:
 - **SubjectConflict**: another AgentIdentity already lists one of its subjects. The older one
   keeps it: a principal is never two agents.
 - **InvalidSponsor**: its sponsor is itself an agent.
-- **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 4,000 subjects,
-  blocked ones included). The whole index is then not Ready, and kardinal refuses every write
+- **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 5,000
+  AgentIdentities of one subject each, blocked ones included; kardinal supports up to 4,000, see
+  [Scale and limits](operate.md#scale-and-limits)). The whole index is then not Ready, and kardinal refuses every write
   the actor policy checks until AgentIdentities or subjects are removed.
 
 The subjects of an AgentIdentity that is not ready are refused, with its reason, rather than
 treated as people.
+
+The index records how full it is: `status.bytes` (its entries, as the bound counts them) and
+`status.maxBytes`, and a `NearFull` condition, True from 80% of the bound, whose message says
+how many more AgentIdentities of the average size fit. `kubectl get agentindex` shows them; the
+chart's `KardinalAgentIndexNearFull` and `KardinalAgentIndexFull` alerts fire on the
+`kardinal_agent_index_bytes` and `kardinal_agent_index_max_bytes` metrics
+([Monitoring](guides/monitoring.md#included-alerts)).
 
 `scope.pipelines` applies to the versions an agent creates and the gate overrides it records
 (a gate instance names its Pipeline). An Approval is checked against `scope.namespaces` and

@@ -1,0 +1,5 @@
+---
+section: Upgrade
+---
+
+- **Upgrade the `kardinal` CLI with the chart: Pipeline and Bundle writes that record who acted need the `kardinal.io/actor-check` label** (#1936) — `<release>-actor-records` converted the whole AgentIndex for every Pipeline create and update and every Bundle update, the controller's included (about 16 ms at 2,000 agents and 32 ms at 4,200 per write). It now matches only Pipelines and Bundles labelled `kardinal.io/actor-check: "true"`, and the new params-free `<release>-actor-record-marker` refuses a write that adds a hold, a `spec.lastChange` (a pause, resume or hold release) or a rejection without that label. The v0.12 CLI, the UI and the MCP tools set it. **After the upgrade, the v0.11 CLI's `kardinal reject`, `kardinal rollback --hold`, `kardinal pause`/`resume` and `release-hold`, and kubectl, script or GitOps writes of `spec.holds`, `spec.lastChange` or `spec.rejected`, are refused** until they carry the label: upgrade the CLI, and add `kardinal.io/actor-check: "true"` to `metadata.labels` in such writes ([Agents and the verified actor](actors.md))

@@ -40,6 +40,10 @@ type Registry struct {
 	// Full is true when an AgentIdentity was left out to stay under
 	// MaxIndexBytes.
 	Full bool
+	// Bytes is the size of the entries as the bound counts them (each
+	// entry's JSON, its key and 4 bytes), blocked ones included, also when
+	// Full; MaxBytes is the bound.
+	Bytes, MaxBytes int
 }
 
 // Evaluate decides which AgentIdentities take effect and builds the index,
@@ -123,6 +127,7 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 	// Every entry counts, blocked ones too. An index past the bound is
 	// written empty and not Ready, and admission then refuses every write it
 	// judges (fail closed) until AgentIdentities are removed.
+	reg.Bytes, reg.MaxBytes = size, maxBytes
 	if size > maxBytes {
 		reg.Full = true
 		reg.Index.Users, reg.Index.Groups = map[string]v1alpha1.AgentIndexEntry{}, map[string]v1alpha1.AgentIndexEntry{}

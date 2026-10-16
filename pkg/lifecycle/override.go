@@ -117,14 +117,32 @@ func (c classified) Unwrap() []error { return []error{c.err, c.kind} }
 // kindError classifies err as kind without changing its message.
 func kindError(kind, err error) error { return classified{err: err, kind: kind} }
 
-// AppendOverride appends override to gate's spec.overrides. A merge patch
-// replaces the whole list, so it carries the resourceVersion and is retried
-// on conflict: a concurrent override is re-read, not overwritten.
+// LabelOverrideCheck marks a gate whose overrides the chart's
+// <release>-actor-overrides policy checks: every write that adds or changes
+// an override entry must carry it ("true", the <release>-override-marker
+// policy), so the policy, which reads the agent index, matches only those
+// gates and not kro's every re-apply of a gate instance (#1936).
+const LabelOverrideCheck = "kardinal.io/override-check"
+
+// MarkOverride sets LabelOverrideCheck on gate, for a write that adds an
+// override.
+func MarkOverride(gate *v1alpha1.PolicyGate) {
+	if gate.Labels == nil {
+		gate.Labels = map[string]string{}
+	}
+	gate.Labels[LabelOverrideCheck] = "true"
+}
+
+// AppendOverride appends override to gate's spec.overrides, with
+// LabelOverrideCheck. A merge patch replaces the whole list, so it carries
+// the resourceVersion and is retried on conflict: a concurrent override is
+// re-read, not overwritten.
 func AppendOverride(ctx context.Context, c client.Client, gate *v1alpha1.PolicyGate,
 	override v1alpha1.PolicyGateOverride) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		patch := client.MergeFromWithOptions(gate.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+		MarkOverride(gate)
 		err := c.Patch(ctx, gate, patch)
 		if apierrors.IsConflict(err) {
 			if getErr := c.Get(ctx, client.ObjectKeyFromObject(gate), gate); getErr != nil {
@@ -163,6 +181,7 @@ func Reject(ctx context.Context, c client.Client, ns, name, reason, by string, s
 	patch := client.MergeFromWithOptions(b.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	at := metav1.NewTime(now.UTC().Truncate(time.Second))
 	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: by, At: &at, Actor: stamp}
+	MarkActorCheck(&b)
 	if err := c.Patch(ctx, &b, patch); err != nil {
 		if apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("reject: bundle %s changed while rejecting it; try again: %w", name, ErrConflict)

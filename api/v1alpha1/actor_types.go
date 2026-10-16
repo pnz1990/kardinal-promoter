@@ -281,8 +281,19 @@ type AgentIndexStatus struct {
 	// +optional
 	Groups map[string]AgentIndexEntry `json:"groups,omitempty"`
 
-	// Conditions: Ready; IndexFull when an entry was left out to keep the
-	// index under its size limit.
+	// Bytes is the size of the index's entries as its bound counts them
+	// (each entry's JSON, its key and 4 bytes, blocked entries included),
+	// also when it is over the bound and written empty.
+	// +optional
+	Bytes int64 `json:"bytes,omitempty"`
+
+	// MaxBytes is the bound on Bytes: past it the index is not Ready
+	// (IndexFull) and the writes the actor policy checks are refused.
+	// +optional
+	MaxBytes int64 `json:"maxBytes,omitempty"`
+
+	// Conditions: Ready (False, reason IndexFull, when the entries are over
+	// MaxBytes); NearFull (True from 80% of MaxBytes).
 	// +optional
 	// +listType=map
 	// +listMapKey=type
@@ -293,6 +304,9 @@ type AgentIndexStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=agentindexes,scope=Cluster,shortName=agentidx,categories=kardinal-all
 // +kubebuilder:printcolumn:name="Identities",type=integer,JSONPath=`.status.observedIdentities`
+// +kubebuilder:printcolumn:name="Bytes",type=integer,JSONPath=`.status.bytes`
+// +kubebuilder:printcolumn:name="Max",type=integer,JSONPath=`.status.maxBytes`
+// +kubebuilder:printcolumn:name="NearFull",type=string,JSONPath=`.status.conditions[?(@.type=="NearFull")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // AgentIndex is the registry of agents in the shape admission reads: the

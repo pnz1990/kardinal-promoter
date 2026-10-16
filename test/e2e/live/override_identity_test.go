@@ -59,7 +59,8 @@ func TestGate_OverrideIdentity(t *testing.T) {
 	// The policy, for a real user who may patch PolicyGates.
 	mallory := impersonating(t, e, a.ns, "mallory@example.com", nil, []string{"policygates"}, "get", "create", "patch", "update")
 	forge := func(overrides []v1alpha1.PolicyGateOverride) error {
-		raw, err := json.Marshal(map[string]any{"spec": map[string]any{"overrides": overrides}})
+		raw, err := json.Marshal(map[string]any{"metadata": map[string]any{"labels": map[string]string{"kardinal.io/override-check": "true"}},
+			"spec": map[string]any{"overrides": overrides}})
 		require.NoError(t, err)
 		return mallory.Patch(ctx, gate.DeepCopy(), client.RawPatch(types.MergePatchType, raw))
 	}

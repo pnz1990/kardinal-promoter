@@ -1113,13 +1113,16 @@ func (p *Pipeline) HoldState(h *EnvironmentHold) *EnvironmentHoldState {
 	return nil
 }
 
-// EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
+// EnvironmentHold pins one environment of a Pipeline to one Bundle: a
+// rollback (kardinal rollback --hold) or the version running there
+// (kardinal hold).
 type EnvironmentHold struct {
 	// Environment is the held environment.
 	// +kubebuilder:validation:MinLength=1
 	Environment string `json:"environment"`
 
-	// Bundle is the rollback Bundle the environment is held on: the only
+	// Bundle is the Bundle the environment is held on (a rollback, or the
+	// version running there): the only
 	// Bundle that promotes into it while the hold lasts.
 	// +kubebuilder:validation:MinLength=1
 	Bundle string `json:"bundle"`
@@ -1363,6 +1366,8 @@ type PipelineDeploymentMetrics struct {
 	// Bundle's commit time is spec.provenance.commitTime when CI set it;
 	// otherwise the Bundle's creation, which leaves out the build
 	// (LeadTimeFromCommit counts the Bundles measured from the commit).
+	// Rollback Bundles are left out: they restore a change, they do not
+	// ship one.
 	// +optional
 	P50CommitToProdMinutes int64 `json:"p50CommitToProdMinutes,omitempty"`
 
@@ -1374,7 +1379,7 @@ type PipelineDeploymentMetrics struct {
 
 	// LeadTimeFromCommit is how many of the sampled Bundles' lead times
 	// start at spec.provenance.commitTime; the others start at the Bundle's
-	// creation. Rollback Bundles always start at their creation.
+	// creation. Rollback Bundles have no lead time and are not counted.
 	// +optional
 	LeadTimeFromCommit int `json:"leadTimeFromCommit,omitempty"`
 

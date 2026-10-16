@@ -37,15 +37,18 @@ var SCMHost = map[string]string{
 
 // PR is a pull request (a GitLab merge request) on the fake SCM.
 type PR struct {
-	Repo      string
-	Number    int
-	Title     string
-	Body      string
-	Head      string
-	Base      string
-	HeadSHA   string
-	State     string // open, closed, merged
-	MergeSHA  string
+	Repo     string
+	Number   int
+	Title    string
+	Body     string
+	Head     string
+	Base     string
+	HeadSHA  string
+	State    string // open, closed, merged
+	MergeSHA string
+	// MergedBy is who merged it (MergeAs); the API reports it as GitHub's
+	// merged_by, GitLab's merge_user and Forgejo's merged_by.
+	MergedBy  string
 	Labels    []string
 	Comments  []string
 	Approvals []string
@@ -72,6 +75,23 @@ type SCMServer struct {
 	// unknown are the requests no route served: the fake is missing an API
 	// kardinal calls, and the scenario fails.
 	unknown []string
+
+	// OnChange, when set, is told of every request that changed something
+	// (a side effect of the controller, World.CrashAfter); Dying, when it
+	// reports true, drops requests that would change something.
+	OnChange func(what string)
+	Dying    func() bool
+}
+
+// statusRecorder keeps the status code a route answered.
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.code = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // NewSCMServer starts the fake API of kind over git.
@@ -132,8 +152,9 @@ func (s *SCMServer) Approve(repo string, number int, user string) error {
 	return nil
 }
 
-// Merge merges an open PR the way a reviewer clicking merge does.
-func (s *SCMServer) Merge(repo string, number int) error {
+// MergeAs merges an open PR the way user clicking merge does: the API then
+// names user as the merger.
+func (s *SCMServer) MergeAs(repo string, number int, user string) error {
 	s.mu.Lock()
 	p := s.find(repo, number)
 	if p == nil || p.State != "open" {
@@ -150,7 +171,7 @@ func (s *SCMServer) Merge(repo string, number int) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p.State, p.MergeSHA, p.MergedAt = "merged", sha, time.Now().UTC()
+	p.State, p.MergeSHA, p.MergedBy, p.MergedAt = "merged", sha, user, time.Now().UTC()
 	if headSHA != "" {
 		p.HeadSHA = headSHA
 	}
@@ -208,9 +229,18 @@ func (s *SCMServer) serve(w http.ResponseWriter, r *http.Request) {
 					m[i] = u
 				}
 			}
+			if r.Method != http.MethodGet && s.Dying != nil && s.Dying() {
+				// The controller that sent it is dead: it never arrives.
+				http.Error(w, `{"message":"connection reset"}`, http.StatusBadGateway)
+				return
+			}
+			rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
 			s.mu.Lock()
-			rt.fn(s, w, m, body, r.URL.Query())
+			rt.fn(s, rec, m, body, r.URL.Query())
 			s.mu.Unlock()
+			if r.Method != http.MethodGet && rec.code < 300 && s.OnChange != nil {
+				s.OnChange(r.Method + " " + path)
+			}
 			return
 		}
 	}
@@ -290,11 +320,16 @@ func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
 	for _, l := range p.Labels {
 		labels = append(labels, map[string]interface{}{"name": l, "id": s.labelID(l)})
 	}
+	var mergedBy interface{}
+	if p.MergedBy != "" {
+		mergedBy = map[string]interface{}{"login": p.MergedBy}
+	}
 	var mergedAt interface{}
 	if p.State == "merged" {
 		mergedAt = p.MergedAt.Format(time.RFC3339)
 	}
 	return map[string]interface{}{
+		"merged_by":  mergedBy,
 		"created_at": p.OpenedAt.Format(time.RFC3339), "merged_at": mergedAt,
 		"number": p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
 		"merge_commit_sha": p.MergeSHA, "node_id": fmt.Sprintf("PR_%d", p.Number), "title": p.Title, "body": p.Body,
@@ -526,8 +561,13 @@ var gitlabRoutes = []route{
 func (s *SCMServer) mrJSON(p *PR) map[string]interface{} {
 	s.refreshHead(p)
 	state := map[string]string{"open": "opened", "closed": "closed", "merged": "merged"}[p.State]
+	var mergeUser interface{}
+	if p.MergedBy != "" {
+		mergeUser = map[string]interface{}{"username": p.MergedBy}
+	}
 	return map[string]interface{}{
-		"iid": p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
+		"merge_user": mergeUser,
+		"iid":        p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
 		"created_at": p.OpenedAt.Format(time.RFC3339),
 		// Every MR is from a branch of the project itself (the fake has no
 		// forks).

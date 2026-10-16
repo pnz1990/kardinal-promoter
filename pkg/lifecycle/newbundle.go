@@ -73,9 +73,10 @@ func ValidateNewBundle(spec *v1alpha1.BundleSpec) error {
 // CI runners' clocks drift a little from the API server's.
 const commitTimeSkew = 5 * time.Minute
 
-// validateCommitTime refuses a provenance.commitTime that is zero or later
-// than now (beyond commitTimeSkew): the lead time metrics start at it
-// (LeadTimeStart), and neither can be when a commit was made.
+// validateCommitTime refuses a provenance.commitTime that is zero, later
+// than now (beyond commitTimeSkew), or more than CommitTimeMaxAge before
+// now: the lead time metrics start at it (LeadTimeStart), and none of these
+// is when the commit was made.
 func validateCommitTime(t *metav1.Time, now time.Time) error {
 	switch {
 	case t == nil:
@@ -84,6 +85,9 @@ func validateCommitTime(t *metav1.Time, now time.Time) error {
 		return fmt.Errorf("provenance.commitTime is the zero time; leave it unset when the commit time is not known")
 	case t.After(now.Add(commitTimeSkew)):
 		return fmt.Errorf("provenance.commitTime %s is in the future (now %s)", t.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+	case t.Time.Before(now.Add(-CommitTimeMaxAge)):
+		return fmt.Errorf("provenance.commitTime %s is more than a year before now (%s); leave it unset when the commit time is not known",
+			t.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
 	}
 	return nil
 }

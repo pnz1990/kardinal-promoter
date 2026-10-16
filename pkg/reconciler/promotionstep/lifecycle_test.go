@@ -148,7 +148,8 @@ func TestHold_EnvironmentHeldOnAnotherBundle(t *testing.T) {
 			}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"}}
 			key := req.NamespacedName
-			msg := lifecycle.HeldMessage("nginx-demo", &hold)
+			// rb-1 is not stored: the hold is not named a rollback.
+			msg := lifecycle.HeldMessage("nginx-demo", &hold, false)
 
 			res, err := r.Reconcile(ctx, req)
 			require.NoError(t, err)
@@ -197,7 +198,9 @@ func TestHold_CancelsWaitingForMerge(t *testing.T) {
 			hold := v1alpha1.EnvironmentHold{Environment: "prod", Bundle: tc.holdBundle, Reason: "INC-42", CreatedBy: "alice"}
 			p.Spec.Holds = []v1alpha1.EnvironmentHold{hold}
 			step := prStep("WaitingForMerge", 5)
-			c := newClient(t, step, p, makeBundle("bundle-1", "nginx-demo"), openPRStatus("prs-step", "test/repo", 5))
+			rb := makeBundle("rb-1", "nginx-demo")
+			rb.Labels = map[string]string{lifecycle.LabelRollback: "true"}
+			c := newClient(t, step, p, makeBundle("bundle-1", "nginx-demo"), rb, openPRStatus("prs-step", "test/repo", 5))
 			m := &mockSCM{open: true}
 			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
@@ -211,7 +214,7 @@ func TestHold_CancelsWaitingForMerge(t *testing.T) {
 				return
 			}
 			assert.Equal(t, "Failed", got.Status.State)
-			assert.Equal(t, lifecycle.HeldMessage("nginx-demo", &hold)+" — promotion cancelled", got.Status.Message)
+			assert.Equal(t, lifecycle.HeldMessage("nginx-demo", &hold, true)+" — promotion cancelled", got.Status.Message)
 			assert.Equal(t, []string{"test/repo#5"}, m.closed, "the PR is closed")
 			require.Len(t, m.comments, 1)
 			assert.Contains(t, m.comments[0], "environment prod is held on rollback rb-1 (INC-42)")

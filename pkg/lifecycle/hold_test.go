@@ -79,7 +79,9 @@ func TestRollbackAndHold(t *testing.T) {
 	assert.Equal(t, &h, lifecycle.HeldFrom(p, "prod", "v3"), "every other Bundle is")
 	assert.Nil(t, lifecycle.HeldFrom(p, "uat", "v3"), "other environments are not held")
 	assert.Equal(t, "environment prod is held on rollback "+h.Bundle+" (INC-42: v2 leaks connections) — release with: kardinal release-hold app --env prod",
-		lifecycle.HeldMessage("app", &h))
+		lifecycle.HeldMessage("app", &h, true))
+	assert.Equal(t, "environment prod is held on "+h.Bundle+" (INC-42: v2 leaks connections) — release with: kardinal release-hold app --env prod",
+		lifecycle.HeldMessage("app", &h, false), "a kardinal hold of the running version is not a rollback (#2067)")
 	ex := lifecycle.GateExemption(&h, "expression false")
 	assert.Equal(t, "EXEMPT: rollback "+h.Bundle+" holds prod (by alice: INC-42: v2 leaks connections); without the hold: expression false", ex)
 	assert.True(t, lifecycle.IsHoldExemption(ex))
@@ -296,4 +298,41 @@ func TestHoldCurrent(t *testing.T) {
 		_, _, err := lifecycle.HoldCurrent(context.Background(), c, r)
 		assert.Error(t, err, name)
 	}
+}
+
+// TestActorCheckLabel (#1936): every write that records who acted on a
+// Pipeline or a Bundle (a hold, a release, a pause or resume, a rejection)
+// carries kardinal.io/actor-check, which <release>-actor-records matches on
+// and <release>-actor-record-marker requires.
+func TestActorCheckLabel(t *testing.T) {
+	ctx := context.Background()
+	who := &v1alpha1.PipelineChange{By: "alice"}
+	labelled := func(t *testing.T, o metav1.Object, what string) {
+		t.Helper()
+		assert.Equal(t, "true", o.GetLabels()[lifecycle.LabelActorCheck], what)
+	}
+
+	c := newClient(t, holdObjects()...)
+	_, _, err := lifecycle.HoldCurrent(ctx, c, lifecycle.HoldCurrentRequest{Namespace: ns, Pipeline: "app", Environment: "prod",
+		Reason: "audit", Actor: "alice", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	p := getPipeline(t, c)
+	labelled(t, p, "a hold")
+
+	p.Labels = nil
+	require.NoError(t, c.Update(ctx, p))
+	_, err = lifecycle.ReleaseHold(ctx, c, ns, "app", "prod", who)
+	require.NoError(t, err)
+	p = getPipeline(t, c)
+	labelled(t, p, "a release")
+
+	p.Labels = nil
+	require.NoError(t, c.Update(ctx, p))
+	require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", true, who))
+	p = getPipeline(t, c)
+	labelled(t, p, "a pause")
+
+	b, err := lifecycle.Reject(ctx, c, ns, "v2", "bad", "alice", nil, t0)
+	require.NoError(t, err)
+	labelled(t, b, "a rejection")
 }

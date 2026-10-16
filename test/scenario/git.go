@@ -472,6 +472,24 @@ func (s *GitServer) DeleteBranch(url, branch string) error {
 type RewritingGit struct {
 	*scm.GoGitClient
 	Server *GitServer
+	// effect, when set, is told of every push (World.CrashAfter); dying
+	// drops a push of a dead controller.
+	effect func(what string)
+	dying  func() bool
+}
+
+// Push is GoGitClient.Push, a side effect of the controller.
+func (g *RewritingGit) Push(ctx context.Context, dir, remote, branch string, auth scm.GitAuth, force bool) error {
+	if g.dying != nil && g.dying() {
+		return fmt.Errorf("git push %s: connection reset", branch)
+	}
+	if err := g.GoGitClient.Push(ctx, dir, remote, branch, auth, force); err != nil {
+		return err
+	}
+	if g.effect != nil {
+		g.effect("git push " + branch)
+	}
+	return nil
 }
 
 // file:// remotes need no credentials: auth is dropped so the token of the

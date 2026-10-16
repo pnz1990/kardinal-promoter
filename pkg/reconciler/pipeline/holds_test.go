@@ -230,9 +230,42 @@ func TestPipelineHolds_StaleReadStoresNoSecondRecord(t *testing.T) {
 }
 
 // holdBundle is a rollback Bundle of the app Pipeline in default.
+// holdBundle is Bundle name of Pipeline app; one named *-rollback-* is a
+// rollback (kardinal.io/rollback), as kardinal rollback --hold creates it.
 func holdBundle(name string) *kardinalv1alpha1.Bundle {
-	return &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+	b := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"}}
+	if strings.Contains(name, "-rollback-") {
+		b.Labels = map[string]string{"kardinal.io/rollback": "true"}
+	}
+	return b
+}
+
+// TestPipelineHoldOfTheRunningVersion (#2067): a hold of what runs in the
+// environment (kardinal hold) is recorded as held on that Bundle, not "on
+// rollback", which only a rollback's hold says.
+func TestPipelineHoldOfTheRunningVersion(t *testing.T) {
+	at := metav1.NewTime(time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC))
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.Spec.Holds = []kardinalv1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-2", Reason: "soak", CreatedBy: "rm", CreatedAt: &at}}
+	c := newClientWithIndex(newPipelineScheme(), p, holdBundle("app-2"))
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return at.Time }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	ae := holdAudits(t, c)
+	require.Len(t, ae, 1)
+	assert.Equal(t, "rm held prod on app-2: soak", ae[0].Spec.Message)
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	got.Spec.Holds = nil
+	require.NoError(t, c.Update(context.Background(), &got))
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	ae = holdAudits(t, c)
+	require.Len(t, ae, 2)
+	assert.Contains(t, ae[1].Spec.Message+ae[0].Spec.Message, "hold of prod on app-2 (held by rm: soak)")
+	assert.NotContains(t, ae[0].Spec.Message+ae[1].Spec.Message, "rollback")
 }
 
 // missingFixture is a Pipeline holding prod on a Bundle, with a fake

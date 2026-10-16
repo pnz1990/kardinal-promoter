@@ -105,4 +105,31 @@ spec:
             summary: "kardinal PolicyGate reconcile P99 latency is above 10s"
             description: "PolicyGate reconciles are taking more than 10s at P99. Gates may be stale and blocking or unblocking promotions late."
             runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
+
+        # The agent index's entries near their size bound (#2076): past it
+        # the index is not Ready and the actor policy refuses the writes it
+        # checks, people's included. Only the leader sets these gauges; the
+        # other replicas export 0, so the max is the leader's.
+        - alert: KardinalAgentIndexNearFull
+          expr: |
+            max by (cluster, namespace) (kardinal_agent_index_bytes)
+              / max by (cluster, namespace) (kardinal_agent_index_max_bytes) >= 0.8
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the kardinal agent index is {{ "{{" }} $value | humanizePercentage {{ "}}" }} full"
+            description: "The agent index's entries take {{ "{{" }} $value | humanizePercentage {{ "}}" }} of their size bound. Past it, kardinal refuses every write the actor policy checks (Bundles, Approvals, overrides) until AgentIdentities or subjects are removed."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/operate/#scale-and-limits"
+        - alert: KardinalAgentIndexFull
+          expr: |
+            max by (cluster, namespace) (kardinal_agent_index_bytes)
+              > max by (cluster, namespace) (kardinal_agent_index_max_bytes)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "the kardinal agent index is over its size bound"
+            description: "The agent index is not Ready (IndexFull): kardinal refuses every write the actor policy checks (Bundles, Approvals, overrides), people's included, until AgentIdentities or subjects are removed."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/operate/#scale-and-limits"
 {{- end }}

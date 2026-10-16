@@ -72,3 +72,82 @@ func TestFindRollback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got, "a rollback in another environment does not count")
 }
+
+// TestAutoRollbackName_LongEnvironment (#2082 QA): the rollback of a Bundle
+// in an environment of any length up to 63 characters is a valid object
+// name and label value, deterministic, never the Bundle's other rollback
+// names, and different for different Bundles with long environment names.
+func TestAutoRollbackName_LongEnvironment(t *testing.T) {
+	for _, n := range []int{1, 37, 38, 47, 48, 62, 63} {
+		env := strings.Repeat("e", n-1) + "z"
+		for _, bundle := range []string{"app-1-4-0", strings.Repeat("b", 50) + "-1-4-0"} {
+			got := lifecycle.AutoRollbackName(bundle, "alarm-"+env)
+			assert.LessOrEqual(t, len(got), 63, "%d: %s", n, got)
+			assert.Empty(t, validation.IsValidLabelValue(got), "%d: %s", n, got)
+			assert.Empty(t, validation.IsDNS1123Subdomain(got), "%d: %s", n, got)
+			assert.Equal(t, got, lifecycle.AutoRollbackName(bundle, "alarm-"+env), "deterministic")
+			assert.NotEqual(t, lifecycle.AutoRollbackName(bundle, "alarm"), got, "%d: not the first environment's", n)
+			assert.NotEqual(t, lifecycle.AutoRollbackName(bundle, "alarm-"+env+"x"), got, "%d: not another environment's", n)
+			assert.NotEqual(t, lifecycle.AutoRollbackName(bundle+"x", "alarm-"+env), got, "%d: not another Bundle's", n)
+		}
+	}
+}
+
+// TestAutoRollbackNameIn (#2082): the first environment's rollback takes the
+// plain name; another environment of the same Bundle, or the same one again,
+// gets its own or its own again.
+func TestAutoRollbackNameIn(t *testing.T) {
+	ctx := context.Background()
+	rb := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2-rollback-alarm", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}}}
+	empty := newClient(t)
+	got, err := lifecycle.AutoRollbackNameIn(ctx, empty, "default", "app-v2", "alarm", "prod-eu")
+	require.NoError(t, err)
+	assert.Equal(t, "app-v2-rollback-alarm", got, "nothing yet: the plain name")
+
+	c := newClient(t, rb)
+	got, err = lifecycle.AutoRollbackNameIn(ctx, c, "default", "app-v2", "alarm", "prod-eu")
+	require.NoError(t, err)
+	assert.Equal(t, "app-v2-rollback-alarm", got, "its own again")
+	got, err = lifecycle.AutoRollbackNameIn(ctx, c, "default", "app-v2", "alarm", "prod-us")
+	require.NoError(t, err)
+	assert.Equal(t, "app-v2-rollback-alarm-prod-us", got, "another environment's is taken")
+
+	taken, err := lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "prod-us")
+	require.NoError(t, err)
+	assert.True(t, taken, "prod-eu's is not prod-us's")
+	taken, err = lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "prod-eu")
+	require.NoError(t, err)
+	assert.False(t, taken, "prod-eu's own")
+}
+
+// TestAutoRollbackName_Readable: a shortened name still reads as a rollback
+// of its Bundle (the Bundle's start and "-rollback-"), and no two of many
+// Bundle and environment names of every length share one.
+func TestAutoRollbackName_Readable(t *testing.T) {
+	seen := map[string]string{}
+	for _, b := range []int{1, 9, 20, 40, 43, 44, 52, 60, 63} {
+		bundle := strings.Repeat("b", b-1) + "1"
+		for e := 1; e <= 63; e += 2 {
+			env := strings.Repeat("e", e-1) + "z"
+			for _, source := range []string{"alarm", "policy", "alarm-" + env, "policy-" + env} {
+				full := bundle + "-rollback-" + source
+				got := lifecycle.AutoRollbackName(bundle, source)
+				assert.LessOrEqual(t, len(got), 63, full)
+				assert.Empty(t, validation.IsValidLabelValue(got), full)
+				assert.Empty(t, validation.IsDNS1123Subdomain(got), full)
+				if len(full) <= 63 {
+					assert.Equal(t, full, got, "a name that fits is unchanged")
+				} else {
+					assert.Contains(t, got, "-rollback-", "%s still says rollback", got)
+					assert.True(t, strings.HasPrefix(got, bundle[:min(len(bundle), 30)]), "%s starts with its Bundle", got)
+				}
+				if other, ok := seen[got]; ok {
+					assert.Equal(t, other, full, "%s and %s share %s", other, full, got)
+				}
+				seen[got] = full
+			}
+		}
+	}
+	t.Logf("%d names, none shared", len(seen))
+}

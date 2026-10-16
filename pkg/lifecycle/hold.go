@@ -122,10 +122,27 @@ func HeldFrom(p *v1alpha1.Pipeline, env, bundle string) *v1alpha1.EnvironmentHol
 	return nil
 }
 
-// HeldMessage is what a step held by h says.
-func HeldMessage(pipeline string, h *v1alpha1.EnvironmentHold) string {
-	return fmt.Sprintf("environment %s is held on rollback %s (%s) — release with: kardinal release-hold %s --env %s",
-		h.Environment, h.Bundle, h.Reason, pipeline, h.Environment)
+// IsRollbackBundle reports whether b is a rollback: its kardinal.io/rollback
+// label or its provenance's rollbackOf.
+func IsRollbackBundle(b *v1alpha1.Bundle) bool {
+	return b != nil && (b.Labels[LabelRollback] == "true" || (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != ""))
+}
+
+// HeldOn is what h holds its environment on: "rollback <bundle>" when the
+// Bundle is a rollback (kardinal rollback --hold), else the Bundle (kardinal
+// hold of what runs there).
+func HeldOn(h *v1alpha1.EnvironmentHold, rollback bool) string {
+	if rollback {
+		return "rollback " + h.Bundle
+	}
+	return h.Bundle
+}
+
+// HeldMessage is what a step held by h says; rollback is whether the hold's
+// Bundle is a rollback (IsRollbackBundle).
+func HeldMessage(pipeline string, h *v1alpha1.EnvironmentHold, rollback bool) string {
+	return fmt.Sprintf("environment %s is held on %s (%s) — release with: kardinal release-hold %s --env %s",
+		h.Environment, HeldOn(h, rollback), h.Reason, pipeline, h.Environment)
 }
 
 // GateExemption is the reason a gate of the hold's Bundle passes when its
@@ -388,6 +405,7 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 		}
 		kept = append(kept, hold)
 		p.Spec.Holds = kept
+		MarkActorCheck(&p)
 		return c.Update(ctx, &p)
 	})
 }

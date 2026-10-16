@@ -69,7 +69,7 @@
 #                    on a shared host)
 #   KARDINAL_E2E_KRO_MEMORY  memory limit of the kro controller, e.g. 8Gi
 #                    (default: the kro chart's, 1Gi; the scale suite's 3Gi,
-#                    and its full profile needs 8Gi until #1492 is fixed)
+#                    and the release gate runs its full profile with 8Gi)
 #   KARDINAL_E2E_TOOLS  pinned (default): install the kind, kubectl and helm
 #                    of hack/tool-versions.env into bin/e2e (tools.sh) and use
 #                    them; path: use the ones on PATH

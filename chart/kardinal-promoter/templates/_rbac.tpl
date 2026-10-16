@@ -246,6 +246,12 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["agentindexes"]
   verbs: ["get", "list", "watch", "create"]
+# The controller clears its index's managedFields after each status write,
+# so the actor policies convert a param half the size (#1936).
+- apiGroups: ["kardinal.io"]
+  resources: ["agentindexes"]
+  verbs: ["patch"]
+  resourceNames: [{{ include "kardinal-promoter.fullname" . | quote }}]
 - apiGroups: ["kardinal.io"]
   resources: ["agentindexes/status"]
   verbs: ["get", "update", "patch"]
@@ -317,6 +323,13 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
   verbs: ["get"]
   resourceNames: [{{ printf "%s-gate-overrides" (include "kardinal-promoter.fullname" .) | quote }}]
+# The agent index guard: when it exists and the chart's AgentIndex does not,
+# the index was deleted after the install, and the controller recreates it
+# with the guard's Helm ownership (pkg/reconciler/agentidentity).
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies"]
+  verbs: ["get"]
+  resourceNames: [{{ printf "%s-agent-index" (include "kardinal-promoter.fullname" .) | quote }}]
 {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
 # ui.auth.tokenReview, bundleAPI.tokenReview: the UI API and the Bundle API
 # validate each bearer token with a TokenReview and authorize it with a

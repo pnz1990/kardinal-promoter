@@ -1,0 +1,58 @@
+# hack/ci/perf-baseline.txt
+#
+# The budgets of the agent scale scenario (test/scenario/enterprise/agents/
+# scale, agentcases.RunScale): "scale.<mode>.<name> <value>". Mode quick is
+# go test ./... (under -race in CI: 150 AgentIdentities, 3 tenants); mode
+# medium is KARDINAL_SCENARIO_ENTERPRISE=full (CI's scenario-enterprise job,
+# no -race: 2,000 AgentIdentities, 80 Pipelines in 20 tenants); mode full is
+# KARDINAL_SCENARIO_SCALE=full (the release gate, no -race: 5,000
+# AgentIdentities, 200 Pipelines in 50 tenants, 98 agents, 2 bursts). The scenario fails when a measure goes
+# past its budget.
+#
+# Rounds and reconciles are counted, not timed, so the host's load does not
+# move them. Measured (2026-10-16): 23 rounds per burst in both modes;
+# reconciles per version of a burst 173, 314, 459 (each burst also wakes
+# the Pipeline's earlier versions).
+#
+# Admission is timed in the API server's ValidatingAdmissionPolicy plugin
+# with the chart's policies, as #1959's envtest bound
+# (TestActorPolicyLatencyOnAPIServer: p99 under 50ms, 44ms at 4,200 agents)
+# times it on kube-apiserver, after the bursts: every agent's version,
+# Approval and gate instance admitted again (writing nothing) in three
+# passes, each write's fastest timing kept, and the same writes against the
+# index emptied (the calibration: an agent's Bundle without the index). A
+# budget is the median at the calibration's speed: the scenario holds the
+# ratio median / calibration median under budget / calibration, so the
+# host's load moves both sides (#2035, #2039).
+#
+# Measured in full (5,000 AgentIdentities, after #1959): calibration
+# 170-185us; agents' Bundles and people's Approvals p50 42-45ms, p99 46ms
+# idle and 49-65ms with the host loaded (logged, not bounded: each converts
+# about a MiB of index, and the tail moves with memory pressure); kro's
+# gates p50 0.05ms. In medium (2,000): calibration 166us, Bundles and
+# Approvals p50 16.5ms, kro 0.05ms. The full Bundle and Approval budget is
+# #1959's 50ms bound; medium's is it scaled to 2,000 identities and rounded
+# up (30ms);
+# kro's guards #1936's fix (it converted the index too before it). Quick
+# mode runs under -race (calibration 1.9ms) with wide budgets.
+scale.quick.index.bytes 1048576
+scale.quick.calibration.empty-index-admission 1.9ms
+scale.quick.burst.rounds 30
+scale.quick.burst.reconciles-per-version 450
+scale.quick.admission.p50.agent-bundle-create 500ms
+scale.quick.admission.p50.person-approval-create 500ms
+scale.quick.admission.p50.kro-gate-create 500ms
+scale.medium.index.bytes 1048576
+scale.medium.calibration.empty-index-admission 175us
+scale.medium.burst.rounds 30
+scale.medium.burst.reconciles-per-version 450
+scale.medium.admission.p50.agent-bundle-create 30ms
+scale.medium.admission.p50.person-approval-create 30ms
+scale.medium.admission.p50.kro-gate-create 5ms
+scale.full.index.bytes 1048576
+scale.full.calibration.empty-index-admission 175us
+scale.full.burst.rounds 30
+scale.full.burst.reconciles-per-version 450
+scale.full.admission.p50.agent-bundle-create 50ms
+scale.full.admission.p50.person-approval-create 50ms
+scale.full.admission.p50.kro-gate-create 5ms

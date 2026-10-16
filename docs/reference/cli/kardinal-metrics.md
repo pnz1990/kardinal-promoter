@@ -15,7 +15,8 @@ their PromotionSteps in the environment:
     bundles_total          Bundles created in the window
     deployment_frequency   steps Verified in the environment per day
     lead_time_avg          mean time from the commit (spec.provenance.commitTime,
-                           else the Bundle's creation) to Verified
+                           else the Bundle's creation) to Verified; rollback
+                           Bundles are left out
     change_fail_rate       Failed Bundles / bundles_total
     rollback_count         rollback Bundles in the window
 

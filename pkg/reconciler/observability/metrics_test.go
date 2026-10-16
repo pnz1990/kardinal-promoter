@@ -105,6 +105,8 @@ func TestMetricNames(t *testing.T) {
 		"kardinal_gate_blocking_duration_seconds": observability.GateBlockingDurationSeconds,
 		"kardinal_promotionstep_age_seconds":      observability.PromotionStepAgeSeconds,
 		"kardinal_auditevents_pruned_total":       observability.AuditEventsPrunedTotal,
+		"kardinal_agent_index_bytes":              observability.AgentIndexBytes,
+		"kardinal_agent_index_max_bytes":          observability.AgentIndexMaxBytes,
 	}
 	for name, c := range collectors {
 		descs := make(chan *prometheus.Desc, 1)

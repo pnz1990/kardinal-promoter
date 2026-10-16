@@ -316,6 +316,7 @@ func TestUIHandler_ActionsRecordRequester(t *testing.T) {
 					require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(gate()), &g))
 					require.Len(t, g.Spec.Overrides, 1)
 					assert.Equal(t, m.want, g.Spec.Overrides[0].CreatedBy)
+					assert.Equal(t, "true", g.Labels[lifecycle.LabelOverrideCheck], "labelled for the actor-overrides policy (#1936)")
 				}
 				var logged []string
 				for _, line := range strings.Split(logs.String(), "\n") {

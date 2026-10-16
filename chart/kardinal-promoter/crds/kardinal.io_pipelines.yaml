@@ -1405,8 +1405,10 @@ spec:
                   spec.holds needs update on the virtual subresource pipelines/hold
                   (chart: <release>-hold-writes ValidatingAdmissionPolicy).
                 items:
-                  description: EnvironmentHold pins one environment of a Pipeline
-                    to a rollback Bundle.
+                  description: |-
+                    EnvironmentHold pins one environment of a Pipeline to one Bundle: a
+                    rollback (kardinal rollback --hold) or the version running there
+                    (kardinal hold).
                   properties:
                     actor:
                       description: |-
@@ -1492,7 +1494,8 @@ spec:
                       type: string
                     bundle:
                       description: |-
-                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle is the Bundle the environment is held on (a rollback, or the
+                        version running there): the only
                         Bundle that promotes into it while the hold lasts.
                       minLength: 1
                       type: string
@@ -2001,7 +2004,7 @@ spec:
                     description: |-
                       LeadTimeFromCommit is how many of the sampled Bundles' lead times
                       start at spec.provenance.commitTime; the others start at the Bundle's
-                      creation. Rollback Bundles always start at their creation.
+                      creation. Rollback Bundles have no lead time and are not counted.
                     type: integer
                   meanTimeToRestoreMinutes:
                     description: |-
@@ -2023,6 +2026,8 @@ spec:
                       Bundle's commit time is spec.provenance.commitTime when CI set it;
                       otherwise the Bundle's creation, which leaves out the build
                       (LeadTimeFromCommit counts the Bundles measured from the commit).
+                      Rollback Bundles are left out: they restore a change, they do not
+                      ship one.
                     format: int64
                     type: integer
                   p90CommitToProdMinutes:
@@ -2501,8 +2506,10 @@ spec:
                   it: the HoldCreated and HoldReleased AuditEvents are written from the
                   difference, whichever client changed spec.holds.
                 items:
-                  description: EnvironmentHold pins one environment of a Pipeline
-                    to a rollback Bundle.
+                  description: |-
+                    EnvironmentHold pins one environment of a Pipeline to one Bundle: a
+                    rollback (kardinal rollback --hold) or the version running there
+                    (kardinal hold).
                   properties:
                     actor:
                       description: |-
@@ -2588,7 +2595,8 @@ spec:
                       type: string
                     bundle:
                       description: |-
-                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle is the Bundle the environment is held on (a rollback, or the
+                        version running there): the only
                         Bundle that promotes into it while the hold lasts.
                       minLength: 1
                       type: string

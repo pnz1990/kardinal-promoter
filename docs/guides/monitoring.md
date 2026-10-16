@@ -143,6 +143,15 @@ sum(rate(kardinal_git_operations_total{operation="push",result="non_fast_forward
   / sum(rate(kardinal_git_operations_total{operation="push"}[15m]))
 ```
 
+### Agent index fullness
+
+How full the [agent index](../actors.md) is: past 1 (100%) the index is not Ready and the actor
+policy refuses the writes it checks. Only the leader sets these gauges; other replicas export 0.
+
+```promql
+max by (namespace) (kardinal_agent_index_bytes) / max by (namespace) (kardinal_agent_index_max_bytes)
+```
+
 ### Work queue depth (are we falling behind?)
 
 ```promql
@@ -176,7 +185,7 @@ rollback_count         1
 |---|---|
 | `bundles_total` | Versions created in the window |
 | `deployment_frequency` | PromotionSteps Verified in `--env` per day |
-| `lead_time_avg` | Mean time from the commit (`provenance.commitTime`), else the version's creation, to Verified in `--env`; the note says which |
+| `lead_time_avg` | Mean time from the commit (`provenance.commitTime`), else the version's creation, to Verified in `--env`; the note says which. Rollback versions are left out, as in DORA's lead time for changes: they restore a change, they do not ship one |
 | `change_fail_rate` | Failed versions divided by `bundles_total` |
 | `rollback_count` | Rollback versions in the window |
 
@@ -187,12 +196,20 @@ When `--env` is the Pipeline's last environment and `--days` is 30 (the defaults
 the flags are given or not), the command prints the controller's own figures from
 `Pipeline.status.deploymentMetrics` instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
 `p90_commit_to_prod` (from the commit when the version's `provenance.commitTime` is set, else from
-its creation; the row says which), `auto_rollback_rate` (rollbacks the controller started:
+its creation; the row says which; rollback versions have no lead time and are left out),
+`auto_rollback_rate` (rollbacks the controller started:
 `onHealthFailure: rollback` or a RollbackPolicy), `rollback_rate` (every rollback, also
 `kardinal rollback`), `operator_intervention_rate` and
 `stale_prod_days`, over the last 30 versions Verified in the last environment, and
 `change_failure_rate` and `time_to_restore` over the last 30 deployments to it (see
 [Change failure rate and time to restore](#change-failure-rate-and-time-to-restore)).
+
+The controller tells its own rollbacks by their labels: `kardinal.io/rollback: "true"` and
+`kardinal.io/reason: AutoRollback`. Labels are not protected, so anyone allowed to create or
+update Bundles can set them, and a rollback labelled by hand counts in `auto_rollback_rate`
+(`autoRollbackRateMillis`). Read the rate as a team's own figure, not as an audit record: to
+know who started a rollback, read the version's actor (`spec.actor`, see
+[Actors](../actors.md#the-actor)), which is `controller` via `auto-rollback` for the controller's own.
 
 ### Change failure rate and time to restore
 
@@ -261,13 +278,15 @@ helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-p
 | `KardinalBundleReconcilerStalled` | Bundles queued but none reconciled for 10m | warning | Controller stuck; possible leader election issue |
 | `KardinalWorkQueueBacklog` | work queue depth > 100 for 5m | warning | Controller overloaded or starved of CPU |
 | `KardinalPolicyGateReconcileSlow` | PolicyGate P99 latency > 10s | warning | Gate evaluations stale; promotions blocked late |
+| `KardinalAgentIndexNearFull` | agent index entries ≥ 80% of their size bound for 15m | warning | Close to the bound past which the actor policy refuses writes |
+| `KardinalAgentIndexFull` | agent index entries over their size bound for 1m | critical | The index is not Ready (`IndexFull`): Bundles, Approvals and overrides the actor policy checks are refused |
 
-Every alert includes a `runbook_url` annotation pointing to the relevant section in [troubleshooting.md](../troubleshooting.md).
+Every alert includes a `runbook_url` annotation pointing to the relevant section of [Troubleshoot](../troubleshooting.md), [Promotion stuck or failed](../troubleshoot-promotions.md), or, for the two agent index alerts, [Scale and limits](../operate.md#scale-and-limits).
 
 ### Manual alerting (without Prometheus Operator)
 
 If you don't use the Prometheus Operator, put these rules in a rule file listed under
-`rule_files` in `prometheus.yml`. This block has three of the five alerts; the full set is in
+`rule_files` in `prometheus.yml`. This block has three of the seven alerts; the full set is in
 `chart/kardinal-promoter/templates/prometheusrule.yaml`.
 
 ```yaml

@@ -10,11 +10,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -89,6 +91,13 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 		{name: "reuses the onHealthFailure rollback of the same bundle",
 			history:  []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), alarm()},
 			wantName: lifecycle.AutoRollbackName("bundle-1", "alarm")},
+		{name: "reuses an earlier rollback of another naming scheme, found by its labels",
+			history: []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), func() client.Object {
+				b := alarm()
+				b.SetName("bundle-1-rollback-alarm-0a1b2c3d") // a v0.11 controller's long name
+				return b
+			}()},
+			wantName: "bundle-1-rollback-alarm-0a1b2c3d"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,6 +154,78 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 			require.NotNil(t, rb.Spec.Intent)
 			assert.Equal(t, "prod", rb.Spec.Intent.TargetEnvironment)
 			assert.Equal(t, "AutoRollback", rb.Labels[lifecycle.LabelReason])
+		})
+	}
+}
+
+// TestRollbackPolicy_RollbackPerEnvironment (#2082): RollbackPolicies of two
+// environments of one failing Bundle each get their own rollback Bundle,
+// also when the second reads the first's name as free (a cache behind its
+// create): it fails that reconcile rather than take it, and the retry
+// creates its own.
+func TestRollbackPolicy_RollbackPerEnvironment(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "in turn", true: "racing"}[stale], func(t *testing.T) {
+			ctx := context.Background()
+			objs := []client.Object{rtPipeline(), rtBundle("bundle-0", "1.24.0", 0), rtBundle("bundle-1", "1.25.0", 30)}
+			for _, env := range []string{"test", "prod"} {
+				at := metav1.NewTime(fixedNow.Add(-55 * time.Minute))
+				ok := makePromotionStep("z-bundle-0-"+env, "nginx-demo", env, 0)
+				ok.Labels["kardinal.io/bundle"], ok.Spec.BundleName = "bundle-0", "bundle-0"
+				ok.CreationTimestamp, ok.Status.State = at, "Verified"
+				ok.Status.Conditions = []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified", LastTransitionTime: at}}
+				failing := makePromotionStep("a-bundle-1-"+env, "nginx-demo", env, 3)
+				failing.Labels["kardinal.io/bundle"] = "bundle-1"
+				objs = append(objs, ok, failing, makeRollbackPolicy("rp-"+env, "nginx-demo", env, "bundle-1", 3))
+			}
+			base := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(objs...).
+				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+				WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+			plain := lifecycle.AutoRollbackName("bundle-1", "policy")
+			miss := false
+			c := interceptor.NewClient(base, interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*v1alpha1.Bundle); ok && key.Name == plain && miss {
+						miss = false
+						return apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("bundles").GroupResource(), key.Name)
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				}})
+			r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+			req := func(env string) ctrl.Request {
+				return ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-" + env, Namespace: "default"}}
+			}
+			_, err := r.Reconcile(ctx, req("test"))
+			require.NoError(t, err)
+			if stale {
+				miss = true
+				res, err := r.Reconcile(ctx, req("prod"))
+				require.NoError(t, err)
+				assert.False(t, miss, "the stale read happened")
+				assert.Positive(t, res.RequeueAfter, "prod's read missed test's rollback: it retries")
+				var rp v1alpha1.RollbackPolicy
+				require.NoError(t, c.Get(ctx, req("prod").NamespacedName, &rp))
+				assert.Nil(t, rp.Status.RollbackBundleName, "prod did not take test's rollback as its own")
+			}
+			_, err = r.Reconcile(ctx, req("prod"))
+			require.NoError(t, err)
+
+			var list v1alpha1.BundleList
+			require.NoError(t, c.List(ctx, &list))
+			targets := map[string]string{}
+			for _, b := range list.Items {
+				if b.Labels[lifecycle.LabelRollback] == "true" {
+					require.NotNil(t, b.Spec.Intent, b.Name)
+					targets[b.Spec.Intent.TargetEnvironment] = b.Name
+				}
+			}
+			assert.Equal(t, map[string]string{"test": plain, "prod": lifecycle.AutoRollbackName("bundle-1", "policy-prod")}, targets)
+			for env, name := range targets {
+				var rp v1alpha1.RollbackPolicy
+				require.NoError(t, c.Get(ctx, req(env).NamespacedName, &rp))
+				require.NotNil(t, rp.Status.RollbackBundleName, env)
+				assert.Equal(t, name, *rp.Status.RollbackBundleName, "%s's policy names its own rollback", env)
+			}
 		})
 	}
 }

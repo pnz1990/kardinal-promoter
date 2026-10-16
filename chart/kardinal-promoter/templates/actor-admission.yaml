@@ -15,6 +15,146 @@ API and the Bundle API) with the same functions.
 */}}
 {{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
 {{- $controllers := prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+{{- /*
+actorChecks: the variables and validations of the actor policies, a
+transliteration of pkg/actor Derive and Scope. $controllers is passed in.
+*/}}
+{{- define "kardinal-promoter.actorChecks" -}}
+variables:
+  - name: controller
+    expression: request.userInfo.username in {{ .controllers }}
+  - name: groups
+    expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
+  # The index entries that match the requester: by username, then by group.
+  - name: matches
+    expression: >-
+      (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
+        ? [params.status.users[request.userInfo.username]] : []) +
+      (has(params.status) && has(params.status.groups)
+        ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+  - name: agent
+    expression: "size(variables.matches) > 0"
+  - name: entry
+    expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
+  - name: kind
+    expression: >-
+      variables.agent ? 'agent' :
+      request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
+  # The stamps this request adds: the new object's (null when it has
+  # none), or the gate's new override entries. A Bundle or Approval update
+  # adds none (the CRD keeps spec.actor immutable).
+  - name: gate
+    expression: "request.resource.resource == 'policygates'"
+  # A freeze's new exemptions (kardinal override --freeze) are stamped
+  # like gate overrides; other ChangeWindow writes add no stamp.
+  - name: freeze
+    expression: "request.resource.resource == 'changewindows'"
+  - name: oldExemptions
+    expression: >-
+      variables.freeze && oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.exemptions)
+        ? oldObject.spec.freeze.exemptions : []
+  - name: exemptionStamps
+    expression: >-
+      variables.freeze && has(object.spec.freeze) && has(object.spec.freeze.exemptions)
+        ? object.spec.freeze.exemptions.filter(e, !(e in variables.oldExemptions))
+            .map(e, has(e.actor) ? e.actor : null)
+        : []
+  # Who froze (a new freeze) and who lifts it (a new spec.freeze.lifted).
+  - name: freezeStamps
+    expression: >-
+      !variables.freeze || !has(object.spec.freeze) ? [] :
+      (oldObject == null ? [has(object.spec.freeze.actor) ? object.spec.freeze.actor : null] : []) +
+      (has(object.spec.freeze.lifted) &&
+        !(oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.lifted))
+        ? [has(object.spec.freeze.lifted.actor) ? object.spec.freeze.lifted.actor : null] : [])
+  - name: stamps
+    expression: >-
+      variables.freeze ? variables.exemptionStamps + variables.freezeStamps
+      : variables.gate
+        ? (has(object.spec.overrides)
+            ? object.spec.overrides.filter(o,
+                !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))
+              .map(o, has(o.actor) ? o.actor : null)
+            : [])
+        : [has(object.spec.actor) ? object.spec.actor : null]
+  - name: labels
+    expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+  # Where the write lands, for the agent's scope.
+  - name: pipeline
+    expression: >-
+      request.resource.resource in ['bundles', 'verdicts'] ? object.spec.pipeline :
+      variables.gate && 'kardinal.io/pipeline' in variables.labels ? variables.labels['kardinal.io/pipeline'] : ''
+  - name: environment
+    expression: >-
+      request.resource.resource in ['approvals', 'verdicts'] ? object.spec.environment :
+      variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
+  - name: check
+    expression: "!variables.controller && size(variables.stamps) > 0"
+  # The index is built: a Ready condition that is True. Until then (just
+  # created, or IndexFull) every write the policy judges is refused: the
+  # registry fails closed.
+  - name: indexReady
+    expression: >-
+      has(params.status) && has(params.status.conditions) &&
+      params.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+validations:
+  - expression: "!variables.check || variables.indexReady"
+    message: kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)
+    reason: Forbidden
+  - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
+    messageExpression: >-
+      'you (' + request.userInfo.username + ') match more than one AgentIdentity (' +
+      variables.matches.map(m, m.agent).join(', ') + '); ask a cluster admin to fix the agent registry'
+    reason: Forbidden
+  - expression: "!variables.check || variables.matches.all(m, !has(m.blocked))"
+    messageExpression: >-
+      'agent ' + variables.entry.agent + ' may not act: ' +
+      variables.matches.filter(m, has(m.blocked)).map(m, m.blocked).join('; ')
+    reason: Forbidden
+  # Break-glass is for people (docs/design/18-actor-policy.md section 6):
+  # an agent may not let a pipeline through a freeze.
+  - expression: "!variables.check || !variables.agent || size(variables.exemptionStamps) == 0"
+    messageExpression: >-
+      'you are agent ' + variables.entry.agent + ': an agent may not let a pipeline through a freeze ' +
+      '(break-glass is for people); ask ' + variables.entry.sponsor + ' or another person to run kardinal override --freeze'
+    reason: Forbidden
+  # An agent must stamp what it writes.
+  - expression: "!variables.check || !variables.agent || variables.stamps.all(s, s != null)"
+    messageExpression: >-
+      'you are agent ' + variables.entry.agent + ' (sponsor ' + variables.entry.sponsor +
+      '): set actor {kind: agent, principal: ' + request.userInfo.username + ', agent: ' +
+      variables.entry.agent + ', sponsor: ' + variables.entry.sponsor + '}; kardinal sets it for you'
+    reason: Forbidden
+  # A stamp says exactly what the index says, and only the controller sets via.
+  - expression: >-
+      !variables.check || variables.stamps.all(s, s == null || (
+        s.principal == request.userInfo.username && s.kind == variables.kind && !has(s.via) &&
+        (variables.agent
+          ? has(s.agent) && s.agent == variables.entry.agent && has(s.sponsor) && s.sponsor == variables.entry.sponsor
+          : !has(s.agent) && !has(s.sponsor))))
+    messageExpression: >-
+      'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
+      (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
+      '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
+    reason: Forbidden
+  # An agent stays in its scope: the namespace always, the Bundle's
+  # Pipeline, the Approval's environment, the gate's Pipeline and environment.
+  # An entry scoped nowhere has no namespaces (the index omits an empty list).
+  - expression: >-
+      !variables.check || !variables.agent || variables.freeze || (
+        (has(variables.entry.namespaces) ? variables.entry.namespaces : []).exists(p, p == '*' || p == request.namespace ||
+          (p.endsWith('*') && request.namespace.startsWith(p.substring(0, size(p) - 1)))) &&
+        (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline ||
+          (p.endsWith('*') && variables.pipeline.startsWith(p.substring(0, size(p) - 1))))) &&
+        (variables.environment == '' || variables.entry.environments.exists(p, p == '*' || p == variables.environment ||
+          (p.endsWith('*') && variables.environment.startsWith(p.substring(0, size(p) - 1))))))
+    messageExpression: >-
+      'agent ' + variables.entry.agent + ' may not act here (namespace ' + request.namespace +
+      (variables.pipeline != '' ? ', pipeline ' + variables.pipeline : '') +
+      (variables.environment != '' ? ', environment ' + variables.environment : '') +
+      '): see its AgentIdentity spec.scope'
+    reason: Forbidden
+{{- end }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -32,144 +172,13 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE"]
         resources: ["bundles", "approvals", "verdicts"]
+      # Freeze exemptions (#1843): ChangeWindows are written rarely, so the
+      # index conversion they pay does not matter (#1936).
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["policygates", "changewindows"]
-  variables:
-    - name: controller
-      expression: request.userInfo.username in {{ $controllers }}
-    - name: groups
-      expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-    # The index entries that match the requester: by username, then by group.
-    - name: matches
-      expression: >-
-        (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-          ? [params.status.users[request.userInfo.username]] : []) +
-        (has(params.status) && has(params.status.groups)
-          ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
-    - name: agent
-      expression: "size(variables.matches) > 0"
-    - name: entry
-      expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
-    - name: kind
-      expression: >-
-        variables.agent ? 'agent' :
-        request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
-    # The stamps this request adds: the new object's (null when it has
-    # none), or the gate's new override entries. A Bundle or Approval update
-    # adds none (the CRD keeps spec.actor immutable).
-    - name: gate
-      expression: "request.resource.resource == 'policygates'"
-    # A freeze's new exemptions (kardinal override --freeze) are stamped
-    # like gate overrides; other ChangeWindow writes add no stamp.
-    - name: freeze
-      expression: "request.resource.resource == 'changewindows'"
-    - name: oldExemptions
-      expression: >-
-        variables.freeze && oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.exemptions)
-          ? oldObject.spec.freeze.exemptions : []
-    - name: exemptionStamps
-      expression: >-
-        variables.freeze && has(object.spec.freeze) && has(object.spec.freeze.exemptions)
-          ? object.spec.freeze.exemptions.filter(e, !(e in variables.oldExemptions))
-              .map(e, has(e.actor) ? e.actor : null)
-          : []
-    # Who froze (a new freeze) and who lifts it (a new spec.freeze.lifted).
-    - name: freezeStamps
-      expression: >-
-        !variables.freeze || !has(object.spec.freeze) ? [] :
-        (oldObject == null ? [has(object.spec.freeze.actor) ? object.spec.freeze.actor : null] : []) +
-        (has(object.spec.freeze.lifted) &&
-          !(oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.lifted))
-          ? [has(object.spec.freeze.lifted.actor) ? object.spec.freeze.lifted.actor : null] : [])
-    - name: stamps
-      expression: >-
-        variables.freeze ? variables.exemptionStamps + variables.freezeStamps
-        : variables.gate
-          ? (has(object.spec.overrides)
-              ? object.spec.overrides.filter(o,
-                  !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))
-                .map(o, has(o.actor) ? o.actor : null)
-              : [])
-          : [has(object.spec.actor) ? object.spec.actor : null]
-    - name: labels
-      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
-    # Where the write lands, for the agent's scope.
-    - name: pipeline
-      expression: >-
-        request.resource.resource in ['bundles', 'verdicts'] ? object.spec.pipeline :
-        variables.gate && 'kardinal.io/pipeline' in variables.labels ? variables.labels['kardinal.io/pipeline'] : ''
-    - name: environment
-      expression: >-
-        request.resource.resource in ['approvals', 'verdicts'] ? object.spec.environment :
-        variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
-    - name: check
-      expression: "!variables.controller && size(variables.stamps) > 0"
-    # The index is built: a Ready condition that is True. Until then (just
-    # created, or IndexFull) every write the policy judges is refused: the
-    # registry fails closed.
-    - name: indexReady
-      expression: >-
-        has(params.status) && has(params.status.conditions) &&
-        params.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
-  validations:
-    - expression: "!variables.check || variables.indexReady"
-      message: kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)
-      reason: Forbidden
-    - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
-      messageExpression: >-
-        'you (' + request.userInfo.username + ') match more than one AgentIdentity (' +
-        variables.matches.map(m, m.agent).join(', ') + '); ask a cluster admin to fix the agent registry'
-      reason: Forbidden
-    - expression: "!variables.check || variables.matches.all(m, !has(m.blocked))"
-      messageExpression: >-
-        'agent ' + variables.entry.agent + ' may not act: ' +
-        variables.matches.filter(m, has(m.blocked)).map(m, m.blocked).join('; ')
-      reason: Forbidden
-    # Break-glass is for people (docs/design/18-actor-policy.md section 6):
-    # an agent may not let a pipeline through a freeze.
-    - expression: "!variables.check || !variables.agent || size(variables.exemptionStamps) == 0"
-      messageExpression: >-
-        'you are agent ' + variables.entry.agent + ': an agent may not let a pipeline through a freeze ' +
-        '(break-glass is for people); ask ' + variables.entry.sponsor + ' or another person to run kardinal override --freeze'
-      reason: Forbidden
-    # An agent must stamp what it writes.
-    - expression: "!variables.check || !variables.agent || variables.stamps.all(s, s != null)"
-      messageExpression: >-
-        'you are agent ' + variables.entry.agent + ' (sponsor ' + variables.entry.sponsor +
-        '): set actor {kind: agent, principal: ' + request.userInfo.username + ', agent: ' +
-        variables.entry.agent + ', sponsor: ' + variables.entry.sponsor + '}; kardinal sets it for you'
-      reason: Forbidden
-    # A stamp says exactly what the index says, and only the controller sets via.
-    - expression: >-
-        !variables.check || variables.stamps.all(s, s == null || (
-          s.principal == request.userInfo.username && s.kind == variables.kind && !has(s.via) &&
-          (variables.agent
-            ? has(s.agent) && s.agent == variables.entry.agent && has(s.sponsor) && s.sponsor == variables.entry.sponsor
-            : !has(s.agent) && !has(s.sponsor))))
-      messageExpression: >-
-        'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
-        (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
-        '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
-      reason: Forbidden
-    # An agent stays in its scope: the namespace always, the Bundle's
-    # Pipeline, the Approval's environment, the gate's Pipeline and environment.
-    # An entry scoped nowhere has no namespaces (the index omits an empty list).
-    - expression: >-
-        !variables.check || !variables.agent || variables.freeze || (
-          (has(variables.entry.namespaces) ? variables.entry.namespaces : []).exists(p, p == '*' || p == request.namespace ||
-            (p.endsWith('*') && request.namespace.startsWith(p.substring(0, size(p) - 1)))) &&
-          (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline ||
-            (p.endsWith('*') && variables.pipeline.startsWith(p.substring(0, size(p) - 1))))) &&
-          (variables.environment == '' || variables.entry.environments.exists(p, p == '*' || p == variables.environment ||
-            (p.endsWith('*') && variables.environment.startsWith(p.substring(0, size(p) - 1))))))
-      messageExpression: >-
-        'agent ' + variables.entry.agent + ' may not act here (namespace ' + request.namespace +
-        (variables.pipeline != '' ? ', pipeline ' + variables.pipeline : '') +
-        (variables.environment != '' ? ', environment ' + variables.environment : '') +
-        '): see its AgentIdentity spec.scope'
-      reason: Forbidden
+        resources: ["changewindows"]
+  {{- include "kardinal-promoter.actorChecks" (dict "controllers" $controllers) | nindent 2 }}
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Deny")) }}
 ---
@@ -193,6 +202,15 @@ spec:
     apiVersion: kardinal.io/v1alpha1
     kind: AgentIndex
   matchConstraints:
+    # Only writes labelled kardinal.io/actor-check (#1936): the object selector
+    # is matched before the API server converts the AgentIndex param, which
+    # every matched request pays in full. Writes that add a stamp carry the
+    # label (<release>-actor-record-marker requires it); the controller's and
+    # everyone else's do not pay for the agent registry.
+    objectSelector:
+      matchExpressions:
+        - key: kardinal.io/actor-check
+          operator: Exists
     resourceRules:
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
@@ -221,19 +239,7 @@ spec:
       expression: >-
         variables.agent ? 'agent' :
         request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
-    - name: stamps
-      expression: >-
-        request.resource.resource == 'pipelines'
-          ? (has(object.spec.holds)
-              ? object.spec.holds.filter(h,
-                  !(oldObject != null && has(oldObject.spec.holds) && h in oldObject.spec.holds))
-                .map(h, has(h.actor) ? h.actor : null)
-              : []) +
-            (has(object.spec.lastChange) &&
-              !(oldObject != null && has(oldObject.spec.lastChange) && oldObject.spec.lastChange == object.spec.lastChange)
-              ? [has(object.spec.lastChange.actor) ? object.spec.lastChange.actor : null] : [])
-          : (has(object.spec.rejected) && !has(oldObject.spec.rejected)
-              ? [has(object.spec.rejected.actor) ? object.spec.rejected.actor : null] : [])
+    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
   validations:
     - expression: >-
         variables.controller || variables.stamps.all(s, s == null || (
@@ -248,6 +254,176 @@ spec:
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-records" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Allow")) }}
+---
+# A write that adds an actor stamp to a Pipeline (a hold, a spec.lastChange)
+# or a Bundle (a rejection) carries the label kardinal.io/actor-check: true,
+# so <release>-actor-records checks the stamp. No params: it judges every
+# Pipeline write and Bundle update, the controller's included, at no cost
+# that grows with the agent registry.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-actor-record-marker
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pipelines"]
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["bundles"]
+  variables:
+    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
+  validations:
+    - expression: >-
+        request.userInfo.username in {{ $controllers }} || size(variables.stamps) == 0 ||
+        (has(object.metadata.labels) && 'kardinal.io/actor-check' in object.metadata.labels &&
+          object.metadata.labels['kardinal.io/actor-check'] == 'true')
+      message: >-
+        a write that adds a hold, a spec.lastChange or a rejection must carry the label
+        kardinal.io/actor-check: "true", so its actor stamp is checked: add it to metadata.labels in the
+        same write (kubectl, scripts and GitOps tools), or use kardinal from v0.12 on, which sets it
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-record-marker") }}
+---
+# Gate override entries, checked like the stamps above, but only on gates
+# labelled kardinal.io/override-check (#1936): the API server converts the
+# whole AgentIndex for every request a policy with params matches, and kro
+# re-applies every gate instance on every Graph pass. The label is matched
+# before the index is read; <release>-override-marker requires it on every
+# write that adds an override (kardinal override and the UI set it).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-actor-overrides
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: kardinal.io/v1alpha1
+    kind: AgentIndex
+  matchConstraints:
+    objectSelector:
+      matchExpressions:
+        - key: kardinal.io/override-check
+          operator: Exists
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["policygates"]
+  {{- include "kardinal-promoter.actorChecks" (dict "controllers" $controllers) | nindent 2 }}
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-overrides" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Deny")) }}
+---
+# A write that adds or changes an override entry carries the label
+# kardinal.io/override-check: true, so <release>-actor-overrides checks its
+# stamp. No params: it judges every gate write, kro's included, at no cost
+# that grows with the agent registry.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-override-marker
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["policygates"]
+  variables:
+    - name: added
+      expression: >-
+        has(object.spec.overrides) && object.spec.overrides.exists(o,
+          !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))
+  validations:
+    - expression: >-
+        request.userInfo.username in {{ $controllers }} || !variables.added ||
+        (has(object.metadata.labels) && 'kardinal.io/override-check' in object.metadata.labels &&
+          object.metadata.labels['kardinal.io/override-check'] == 'true')
+      message: >-
+        a write that adds or changes an override must carry the label kardinal.io/override-check: "true", so
+        its actor stamp is checked: add it to the gate's metadata.labels in the same write (kubectl,
+        scripts and GitOps tools), or use kardinal override from v0.12 on, which sets it
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "override-marker") }}
+---
+# The AgentIndex the actor policy reads as params. The API server refuses
+# every write a policy matches while its param is missing ("no params
+# found"), before any expression runs, so the controller's exemption and the
+# check variable cannot help then (#1929): kro's gate instances and the
+# controller's own versions would wait too. So the index always exists: the
+# chart creates it empty (Helm installs the kinds it does not list in
+# alphabetical order, AgentIndex before the policies), the controller writes
+# its status, and <release>-agent-index below refuses to delete it. Until the
+# controller has built it, the index is not Ready: only the writes the policy
+# checks wait. Kept on uninstall (the policy refuses the delete); delete it
+# after uninstalling with kubectl delete agentindex <release>.
+apiVersion: kardinal.io/v1alpha1
+kind: AgentIndex
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+---
+# Only the controller deletes this release's AgentIndex or writes its status:
+# it is the param the actor policy decides with.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-index
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      # No resourceNames: a collection delete (kubectl delete agentindexes
+      # --all) is matched without a name. The rule checks the object's name
+      # instead, so other releases' indexes are not this release's concern.
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["DELETE"]
+        resources: ["agentindexes"]
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["agentindexes/status"]
+  variables:
+    - name: name
+      expression: "oldObject != null ? oldObject.metadata.name : object.metadata.name"
+  validations:
+    - expression: >-
+        variables.name != {{ include "kardinal-promoter.fullname" . | squote }} ||
+        request.userInfo.username in {{ $controllers }}
+      messageExpression: >-
+        'only kardinal writes the agent index ' + variables.name + ' (its status, or deleting it): the actor policy
+        decides with it, and without it the API server refuses every write the policy matches, those of kro included'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-index
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-agent-index
+  validationActions: ["Deny"]
 ---
 # An AuditEvent that names an actor was written by kardinal: only the
 # controller may create one with spec.actor.

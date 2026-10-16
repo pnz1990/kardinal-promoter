@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -188,9 +189,14 @@ type World struct {
 	renders   *rrrec.Reconciler
 	gitClient *RewritingGit
 
+	// mgr starts the controller (startManager); incarnation counts its
+	// starts, and crash its crash injection (CrashAfter).
+	mgr         managerConfig
+	incarnation int
+	crash       crashState
+
 	// The agent registry and admission (Options.Actors).
 	api         *APIServer
-	identities  *airec.Reconciler
 	index       *airec.IndexReconciler
 	indexDirty  atomic.Bool
 	indexPaused atomic.Bool
@@ -212,10 +218,15 @@ type World struct {
 	// around kardinal (reviewers, approvers, CI).
 	Actors []func(w *World) error
 
-	writes     atomic.Int64
-	uids       atomic.Int64
-	mu         sync.Mutex
-	reconciles map[string]int
+	// admissions are the recorded admission times (RecordAdmissions).
+	admissions map[string][]time.Duration
+
+	writes atomic.Int64
+	// graphWrites counts the writes of Graphs (Kro.GraphVersion).
+	graphWrites atomic.Int64
+	uids        atomic.Int64
+	mu          sync.Mutex
+	reconciles  map[string]int
 	// perObject counts the reconciles of each object (kind/namespace/name).
 	perObject  map[string]int
 	errors     map[string]int
@@ -258,13 +269,25 @@ func NewWorld(t testing.TB, opts Options) *World {
 		w.clock = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) // a Wednesday
 	}
 	countWrite := func(o client.Object, created bool) {
-		if objKind(o) == "AgentIndex" {
+		w.effect("write " + objKind(o) + " " + o.GetNamespace() + "/" + o.GetName())
+		switch objKind(o) {
+		case "AgentIndex":
 			w.indexDirty.Store(true)
+		case "Graph":
+			w.graphWrites.Add(1)
 		}
 		w.writes.Add(1)
 		w.noteWrite(o)
 		if w.cache != nil {
 			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), created)
+		}
+	}
+	// A patch admission refuses is stored and then put back (admitPatched):
+	// the object's resourceVersion moved, so the cache drops it, or the next
+	// read-modify-write of it conflicts with a version nobody can see.
+	refusedPatch := func(o client.Object) {
+		if w.cache != nil {
+			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), false)
 		}
 	}
 	statusObjs := []client.Object{
@@ -300,6 +323,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 			// 1 on create and moves the generation when the spec changes;
 			// the fake client does none of it.
 			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) (err error) {
+				w.crashCheck()
 				defer func() {
 					if err == nil {
 						countWrite(o, true)
@@ -326,6 +350,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				return c.Create(ctx, o, opts...)
 			},
 			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) (err error) {
+				w.crashCheck()
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
@@ -350,9 +375,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 				return c.Update(ctx, o, opts...)
 			},
 			Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) (err error) {
+				w.crashCheck()
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
+					} else {
+						refusedPatch(o)
 					}
 				}()
 				before, serr := specOf(ctx, c, o)
@@ -383,6 +411,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				return w.admitPatched(ctx, c, "", o, old)
 			},
 			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {
+				w.crashCheck()
 				defer func() {
 					if err == nil {
 						countWrite(o, true)
@@ -400,6 +429,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				return c.Delete(ctx, o, opts...)
 			},
 			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) (err error) {
+				w.crashCheck()
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
@@ -417,9 +447,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 				return c.SubResource(sub).Update(ctx, o, opts...)
 			},
 			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) (err error) {
+				w.crashCheck()
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
+					} else {
+						refusedPatch(o)
 					}
 				}()
 				old, gerr := w.stored(ctx, c, o)
@@ -446,6 +479,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 	dyn := newDynClient(c, kinds)
 	w.Kro = NewKro(c)
 	w.Kro.Version = w.writes.Load
+	w.Kro.GraphVersion = w.graphWrites.Load
 	if opts.Watch {
 		w.Kro.Skip = w.graphQuiet
 	}
@@ -458,44 +492,82 @@ func NewWorld(t testing.TB, opts Options) *World {
 		kind = SCMGitHub
 	}
 	w.SCM = NewSCMServer(kind, w.Git)
+	w.SCM.OnChange, w.SCM.Dying = w.effect, w.dying
 	t.Cleanup(w.SCM.Close)
 	w.Admit = NewAdmission(RepoRoot())
 	w.Metrics = &FakeMetrics{values: map[string]float64{}}
 
-	provider, err := scm.NewProvider(kind, "scm-token", w.SCM.URL(), "")
+	w.GitOps = &GitOps{w: w}
+	w.mgr = managerConfig{scmKind: kind, compactAbove: opts.CompactAbove, policyNS: opts.PolicyNamespaces,
+		actors: opts.Actors, maxIndexBytes: opts.MaxIndexBytes, dyn: dyn}
+	if opts.Actors {
+		w.startAPIServer()
+		// The API server's own EndpointSlice: an AgentRun's NetworkPolicy
+		// allows egress to it.
+		if err := c.Create(w.Ctx, &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
+			AddressType: discoveryv1.AddressTypeIPv4, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.96.0.1"}}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.startManager()
+	return w
+}
+
+// managerConfig is what the controller's manager is started with: the flags
+// of cmd/kardinal-controller the World sets.
+type managerConfig struct {
+	scmKind       string
+	compactAbove  int
+	policyNS      []string
+	actors        bool
+	maxIndexBytes int
+	dyn           *dynClient
+}
+
+// startManager starts the controller: every kardinal reconciler, as
+// cmd/kardinal-controller wires them, with nothing in memory (Restart
+// starts it again). The reconcilers read through the cache, as from the
+// manager's informers; APIReader and Reader read the store directly.
+func (w *World) startManager() {
+	w.T.Helper()
+	m := w.mgr
+	w.incarnation++
+	provider, err := scm.NewProvider(m.scmKind, "scm-token", w.SCM.URL(), "")
 	if err != nil {
-		t.Fatal(err)
+		w.T.Fatal(err)
 	}
 	logger := zerolog.Nop()
 	builder := graph.NewBuilder()
 	switch {
-	case opts.CompactAbove < 0:
+	case m.compactAbove < 0:
 		builder.CompactAbove = 0
-	case opts.CompactAbove > 0:
-		builder.CompactAbove = opts.CompactAbove
+	case m.compactAbove > 0:
+		builder.CompactAbove = m.compactAbove
 	}
 	compactAbove := builder.CompactAbove
-	// The reconcilers read through the cache, as from the manager's
-	// informers; APIReader and Reader read the store directly.
-	rc := w.Client
-	tr := translator.New(graph.NewGraphClient(dyn, logger), builder, rc, opts.PolicyNamespaces, logger)
+	rc, c, dyn := w.Client, w.store, m.dyn
+	tr := translator.New(graph.NewGraphClient(dyn, logger), builder, rc, m.policyNS, logger)
 	now := w.Now
-	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git}
-	w.GitOps = &GitOps{w: w}
+	// A restarted controller's Pod starts with an empty working directory.
+	work := filepath.Join(w.Dir, "work")
+	if w.incarnation > 1 {
+		work = filepath.Join(w.Dir, fmt.Sprintf("work-%d", w.incarnation))
+	}
+	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git, effect: w.effect, dying: w.dying}
 	w.bundles = &bundlerec.Reconciler{Client: rc, APIReader: c, Translator: tr, GraphChecker: graph.NewGraphClient(dyn, logger),
-		PolicyNamespaces: opts.PolicyNamespaces, NowFn: now}
+		PolicyNamespaces: m.policyNS, NowFn: now}
 	w.pipelines = &pipelinerec.Reconciler{Client: rc, Reader: c, CompactAbove: &compactAbove, Now: now}
 	w.steps = &psrec.Reconciler{Client: rc, APIReader: c, SCM: provider, GitClient: w.gitClient,
 		HealthDetector: health.NewAutoDetector(rc, dyn), RemoteClusters: &health.RemoteClusters{},
-		WorkDirRoot: filepath.Join(dir, "work"), NowFn: now, ControllerUser: ControllerUser}
+		WorkDirRoot: work, NowFn: now, ControllerUser: ControllerUser}
 	gates, err := pgrec.NewReconciler(rc)
 	if err != nil {
-		t.Fatal(err)
+		w.T.Fatal(err)
 	}
 	gates.NowFn = now
 	gates.MetricsNowFn = now
-	gates.PolicyNamespaces = opts.PolicyNamespaces
-	if opts.Actors {
+	gates.PolicyNamespaces = m.policyNS
+	if m.actors {
 		gates.AgentIndexName = Release // agent.* reads the release's AgentIndex, as --agent-index sets it
 	}
 	w.gates = gates
@@ -505,19 +577,17 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.rollbacks = &rbprec.Reconciler{Client: rc, NowFn: now, ControllerUser: ControllerUser}
 	w.renders = &rrrec.Reconciler{Client: rc, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",
 		AuthorName: "kardinal-promoter", AuthorEmail: "kardinal@kardinal.io", NowFn: now, Timeout: time.Hour}
-	if opts.Actors {
-		w.startActors(opts.MaxIndexBytes)
+	if m.actors {
+		// The release's AgentIndex vouches for the agent stamps the Bundle
+		// (rejections) and Pipeline (holds, lastChange) reconcilers record,
+		// as main.go wires them.
+		agents := &actor.Source{Reader: rc, Name: Release}
+		w.bundles.Agents, w.pipelines.Agents = agents, agents
+		w.startRegistry(m.maxIndexBytes)
 		w.agentRuns = &arrec.Reconciler{Client: rc, APIReader: c, WriterClusterRole: Release + "-agentrun-writer",
 			ReaderClusterRole: Release + "-agentrun-reader", ControllerNamespace: ReleaseNamespace, NowFn: now}
 		w.templates = &strec.Reconciler{Client: rc}
-		// The API server's own EndpointSlice: an AgentRun's NetworkPolicy
-		// allows egress to it.
-		if err := c.Create(w.Ctx, &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
-			AddressType: discoveryv1.AddressTypeIPv4, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.96.0.1"}}}}); err != nil {
-			t.Fatal(err)
-		}
 	}
-	return w
 }
 
 // Now is the World's clock.
@@ -592,9 +662,9 @@ func (w *World) kinds() []reconcileKind {
 	var registry []reconcileKind
 	if w.index != nil {
 		// The registry first: the controller builds the index at start and
-		// keeps it current; a write is admitted against it.
+		// keeps it current, with every AgentIdentity's status (#1937); a
+		// write is admitted against it.
 		registry = []reconcileKind{
-			{"AgentIdentity", &v1alpha1.AgentIdentityList{}, w.identities.Reconcile},
 			{"AgentIndex", nil, w.index.Reconcile},
 			{"StepTemplate", &v1alpha1.StepTemplateList{}, w.templates.Reconcile},
 			{"AgentRun", &v1alpha1.AgentRunList{}, w.agentRuns.Reconcile},
@@ -628,6 +698,10 @@ func (w *World) Round() int64 {
 	}
 	w.syncKro()
 	for _, k := range w.kinds() {
+		if w.down() {
+			// The controller crashed this round: it is restarting.
+			break
+		}
 		if k.list == nil && k.rec != nil {
 			w.reconcileIndex(k)
 			continue
@@ -647,9 +721,13 @@ func (w *World) Round() int64 {
 			return objs[i].GetNamespace()+"/"+objs[i].GetName() < objs[j].GetNamespace()+"/"+objs[j].GetName()
 		})
 		for _, o := range objs {
+			if w.down() {
+				break
+			}
 			w.reconcileObject(k, o)
 		}
 	}
+	w.takeDown()
 	if err := w.GitOps.Sync(); err != nil {
 		w.T.Fatalf("gitops: %v", err)
 	}
@@ -675,7 +753,14 @@ func (w *World) reconcileObject(k reconcileKind, o client.Object) {
 	// again, as the watch event of its own write would make it.
 	for i := 0; i < maxImmediate; i++ {
 		before := w.writes.Load()
-		res, err := k.rec(w.Ctx, ctrl.Request{NamespacedName: key})
+		res, err, crashed := w.reconcileOnce(k, ctrl.Request{NamespacedName: key})
+		if crashed {
+			w.mu.Lock()
+			w.reconciles[k.name]++
+			w.perObject[skey]++
+			w.mu.Unlock()
+			return
+		}
 		w.mu.Lock()
 		w.reconciles[k.name]++
 		w.perObject[skey]++
@@ -785,8 +870,8 @@ func listenKeys(o client.Object) []string {
 	case "RenderRun":
 		return []string{"RR:" + ns + "/" + o.GetName()}
 	case "AgentIdentity":
-		// A change to one AgentIdentity re-checks them all
-		// (agentidentity.Reconciler.SetupWithManager).
+		// A change to one AgentIdentity rebuilds the index and every
+		// status (agentidentity.IndexReconciler.SetupWithManager).
 		return []string{"AI:*"}
 	case "AgentIndex":
 		return []string{"AI:*", "IX:*"}

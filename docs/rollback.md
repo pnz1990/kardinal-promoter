@@ -355,7 +355,7 @@ Each health check has one of four results (see [Timings and failures](health-ada
 
 ### Health timeout
 
-If a PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, the timeout is a health failure: it increments `status.consecutiveHealthFailures` and applies `onHealthFailure`, as a Failed result does. The step message is `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: <last check>`. The timeout does not apply while a `bake` window runs. When the window stops (an Unhealthy check, or a Waiting one), the timeout starts again from that moment: a release that does not become healthy again fails at the timeout under either `bake.policy`.
+If a PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, the timeout is a health failure: it increments `status.consecutiveHealthFailures` and applies `onHealthFailure`, as a Failed result does. The step message is `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: <last check>`. A step reconciled after the timeout (the controller was down or behind) checks once more first: a healthy result passes (with a bake, it starts the window unless the bake deadline has passed), an adapter error is tried once more, and `last result` is that check's. The timeout does not apply while a `bake` window runs. When the window stops (an Unhealthy check, or a Waiting one), the timeout starts again from that moment: a release that does not become healthy again fails at the timeout under either `bake.policy`.
 
 A new image whose pods crash-loop is the common case. Kubernetes reports such a Deployment as still rolling out (`Progressing=True`, reason `ReplicaSetUpdated`) until its `progressDeadlineSeconds` (default: 600s) passes, so every check before that is Waiting. The step then fails at `health.timeout`, or earlier when `ProgressDeadlineExceeded` is reported first. To fail sooner, set the Deployment's `progressDeadlineSeconds` below `health.timeout`.
 
@@ -394,8 +394,10 @@ commit def456  [kardinal] Promote my-app-rollback-bkgwk to prod
 Every commit, a rollback's included, is titled `[kardinal] Promote <bundle> to <environment>`, with
 the version and Pipeline names in the body. A rollback from the CLI or UI is named
 `<pipeline>-rollback-<suffix>`. An automatic one is named `<failing bundle>-rollback-alarm`
-(`onHealthFailure: rollback`) or `<bundle>-rollback-policy` (RollbackPolicy); a name longer than
-63 characters is shortened and ends in a hash. Every rollback PR is labelled `kardinal/rollback`.
+(`onHealthFailure: rollback`) or `<bundle>-rollback-policy` (RollbackPolicy). When several
+environments of the version fail at once (fan-out, waves, a fleet's targets in flight together),
+each other environment's rollback is `<failing bundle>-rollback-alarm-<environment>` (or
+`-policy-<environment>`). A name longer than 63 characters is shortened to the start of the Bundle's name, `-rollback-` and a hash. Every rollback PR is labelled `kardinal/rollback`.
 Bitbucket Cloud and Bitbucket Data Center have no PR labels; find rollback PRs there by their `[kardinal] Rollback ...` title.
 
 The rollback commit is a new commit, not a `git revert`. The history is always append-only.

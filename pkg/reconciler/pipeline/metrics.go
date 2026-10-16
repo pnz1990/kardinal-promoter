@@ -135,10 +135,14 @@ func ComputeDeploymentMetrics(
 
 	// --- Lead time (commit → final env Verified) ---
 	// From spec.provenance.commitTime when CI set it, else from the Bundle's
-	// creation (lifecycle.LeadTimeStart, #1942).
+	// creation (lifecycle.LeadTimeStart, #1942). Rollbacks are left out
+	// (lifecycle.IsRollback): they restore a change, they do not ship one.
 	leadMinutes := make([]int64, 0, sampleSize)
 	fromCommit := 0
 	for _, vb := range verified {
+		if lifecycle.IsRollback(vb.bundle) {
+			continue
+		}
 		start, commit := lifecycle.LeadTimeStart(vb.bundle)
 		lead := vb.verifiedAt.Sub(start)
 		if lead > 0 {
@@ -158,7 +162,7 @@ func ComputeDeploymentMetrics(
 	// overall rate only (#1942).
 	rollbackCount, autoCount := 0, 0
 	for _, vb := range verified {
-		if vb.bundle.Spec.Provenance != nil && vb.bundle.Spec.Provenance.RollbackOf != "" {
+		if lifecycle.IsRollback(vb.bundle) {
 			rollbackCount++
 			if lifecycle.AutoRollback(vb.bundle) {
 				autoCount++

@@ -472,8 +472,9 @@ func unitSteps(r *Repo, o Options) []Step {
 		steps = append(steps, Step{
 			ID: "fuzz-" + f.Name, Area: areaUnit, Title: fmt.Sprintf("%s (%s) for %s", f.Name, f.Dir, o.FuzzTime),
 			Tests: "tests.json", MinTests: 1, Heavy: fuzzHeavy(o.FuzzTime),
-			Script: fmt.Sprintf(`go test -run '^$' -fuzz '^%s$' -fuzztime %s -parallel 4 -json %s > "$STEP_DIR/tests.json"`,
-				f.Name, o.FuzzTime, f.Dir),
+			// hack/ci/fuzz.sh: go test -fuzz, and Go's fuzzing deadline
+			// race (#2078) counted as the run with no finding it is.
+			Script: fmt.Sprintf(`bash hack/ci/fuzz.sh %s %s %s "$STEP_DIR/tests.json"`, f.Dir, f.Name, o.FuzzTime),
 		})
 	}
 	steps = append(steps, Step{
@@ -485,7 +486,11 @@ func unitSteps(r *Repo, o Options) []Step {
 	})
 	ent := Step{ID: "scenario-enterprise", Area: areaUnit, Title: "enterprise scenario at full size", Heavy: true, Tests: "tests.json",
 		MinTests: 2,
-		Script:   `KARDINAL_SCENARIO_ENTERPRISE=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}
+		// KARDINAL_SCENARIO_SCALE=full: the agent scale scenario at its full
+		// 5,000 AgentIdentities, which PR CI runs at 2,000.
+		// KARDINAL_SCENARIO_CHAOS=full: the controller restarts with 32
+		// seeds, which PR CI runs 16 of.
+		Script: `KARDINAL_SCENARIO_ENTERPRISE=full KARDINAL_SCENARIO_SCALE=full KARDINAL_SCENARIO_CHAOS=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}
 	if !r.Enterprise {
 		ent.Script = ""
 		ent.Missing = "no test/scenario/enterprise on this commit (#1860)"

@@ -24,7 +24,6 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
@@ -219,10 +218,8 @@ func Run(t *testing.T, phase Phase) {
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
 	require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), "the index is Ready: %v", idx.Status.Conditions)
-	raw, err := yaml.Marshal(idx.Status)
-	require.NoError(t, err)
-	t.Logf("registry: %d AgentIdentities, %d users and %d groups in the index (%d KiB of %d), built and checked in %s with %d AgentIdentity reconciles",
-		sz.Identities, len(idx.Status.Users), len(idx.Status.Groups), len(raw)>>10, sz.bound()>>10,
+	t.Logf("registry: %d AgentIdentities, %d users and %d groups in the index (%d KiB of %d, as the bound counts it), built and checked in %s with %d AgentIdentity reconciles",
+		sz.Identities, len(idx.Status.Users), len(idx.Status.Groups), indexBytes(idx.Status)>>10, sz.bound()>>10,
 		time.Since(start).Round(time.Millisecond), w.Reconciles()["AgentIdentity"]-before)
 	assert.Equal(t, sz.Identities, idx.Status.ObservedIdentities)
 
@@ -506,6 +503,9 @@ func probes(reg registry, idx *v1alpha1.AgentIndexStatus, sz agentSize, n int) (
 				}
 				g.Spec.Overrides = []v1alpha1.PolicyGateOverride{{Reason: "probe", ExpiresAt: metav1.NewTime(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)),
 					CreatedBy: u.GetName(), Actor: stamp}}
+				// As kardinal override writes it: labelled for the
+				// actor-overrides policy (#1936).
+				lifecycle.MarkOverride(g)
 				pr.stamps = []*v1alpha1.Actor{stamp}
 			}
 			pr.obj, err = toMap(g, "PolicyGate")
@@ -555,7 +555,8 @@ func actorVerdict(pr probe, idx *v1alpha1.AgentIndexStatus) bool {
 }
 
 // probeAgainstGo sends sz.Probes requests (probes) through the API
-// server's admission plugin serving the actor policy alone, with the index
+// server's admission plugin serving the actor policies alone (the actor,
+// actor-overrides and override-marker policies), with the index
 // as its param, and checks each verdict against actorVerdict, and that
 // every refusal is one of the policy's messages. Then it sends them again
 // with a tenth of the index: the admission cost may grow at most linearly
@@ -564,7 +565,8 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 	t.Helper()
 	c, err := scenario.RenderChart()
 	require.NoError(t, err)
-	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c, []string{scenario.Release + "-actor"}, nil), nil)
+	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c,
+		[]string{scenario.Release + "-actor", scenario.Release + "-actor-overrides", scenario.Release + "-override-marker"}, nil), nil)
 	require.NoError(t, err)
 	t.Cleanup(stop)
 	for i := 1; i <= sz.Teams; i++ {
@@ -606,7 +608,7 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 			}
 		}
 		if err != nil {
-			assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy '"+scenario.Release+"-actor'", "probe %d", i)
+			assert.Regexp(t, "ValidatingAdmissionPolicy '"+scenario.Release+"-actor(-overrides)?'", err.Error(), "probe %d", i)
 			assert.NotContains(t, err.Error(), "resulted in error", "probe %d: a refusal names its reason", i)
 		}
 	}
@@ -797,10 +799,8 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	t.Helper()
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
-	raw, err := yaml.Marshal(idx.Status)
-	require.NoError(t, err)
 	per := 16 * 260
-	extra := (sz.bound()-len(raw))/per + 2
+	extra := (sz.bound()-indexBytes(idx.Status))/per + 2
 	admin := scenario.AsUser(w.Ctx, scenario.AdminUser, scenario.AdminGroups...)
 	var names []string
 	for i := 0; i < extra; i++ {

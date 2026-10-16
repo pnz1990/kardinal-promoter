@@ -388,7 +388,7 @@ func Reviewer(w *World) error {
 		if err := w.SCM.Approve(pr.Repo, pr.Number, "reviewer"); err != nil {
 			return err
 		}
-		if err := w.SCM.Merge(pr.Repo, pr.Number); err != nil {
+		if err := w.SCM.MergeAs(pr.Repo, pr.Number, "reviewer"); err != nil {
 			return err
 		}
 	}
