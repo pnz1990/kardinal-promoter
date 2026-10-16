@@ -1,6 +1,6 @@
 # Design: Verdicts (agents as verification gates)
 
-> Status: Accepted (spec for epic #1844, v0.12.0). Implementation follows in separate PRs.
+> Status: Implemented in v0.12.0 (epic #1844, #1870).
 > Created: 2026-10-14
 > Depends on: [17-actors.md](17-actors.md) (the actor stamp, `actor.SameParty`, the AgentIndex; #1834)
 > and E7's one-party rule (#1843).

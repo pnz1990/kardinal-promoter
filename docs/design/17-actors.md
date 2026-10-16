@@ -1,6 +1,6 @@
 # Design: Actors (who acted, and for whom)
 
-> Status: Accepted (spec for epic #1834, v0.12.0). Implementation follows in a separate PR.
+> Status: Implemented in v0.12.0 (epic #1834, #1857).
 > Created: 2026-10-14
 > Absorbs: #1539 (AuditEvents for UI API and Bundle API writes).
 > Consumers: E7 actor-aware policy and separation of duties, E8 Verdicts, E9 freezes, E10 local MCP.
