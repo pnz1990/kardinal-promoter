@@ -24,7 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario"
@@ -78,11 +77,11 @@ func RunScale(t *testing.T) {
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
 	require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), "the index is Ready: %v", idx.Status.Conditions)
-	raw, err := yaml.Marshal(idx.Status)
-	require.NoError(t, err)
+	// Sizes as the bound counts them (indexBytes), not the object's YAML,
+	// which is about 10% larger.
 	t.Logf("%s: %d AgentIdentities, %d Pipelines in %d tenants: the index holds %d users and %d groups (%d KiB of %d), built in %s",
 		mode, sz.Identities, sz.Teams*sz.PipelinesPerTeam, sz.Teams, len(idx.Status.Users), len(idx.Status.Groups),
-		len(raw)>>10, sz.bound()>>10, time.Since(start).Round(time.Millisecond))
+		indexBytes(idx.Status)>>10, sz.bound()>>10, time.Since(start).Round(time.Millisecond))
 
 	// The index's size as the controller bounds it (actor.Evaluate: each
 	// entry's JSON, its key and 4 bytes), and the identities that would
