@@ -9,13 +9,10 @@ what changed in each release.
 
 ---
 
-## Planned
+## Currently available: v0.12.0
 
-The v0.12 items are merged on main and ship in v0.12.0, except where noted; v0.13 and later are
-planned and not in kardinal yet. Plans change with feedback; the [changelog](changelog.md) says
-what shipped.
-
-### v0.12: agent-ready (on main, unreleased)
+v0.12.0 is the latest release. Besides everything earlier releases shipped (see the
+[changelog](changelog.md)), it makes kardinal agent-ready:
 
 - **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
   the namespaces, pipelines and environments it may act in. Versions, approvals and overrides
@@ -40,7 +37,13 @@ what shipped.
 - **Sync on promotion, scoped.** The controller asks Argo CD or Flux to sync only the Pipeline's
   own objects (`health.refresh.namespaces` admits more), and `health.refreshTarget` names the
   object to sync for Rollouts, Canaries and Deployments: [Sync on promotion](health-adapters.md#sync-on-promotion).
-- Planned: move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
+
+---
+
+## Planned
+
+Nothing below is in kardinal yet. Plans change with feedback; the [changelog](changelog.md) says
+what shipped.
 
 ### v0.13: evidence
 
@@ -63,6 +66,7 @@ what shipped.
 
 ### Also planned
 
+- Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
 - `rollback` and `promote --env` without re-running upstream environments
 
 ---
