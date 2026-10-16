@@ -34,6 +34,13 @@ const Bound = 150 * time.Second
 // test without git or timeout(1).
 func Serve(t testing.TB, root string, wrap func(http.Handler) http.Handler) *httptest.Server {
 	t.Helper()
+	return ServeWith(t, root, wrap, nil)
+}
+
+// ServeWith is Serve with configure, when not nil, run on the server before
+// it starts (to set its http.Server's ConnState, say).
+func ServeWith(t testing.TB, root string, wrap func(http.Handler) http.Handler, configure func(*httptest.Server)) *httptest.Server {
+	t.Helper()
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git http-backend needs the git binary")
@@ -49,7 +56,11 @@ func Serve(t testing.TB, root string, wrap func(http.Handler) http.Handler) *htt
 	if wrap != nil {
 		h = wrap(h)
 	}
-	srv := httptest.NewServer(h)
+	srv := httptest.NewUnstartedServer(h)
+	if configure != nil {
+		configure(srv)
+	}
+	srv.Start()
 	t.Cleanup(srv.Close)
 	// Registered after srv.Close, so it runs first: Close waits for the
 	// requests a stuck backend holds.
