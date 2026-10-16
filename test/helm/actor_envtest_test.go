@@ -21,6 +21,7 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -460,9 +461,10 @@ func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 	require.NoError(t, err, "the full index is written: it is small")
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
-	require.Len(t, idx.Status.Conditions, 1)
-	require.Equal(t, metav1.ConditionFalse, idx.Status.Conditions[0].Status)
-	require.Equal(t, "IndexFull", idx.Status.Conditions[0].Reason)
+	ready := meta.FindStatusCondition(idx.Status.Conditions, agentidentity.ConditionReady)
+	require.NotNil(t, ready)
+	require.Equal(t, metav1.ConditionFalse, ready.Status)
+	require.Equal(t, "IndexFull", ready.Reason)
 	var id v1alpha1.AgentIdentity
 	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "agent-0000"}, &id))
 	require.False(t, id.Status.Ready)
@@ -605,6 +607,11 @@ func TestActorIndexAvailabilityOnAPIServer(t *testing.T) {
 	// The controller builds it; people pass again.
 	_, err = (&agentidentity.IndexReconciler{Client: as(controllerUser), Name: "kardinal-promoter"}).Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
+	// Its managedFields are cleared after the write (#1936): the API server
+	// converts the whole param for every request a policy with params
+	// matches, managedFields included.
+	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	assert.Empty(t, idx.ManagedFields, "the index's managedFields are cleared")
 	require.Eventually(t, func() bool { return as("alice").Create(ctx, bundle()) == nil },
 		30*time.Second, 500*time.Millisecond, "a person's version once the index is built")
 }

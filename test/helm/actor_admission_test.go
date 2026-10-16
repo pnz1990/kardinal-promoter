@@ -447,3 +447,37 @@ func TestAgentIndexChart(t *testing.T) {
 	other := actorReq{resource: "agentindexes", user: "alice", old: named("another-release")}
 	assert.Empty(t, evalActor(t, vap, nil, other), "another release's index is its own release's concern")
 }
+
+// TestActorAdmission_FreezeLift: who lifts a freeze (a new
+// spec.freeze.lifted) is stamped and checked by <release>-actor like who
+// froze: an agent's lift must name its registered agent and sponsor. A lift
+// already recorded is not checked again: a person adding an exemption to a
+// freeze an agent lifted is admitted on their own stamp (QA on #1959: the
+// lifted clause of freezeStamps had no test).
+func TestActorAdmission_FreezeLift(t *testing.T) {
+	vap := identityPolicy(t, "actor")
+	ready := *actorRegistry(t)
+	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: ready})
+	fixerSA := "system:serviceaccount:ci:fixer"
+	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
+	freeze := func(lifted *v1alpha1.FreezeLift, exemptions ...v1alpha1.FreezeExemption) map[string]interface{} {
+		return asMap(t, v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-agents"},
+			Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.NewTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)),
+				Reason: "INC-1", Freeze: &v1alpha1.ChangeWindowFreeze{Actors: v1alpha1.FreezeAgents, CreatedBy: "alice",
+					Actor: &v1alpha1.Actor{Kind: "human", Principal: "alice"}, Lifted: lifted, Exemptions: exemptions}}})
+	}
+	forged := *fixer
+	forged.Sponsor = "mallory"
+	assert.Contains(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: fixerSA,
+		old: freeze(nil), object: freeze(&v1alpha1.FreezeLift{By: fixerSA, Actor: &forged})}),
+		"actor must be {kind: agent", "an agent's lift with a forged sponsor")
+	assert.Empty(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: fixerSA,
+		old: freeze(nil), object: freeze(&v1alpha1.FreezeLift{By: fixerSA, Actor: fixer})}), "an agent's own lift")
+
+	lifted := &v1alpha1.FreezeLift{By: fixerSA, Actor: fixer}
+	ex := v1alpha1.FreezeExemption{Namespace: "payments-eu", Pipeline: "checkout", Reason: "hotfix", CreatedBy: "bob",
+		Actor: &v1alpha1.Actor{Kind: "human", Principal: "bob"}, ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))}
+	assert.Empty(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: "bob",
+		old: freeze(lifted), object: freeze(lifted, ex)}), "the recorded lift is not checked against bob")
+}

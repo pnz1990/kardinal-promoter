@@ -319,7 +319,8 @@ spec:
           object.metadata.labels['kardinal.io/override-check'] == 'true')
       message: >-
         a write that adds or changes an override must carry the label kardinal.io/override-check: "true", so
-        its actor stamp is checked (kardinal override sets it)
+        its actor stamp is checked: add it to the gate's metadata.labels in the same write (kubectl,
+        scripts and GitOps tools), or use kardinal override from v0.12 on, which sets it
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "override-marker") }}

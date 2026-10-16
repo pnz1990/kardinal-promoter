@@ -76,9 +76,12 @@ index (`helm.sh/resource-policy: keep`); delete it afterwards with
 A gate override is checked when the write that adds it carries the label
 `kardinal.io/override-check: "true"`: `kardinal override` and the UI set it, and the
 `<release>-override-marker` policy refuses an override added without it, by anyone but the
-controller. The label lets the API server leave kro's every re-apply of a gate instance out of
-`<release>-actor-overrides`, which converts the whole index for each request it matches. Add
-it yourself if you write `spec.overrides` with `kubectl`.
+controller. The label lets the API server leave kro's re-applies of a gate instance that was
+never overridden out of `<release>-actor-overrides`, which converts the whole index for each
+request it matches. The label stays on a gate once it has been overridden, so kro's later
+re-applies of that instance are matched and pay that cost; overrides are rare, so few gates
+carry it. Add it yourself if you write `spec.overrides` with `kubectl`, scripts or GitOps
+tools: the refusal names it.
 
 An agent must stamp what it writes; a person or a bot may leave the stamp out, as before
 v0.12. An agent that is suspended, or out of its scope, is refused. `kardinal` sets the stamp

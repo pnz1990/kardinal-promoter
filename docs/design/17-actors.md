@@ -399,6 +399,12 @@ status:
   entries keep working. The scale suite registers 2,000 AgentIdentities.
 - **Writers.** Only the controller has `update` on `agentindexes/status`. Nothing else writes the
   index (the chart's user roles do not include it).
+- **Order.** One build writes the index first, then the AgentIdentity statuses that changed,
+  then a `StatusesWritten` condition on the index. Admission reads only the index, so a
+  suspension takes effect when it is written, not after a mass status change at the client's
+  rate limit (2,000 patches at 20 QPS are 100 s). The `agent.*` gates read the index and
+  `status.ready`, and wake on index events: the condition write wakes them once the statuses
+  are written. Until then a new agent is not yet registered for them (fail closed).
 - **Missing index.** `parameterNotFoundAction: Deny`: with the param missing, the dispatcher
   refuses every write the policy matches before any expression runs, the controller's and
   kro's included (`CollectParams`, `policy_dispatcher.go:396-398`, runs at

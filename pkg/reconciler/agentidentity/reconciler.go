@@ -53,7 +53,7 @@ func evaluate(ctx context.Context, c client.Client, maxBytes int) ([]v1alpha1.Ag
 // change costs one pass over the registry, not one per AgentIdentity. Each
 // patch carries the resourceVersion read, so a stale read gets a Conflict
 // and the rebuild is retried instead of writing an older verdict.
-func writeStatuses(ctx context.Context, c client.Client, ids []v1alpha1.AgentIdentity, reg actor.Registry) error {
+func writeStatuses(ctx context.Context, c client.Client, ids []v1alpha1.AgentIdentity, reg actor.Registry) (int, error) {
 	written := 0
 	for i := range ids {
 		id := &ids[i]
@@ -81,7 +81,7 @@ func writeStatuses(ctx context.Context, c client.Client, ids []v1alpha1.AgentIde
 		case apierrors.IsNotFound(err):
 			continue // deleted since the List
 		case err != nil:
-			return fmt.Errorf("patch agent identity %s status: %w", id.Name, err)
+			return written, fmt.Errorf("patch agent identity %s status: %w", id.Name, err)
 		}
 		written++
 		zerolog.Ctx(ctx).Info().Str("agentidentity", id.Name).Bool("ready", v.Ready).Str("reason", v.Reason).
@@ -90,7 +90,7 @@ func writeStatuses(ctx context.Context, c client.Client, ids []v1alpha1.AgentIde
 	if written > 0 {
 		zerolog.Ctx(ctx).Debug().Int("written", written).Int("identities", len(ids)).Msg("agent identity statuses written")
 	}
-	return nil
+	return written, nil
 }
 
 // IndexReconciler writes the status of the AgentIndex named Name, creating
@@ -200,15 +200,13 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	}
 	meta.SetStatusCondition(&want.Conditions, cond)
 	if equalIndex(idx.Status, want) {
-		return reconcile.Result{}, r.statuses(ctx, ids, reg)
+		return reconcile.Result{}, r.statuses(ctx, &idx, ids, reg)
 	}
-	// The statuses first, then the index: the PolicyGate reconciler
-	// re-evaluates agent.* gates on an AgentIndex event and reads the
-	// AgentIdentity's status.ready (#1869), so the index event must find
-	// the statuses already written.
-	if err := r.statuses(ctx, ids, reg); err != nil {
-		return reconcile.Result{}, err
-	}
+	// The index first, then the statuses: admission decides with the index,
+	// so a suspension or a scope change takes effect once it is written, not
+	// after every changed status at the client's rate limit (2,000 patches at
+	// 20 QPS are 100 s). The statuses follow; statuses wakes the gates once
+	// they are written.
 	idx.Status = want
 	// Optimistic concurrency (#1917): a builder whose read of the index is
 	// older than another builder's write (a replica's start-up build from a
@@ -220,7 +218,7 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	zerolog.Ctx(ctx).Info().Str("agentindex", r.Name).Int("identities", reg.Index.ObservedIdentities).
 		Int("users", len(want.Users)).Int("groups", len(want.Groups)).Msg("agent index written")
 	r.dropManagedFields(ctx, &idx)
-	return reconcile.Result{}, nil
+	return reconcile.Result{}, r.statuses(ctx, &idx, ids, reg)
 }
 
 // dropManagedFields clears the index's metadata.managedFields after a
@@ -243,15 +241,40 @@ func (r *IndexReconciler) dropManagedFields(ctx context.Context, idx *v1alpha1.A
 	}
 }
 
-// statuses writes the AgentIdentity statuses, before the index (the gates
-// that read both wake on the index). The start-up build of a replica that
-// does not lead (StatusesDisabled) leaves them to the leader.
-func (r *IndexReconciler) statuses(ctx context.Context, ids []v1alpha1.AgentIdentity, reg actor.Registry) error {
+// statuses writes the AgentIdentity statuses, after the index (admission
+// reads the index: a suspension does not wait for them), then wakes the
+// agent.* gates, which read both, with one StatusesWritten condition on the
+// index. The start-up build of a replica that does not lead
+// (StatusesDisabled) leaves them to the leader.
+func (r *IndexReconciler) statuses(ctx context.Context, idx *v1alpha1.AgentIndex, ids []v1alpha1.AgentIdentity,
+	reg actor.Registry) error {
 	if r.StatusesDisabled {
 		return nil
 	}
-	return writeStatuses(ctx, r.Client, ids, reg)
+	written, err := writeStatuses(ctx, r.Client, ids, reg)
+	if err != nil || written == 0 {
+		return err
+	}
+	// Wake the agent.* gates: they re-evaluate on AgentIndex events
+	// (agentIndexGateRequests) and read status.ready, which was written
+	// after the index. One condition write per build, whatever the number of
+	// statuses.
+	base := idx.DeepCopy()
+	meta.SetStatusCondition(&idx.Status.Conditions, metav1.Condition{Type: ConditionStatusesWritten,
+		Status: metav1.ConditionTrue, Reason: "Written", ObservedGeneration: idx.Generation,
+		Message: fmt.Sprintf("%d agent identity statuses written after index version %s", written, idx.ResourceVersion)})
+	if err := r.Status().Patch(ctx, idx, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil &&
+		!apierrors.IsNotFound(err) {
+		return fmt.Errorf("record the agent identity statuses on index %s: %w", r.Name, err)
+	}
+	r.dropManagedFields(ctx, idx)
+	return nil
 }
+
+// ConditionStatusesWritten is the AgentIndex condition written after a
+// build changed AgentIdentity statuses, so the gates that read them
+// re-evaluate.
+const ConditionStatusesWritten = "StatusesWritten"
 
 // ensureIndex builds the index once at start on every replica, leader or
 // not (NeedLeaderElection false), when it has never been built: a replica is ready only once the index is

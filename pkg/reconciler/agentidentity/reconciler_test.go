@@ -117,8 +117,9 @@ func TestReconcile_AgentIndex(t *testing.T) {
 	assert.Equal(t, "fixer", idx.Status.Users["system:serviceaccount:ci:fixer"].Agent)
 	assert.Equal(t, "alice", idx.Status.Users["system:serviceaccount:ci:fixer"].Sponsor)
 	assert.Equal(t, "suspended", idx.Status.Users["system:serviceaccount:ci:parked"].Blocked)
-	require.Len(t, idx.Status.Conditions, 1)
-	assert.Equal(t, metav1.ConditionTrue, idx.Status.Conditions[0].Status)
+	require.Len(t, idx.Status.Conditions, 2, "Ready, and StatusesWritten after the statuses")
+	assert.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, agentidentity.ConditionReady))
+	assert.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, agentidentity.ConditionStatusesWritten))
 
 	// Idempotent.
 	n := patches.Load()
