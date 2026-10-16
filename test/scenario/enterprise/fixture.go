@@ -80,6 +80,9 @@ func env(ns, name, approval string) v1alpha1.EnvironmentSpec {
 		Health: v1alpha1.HealthConfig{Resource: &v1alpha1.ResourceRef{Namespace: ns + "-" + name}}}
 }
 
+// RepoURL is the GitOps repository of team ns's Pipeline p.
+func RepoURL(ns, p string) string { return repoURL(ns, p) }
+
 func repoURL(ns, p string) string { return "https://github.com/" + ns + "/" + p + "-gitops" }
 
 // tenant creates team ns: its git Secret, its own soak gate and its
