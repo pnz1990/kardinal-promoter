@@ -51,8 +51,9 @@ spec:
       health:
         type: argoRollouts
         timeout: 30m
-      # A Rollout that stays Degraded (aborted) until health.timeout gets a
-      # rollback Bundle for the previous release, and so a rollback PR.
+      # An aborted Rollout (Degraded with status.abort) fails at once, and one
+      # that stays Degraded otherwise fails at health.timeout: either way it
+      # gets a rollback Bundle for the previous release, and so a rollback PR.
       onHealthFailure: rollback
 
   historyLimit: 20

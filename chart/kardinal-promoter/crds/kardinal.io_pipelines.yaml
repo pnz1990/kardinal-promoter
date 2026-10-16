@@ -1405,8 +1405,10 @@ spec:
                   spec.holds needs update on the virtual subresource pipelines/hold
                   (chart: <release>-hold-writes ValidatingAdmissionPolicy).
                 items:
-                  description: EnvironmentHold pins one environment of a Pipeline
-                    to a rollback Bundle.
+                  description: |-
+                    EnvironmentHold pins one environment of a Pipeline to one Bundle: a
+                    rollback (kardinal rollback --hold) or the version running there
+                    (kardinal hold).
                   properties:
                     actor:
                       description: |-
@@ -1492,7 +1494,8 @@ spec:
                       type: string
                     bundle:
                       description: |-
-                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle is the Bundle the environment is held on (a rollback, or the
+                        version running there): the only
                         Bundle that promotes into it while the hold lasts.
                       minLength: 1
                       type: string
@@ -2503,8 +2506,10 @@ spec:
                   it: the HoldCreated and HoldReleased AuditEvents are written from the
                   difference, whichever client changed spec.holds.
                 items:
-                  description: EnvironmentHold pins one environment of a Pipeline
-                    to a rollback Bundle.
+                  description: |-
+                    EnvironmentHold pins one environment of a Pipeline to one Bundle: a
+                    rollback (kardinal rollback --hold) or the version running there
+                    (kardinal hold).
                   properties:
                     actor:
                       description: |-
@@ -2590,7 +2595,8 @@ spec:
                       type: string
                     bundle:
                       description: |-
-                        Bundle is the rollback Bundle the environment is held on: the only
+                        Bundle is the Bundle the environment is held on (a rollback, or the
+                        version running there): the only
                         Bundle that promotes into it while the hold lasts.
                       minLength: 1
                       type: string
