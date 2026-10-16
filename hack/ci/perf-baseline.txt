@@ -5,7 +5,7 @@
 # go test ./... (under -race in CI: 150 AgentIdentities, 3 tenants); mode
 # full is KARDINAL_SCENARIO_ENTERPRISE=full (CI's scenario-enterprise job
 # and the release gate, no -race: 5,000 AgentIdentities, 200 Pipelines in
-# 50 tenants, 98 agents, 3 bursts). The scenario fails when a measure goes
+# 50 tenants, 98 agents, 2 bursts). The scenario fails when a measure goes
 # past its budget.
 #
 # Rounds and reconciles are counted, not timed, so the host's load does not
@@ -41,7 +41,7 @@ scale.quick.admission.p50.kro-gate-create 500ms
 scale.full.index.bytes 1048576
 scale.full.calibration.empty-index-admission 175us
 scale.full.burst.rounds 30
-scale.full.burst.reconciles-per-version 600
+scale.full.burst.reconciles-per-version 450
 scale.full.admission.p50.agent-bundle-create 50ms
 scale.full.admission.p50.person-approval-create 50ms
 scale.full.admission.p50.kro-gate-create 5ms

@@ -33,10 +33,11 @@ import (
 // The scale of agents: fullScale is the release gate's
 // (KARDINAL_SCENARIO_ENTERPRISE=full): 5,000 AgentIdentities, 50 tenants
 // with 4 Pipelines each (200 Pipelines) and 98 agents (100 asked; the 50th
-// team has none) shipping 3 bursts.
+// team has none) shipping 2 bursts: 3 took CI's runner 14.5 of the
+// 15 minutes the scenario-enterprise job gives go test.
 // quickScale keeps go test ./... under its budget.
 var (
-	fullScale  = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 5000, Agents: 100, Bursts: 3}
+	fullScale  = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 5000, Agents: 100, Bursts: 2}
 	quickScale = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 150, Agents: 6, Bursts: 2}
 )
 
