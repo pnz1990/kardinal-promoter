@@ -1918,8 +1918,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, health.EffectiveType(env), msg)
 	}
 
-	if expired && env.Bake != nil {
+	if expired && env.Bake != nil && pastBakeDeadline(ps, env, timeout, r.now()) {
 		// A bake's deadline is past: no healthy check now gives it its window.
+		// Before it, the late check below may still start one.
 		return timedOut(ps.Status.Message)
 	}
 
@@ -2009,7 +2010,18 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	if checkErr != nil {
 		log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
 		if expired {
-			return timedOut(ps.Status.Message)
+			// The late check could not ask: try once more (status.
+			// lastHealthCheckAt past the expiry marks the try) before failing
+			// on the result read before the timeout.
+			if last := ps.Status.LastHealthCheckAt; last == nil || !last.After(ps.Status.HealthCheckExpiry.Time) {
+				tried := metav1.NewTime(r.now())
+				ps.Status.LastHealthCheckAt = &tried
+				if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+					return ctrl.Result{}, fmt.Errorf("patch late health check: %w", patchErr)
+				}
+				return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
+			}
+			return timedOut(ps.Status.Message + "; the health check past the timeout failed: " + checkErr.Error())
 		}
 		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 	}

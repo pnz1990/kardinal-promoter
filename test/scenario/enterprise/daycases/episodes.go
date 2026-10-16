@@ -171,23 +171,28 @@ func (d *Day) advance(e *Episode, interleave bool) {
 }
 
 // Parts is how many parts the day runs in, each on a World of its own with
-// all the tenants, so that a package stays under the scenario duration
-// bound: the morning, midday and afternoon.
-const Parts = 3
+// all the tenants, so that a package stays well under the scenario duration
+// bound. The whole day on one World runs in full mode (Whole).
+const Parts = 5
 
-// Episodes are part (1-based) of the day. The morning: agents ship while
-// people approve, agent autonomy, a pause. Midday: verification passes,
-// fails and times out (the clock jumps), the agent index outage, a canary
-// rollback on the fleet. The afternoon: an agents-only freeze, stop-the-line
-// with a capped exemption, a hold. PRs are reviewed and merged all day.
+// Episodes are part (1-based) of the day. 1: agents ship while people
+// approve, and agent autonomy. 2: verification passes, fails and times out
+// (the clock jumps), and the agent index outage, which refuses agents'
+// Verdicts. 3: a pause, and a canary rollback on the fleet. 4: an
+// agents-only freeze, and a hold. 5: stop-the-line with a capped exemption.
+// PRs are reviewed and merged all day.
 func (d *Day) Episodes(part int) []*Episode {
 	switch part {
 	case 1:
-		return []*Episode{d.oneParty(), d.autonomy(), d.pause()}
+		return []*Episode{d.oneParty(), d.autonomy()}
 	case 2:
-		return []*Episode{d.verify(), d.outageEp(), d.rollback()}
+		return []*Episode{d.verify(), d.outageEp()}
 	case 3:
-		return []*Episode{d.freezeAgents(), d.stopTheLine(), d.hold()}
+		return []*Episode{d.pause(), d.rollback()}
+	case 4:
+		return []*Episode{d.freezeAgents(), d.hold()}
+	case 5:
+		return []*Episode{d.stopTheLine()}
 	}
 	d.t.Fatalf("no part %d of the day", part)
 	return nil

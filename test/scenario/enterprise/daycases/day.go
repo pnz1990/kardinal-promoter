@@ -247,19 +247,23 @@ func isolate(p *v1alpha1.Pipeline) {
 
 func repoURL(ns, p string) string { return "https://github.com/" + ns + "/" + p + "-gitops" }
 
-// SeedList is the seeded interleavings each part runs: 1 and 2, 1 to 8 with
-// KARDINAL_SCENARIO_ENTERPRISE=full, 1 to KARDINAL_SCENARIO_DAY_SEEDS, or
+// SeedList is the seeded interleavings part runs: seed <part> (one seed a
+// part, five over the day, to keep each package fast); 1 to 8 with
+// KARDINAL_SCENARIO_ENTERPRISE=full; 1 to KARDINAL_SCENARIO_DAY_SEEDS; or
 // only KARDINAL_SCENARIO_DAY_SEED (to replay one).
-func SeedList() []int64 {
+func SeedList(part int) []int64 {
 	if v, err := strconv.ParseInt(os.Getenv("KARDINAL_SCENARIO_DAY_SEED"), 10, 64); err == nil && v >= 0 {
 		return []int64{v}
 	}
-	n := 2
+	n := 0
 	if os.Getenv("KARDINAL_SCENARIO_ENTERPRISE") == "full" {
 		n = 8
 	}
 	if v, err := strconv.Atoi(os.Getenv("KARDINAL_SCENARIO_DAY_SEEDS")); err == nil && v > 0 {
 		n = v
+	}
+	if n == 0 {
+		return []int64{int64(part)}
 	}
 	out := make([]int64, n)
 	for i := range out {

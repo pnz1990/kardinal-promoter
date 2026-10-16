@@ -85,6 +85,11 @@ type Kro struct {
 	isClean bool
 	// Skip, when set, reports a Graph that needs no pass.
 	Skip func(g *graph.Graph) bool
+	// GraphVersion, when set, counts the writes of Graphs: a Sync after none
+	// reuses the Graphs it listed and decoded last (the fake client's List
+	// is a JSON round trip of every Graph).
+	GraphVersion func() int64
+	listed       *listedGraphs
 	// failing are the Graphs (namespace/name) whose last pass hit a hard
 	// error: kro requeues a Graph whose reconcile failed, so they get a pass
 	// every Sync, whatever Version and Skip say, until one succeeds.
@@ -714,14 +719,29 @@ func (k *Kro) Sync(ctx context.Context) (int, error) {
 	return n, err
 }
 
-func (k *Kro) sync(ctx context.Context) (int, error) {
+// listedGraphs are the Graphs a Sync listed, decoded, at a GraphVersion.
+type listedGraphs struct {
+	version int64
+	list    *unstructured.UnstructuredList
+	graphs  []*graph.Graph
+}
+
+// graphs lists and decodes the Graphs, or reuses the last list when no Graph
+// was written since.
+func (k *Kro) graphs(ctx context.Context) (*unstructured.UnstructuredList, []*graph.Graph, error) {
+	var version int64
+	if k.GraphVersion != nil {
+		version = k.GraphVersion()
+		if l := k.listed; l != nil && l.version == version {
+			return l.list, l.graphs, nil
+		}
+	}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{Group: graph.GraphGVR.Group, Version: graph.GraphGVR.Version, Kind: "GraphList"})
 	if err := k.c.List(ctx, list); err != nil {
-		return 0, fmt.Errorf("list graphs: %w", err)
+		return nil, nil, fmt.Errorf("list graphs: %w", err)
 	}
-	live := map[string]bool{}
-	changes := 0
+	graphs := make([]*graph.Graph, len(list.Items))
 	for i := range list.Items {
 		// Decoded from the unstructured object, not through JSON: kro
 		// reads integers in the spec as integers (graph.FromUnstructured's
@@ -729,8 +749,25 @@ func (k *Kro) sync(ctx context.Context) (int, error) {
 		// as "no such overload").
 		g := &graph.Graph{}
 		if err := k8sruntime.DefaultUnstructuredConverter.FromUnstructured(list.Items[i].Object, g); err != nil {
-			return changes, fmt.Errorf("decode graph: %w", err)
+			return nil, nil, fmt.Errorf("decode graph: %w", err)
 		}
+		graphs[i] = g
+	}
+	if k.GraphVersion != nil {
+		k.listed = &listedGraphs{version: version, list: list, graphs: graphs}
+	}
+	return list, graphs, nil
+}
+
+func (k *Kro) sync(ctx context.Context) (int, error) {
+	list, graphs, err := k.graphs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	live := map[string]bool{}
+	changes := 0
+	for i := range list.Items {
+		g := graphs[i]
 		gk := g.Namespace + "/" + g.Name
 		live[gk] = true
 		k.mu.Lock()

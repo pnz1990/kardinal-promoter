@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,10 +15,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	dynfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
 const badImage = "ghcr.io/org/app:v2-bad"
@@ -217,4 +223,63 @@ func TestHealthTimeoutChecksOnceMore(t *testing.T) {
 			assert.Equal(t, tc.state == "Verified", apierrors.IsNotFound(err), "a rollback Bundle only when it is still not updated: %v", err)
 		})
 	}
+}
+
+// TestHealthTimeoutLateBakeStarts: with a bake, a step reconciled past its
+// health.timeout but before the bake's deadline checks once more too, and an
+// environment healthy by now starts its bake window instead of failing.
+func TestHealthTimeoutLateBakeStarts(t *testing.T) {
+	env := v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"},
+		OnHealthFailure: "rollback", Bake: &v1alpha1.BakeConfig{Minutes: 30}}
+	images := []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2"}}
+	expired := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	status := v1alpha1.PromotionStepStatus{HealthCheckExpiry: &expired,
+		Message: "waiting for resource: Deployment test/p not updated yet"}
+	objs := append(verifiedBefore("test"), withImage(healthyDeployment("p", "test"), "ghcr.io/org/app:v2"))
+	c, got, _ := healthCase{env: env, images: images, objs: objs, status: status}.run(t)
+	assert.Equal(t, "HealthChecking", got.Status.State, got.Status.Message)
+	assert.NotNil(t, got.Status.BakeStartedAt, "the bake window starts")
+	_, err := getBundle(c, "b1-rollback-alarm")
+	assert.True(t, apierrors.IsNotFound(err), "no rollback: %v", err)
+}
+
+// TestHealthTimeoutLateAdapterError: a late check whose adapter fails is
+// tried once more (status.lastHealthCheckAt past the expiry marks it) before
+// onHealthFailure applies on the result read before, with the error.
+func TestHealthTimeoutLateAdapterError(t *testing.T) {
+	env := v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"},
+		OnHealthFailure: "rollback"}
+	pipeline := makePipeline("p")
+	pipeline.Spec.Environments = []v1alpha1.EnvironmentSpec{env}
+	bundle := makeBundle("b1", "p")
+	bundle.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2"}}
+	ps := labelled(makeStep("step", "p", "b1", "test"))
+	expired := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	ps.Status = v1alpha1.PromotionStepStatus{State: "HealthChecking", Steps: recordedSteps(""), HealthCheckExpiry: &expired,
+		Message: "waiting for resource: Deployment test/p not updated yet"}
+	base := newClient(t, append([]client.Object{pipeline, bundle, ps}, verifiedBefore("test")...)...)
+	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				return errors.New("etcdserver: request timed out")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		}})
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
+
+	res, err := r.Reconcile(context.Background(), reqFor("step"))
+	require.NoError(t, err)
+	got := getStep(t, c, "step")
+	assert.Equal(t, "HealthChecking", got.Status.State, "the first late error is tried again: %s", got.Status.Message)
+	assert.Positive(t, res.RequeueAfter)
+	require.NotNil(t, got.Status.LastHealthCheckAt)
+	assert.True(t, got.Status.LastHealthCheckAt.After(expired.Time))
+
+	_, err = r.Reconcile(context.Background(), reqFor("step"))
+	require.NoError(t, err)
+	got = getStep(t, c, "step")
+	assert.Equal(t, "RollingBack", got.Status.State, got.Status.Message)
+	assert.Contains(t, got.Status.Message, "last result: waiting for resource: Deployment test/p not updated yet")
+	assert.Contains(t, got.Status.Message, "the health check past the timeout failed: get deployment test/p: etcdserver: request timed out")
 }

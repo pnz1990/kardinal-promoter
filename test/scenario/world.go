@@ -213,10 +213,12 @@ type World struct {
 	// around kardinal (reviewers, approvers, CI).
 	Actors []func(w *World) error
 
-	writes     atomic.Int64
-	uids       atomic.Int64
-	mu         sync.Mutex
-	reconciles map[string]int
+	writes atomic.Int64
+	// graphWrites counts the writes of Graphs (Kro.GraphVersion).
+	graphWrites atomic.Int64
+	uids        atomic.Int64
+	mu          sync.Mutex
+	reconciles  map[string]int
 	// perObject counts the reconciles of each object (kind/namespace/name).
 	perObject  map[string]int
 	errors     map[string]int
@@ -259,8 +261,11 @@ func NewWorld(t testing.TB, opts Options) *World {
 		w.clock = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) // a Wednesday
 	}
 	countWrite := func(o client.Object, created bool) {
-		if objKind(o) == "AgentIndex" {
+		switch objKind(o) {
+		case "AgentIndex":
 			w.indexDirty.Store(true)
+		case "Graph":
+			w.graphWrites.Add(1)
 		}
 		w.writes.Add(1)
 		w.noteWrite(o)
@@ -459,6 +464,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 	dyn := newDynClient(c, kinds)
 	w.Kro = NewKro(c)
 	w.Kro.Version = w.writes.Load
+	w.Kro.GraphVersion = w.graphWrites.Load
 	if opts.Watch {
 		w.Kro.Skip = w.graphQuiet
 	}
