@@ -151,6 +151,13 @@ checkout-1-5-0-prod   checkout   prod   checkout-1-5-0   Stored   2m
   `receipts.retention.maxAge` (for example `8760h`): the leader then deletes the receipts
   created longer ago, at most 2,000 an hour. The sinks outside the cluster keep their copy
   whatever it says.
+- **Size**: a receipt is typically a few KB. Its statement is capped at 256 KiB, and the signed
+  bundle repeats it in base64, so one receipt is at most about 600 KiB in etcd: 10,000 receipts
+  of that worst case would be about 6 GB, against etcd's default 8 GB quota. If your gates
+  carry very large expressions or approval reasons, set `receipts.retention.maxAge` and keep
+  the long-term copy in the OCI or Rekor sink. The controller caches a receipt it is done with
+  (stored and commented, or failed) without its statement and bundle, so its memory does not
+  grow with them.
 - **Writes**: `spec` is immutable and `status.bundle` cannot change once set (the CRD refuses
   both). The `<release>-receipts` admission policy refuses every create, update and delete of a
   PromotionReceipt by anyone but the controller, a cluster-admin included; the namespace

@@ -12,6 +12,8 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // TestShardCacheOpts (#1505 QA): a sharded controller caches only the shard
@@ -22,15 +24,19 @@ import (
 // sharding on: the shard entries are added, not substituted.
 func TestShardCacheOpts(t *testing.T) {
 	unsharded := shardCacheOpts(buildCacheOpts(""), "").ByObject
-	require.Len(t, unsharded, 1, "only the hook Job selector")
+	require.Len(t, unsharded, 2, "only the hook Job selector and the receipt transform")
 	opts := shardCacheOpts(buildCacheOpts(""), "b")
-	require.Len(t, opts.ByObject, 2)
+	require.Len(t, opts.ByObject, 3)
 	var leases int
 	for obj, by := range opts.ByObject {
 		if _, ok := obj.(*batchv1.Job); ok {
 			assert.True(t, by.Label.Matches(labels.Set{"kardinal.io/run-job": "hookrun"}), "hook Jobs cached")
 			assert.True(t, by.Label.Matches(labels.Set{"kardinal.io/run-job": "renderrun"}), "render Jobs cached")
 			assert.False(t, by.Label.Matches(labels.Set{}), "other Jobs not cached")
+			continue
+		}
+		if _, ok := obj.(*v1alpha1.PromotionReceipt); ok {
+			assert.NotNil(t, by.Transform, "done receipts cached without their statement")
 			continue
 		}
 		_, ok := obj.(*coordinationv1.Lease)

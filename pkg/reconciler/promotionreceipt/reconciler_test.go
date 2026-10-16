@@ -18,6 +18,7 @@ package promotionreceipt
 import (
 	"context"
 	"crypto"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -436,4 +437,60 @@ func TestReconcile_OnceDespiteConflicts(t *testing.T) {
 	assert.Len(t, s.comments, 1, "not posted again")
 	assert.True(t, rc.Status.PRComment)
 	assert.Contains(t, conditionOf(rc, ConditionPRCommented).Message, "already has the receipt's comment")
+}
+
+// TestCacheTransform (#1951 finding 5): a done receipt is cached without
+// its statement and signed bundle, and the reconciler returns for it before
+// parsing anything; a receipt still to be signed, stored or commented is
+// cached whole. At 10,000 done receipts of the 256 KiB worst case the cache
+// holds kilobytes per receipt, not the ~600 KiB the full object takes.
+//
+// Covers RECEIPT-SCALE-01.
+func TestCacheTransform(t *testing.T) {
+	big := strings.Repeat("x", v1alpha1.MaxReceiptStatementBytes)
+	mk := func(phase string, commented bool) *v1alpha1.PromotionReceipt {
+		rc := newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))
+		rc.ManagedFields = []metav1.ManagedFieldsEntry{{Manager: "kardinal"}}
+		rc.Spec.Statement, rc.Status.Bundle = big, big
+		rc.Status.Phase, rc.Status.PRComment = phase, commented
+		return rc
+	}
+	for _, tc := range []struct {
+		phase     string
+		commented bool
+		stripped  bool
+	}{
+		{v1alpha1.ReceiptStored, true, true},
+		{v1alpha1.ReceiptFailed, false, true},
+		{v1alpha1.ReceiptStored, false, false}, // its PR comment is still to post
+		{v1alpha1.ReceiptSigned, false, false},
+		{v1alpha1.ReceiptPending, false, false},
+	} {
+		out, err := CacheTransform(mk(tc.phase, tc.commented))
+		require.NoError(t, err)
+		rc := out.(*v1alpha1.PromotionReceipt)
+		assert.Nil(t, rc.ManagedFields)
+		assert.Equal(t, tc.stripped, rc.Spec.Statement == "", "%s commented=%v", tc.phase, tc.commented)
+		assert.Equal(t, tc.stripped, rc.Status.Bundle == "", "%s commented=%v", tc.phase, tc.commented)
+	}
+
+	// The reconciler reads nothing of a done receipt: a stripped one is
+	// left alone, not failed for a statement that no longer matches.
+	done, _ := CacheTransform(mk(v1alpha1.ReceiptStored, true))
+	h := newHarness(t, done.(*v1alpha1.PromotionReceipt))
+	rc := h.run(t, 2)
+	assert.Equal(t, v1alpha1.ReceiptStored, rc.Status.Phase)
+	assert.Empty(t, h.scm.comments)
+
+	var total int
+	for i := 0; i < 10000; i++ {
+		out, err := CacheTransform(mk(v1alpha1.ReceiptStored, true))
+		require.NoError(t, err)
+		b, err := json.Marshal(out)
+		require.NoError(t, err)
+		total += len(b)
+	}
+	perReceipt := total / 10000
+	t.Logf("10,000 done receipts of the worst case: %d bytes each in the cache, %d MiB in all", perReceipt, total>>20)
+	assert.Less(t, perReceipt, 8*1024)
 }

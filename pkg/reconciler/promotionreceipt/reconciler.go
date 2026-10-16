@@ -129,6 +129,38 @@ func (r *Reconciler) now() time.Time {
 	return time.Now()
 }
 
+// Done reports whether rc needs nothing more: Failed, or Stored with its PR
+// comment posted (or given up) or no PR to comment on.
+func Done(rc *v1alpha1.PromotionReceipt) bool {
+	switch rc.Status.Phase {
+	case v1alpha1.ReceiptFailed:
+		return true
+	case v1alpha1.ReceiptStored:
+		return rc.Spec.PullRequest == nil || rc.Status.PRComment
+	}
+	return false
+}
+
+// CacheTransform is the controller cache's transform of PromotionReceipts:
+// a receipt that is Done is cached without spec.statement and
+// status.bundle (up to 256 KiB, and its DSSE payload repeats the statement
+// in base64) and without managedFields. Nothing the controller does with a
+// done receipt reads them: the reconciler returns before, the UI reads its
+// name and phase, retention lists uncached, and kardinal verify-receipt
+// reads the API server. A receipt still being signed or stored is cached
+// whole.
+func CacheTransform(obj interface{}) (interface{}, error) {
+	rc, ok := obj.(*v1alpha1.PromotionReceipt)
+	if !ok {
+		return obj, nil
+	}
+	rc.ManagedFields = nil
+	if Done(rc) {
+		rc.Spec.Statement, rc.Status.Bundle = "", ""
+	}
+	return rc, nil
+}
+
 // receiptsResource is the resource objectgone matches a NotFound against.
 var receiptsResource = v1alpha1.GroupVersion.WithResource("promotionreceipts").GroupResource()
 
@@ -147,7 +179,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrlruntime.Request) (ct
 		}
 		return ctrlruntime.Result{}, fmt.Errorf("get promotion receipt %s: %w", req.Name, err)
 	}
-	if rc.Status.Phase == v1alpha1.ReceiptFailed {
+	if Done(&rc) {
+		// Nothing left to do, and the cache holds it without its statement
+		// and bundle (CacheTransform): return before reading either.
 		return ctrlruntime.Result{}, nil
 	}
 	now := r.now()
