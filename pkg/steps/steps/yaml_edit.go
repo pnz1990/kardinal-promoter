@@ -136,7 +136,11 @@ func (d *yamlDoc) root() *yaml.Node { return d.doc.Content[0] }
 func (d *yamlDoc) encode() ([]byte, error) {
 	if d.orig != nil {
 		if out, ok := spliceEncode(d.raw, d.orig, &d.doc, d.compactSeq); ok {
-			if same, err := sameData(out, &d.doc); err == nil && same {
+			same, err := sameData(out, &d.doc)
+			if errors.Is(err, errAliasExpansion) {
+				return nil, err
+			}
+			if err == nil && same {
 				return out, nil
 			}
 		}
@@ -149,7 +153,9 @@ func (d *yamlDoc) encode() ([]byte, error) {
 	// The encoder does not round-trip every scalar (a folded block scalar
 	// with more-indented lines, #1907): refuse to write a file whose other
 	// values would change, rather than change them.
-	if same, err := sameData(out, &d.doc); err != nil || !same {
+	if same, err := sameData(out, &d.doc); errors.Is(err, errAliasExpansion) {
+		return nil, err
+	} else if err != nil || !same {
 		return nil, errReencodeChanges
 	}
 	// Nor is it stable: a comment in a flow collection can come out with a

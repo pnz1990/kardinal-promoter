@@ -472,8 +472,9 @@ func unitSteps(r *Repo, o Options) []Step {
 		steps = append(steps, Step{
 			ID: "fuzz-" + f.Name, Area: areaUnit, Title: fmt.Sprintf("%s (%s) for %s", f.Name, f.Dir, o.FuzzTime),
 			Tests: "tests.json", MinTests: 1, Heavy: fuzzHeavy(o.FuzzTime),
-			Script: fmt.Sprintf(`go test -run '^$' -fuzz '^%s$' -fuzztime %s -parallel 4 -json %s > "$STEP_DIR/tests.json"`,
-				f.Name, o.FuzzTime, f.Dir),
+			// hack/ci/fuzz.sh: go test -fuzz, and Go's fuzzing deadline
+			// race (#2078) counted as the run with no finding it is.
+			Script: fmt.Sprintf(`bash hack/ci/fuzz.sh %s %s %s "$STEP_DIR/tests.json"`, f.Dir, f.Name, o.FuzzTime),
 		})
 	}
 	steps = append(steps, Step{

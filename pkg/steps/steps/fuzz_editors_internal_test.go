@@ -447,7 +447,8 @@ func TestKustomizeSetImage_Property(t *testing.T) {
 
 // TestYAMLUpdate_Refusals: the inputs yaml-update refuses (an anchor or an
 // alias on the path, a merge key, several documents, a duplicate key, a file
-// over 4 MiB) fail the step and leave the file byte-identical.
+// over 4 MiB, aliases that expand exponentially) fail the step and leave the
+// file byte-identical.
 // Covers STEP-FUZZ-03.
 func TestYAMLUpdate_Refusals(t *testing.T) {
 	for name, tc := range map[string]struct{ doc, path string }{
@@ -461,6 +462,9 @@ func TestYAMLUpdate_Refusals(t *testing.T) {
 		"missing element": {"list: [a]\n", "list[3]"},
 		"top level list":  {"- a\n", "a"},
 		"oversize":        {"image: {tag: 1}\npad: \"" + strings.Repeat("x", maxYAMLUpdateFile) + "\"\n", "image.tag"},
+		// 460 bytes whose aliases name aliases eight deep: 10^8 values.
+		// Comparing it before and after the edit took two minutes (#2078).
+		"aliases of aliases": {aliasBomb(8) + "image: {tag: 1}\n", "image.tag"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -477,10 +481,24 @@ func TestYAMLUpdate_Refusals(t *testing.T) {
 			}
 			res, got := runEditor(t, &yamlUpdateStep{}, state, file, []byte(tc.doc))
 			require.Equal(t, parentsteps.StepFailed, res.Status)
+			if name == "aliases of aliases" {
+				require.Contains(t, res.Message, errAliasExpansion.Error())
+			}
 			require.Equal(t, tc.doc, string(got), "the file is unchanged")
 			require.Equal(t, []string{"values.yaml"}, dirFiles(t, envDir))
 		})
 	}
+}
+
+// aliasBomb is a mapping of depth lists of ten aliases each to the list
+// before it: 10^depth values from about 60 bytes per level.
+func aliasBomb(depth int) string {
+	var b strings.Builder
+	b.WriteString("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n")
+	for i := 1; i < depth; i++ {
+		fmt.Fprintf(&b, "a%d: &a%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*a%d, ", i-1), 10), ", "))
+	}
+	return b.String()
 }
 
 // TestEncode_KeepsFlowNulls: a null with no text inside a flow collection

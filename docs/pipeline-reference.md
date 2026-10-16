@@ -493,7 +493,9 @@ update:
   back, and its comments move to the end of the file), an anchor or alias
   (`&`, `*`) or a merge key (`<<`) on the edited path, a key that appears twice in one mapping, a
   symbolic link anywhere on the path (the environment directory, a directory in `file`, or the
-  file), a file over 4 MiB, and a `file` that is absolute or contains `..`.
+  file), a file over 4 MiB, a file whose aliases and merge keys expand to over a million values,
+  far more than its text holds (a "billion laughs" document), and a `file` that is absolute or contains `..`.
+  The helm and kustomize strategies refuse such a file too.
 - A version without images (a config version) changes nothing.
 
 ### YAML paths

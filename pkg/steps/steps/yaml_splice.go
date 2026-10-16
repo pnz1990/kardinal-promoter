@@ -492,9 +492,10 @@ func sameNode(a, b *yaml.Node) bool {
 
 // sameData reports whether out decodes to the data of the edited document
 // node (nodeData: duplicate keys and merge keys are data like any other, so
-// every document compares).
+// every document compares). It returns errAliasExpansion for a document
+// whose aliases expand past aliasBudget.
 func sameData(out []byte, edited *yaml.Node) (bool, error) {
-	want, err := nodeData(edited, 0)
+	want, err := (&dataReader{budget: aliasBudget(edited)}).nodeData(edited, 0)
 	if err != nil {
 		return false, err
 	}
@@ -502,31 +503,71 @@ func sameData(out []byte, edited *yaml.Node) (bool, error) {
 	if err := yaml.Unmarshal(out, &parsed); err != nil {
 		return false, nil
 	}
-	have, err := nodeData(&parsed, 0)
+	have, err := (&dataReader{budget: aliasBudget(&parsed)}).nodeData(&parsed, 0)
 	if err != nil {
 		return false, nil
 	}
 	return reflect.DeepEqual(want, have), nil
 }
 
+// errAliasExpansion refuses a document whose aliases and merge keys
+// expand its data far past its text (a "billion laughs" document: 460 bytes
+// took two minutes to compare, #2078).
+var errAliasExpansion = fmt.Errorf("the file's YAML aliases and merge keys expand to more than %d values, "+
+	"far more than the file holds; kardinal does not edit it", aliasFloor)
+
+// The bound of nodeData, as yaml.v3's own alias guard (allowedAliasRatio)
+// is in spirit: the visits allowed grow with the document. A document may
+// visit aliasRatio times its nodes, and at least aliasFloor nodes whatever
+// its size: values files whose shared blocks are merged or aliased into
+// hundreds of entries stay far within it (a 40-key defaults block merged
+// into 300 services visits about 25,000), and 2^20 visits take well under a
+// second. Variables, so a test can pin them.
+var (
+	aliasFloor = 1 << 20
+	aliasRatio = 10
+)
+
+// aliasBudget is how many nodes nodeData may visit in n (aliasFloor,
+// aliasRatio).
+func aliasBudget(n *yaml.Node) int {
+	count := 0
+	var walk func(*yaml.Node)
+	walk = func(n *yaml.Node) {
+		count++
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(n)
+	return max(aliasRatio*count, aliasFloor)
+}
+
+// dataReader reads the data of a document (nodeData), visiting at most
+// budget nodes.
+type dataReader struct{ budget int }
+
 // nodeData is the data of n: scalars decoded with their tags, mappings as
 // ordered key/value pairs (duplicates and "<<" kept as written), aliases
 // resolved to the data they name.
-func nodeData(n *yaml.Node, depth int) (interface{}, error) {
+func (r *dataReader) nodeData(n *yaml.Node, depth int) (interface{}, error) {
 	if depth > 64 {
 		return nil, fmt.Errorf("nodeData: too deep")
+	}
+	if r.budget--; r.budget < 0 {
+		return nil, errAliasExpansion
 	}
 	switch n.Kind {
 	case yaml.DocumentNode:
 		if len(n.Content) == 0 {
 			return nil, nil
 		}
-		return nodeData(n.Content[0], depth+1)
+		return r.nodeData(n.Content[0], depth+1)
 	case yaml.AliasNode:
 		if n.Alias == nil {
 			return nil, fmt.Errorf("nodeData: alias without target")
 		}
-		return nodeData(n.Alias, depth+1)
+		return r.nodeData(n.Alias, depth+1)
 	case yaml.ScalarNode:
 		var v interface{}
 		if err := n.Decode(&v); err != nil {
@@ -536,7 +577,7 @@ func nodeData(n *yaml.Node, depth int) (interface{}, error) {
 	case yaml.SequenceNode:
 		out := make([]interface{}, 0, len(n.Content))
 		for _, c := range n.Content {
-			v, err := nodeData(c, depth+1)
+			v, err := r.nodeData(c, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -546,11 +587,11 @@ func nodeData(n *yaml.Node, depth int) (interface{}, error) {
 	case yaml.MappingNode:
 		out := make([][2]interface{}, 0, len(n.Content)/2)
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			k, err := nodeData(n.Content[i], depth+1)
+			k, err := r.nodeData(n.Content[i], depth+1)
 			if err != nil {
 				return nil, err
 			}
-			v, err := nodeData(n.Content[i+1], depth+1)
+			v, err := r.nodeData(n.Content[i+1], depth+1)
 			if err != nil {
 				return nil, err
 			}
