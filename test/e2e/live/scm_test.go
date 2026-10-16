@@ -267,10 +267,12 @@ func (a *app) mergeByWebhook(t *testing.T, bundle, env, header string, eventSHA 
 
 	merged := a.e.WaitPRState(t, a.repo, pr.Number, "merged", 30*time.Second)
 	require.NotEmpty(t, merged.MergeCommit, "the git server reports PR #%d's merge commit", pr.Number)
+	// The event's merge commit is only logged, as a hint: the PRStatus
+	// reconciler records the one the SCM API reports (#2021).
 	if eventSHA {
-		assert.Equal(t, merged.MergeCommit, mark.Str("mergeCommit"), "the webhook records the event's merge commit")
+		assert.Equal(t, merged.MergeCommit, mark.Str("mergeCommitPerPayload"), "the webhook logs the event's merge commit")
 	} else {
-		assert.Empty(t, mark.Str("mergeCommit"), "the event carries no merge commit")
+		assert.Empty(t, mark.Str("mergeCommitPerPayload"), "the event carries no merge commit")
 	}
 	prs := a.e.WaitPRStatus(t, a.ns, pipelineName, bundle, env, time.Minute, "merged with its merge commit",
 		func(p *v1alpha1.PRStatus) bool { return p.Status.Merged && p.Status.MergeCommitSHA != "" })
