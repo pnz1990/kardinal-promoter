@@ -82,21 +82,36 @@ func TestChartPrometheusRuleScopedToKardinal(t *testing.T) {
 	assert.Equal(t, 4, checked, "the four alerts on controller-runtime and work queue metrics")
 }
 
+// promtoolBin is bin/e2e/promtool when hack/ci/install-promtool.sh installed
+// it (the version CI runs, hack/tool-versions.env), and promtool on PATH
+// otherwise. Without either it skips the test locally and fails it in CI
+// (CI=true, as GitHub Actions sets it, or KARDINAL_REQUIRE_PROMTOOL), so the
+// PromQL tests never stop running there unnoticed.
+func promtoolBin(t *testing.T) string {
+	t.Helper()
+	pinned := filepath.Join(repoRoot(t), "bin", "e2e", "promtool")
+	if fi, err := os.Stat(pinned); err == nil && fi.Mode()&0o111 != 0 {
+		return pinned
+	}
+	bin, err := exec.LookPath("promtool")
+	if err == nil {
+		return bin
+	}
+	if os.Getenv("CI") == "true" || os.Getenv("KARDINAL_REQUIRE_PROMTOOL") != "" {
+		t.Fatalf("promtool is required in CI (run hack/ci/install-promtool.sh): %v", err)
+	}
+	t.Skip("promtool not installed (hack/ci/install-promtool.sh): skipping the PromQL unit tests")
+	return ""
+}
+
 // TestChartPrometheusRuleAlertsOnlyOnKardinal (#2037) runs promtool's rule
 // unit tests (testdata/prometheusrule_test.yaml) on the rendered rules:
 // Crossplane's reconcile errors, another target of kardinal's job name, and
 // Rancher Fleet's stalled "bundle" controller with a backlog alert nothing;
-// kardinal's own errors, stall and backlog do. promtool is optional here
-// (KARDINAL_REQUIRE_PROMTOOL makes it required); the structure test above
-// always runs.
+// kardinal's own errors, stall and backlog do. It needs promtool in CI
+// (promtoolBin); the structure test above runs without it.
 func TestChartPrometheusRuleAlertsOnlyOnKardinal(t *testing.T) {
-	promtool, err := exec.LookPath("promtool")
-	if err != nil {
-		if os.Getenv("KARDINAL_REQUIRE_PROMTOOL") != "" {
-			t.Fatalf("KARDINAL_REQUIRE_PROMTOOL is set but promtool is not on PATH: %v", err)
-		}
-		t.Skip("promtool not installed: skipping the PromQL unit tests")
-	}
+	promtool := promtoolBin(t)
 	raw, err := yaml.Marshal(renderedRuleSpec(t))
 	require.NoError(t, err)
 	dir := t.TempDir()
