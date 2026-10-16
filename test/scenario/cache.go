@@ -65,6 +65,14 @@ func cachedKind(obj k8sruntime.Object) bool {
 	return t.Kind() == reflect.Ptr && t.Elem().PkgPath() == reflect.TypeOf(v1alpha1.Bundle{}).PkgPath()
 }
 
+// reset forgets everything, as a restarted manager's new informers do.
+func (r *readCache) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.objs = map[string]k8sruntime.Object{}
+	r.lists = map[string]map[string]bool{}
+}
+
 // invalidate drops what a write of kind ns/name changed; created marks a
 // create or delete, which changes the kind's lists.
 func (r *readCache) invalidate(kind, ns, name string, created bool) {

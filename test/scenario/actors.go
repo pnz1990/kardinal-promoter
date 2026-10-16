@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -76,9 +78,10 @@ func userOf(ctx context.Context) user.Info {
 	return ControllerInfo()
 }
 
-// startActors serves the chart's identity and actor policies and builds the
-// agent index, as the controller does at start (ensureIndex).
-func (w *World) startActors(maxBytes int) {
+// startAPIServer serves the chart's identity and actor policies through
+// the API server's ValidatingAdmissionPolicy plugin. The API server
+// outlives a controller restart (Restart).
+func (w *World) startAPIServer() {
 	w.T.Helper()
 	c, err := RenderChart()
 	if err != nil {
@@ -96,6 +99,12 @@ func (w *World) startActors(maxBytes int) {
 	}
 	w.T.Cleanup(stop)
 	w.api = api
+}
+
+// startRegistry starts the agent registry's reconciler and builds the
+// index, as the controller does at start.
+func (w *World) startRegistry(maxBytes int) {
+	w.T.Helper()
 	w.index = &airec.IndexReconciler{Client: w.Client, Name: Release, MaxIndexBytes: maxBytes}
 	if _, err := w.index.Reconcile(w.Ctx, ctrl.Request{}); err != nil {
 		w.T.Fatalf("build the agent index: %v", err)
@@ -196,7 +205,60 @@ func (w *World) admitSub(ctx context.Context, c client.Client, op admission.Oper
 	if err != nil {
 		return err
 	}
-	return w.api.AdmitSub(op, m.Resource, sub, newM, oldM, userOf(ctx))
+	u := userOf(ctx)
+	start := time.Now()
+	err = w.api.AdmitSub(op, m.Resource, sub, newM, oldM, u)
+	w.recordAdmission(gvk.Kind, op, sub, u.GetName(), time.Since(start))
+	return err
+}
+
+// RecordAdmissions starts (true) or stops recording how long each write
+// the chart's policies match takes the API server's admission plugin
+// (AdmissionLatencies).
+func (w *World) RecordAdmissions(on bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if on {
+		w.admissions = map[string][]time.Duration{}
+	} else {
+		w.admissions = nil
+	}
+}
+
+// AdmissionLatencies are the admission times recorded since
+// RecordAdmissions(true), by "<Kind> <OPERATION>[/<subresource>] by
+// <who>", who being the controller, kro, a ServiceAccount or a user.
+func (w *World) AdmissionLatencies() map[string][]time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string][]time.Duration, len(w.admissions))
+	for k, v := range w.admissions {
+		out[k] = append([]time.Duration(nil), v...)
+	}
+	return out
+}
+
+func (w *World) recordAdmission(kind string, op admission.Operation, sub, username string, d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.admissions == nil {
+		return
+	}
+	who := "user"
+	switch {
+	case username == ControllerUser:
+		who = "controller"
+	case strings.HasPrefix(username, "system:serviceaccount:") && strings.HasSuffix(username, ":"+graphSA):
+		who = "kro"
+	case strings.HasPrefix(username, "system:serviceaccount:"):
+		who = "serviceaccount"
+	}
+	key := kind + " " + string(op)
+	if sub != "" {
+		key += "/" + sub
+	}
+	key += " by " + who
+	w.admissions[key] = append(w.admissions[key], d)
 }
 
 // admitPatched admits a patch that is already stored (o: the result, old:
