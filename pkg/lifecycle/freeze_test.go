@@ -105,8 +105,16 @@ func TestExemptFromFreezes(t *testing.T) {
 					Exemptions: []v1alpha1.FreezeExemption{old}}},
 			Status: v1alpha1.ChangeWindowStatus{Active: active, ObservedGeneration: 1}}
 	}
+	// Unfrozen: kardinal unfreeze wrote spec.freeze.lifted (its status is a
+	// generation behind) and deleted it; the finalizer keeps it until
+	// FreezeLifted is recorded. It is not exempted from: it no longer holds.
+	lifted := window("d-lifted", false)
+	lifted.Generation = 2
+	lifted.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "carol"}
+	lifted.Finalizers = []string{"kardinal.io/freeze-audit"}
+	lifted.DeletionTimestamp = &metav1.Time{Time: now.Add(-time.Second)}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(window("a-cluster", true), window("b-billing", true, "billing"),
-		window("c-ended", false)).Build()
+		window("c-ended", false), lifted).Build()
 
 	stamp := &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}
 	names, err := ExemptFromFreezes(ctx, c, ExemptRequest{Namespace: "payments", Pipeline: "checkout", Environment: "prod",
