@@ -77,9 +77,30 @@ type OCISink struct {
 	// Repository, when set, receives every referrer instead of the
 	// image's own repository (as cosign's COSIGN_REPOSITORY).
 	Repository string
+	// AllowedRepositories, when set and Repository is not, are the
+	// repositories (or path prefixes: ghcr.io/acme/) the controller pushes
+	// referrers to. An image's repository is tenant input, and the push
+	// credential is the admin's: without a bound, a tenant could make kardinal
+	// write into a repository the tenant cannot. Another image gets no
+	// referrer: the receipt's Stored condition is False, RepositoryNotAllowed.
+	AllowedRepositories []string
 	// SecretNamespace and SecretName name a kubernetes.io/dockerconfigjson
 	// Secret with push credentials; empty is anonymous.
 	SecretNamespace, SecretName string
+}
+
+// allowed reports whether the sink may push a referrer of an image in repo.
+func (o *OCISink) allowed(repo string) bool {
+	if o.Repository != "" || len(o.AllowedRepositories) == 0 {
+		return true
+	}
+	for _, p := range o.AllowedRepositories {
+		p = strings.TrimSuffix(p, "/")
+		if p != "" && (repo == p || strings.HasPrefix(repo, p+"/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reconciler signs and stores PromotionReceipts.
@@ -140,7 +161,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrlruntime.Request) (ct
 		return r.storeOCI(ctx, base, &rc, now)
 	case rc.Status.Phase != v1alpha1.ReceiptStored:
 		rc.Status.Phase = v1alpha1.ReceiptStored
-		setCondition(&rc, ConditionStored, metav1.ConditionTrue, "AllSinks", "stored in "+sinks(&rc), now)
+		if refused := r.notAllowed(&rc); len(refused) > 0 {
+			// Not retried: the allowlist decides the same next time.
+			zerolog.Ctx(ctx).Warn().Str("receipt", rc.Name).Strs("repositories", refused).
+				Msg("receipt referrers not pushed: repositories outside sinks.oci.allowedRepositories")
+			setCondition(&rc, ConditionStored, metav1.ConditionFalse, "RepositoryNotAllowed",
+				"stored in "+sinks(&rc)+"; no referrer in "+strings.Join(refused, ", ")+
+					": not in the controller's allowed repositories (sinks.oci.allowedRepositories)", now)
+		} else {
+			setCondition(&rc, ConditionStored, metav1.ConditionTrue, "AllSinks", "stored in "+sinks(&rc), now)
+		}
 		return ctrlruntime.Result{Requeue: true}, r.patch(ctx, base, &rc)
 	case rc.Spec.PullRequest != nil && !rc.Status.PRComment:
 		return r.comment(ctx, base, &rc, now)
@@ -193,16 +223,42 @@ func (r *Reconciler) ociStored(rc *v1alpha1.PromotionReceipt) bool {
 	return len(r.pendingImages(rc)) == 0
 }
 
-// pendingImages are the image subjects of rc without a stored referrer.
-// A config version has none: its subject is a commit.
-func (r *Reconciler) pendingImages(rc *v1alpha1.PromotionReceipt) []receipt.Subject {
+// imageSubjects are the image subjects of rc. A config version has none:
+// its subject is a commit.
+func imageSubjects(rc *v1alpha1.PromotionReceipt) []receipt.Subject {
 	st, err := receipt.Parse([]byte(rc.Spec.Statement))
 	if err != nil {
 		return nil
 	}
 	var out []receipt.Subject
 	for _, s := range st.Subject {
-		if s.Digest["sha256"] == "" || strings.HasPrefix(s.Name, "kardinal://") {
+		if s.Digest["sha256"] != "" && !strings.HasPrefix(s.Name, "kardinal://") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// notAllowed are the image repositories of rc the OCI sink may not push to.
+func (r *Reconciler) notAllowed(rc *v1alpha1.PromotionReceipt) []string {
+	if r.OCI == nil {
+		return nil
+	}
+	var out []string
+	for _, s := range imageSubjects(rc) {
+		if !r.OCI.allowed(s.Name) {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// pendingImages are the image subjects of rc without a stored referrer
+// that the OCI sink may push.
+func (r *Reconciler) pendingImages(rc *v1alpha1.PromotionReceipt) []receipt.Subject {
+	var out []receipt.Subject
+	for _, s := range imageSubjects(rc) {
+		if r.OCI != nil && !r.OCI.allowed(s.Name) {
 			continue
 		}
 		repo := s.Name

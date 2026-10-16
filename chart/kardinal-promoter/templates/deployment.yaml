@@ -121,6 +121,9 @@ spec:
             {{- with .sinks.oci.repository }}
             - --receipt-oci-repository={{ . }}
             {{- end }}
+            {{- with .sinks.oci.allowedRepositories }}
+            - --receipt-oci-allowed-repositories={{ join "," . }}
+            {{- end }}
             {{- if .sinks.oci.insecure }}
             - --receipt-oci-insecure=true
             {{- end }}

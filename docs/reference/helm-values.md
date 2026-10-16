@@ -156,6 +156,7 @@ Where a value sets a controller flag, the flag is in [Controller flags](controll
 | `receipts.sinks.oci.enabled` | `false` | Push every receipt as an OCI referrer of each of its images. |
 | `receipts.sinks.oci.secretRef` | `{"name":""}` | kubernetes.io/dockerconfigjson Secret in the release namespace with push credentials. Never a tenant's pull Secret. |
 | `receipts.sinks.oci.repository` | `""` | Push every referrer to this repository instead of each image's own (as cosign's COSIGN_REPOSITORY), for images in a registry the controller may not write. verify-receipt --repository reads it. |
+| `receipts.sinks.oci.allowedRepositories` | `[]` | When repository is empty: the repositories, or path prefixes (ghcr.io/acme/), the controller may push referrers to with its push Secret. An image's repository is the tenant's choice, so in a shared install set repository or this list: empty pushes to every image's repository the Secret reaches. Other images get no referrer (the receipt's Stored condition is False, RepositoryNotAllowed). |
 | `receipts.sinks.oci.insecure` | `false` | Push over plain HTTP (an in-cluster registry). |
 | `receipts.sinks.rekor.url` | `""` | Rekor URL that logs every receipt signature; empty logs nothing. |
 | `receipts.sinks.rekor.public` | `false` | Allow the public-good Rekor (rekor.sigstore.dev). It publishes each receipt's statement metadata: names, emails and pipeline names. |

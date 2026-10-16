@@ -117,6 +117,14 @@ The keyless certificate names the ServiceAccount, not the cluster: always pin th
 | OCI referrer | `receipts.sinks.oci.enabled`, `receipts.sinks.oci.secretRef.name` | Pushed as a referrer of each image, artifact type `application/vnd.dev.sigstore.bundle.v0.3+json`, annotated `dev.sigstore.bundle.predicateType: https://slsa.dev/verification_summary/v1`. Needs push rights: a `kubernetes.io/dockerconfigjson` Secret in the release namespace, never a tenant's pull Secret. A config version has no image and is not pushed. |
 | Rekor | `receipts.sinks.rekor.url` | Every signature is logged. The public-good Rekor (`rekor.sigstore.dev`) publishes each receipt's names, emails and pipeline names, so it needs `receipts.sinks.rekor.public: true` as well. A private Rekor is the enterprise path. |
 
+The OCI sink pushes with the controller's Secret, but a Bundle's image repositories are chosen
+by whoever creates the Bundle. In a shared install, bound where it writes: set
+`receipts.sinks.oci.repository` (every referrer goes to one repository you own), or
+`receipts.sinks.oci.allowedRepositories` (repositories or path prefixes, `ghcr.io/acme/`).
+An image outside the list gets no referrer: its receipt is still signed and kept, and its
+`Stored` condition is `False` with reason `RepositoryNotAllowed`, naming the repository. Left
+empty, the sink pushes to every image's repository its Secret reaches.
+
 ImageVerification skips receipt referrers before it counts an image's signatures, so an image
 promoted to many environments does not crowd out its own signature
 ([Image verification](image-verification.md#signature-formats)).

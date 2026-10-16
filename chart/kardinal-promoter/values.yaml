@@ -703,6 +703,13 @@ receipts:
       # (as cosign's COSIGN_REPOSITORY), for images in a registry the
       # controller may not write. verify-receipt --repository reads it.
       repository: ""
+      # -- When repository is empty: the repositories, or path prefixes
+      # (ghcr.io/acme/), the controller may push referrers to with its push
+      # Secret. An image's repository is the tenant's choice, so in a shared
+      # install set repository or this list: empty pushes to every image's
+      # repository the Secret reaches. Other images get no referrer (the
+      # receipt's Stored condition is False, RepositoryNotAllowed).
+      allowedRepositories: []
       # -- Push over plain HTTP (an in-cluster registry).
       insecure: false
     rekor:

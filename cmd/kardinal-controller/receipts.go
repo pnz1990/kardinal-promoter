@@ -56,6 +56,7 @@ type receiptFlags struct {
 	tsaURL      string
 	ociSecret   string
 	ociRepo     string
+	ociAllowed  []string
 	oci         bool
 	ociInsecure bool
 	clusterID   string
@@ -84,6 +85,17 @@ func bindReceiptFlags(fs *flag.FlagSet) *receiptFlags {
 		"kubernetes.io/dockerconfigjson Secret in the controller namespace with push credentials for --receipt-oci.")
 	fs.StringVar(&f.ociRepo, "receipt-oci-repository", "",
 		"Push receipt referrers to this repository instead of each image's own (as cosign's COSIGN_REPOSITORY).")
+	fs.Func("receipt-oci-allowed-repositories",
+		"Comma-separated repositories (or path prefixes, ghcr.io/acme/) --receipt-oci may push referrers to when "+
+			"--receipt-oci-repository is not set; empty allows every image's repository. Set it, or --receipt-oci-repository, "+
+			"when tenants choose the images.", func(v string) error {
+			for _, p := range strings.Split(v, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					f.ociAllowed = append(f.ociAllowed, p)
+				}
+			}
+			return nil
+		})
 	fs.BoolVar(&f.ociInsecure, "receipt-oci-insecure", false, "Push receipt referrers over plain HTTP (an in-cluster registry).")
 	fs.DurationVar(&f.maxAge, "receipt-retention-max-age", 0,
 		"Delete PromotionReceipts created longer ago than this; 0 (the default) keeps every receipt, which is evidence.")
@@ -141,7 +153,7 @@ func (f *receiptFlags) ociSink(ns string, transport http.RoundTripper) *receiptr
 		return nil
 	}
 	sink := &receiptrecon.OCISink{Registry: receipt.Registry{Transport: transport, Insecure: f.ociInsecure}, SecretNamespace: ns}
-	sink.SecretName, sink.Repository = f.ociSecret, f.ociRepo
+	sink.SecretName, sink.Repository, sink.AllowedRepositories = f.ociSecret, f.ociRepo, f.ociAllowed
 	return sink
 }
 

@@ -788,6 +788,7 @@
                 "enabled": {"type": "boolean"},
                 "secretRef": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string"}}},
                 "repository": {"type": "string"},
+                "allowedRepositories": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": "^[^,\\s]+$"}},
                 "insecure": {"type": "boolean"}
               }
             },

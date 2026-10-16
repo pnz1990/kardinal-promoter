@@ -76,6 +76,7 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--receipt-key-secret-key` | string | `"cosign.key"` | Key of --receipt-key-secret holding the PEM private key. |
 | `--receipt-kms-key` | string |  | KMS key reference (mode kms), for a provider the controller was built with. |
 | `--receipt-oci` | bool | `false` | Push every receipt as an OCI referrer of each of its images. |
+| `--receipt-oci-allowed-repositories` | value |  | Comma-separated repositories (or path prefixes, ghcr.io/acme/) --receipt-oci may push referrers to when --receipt-oci-repository is not set; empty allows every image's repository. Set it, or --receipt-oci-repository, when tenants choose the images. |
 | `--receipt-oci-insecure` | bool | `false` | Push receipt referrers over plain HTTP (an in-cluster registry). |
 | `--receipt-oci-repository` | string |  | Push receipt referrers to this repository instead of each image's own (as cosign's COSIGN_REPOSITORY). |
 | `--receipt-oci-secret` | string |  | kubernetes.io/dockerconfigjson Secret in the controller namespace with push credentials for --receipt-oci. |

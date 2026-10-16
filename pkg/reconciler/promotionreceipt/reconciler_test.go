@@ -280,3 +280,70 @@ func conditionOf(rc *v1alpha1.PromotionReceipt, typ string) metav1.Condition {
 	}
 	return metav1.Condition{}
 }
+
+// TestReconcile_OCIAllowedRepositories: the push credential is the
+// admin's and an image's repository is the tenant's choice. With
+// AllowedRepositories set, tenant A's image under an allowed prefix gets its
+// referrer; tenant B's image in another repository gets none, though B's
+// receipt is signed and kept: its Stored condition is False,
+// RepositoryNotAllowed, and it is not retried.
+//
+// Covers RECEIPT-OCI-02.
+func TestReconcile_OCIAllowedRepositories(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	push := func(repo string) string {
+		img, err := random.Image(64, 1)
+		require.NoError(t, err)
+		ref, err := name.ParseReference(repo+":1", name.Insecure)
+		require.NoError(t, err)
+		require.NoError(t, remote.Write(ref, img))
+		d, err := img.Digest()
+		require.NoError(t, err)
+		return d.String()
+	}
+	repoA, repoB := host+"/team-a/checkout", host+"/platform/base"
+	dA, dB := push(repoA), push(repoB)
+	secret, _ := keySecret(t)
+	a := newReceipt(t, repoA, dA)
+	b := newReceipt(t, repoB, dB)
+	b.Namespace = "team-b"
+	h := newHarness(t, secret, a, b)
+	h.r.OCI = &OCISink{Registry: receipt.Registry{Insecure: true}, AllowedRepositories: []string{host + "/team-a/"}}
+	get := func(ns string) *v1alpha1.PromotionReceipt {
+		key := types.NamespacedName{Namespace: ns, Name: "checkout-1-5-0-prod"}
+		for i := 0; i < 5; i++ {
+			_, err := h.r.Reconcile(context.Background(), ctrlruntime.Request{NamespacedName: key})
+			require.NoError(t, err)
+		}
+		var rc v1alpha1.PromotionReceipt
+		require.NoError(t, h.c.Get(context.Background(), key, &rc))
+		return &rc
+	}
+
+	rcA := get("payments")
+	assert.Equal(t, metav1.ConditionTrue, conditionOf(rcA, ConditionStored).Status)
+	got, err := (&receipt.Registry{Insecure: true}).Referrers(context.Background(), repoA, dA)
+	require.NoError(t, err)
+	assert.Len(t, got, 1, "team A's image has its referrer")
+
+	rcB := get("team-b")
+	assert.Equal(t, v1alpha1.ReceiptStored, rcB.Status.Phase, "signed and kept in the CR")
+	c := conditionOf(rcB, ConditionStored)
+	assert.Equal(t, metav1.ConditionFalse, c.Status)
+	assert.Equal(t, "RepositoryNotAllowed", c.Reason)
+	assert.Contains(t, c.Message, repoB)
+	assert.Zero(t, rcB.Status.Attempts, "not retried")
+	for _, s := range rcB.Status.Stored {
+		assert.NotEqual(t, v1alpha1.ReceiptSinkOCI, s.Sink)
+	}
+	got, err = (&receipt.Registry{Insecure: true}).Referrers(context.Background(), repoB, dB)
+	require.NoError(t, err)
+	assert.Empty(t, got, "nothing written to a repository outside the allowlist")
+
+	assert.True(t, (&OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}).allowed("ghcr.io/acme/app"))
+	assert.False(t, (&OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}).allowed("ghcr.io/acme-evil/app"), "a path prefix, not a string prefix")
+	assert.True(t, (&OCISink{Repository: "ghcr.io/acme/receipts", AllowedRepositories: []string{"x/"}}).allowed("anything"),
+		"a fixed repository is the admin's own")
+}
