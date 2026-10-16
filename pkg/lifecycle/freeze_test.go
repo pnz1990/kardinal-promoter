@@ -257,6 +257,7 @@ func unfreezeFixture(t *testing.T, funcs interceptor.Funcs) (client.Client, clie
 	var cw v1alpha1.ChangeWindow
 	require.NoError(t, base.Get(context.Background(), types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw))
 	cw.Finalizers = []string{"kardinal.io/freeze-audit"}
+	cw.UID = "uid-1" // the fake client assigns none
 	require.NoError(t, base.Update(context.Background(), &cw))
 	return interceptor.NewClient(base, funcs), base
 }
@@ -364,6 +365,61 @@ func TestUnfreeze_Races(t *testing.T) {
 				assert.True(t, apierrors.IsNotFound(base.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw)))
 			})
 		}
+	})
+
+	t.Run("a freeze deleted and created again with the same spec is another freeze", func(t *testing.T) {
+		raced := false
+		gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if raced {
+				return cl.Update(ctx, obj, opts...)
+			}
+			raced = true
+			old := getFreeze(t, cl)
+			old.Finalizers = nil
+			require.NoError(t, cl.Update(ctx, &old))
+			require.NoError(t, cl.Delete(ctx, &old))
+			again := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: old.Name, UID: "uid-2", Labels: old.Labels},
+				Spec: *old.Spec.DeepCopy()}
+			require.NoError(t, cl.Create(ctx, again))
+			return apierrors.NewConflict(gr, old.Name, errors.New("modified"))
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+		cw := getFreeze(t, base)
+		assert.Equal(t, "uid-2", string(cw.UID))
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "the new freeze is not lifted")
+	})
+
+	t.Run("another unfreeze's mark alone is not a change", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !raced {
+				raced = true
+				// Erin has written her mark; her delete is still to come.
+				cw := getFreeze(t, cl)
+				cw.Spec.Freeze.Lifted = erin
+				require.NoError(t, cl.Update(ctx, &cw))
+			}
+			return cl.Update(ctx, obj, opts...)
+		}})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+		cw := getFreeze(t, base)
+		assert.False(t, cw.DeletionTimestamp.IsZero(), "lifted")
+	})
+
+	t.Run("an overlapping unfreeze that deleted it first is not a change", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if !raced {
+				raced = true
+				require.NoError(t, Unfreeze(ctx, cl, "kardinal-freeze-everyone", "", erin))
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob), "lifted, not \"frozen again?\"")
+		assert.False(t, getFreeze(t, base).DeletionTimestamp.IsZero())
 	})
 
 	t.Run("an unfreeze of a freeze already being deleted", func(t *testing.T) {

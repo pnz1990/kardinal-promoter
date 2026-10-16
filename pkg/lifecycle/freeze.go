@@ -211,6 +211,13 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 			clearLift(ctx, c, name, lift)
 		}
 		if apierrors.IsConflict(err) {
+			// Another unfreeze may have lifted it meanwhile (its mark moved
+			// the ResourceVersion): that is no reason to complain.
+			var now v1alpha1.ChangeWindow
+			if gerr := c.Get(ctx, types.NamespacedName{Name: name}, &now); apierrors.IsNotFound(gerr) ||
+				(gerr == nil && !now.DeletionTimestamp.IsZero()) {
+				return nil
+			}
 			return changedMeanwhile(name)
 		}
 		return fmt.Errorf("delete freeze %s: %w", name, err)
