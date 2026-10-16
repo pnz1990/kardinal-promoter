@@ -283,3 +283,100 @@ func TestHealthTimeoutLateAdapterError(t *testing.T) {
 	assert.Contains(t, got.Status.Message, "last result: waiting for resource: Deployment test/p not updated yet")
 	assert.Contains(t, got.Status.Message, "the health check past the timeout failed: get deployment test/p: etcdserver: request timed out")
 }
+
+// TestRollbackPerEnvironment (#2082): when two environments of one Bundle
+// fail at once with onHealthFailure=rollback (fan-out, waves, a fleet's
+// targets in flight together), each gets its own rollback Bundle; neither
+// takes the other's as its own. A step reconciled again reuses its own.
+func TestRollbackPerEnvironment(t *testing.T) {
+	envs := []string{"prod-eu", "prod-us"}
+	c := newClient(t, failingEnvironments(envs...)...)
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
+	for _, e := range append(envs, envs...) {
+		_, err := r.Reconcile(context.Background(), reqFor("step-"+e))
+		require.NoError(t, err)
+	}
+	targets := rollbackTargets(t, c)
+	assert.Equal(t, map[string]string{"prod-eu": "b1-rollback-alarm", "prod-us": "b1-rollback-alarm-prod-us"}, targets,
+		"one rollback Bundle per failing environment")
+	for _, e := range envs {
+		got := getStep(t, c, "step-"+e)
+		assert.Equal(t, "RollingBack", got.Status.State, got.Status.Message)
+		assert.Contains(t, got.Status.Message, "rollback Bundle "+targets[e]+" created", "%s names its own rollback", e)
+	}
+}
+
+// TestRollbackPerEnvironmentRace (#2082 QA): a step that reads the plain
+// name as free (a cache behind another environment's create) and then
+// finds it taken by that environment's rollback does not take it as its
+// own: it fails the reconcile, and the retry creates its own.
+func TestRollbackPerEnvironmentRace(t *testing.T) {
+	envs := []string{"prod-eu", "prod-us"}
+	base := newClient(t, failingEnvironments(envs...)...)
+	stale := 0
+	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*v1alpha1.Bundle); ok && key.Name == "b1-rollback-alarm" && stale == 1 {
+				stale++
+				return apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("bundles").GroupResource(), key.Name)
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		}})
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
+	_, err := r.Reconcile(context.Background(), reqFor("step-prod-eu"))
+	require.NoError(t, err)
+	stale = 1 // prod-us's next read of the name misses prod-eu's rollback
+	_, err = r.Reconcile(context.Background(), reqFor("step-prod-us"))
+	require.Error(t, err, "the name is another environment's: retry")
+	assert.Equal(t, 2, stale, "the stale read happened")
+	assert.NotEqual(t, "RollingBack", getStep(t, c, "step-prod-us").Status.State, "prod-us did not take prod-eu's rollback")
+	_, err = r.Reconcile(context.Background(), reqFor("step-prod-us"))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"prod-eu": "b1-rollback-alarm", "prod-us": "b1-rollback-alarm-prod-us"}, rollbackTargets(t, c))
+	assert.Contains(t, getStep(t, c, "step-prod-us").Status.Message, "rollback Bundle b1-rollback-alarm-prod-us created")
+}
+
+// rollbackTargets maps each rollback Bundle's target environment to it.
+func rollbackTargets(t *testing.T, c client.Client) map[string]string {
+	t.Helper()
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	targets := map[string]string{}
+	for _, b := range bundles.Items {
+		if b.Labels["kardinal.io/rollback"] == "true" {
+			require.NotNil(t, b.Spec.Intent, b.Name)
+			targets[b.Spec.Intent.TargetEnvironment] = b.Name
+		}
+	}
+	return targets
+}
+
+// failingEnvironments is Pipeline p with environments envs, where b0 was
+// Verified and b1 crash-loops past its health.timeout with
+// onHealthFailure=rollback, step step-<env> each.
+func failingEnvironments(envs ...string) []client.Object {
+	pipeline := makePipeline("p")
+	pipeline.Spec.Environments = nil
+	objs := []client.Object{pipeline}
+	for _, e := range envs {
+		pipeline.Spec.Environments = append(pipeline.Spec.Environments, v1alpha1.EnvironmentSpec{Name: e,
+			Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"}, OnHealthFailure: "rollback"})
+		objs = append(objs, crashLoopDeployment("p", e, appsv1.RecreateDeploymentStrategyType))
+		s0 := labelled(makeStep("step-b0-"+e, "p", "b0", e))
+		s0.Status = v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{{
+			Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified",
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Hour))}}}
+		expired := metav1.NewTime(time.Now().Add(-time.Second))
+		ps := labelled(makeStep("step-"+e, "p", "b1", e))
+		ps.Status = v1alpha1.PromotionStepStatus{State: "HealthChecking", Steps: recordedSteps(""), HealthCheckExpiry: &expired}
+		objs = append(objs, s0, ps)
+	}
+	b0 := makeBundle("b0", "p")
+	b0.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}}
+	b0.Status.Phase = "Superseded"
+	b1 := makeBundle("b1", "p")
+	b1.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2-bad"}}
+	return append(objs, b0, b1)
+}
