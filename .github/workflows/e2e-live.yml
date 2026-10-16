@@ -145,8 +145,10 @@ jobs:
     strategy:
       fail-fast: false
       # The account runs 20 jobs at once: a dispatched run on a branch takes at
-      # most 4, so pull-request and main CI keep runners.
-      max-parallel: ${{ (github.event_name == 'workflow_dispatch' && github.ref_name != 'main') && 4 || 16 }}
+      # most 4, so pull-request and main CI keep runners. A release branch's
+      # dispatch is the release gate (hack/release-gate -live ci, about 38
+      # jobs): it takes 16, as main does, while other live runs are frozen.
+      max-parallel: ${{ (github.event_name == 'workflow_dispatch' && github.ref_name != 'main' && !startsWith(github.ref_name, 'release/')) && 4 || 16 }}
       matrix: ${{ fromJSON(needs.image.outputs.matrix) }}
     env:
       SUITE: ${{ matrix.suite }}
