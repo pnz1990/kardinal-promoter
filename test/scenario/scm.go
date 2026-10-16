@@ -131,12 +131,8 @@ func (s *SCMServer) Approve(repo string, number int, user string) error {
 	return nil
 }
 
-// Merge merges an open PR the way a reviewer clicking merge does.
-func (s *SCMServer) Merge(repo string, number int) error {
-	return s.MergeAs(repo, number, "")
-}
-
-// MergeAs is Merge by user, whom the API then names as the merger.
+// MergeAs merges an open PR the way user clicking merge does: the API then
+// names user as the merger.
 func (s *SCMServer) MergeAs(repo string, number int, user string) error {
 	s.mu.Lock()
 	p := s.find(repo, number)
