@@ -29,11 +29,21 @@ spec:
             description: "The kardinal-promoter controller has been unreachable for more than 5 minutes. Promotions are stalled."
             runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#start-here-kardinal-doctor"
 
+        # controller_runtime_* and workqueue_* are exported by every
+        # controller-runtime operator. Each rule below keeps them to
+        # kardinal's own scrape targets with
+        # `and on (cluster, job, instance) kardinal_pr_duration_seconds_count`,
+        # a series only kardinal exports (a histogram without labels, present
+        # from start-up), whatever the scrape job is called: the join the
+        # Grafana dashboard uses (#1941, #2037). Aggregations keep cluster and
+        # namespace, so each kardinal installation alerts on its own.
+
         # Reconcile errors — any controller error rate above 0.1/s for 5m
         - alert: KardinalHighReconcileErrors
           expr: |
-            sum by (controller) (
+            sum by (cluster, namespace, controller) (
               rate(controller_runtime_reconcile_errors_total[5m])
+                and on (cluster, job, instance) kardinal_pr_duration_seconds_count
             ) > 0.1
           for: 5m
           labels:
@@ -47,8 +57,15 @@ spec:
         # for 10 minutes. (An idle cluster has an empty queue and does not fire.)
         - alert: KardinalBundleReconcilerStalled
           expr: |
-            sum(rate(controller_runtime_reconcile_total{controller="bundle"}[10m])) == 0
-              and on() sum(workqueue_depth{name="bundle"}) > 0
+            sum by (cluster, namespace) (
+              rate(controller_runtime_reconcile_total{controller="bundle"}[10m])
+                and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+            ) == 0
+              and on (cluster, namespace)
+            sum by (cluster, namespace) (
+              workqueue_depth{name="bundle"}
+                and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+            ) > 0
           for: 10m
           labels:
             severity: warning
@@ -60,7 +77,10 @@ spec:
         # Work queue backlog — controller is falling behind
         - alert: KardinalWorkQueueBacklog
           expr: |
-            workqueue_depth{name=~"bundle|promotionstep|policygate"} > 100
+            (
+              workqueue_depth{name=~"bundle|promotionstep|policygate"}
+                and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+            ) > 100
           for: 5m
           labels:
             severity: warning
@@ -73,7 +93,10 @@ spec:
         - alert: KardinalPolicyGateReconcileSlow
           expr: |
             histogram_quantile(0.99,
-              rate(controller_runtime_reconcile_time_seconds_bucket{controller="policygate"}[5m])
+              sum by (cluster, namespace, le) (
+                rate(controller_runtime_reconcile_time_seconds_bucket{controller="policygate"}[5m])
+                  and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+              )
             ) > 10
           for: 5m
           labels:

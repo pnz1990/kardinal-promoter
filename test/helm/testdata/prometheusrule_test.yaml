@@ -1,0 +1,86 @@
+# promtool unit tests of the chart's alerts in a Prometheus that scrapes other
+# controller-runtime operators (#2037). Run by TestChartPrometheusRuleAlertsOnlyOnKardinal
+# when promtool is on PATH; series without a cluster label, as in one cluster.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # Errors: kardinal's promotionstep reconciler fails at 1/s. Crossplane, and
+  # another instance of the same job name without kardinal's metrics, fail
+  # faster; neither alerts.
+  - interval: 1m
+    input_series:
+      - series: 'kardinal_pr_duration_seconds_count{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '0x20'
+      - series: 'controller_runtime_reconcile_errors_total{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",controller="promotionstep"}'
+        values: '0+60x20'
+      - series: 'controller_runtime_reconcile_errors_total{job="crossplane",instance="10.0.0.9:8080",namespace="crossplane-system",controller="managed/bucket"}'
+        values: '0+120x20'
+      - series: 'controller_runtime_reconcile_errors_total{job="kp",instance="10.0.0.2:8080",namespace="other",controller="bundle"}'
+        values: '0+120x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: KardinalHighReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: kardinal-system
+              controller: promotionstep
+            exp_annotations:
+              summary: "kardinal promotionstep reconciler error rate is elevated"
+              description: "The promotionstep reconciler is failing at 1 errors/s. Promotions may be stuck or failing silently."
+              runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
+  # Another operator's "bundle" controller is stalled with a backlog (Rancher
+  # Fleet has one); kardinal's is healthy: nothing alerts.
+  - interval: 1m
+    input_series:
+      - series: 'kardinal_pr_duration_seconds_count{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '0x30'
+      - series: 'controller_runtime_reconcile_total{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",controller="bundle"}'
+        values: '0+600x30'
+      - series: 'workqueue_depth{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",name="bundle"}'
+        values: '5x30'
+      - series: 'controller_runtime_reconcile_total{job="fleet",instance="10.0.0.9:8080",namespace="cattle-fleet-system",controller="bundle"}'
+        values: '100x30'
+      - series: 'workqueue_depth{job="fleet",instance="10.0.0.9:8080",namespace="cattle-fleet-system",name="bundle"}'
+        values: '500x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KardinalBundleReconcilerStalled
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KardinalWorkQueueBacklog
+        exp_alerts: []
+  # kardinal's own bundle reconciler is stalled with a backlog: both alert.
+  - interval: 1m
+    input_series:
+      - series: 'kardinal_pr_duration_seconds_count{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '0x30'
+      - series: 'controller_runtime_reconcile_total{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",controller="bundle"}'
+        values: '100x30'
+      - series: 'workqueue_depth{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",name="bundle"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KardinalBundleReconcilerStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: kardinal-system
+            exp_annotations:
+              summary: "kardinal BundleReconciler has not run in 10 minutes"
+              description: "Bundles are queued but none were reconciled in the last 10 minutes. The controller may be stuck or leader election may be broken."
+              runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#bundle-not-promoting"
+      - eval_time: 25m
+        alertname: KardinalWorkQueueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: kp
+              instance: "10.0.0.1:8080"
+              namespace: kardinal-system
+              name: bundle
+            exp_annotations:
+              summary: "kardinal bundle work queue depth > 100"
+              description: "The bundle work queue has 150 items pending for more than 5 minutes. Controller may be overloaded."
+              runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#graph-controller-issues"

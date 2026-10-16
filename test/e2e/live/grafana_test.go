@@ -26,13 +26,35 @@ import (
 // Grafana sends for All.
 var allVariables = strings.NewReplacer(`"$namespace"`, `".*"`, `"$cluster"`, `".*"`)
 
+// intruderInstance is the instance label of the intruder pushed under the
+// controller's own job name.
+const intruderInstance = "e2e-intruder"
+
 // pushIntruder puts another controller-runtime operator's metrics into the
 // suite's Prometheus, through the Pushgateway, as a shared Prometheus holds
 // them: a reconcile counter for controller "intruder" and a work queue named
-// bundle. It deletes them when the test ends.
+// bundle. It pushes them twice: as job e2e-intruder, and as another instance
+// of kardinal's own job name, kardinal-promoter (#2037: a selector on the job
+// alone would keep it). It deletes them when the test ends.
 func pushIntruder(t *testing.T, e *framework.Env) {
 	t.Helper()
-	path := "/api/v1/namespaces/" + framework.MonitoringNamespace + "/services/http:pushgateway:9091/proxy/metrics/job/e2e-intruder"
+	for _, group := range []string{"job/e2e-intruder", "job/kardinal-promoter/instance/" + intruderInstance} {
+		pushIntruderAs(t, e, group)
+	}
+	framework.Eventually(t, time.Minute, "Prometheus to scrape the intruder's metrics", func(ctx context.Context) (bool, string) {
+		s, err := e.PromQuery(ctx, `workqueue_depth{job=~"e2e-intruder|kardinal-promoter", controller="intruder"}`)
+		if err != nil {
+			return false, err.Error()
+		}
+		return len(s) == 2, fmt.Sprintf("%v", s)
+	})
+}
+
+// pushIntruderAs pushes the intruder's metrics under the Pushgateway
+// grouping key group (job/<job>[/instance/<instance>]).
+func pushIntruderAs(t *testing.T, e *framework.Env, group string) {
+	t.Helper()
+	path := "/api/v1/namespaces/" + framework.MonitoringNamespace + "/services/http:pushgateway:9091/proxy/metrics/" + group
 	body := "# TYPE controller_runtime_reconcile_total counter\n" +
 		"controller_runtime_reconcile_total{controller=\"intruder\",result=\"success\"} 5\n" +
 		"# TYPE controller_runtime_reconcile_errors_total counter\n" +
@@ -47,13 +69,6 @@ func pushIntruder(t *testing.T, e *framework.Env) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = e.Kube.CoreV1().RESTClient().Delete().AbsPath(path).Do(ctx).Error()
-	})
-	framework.Eventually(t, time.Minute, "Prometheus to scrape the intruder's metrics", func(ctx context.Context) (bool, string) {
-		s, err := e.PromQuery(ctx, `workqueue_depth{job="e2e-intruder"}`)
-		if err != nil {
-			return false, err.Error()
-		}
-		return len(s) == 1, fmt.Sprintf("%v", s)
 	})
 }
 
@@ -195,6 +210,7 @@ func TestObs_GrafanaDashboard(t *testing.T) {
 		for _, l := range r.SeriesLabels() {
 			assert.NotEqual(t, "e2e-intruder", l["job"], "panel %q shows another operator's series: %v", q.Panel, l)
 			assert.NotEqual(t, "intruder", l["controller"], "panel %q shows another operator's controller: %v", q.Panel, l)
+			assert.NotEqual(t, intruderInstance, l["instance"], "panel %q shows another target of kardinal's job name: %v", q.Panel, l)
 		}
 	}
 }

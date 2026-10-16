@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **The chart's alerts fire only on kardinal-promoter in a shared Prometheus** (#2037) — `KardinalHighReconcileErrors`, `KardinalBundleReconcilerStalled`, `KardinalWorkQueueBacklog` and `KardinalPolicyGateReconcileSlow` read `controller_runtime_*` and `workqueue_*`, which every controller-runtime operator exports: another operator's reconcile errors fired `KardinalHighReconcileErrors`, and another operator's stalled `bundle` controller (Rancher Fleet has one) fired `KardinalBundleReconcilerStalled`. Each now keeps those metrics to kardinal's own targets with `and on (cluster, job, instance) kardinal_pr_duration_seconds_count`, as the Grafana dashboard does, whatever the scrape job is called, and aggregates by `cluster` and `namespace` so each installation alerts on its own (the alerts gain those labels). The example queries and rules in [Monitoring](guides/monitoring.md#prometheus-operator) do the same, and the page says the alerts and the dashboard depend on `kardinal_pr_duration_seconds_count`.
