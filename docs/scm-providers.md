@@ -53,9 +53,10 @@ branch of the same name never matches. Each SCM's source-repository field is che
 | Bitbucket Data Center | `fromRef.repository` |
 | Azure DevOps | no `forkSource` |
 
-Its head must also be, or contain, the commit kardinal pushed. An open PR of the branch whose head
-does not contain it is not adopted and the branch is not rebuilt over it: the step fails, with a
-`PRBranchForeignCommit` Warning Event that says how to go on. A PR opened by hand on kardinal's branch in the repository itself,
+Its head must also be, or contain, the commit kardinal pushed, and so must the branch's head
+before kardinal opens a PR from it. Otherwise nothing is adopted or opened, and the branch is not
+rebuilt over the other commit: the step fails, with a `PRBranchForeignCommit` Warning Event that
+says how to go on ([PR evidence](pr-evidence.md)). A PR opened by hand on kardinal's branch in the repository itself,
 after kardinal's push, carries kardinal's commit and is adopted with its own title and body:
 only someone who can push the branch anyway can do that. A PR that another run opens between
 the lookup and the create is still adopted, from the repository's own branch only, when the SCM

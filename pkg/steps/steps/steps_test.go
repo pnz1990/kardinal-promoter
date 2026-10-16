@@ -1497,7 +1497,9 @@ func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 		assert.Equal(t, "deadbeefcafe0000000000000000000000000000", foreign.Head)
 		assert.Equal(t, parentsteps.StepFailed, res.Status)
 		assert.Contains(t, res.Message, "does not contain "+testPushed)
-		assert.Contains(t, res.Message, "Close the PR, or reset the branch to kardinal's commit")
+		assert.Contains(t, res.Message, "reset the branch to kardinal's commit")
+		assert.NotContains(t, res.Message, "Close the PR", "closing it would leave the foreign commit on the branch")
+		assert.Contains(t, res.Message, "about 4.5 minutes")
 		assert.Empty(t, res.Outputs["prNumber"])
 		assert.Zero(t, m.openPRCalls, "no create: its refused duplicate would adopt that PR")
 		assert.Zero(t, g.pushes, "never pushed over someone else's commit")
@@ -1522,5 +1524,148 @@ func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "7", res.Outputs["prNumber"])
 		assert.Equal(t, 1, m.openPRCalls)
+	})
+}
+
+// chainGitClient is a git client whose PR branch is a line of commits,
+// chain[0] its head. It honours BranchGraph's maxCommits, reads the head
+// with RemoteBranchHead, and counts pushes.
+type chainGitClient struct {
+	mockGitClient
+	chain   []string
+	readErr error
+	pushes  int
+	depths  []int
+}
+
+func (g *chainGitClient) RemoteBranchHead(context.Context, string, string, scm.GitAuth) (string, error) {
+	if g.readErr != nil {
+		return "", g.readErr
+	}
+	return g.chain[0], nil
+}
+
+func (g *chainGitClient) BranchGraph(_ context.Context, _, _ string, _ scm.GitAuth, maxCommits int) (string, map[string]scm.GraphCommit, error) {
+	g.depths = append(g.depths, maxCommits)
+	if g.readErr != nil {
+		return "", nil, g.readErr
+	}
+	graph := map[string]scm.GraphCommit{}
+	for i := 0; i < len(g.chain) && i < maxCommits; i++ {
+		var parents []string
+		if i+1 < len(g.chain) {
+			parents = []string{g.chain[i+1]}
+		}
+		graph[g.chain[i]] = scm.GraphCommit{Parents: parents}
+	}
+	return g.chain[0], graph, nil
+}
+
+func (g *chainGitClient) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
+	g.pushes++
+	return nil
+}
+
+// chain is n commit IDs, newest first, with pushed at index at (or none
+// when at < 0).
+func chain(n, at int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%040x", i+1)
+	}
+	if at >= 0 {
+		out[at] = testPushed
+	}
+	return out
+}
+
+// TestOpenPR_BranchHeadMustContainKardinalsCommit (#2075 QA): with no open
+// PR of kardinal's branch, open-pr opens one only when the branch's head is,
+// or contains, the commit kardinal pushed. A head that does not (someone
+// pushed over kardinal's commit, then closed the PR that carried theirs)
+// opens nothing: that PR would carry kardinal's evidence without kardinal's
+// change, and its merge would count as the environment's approval. The
+// containment check fails safe: a history it cannot read is an error, a head
+// outside what it read does not contain the commit, and it reads
+// prHistoryDepth (50) commits, no fewer and no more.
+//
+// Covers SCM-OPEN-FIRST-01.
+func TestOpenPR_BranchHeadMustContainKardinalsCommit(t *testing.T) {
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+	run := func(t *testing.T, g *chainGitClient, open *scm.FoundPR) (parentsteps.StepResult, *finderSCM, error) {
+		t.Helper()
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/7", prNumber: 7}, open: open}
+		state := makeState(t, &mockGitClient{}, &mockSCMProvider{})
+		state.GitClient, state.SCM = g, m
+		state.Environment.Approval = "pr-review"
+		state.Outputs = map[string]string{steps.OutputPushedSHA: testPushed}
+		res, err := step.Execute(context.Background(), state)
+		return res, m, err
+	}
+	t.Run("the head is kardinal's commit: opened", func(t *testing.T) {
+		g := &chainGitClient{chain: chain(3, 0)}
+		res, m, err := run(t, g, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "7", res.Outputs["prNumber"])
+		assert.Equal(t, 1, m.openPRCalls)
+		assert.Empty(t, g.depths, "the head alone tells, without reading history")
+	})
+	t.Run("commits on top of kardinal's: opened", func(t *testing.T) {
+		res, m, err := run(t, &chainGitClient{chain: chain(5, 2)}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "7", res.Outputs["prNumber"])
+		assert.Equal(t, 1, m.openPRCalls)
+	})
+	t.Run("a head without kardinal's commit: nothing opened, nothing pushed", func(t *testing.T) {
+		g := &chainGitClient{chain: chain(5, -1)}
+		res, m, err := run(t, g, nil)
+		var foreign *parentsteps.ForeignPRHeadError
+		require.ErrorAs(t, err, &foreign)
+		assert.Zero(t, foreign.PR, "the branch, no PR")
+		assert.Equal(t, g.chain[0], foreign.Head)
+		assert.Contains(t, res.Message, "kardinal's branch")
+		assert.Contains(t, res.Message, "kardinal opens no PR from it")
+		assert.Contains(t, res.Message, "reset the branch to kardinal's commit")
+		assert.NotContains(t, res.Message, "Close the PR")
+		assert.Zero(t, m.openPRCalls)
+		assert.Zero(t, g.pushes)
+	})
+	t.Run("a history it cannot read is an error, nothing opened", func(t *testing.T) {
+		res, m, err := run(t, &chainGitClient{chain: chain(3, -1), readErr: errors.New("connection reset")}, nil)
+		require.Error(t, err)
+		var foreign *parentsteps.ForeignPRHeadError
+		assert.False(t, errors.As(err, &foreign))
+		assert.NotErrorIs(t, err, parentsteps.ErrPermanent, "retried")
+		assert.Contains(t, res.Message, "connection reset")
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("an open PR whose history cannot be read is not adopted", func(t *testing.T) {
+		g := &chainGitClient{chain: chain(3, 1), readErr: errors.New("connection reset")}
+		res, m, err := run(t, g, &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5", HeadSHA: chain(3, 1)[0]})
+		require.Error(t, err)
+		assert.Empty(t, res.Outputs["prNumber"])
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("an open PR whose head is outside what was read is not adopted", func(t *testing.T) {
+		g := &chainGitClient{chain: chain(3, 1)}
+		_, m, err := run(t, g, &scm.FoundPR{Number: 5, URL: "https://github.com/owner/repo/pull/5", HeadSHA: "abcdef0000000000000000000000000000000000"})
+		var foreign *parentsteps.ForeignPRHeadError
+		require.ErrorAs(t, err, &foreign)
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("kardinal's commit 49 commits down: within the read", func(t *testing.T) {
+		g := &chainGitClient{chain: chain(60, 49)}
+		res, _, err := run(t, g, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "7", res.Outputs["prNumber"])
+		assert.Equal(t, []int{50}, g.depths, "reads 50 commits")
+	})
+	t.Run("kardinal's commit 51 commits down: beyond the read, not contained", func(t *testing.T) {
+		g := &chainGitClient{chain: chain(60, 51)}
+		_, m, err := run(t, g, nil)
+		var foreign *parentsteps.ForeignPRHeadError
+		require.ErrorAs(t, err, &foreign)
+		assert.Zero(t, m.openPRCalls)
 	})
 }

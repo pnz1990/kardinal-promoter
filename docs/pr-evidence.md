@@ -376,11 +376,20 @@ What the retry does:
 - **Open, but its head does not contain kardinal's commit** (someone else committed to the branch
   and replaced it): kardinal neither adopts the PR nor rebuilds the branch over their commit,
   just as it never rebuilds a PR branch with someone else's commits on a moved base. It opens no
-  PR either, because the SCM would refuse the duplicate. The step fails against its normal retry
-  budget, then is Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message
-  names the PR, its head and kardinal's commit, and the head is kept in
-  `status.outputs.prForeignHead`. To go on, close the PR, or reset the branch to kardinal's
-  commit (`git push --force origin <pushedSHA>:refs/heads/<branch>`).
+  PR either, because the SCM would refuse the duplicate.
+- **No open PR, and the branch's head does not contain kardinal's commit** (someone pushed over
+  it, and the PR that carried their commit was closed): kardinal opens no PR from the branch. That
+  PR would carry kardinal's evidence without kardinal's change, and its merge would count as the
+  environment's approval. Before every PR it opens, kardinal checks that the branch's head is, or
+  contains, its commit.
+
+In both cases the step fails against its normal retry budget, about 4.5 minutes, and then is
+Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message names the head
+and kardinal's commit, and the head is kept in `status.outputs.prForeignHead`. The way to go on
+is to reset the branch to kardinal's commit (`git push --force origin
+<pushedSHA>:refs/heads/<branch>`) while the step retries. Once it has failed, promote again
+(`kardinal promote <pipeline> <environment>`, or ship a new version). Closing the PR does not
+help, because the branch still carries the other commit.
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
   looks up the merged PR of its branch, with the recorded commit as its head, and records the

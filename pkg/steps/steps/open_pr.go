@@ -231,7 +231,11 @@ const prHistoryDepth = 50
 // adopted and OpenPR runs, as before.
 func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, adoption, error) {
 	pushed := state.Outputs[OutputPushedSHA]
-	if finder, ok := state.SCM.(scm.OpenPRFinder); ok && pushed != "" {
+	if pushed == "" {
+		prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+		return prURL, prNum, opened, err
+	}
+	if finder, ok := state.SCM.(scm.OpenPRFinder); ok {
 		pr, err := finder.FindOpenPR(ctx, repo, branch, state.Git.Branch)
 		switch {
 		case errors.Is(err, errors.ErrUnsupported):
@@ -240,33 +244,77 @@ func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, titl
 		case pr != nil && scm.SameCommit(pr.HeadSHA, pushed):
 			return pr.URL, pr.Number, adoptedOwnHead, nil
 		case pr != nil:
-			contains, err := headContains(ctx, state, branch, pr.HeadSHA, pushed)
-			if err != nil {
+			contains, _, err := branchContains(ctx, state, branch, pr.HeadSHA, pushed)
+			switch {
+			case errors.Is(err, errNoHistory):
+			case err != nil:
 				return "", 0, opened, fmt.Errorf("PR #%d's head %s is not kardinal's commit %s, and reading branch %s failed: %w",
 					pr.Number, pr.HeadSHA, pushed, branch, err)
-			}
-			if contains {
+			case contains:
 				return pr.URL, pr.Number, adoptedOnTop, nil
 			}
 			return "", 0, opened, &parentsteps.ForeignPRHeadError{PR: pr.Number, URL: pr.URL, Branch: branch, Head: pr.HeadSHA, Pushed: pushed}
 		}
 	}
+	// No PR of the branch: before opening one, its head must contain
+	// kardinal's commit. Someone may have pushed over it, and then closed the
+	// PR that carried their commit: a PR opened now would carry kardinal's
+	// evidence without kardinal's change, and its merge would count as the
+	// environment's approval. A git client that can read neither the
+	// branch's head nor its history checks nothing, as before.
+	contains, head, err := branchHeadContains(ctx, state, branch, pushed)
+	switch {
+	case errors.Is(err, errNoHistory):
+	case err != nil:
+		return "", 0, opened, fmt.Errorf("read the head of kardinal's branch %s before opening its PR: %w", branch, err)
+	case !contains:
+		return "", 0, opened, &parentsteps.ForeignPRHeadError{Branch: branch, Head: head, Pushed: pushed}
+	}
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
 	return prURL, prNum, opened, err
 }
 
-// headContains reports whether commit head of branch is commit pushed or
-// has it among its last prHistoryDepth ancestors. A git client that cannot
-// read the branch's history, or a head that is not in what it read, does
-// not contain it: nothing is adopted that cannot be checked.
-func headContains(ctx context.Context, state *parentsteps.StepState, branch, head, pushed string) (bool, error) {
+// errNoHistory is a git client that cannot read a branch's head or history.
+var errNoHistory = errors.New("the git client cannot read the branch's history")
+
+// branchHeadContains reports whether branch's head on the remote, which it
+// returns, is or contains commit pushed. The head is read first (git
+// ls-remote), and the history only when it is not pushed.
+func branchHeadContains(ctx context.Context, state *parentsteps.StepState, branch, pushed string) (bool, string, error) {
+	var head string
+	if hr, ok := state.GitClient.(scm.BranchHeadReader); ok {
+		var err error
+		head, err = hr.RemoteBranchHead(ctx, state.Git.URL, branch, state.Git.Auth())
+		if err != nil {
+			return false, "", err
+		}
+		if head == "" {
+			return false, "", fmt.Errorf("branch %s does not exist on the remote", branch)
+		}
+		if scm.SameCommit(head, pushed) {
+			return true, head, nil
+		}
+	}
+	// From the head ls-remote read, or the history's tip without it.
+	return branchContains(ctx, state, branch, head, pushed)
+}
+
+// branchContains reports whether commit head of branch (the branch's head
+// when head is empty, which it returns) is commit pushed or has it among
+// its last prHistoryDepth ancestors. A head that is not in what was read
+// does not contain it: nothing that cannot be checked counts. A git client
+// that cannot read the branch's history is errNoHistory.
+func branchContains(ctx context.Context, state *parentsteps.StepState, branch, head, pushed string) (bool, string, error) {
 	gr, ok := state.GitClient.(scm.BranchGraphReader)
 	if !ok {
-		return false, nil
+		return false, head, errNoHistory
 	}
-	_, graph, err := gr.BranchGraph(ctx, state.Git.URL, branch, state.Git.Auth(), prHistoryDepth)
+	tip, graph, err := gr.BranchGraph(ctx, state.Git.URL, branch, state.Git.Auth(), prHistoryDepth)
 	if err != nil {
-		return false, err
+		return false, head, err
+	}
+	if head == "" {
+		head = tip
 	}
 	var start string
 	for sha := range graph {
@@ -275,7 +323,7 @@ func headContains(ctx context.Context, state *parentsteps.StepState, branch, hea
 		}
 	}
 	if start == "" {
-		return false, nil
+		return false, head, nil
 	}
 	seen := map[string]bool{}
 	queue := []string{start}
@@ -287,11 +335,11 @@ func headContains(ctx context.Context, state *parentsteps.StepState, branch, hea
 		}
 		seen[sha] = true
 		if scm.SameCommit(sha, pushed) {
-			return true, nil
+			return true, head, nil
 		}
 		queue = append(queue, graph[sha].Parents...)
 	}
-	return false, nil
+	return false, head, nil
 }
 
 // prClockSkew is how much older than the PromotionStep a PR adoptMergedPR

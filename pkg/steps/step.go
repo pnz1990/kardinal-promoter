@@ -220,13 +220,15 @@ type StepState struct {
 // (ForeignPRHeadError), until open-pr opens or adopts its PR.
 const OutputPRForeignHead = "prForeignHead"
 
-// ForeignPRHeadError is an open PR of kardinal's branch whose head does
-// not contain the commit kardinal pushed (status.outputs.pushedSHA):
-// someone else committed to the branch, replacing kardinal's commit.
-// open-pr neither adopts the PR nor rebuilds the branch (kardinal never
-// force-pushes over someone else's commit, as refreshPRBranch does not):
-// the step fails against its retry budget, and the reconciler emits a
-// Warning Event and records the head (status.outputs.prForeignHead).
+// ForeignPRHeadError is kardinal's PR branch, or an open PR of it (PR is
+// set), whose head does not contain the commit kardinal pushed
+// (status.outputs.pushedSHA): someone else pushed to the branch, replacing
+// kardinal's commit. open-pr neither adopts the PR, nor opens one from the
+// branch (it would carry kardinal's evidence without kardinal's change),
+// nor rebuilds the branch (kardinal never force-pushes over someone else's
+// commit, as refreshPRBranch does not): the step fails against its retry
+// budget, and the reconciler emits a Warning Event and records the head
+// (status.outputs.prForeignHead).
 type ForeignPRHeadError struct {
 	PR           int
 	URL          string
@@ -235,10 +237,16 @@ type ForeignPRHeadError struct {
 }
 
 func (e *ForeignPRHeadError) Error() string {
-	return fmt.Sprintf("PR #%d (%s) is open from kardinal's branch %s, but its head %s does not contain %s, the commit kardinal pushed: "+
-		"someone else committed to the branch, and kardinal does not rebuild it over their commit. "+
-		"Close the PR, or reset the branch to kardinal's commit (git push --force origin %s:refs/heads/%s); the step then retries",
-		e.PR, e.URL, e.Branch, e.Head, e.Pushed, e.Pushed, e.Branch)
+	what := fmt.Sprintf("kardinal's branch %s has head %s, which does not contain %s, the commit kardinal pushed: "+
+		"someone else pushed to it, and kardinal opens no PR from it", e.Branch, e.Head, e.Pushed)
+	if e.PR != 0 {
+		what = fmt.Sprintf("PR #%d (%s) is open from kardinal's branch %s, but its head %s does not contain %s, the commit kardinal pushed: "+
+			"someone else committed to the branch, and kardinal does not adopt the PR", e.PR, e.URL, e.Branch, e.Head, e.Pushed)
+	}
+	return what + fmt.Sprintf(" or push over their commit. To go on, reset the branch to kardinal's commit "+
+		"(git push --force origin %s:refs/heads/%s): the step retries for about 4.5 minutes (its retry budget), "+
+		"and once it has failed, promote again (kardinal promote <pipeline> <environment>, or ship a new version)",
+		e.Pushed, e.Branch)
 }
 
 // ErrStalePush marks a push BeforePush refused because the promotion is

@@ -197,6 +197,15 @@ type graphPushGit struct {
 	pushedHeadGit
 	graph  map[string]scm.GraphCommit
 	pushes int
+	// head is the PR branch's head on the remote; "" is kardinal's commit.
+	head string
+}
+
+func (g *graphPushGit) RemoteBranchHead(context.Context, string, string, scm.GitAuth) (string, error) {
+	if g.head == "" {
+		return pushedBeforeCrash, nil
+	}
+	return g.head, nil
 }
 
 func (g *graphPushGit) Push(context.Context, string, string, string, scm.GitAuth, bool) error {
@@ -215,6 +224,9 @@ type openHeadSCM struct {
 }
 
 func (m *openHeadSCM) FindOpenPR(context.Context, string, string, string) (*scm.FoundPR, error) {
+	if m.head == "" {
+		return nil, nil // no open PR (closed)
+	}
 	return &scm.FoundPR{Number: 5, URL: "https://github.com/test/repo/pull/5", HeadSHA: m.head}, nil
 }
 
@@ -252,7 +264,8 @@ func TestOpenPRWithAForeignHead(t *testing.T) {
 		got := getStep(t, c, "step")
 		assert.Equal(t, "Promoting", got.Status.State, "retried")
 		assert.Contains(t, got.Status.Message, "does not contain "+pushedBeforeCrash)
-		assert.Contains(t, got.Status.Message, "Close the PR, or reset the branch to kardinal's commit")
+		assert.Contains(t, got.Status.Message, "reset the branch to kardinal's commit")
+		assert.Contains(t, got.Status.Message, "promote again")
 		assert.Equal(t, foreignHead, got.Status.Outputs["prForeignHead"], "the foreign head is in the step's evidence")
 		require.NotEmpty(t, rec.Events)
 		ev := <-rec.Events
@@ -268,6 +281,22 @@ func TestOpenPRWithAForeignHead(t *testing.T) {
 		assert.Equal(t, 1, g.pushes, "only kardinal's own push, before open-pr; never over the foreign commit")
 		assert.Zero(t, s.openCalled, "no create")
 		assert.Empty(t, got.Status.Outputs["prNumber"])
+	})
+
+	t.Run("no open PR, and the branch carries a foreign commit: nothing opened", func(t *testing.T) {
+		// Someone pushed over kardinal's commit, and the PR was closed: a PR
+		// opened now would carry kardinal's evidence without its change.
+		c, r, g, s, rec, _ := setup(t, "", map[string]scm.GraphCommit{foreignHead: {Parents: []string{"base"}}})
+		g.head = foreignHead
+		reconcileStep(t, r, "step")
+		got := getStep(t, c, "step")
+		assert.Equal(t, "Promoting", got.Status.State, "retried")
+		assert.Contains(t, got.Status.Message, "kardinal opens no PR from it")
+		assert.Equal(t, foreignHead, got.Status.Outputs["prForeignHead"])
+		require.NotEmpty(t, rec.Events)
+		assert.Contains(t, <-rec.Events, "Warning PRBranchForeignCommit")
+		assert.Zero(t, s.openCalled, "no PR opened from a branch without kardinal's change")
+		assert.Equal(t, 1, g.pushes, "only kardinal's own push")
 	})
 
 	t.Run("a head on top of kardinal's commit is adopted", func(t *testing.T) {
