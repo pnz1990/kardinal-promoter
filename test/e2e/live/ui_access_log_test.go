@@ -46,6 +46,7 @@ func TestUI_AccessLog(t *testing.T) {
 	}
 	_, err := e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, "", crb.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
 	})
@@ -65,6 +66,7 @@ func TestUI_AccessLog(t *testing.T) {
 		Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: a.ns}}}
 	_, err = e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, vb, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, "", vb.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), vb.Name, metav1.DeleteOptions{})
 		_ = e.Kube.RbacV1().ClusterRoles().Delete(context.Background(), viewer.Name, metav1.DeleteOptions{})

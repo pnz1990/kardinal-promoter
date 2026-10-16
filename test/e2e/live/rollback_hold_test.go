@@ -121,6 +121,7 @@ func TestRollback_Hold(t *testing.T) {
 		Subjects:   []rbacv1.Subject{{APIGroup: "rbac.authorization.k8s.io", Kind: "User", Name: editor}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, a.ns, "pipeline-editor")
 	cfg := rest.CopyConfig(e.Config)
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: editor}
 	asEditor, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})

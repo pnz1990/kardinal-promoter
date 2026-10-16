@@ -46,6 +46,7 @@ func policyAgent(t *testing.T, e *framework.Env, ns, name, sponsor, autonomy str
 			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: ns}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
+		waitBoundNamed(t, e, ns, name+"-"+role)
 	}
 	// Approving needs the chart's approvals role too (create Approvals).
 	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
@@ -54,6 +55,7 @@ func policyAgent(t *testing.T, e *framework.Env, ns, name, sponsor, autonomy str
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: ns}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, name+"-approvals")
 	id := &v1alpha1.AgentIdentity{
 		ObjectMeta: metav1.ObjectMeta{Name: agent},
 		Spec: v1alpha1.AgentIdentitySpec{

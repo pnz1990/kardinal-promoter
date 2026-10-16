@@ -176,6 +176,7 @@ func bindViewer(t *testing.T, e *framework.Env, ns, saNS, sa string) {
 	}
 	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, binding, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, binding.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().RoleBindings(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
 		_ = e.Kube.RbacV1().Roles(ns).Delete(context.Background(), name, metav1.DeleteOptions{})

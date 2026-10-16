@@ -51,6 +51,7 @@ func userKubeconfig(t *testing.T, e *framework.Env, ns, user string, groups ...s
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: user}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, "approver-"+strings.NewReplacer("@", "-", ":", "-", ".", "-").Replace(user))
 	return path
 }
 

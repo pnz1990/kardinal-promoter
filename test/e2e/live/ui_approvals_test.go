@@ -55,6 +55,7 @@ func TestUI_APIApprovalsTokenReview(t *testing.T) {
 	}
 	_, err := e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, "", crb.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
 	})
@@ -72,6 +73,7 @@ func TestUI_APIApprovalsTokenReview(t *testing.T) {
 			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: a.ns}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
+		waitBoundNamed(t, e, a.ns, sa)
 		tr, err := e.Kube.CoreV1().ServiceAccounts(a.ns).CreateToken(ctx, sa, &authnv1.TokenRequest{
 			Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800), Audiences: []string{"kardinal-promoter"}}}, metav1.CreateOptions{})
 		require.NoError(t, err)

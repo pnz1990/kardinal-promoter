@@ -55,6 +55,7 @@ func impersonating(t *testing.T, e *framework.Env, ns, user string, groups []str
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: user}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, name)
 	cfg := rest.CopyConfig(e.Config)
 	cfg.Impersonate = rest.ImpersonationConfig{UserName: user, Groups: groups}
 	c, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})

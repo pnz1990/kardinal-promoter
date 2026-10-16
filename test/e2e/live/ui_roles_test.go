@@ -54,6 +54,7 @@ func newRoleUser(t *testing.T, e *framework.Env, ns, name, clusterRole string) r
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: ns}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, name)
 	tr, err := e.Kube.CoreV1().ServiceAccounts(ns).CreateToken(ctx, name, &authnv1.TokenRequest{
 		Spec: authnv1.TokenRequestSpec{ExpirationSeconds: ptr.To[int64](1800), Audiences: []string{"kardinal-promoter"}}}, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -120,6 +121,7 @@ func TestUI_UserRoles(t *testing.T) {
 	}
 	_, err := e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{})
 	require.NoError(t, err)
+	waitBoundNamed(t, e, "", crb.Name)
 	t.Cleanup(func() {
 		_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), crb.Name, metav1.DeleteOptions{})
 	})
@@ -275,6 +277,7 @@ func TestUI_ScopedWritesAdmission(t *testing.T) {
 			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: u.name, Namespace: ns}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
+		waitBoundNamed(t, e, ns, u.name+"-"+role)
 	}
 	role := func(r string) string { return framework.ControllerDeployment + "-" + r }
 	pauser := newRoleUser(t, e, ns, "pauser", role("promoter"))

@@ -70,6 +70,7 @@ func newLiveAgent(t *testing.T, e *framework.Env, ns string, rbac, environments 
 				Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: a.sa, Namespace: ns}},
 			}, metav1.CreateOptions{})
 			require.NoError(t, err)
+			waitBoundNamed(t, e, where, "agent-"+role)
 		}
 	}
 	id := &v1alpha1.AgentIdentity{
