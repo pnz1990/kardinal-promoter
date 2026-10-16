@@ -17,6 +17,7 @@ package promotionstep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -188,11 +189,36 @@ func (r *Reconciler) pendingReceipt(ctx context.Context, ps *v1alpha1.PromotionS
 	}
 	stmt, digest, err := receipt.Build(in)
 	if err != nil {
-		return nil, fmt.Errorf("build receipt: %w", err)
+		return nil, fmt.Errorf("%w: %w", errReceiptBuild, err)
 	}
 	return &v1alpha1.PendingReceipt{Name: in.Name, Spec: v1alpha1.PromotionReceiptSpec{
 		Statement: string(stmt), StatementDigest: digest, PullRequest: pr,
 	}}, nil
+}
+
+// receiptSinkBuild is the kardinal_receipts_failed_total sink of a receipt
+// that could not be built.
+const receiptSinkBuild = "build"
+
+// errReceiptBuild marks a receipt.Build error: the same inputs give the same
+// error, so retrying cannot help.
+var errReceiptBuild = errors.New("build receipt")
+
+// receiptNeverBuilds reports whether err from pendingReceipt is
+// deterministic: the statement cannot be built from these inputs (over the
+// size cap after every cut), or the Bundle or Pipeline it is built from no
+// longer exists. Other errors (a cache read) may succeed on a retry.
+func receiptNeverBuilds(err error) bool {
+	return errors.Is(err, errReceiptBuild) || apierrors.IsNotFound(err)
+}
+
+// receiptErrorText is err for status.receiptError, within its 1024 bytes.
+func receiptErrorText(err error) string {
+	s := err.Error()
+	if len(s) > 1024 {
+		s = strings.ToValidUTF8(s[:1021], "") + "..."
+	}
+	return s
 }
 
 // readGates reads the step's required gates, for a step without a

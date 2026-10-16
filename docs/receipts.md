@@ -90,10 +90,14 @@ kubectl -n kardinal-system create secret generic receipt-key --from-file=cosign.
 
 `kubectl apply` the new CRD before you upgrade the chart, as for every release
 ([Upgrading](upgrade.md)): `promotionreceipts`, and the PromotionStep's new `status.decision`
-and `status.pendingReceipt` fields.
+`status.pendingReceipt` and `status.receiptError` fields.
 
 No promotion waits for a receipt, and no gate reads one. A receipt that cannot be signed or
 stored is retried with backoff and counted in `kardinal_receipts_failed_total{sink}`.
+A receipt that can never be built (its statement is over the 256 KiB cap after every cut, or
+the version's Bundle or Pipeline is gone) does not hold the step either: the step is Verified
+without a PromotionReceipt, its `status.receiptError` says why, a `ReceiptFailed` AuditEvent
+records it, and `kardinal_receipts_failed_total{sink="build"}` counts it once.
 
 ### Signing modes
 

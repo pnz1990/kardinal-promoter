@@ -16,13 +16,19 @@
 package promotionstep
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 )
 
 // TestReceiptPR: the receipt names the step's PR and its SCM provider, so
@@ -60,4 +66,14 @@ func TestActiveOverride(t *testing.T) {
 	assert.Equal(t, "hotfix", o.Reason)
 	assert.Equal(t, "bob", o.CreatedBy)
 	assert.False(t, o.Verified, "not recorded as checked")
+}
+
+// TestReceiptNeverBuilds: a statement that cannot be built and a Bundle or
+// Pipeline that is gone are final; a cache error is retried.
+func TestReceiptNeverBuilds(t *testing.T) {
+	gone := apierrors.NewNotFound(schema.GroupResource{Group: "kardinal.io", Resource: "bundles"}, "b")
+	assert.True(t, receiptNeverBuilds(fmt.Errorf("%w: %w", errReceiptBuild, receipt.ErrTooLarge)))
+	assert.True(t, receiptNeverBuilds(fmt.Errorf("get bundle b: %w", gone)))
+	assert.False(t, receiptNeverBuilds(errors.New("list metric checks: cache not synced")))
+	assert.LessOrEqual(t, len(receiptErrorText(errors.New(strings.Repeat("é", 2000)))), 1024)
 }

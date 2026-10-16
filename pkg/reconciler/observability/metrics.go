@@ -151,12 +151,13 @@ var (
 
 	// ReceiptsFailedTotal counts failed promotion receipt attempts by sink:
 	// signing (the signature, and Rekor when it is configured), oci, and
-	// pr-comment. A failing sink never holds a promotion; the receipt
-	// retries it with backoff (docs/receipts.md).
+	// pr-comment, each retried with backoff; and build, once per step whose
+	// receipt can never be built. A failing sink never holds a promotion
+	// (docs/receipts.md).
 	ReceiptsFailedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kardinal_receipts_failed_total",
-			Help: "Failed promotion receipt attempts by sink (signing, oci, pr-comment); each is retried with backoff.",
+			Help: "Failed promotion receipt attempts by sink (signing, oci, pr-comment: retried with backoff; build: a receipt that can never be built, once per step).",
 		},
 		[]string{"sink"},
 	)

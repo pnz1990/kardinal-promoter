@@ -17,10 +17,12 @@ package promotionstep_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +34,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -217,4 +220,40 @@ func TestReceiptJourney_Off(t *testing.T) {
 	var rc v1alpha1.PromotionReceipt
 	err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "bundle-1-test"}, &rc)
 	assert.True(t, apierrors.IsNotFound(err))
+}
+
+// TestReceiptJourney_CannotBuild: a receipt that can never be built (the
+// statement is over the size cap after every cut) does not hold the step:
+// it is Verified without a PromotionReceipt, with status.receiptError, one
+// ReceiptFailed AuditEvent and kardinal_receipts_failed_total{sink="build"}
+// counted once (spec 21 section 9).
+//
+// Covers RECEIPT-JOURNEY-03.
+func TestReceiptJourney_CannotBuild(t *testing.T) {
+	f := newReceiptFixture(t, true, nil)
+	var g v1alpha1.PolicyGate
+	require.NoError(t, f.c.Get(context.Background(), f.gate, &g))
+	// A counted approval's reason, which the cuts keep, past the cap (the fake
+	// client does not enforce the CRD's bounds).
+	g.Status.Approvals[0].Reason = strings.Repeat("x", v1alpha1.MaxReceiptStatementBytes+1)
+	require.NoError(t, f.c.Status().Update(context.Background(), &g))
+	before := testutil.ToFloat64(observability.ReceiptsFailedTotal.WithLabelValues("build"))
+
+	s := f.toVerified(t)
+	assert.Contains(t, s.Status.ReceiptError, "exceeds the size cap")
+	assert.Nil(t, s.Status.PendingReceipt)
+	assert.Empty(t, s.Status.Receipt)
+	var rc v1alpha1.PromotionReceipt
+	err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "bundle-1-test"}, &rc)
+	assert.True(t, apierrors.IsNotFound(err), "no receipt")
+	for i := 0; i < 3; i++ {
+		f.reconcile(t)
+	}
+	assert.Equal(t, before+1, testutil.ToFloat64(observability.ReceiptsFailedTotal.WithLabelValues("build")), "counted once")
+	var events v1alpha1.AuditEventList
+	require.NoError(t, f.c.List(context.Background(), &events, client.InNamespace("default"),
+		client.MatchingLabels{"kardinal.io/action": "ReceiptFailed"}))
+	require.Len(t, events.Items, 1)
+	assert.Equal(t, "Failure", events.Items[0].Spec.Outcome)
+	assert.Contains(t, events.Items[0].Spec.Message, "no promotion receipt")
 }

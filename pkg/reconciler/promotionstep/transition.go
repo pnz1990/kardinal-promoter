@@ -122,6 +122,7 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	ps.Status.State = state
 	ps.Status.Message = message
 	changed := base.Status.State != state
+	receiptFailed := false
 	if changed {
 		at := metav1.NewTime(r.now().UTC().Truncate(time.Second))
 		ps.Status.StateTransitionTime = &at
@@ -132,14 +133,29 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 		}
 		// The receipt is decided here, after the step statuses are closed,
 		// and stored in the same patch as Verified (the receipt outbox):
-		// the state cannot change without it. A receipt that cannot be
-		// built retries the transition.
-		if state == StateVerified && r.Receipts != nil && ps.Status.PendingReceipt == nil && ps.Status.Receipt == "" {
+		// the state cannot change without it. A read that may succeed later
+		// (the cache) retries the transition; a receipt that can never be
+		// built does not hold the step: it is Verified with
+		// status.receiptError and a ReceiptFailed record (spec 21 section 9:
+		// no promotion waits for a receipt).
+		if state == StateVerified && r.Receipts != nil && ps.Status.PendingReceipt == nil &&
+			ps.Status.Receipt == "" && ps.Status.ReceiptError == "" {
 			pending, err := r.pendingReceipt(ctx, ps)
-			if err != nil {
+			switch {
+			case err == nil:
+				ps.Status.PendingReceipt = pending
+			case receiptNeverBuilds(err):
+				ps.Status.ReceiptError = receiptErrorText(err)
+				receiptFailed = true
+				zerolog.Ctx(ctx).Warn().Err(err).Str("step", ps.Name).
+					Msg("receipt cannot be built; the step is Verified without one")
+				if e, ok := auditEntry(ps, AuditActionReceiptFailed, AuditOutcomeFailure,
+					"no promotion receipt: "+ps.Status.ReceiptError, r.now(), nil); ok {
+					ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, e)
+				}
+			default:
 				return false, err
 			}
-			ps.Status.PendingReceipt = pending
 		}
 	}
 	// Locked on the resourceVersion base was read at: a reconcile that read
@@ -163,6 +179,9 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 		return false, fmt.Errorf("patch state %s: %w", state, err)
 	}
 	closed.record()
+	if receiptFailed {
+		observability.ReceiptsFailedTotal.WithLabelValues(receiptSinkBuild).Inc()
+	}
 	return changed, nil
 }
 
@@ -363,6 +382,11 @@ func closeStepStatuses(ps *v1alpha1.PromotionStep, state string) stepObservation
 // AuditActionPRMerged is written once when a step's pull request is merged
 // (#1939).
 const AuditActionPRMerged = "PRMerged"
+
+// AuditActionReceiptFailed is written once when a step reaches Verified
+// without a PromotionReceipt because its receipt can never be built
+// (status.receiptError).
+const AuditActionReceiptFailed = "ReceiptFailed"
 
 // OutputPRMergedBy is the status.outputs key of the SCM user who merged the
 // step's PR.

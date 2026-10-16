@@ -39,7 +39,10 @@ type AuditEventSpec struct {
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
 	//               "HoldBundleMissing", "BundleRejected", "APIWrite", "VerdictRecorded",
 	//               "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
-	//               "FreezeStarted", "FreezeLifted", "PRMerged".
+	//               "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed".
+	// ReceiptFailed is written by a promotion step that reached Verified
+	// without a PromotionReceipt, because its receipt could not be built
+	// (status.receiptError).
 	// PRMerged is written by a promotion step when its pull request is merged,
 	// naming who merged it as the SCM API reports it.
 	// ApprovalRecorded and ApprovalRevoked are written by an approval gate
@@ -60,7 +63,7 @@ type AuditEventSpec struct {
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -134,7 +137,7 @@ var AuditActions = []string{
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
 	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked", "FreezeExempted",
 	"PipelinePaused", "PipelineResumed", "FreezeStarted", "FreezeLifted",
-	"PRMerged",
+	"PRMerged", "ReceiptFailed",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

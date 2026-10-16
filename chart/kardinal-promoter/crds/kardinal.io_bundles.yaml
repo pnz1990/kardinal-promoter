@@ -639,7 +639,10 @@ spec:
                                           "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
                                           "HoldBundleMissing", "BundleRejected", "APIWrite", "VerdictRecorded",
                                           "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
-                                          "FreezeStarted", "FreezeLifted", "PRMerged".
+                                          "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed".
+                            ReceiptFailed is written by a promotion step that reached Verified
+                            without a PromotionReceipt, because its receipt could not be built
+                            (status.receiptError).
                             PRMerged is written by a promotion step when its pull request is merged,
                             naming who merged it as the SCM API reports it.
                             ApprovalRecorded and ApprovalRevoked are written by an approval gate
@@ -687,6 +690,7 @@ spec:
                           - FreezeStarted
                           - FreezeLifted
                           - PRMerged
+                          - ReceiptFailed
                           type: string
                         actor:
                           description: |-

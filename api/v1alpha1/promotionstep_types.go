@@ -523,6 +523,14 @@ type PromotionStepStatus struct {
 	// Receipt names the step's PromotionReceipt once it exists.
 	// +optional
 	Receipt string `json:"receipt,omitempty"`
+
+	// ReceiptError says why the step has no PromotionReceipt: its receipt
+	// could not be built at Verified, and never will be (the statement is
+	// over the size cap after every cut, or the Bundle or Pipeline is gone).
+	// The step reached Verified anyway: no promotion waits for a receipt.
+	// +optional
+	// +kubebuilder:validation:MaxLength=1024
+	ReceiptError string `json:"receiptError,omitempty"`
 }
 
 // +kubebuilder:object:root=true
