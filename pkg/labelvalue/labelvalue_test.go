@@ -34,3 +34,15 @@ func TestFit(t *testing.T) {
 		assert.Empty(t, validation.IsValidLabelValue(labelvalue.Fit(n)), n)
 	}
 }
+
+// TestFit_Pinned: the exact output for long names. Bundles, MetricChecks,
+// AnalysisRuns and AuditEvents already carry these values, and the
+// Subscription finds its Bundles by them: a change of format would make a
+// new controller miss them (duplicate Bundles after an upgrade). The hashes
+// are sha256sum's of the names.
+func TestFit_Pinned(t *testing.T) {
+	assert.Equal(t, "kardinal-freeze-agents-e2e-testgate-freezeagentsands-40b30b602c",
+		labelvalue.Fit("kardinal-freeze-agents-e2e-testgate-freezeagentsandstoptheline-cb39f208"))
+	assert.Equal(t, "checkout-service-images-from-the-ghcr-registry-of-th-faf055a9fc",
+		labelvalue.Fit("checkout-service-images-from-the-ghcr-registry-of-the-payments-team-v2"))
+}

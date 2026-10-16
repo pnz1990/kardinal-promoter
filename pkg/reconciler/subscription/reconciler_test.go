@@ -826,3 +826,42 @@ func TestSubscriptionReconciler_LongNameFitsLabel(t *testing.T) {
 	}
 	assert.Equal(t, labelvalue.Fit(long), bundles.Items[0].Labels["kardinal.io/subscription"])
 }
+
+// TestSubscriptionReconciler_LongNameOwnerCheck: when the label selector
+// misses the Bundle of a digest (a lagging cache), the create collides with
+// it and the owner check compares its kardinal.io/subscription label with
+// labelvalue.Fit of the name: the Bundle is this Subscription's, and no
+// error or second Bundle follows.
+func TestSubscriptionReconciler_LongNameOwnerCheck(t *testing.T) {
+	long := "checkout-service-images-from-the-ghcr-registry-of-the-payments-team-v2"
+	sub := makeImageSub(long, "default", "my-pipeline", "ghcr.io/test/app")
+	miss := false
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+		WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*kardinalv1alpha1.BundleList); ok && miss {
+				return nil // the selector finds nothing
+			}
+			return cl.List(ctx, list, opts...)
+		}}).Build()
+	r := &subscription.Reconciler{
+		Client: c,
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
+			return &forcedChangeWatcher{digest: "sha256:" + strings.Repeat("b", 64), tag: "v2.0.0"}, nil
+		},
+		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	miss = true
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Subscription
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.NotEqual(t, "Error", got.Status.Phase, got.Status.Message)
+	miss = false
+	var bundles kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles, client.InNamespace("default")))
+	assert.Len(t, bundles.Items, 1)
+}

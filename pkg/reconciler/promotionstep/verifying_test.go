@@ -174,4 +174,22 @@ func TestVerifyingAnalysesLongTemplateName(t *testing.T) {
 	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
 	got, _ := reconcileHookStep(t, c, "step")
 	assert.Equal(t, "Verified", got.Status.State, got.Status.Message)
+
+	// A replaced run is counted under the fitted name, and a failure names
+	// the template in full.
+	ps = verifyingStep(time.Now(), nil, &v1alpha1.PromotionStepLive{Analyses: []v1alpha1.LiveAnalysisRun{
+		{Name: "run-old", Template: labelvalue.Fit(long), Phase: "Failed", Created: "2026-10-16T01:00:00Z"},
+		{Name: "run-new", Template: labelvalue.Fit(long), Phase: "Running", Created: "2026-10-16T02:00:00Z"}}})
+	ps.Spec.Analyses = []string{long}
+	c = newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ = reconcileHookStep(t, c, "step")
+	assert.Equal(t, promotionstep.StateVerifying, got.Status.State, got.Status.Message)
+	assert.Contains(t, got.Status.Message, "was replaced after its template changed")
+	ps = verifyingStep(time.Now(), nil, &v1alpha1.PromotionStepLive{Analyses: []v1alpha1.LiveAnalysisRun{
+		{Name: "run-a", Template: labelvalue.Fit(long), Phase: "Failed", Message: "boom"}}})
+	ps.Spec.Analyses = []string{long}
+	c = newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ = reconcileHookStep(t, c, "step")
+	assert.Equal(t, "Failed", got.Status.State)
+	assert.Contains(t, got.Status.Message, "analysis "+long+" ", "the full template name")
 }

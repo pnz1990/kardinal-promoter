@@ -88,6 +88,7 @@ func analysisResults(ps *v1alpha1.PromotionStep, inconclusivePasses bool) analys
 	for _, tmpl := range ps.Spec.Analyses {
 		// The runs carry the template in a label, fitted to 63 characters.
 		a, ok := newest[labelvalue.Fit(tmpl)]
+		a.Template = tmpl // messages name the template in full
 		if count[labelvalue.Fit(tmpl)] > 1 {
 			v.replaced = append(v.replaced, tmpl)
 		}
