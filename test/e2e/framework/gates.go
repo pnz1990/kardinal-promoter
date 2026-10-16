@@ -254,8 +254,11 @@ func (e *Env) Override(t *testing.T, g *v1alpha1.PolicyGate, o v1alpha1.PolicyGa
 	if err := e.Client.Get(ctx, client.ObjectKeyFromObject(g), &cur); err != nil {
 		t.Fatalf("get PolicyGate %s: %v", g.Name, err)
 	}
-	patch, err := json.Marshal(map[string]interface{}{"spec": map[string]interface{}{
-		"overrides": append(cur.Spec.Overrides, o)}})
+	// With the label kardinal override sets, so the actor-overrides policy
+	// checks the stamp (<release>-override-marker requires it).
+	patch, err := json.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{"labels": map[string]string{lifecycle.LabelOverrideCheck: "true"}},
+		"spec":     map[string]interface{}{"overrides": append(cur.Spec.Overrides, o)}})
 	if err != nil {
 		t.Fatal(err)
 	}

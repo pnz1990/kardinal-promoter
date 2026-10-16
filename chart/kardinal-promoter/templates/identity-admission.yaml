@@ -61,7 +61,7 @@ spec:
 {{- $instanceSpecFields := list "expression" "message" "recheckInterval" "skipPermission" "when" "selector" "approval" "approvals" "verify" "verdicts" "generated" }}
 {{- /* Gate instance metadata a caller other than kro and the controller may not change: all of it but
 managedFields, resourceVersion and generation, which the API server writes (name and namespace are immutable). */}}
-{{- $instanceMetaFields := list "labels" "ownerReferences" "finalizers" "generateName" }}
+{{- $instanceMetaFields := list "ownerReferences" "finalizers" "generateName" }}
 {{- /* The garbage collector and the namespace controller remove owner references and finalizers. */}}
 {{- $cleanup := list "system:serviceaccount:kube-system:generic-garbage-collector" "system:serviceaccount:kube-system:namespace-controller" "system:kube-controller-manager" }}
 apiVersion: admissionregistration.k8s.io/v1
@@ -177,9 +177,22 @@ spec:
         (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}).all(k,
           k == 'kardinal.io/force-recheck' ||
           (has(object.metadata.annotations) && k in object.metadata.annotations))
+    # The labels are unchanged but kardinal.io/override-check, which a write
+    # adding an override sets (kardinal override; <release>-override-marker
+    # requires it) so <release>-actor-overrides checks its stamp.
+    - name: labelsKept
+      expression: >-
+        oldObject != null &&
+        (has(object.metadata.labels) ? object.metadata.labels : {}).all(k,
+          k == 'kardinal.io/override-check' ||
+          (has(oldObject.metadata.labels) && k in oldObject.metadata.labels &&
+           object.metadata.labels[k] == oldObject.metadata.labels[k])) &&
+        (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}).all(k,
+          k == 'kardinal.io/override-check' ||
+          (has(object.metadata.labels) && k in object.metadata.labels))
     # Everything in spec but overrides, and the metadata but managedFields,
-    # resourceVersion, generation and the force-recheck annotation, are
-    # unchanged.
+    # resourceVersion, generation, the force-recheck annotation and the
+    # override-check label, are unchanged.
     - name: onlyOverrides
       expression: >-
         oldObject != null &&
@@ -191,7 +204,7 @@ spec:
         && has(object.metadata.{{ $f }}) == has(oldObject.metadata.{{ $f }}) &&
         (!has(object.metadata.{{ $f }}) || object.metadata.{{ $f }} == oldObject.metadata.{{ $f }})
         {{- end }}
-        && variables.annotationsKept
+        && variables.annotationsKept && variables.labelsKept
   validations:
     # kardinal override (spec.overrides[]) records who overrode the gate.
     # Every entry that is new, or changed, must name the requester.
@@ -696,6 +709,18 @@ spec:
         !variables.check.subresource('edit').check('update').allowed()
     - name: serverSet
       expression: "['managedFields', 'resourceVersion', 'generation']"
+    # A gate's labels are unchanged but kardinal.io/override-check, which a
+    # write adding an override sets (<release>-override-marker).
+    - name: labelsKept
+      expression: >-
+        !variables.pipeline &&
+        (has(object.metadata.labels) ? object.metadata.labels : {}).all(k,
+          k == 'kardinal.io/override-check' ||
+          (has(oldObject.metadata.labels) && k in oldObject.metadata.labels &&
+           object.metadata.labels[k] == oldObject.metadata.labels[k])) &&
+        (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}).all(k,
+          k == 'kardinal.io/override-check' ||
+          (has(object.metadata.labels) && k in object.metadata.labels))
     - name: oldOverrides
       expression: "has(oldObject.spec.overrides) ? oldObject.spec.overrides : []"
     - name: newOverrides
@@ -703,9 +728,10 @@ spec:
   validations:
     - expression: >-
         !variables.limited ||
-        (object.metadata.all(k, k in variables.serverSet ||
+        (object.metadata.all(k, k in variables.serverSet || (k == 'labels' && variables.labelsKept) ||
            (k in oldObject.metadata && object.metadata[k] == oldObject.metadata[k])) &&
-         oldObject.metadata.all(k, k in variables.serverSet || k in object.metadata))
+         oldObject.metadata.all(k, k in variables.serverSet || (k == 'labels' && variables.labelsKept) ||
+           k in object.metadata))
       messageExpression: >-
         'you may not change the metadata (labels, annotations, finalizers, ownerReferences) of this ' +
         request.resource.resource + ': you have ' +

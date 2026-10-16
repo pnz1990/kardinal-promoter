@@ -383,6 +383,10 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 			assert.Contains(t, only, "variables.annotationsKept", "annotations are compared but for kardinal.io/force-recheck")
 			continue
 		}
+		if name == "labels" {
+			assert.Contains(t, only, "variables.labelsKept", "labels are compared but for kardinal.io/override-check")
+			continue
+		}
 		assert.Contains(t, only, "object.metadata."+name+" == oldObject.metadata."+name, "metadata.%s must not change on a gate instance", name)
 	}
 }
@@ -808,14 +812,17 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	// fleets (#1835) is bound the same way.
 	policies = append(policies, "kardinal-promoter-hold-writes", "kardinal-promoter-fleets")
 	// The actor policies (actor-admission.yaml) exempt the controller too.
-	policies = append(policies, "kardinal-promoter-actor", "kardinal-promoter-actor-records", "kardinal-promoter-audit-actor")
+	policies = append(policies, "kardinal-promoter-actor", "kardinal-promoter-actor-records", "kardinal-promoter-actor-overrides",
+		"kardinal-promoter-override-marker", "kardinal-promoter-audit-actor")
 	team := bindings("--set", "controller.namespaceShard=team-b")
-	// agent-identities matches a cluster-scoped kind: one binding, without a
-	// namespace selector, in every mode.
-	ids, ok := team["kardinal-promoter-agent-identities"]
-	require.True(t, ok)
-	assert.Nil(t, ids.Spec.MatchResources)
-	delete(team, "kardinal-promoter-agent-identities")
+	// agent-identities and agent-index match cluster-scoped kinds: one
+	// binding each, without a namespace selector, in every mode.
+	for _, name := range []string{"kardinal-promoter-agent-identities", "kardinal-promoter-agent-index"} {
+		ids, ok := team[name]
+		require.True(t, ok, name)
+		assert.Nil(t, ids.Spec.MatchResources, name)
+		delete(team, name)
+	}
 	// gitops-writes (gitops-admission.yaml) matches the controller's writes
 	// to Argo CD and Flux objects in their own namespaces: one binding,
 	// cluster-wide, in every mode.
@@ -840,6 +847,7 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	delete(def, "kardinal-promoter-gitops-writes")
 	delete(def, "kardinal-promoter-agent-identities")
 	delete(def, "kardinal-promoter-freezes")
+	delete(def, "kardinal-promoter-agent-index")
 	assert.Len(t, def, 2*len(policies))
 	for _, name := range policies {
 		labelled, unlabelled := def[name], def[name+"-unlabelled"]

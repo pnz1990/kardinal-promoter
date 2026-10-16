@@ -1777,6 +1777,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 			return err
 		}
 		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+		lifecycle.MarkOverride(&gate)
 		return writer.Update(r.Context(), &gate)
 	})
 	switch {

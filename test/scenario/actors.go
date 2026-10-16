@@ -96,7 +96,6 @@ func (w *World) startActors(maxBytes int) {
 	}
 	w.T.Cleanup(stop)
 	w.api = api
-	w.identities = &airec.Reconciler{Client: w.Client, MaxIndexBytes: maxBytes}
 	w.index = &airec.IndexReconciler{Client: w.Client, Name: Release, MaxIndexBytes: maxBytes}
 	if _, err := w.index.Reconcile(w.Ctx, ctrl.Request{}); err != nil {
 		w.T.Fatalf("build the agent index: %v", err)

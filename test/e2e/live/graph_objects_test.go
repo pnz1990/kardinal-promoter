@@ -148,7 +148,8 @@ func TestGraph_GateSquatterRefused(t *testing.T) {
 	mallory := impersonating(t, e, a.ns, "mallory@example.com", nil, []string{"policygates"}, "get", "create")
 	in := metav1.NewTime(time.Now().Add(time.Hour))
 	squat := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: instance, Namespace: a.ns, Labels: map[string]string{"kardinal.io/environment": "prod"}},
+		ObjectMeta: metav1.ObjectMeta{Name: instance, Namespace: a.ns, Labels: map[string]string{"kardinal.io/environment": "prod",
+			"kardinal.io/override-check": "true"}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "false", Generated: true, Overrides: []v1alpha1.PolicyGateOverride{{
 			Reason: "pre-seeded", ExpiresAt: in, CreatedBy: "mallory@example.com"}}},
 	}

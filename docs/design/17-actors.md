@@ -297,9 +297,11 @@ it, and the validating policy below stays as defense in depth. Tracked as a foll
 
 **(c') is rejected** because of the fabricated-agent hole, and (b) because it is impossible.
 
-The policy, `<release>-actor`, matches CREATE of `bundles` and `approvals`, and UPDATE of
-`policygates` (new override entries). Its binding has
-`paramRef: {name: <release>, parameterNotFoundAction: Deny}`. The core of it:
+The policy, `<release>-actor`, matches CREATE of `bundles` and `approvals`;
+`<release>-actor-overrides`, with the same expressions, matches CREATE and UPDATE of
+`policygates` labelled `kardinal.io/override-check` (new override entries; a params-free
+`<release>-override-marker` requires the label on every write that adds one, #1936). Their
+bindings have `paramRef: {name: <release>, parameterNotFoundAction: Deny}`. The core of it:
 
 ```yaml
 variables:
@@ -377,7 +379,9 @@ status:
 - **Builder.** `pkg/reconciler/agentindex` watches AgentIdentities and writes only its own
   AgentIndex's status: a status-writing reconciler. It creates the AgentIndex if it is missing,
   at startup and whenever it is deleted. The same AgentIdentities always produce the same status
-  (keys sorted, no timestamps in entries), so a re-run writes nothing.
+  (keys sorted, no timestamps in entries), so a re-run writes nothing. The same build writes each
+  AgentIdentity's `status.ready`, patching only those that change: one evaluation per change,
+  not one per AgentIdentity (#1937).
 - **Why not a kro Graph.** A Graph with a selector `ref` over AgentIdentities and one `template`
   node could build this object. kro can do it: a namespaced Graph may list a cluster-scoped kind
   (`executor/simple.go:1259-1265`) and apply a cluster-scoped object (`compiler/context.go:279-285`),
@@ -395,10 +399,29 @@ status:
   entries keep working. The scale suite registers 2,000 AgentIdentities.
 - **Writers.** Only the controller has `update` on `agentindexes/status`. Nothing else writes the
   index (the chart's user roles do not include it).
-- **Missing index.** `parameterNotFoundAction: Deny`: if the index is deleted, stamped and
-  unstamped writes the policy matches are refused until the controller recreates it (one
-  reconcile). This fails closed. A missing CRD fails the same way, and the upgrade guide already
-  applies CRDs before the chart.
+- **Order.** One build writes the index first, then the AgentIdentity statuses that changed,
+  then a `StatusesWritten` condition on the index. Admission reads only the index, so a
+  suspension takes effect when it is written, not after a mass status change at the client's
+  rate limit (2,000 patches at 20 QPS are 100 s). The `agent.*` gates read the index and
+  `status.ready`, and wake on index events: the condition write wakes them once the statuses
+  are written. Until then a new agent is not yet registered for them (fail closed).
+- **Missing index.** `parameterNotFoundAction: Deny`: with the param missing, the dispatcher
+  refuses every write the policy matches before any expression runs, the controller's and
+  kro's included (`CollectParams`, `policy_dispatcher.go:396-398`, runs at
+  `validating/dispatcher.go:151`, before `Validate` at `:215`; matchConditions run inside
+  `Validate`, `validator.go:103-121`, so they cannot exempt anyone). In-flight gated promotions
+  would stall (#1929). So the index is never missing: the chart creates it (Helm installs the
+  kinds it does not list alphabetically, `AgentIndex` before the policies; `helm.sh/resource-policy:
+  keep`), and `<release>-agent-index` lets only the controller delete it or write its status. An
+  index not built yet is not Ready: the `check` variable then exempts kro and the controller, and
+  only checked writes wait. `Allow` was rejected: with no params the policy is not evaluated at
+  all (fail open). A missing CRD still fails closed, and the upgrade guide applies CRDs before
+  the chart.
+- **Cost.** The API server converts the whole param object, `managedFields` included, to a CEL
+  value for every request a policy with params matches (`cel/activation.go:76-77`, a JSON round
+  trip). So the policies match only what they check before the param is read (matchConstraints
+  and the object selector run before `CollectParams`), and the builder clears the index's
+  `managedFields` after each status write (#1936).
 
 ### 5.5 Who may write without a stamp
 

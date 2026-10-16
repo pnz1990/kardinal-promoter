@@ -56,9 +56,7 @@ func TestJourney8AgentActor(t *testing.T) {
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	// The controller validates the registration and builds the index.
-	_, err := (&agentidentity.Reconciler{Client: c}).Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "fixer"}})
-	require.NoError(t, err)
-	_, err = (&agentidentity.IndexReconciler{Client: c, Name: index}).Reconcile(ctx, ctrl.Request{})
+	_, err := (&agentidentity.IndexReconciler{Client: c, Name: index}).Reconcile(ctx, ctrl.Request{})
 	require.NoError(t, err)
 	var got v1alpha1.AgentIdentity
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "fixer"}, &got))

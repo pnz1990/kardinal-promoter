@@ -506,6 +506,9 @@ func probes(reg registry, idx *v1alpha1.AgentIndexStatus, sz agentSize, n int) (
 				}
 				g.Spec.Overrides = []v1alpha1.PolicyGateOverride{{Reason: "probe", ExpiresAt: metav1.NewTime(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)),
 					CreatedBy: u.GetName(), Actor: stamp}}
+				// As kardinal override writes it: labelled for the
+				// actor-overrides policy (#1936).
+				lifecycle.MarkOverride(g)
 				pr.stamps = []*v1alpha1.Actor{stamp}
 			}
 			pr.obj, err = toMap(g, "PolicyGate")
@@ -555,7 +558,8 @@ func actorVerdict(pr probe, idx *v1alpha1.AgentIndexStatus) bool {
 }
 
 // probeAgainstGo sends sz.Probes requests (probes) through the API
-// server's admission plugin serving the actor policy alone, with the index
+// server's admission plugin serving the actor policies alone (the actor,
+// actor-overrides and override-marker policies), with the index
 // as its param, and checks each verdict against actorVerdict, and that
 // every refusal is one of the policy's messages. Then it sends them again
 // with a tenth of the index: the admission cost may grow at most linearly
@@ -564,7 +568,8 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 	t.Helper()
 	c, err := scenario.RenderChart()
 	require.NoError(t, err)
-	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c, []string{scenario.Release + "-actor"}, nil), nil)
+	api, stop, err := scenario.NewAPIServer(scenario.PolicyObjects(nil, c,
+		[]string{scenario.Release + "-actor", scenario.Release + "-actor-overrides", scenario.Release + "-override-marker"}, nil), nil)
 	require.NoError(t, err)
 	t.Cleanup(stop)
 	for i := 1; i <= sz.Teams; i++ {
@@ -606,7 +611,7 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 			}
 		}
 		if err != nil {
-			assert.Contains(t, err.Error(), "ValidatingAdmissionPolicy '"+scenario.Release+"-actor'", "probe %d", i)
+			assert.Regexp(t, "ValidatingAdmissionPolicy '"+scenario.Release+"-actor(-overrides)?'", err.Error(), "probe %d", i)
 			assert.NotContains(t, err.Error(), "resulted in error", "probe %d: a refusal names its reason", i)
 		}
 	}

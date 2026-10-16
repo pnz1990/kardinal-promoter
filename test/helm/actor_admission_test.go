@@ -23,7 +23,7 @@ import (
 // actorAdmissionObjects is every admission object actor-admission.yaml renders.
 func actorAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"actor", "actor-records", "audit-actor", "agent-identities"} {
+	for _, p := range []string{"actor", "actor-records", "actor-overrides", "override-marker", "audit-actor", "agent-identities", "agent-index"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out
@@ -67,10 +67,10 @@ func asMap(t *testing.T, v interface{}) map[string]interface{} {
 
 // actorReq is one admission request for the actor policy.
 type actorReq struct {
-	resource, namespace string
-	user                string
-	groups              []string
-	object, old         map[string]interface{}
+	resource, namespace, name string
+	user                      string
+	groups                    []string
+	object, old               map[string]interface{}
 }
 
 // evalActor evaluates vap as the API server would, with params, and returns
@@ -87,7 +87,7 @@ func evalActor(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPol
 	}
 	req := map[string]interface{}{
 		"userInfo":  map[string]interface{}{"username": r.user, "groups": groups},
-		"operation": operation(r.object, r.old), "namespace": r.namespace,
+		"operation": operation(r.object, r.old), "namespace": r.namespace, "name": r.name,
 		"resource": map[string]interface{}{"group": "kardinal.io", "version": "v1alpha1", "resource": r.resource},
 	}
 	variables := map[string]interface{}{}
@@ -230,9 +230,16 @@ func TestActorAdmission(t *testing.T) {
 		{name: "18e kro creates a gate instance", req: actorReq{resource: "policygates", namespace: "payments-eu",
 			user: "system:serviceaccount:payments-eu:kardinal-graph", object: gateObj(t, "payments-eu", "prod")}, noParity: true},
 	}
+	gates := identityPolicy(t, "actor-overrides")
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := evalActor(t, vap, params, tc.req)
+			// Gate overrides are checked by their own policy (#1936), with
+			// the same expressions.
+			policy := vap
+			if tc.req.resource == "policygates" {
+				policy = gates
+			}
+			got := evalActor(t, policy, params, tc.req)
 			if tc.deny == "" {
 				assert.Empty(t, got, "admitted")
 			} else {
@@ -323,4 +330,154 @@ func TestAgentIdentityDeleteAdmission(t *testing.T) {
 	}
 	assert.False(t, admits(t, vap, nil, id(false), "cluster-admin"))
 	assert.True(t, admits(t, vap, nil, id(true), "cluster-admin"))
+}
+
+// TestActorPolicies_Match (#1936): the policies that read the agent index
+// match only what they check before the index is read. <release>-actor
+// matches new Bundles, Approvals and Verdicts; <release>-actor-overrides matches gates
+// labelled kardinal.io/override-check, so kro's re-apply of a gate instance
+// reaches neither, and both run the same expressions.
+//
+// Covers ACTOR-PERF-01.
+func TestActorPolicies_Match(t *testing.T) {
+	actorVAP, gates := identityPolicy(t, "actor"), identityPolicy(t, "actor-overrides")
+	require.Len(t, actorVAP.Spec.MatchConstraints.ResourceRules, 2)
+	r := actorVAP.Spec.MatchConstraints.ResourceRules[0]
+	assert.Equal(t, []string{"bundles", "approvals", "verdicts"}, r.Resources)
+	assert.Equal(t, []admissionregistrationv1.OperationType{"CREATE"}, r.Operations)
+	// Freeze exemptions (#1843): ChangeWindows, rarely written.
+	assert.Equal(t, []string{"changewindows"}, actorVAP.Spec.MatchConstraints.ResourceRules[1].Resources)
+	for _, rule := range append(actorVAP.Spec.MatchConstraints.ResourceRules, gates.Spec.MatchConstraints.ResourceRules...) {
+		assert.NotContains(t, rule.Resources, "policygates/status")
+	}
+	for _, rule := range actorVAP.Spec.MatchConstraints.ResourceRules {
+		assert.NotContains(t, rule.Resources, "policygates", "gates go to actor-overrides, labelled only")
+	}
+
+	sel := gates.Spec.MatchConstraints.ObjectSelector
+	require.NotNil(t, sel, "only labelled gates")
+	assert.Equal(t, []metav1.LabelSelectorRequirement{{Key: "kardinal.io/override-check", Operator: metav1.LabelSelectorOpExists}},
+		sel.MatchExpressions)
+	assert.Equal(t, []string{"policygates"}, gates.Spec.MatchConstraints.ResourceRules[0].Resources)
+	assert.Equal(t, actorVAP.Spec.Variables, gates.Spec.Variables)
+	assert.Equal(t, actorVAP.Spec.Validations, gates.Spec.Validations)
+	assert.Equal(t, actorVAP.Spec.ParamKind, gates.Spec.ParamKind)
+}
+
+// TestOverrideMarkerAdmission (#1936): a write that adds or changes an
+// override entry carries kardinal.io/override-check: "true", whoever
+// writes it but the controller; a write that adds none (kro's re-apply, an
+// expired entry removed) needs no label.
+//
+// Covers ACTOR-PERF-01.
+func TestOverrideMarkerAdmission(t *testing.T) {
+	vap := identityPolicy(t, "override-marker")
+	assert.Nil(t, vap.Spec.ParamKind, "no params: it judges every gate write at no cost that grows with the registry")
+	o := v1alpha1.PolicyGateOverride{Reason: "r", ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), CreatedBy: "alice"}
+	labelled := func(m map[string]interface{}) map[string]interface{} {
+		m["metadata"].(map[string]interface{})["labels"].(map[string]interface{})["kardinal.io/override-check"] = "true"
+		return m
+	}
+	changed := o
+	changed.Reason = "other"
+	for _, tc := range []struct {
+		name string
+		req  actorReq
+		deny bool
+	}{
+		{"adds an override without the label", actorReq{resource: "policygates", user: "alice",
+			old: gateObj(t, "x", "prod"), object: gateObj(t, "x", "prod", o)}, true},
+		{"adds an override with the label", actorReq{resource: "policygates", user: "alice",
+			old: gateObj(t, "x", "prod"), object: labelled(gateObj(t, "x", "prod", o))}, false},
+		{"changes an entry without the label", actorReq{resource: "policygates", user: "alice",
+			old: gateObj(t, "x", "prod", o), object: gateObj(t, "x", "prod", changed)}, true},
+		{"creates a gate with an override, no label", actorReq{resource: "policygates", user: "alice",
+			object: gateObj(t, "x", "prod", o)}, true},
+		{"kro re-applies an overridden gate", actorReq{resource: "policygates", user: "system:serviceaccount:x:kardinal-graph",
+			old: gateObj(t, "x", "prod", o), object: gateObj(t, "x", "prod", o)}, false},
+		{"an entry removed", actorReq{resource: "policygates", user: "alice",
+			old: gateObj(t, "x", "prod", o), object: gateObj(t, "x", "prod")}, false},
+		{"the controller", actorReq{resource: "policygates", user: controllerUser,
+			old: gateObj(t, "x", "prod"), object: gateObj(t, "x", "prod", o)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evalActor(t, vap, nil, tc.req)
+			if tc.deny {
+				assert.Contains(t, got, "kardinal.io/override-check")
+			} else {
+				assert.Empty(t, got)
+			}
+		})
+	}
+}
+
+// TestAgentIndexChart (#1929): the chart creates the release's AgentIndex,
+// kept on uninstall, so the actor policies' param exists before they are
+// bound; <release>-agent-index lets only the controller delete it or write
+// its status.
+//
+// Covers ACTOR-ADMIT-06.
+func TestAgentIndexChart(t *testing.T) {
+	var found bool
+	for _, d := range render(t, "kardinal-promoter") {
+		if d.Kind != "AgentIndex" {
+			continue
+		}
+		var idx v1alpha1.AgentIndex
+		decodeStrict(t, d, &idx)
+		assert.Equal(t, "kardinal-promoter", idx.Name)
+		assert.Equal(t, "keep", idx.Annotations["helm.sh/resource-policy"])
+		found = true
+	}
+	require.True(t, found, "the chart creates the AgentIndex")
+	vap := identityPolicy(t, "agent-index")
+	assert.Nil(t, vap.Spec.ParamKind)
+	for _, r := range vap.Spec.MatchConstraints.ResourceRules {
+		// A collection delete carries no name: resourceNames would not
+		// match it (QA on #1959). The rule checks the object's name.
+		assert.Empty(t, r.ResourceNames, "every delete is matched")
+	}
+	named := func(name string) map[string]interface{} {
+		return asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	del := actorReq{resource: "agentindexes", user: "alice", old: named("kardinal-promoter")}
+	assert.Contains(t, evalActor(t, vap, nil, del), "only kardinal writes the agent index kardinal-promoter")
+	del.user = controllerUser
+	assert.Empty(t, evalActor(t, vap, nil, del))
+	other := actorReq{resource: "agentindexes", user: "alice", old: named("another-release")}
+	assert.Empty(t, evalActor(t, vap, nil, other), "another release's index is its own release's concern")
+}
+
+// TestActorAdmission_FreezeLift: who lifts a freeze (a new
+// spec.freeze.lifted) is stamped and checked by <release>-actor like who
+// froze: an agent's lift must name its registered agent and sponsor. A lift
+// already recorded is not checked again: a person adding an exemption to a
+// freeze an agent lifted is admitted on their own stamp (QA on #1959: the
+// lifted clause of freezeStamps had no test).
+func TestActorAdmission_FreezeLift(t *testing.T) {
+	vap := identityPolicy(t, "actor")
+	ready := *actorRegistry(t)
+	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: ready})
+	fixerSA := "system:serviceaccount:ci:fixer"
+	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
+	freeze := func(lifted *v1alpha1.FreezeLift, exemptions ...v1alpha1.FreezeExemption) map[string]interface{} {
+		return asMap(t, v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-agents"},
+			Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.NewTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)),
+				Reason: "INC-1", Freeze: &v1alpha1.ChangeWindowFreeze{Actors: v1alpha1.FreezeAgents, CreatedBy: "alice",
+					Actor: &v1alpha1.Actor{Kind: "human", Principal: "alice"}, Lifted: lifted, Exemptions: exemptions}}})
+	}
+	forged := *fixer
+	forged.Sponsor = "mallory"
+	assert.Contains(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: fixerSA,
+		old: freeze(nil), object: freeze(&v1alpha1.FreezeLift{By: fixerSA, Actor: &forged})}),
+		"actor must be {kind: agent", "an agent's lift with a forged sponsor")
+	assert.Empty(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: fixerSA,
+		old: freeze(nil), object: freeze(&v1alpha1.FreezeLift{By: fixerSA, Actor: fixer})}), "an agent's own lift")
+
+	lifted := &v1alpha1.FreezeLift{By: fixerSA, Actor: fixer}
+	ex := v1alpha1.FreezeExemption{Namespace: "payments-eu", Pipeline: "checkout", Reason: "hotfix", CreatedBy: "bob",
+		Actor: &v1alpha1.Actor{Kind: "human", Principal: "bob"}, ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))}
+	assert.Empty(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: "bob",
+		old: freeze(lifted), object: freeze(lifted, ex)}), "the recorded lift is not checked against bob")
 }

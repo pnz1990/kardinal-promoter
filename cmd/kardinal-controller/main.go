@@ -177,6 +177,10 @@ func main() {
 		"Longest a freeze exemption (kardinal override --freeze) counts, from when the controller first saw it; "+
 			"an exemption ends at the earlier of its expiresAt and this cap (Helm controller.freezeExemptionMaxMinutes).")
 	var agentIndexName string
+	var agentIndexFromChart bool
+	flag.BoolVar(&agentIndexFromChart, "agent-index-from-chart", false,
+		"The chart creates the --agent-index AgentIndex: the controller waits for it instead of creating it, "+
+			"so a Helm install never finds it already there. Set by the chart.")
 	flag.StringVar(&agentIndexName, "agent-index", "",
 		"Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the "+
 			"Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). "+
@@ -721,10 +725,8 @@ func main() {
 	actors := &actorWriter{}
 	if agentIndexName != "" {
 		actors.source = &actor.Source{Reader: mgr.GetClient(), Name: agentIndexName}
-		if err := (&agentidentityrecon.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
-			logger.Fatal().Err(err).Msg("unable to set up AgentIdentityReconciler")
-		}
-		if err := (&agentidentityrecon.IndexReconciler{Client: mgr.GetClient(), Name: agentIndexName}).SetupWithManager(mgr); err != nil {
+		if err := (&agentidentityrecon.IndexReconciler{Client: mgr.GetClient(), Name: agentIndexName,
+			ChartCreated: agentIndexFromChart, Guard: agentIndexName + "-agent-index", Reader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
 			logger.Fatal().Err(err).Msg("unable to set up AgentIndexReconciler")
 		}
 	} else {

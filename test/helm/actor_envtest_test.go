@@ -11,13 +11,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,7 +41,8 @@ import (
 // an AgentIndex built by the controller's own reconcilers, and impersonated
 // users: forged and missing stamps, kind claims, sponsors, scope, suspension,
 // conflicts, group agents, the controller exemption, via, overrides,
-// audit-actor, deletion without suspension, a stamp added on update; and the
+// audit-actor, deletion without suspension, a stamp added on update; the
+// index guarded against deletes and status writes (#1929); and the
 // registry failing closed while the index is missing, written without status
 // or not Ready. (Found by QA on #1857, F1 and F3.)
 func TestActorsOnAPIServer(t *testing.T) {
@@ -83,17 +88,10 @@ func TestActorsOnAPIServer(t *testing.T) {
 	mk("late", "carol", scope, false, sa("ci", "fixer"), sa("ci", "late"))
 	mk("grpb", "dave", v1alpha1.AgentScope{Namespaces: []string{"*"}}, false, v1alpha1.AgentSubject{Kind: "Group", Name: "oidc:agents-b"})
 
-	idxR := &agentidentity.IndexReconciler{Client: admin, Name: "kardinal-promoter"}
-	idR := &agentidentity.Reconciler{Client: admin}
+	idxR := &agentidentity.IndexReconciler{Client: asController(t, cfg, sch), Name: "kardinal-promoter"}
 	build := func() {
 		_, err := idxR.Reconcile(ctx, reconcile.Request{})
 		require.NoError(t, err)
-		var l v1alpha1.AgentIdentityList
-		require.NoError(t, admin.List(ctx, &l))
-		for _, id := range l.Items {
-			_, err := idR.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: id.Name}})
-			require.NoError(t, err)
-		}
 	}
 	build()
 	// Determinism / idempotency: a second build writes nothing.
@@ -192,14 +190,39 @@ func TestActorsOnAPIServer(t *testing.T) {
 		require.NoError(t, as(controllerUser).Create(ctx, g))
 		return g
 	}
+	// An override write carries kardinal.io/override-check (kardinal
+	// override sets it), so the actor-overrides policy checks it.
 	override := func(c client.Client, g *v1alpha1.PolicyGate, by string, a *v1alpha1.Actor) error {
 		var cur v1alpha1.PolicyGate
 		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(g), &cur))
 		cur.Spec.Overrides = append(cur.Spec.Overrides, v1alpha1.PolicyGateOverride{Reason: "qa", CreatedBy: by,
 			ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour)), Actor: a})
+		cur.Labels["kardinal.io/override-check"] = "true"
 		return c.Update(ctx, &cur)
 	}
 	gt, gp := gate("g-test", "test"), gate("g-prod", "prod")
+	// Without the label an override is refused by everyone but the
+	// controller, so no override escapes the check (#1936).
+	{
+		var cur v1alpha1.PolicyGate
+		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(gp), &cur))
+		cur.Spec.Overrides = append(cur.Spec.Overrides, v1alpha1.PolicyGateOverride{Reason: "qa", CreatedBy: "alice",
+			ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+		err := as("alice").Update(ctx, &cur)
+		require.Error(t, err, "18 override without the label")
+		require.Contains(t, err.Error(), "kardinal.io/override-check")
+		cur.Spec.Message = "re-applied by kro"
+		cur.Spec.Overrides = nil
+		require.NoError(t, as("system:serviceaccount:payments-a:kardinal-graph").Update(ctx, &cur),
+			"18 kro's re-apply of an unlabelled gate is not checked")
+		// The override-check label is the one label anyone with an override
+		// may add (gate-overrides keeps the others).
+		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(gp), &cur))
+		cur.Spec.Overrides = append(cur.Spec.Overrides, v1alpha1.PolicyGateOverride{Reason: "qa", CreatedBy: "alice",
+			ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+		cur.Labels["kardinal.io/override-check"], cur.Labels["kardinal.io/environment"] = "true", "test"
+		require.Error(t, as("alice").Update(ctx, &cur), "18 another label changed with the override")
+	}
 	require.NoError(t, override(as(fx), gt, fx, ag(fx, "fixer", "alice")), "18 override correct")
 	require.Error(t, override(as(fx), gt, fx, ag(fx, "fixer", "mallory")), "18 override forged sponsor")
 	require.Error(t, override(as(fx), gt, fx, nil), "18 override unstamped agent")
@@ -312,8 +335,23 @@ func TestActorsOnAPIServer(t *testing.T) {
 		require.Error(t, err, "22 add stamp on update")
 		t.Logf("ok 22 %v", err)
 	}
-	// 23 index deleted: fail closed, even for the controller.
-	require.NoError(t, admin.Delete(ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}))
+	// 23 the index cannot be deleted, nor its status written, but by the
+	// controller (#1929); a cluster admin who removes that guard and
+	// deletes it gets a registry that fails closed, even for the
+	// controller.
+	waitIndexGuard(t, admin)
+	err = admin.Delete(ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
+	require.Error(t, err, "23 the index delete is refused")
+	require.Contains(t, err.Error(), "only kardinal writes the agent index")
+	var idx v1alpha1.AgentIndex
+	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	idx.Status.Users = map[string]v1alpha1.AgentIndexEntry{"mallory": {Agent: "fixer", Sponsor: "alice"}}
+	require.Error(t, admin.Status().Update(ctx, &idx), "23 an index status write is refused")
+	require.NoError(t, admin.Delete(ctx, &admissionregistrationv1.ValidatingAdmissionPolicyBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter-agent-index"}}))
+	require.Eventually(t, func() bool {
+		return admin.Delete(ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}) == nil
+	}, 30*time.Second, 500*time.Millisecond, "23 without the guard the index can be deleted")
 	require.Eventually(t, func() bool {
 		return as("alice").Create(ctx, bundle("payments-a", "checkout", nil)) != nil
 	}, 30*time.Second, 500*time.Millisecond, "23 missing index denies")
@@ -406,6 +444,9 @@ func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 		require.NoError(t, admin.Create(ctx, &obj), d.Name)
 	}
 	require.NoError(t, admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}))
+	require.NoError(t, admin.Create(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "all-admin"},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
+		Subjects: []rbacv1.Subject{{Kind: "Group", APIGroup: rbacv1.GroupName, Name: "system:authenticated"}}}))
 	for i := 0; i < 700; i++ {
 		subs := make([]v1alpha1.AgentSubject, 16)
 		for j := range subs {
@@ -415,16 +456,15 @@ func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 			Spec: v1alpha1.AgentIdentitySpec{Subjects: subs, Sponsor: v1alpha1.AgentSponsor{User: "alice@example.com"},
 				Scope: v1alpha1.AgentScope{Namespaces: []string{"team-*"}}}}))
 	}
-	idxR := &agentidentity.IndexReconciler{Client: admin, Name: "kardinal-promoter"}
+	idxR := &agentidentity.IndexReconciler{Client: asController(t, cfg, sch), Name: "kardinal-promoter"}
 	_, err = idxR.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err, "the full index is written: it is small")
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
-	require.Len(t, idx.Status.Conditions, 1)
-	require.Equal(t, metav1.ConditionFalse, idx.Status.Conditions[0].Status)
-	require.Equal(t, "IndexFull", idx.Status.Conditions[0].Reason)
-	_, err = (&agentidentity.Reconciler{Client: admin}).Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: "agent-0000"}})
-	require.NoError(t, err)
+	ready := meta.FindStatusCondition(idx.Status.Conditions, agentidentity.ConditionReady)
+	require.NotNil(t, ready)
+	require.Equal(t, metav1.ConditionFalse, ready.Status)
+	require.Equal(t, "IndexFull", ready.Reason)
 	var id v1alpha1.AgentIdentity
 	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "agent-0000"}, &id))
 	require.False(t, id.Status.Ready)
@@ -442,4 +482,136 @@ func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 			Spec: v1alpha1.BundleSpec{Pipeline: "p", Type: "image"}})
 		return err != nil && strings.Contains(err.Error(), "agent index is not ready")
 	}, 30*time.Second, 500*time.Millisecond, "a full index fails closed")
+}
+
+// asController is a client of cfg acting as the release's controller, the
+// only writer of the AgentIndex status (<release>-agent-index).
+// waitIndexGuard waits until the API server enforces the
+// <release>-agent-index guard: a dry-run delete of the index by c is
+// refused. Each policy and binding loads on its own, so another policy
+// refusing writes does not mean the guard does yet, and a dry run cannot
+// delete the index if it does not.
+func waitIndexGuard(t *testing.T, c client.Client) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		err := c.Delete(context.Background(), &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}},
+			client.DryRunAll)
+		return err != nil && strings.Contains(err.Error(), "only kardinal writes the agent index")
+	}, 30*time.Second, 200*time.Millisecond, "the agent-index guard is enforced")
+}
+
+func asController(t *testing.T, cfg *rest.Config, sch *runtime.Scheme) client.Client {
+	t.Helper()
+	c := rest.CopyConfig(cfg)
+	c.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + releaseNS + ":kardinal-promoter"}
+	cl, err := client.New(c, client.Options{Scheme: sch})
+	require.NoError(t, err)
+	return cl
+}
+
+// helmInstallOrder sorts rendered documents as Helm installs kinds it does
+// not list (helm.sh/helm/v3 pkg/releaseutil kind_sorter.go lessByKind):
+// alphabetically by kind, keeping the order within a kind. AgentIndex,
+// ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding are not
+// listed.
+func helmInstallOrder(docs []renderedDoc) []renderedDoc {
+	out := append([]renderedDoc(nil), docs...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
+// TestActorIndexAvailabilityOnAPIServer (#1929): installed as Helm installs
+// the chart (the AgentIndex before the policies), and before the controller
+// has built the index, the actor policy admits what it does not check, kro's
+// gate instances and the controller's own versions, and refuses only what it
+// checks, with "agent index is not ready". The API server would otherwise
+// refuse every write the policy matches ("no params found") while the index
+// is missing, the controller's and kro's included. Once the controller has
+// built the index, people pass again; nobody but the controller may delete
+// it or write its status.
+//
+// Covers ACTOR-ADMIT-06.
+func TestActorIndexAvailabilityOnAPIServer(t *testing.T) {
+	require.NotEmpty(t, os.Getenv("KUBEBUILDER_ASSETS"))
+	env := &envtest.Environment{CRDDirectoryPaths: []string{filepath.Join(repoRoot(t), "config", "crd", "bases")}, ErrorIfCRDPathMissing: true}
+	cfg, err := env.Start()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.Stop() })
+	sch := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(sch))
+	require.NoError(t, v1alpha1.AddToScheme(sch))
+	admin, err := client.New(cfg, client.Options{Scheme: sch})
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}))
+	require.NoError(t, admin.Create(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "all-admin"},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
+		Subjects: []rbacv1.Subject{{Kind: "Group", APIGroup: rbacv1.GroupName, Name: "system:authenticated"}}}))
+	as := func(user string) client.Client {
+		c := rest.CopyConfig(cfg)
+		c.Impersonate = rest.ImpersonationConfig{UserName: user}
+		cl, err := client.New(c, client.Options{Scheme: sch})
+		require.NoError(t, err)
+		return cl
+	}
+	sawIndex := false
+	for _, d := range helmInstallOrder(render(t, "kardinal-promoter")) {
+		switch d.Kind {
+		case "AgentIndex":
+			sawIndex = true
+		case "ValidatingAdmissionPolicy", "ValidatingAdmissionPolicyBinding":
+		default:
+			continue
+		}
+		var obj unstructured.Unstructured
+		require.NoError(t, json.Unmarshal(d.raw, &obj.Object))
+		require.NoError(t, admin.Create(ctx, &obj), d.Kind+"/"+d.Name)
+	}
+	require.True(t, sawIndex, "the chart creates the AgentIndex")
+
+	controllerUser := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
+	kro := as("system:serviceaccount:team-a:kardinal-graph")
+	n := 0
+	gate := func() *v1alpha1.PolicyGate {
+		n++
+		return &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("g%d", n), Namespace: "team-a",
+			Labels: map[string]string{"kardinal.io/pipeline": "checkout", "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
+	}
+	bundle := func() *v1alpha1.Bundle {
+		n++
+		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("b%d", n), Namespace: "team-a"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "checkout", Type: "image"}}
+	}
+	// The policies load: a person's version waits for the index.
+	require.Eventually(t, func() bool {
+		err := as("alice").Create(ctx, bundle())
+		return err != nil && strings.Contains(err.Error(), "agent index is not ready")
+	}, 30*time.Second, 500*time.Millisecond, "a checked write waits for the index")
+	g := gate()
+	require.NoError(t, kro.Create(ctx, g), "kro creates a gate instance before the index is built")
+	g.Spec.Message = "re-applied"
+	require.NoError(t, kro.Update(ctx, g), "and re-applies it")
+	require.NoError(t, as(controllerUser).Create(ctx, bundle()), "the controller creates its own version (a rollback)")
+
+	waitIndexGuard(t, admin)
+	var idx v1alpha1.AgentIndex
+	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	err = admin.Delete(ctx, &idx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "only kardinal writes the agent index")
+	idx.Status.Users = map[string]v1alpha1.AgentIndexEntry{"system:serviceaccount:ci:mallory": {Agent: "fixer", Sponsor: "alice"}}
+	require.Error(t, admin.Status().Update(ctx, &idx), "nobody but the controller writes the index status")
+	assert.Equal(t, "keep", idx.Annotations["helm.sh/resource-policy"], "helm uninstall leaves it to the guard")
+
+	// The controller builds it; people pass again.
+	_, err = (&agentidentity.IndexReconciler{Client: as(controllerUser), Name: "kardinal-promoter"}).Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	// Its managedFields are cleared after the write (#1936): the API server
+	// converts the whole param for every request a policy with params
+	// matches, managedFields included.
+	require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
+	assert.Empty(t, idx.ManagedFields, "the index's managedFields are cleared")
+	require.Eventually(t, func() bool { return as("alice").Create(ctx, bundle()) == nil },
+		30*time.Second, 500*time.Millisecond, "a person's version once the index is built")
 }
