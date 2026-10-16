@@ -159,7 +159,7 @@ func (b *BitbucketProvider) findExistingPR(ctx context.Context, workspace, repoS
 			return pr.Links.HTML.Href, pr.ID, nil
 		}
 	}
-	return "", 0, fmt.Errorf("bitbucket PR exists for branch %s into %s but could not find it in open PRs", sourceBranch, destBranch)
+	return "", 0, fmt.Errorf("bitbucket PR exists for branch %s into %s but could not find it in open PRs: %w", sourceBranch, destBranch, errNoOpenPR)
 }
 
 // isBitbucketExistingPRErr returns true when Bitbucket rejected PR creation because

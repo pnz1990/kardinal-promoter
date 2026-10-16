@@ -129,6 +129,12 @@ type StepState struct {
 	// the creating user. Empty when it is not recorded.
 	CreatedBy string
 
+	// PromotionCreatedAt is when the PromotionStep was created. A PR this
+	// promotion opened is not older, so a step that looks up its own merged
+	// PR by its head branch (open-pr, #2065) does not adopt the PR of an
+	// earlier Bundle with the same name. Zero means unknown.
+	PromotionCreatedAt time.Time
+
 	// RollbackFrom names the Bundle a rollback Bundle replaces: its
 	// kardinal.io/rollback-from annotation. Empty for a promotion.
 	RollbackFrom string

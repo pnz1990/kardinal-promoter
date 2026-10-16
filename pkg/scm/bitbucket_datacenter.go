@@ -227,7 +227,7 @@ func (b *BitbucketDCProvider) findExistingPR(ctx context.Context, repo, head, ba
 		}
 		start = res.NextPageStart
 	}
-	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs", head, base)
+	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs: %w", head, base, errNoOpenPR)
 }
 
 // getPR reads one pull request.

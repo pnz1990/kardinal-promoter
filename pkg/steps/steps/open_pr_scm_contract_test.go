@@ -87,6 +87,9 @@ func TestOpenPRStep_BitbucketCloud(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, requests := fakeSCMAPI(t, func(r *http.Request) (int, string) {
+				if r.Method == http.MethodGet && r.URL.Path == path {
+					return http.StatusOK, `{"values":[]}` // no open PR of the branch yet
+				}
 				if r.Method != http.MethodPost || r.URL.Path != path {
 					return http.StatusNotFound, `{"type":"error","error":{"message":"Resource not found"}}`
 				}
@@ -107,7 +110,10 @@ func TestOpenPRStep_BitbucketCloud(t *testing.T) {
 			assert.NotContains(t, result.Message, "adding labels failed")
 
 			reqs := requests()
-			require.Len(t, reqs, 1, "one PR create and no label request")
+			require.Len(t, reqs, 2, "the lookup of an open PR, one PR create and no label request")
+			assert.Equal(t, http.MethodGet, reqs[0].Method, "open-pr looks for an open PR of its branch first")
+			assert.Equal(t, path, reqs[0].Path)
+			reqs = reqs[1:]
 			assert.Equal(t, http.MethodPost, reqs[0].Method)
 			assert.Equal(t, path, reqs[0].Path)
 			assert.Equal(t, "Bearer bb-access-token", reqs[0].Auth)
@@ -160,6 +166,8 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, requests := fakeSCMAPI(t, func(r *http.Request) (int, string) {
 				switch {
+				case r.Method == http.MethodGet && r.URL.Path == prs:
+					return http.StatusOK, `{"value":[]}` // no active PR of the branch yet
 				case r.Method == http.MethodPost && r.URL.Path == prs:
 					return http.StatusCreated, `{"pullRequestId":12,"status":"active",` +
 						`"repository":{"name":"web-app","project":{"name":"Web"},"webUrl":"https://dev.azure.com/contoso/Web/_git/web-app"}}`
@@ -182,7 +190,9 @@ func TestOpenPRStep_AzureDevOps(t *testing.T) {
 			assert.NotContains(t, result.Message, "adding labels failed")
 
 			reqs := requests()
-			require.Len(t, reqs, 1+len(tt.wantLabels))
+			require.Len(t, reqs, 2+len(tt.wantLabels))
+			assert.Equal(t, http.MethodGet, reqs[0].Method, "open-pr looks for an active PR of its branch first")
+			reqs = reqs[1:]
 			assert.Equal(t, prs, reqs[0].Path)
 			assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte(":ado-pat")), reqs[0].Auth)
 			assert.Equal(t, tt.wantTitle, reqs[0].Body["title"])

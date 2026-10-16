@@ -165,7 +165,7 @@ func (a *AzureDevOpsProvider) findExistingPR(ctx context.Context, org, project, 
 		return "", 0, fmt.Errorf("list ADO PRs to find existing for %s: %w", head, err)
 	}
 	if len(result.Value) == 0 {
-		return "", 0, fmt.Errorf("ADO PR already exists for branch %s into %s but could not find it in active PRs", head, base)
+		return "", 0, fmt.Errorf("ADO PR already exists for branch %s into %s but could not find it in active PRs: %w", head, base, errNoOpenPR)
 	}
 	pr := result.Value[0]
 	return a.prWebURL(pr.Repository.WebURL, org, project, repoName, pr.PullRequestID), pr.PullRequestID, nil

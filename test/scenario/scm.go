@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -51,6 +52,9 @@ type PR struct {
 	Reviewers []string
 	Assignees []string
 	AutoMerge bool
+	// OpenedAt and MergedAt are when the PR was opened and merged, as the
+	// SCM reports them (created_at, merged_at).
+	OpenedAt, MergedAt time.Time
 }
 
 // SCMServer fakes the pull request API of GitHub, GitLab or Forgejo over
@@ -144,7 +148,7 @@ func (s *SCMServer) Merge(repo string, number int) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p.State, p.MergeSHA = "merged", sha
+	p.State, p.MergeSHA, p.MergedAt = "merged", sha, time.Now().UTC()
 	return nil
 }
 
@@ -244,7 +248,8 @@ func (s *SCMServer) openPR(repo, title, body, head, base string) (*PR, bool) {
 			return p, false
 		}
 	}
-	p := &PR{Repo: repo, Number: s.nextNumber(repo), Title: title, Body: body, Head: head, Base: base, State: "open"}
+	p := &PR{Repo: repo, Number: s.nextNumber(repo), Title: title, Body: body, Head: head, Base: base, State: "open",
+		OpenedAt: time.Now().UTC()}
 	s.mu.Unlock()
 	p.HeadSHA = s.headSHA(repo, head)
 	s.mu.Lock()
@@ -268,7 +273,12 @@ func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
 	for _, l := range p.Labels {
 		labels = append(labels, map[string]interface{}{"name": l, "id": s.labelID(l)})
 	}
+	var mergedAt interface{}
+	if p.State == "merged" {
+		mergedAt = p.MergedAt.Format(time.RFC3339)
+	}
 	return map[string]interface{}{
+		"created_at": p.OpenedAt.Format(time.RFC3339), "merged_at": mergedAt,
 		"number": p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
 		"merge_commit_sha": p.MergeSHA, "node_id": fmt.Sprintf("PR_%d", p.Number), "title": p.Title, "body": p.Body,
 		"head":   map[string]interface{}{"ref": p.Head, "label": p.Head, "sha": p.HeadSHA},
@@ -497,6 +507,7 @@ func (s *SCMServer) mrJSON(p *PR) map[string]interface{} {
 	state := map[string]string{"open": "opened", "closed": "closed", "merged": "merged"}[p.State]
 	return map[string]interface{}{
 		"iid": p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
+		"created_at":    p.OpenedAt.Format(time.RFC3339),
 		"source_branch": p.Head, "target_branch": p.Base, "sha": p.HeadSHA, "merge_commit_sha": p.MergeSHA,
 		"labels": p.Labels, "detailed_merge_status": "mergeable", "reviewers": []interface{}{}, "assignees": []interface{}{},
 	}

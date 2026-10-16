@@ -1321,6 +1321,7 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		Verifications:        r.collectVerifications(ctx, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
+		PromotionCreatedAt:   ps.CreationTimestamp.Time,
 	}
 	if ps.Spec.Live != nil {
 		state.LiveRenders = ps.Spec.Live.Renders

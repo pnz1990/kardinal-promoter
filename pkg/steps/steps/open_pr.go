@@ -45,22 +45,28 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "SCM provider not configured"}, nil
 	}
 
-	if noChanges(state) {
-		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}, nil
-	}
-
-	// Idempotency: skip if PR already opened.
+	// Idempotency: skip if PR already opened. A PR this promotion recorded
+	// is its change even when a later run finds the base branch already
+	// has it (the PR merged): wait-for-merge records the merge (#2065).
 	if prURL, ok := state.Outputs["prURL"]; ok && prURL != "" {
+		out := map[string]string{"prURL": prURL}
+		if noChanges(state) {
+			out[outputNoChanges] = "false"
+		}
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepSuccess,
 			Message: "PR already open: " + prURL,
-			Outputs: map[string]string{"prURL": prURL},
+			Outputs: out,
 		}, nil
 	}
 
 	branch, ok := state.Outputs["branch"]
 	if !ok || branch == "" {
 		branch = PRBranch(state.Namespace, state.BundleName, state.Environment.Name)
+	}
+
+	if noChanges(state) {
+		return adoptMergedPR(ctx, state, branch)
 	}
 
 	data := scm.PRBody{
@@ -131,7 +137,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
 
-	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, rendered.Title, rendered.Body, branch, state.Git.Branch)
+	prURL, prNum, adopted, err := openOrAdoptPR(ctx, state, repo, rendered.Title, rendered.Body, branch)
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
@@ -150,6 +156,9 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		}
 	}
 	message := fmt.Sprintf("PR #%d: %s", prNum, prURL)
+	if adopted {
+		message += " (already open, from an earlier run of this promotion)"
+	}
 	outputs := map[string]string{
 		"prURL":    prURL,
 		"prNumber": fmt.Sprintf("%d", prNum),
@@ -181,6 +190,85 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		Status:  parentsteps.StepSuccess,
 		Message: message,
 		Outputs: outputs,
+	}, nil
+}
+
+// openOrAdoptPR returns the open PR of branch into the base branch when
+// there is one, adopted, and otherwise opens it. A step re-run after a
+// crash then adopts the PR it opened without relying on the SCM to refuse a
+// second one (Bitbucket Cloud updates the existing PR instead, overwriting
+// its title and description). The SCM's refusal is still handled, by
+// adopting, for a PR created between the lookup and OpenPR.
+func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, bool, error) {
+	if finder, ok := state.SCM.(scm.OpenPRFinder); ok {
+		prURL, prNum, found, err := finder.FindOpenPR(ctx, repo, branch, state.Git.Branch)
+		switch {
+		case errors.Is(err, errors.ErrUnsupported):
+		case err != nil:
+			return "", 0, false, fmt.Errorf("look up an open PR of %s: %w", branch, err)
+		case found:
+			return prURL, prNum, true, nil
+		}
+	}
+	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+	return prURL, prNum, false, err
+}
+
+// prClockSkew is how much older than the PromotionStep a PR adoptMergedPR
+// adopts may look: the SCM's clock and the cluster's can differ.
+const prClockSkew = time.Minute
+
+// adoptMergedPR handles a run of a PR-opening step whose git-commit found
+// nothing to commit (#2065). The base branch already having the change is
+// not, by itself, a promotion without a PR: an earlier run may have opened
+// this promotion's PR (its head branch is deterministic) and a reviewer
+// merged it before the step recorded it, when the controller crashed after
+// open-pr. Such a PR is adopted: its number and URL become the step's
+// outputs, so wait-for-merge hands it to the PRStatus, which records the
+// merge and the SCM-verified merger like any other (the PRMerged
+// AuditEvent, #1939). Without such a PR the step has no changes, as
+// before. A lookup that fails is retried, never taken as "no PR".
+func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch string) (parentsteps.StepResult, error) {
+	noPR := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}
+	finder, ok := state.SCM.(scm.MergedPRFinder)
+	if !ok {
+		return noPR, nil
+	}
+	repo, err := scm.RepoFromURL(state.Pipeline.Git.URL)
+	if err != nil {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+	}
+	var since time.Time
+	if !state.PromotionCreatedAt.IsZero() {
+		since = state.PromotionCreatedAt.Add(-prClockSkew)
+	}
+	pr, err := finder.FindMergedPR(ctx, repo, branch, state.Git.Branch, since)
+	switch {
+	case errors.Is(err, errors.ErrUnsupported):
+		return noPR, nil
+	case err != nil && scm.IsPermanentError(err):
+		msg := fmt.Sprintf("nothing to commit; looking up a merged PR of %s failed: %s", branch, permanentSCMReason(err))
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("%s: %v", msg, err)},
+			parentsteps.Permanent(fmt.Errorf("%s: %w", msg, err))
+	case err != nil:
+		return parentsteps.StepResult{
+			Status:       parentsteps.StepPending,
+			Message:      fmt.Sprintf("nothing to commit; looking up a merged PR of %s failed, retrying in %s: %v", branch, scmRetryInterval, err),
+			RequeueAfter: scmRetryInterval,
+		}, nil
+	case pr == nil:
+		return noPR, nil
+	}
+	zerolog.Ctx(ctx).Info().Int("pr", pr.Number).Str("branch", branch).
+		Msg("nothing to commit: this promotion's PR was merged before the step recorded it; adopting it")
+	return parentsteps.StepResult{
+		Status:  parentsteps.StepSuccess,
+		Message: fmt.Sprintf("PR #%d: %s (opened by an earlier run of this promotion, already merged)", pr.Number, pr.URL),
+		Outputs: map[string]string{
+			"prURL":         pr.URL,
+			"prNumber":      fmt.Sprintf("%d", pr.Number),
+			outputNoChanges: "false",
+		},
 	}, nil
 }
 

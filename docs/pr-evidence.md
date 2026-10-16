@@ -359,3 +359,17 @@ commit at the head of the branch and counts the change as its own, not as an env
 that already had the version. It looks at the head commit only: if another commit landed on
 top in the meantime, the retry records `noChanges` and the deployment metrics miss that one
 deployment.
+
+A `pr-review` promotion retried the same way keeps its pull request too. Its PR branch is
+`kardinal/<namespace hash>/<bundle>/<environment>`, so a retry finds the PR an earlier attempt
+opened:
+
+- **Still open:** open-pr adopts it before opening one, and opens no second PR.
+- **Already merged** (the controller restarted after opening it, and a reviewer merged it in
+  between): the retry finds nothing to commit, because the base branch has the change. It then
+  looks up the merged PR of its branch and records the merge as for any PR: the step's outputs
+  name the PR, its merge commit and who merged it (asked of the SCM), and the `PRMerged`
+  AuditEvent is written. Only a PR opened after the PromotionStep was created, less a minute
+  for clock skew, counts, so an earlier Bundle of the same name is not taken for this one.
+- **Neither:** the step records `noChanges`, as before. A lookup that fails is retried; it is
+  never taken as "no PR".

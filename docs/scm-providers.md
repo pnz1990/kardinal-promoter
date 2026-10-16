@@ -36,6 +36,12 @@ Bitbucket Cloud, Azure DevOps and Bitbucket Data Center are newer and less teste
 On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
 PRs by their `[kardinal] Rollback` title instead.
 
+Before it opens a PR, kardinal looks for an open PR from its branch into the target branch
+and adopts it, on every provider. It never relies on the SCM refusing a second one:
+Bitbucket Cloud updates the existing PR instead, which would overwrite its title and
+description. A PR that another run opens between the lookup and the create is still adopted
+when the SCM refuses the duplicate.
+
 SCM webhooks are delivered to `POST /webhook/scm` on the webhook port (`8083`). Without
 `--webhook-secret` the endpoint rejects every event with `401`, and merges are detected by
 PR status polling instead.

@@ -143,7 +143,7 @@ func (g *GitHubProvider) findExistingPR(ctx context.Context, repo, head, base st
 			return pr.HTMLURL, pr.Number, nil
 		}
 	}
-	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs", head, base)
+	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs: %w", head, base, errNoOpenPR)
 }
 
 // isExistingPRErr returns true when the GitHub API rejected the PR creation with 422

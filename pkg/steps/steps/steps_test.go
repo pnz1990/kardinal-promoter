@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -374,7 +376,10 @@ func TestWaitForMergeStep_Merged(t *testing.T) {
 
 	result, err := step.Execute(context.Background(), state)
 	require.NoError(t, err)
-	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	// Pending: the step moves to WaitingForMerge, where the PRStatus records
+	// the merge and who merged it (#2065), not past it.
+	assert.Equal(t, parentsteps.StepPending, result.Status)
+	assert.Equal(t, "PR #42 merged; recording the merge", result.Message)
 }
 
 func TestWaitForMergeStep_ClosedUnmerged(t *testing.T) {
@@ -929,8 +934,10 @@ func TestEngine_ExecuteFrom_AllSteps(t *testing.T) {
 
 	nextIdx, result, err := eng2.ExecuteFrom(context.Background(), state, 0)
 	require.NoError(t, err)
-	assert.Equal(t, parentsteps.StepSuccess, result.Status)
-	assert.Equal(t, len(eng2.StepNames()), nextIdx, "should complete all steps")
+	// A merged PR stops the sequence at wait-for-merge (Pending): the
+	// reconciler records the merge from the PRStatus, then runs the rest.
+	assert.Equal(t, parentsteps.StepPending, result.Status)
+	assert.Equal(t, 4, nextIdx, "runs every step up to wait-for-merge")
 	assert.Equal(t, "https://github.com/owner/repo/pull/1", state.Outputs["prURL"])
 }
 
@@ -1338,4 +1345,59 @@ func TestUpdateStepTypeInSequence(t *testing.T) {
 			}
 		}
 	}
+}
+
+// finderSCM is mockSCMProvider that finds a merged PR by its head branch.
+type finderSCM struct {
+	*mockSCMProvider
+	pr  *scm.MergedPR
+	err error
+}
+
+func (f *finderSCM) FindMergedPR(context.Context, string, string, string, time.Time) (*scm.MergedPR, error) {
+	return f.pr, f.err
+}
+
+// TestOpenPR_NothingToCommit (#2065): a PR-opening step whose git-commit
+// found nothing to commit records the PR this promotion opened, the one in
+// its outputs or the merged one of its head branch, instead of no changes;
+// it opens no second PR. A permanent lookup error fails the step; none of
+// them is taken as "no PR".
+func TestOpenPR_NothingToCommit(t *testing.T) {
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+	run := func(t *testing.T, s scm.SCMProvider, outputs map[string]string) parentsteps.StepResult {
+		t.Helper()
+		state := makeState(t, &mockGitClient{}, &mockSCMProvider{})
+		state.SCM = s
+		state.Environment.Approval = "pr-review"
+		state.Outputs = outputs
+		res, _ := step.Execute(context.Background(), state)
+		return res
+	}
+	t.Run("a PR recorded in its outputs", func(t *testing.T) {
+		m := &mockSCMProvider{}
+		res := run(t, m, map[string]string{"noChanges": "true", "prURL": "https://github.com/owner/repo/pull/4", "prNumber": "4"})
+		assert.Equal(t, parentsteps.StepSuccess, res.Status)
+		assert.Equal(t, "false", res.Outputs["noChanges"], "its PR brought the change")
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("its merged PR, found by its head branch", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, pr: &scm.MergedPR{Number: 6, URL: "https://github.com/owner/repo/pull/6"}}
+		res := run(t, m, map[string]string{"noChanges": "true"})
+		assert.Equal(t, parentsteps.StepSuccess, res.Status)
+		assert.Equal(t, map[string]string{"prURL": "https://github.com/owner/repo/pull/6", "prNumber": "6", "noChanges": "false"}, res.Outputs)
+		assert.Zero(t, m.openPRCalls)
+	})
+	t.Run("a permanent lookup error fails", func(t *testing.T) {
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, err: &scm.APIError{Provider: "GitHub", StatusCode: http.StatusForbidden}}
+		res := run(t, m, map[string]string{"noChanges": "true"})
+		assert.Equal(t, parentsteps.StepFailed, res.Status)
+		assert.Contains(t, res.Message, "HTTP 403")
+	})
+	t.Run("an SCM that cannot look up keeps no changes", func(t *testing.T) {
+		res := run(t, &mockSCMProvider{}, map[string]string{"noChanges": "true"})
+		assert.Equal(t, parentsteps.StepSuccess, res.Status)
+		assert.Empty(t, res.Outputs["prNumber"])
+	})
 }

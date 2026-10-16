@@ -135,7 +135,7 @@ func (f *ForgejoProvider) findExistingPR(ctx context.Context, owner, repo, head,
 			break
 		}
 	}
-	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs", head, base)
+	return "", 0, fmt.Errorf("PR already exists for %s into %s but could not find it in open PRs: %w", head, base, errNoOpenPR)
 }
 
 // isForgejoExistingPRErr returns true when Forgejo rejected the PR creation

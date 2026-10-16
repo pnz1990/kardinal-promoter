@@ -124,7 +124,7 @@ func (g *GitLabProvider) findExistingMR(ctx context.Context, repo, sourceBranch,
 			return mr.WebURL, mr.IID, nil
 		}
 	}
-	return "", 0, fmt.Errorf("MR already exists for %s into %s but could not find it in open MRs", sourceBranch, targetBranch)
+	return "", 0, fmt.Errorf("MR already exists for %s into %s but could not find it in open MRs: %w", sourceBranch, targetBranch, errNoOpenPR)
 }
 
 // isGitLabExistingMRErr returns true when GitLab rejected the MR creation with 409

@@ -83,9 +83,15 @@ func (s *waitForMergeStep) Execute(ctx context.Context, state *parentsteps.StepS
 	}
 
 	if merged {
+		// Pending, not Success: the step moves to WaitingForMerge, where the
+		// PRStatus records the merge, its commit and the SCM-verified
+		// merger (the PRMerged AuditEvent, #1939), as for a PR merged later.
+		// Success here would end the sequence without that record: a PR
+		// merged before this step first looked, such as one an earlier run
+		// opened (#2065) or one merged at once.
 		return parentsteps.StepResult{
-			Status:  parentsteps.StepSuccess,
-			Message: fmt.Sprintf("PR #%d merged", prNum),
+			Status:  parentsteps.StepPending,
+			Message: fmt.Sprintf("PR #%d merged; recording the merge", prNum),
 		}, nil
 	}
 
