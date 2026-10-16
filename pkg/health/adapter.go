@@ -58,6 +58,11 @@ type HealthStatus struct {
 	Progressing bool
 	// Terminal is true when the workload failed in a way that will not recover.
 	Terminal bool
+	// NotFound is true when the target (or the object it names) does not
+	// exist: an Unhealthy result that may be only a GitOps tool that has not
+	// created it yet. bake.policy fail-on-alarm does not act on it before the
+	// first healthy check (#2006).
+	NotFound bool
 	// Reason is a human-readable explanation.
 	Reason string
 	// CheckedAt records when the check was performed.
@@ -79,6 +84,11 @@ func progressing(reason string) HealthStatus {
 
 func unhealthy(reason string) HealthStatus {
 	return HealthStatus{Reason: reason, CheckedAt: time.Now()}
+}
+
+// missing is an Unhealthy result for a target that does not exist.
+func missing(reason string) HealthStatus {
+	return HealthStatus{NotFound: true, Reason: reason, CheckedAt: time.Now()}
 }
 
 func terminal(reason string) HealthStatus {
@@ -317,7 +327,7 @@ func (a *DeploymentAdapter) Check(ctx context.Context, opts CheckOptions) (Healt
 		Namespace: cfg.Namespace,
 	}, &deploy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return unhealthy(fmt.Sprintf("Deployment %s/%s not found", cfg.Namespace, cfg.Name)), nil
+			return missing(fmt.Sprintf("Deployment %s/%s not found", cfg.Namespace, cfg.Name)), nil
 		}
 		return HealthStatus{}, fmt.Errorf("get deployment %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
@@ -632,7 +642,7 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 		Get(ctx, cfg.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return unhealthy(fmt.Sprintf("Application %s/%s not found", cfg.Namespace, cfg.Name)), nil
+			return missing(fmt.Sprintf("Application %s/%s not found", cfg.Namespace, cfg.Name)), nil
 		}
 		return HealthStatus{}, fmt.Errorf("get argo cd application %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
@@ -665,7 +675,15 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	opOK := opPhase == "Succeeded" || opPhase == "" || (!target.operated && opFailed)
 
 	switch {
-	case !target.unverified && ((healthStatus == "Degraded" && target.deployed) || (opFailed && target.operated)):
+	case !target.unverified && healthStatus == "Degraded" && target.deployed:
+		if r := abortedRollout(app); r != "" {
+			// The Application is Degraded because Argo Rollouts aborted the
+			// promoted revision of one of its Rollouts: Terminal, as with the
+			// argoRollouts adapter (#2006).
+			return terminal(state + ", " + r), nil
+		}
+		return unhealthy(state), nil
+	case !target.unverified && opFailed && target.operated:
 		return unhealthy(state), nil
 	case healthStatus == "Healthy" && syncStatus == "Synced" && opOK && target.deployed:
 		reason := fmt.Sprintf("Healthy+Synced (opPhase=%q)", opPhase)
@@ -676,6 +694,30 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	default:
 		return progressing(state), nil
 	}
+}
+
+// abortedRollout names an Argo Rollouts Rollout among app's resources whose
+// health Argo CD reports Degraded because the Rollout was aborted (its
+// health message, from Argo CD's Rollout health check, says so: "Rollout is
+// aborted", or the Rollout's own "Rollout aborted update to revision N"),
+// or returns "".
+func abortedRollout(app *unstructured.Unstructured) string {
+	resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+	for _, r := range resources {
+		m, ok := r.(map[string]interface{})
+		if !ok || m["kind"] != "Rollout" || m["group"] != "argoproj.io" {
+			continue
+		}
+		status, _, _ := unstructured.NestedString(m, "health", "status")
+		msg, _, _ := unstructured.NestedString(m, "health", "message")
+		if l := strings.ToLower(msg); status == "Degraded" &&
+			(strings.Contains(l, "rollout is aborted") || strings.Contains(l, "rolloutaborted") || strings.Contains(l, "aborted update")) {
+			name, _ := m["name"].(string)
+			ns, _ := m["namespace"].(string)
+			return fmt.Sprintf("Rollout %s/%s aborted the update: %s", ns, name, msg)
+		}
+	}
+	return ""
 }
 
 // argoCDDescendant accepts a synced revision that is not the promoted commit
@@ -915,7 +957,7 @@ func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatu
 		Get(ctx, cfg.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return unhealthy(fmt.Sprintf("Kustomization %s/%s not found", cfg.Namespace, cfg.Name)), nil
+			return missing(fmt.Sprintf("Kustomization %s/%s not found", cfg.Namespace, cfg.Name)), nil
 		}
 		return HealthStatus{}, fmt.Errorf("get flux kustomization %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
@@ -1193,7 +1235,7 @@ func (a *FluxAdapter) workloads(ctx context.Context, ks *unstructured.Unstructur
 		d, err := getDeployment(ctx, a.dynamic, ref.Namespace, ref.Name)
 		switch {
 		case apierrors.IsNotFound(err):
-			fd.status = unhealthy(fmt.Sprintf("Deployment %s not found", ref))
+			fd.status = missing(fmt.Sprintf("Deployment %s not found", ref))
 		case err != nil:
 			return nil, err
 		default:
@@ -1374,7 +1416,9 @@ var argoRolloutsGVR = schema.GroupVersionResource{
 //     workloadRef, status.workloadObservedGeneration is the Deployment's
 //     generation), else Progressing: the phase describes an older spec;
 //  3. status.phase: Healthy with status.stableRS == status.currentPodHash is
-//     Healthy, Degraded is unhealthy, any other phase is Progressing.
+//     Healthy; Degraded with status.abort is Terminal (Argo Rollouts aborted
+//     the promoted revision and will not roll it forward by itself), other
+//     Degraded is unhealthy; any other phase is Progressing.
 //
 // Without the first two checks, the Healthy or Degraded phase of the previous
 // revision would decide the new one's health.
@@ -1393,11 +1437,7 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 		Get(ctx, cfg.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return HealthStatus{
-				Healthy:   false,
-				Reason:    fmt.Sprintf("Rollout %s/%s not found", cfg.Namespace, cfg.Name),
-				CheckedAt: time.Now(),
-			}, nil
+			return missing(fmt.Sprintf("Rollout %s/%s not found", cfg.Namespace, cfg.Name)), nil
 		}
 		return HealthStatus{}, fmt.Errorf("get rollout %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
@@ -1413,7 +1453,7 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 
 	running, workload, err := a.rolloutImages(ctx, rollout)
 	if apierrors.IsNotFound(err) {
-		return unhealthy(fmt.Sprintf("%s: workloadRef %v", id, err)), nil
+		return missing(fmt.Sprintf("%s: workloadRef %v", id, err)), nil
 	}
 	if err != nil {
 		return HealthStatus{}, err
@@ -1471,10 +1511,56 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 		}
 		return healthy(reason), nil
 	case "Degraded":
+		if abort, _, _ := unstructured.NestedBool(rollout.Object, "status", "abort"); abort {
+			// Argo Rollouts aborted the update (a failed analysis, or
+			// kubectl argo rollouts abort) and went back to the stable
+			// ReplicaSet. It stays aborted until someone retries it or the
+			// spec changes: it will not roll forward by itself (#2006). The
+			// images cannot tell a config-only, mixed or same-image change
+			// from the release before it, so the abort counts only when it
+			// was set after the promoted change can have reached git, as the
+			// Healthy phase does (#1422).
+			since := opts.ChangedAt
+			if since.IsZero() || opts.Since.IsZero() {
+				since = opts.Since
+			}
+			switch stale, known := abortSetBefore(rollout, since); {
+			case stale:
+				return progressing(fmt.Sprintf("%s: the abort is from an earlier release (%s); "+
+					"waiting for Argo Rollouts to roll out the change", id, reason)), nil
+			case !known:
+				// Argo Rollouts without the RolloutAborted condition: the
+				// abort's time is not known, so it counts as unhealthy.
+				return unhealthy(reason + " (no RolloutAborted condition: cannot tell whether the abort is from this release)"), nil
+			}
+			return terminal(fmt.Sprintf("%s aborted the update (status.abort): %s", id, reason)), nil
+		}
 		return unhealthy(reason), nil
 	default: // Progressing, Paused, or not reported yet
 		return progressing(reason), nil
 	}
+}
+
+// abortSetBefore reports whether the Rollout's abort predates since: its
+// Progressing condition has reason RolloutAborted, which Argo Rollouts sets
+// when it aborts, and that condition's lastTransitionTime is before since
+// (whole seconds). known is false when the condition is missing or has no
+// time. A zero since (the promotion changed nothing in git) is never stale.
+func abortSetBefore(rollout *unstructured.Unstructured, since time.Time) (stale, known bool) {
+	conditions, _, _ := unstructured.NestedSlice(rollout.Object, "status", "conditions")
+	cond := findCondition(conditions, "Progressing")
+	if cond == nil || cond["reason"] != "RolloutAborted" {
+		return false, since.IsZero()
+	}
+	lt, _ := cond["lastTransitionTime"].(string)
+	at, err := time.Parse(time.RFC3339, lt)
+	if err != nil {
+		return false, since.IsZero()
+	}
+	if since.IsZero() {
+		return false, true
+	}
+	return at.Truncate(time.Second).Before(since.Truncate(time.Second)), true
 }
 
 // healthySetBefore explains why the Rollout's Healthy phase predates since,
@@ -1650,11 +1736,7 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 		Get(ctx, cfg.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return HealthStatus{
-				Healthy:   false,
-				Reason:    fmt.Sprintf("Canary %s/%s not found", cfg.Namespace, cfg.Name),
-				CheckedAt: time.Now(),
-			}, nil
+			return missing(fmt.Sprintf("Canary %s/%s not found", cfg.Namespace, cfg.Name)), nil
 		}
 		return HealthStatus{}, fmt.Errorf("get canary %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
@@ -1812,7 +1894,7 @@ func (a *FlaggerAdapter) canaryRevision(ctx context.Context, canary *unstructure
 
 	target, err := getDeployment(ctx, a.dynamic, ns, name)
 	if apierrors.IsNotFound(err) {
-		st := unhealthy(fmt.Sprintf("Canary %s/%s: target Deployment %s/%s not found", ns, canary.GetName(), ns, name))
+		st := missing(fmt.Sprintf("Canary %s/%s: target Deployment %s/%s not found", ns, canary.GetName(), ns, name))
 		return canaryRevision{status: &st}, nil
 	}
 	if err != nil {

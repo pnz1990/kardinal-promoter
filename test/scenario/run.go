@@ -185,6 +185,16 @@ func RunCombo(t *testing.T, c Combo) {
 		if !w.RunUntil(MaxRounds, rolledBack) {
 			fail("environments %v not rolled back to 1.1.0", p.GateEnvs)
 		}
+		if c.Health == "argoRollouts" {
+			// Argo Rollouts aborted the canary (status.abort): the result is
+			// Terminal, so onHealthFailure acts at that check, not at
+			// health.timeout (#2006).
+			for _, e := range p.GateEnvs {
+				s := w.Steps(ns, v2.Name)[e]
+				assert.Contains(t, s.Status.Message, "aborted the update", "%s: v2 failed on the abort", e)
+				assert.NotContains(t, s.Status.Message, "health check timeout", "%s: v2 waited for health.timeout", e)
+			}
+		}
 	default:
 		t.Fatalf("unknown outcome %q", c.Outcome)
 	}

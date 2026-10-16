@@ -125,9 +125,17 @@ func TestArgoRolloutsAdapter_Revision(t *testing.T) {
 		{name: "stale Degraded of the previous, broken release is Waiting, not a failure (bug 9)",
 			objs:     []runtime.Object{rolloutObj(6, templateSpec(podinfo+":0.0.0-broken"), abortedRolloutStatus("6"))},
 			expected: bundle, want: isProgressing, reason: "not updated yet: runs " + podinfo + ":0.0.0-broken"},
-		{name: "Degraded on the Bundle image",
+		{name: "aborted on the Bundle image is Terminal: Argo Rollouts will not roll forward by itself (#2006)",
 			objs:     []runtime.Object{rolloutObj(6, templateSpec(podinfo+":6.15.0"), abortedRolloutStatus("6"))},
-			expected: bundle, want: isUnhealthy, reason: "Rollout phase: Degraded — RolloutAborted: Rollout aborted update"},
+			expected: bundle, want: isTerminal, reason: "aborted the update (status.abort): Rollout phase: Degraded — RolloutAborted"},
+		{name: "Degraded without abort on the Bundle image is unhealthy",
+			objs: []runtime.Object{rolloutObj(6, templateSpec(podinfo+":6.15.0"), func() map[string]interface{} {
+				st := abortedRolloutStatus("6")
+				delete(st, "abort")
+				st["message"] = "ProgressDeadlineExceeded"
+				return st
+			}())},
+			expected: bundle, want: isUnhealthy, reason: "Rollout phase: Degraded — ProgressDeadlineExceeded"},
 		{name: "Paused on the Bundle image",
 			objs: []runtime.Object{rolloutObj(4, templateSpec(podinfo+":6.15.0"), map[string]interface{}{
 				"phase": "Paused", "message": "CanaryPauseStep", "observedGeneration": "4"})},

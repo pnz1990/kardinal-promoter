@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -287,8 +288,29 @@ func (g *GitOps) reflect(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, st 
 		return g.upsert(RolloutGVK, opts.ArgoRollouts.Namespace, opts.ArgoRollouts.Name, spec, func(o map[string]interface{}) {
 			gen := fmt.Sprint(nestedInt(o, "metadata", "generation"))
 			if failed {
+				// Argo Rollouts records when it aborted in the Progressing
+				// condition (reason RolloutAborted); keep the first time.
+				// The step engine stamps some step times from the wall clock,
+				// not the World's: the abort takes the later of the two, so
+				// it is never older than the change it aborts.
+				at := g.w.Now()
+				if wall := time.Now(); wall.After(at) {
+					at = wall
+				}
+				abortedAt := at.UTC().Format(time.RFC3339)
+				if st, ok := o["status"].(map[string]interface{}); ok && st["abort"] == true {
+					if conds, ok := st["conditions"].([]interface{}); ok && len(conds) > 0 {
+						if c, ok := conds[0].(map[string]interface{}); ok {
+							if at, ok := c["lastTransitionTime"].(string); ok {
+								abortedAt = at
+							}
+						}
+					}
+				}
 				o["status"] = map[string]interface{}{"phase": "Degraded", "observedGeneration": gen, "abort": true,
-					"message": "RolloutAborted: the canary failed its analysis", "replicas": int64(1), "availableReplicas": int64(1)}
+					"message": "RolloutAborted: the canary failed its analysis", "replicas": int64(1), "availableReplicas": int64(1),
+					"conditions": []interface{}{map[string]interface{}{"type": "Progressing", "status": "False",
+						"reason": "RolloutAborted", "lastTransitionTime": abortedAt}}}
 				return
 			}
 			o["status"] = map[string]interface{}{"phase": "Healthy", "observedGeneration": gen, "stableRS": "rs" + st.Tag,
