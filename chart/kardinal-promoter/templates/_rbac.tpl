@@ -263,12 +263,17 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["steptemplates/status"]
   verbs: ["get", "update", "patch"]
+{{- if not .Values.controller.watchNamespace }}
 # An AgentRun's NetworkPolicy lets its Pod reach the API server: the
 # controller reads the addresses of the kubernetes Service, uncached, by name.
+# In namespace mode a Role in the default namespace grants it
+# (apiserver-endpoints-role.yaml): this ClusterRole holds only
+# cluster-scoped kinds there.
 - apiGroups: ["discovery.k8s.io"]
   resources: ["endpointslices"]
   resourceNames: ["kubernetes"]
   verbs: ["get"]
+{{- end }}
 # ClusterScmProviders, read like ScmProviders and their Ready condition
 # written.
 - apiGroups: ["kardinal.io"]

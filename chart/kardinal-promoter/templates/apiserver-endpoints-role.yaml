@@ -1,0 +1,40 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+*/}}
+{{- /*
+Namespace mode: the controller reads the kubernetes Service's EndpointSlice
+in the default namespace (an AgentRun's NetworkPolicy lets its Pod reach the
+API server), by name. Cluster mode grants it in the manager ClusterRole
+(_rbac.tpl).
+*/}}
+{{- if .Values.controller.watchNamespace }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-apiserver-endpoints
+  namespace: default
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-apiserver-endpoints
+  namespace: default
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kardinal-promoter.fullname" . }}-apiserver-endpoints
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kardinal-promoter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

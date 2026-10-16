@@ -295,6 +295,26 @@ func TestUnfreeze_Races(t *testing.T) {
 		assert.Nil(t, cw.Spec.Freeze.Lifted)
 	})
 
+	t.Run("the controller's status write between the mark and the delete does not stop it", func(t *testing.T) {
+		deletes := 0
+		c, base := unfreezeFixture(t, interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes++
+			if deletes == 1 {
+				// The controller records the freeze as it starts: the
+				// ResourceVersion moves, the freeze does not.
+				cw := getFreeze(t, cl)
+				cw.Annotations = map[string]string{"kardinal.io/freeze-audited": "started"}
+				require.NoError(t, cl.Update(ctx, &cw))
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}})
+		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
+		assert.Equal(t, 2, deletes, "lifted again after the conflict")
+		cw := getFreeze(t, base)
+		assert.False(t, cw.DeletionTimestamp.IsZero(), "lifted")
+		assert.Equal(t, bob, cw.Spec.Freeze.Lifted, "and bob is who lifted it")
+	})
+
 	t.Run("losing the mark to an unfreeze that lifted it", func(t *testing.T) {
 		raced := false
 		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
