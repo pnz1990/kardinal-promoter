@@ -5,9 +5,11 @@
 # request changes the docs and no Go (#1903), so a docs edit that breaks one
 # (a stale generated reference, a CLI line that no longer parses, a coverage
 # anchor, a changelog link) fails the pull request instead of main.
-# test/hack TestCIDocsTests finds every test package with a string literal
-# naming one of those paths and fails unless it is listed here, or listed
-# with ! and the reason its tests do not read the repository's docs.
+# test/hack TestCIDocsTests finds every test package that names one of those
+# paths, by a string literal, a constant (built from pieces, or another
+# package's), a Join of constants or a helper whose body names one (#1947),
+# and fails unless it is listed here, or listed with ! and the reason its
+# tests do not read the repository's docs.
 cmd/kardinal-controller
 cmd/kardinal/cmd
 hack/gen-api-docs
@@ -24,5 +26,6 @@ test/hack
 !pkg/steps/steps README.md is a file its tests write into scratch git repositories
 !pkg/steps/steps/sharedbranch README.md is a file its tests write into the scratch remote
 !hack/changelog/fragments its tests write docs/changelog.d fixtures into temp directories
+!hack/changelog its tests write docs/changelog.d fixtures (fragments.Dir) into temp directories
 !hack/release-gate "docs" is the id of its docs build step; its tests read no docs
 !test/e2e/docswalk its tests write docs/p.md fixtures into temp directories; test/examples runs its check on the repository's docs

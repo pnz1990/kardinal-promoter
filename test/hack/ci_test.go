@@ -5,13 +5,9 @@ package hack
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -157,11 +153,9 @@ func TestCIChanges(t *testing.T) {
 	}
 }
 
-// docsPathLiteral is a string literal that names the repository's docs.
-var docsPathLiteral = regexp.MustCompile(`^(\.\./)*(docs(/.*)?|README\.md|mkdocs\.yml|overrides/.*)$`)
-
-// TestCIDocsTests (#1903 QA): every Go test package with a string literal
-// naming the docs (docs/, README.md, mkdocs.yml, overrides/) is in
+// TestCIDocsTests (#1903 QA): every Go test package whose tests name the
+// docs (docs/, README.md, mkdocs.yml, overrides/), by a literal, a constant
+// or a helper (docsRefs, #1947), is in
 // hack/ci/docs-tests.txt, which ci.yml's docs-tests job runs on a docs-only
 // pull request, or is listed there with ! and why its tests do not read the
 // repository's docs. A new test that reads the docs and is in neither list
@@ -185,46 +179,15 @@ func TestCIDocsTests(t *testing.T) {
 	for p := range run {
 		assert.DirExists(t, filepath.Join(root, p), "docs-tests.txt lists %s", p)
 	}
-	found := map[string]string{}
-	require.NoError(t, filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == ".git" || d.Name() == "results") {
-			return filepath.SkipDir
-		}
-		if !strings.HasSuffix(p, "_test.go") {
-			return nil
-		}
-		src, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if strings.Contains(string(src), "//go:build e2e") {
-			return nil // the live suites run on a cluster, not in pull request CI
-		}
-		f, err := parser.ParseFile(token.NewFileSet(), p, src, 0)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, filepath.Dir(p))
-		if err != nil {
-			return err
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
-				if v, err := strconv.Unquote(bl.Value); err == nil && docsPathLiteral.MatchString(v) {
-					found[filepath.ToSlash(rel)] = v
-				}
-			}
-			return true
-		})
-		return nil
-	}))
+	// Literals, constants (also another package's), Joins of them and the
+	// helpers that return them (#1947).
+	r, err := loadDocsRefs(root, "github.com/kardinal-promoter/kardinal-promoter")
+	require.NoError(t, err)
+	found := r.testPackages()
 	require.NotEmpty(t, found)
 	for pkg, lit := range found {
 		assert.True(t, run[pkg] || exempt[pkg],
-			"%s: its tests name %q: add the package to hack/ci/docs-tests.txt (or !%s and why it reads no repo docs)", pkg, lit, pkg)
+			"%s: its tests name the docs (%s): add the package to hack/ci/docs-tests.txt (or !%s and why it reads no repo docs)", pkg, lit, pkg)
 	}
 	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
 	require.NoError(t, err)
