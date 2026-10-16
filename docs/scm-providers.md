@@ -51,7 +51,7 @@ branch of the same name never matches. Each SCM's source-repository field is che
 | Forgejo / Gitea | `head.repo_id` |
 | Bitbucket Cloud | `source.repository` |
 | Bitbucket Data Center | `fromRef.repository` |
-| Azure DevOps | no `forkSource` |
+| Azure DevOps | the list asks for PRs whose source branch is in the repository (`searchCriteria.sourceRepositoryId`, the repository's ID, which kardinal reads first; an unreadable ID is an error), and keeps those whose `repository.id` is that ID and that have no `forkSource` |
 
 Its head must also be, or contain, the commit kardinal pushed, and so must the branch's head
 before kardinal opens a PR from it. Otherwise nothing is adopted or opened, and the branch is not
