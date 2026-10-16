@@ -425,8 +425,11 @@ var healthTargets = []struct {
 
 // detectHealth is, per environment, the health type whose object exists in
 // the cluster under its default name (<pipeline>-<env>); an environment
-// with neither keeps the default (a Deployment). Each find is reported on
-// out. A kind the cluster does not serve, or cannot be read, finds nothing.
+// with neither keeps the default (a Deployment). An object being deleted is
+// not found: the controller would check health with a gone object. Each
+// find is reported on out, and so is an environment that found nothing when
+// another one did, which is most often an Application not created yet. A
+// kind the cluster does not serve, or cannot be read, finds nothing.
 func detectHealth(ctx context.Context, c sigs_client.Reader, ns string, cfg *InitConfig, out io.Writer) map[string]string {
 	if ctx == nil {
 		ctx = context.Background()
@@ -439,12 +442,22 @@ func detectHealth(ctx context.Context, c sigs_client.Reader, ns string, cfg *Ini
 		for _, h := range healthTargets {
 			u := &unstructured.Unstructured{}
 			u.SetGroupVersionKind(h.gvk)
-			if err := c.Get(ctx, types.NamespacedName{Namespace: h.namespace, Name: name}, u); err != nil {
+			if err := c.Get(ctx, types.NamespacedName{Namespace: h.namespace, Name: name}, u); err != nil ||
+				u.GetDeletionTimestamp() != nil {
 				continue
 			}
 			found[env] = h.kind
 			_, _ = fmt.Fprintf(out, "Found %s %s/%s: %s checks health with it\n", h.what, h.namespace, name, env)
 			break
+		}
+	}
+	if len(found) > 0 {
+		for _, env := range cfg.Environments {
+			if _, ok := found[env]; !ok {
+				_, _ = fmt.Fprintf(out, "Found no Argo CD Application argocd/%s-%s or Flux Kustomization flux-system/%s-%s: %s checks "+
+					"health with the Deployment %s in namespace %s (if the Application is still being created, run kardinal init again "+
+					"once it exists)\n", cfg.AppName, env, cfg.AppName, env, env, cfg.AppName, env)
+			}
 		}
 	}
 	return found

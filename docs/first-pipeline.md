@@ -120,6 +120,14 @@ spec:
 EOF
 ```
 
+Argo CD creates the three Applications a moment later. Wait for them, so that `kardinal init` finds
+them:
+
+```bash
+kubectl wait --for=create -n argocd --timeout=2m application/kardinal-test-app-test \
+  application/kardinal-test-app-uat application/kardinal-test-app-prod
+```
+
 ## Create the Pipeline
 
 First, create a Secret with your GitHub token:
