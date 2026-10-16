@@ -620,24 +620,77 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 		t.Logf("  %-48s %d", k, verdicts[k])
 	}
 
-	// The same requests with a tenth of the index.
+	// The single-pass ratio this check used before #2028, logged to compare.
 	tenth := idx.DeepCopy()
 	tenth.Status.Users, tenth.Status.Groups = subset(idx.Status.Users, 10), subset(idx.Status.Groups, 10)
-	require.NoError(t, api.SetAgentIndex(tenth))
-	var small []time.Duration
-	for _, pr := range prs[:min(len(prs), 1000)] {
-		d, _ := send(pr)
-		small = append(small, d)
-	}
-	fullBytes, smallBytes := jsonSize(t, idx.Status), jsonSize(t, tenth.Status)
-	p50f, p50s := median(full[:len(small)]), median(small)
+	empty := idx.DeepCopy()
+	empty.Status.Users, empty.Status.Groups = nil, nil
+	fullBytes, smallBytes, emptyBytes := jsonSize(t, idx.Status), jsonSize(t, tenth.Status), jsonSize(t, empty.Status)
 	sort.Slice(full, func(i, j int) bool { return full[i] < full[j] })
-	t.Logf("admission over the index (%d KiB): p50 %s, p99 %s, max %s; over a tenth of it (%d KiB): p50 %s",
-		fullBytes>>10, median(full), full[len(full)*99/100], full[len(full)-1], smallBytes>>10, p50s)
-	// Measured in the same run, so a slow runner slows both: the ratio of
-	// the medians stays under twice the ratio of the sizes.
-	assert.Less(t, float64(p50f)/float64(p50s), 2*float64(fullBytes)/float64(smallBytes),
-		"admission cost grows faster than linearly with the index (p50 %s at %d KiB, %s at %d KiB)", p50f, fullBytes>>10, p50s, smallBytes>>10)
+	t.Logf("admission over the index (%d KiB): p50 %s, p99 %s, max %s", fullBytes>>10, median(full),
+		full[len(full)*99/100], full[len(full)-1])
+	assertLinearAdmission(t, api, send, prs, idx, tenth, empty, fullBytes, smallBytes, emptyBytes)
+}
+
+// growthRounds and growthSample size assertLinearAdmission: the rounds whose
+// median ratio decides, and the requests timed per index in each.
+const (
+	growthRounds = 5
+	growthSample = 400
+)
+
+// assertLinearAdmission checks that the actor policy's admission cost grows
+// at most linearly with the AgentIndex (#1936 makes it linear; #2028 made
+// the check stable). It times the same requests against the full index, a
+// tenth of it and an empty one, interleaved in growthRounds rounds (the
+// order rotates, so drift on a shared runner hits all three alike), takes in
+// each round the cost above the empty index's (the fixed cost of a request,
+// which dominates the small index's) and the ratio of the full index's to
+// the tenth's, and asserts that the median of the round ratios stays under
+// twice the ratio of the index sizes above the empty one. A linear cost
+// gives about the size ratio; a quadratic one its square.
+func assertLinearAdmission(t *testing.T, api *scenario.APIServer, send func(probe) (time.Duration, error), prs []probe,
+	full, tenth, empty *v1alpha1.AgentIndex, fullBytes, smallBytes, emptyBytes int) {
+	t.Helper()
+	sample := prs[:min(len(prs), growthSample)]
+	indexes := []*v1alpha1.AgentIndex{full, tenth, empty}
+	timeOf := func(idx *v1alpha1.AgentIndex) time.Duration {
+		require.NoError(t, api.SetAgentIndex(idx))
+		var ds []time.Duration
+		for _, pr := range sample {
+			d, _ := send(pr)
+			ds = append(ds, d)
+		}
+		return median(ds)
+	}
+	var ratios []float64
+	var singlePass float64
+	for r := 0; r < growthRounds; r++ {
+		p50 := map[*v1alpha1.AgentIndex]time.Duration{}
+		for k := range indexes {
+			idx := indexes[(r+k)%len(indexes)]
+			p50[idx] = timeOf(idx)
+		}
+		above := func(idx *v1alpha1.AgentIndex) float64 {
+			// A floor of a microsecond keeps a round where the small index
+			// costs no more than the empty one from dividing by zero.
+			return max(float64(p50[idx]-p50[empty]), float64(time.Microsecond))
+		}
+		ratios = append(ratios, above(full)/above(tenth))
+		if r == 0 {
+			singlePass = float64(p50[full]) / float64(p50[tenth])
+		}
+		t.Logf("admission round %d: p50 %s at %d KiB, %s at %d KiB, %s empty (%d KiB): ratio above empty %.2f",
+			r, p50[full], fullBytes>>10, p50[tenth], smallBytes>>10, p50[empty], emptyBytes>>10, ratios[r])
+	}
+	sorted := append([]float64(nil), ratios...)
+	sort.Float64s(sorted)
+	got := sorted[len(sorted)/2]
+	bound := 2 * float64(fullBytes-emptyBytes) / float64(smallBytes-emptyBytes)
+	t.Logf("admission growth: median ratio %.2f over %d rounds (min %.2f, max %.2f), bound %.2f; single-pass ratio (before #2028) %.2f",
+		got, growthRounds, sorted[0], sorted[len(sorted)-1], bound, singlePass)
+	assert.Less(t, got, bound, "admission cost grows faster than linearly with the index (median ratio %.2f, round ratios %v)",
+		got, ratios)
 }
 
 // subset keeps every k-th entry of m, by key order.
