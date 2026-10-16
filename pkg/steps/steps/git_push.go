@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -129,9 +130,14 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 			}
 		}
 		// Recorded before open-pr runs: a PR of the branch is kardinal's
-		// only when its head is this commit (open-pr, #2065).
+		// only when its head is this commit, or, for a PR already merged,
+		// one of the commits this step pushed before (open-pr, #2065).
+		if outputs[OutputPushedSHA] != "" {
+			outputs[OutputPushedSHAs] = strings.Join(appendPushed(PushedSHAs(state.Outputs), outputs[OutputPushedSHA]), ",")
+		}
 		if outputs[OutputPushedSHA] != "" && state.RecordPushed != nil {
-			if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHA: outputs[OutputPushedSHA], "branch": branch}); err != nil {
+			if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHA: outputs[OutputPushedSHA],
+				OutputPushedSHAs: outputs[OutputPushedSHAs], "branch": branch}); err != nil {
 				return parentsteps.StepResult{Status: parentsteps.StepFailed,
 					Message: fmt.Sprintf("pushed %s; recording the pushed commit failed: %v", branch, err)}, err
 			}
@@ -168,6 +174,42 @@ func beforePush(ctx context.Context, state *parentsteps.StepState, direct bool) 
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("check before push: %v", err)},
 			true, fmt.Errorf("check before push: %w", err)
 	}
+}
+
+// OutputPushedSHAs (status.outputs.pushedSHAs) lists, oldest first, the
+// last maxPushedSHAs commits git-push pushed to the step's PR branch. A
+// restarted step pushes a new commit (its commit time differs), so a PR an
+// earlier run opened and a reviewer merged carries an earlier one: open-pr
+// adopts a merged PR whose head is any of them (#2065).
+const OutputPushedSHAs = "pushedSHAs"
+
+// maxPushedSHAs bounds OutputPushedSHAs.
+const maxPushedSHAs = 8
+
+// PushedSHAs is the commits the step pushed to its PR branch: the
+// pushedSHAs history, and pushedSHA (a step from before the history, or
+// its latest push).
+func PushedSHAs(outputs map[string]string) []string {
+	var out []string
+	for _, sha := range strings.Split(outputs[OutputPushedSHAs], ",") {
+		if sha != "" {
+			out = append(out, sha)
+		}
+	}
+	if sha := outputs[OutputPushedSHA]; sha != "" && !slices.Contains(out, sha) {
+		out = append(out, sha)
+	}
+	return out
+}
+
+// appendPushed adds sha to list, once, keeping the last maxPushedSHAs.
+func appendPushed(list []string, sha string) []string {
+	list = slices.DeleteFunc(list, func(s string) bool { return s == sha })
+	list = append(list, sha)
+	if len(list) > maxPushedSHAs {
+		list = list[len(list)-maxPushedSHAs:]
+	}
+	return list
 }
 
 // OutputPushedSHA is the git-push output (status.outputs.pushedSHA) naming

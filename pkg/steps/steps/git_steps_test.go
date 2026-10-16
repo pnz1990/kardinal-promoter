@@ -399,6 +399,37 @@ func TestGitPushStep_RecordsPushedSHA(t *testing.T) {
 	assert.Empty(t, res.Outputs[steps.OutputPushedSHA])
 }
 
+// TestGitPushStep_RecordsPushedHistory (#2065): a push to the PR branch
+// records, before open-pr runs (StepState.RecordPushed), the commit it pushed
+// and the history of the step's pushes: the earlier ones first, the new one
+// last, each once, the last 8 kept. A restarted run pushes a new commit, and
+// a PR an earlier run opened and a reviewer merged carries an earlier one.
+func TestGitPushStep_RecordsPushedHistory(t *testing.T) {
+	git := &headGitClient{sha: "h9"}
+	state := makeState(t, &git.mockGitClient, nil)
+	state.GitClient = git
+	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+	state.Environment.Approval = "pr-review"
+	state.Outputs = map[string]string{steps.OutputPushedSHA: "h8", steps.OutputPushedSHAs: "h1,h2,h3,h4,h5,h6,h7,h8"}
+	var recorded []map[string]string
+	state.RecordPushed = func(_ context.Context, o map[string]string) error {
+		recorded = append(recorded, o)
+		return nil
+	}
+	res, err := runStep(t, "git-push", state)
+	require.NoError(t, err)
+	assert.Equal(t, "h2,h3,h4,h5,h6,h7,h8,h9", res.Outputs[steps.OutputPushedSHAs], "the last 8")
+	require.Len(t, recorded, 1, "recorded before open-pr")
+	assert.Equal(t, "h9", recorded[0][steps.OutputPushedSHA])
+	assert.Equal(t, "h2,h3,h4,h5,h6,h7,h8,h9", recorded[0][steps.OutputPushedSHAs])
+
+	// The same commit again (a push retried) is not listed twice.
+	state.Outputs = map[string]string{steps.OutputPushedSHA: "h9", steps.OutputPushedSHAs: "h8,h9"}
+	res, err = runStep(t, "git-push", state)
+	require.NoError(t, err)
+	assert.Equal(t, "h8,h9", res.Outputs[steps.OutputPushedSHAs])
+}
+
 // TestPRBranch covers the one definition of the branch kardinal promotes
 // through: git-push pushes PRBranch(namespace, bundle, env),
 // kardinal/<first 8 hex of sha256(namespace)>/<bundle>/<env>, open-pr opens

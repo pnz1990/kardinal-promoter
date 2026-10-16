@@ -269,7 +269,7 @@ func TestFindMergedPR(t *testing.T) {
 		t.Run(lp.name, func(t *testing.T) {
 			u, queries := serveLookup(t, lp, nil, merged)
 			f := lp.provider(u)
-			pr, err := f.FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, pushedCommit, since)
+			pr, err := f.FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{pushedCommit}, since)
 			require.NoError(t, err)
 			require.NotNil(t, pr)
 			assert.Equal(t, 8, pr.Number, "the newest merged PR of kardinal's own branch with the pushed commit")
@@ -281,10 +281,10 @@ func TestFindMergedPR(t *testing.T) {
 				assert.Contains(t, (*queries)[0], q, "filtered on the server")
 			}
 
-			pr, err = f.FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, pushedCommit, at(21))
+			pr, err = f.FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{pushedCommit}, at(21))
 			require.NoError(t, err)
 			assert.Nil(t, pr, "nothing of kardinal's after since")
-			pr, err = f.FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, "", since)
+			pr, err = f.FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, nil, since)
 			require.NoError(t, err)
 			assert.Nil(t, pr, "without the pushed commit nothing is adopted")
 		})
@@ -358,7 +358,7 @@ func TestFindPR_ForgejoPagesAndLimit(t *testing.T) {
 			_, _ = w.Write([]byte(filler(50)))
 		}))
 		defer srv.Close()
-		pr, err := scm.NewForgejoProvider("t", srv.URL, "").FindMergedPR(context.Background(), "o/r", lookupHead, lookupBase, pushedCommit, time.Time{})
+		pr, err := scm.NewForgejoProvider("t", srv.URL, "").FindMergedPR(context.Background(), "o/r", lookupHead, lookupBase, []string{pushedCommit}, time.Time{})
 		require.Error(t, err)
 		assert.Nil(t, pr)
 		assert.Contains(t, err.Error(), "longer than kardinal reads")
@@ -432,7 +432,7 @@ func TestFindMergedPR_ErrorsAreErrors(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer srv.Close()
-	pr, err := scm.NewGitHubProvider("t", srv.URL, "").FindMergedPR(context.Background(), "o/r", "h", "main", pushedCommit, time.Time{})
+	pr, err := scm.NewGitHubProvider("t", srv.URL, "").FindMergedPR(context.Background(), "o/r", "h", "main", []string{pushedCommit}, time.Time{})
 	require.Error(t, err)
 	assert.Nil(t, pr)
 	assert.Contains(t, err.Error(), "502")
@@ -446,4 +446,19 @@ func TestSameCommit(t *testing.T) {
 	assert.False(t, scm.SameCommit(pushedCommit[:6], pushedCommit), "too short to tell")
 	assert.False(t, scm.SameCommit(otherCommit, pushedCommit))
 	assert.False(t, scm.SameCommit("", pushedCommit))
+}
+
+// TestFindMergedPR_AnyPushedCommit: a merged PR whose head is any of the
+// commits the step pushed is the step's (a restarted run pushes a new one).
+func TestFindMergedPR_AnyPushedCommit(t *testing.T) {
+	lp := lookupProviders[0]
+	since := time.Date(2026, 10, 16, 5, 0, 0, 0, time.UTC)
+	u, _ := serveLookup(t, lp, nil, []lookupPR{{num: 8, head: lookupHead, base: lookupBase, state: "merged", sha: pushedCommit, created: since.Add(time.Minute)}})
+	pr, err := lp.provider(u).FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{pushedCommit, otherCommit}, since)
+	require.NoError(t, err)
+	require.NotNil(t, pr)
+	assert.Equal(t, 8, pr.Number)
+	pr, err = lp.provider(u).FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{otherCommit}, since)
+	require.NoError(t, err)
+	assert.Nil(t, pr)
 }

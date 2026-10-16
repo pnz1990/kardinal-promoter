@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -52,11 +53,11 @@ type OpenPRFinder interface {
 //
 // FindMergedPR returns the newest pull request from the repository's own
 // branch head (never a fork's) into base that is merged, whose head commit is
-// headSHA (the commit the step pushed) and that was opened at or after
-// openedSince; or nil. A provider wrapper whose provider does not implement
+// one of headSHAs (the commits the step pushed to its branch) and that was
+// opened at or after openedSince; or nil. A provider wrapper whose provider does not implement
 // it returns errors.ErrUnsupported.
 type MergedPRFinder interface {
-	FindMergedPR(ctx context.Context, repo, head, base, headSHA string, openedSince time.Time) (*FoundPR, error)
+	FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, openedSince time.Time) (*FoundPR, error)
 }
 
 // SameCommit reports whether commit IDs a and b name the same commit: equal,
@@ -97,8 +98,8 @@ func findOpenPR(ctx context.Context, l prLister, repo, head, base string) (*Foun
 	return &prs[0], nil
 }
 
-func findMergedPR(ctx context.Context, l prLister, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	if headSHA == "" {
+func findMergedPR(ctx context.Context, l prLister, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	if len(headSHAs) == 0 {
 		return nil, nil
 	}
 	prs, err := l.listPRs(ctx, repo, head, base, true)
@@ -108,7 +109,7 @@ func findMergedPR(ctx context.Context, l prLister, repo, head, base, headSHA str
 	var best *FoundPR
 	for i := range prs {
 		pr := prs[i]
-		if pr.OpenedAt.Before(since) || !SameCommit(pr.HeadSHA, headSHA) {
+		if pr.OpenedAt.Before(since) || !slices.ContainsFunc(headSHAs, func(sha string) bool { return SameCommit(pr.HeadSHA, sha) }) {
 			continue
 		}
 		if best == nil || pr.OpenedAt.After(best.OpenedAt) {
@@ -180,8 +181,8 @@ func (g *GitHubProvider) FindOpenPR(ctx context.Context, repo, head, base string
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (g *GitHubProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	return findMergedPR(ctx, g, repo, head, base, headSHA, since)
+func (g *GitHubProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	return findMergedPR(ctx, g, repo, head, base, headSHAs, since)
 }
 
 func (g *GitHubProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
@@ -230,8 +231,8 @@ func (g *GitLabProvider) FindOpenPR(ctx context.Context, repo, head, base string
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (g *GitLabProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	return findMergedPR(ctx, g, repo, head, base, headSHA, since)
+func (g *GitLabProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	return findMergedPR(ctx, g, repo, head, base, headSHAs, since)
 }
 
 func (g *GitLabProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
@@ -307,8 +308,8 @@ func (f *ForgejoProvider) FindOpenPR(ctx context.Context, repo, head, base strin
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (f *ForgejoProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	return findMergedPR(ctx, f, repo, head, base, headSHA, since)
+func (f *ForgejoProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	return findMergedPR(ctx, f, repo, head, base, headSHAs, since)
 }
 
 func (f *ForgejoProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
@@ -377,8 +378,8 @@ func (b *BitbucketProvider) FindOpenPR(ctx context.Context, repo, head, base str
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (b *BitbucketProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	return findMergedPR(ctx, b, repo, head, base, headSHA, since)
+func (b *BitbucketProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	return findMergedPR(ctx, b, repo, head, base, headSHAs, since)
 }
 
 func (b *BitbucketProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
@@ -458,8 +459,8 @@ func (b *BitbucketDCProvider) FindOpenPR(ctx context.Context, repo, head, base s
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (b *BitbucketDCProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	return findMergedPR(ctx, b, repo, head, base, headSHA, since)
+func (b *BitbucketDCProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	return findMergedPR(ctx, b, repo, head, base, headSHAs, since)
 }
 
 func (b *BitbucketDCProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
@@ -555,8 +556,8 @@ func (a *AzureDevOpsProvider) FindOpenPR(ctx context.Context, repo, head, base s
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (a *AzureDevOpsProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
-	return findMergedPR(ctx, a, repo, head, base, headSHA, since)
+func (a *AzureDevOpsProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
+	return findMergedPR(ctx, a, repo, head, base, headSHAs, since)
 }
 
 func (a *AzureDevOpsProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
@@ -575,12 +576,12 @@ func (d *DynamicProvider) FindOpenPR(ctx context.Context, repo, head, base strin
 }
 
 // FindMergedPR forwards to the active provider.
-func (d *DynamicProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
+func (d *DynamicProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
 	f, ok := d.current().(MergedPRFinder)
 	if !ok {
 		return nil, errors.ErrUnsupported
 	}
-	return f.FindMergedPR(ctx, repo, head, base, headSHA, since)
+	return f.FindMergedPR(ctx, repo, head, base, headSHAs, since)
 }
 
 // FindOpenPR implements OpenPRFinder.
@@ -596,7 +597,7 @@ func (g *guardedProvider) FindOpenPR(ctx context.Context, repo, head, base strin
 }
 
 // FindMergedPR implements MergedPRFinder.
-func (g *guardedProvider) FindMergedPR(ctx context.Context, repo, head, base, headSHA string, since time.Time) (*FoundPR, error) {
+func (g *guardedProvider) FindMergedPR(ctx context.Context, repo, head, base string, headSHAs []string, since time.Time) (*FoundPR, error) {
 	if err := g.check("find merged PRs in", repo); err != nil {
 		return nil, err
 	}
@@ -604,7 +605,7 @@ func (g *guardedProvider) FindMergedPR(ctx context.Context, repo, head, base, he
 	if !ok {
 		return nil, errors.ErrUnsupported
 	}
-	return f.FindMergedPR(ctx, repo, head, base, headSHA, since)
+	return f.FindMergedPR(ctx, repo, head, base, headSHAs, since)
 }
 
 var (

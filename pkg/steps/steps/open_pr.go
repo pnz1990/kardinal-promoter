@@ -370,11 +370,12 @@ func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch str
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
-	// Only a PR whose head is the commit this promotion pushed to its
-	// branch is its own: git-push records it (pushedSHA) before open-pr
-	// runs. Without it there is nothing to compare, and nothing is adopted.
-	pushed := state.Outputs[OutputPushedSHA]
-	if pushed == "" {
+	// Only a PR whose head is a commit this promotion pushed to its branch
+	// is its own: git-push records them (pushedSHA, and the pushedSHAs
+	// history, since a restarted run pushes a new commit) before open-pr
+	// runs. Without one there is nothing to compare, and nothing is adopted.
+	pushed := PushedSHAs(state.Outputs)
+	if len(pushed) == 0 {
 		return noPR, nil
 	}
 	var since time.Time

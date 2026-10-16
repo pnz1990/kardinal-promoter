@@ -33,13 +33,13 @@ type mergedFinderSCM struct {
 	found *scm.FoundPR
 	err   error
 	heads []string
-	shas  []string
+	shas  [][]string
 	since []time.Time
 }
 
-func (m *mergedFinderSCM) FindMergedPR(_ context.Context, _, head, _, headSHA string, since time.Time) (*scm.FoundPR, error) {
+func (m *mergedFinderSCM) FindMergedPR(_ context.Context, _, head, _ string, headSHAs []string, since time.Time) (*scm.FoundPR, error) {
 	m.heads = append(m.heads, head)
-	m.shas = append(m.shas, headSHA)
+	m.shas = append(m.shas, headSHAs)
 	m.since = append(m.since, since)
 	return m.found, m.err
 }
@@ -100,7 +100,7 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 		require.Len(t, s.heads, 1)
 		assert.Contains(t, s.heads[0], "/b1/prod", "looked up by the step's own head branch")
 		assert.Equal(t, ps.CreationTimestamp.Add(-time.Minute), s.since[0], "only PRs this promotion could have opened")
-		assert.Equal(t, pushedBeforeCrash, s.shas[0], "only a PR with the commit the crashed run pushed")
+		assert.Equal(t, []string{pushedBeforeCrash}, s.shas[0], "only a PR with a commit the crashed run pushed")
 		var prs v1alpha1.PRStatus
 		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "prs-step"}, &prs))
 		assert.Equal(t, 7, prs.Spec.PRNumber, "the PRStatus polls the adopted PR")
@@ -312,4 +312,33 @@ func TestOpenPRWithAForeignHead(t *testing.T) {
 		assert.Equal(t, 1, g.pushes)
 		assert.Zero(t, s.openCalled)
 	})
+}
+
+// TestPRMergedWithAnEarlierPush (#2065, found by the chaos scenario): the
+// first run pushed C1, opened the PR and crashed; a reviewer merged it with
+// C1; a restarted run, cloned before the merge landed, pushed a new commit
+// C2 (its commit time differs) and crashed again. The run that then finds
+// nothing to commit adopts the merged PR: its head is C1, one of the
+// commits the step pushed (status.outputs.pushedSHAs), though not the
+// latest (pushedSHA).
+func TestPRMergedWithAnEarlierPush(t *testing.T) {
+	const c1, c2 = "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1", pushedBeforeCrash
+	prs := stepPRStatus(v1alpha1.PRStatusSpec{}, 1, 1, v1alpha1.PRStatusStatus{})
+	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
+	ps.CreationTimestamp.Time = time.Now().Add(-10 * time.Minute).Truncate(time.Second)
+	ps.Status.CurrentStepIndex = 2
+	ps.Spec.PRStatusRef = prs.Name
+	ps.Status.Outputs = map[string]string{"pushedSHA": c2, "pushedSHAs": c1 + "," + c2}
+	c := newClient(t, ps, prs, makePipeline("p"), makeBundle("b1", "p"))
+	s := &mergedFinderSCM{mockSCM: &mockSCM{merged: true},
+		found: &scm.FoundPR{Number: 7, URL: "https://github.com/test/repo/pull/7", HeadSHA: c1, OpenedAt: time.Now().Add(-5 * time.Minute)}}
+	r := &promotionstep.Reconciler{Client: c, SCM: s, GitClient: &nothingToCommitGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, "step")
+
+	got := getStep(t, c, "step")
+	assert.Equal(t, "WaitingForMerge", got.Status.State, got.Status.Message)
+	assert.Equal(t, "7", got.Status.Outputs["prNumber"])
+	require.Len(t, s.shas, 1)
+	assert.Equal(t, []string{c1, c2}, s.shas[0], "every commit the step pushed")
 }

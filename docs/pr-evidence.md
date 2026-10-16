@@ -392,7 +392,9 @@ is to reset the branch to kardinal's commit (`git push --force origin
 help, because the branch still carries the other commit.
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
-  looks up the merged PR of its branch, with the recorded commit as its head, and records the
+  looks up the merged PR of its branch, with a commit the step pushed as its head
+  (`status.outputs.pushedSHAs` keeps the last eight: a restarted run pushes a new commit, while
+  the PR a reviewer merged carries an earlier one), and records the
   merge as for any PR: the step's outputs name the PR, its merge commit and who merged it (asked
   of the SCM), and the `PRMerged` AuditEvent is written. Only a PR opened after the PromotionStep
   was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is

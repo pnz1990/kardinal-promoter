@@ -1353,15 +1353,15 @@ type finderSCM struct {
 	*mockSCMProvider
 	open, merged *scm.FoundPR
 	err          error
-	mergedSHA    []string // the headSHA of every FindMergedPR call
+	mergedSHA    [][]string // the headSHAs of every FindMergedPR call
 }
 
 func (f *finderSCM) FindOpenPR(context.Context, string, string, string) (*scm.FoundPR, error) {
 	return f.open, f.err
 }
 
-func (f *finderSCM) FindMergedPR(_ context.Context, _, _, _, headSHA string, _ time.Time) (*scm.FoundPR, error) {
-	f.mergedSHA = append(f.mergedSHA, headSHA)
+func (f *finderSCM) FindMergedPR(_ context.Context, _, _, _ string, headSHAs []string, _ time.Time) (*scm.FoundPR, error) {
+	f.mergedSHA = append(f.mergedSHA, headSHAs)
 	return f.merged, f.err
 }
 
@@ -1398,7 +1398,7 @@ func TestOpenPR_NothingToCommit(t *testing.T) {
 		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
 		assert.Equal(t, parentsteps.StepSuccess, res.Status)
 		assert.Equal(t, map[string]string{"prURL": "https://github.com/owner/repo/pull/6", "prNumber": "6", "noChanges": "false"}, res.Outputs)
-		assert.Equal(t, []string{testPushed}, m.mergedSHA, "only a PR with the commit kardinal pushed")
+		assert.Equal(t, [][]string{{testPushed}}, m.mergedSHA, "only a PR with a commit kardinal pushed")
 		assert.Zero(t, m.openPRCalls)
 	})
 	t.Run("no recorded push: nothing is adopted", func(t *testing.T) {
@@ -1668,4 +1668,13 @@ func TestOpenPR_BranchHeadMustContainKardinalsCommit(t *testing.T) {
 		require.ErrorAs(t, err, &foreign)
 		assert.Zero(t, m.openPRCalls)
 	})
+}
+
+// TestPushedSHAs: the commits a step pushed to its PR branch are its
+// pushedSHAs history and its latest pushedSHA, without repeats.
+func TestPushedSHAs(t *testing.T) {
+	assert.Empty(t, steps.PushedSHAs(map[string]string{}))
+	assert.Equal(t, []string{"a"}, steps.PushedSHAs(map[string]string{"pushedSHA": "a"}), "a step from before the history")
+	assert.Equal(t, []string{"a", "b"}, steps.PushedSHAs(map[string]string{"pushedSHA": "b", "pushedSHAs": "a,b"}))
+	assert.Equal(t, []string{"a", "b", "c"}, steps.PushedSHAs(map[string]string{"pushedSHA": "c", "pushedSHAs": "a,b"}))
 }
