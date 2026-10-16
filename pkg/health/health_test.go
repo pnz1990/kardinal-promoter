@@ -765,6 +765,13 @@ func TestArgoCDAdapter_AbortedRollout(t *testing.T) {
 			isUnhealthy, "health=Degraded"},
 		{"another kind whose message says aborted", []interface{}{resource("apps", "Deployment", "Degraded", "rollout aborted")},
 			isUnhealthy, "health=Degraded"},
+		{"a Rollout of another API group (OpenKruise)", []interface{}{resource("rollouts.kruise.io", "Rollout", "Degraded", "Rollout is aborted")},
+			isUnhealthy, "health=Degraded"},
+		{"a bare RolloutAborted message", []interface{}{resource("argoproj.io", "Rollout", "Degraded", "RolloutAborted")},
+			isTerminal, "aborted the update: RolloutAborted"},
+		{"a message that only names an abort setting", []interface{}{resource("argoproj.io", "Rollout", "Degraded",
+			"InvalidSpec: spec.strategy.canary.abortScaleDownDelaySeconds must be positive")},
+			isUnhealthy, "health=Degraded"},
 		{"no resources", nil, isUnhealthy, "health=Degraded"},
 	}
 	for _, tc := range tests {

@@ -797,6 +797,11 @@ func TestBakeWaitingIsNotAnAlarm(t *testing.T) {
 			status:    v1alpha1.PromotionStepStatus{HealthCheckExpiry: &metav1.Time{Time: time.Now().Add(30 * time.Second)}},
 			deploy:    degradedDeployment("p", "test"),
 			wantState: "HealthChecking", wantMsg: "bake: waiting for the first healthy check (unhealthy via resource)", wantFailures: 1},
+		{name: "fail-on-alarm: a target not created yet waits for the first healthy check (#2006, QA)", env: bake("fail-on-alarm"),
+			status:    v1alpha1.PromotionStepStatus{HealthCheckExpiry: &metav1.Time{Time: time.Now().Add(30 * time.Second)}},
+			deploy:    nil,
+			wantState: "HealthChecking", wantMsg: "bake: waiting for the first healthy check (unhealthy via resource): Deployment test/p not found",
+			wantFailures: 1},
 		{name: "fail-on-alarm: Waiting before the first healthy check waits", env: bake("fail-on-alarm"),
 			status:    v1alpha1.PromotionStepStatus{HealthCheckExpiry: &metav1.Time{Time: time.Now().Add(30 * time.Second)}},
 			deploy:    rollingDeployment("p", "test"),
@@ -808,7 +813,11 @@ func TestBakeWaitingIsNotAnAlarm(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			before := time.Now()
-			_, got, _ := healthCase{env: tt.env, status: tt.status, objs: []client.Object{tt.deploy}}.run(t)
+			var objs []client.Object
+			if tt.deploy != nil {
+				objs = []client.Object{tt.deploy}
+			}
+			_, got, _ := healthCase{env: tt.env, status: tt.status, objs: objs}.run(t)
 			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
 			assert.Contains(t, got.Status.Message, tt.wantMsg)
 			assert.Equal(t, tt.wantFailures, got.Status.ConsecutiveHealthFailures)
@@ -905,7 +914,11 @@ func TestBakeFlappingEnds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, got, _ := healthCase{env: tt.env, status: tt.status, objs: []client.Object{tt.deploy}}.run(t)
+			var objs []client.Object
+			if tt.deploy != nil {
+				objs = []client.Object{tt.deploy}
+			}
+			_, got, _ := healthCase{env: tt.env, status: tt.status, objs: objs}.run(t)
 			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
 			assert.Contains(t, got.Status.Message, tt.wantMsg)
 			assert.Equal(t, tt.wantResets, got.Status.BakeResets)
