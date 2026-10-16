@@ -288,6 +288,10 @@ func TestActorsOnAPIServer(t *testing.T) {
 	require.Error(t, err, "18c a stamped pause without the label")
 	require.Contains(t, err.Error(), `must carry the label kardinal.io/actor-check: "true"`)
 	require.NoError(t, pauseWith(as("bob"), nil, false), "18c kubectl without a record or the label")
+	// A record without an actor stamp (kubectl, scripts) has nothing to
+	// check: no label needed (TestUI_ScopedWritesAdmission's raw hold).
+	require.NoError(t, pauseWith(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Reason: "unstamped"}, false),
+		"18c an unstamped record without the label")
 	// Only by is wrong: the stamp is alice's own, so only the hold-writes
 	// policy refuses (two refusing policies answer in no fixed order).
 	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "bob", Actor: hu("alice")})

@@ -257,7 +257,9 @@ spec:
 ---
 # A write that adds an actor stamp to a Pipeline (a hold, a spec.lastChange)
 # or a Bundle (a rejection) carries the label kardinal.io/actor-check: true,
-# so <release>-actor-records checks the stamp. No params: it judges every
+# so <release>-actor-records checks the stamp. A hold, change or rejection
+# without a stamp (kubectl, scripts) needs no label: there is nothing to
+# check, and -actor-records would admit it. No params: it judges every
 # Pipeline write and Bundle update, the controller's included, at no cost
 # that grows with the agent registry.
 apiVersion: admissionregistration.k8s.io/v1
@@ -282,11 +284,11 @@ spec:
     {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
   validations:
     - expression: >-
-        request.userInfo.username in {{ $controllers }} || size(variables.stamps) == 0 ||
+        request.userInfo.username in {{ $controllers }} || variables.stamps.all(s, s == null) ||
         (has(object.metadata.labels) && 'kardinal.io/actor-check' in object.metadata.labels &&
           object.metadata.labels['kardinal.io/actor-check'] == 'true')
       message: >-
-        a write that adds a hold, a spec.lastChange or a rejection must carry the label
+        a write that adds a hold, a spec.lastChange or a rejection with an actor stamp must carry the label
         kardinal.io/actor-check: "true", so its actor stamp is checked: add it to metadata.labels in the
         same write (kubectl, scripts and GitOps tools), or use kardinal from v0.12 on, which sets it
       reason: Forbidden
