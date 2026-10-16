@@ -13,6 +13,11 @@ makes the call. Each helper is a YAML list at column 0; include it under
                     <fullname>-manager-role in controller.watchNamespace.
   rules.cluster     cluster-scoped kinds. Cluster mode: the same ClusterRole.
                     Namespace mode: ClusterRole <fullname>-cluster-scoped.
+  rules.apiServer   the default namespace's kubernetes EndpointSlice. Cluster
+                    mode: the manager ClusterRole. Namespace mode: Role
+                    <fullname>-apiserver-endpoints in default (it is namespaced:
+                    the cluster-scoped ClusterRole holds only cluster-scoped
+                    kinds).
   rules.release     the controller's own namespace (leader election, the
                     kardinal-version ConfigMap and the SCM token Secret). Role
                     <fullname>-leader-election.
@@ -263,12 +268,6 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["steptemplates/status"]
   verbs: ["get", "update", "patch"]
-# An AgentRun's NetworkPolicy lets its Pod reach the API server: the
-# controller reads the addresses of the kubernetes Service, uncached, by name.
-- apiGroups: ["discovery.k8s.io"]
-  resources: ["endpointslices"]
-  resourceNames: ["kubernetes"]
-  verbs: ["get"]
 # ClusterScmProviders, read like ScmProviders and their Ready condition
 # written.
 - apiGroups: ["kardinal.io"]
@@ -350,6 +349,15 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["changewindows"]
   verbs: ["create", "update", "delete"]
 {{- end }}
+{{- end }}
+
+{{- define "kardinal-promoter.rules.apiServer" -}}
+# An AgentRun's NetworkPolicy lets its Pod reach the API server: the
+# controller reads the addresses of the kubernetes Service, uncached, by name.
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  resourceNames: ["kubernetes"]
+  verbs: ["get"]
 {{- end }}
 
 {{- define "kardinal-promoter.rules.release" -}}

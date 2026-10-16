@@ -24,5 +24,6 @@ metadata:
 rules:
   {{- if not .Values.controller.watchNamespace }}
   {{- include "kardinal-promoter.rules.namespaced" . | nindent 2 }}
+  {{- include "kardinal-promoter.rules.apiServer" . | nindent 2 }}
   {{- end }}
   {{- include "kardinal-promoter.rules.cluster" . | nindent 2 }}

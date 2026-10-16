@@ -382,6 +382,7 @@ const (
 	inWatched accessScope = iota // every namespace the controller reconciles
 	inRelease                    // the controller's own namespace
 	inCluster                    // cluster-scoped resource
+	inDefault                    // the default namespace (the kubernetes Service's)
 )
 
 type apiAccess struct {
@@ -433,7 +434,7 @@ func controllerAccess() []apiAccess {
 		{"multicluster.x-k8s.io", "clusterprofiles", []string{"get", "list"}, inWatched, "", "pipeline fleets.go: fleet selector kind ClusterProfile (uncached List)"},
 		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "hookrun reconciler.go: hook Jobs (Owns, create, delete on timeout); agentrun reconciler.go: agent Jobs"},
 		{"networking.k8s.io", "networkpolicies", []string{"get", "create"}, inWatched, "", "agentrun reconciler.go networkPolicy (create, adopt check)"},
-		{"discovery.k8s.io", "endpointslices", []string{"get"}, inCluster, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
+		{"discovery.k8s.io", "endpointslices", []string{"get"}, inDefault, "kubernetes", "agentrun reconciler.go apiServerEgress (uncached Get of default/kubernetes)"},
 		{"", "serviceaccounts", []string{"delete"}, inWatched, "", "agentrun reconciler.go revoke: a run's own ServiceAccount"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-writer", "agentrun reconciler.go ensureAccess"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-agentrun-reader", "agentrun reconciler.go ensureAccess"},
@@ -528,6 +529,8 @@ func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc ap
 		namespaces = []string{releaseNS}
 	case inCluster:
 		namespaces = []string{""}
+	case inDefault:
+		namespaces = []string{"default"}
 	}
 	for _, ns := range namespaces {
 		for _, verb := range acc.verbs {
@@ -1783,4 +1786,24 @@ func TestChartAggregatedClusterRolesLeaveRulesUnset(t *testing.T) {
 		}
 		assert.Positive(t, aggregated, "args %v: the chart renders the aggregated admin ClusterRole", args)
 	}
+}
+
+// TestChartNamespaceModeClusterRoleIsClusterScoped: in namespace mode the
+// <fullname>-cluster-scoped ClusterRole holds only cluster-scoped kinds, as
+// e2e's TestChart_WatchNamespace checks against the API server; the
+// kubernetes EndpointSlice AgentRuns need is a Role in default (the v0.12
+// release gate found it in the ClusterRole).
+func TestChartNamespaceModeClusterRoleIsClusterScoped(t *testing.T) {
+	v := newRBACView(t, render(t, "kardinal-promoter", "--set", "controller.watchNamespace="+releaseNS))
+	cr, ok := v.clusterRoles["kardinal-promoter-cluster-scoped"]
+	require.True(t, ok)
+	for _, r := range cr.Rules {
+		assert.NotContains(t, r.Resources, "endpointslices", "EndpointSlices are namespaced")
+	}
+	role, ok := v.roles["default/kardinal-promoter-apiserver-endpoints"]
+	require.True(t, ok, "the Role in default")
+	require.Len(t, role.Rules, 1)
+	assert.Equal(t, []string{"kubernetes"}, role.Rules[0].ResourceNames)
+	assert.True(t, v.allowed(releaseNS, "kardinal-promoter", "default", "discovery.k8s.io", "endpointslices", "get", "kubernetes"))
+	assert.False(t, v.allowed(releaseNS, "kardinal-promoter", "default", "discovery.k8s.io", "endpointslices", "get", "other"))
 }

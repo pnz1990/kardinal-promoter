@@ -15,6 +15,17 @@ metadata:
 rules:
   {{- include "kardinal-promoter.rules.namespaced" . | nindent 2 }}
 ---
+# Namespace mode: the kubernetes EndpointSlice, in default (AgentRuns).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-apiserver-endpoints
+  namespace: default
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  {{- include "kardinal-promoter.rules.apiServer" . | nindent 2 }}
+---
 {{- end }}
 # Leader election and the kardinal-version ConfigMap, in the release namespace.
 apiVersion: rbac.authorization.k8s.io/v1

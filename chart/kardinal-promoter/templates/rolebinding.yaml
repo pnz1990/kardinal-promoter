@@ -19,6 +19,22 @@ subjects:
     name: {{ include "kardinal-promoter.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-apiserver-endpoints
+  namespace: default
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kardinal-promoter.fullname" . }}-apiserver-endpoints
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kardinal-promoter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
 {{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

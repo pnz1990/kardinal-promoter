@@ -14,7 +14,7 @@ Object names come from the chart's full name, which is `kardinal-promoter` for a
 |---|---|---|
 | ServiceAccount `kardinal-promoter` | Release namespace | The controller identity |
 | ClusterRole `kardinal-promoter-manager-role`, ClusterRoleBinding `kardinal-promoter-manager-rolebinding` | Cluster (default) | The namespaced rules in every namespace, plus the cluster-scoped rules |
-| Role and RoleBinding `kardinal-promoter-manager-role` / `-manager-rolebinding`, ClusterRole and binding `kardinal-promoter-cluster-scoped` | Namespace mode (`controller.watchNamespace`) | The namespaced rules in the watched namespace; the cluster-scoped rules |
+| Role and RoleBinding `kardinal-promoter-manager-role` / `-manager-rolebinding`, ClusterRole and binding `kardinal-promoter-cluster-scoped`, Role and RoleBinding `kardinal-promoter-apiserver-endpoints` in `default` | Namespace mode (`controller.watchNamespace`) | The namespaced rules in the watched namespace; the cluster-scoped rules; `get` on the `kubernetes` EndpointSlice, whose API server addresses an AgentRun's NetworkPolicy allows |
 | Role and RoleBinding `kardinal-promoter-leader-election` | Release namespace | The leader-election Lease, the `kardinal-version` ConfigMap, and `get` on the SCM token Secret by name |
 | ClusterRoles `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` | Cluster | Bound (with RoleBindings only) to the ServiceAccount kro impersonates for each Graph (`graph.serviceAccountName`, default `kardinal-graph`) |
 | ClusterRole `kardinal-promoter-kro-watch` | Cluster | Lets kro watch the kinds a Graph renders; aggregated into kro's role when kro uses `rbac.mode=aggregation`. Rendered only when `graph.aggregateToKro=true` (the default) |

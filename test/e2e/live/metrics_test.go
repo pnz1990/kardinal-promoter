@@ -689,5 +689,5 @@ func TestObs_ChartMonitoring(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{"KardinalControllerDown", "KardinalHighReconcileErrors", "KardinalBundleReconcilerStalled",
-		"KardinalWorkQueueBacklog", "KardinalPolicyGateReconcileSlow"}, names)
+		"KardinalWorkQueueBacklog", "KardinalPolicyGateReconcileSlow", "KardinalAgentIndexNearFull", "KardinalAgentIndexFull"}, names)
 }
