@@ -35,6 +35,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
@@ -814,7 +815,7 @@ func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string, now tim
 			continue
 		}
 		var inst *kardinalv1alpha1.MetricCheck
-		if found := instances[mc.Name]; len(found) == 1 {
+		if found := instances[labelvalue.Fit(mc.Name)]; len(found) == 1 { // the instances' label
 			inst = found[0]
 		}
 		result[mc.Name] = entryOf(inst)

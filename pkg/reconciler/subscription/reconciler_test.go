@@ -31,12 +31,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
@@ -783,4 +785,44 @@ func TestSubscriptionReconciler_ImageProvenance(t *testing.T) {
 			assert.Equal(t, tc.want, b.Spec.Provenance)
 		})
 	}
+}
+
+// TestSubscriptionReconciler_LongNameFitsLabel (#2034 class): a Subscription
+// named longer than a label value creates Bundles whose
+// kardinal.io/subscription label is labelvalue.Fit of its name, which the
+// API server accepts, and finds them again by it (no duplicate).
+func TestSubscriptionReconciler_LongNameFitsLabel(t *testing.T) {
+	long := "checkout-service-images-from-the-ghcr-registry-of-the-payments-team-v2"
+	require.Greater(t, len(long), validation.LabelValueMaxLength)
+	sub := makeImageSub(long, "default", "my-pipeline", "ghcr.io/test/app")
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+	r := &subscription.Reconciler{
+		Client: c,
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
+			return &forcedChangeWatcher{digest: "sha256:" + strings.Repeat("a", 64), tag: "v2.0.0"}, nil
+		},
+		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	// The Bundle of this digest under another name (as an HA replica or an
+	// older controller names it): only the label selector finds it.
+	var first kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &first, client.InNamespace("default")))
+	require.Len(t, first.Items, 1)
+	moved := first.Items[0].DeepCopy()
+	moved.Name, moved.ResourceVersion = "moved", ""
+	require.NoError(t, c.Delete(context.Background(), &first.Items[0]))
+	require.NoError(t, c.Create(context.Background(), moved))
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var bundles kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles, client.InNamespace("default")))
+	require.Len(t, bundles.Items, 1, "found again by its label: no duplicate")
+	for k, v := range bundles.Items[0].Labels {
+		assert.Empty(t, validation.IsValidLabelValue(v), "label %s=%q", k, v)
+	}
+	assert.Equal(t, labelvalue.Fit(long), bundles.Items[0].Labels["kardinal.io/subscription"])
 }

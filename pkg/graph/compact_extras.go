@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 )
 
 // Hooks and Argo Rollouts analyses in the compact shape.
@@ -284,7 +285,7 @@ func compactAnalysisNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv
 		chunk := runs[i*MaxCollectionItems : min(len(runs), (i+1)*MaxCollectionItems)]
 		items := make([]interface{}, len(chunk))
 		for j, r := range chunk {
-			items[j] = map[string]interface{}{"name": r.name, "environment": r.env, "template": r.template,
+			items[j] = map[string]interface{}{"name": r.name, "environment": r.env, "template": labelvalue.Fit(r.template),
 				"step": r.step, "spec": r.spec}
 		}
 		field := chunkID("items", i)

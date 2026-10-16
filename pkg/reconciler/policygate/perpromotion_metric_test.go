@@ -17,6 +17,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -74,4 +75,30 @@ func TestPolicyGateReconciler_PerPromotionMetric(t *testing.T) {
 			assert.Equal(t, tt.wantReady, got.Status.Ready, got.Status.Reason)
 		})
 	}
+}
+
+// TestPolicyGateReconciler_PerPromotionMetricLongName (#2034 class): a
+// template named longer than a label value is found through its instance,
+// whose kardinal.io/metric-template label the Graph wrote as
+// labelvalue.Fit of the name.
+func TestPolicyGateReconciler_PerPromotionMetricLongName(t *testing.T) {
+	long := "error-rate-of-the-checkout-service-in-every-region-and-every-zone-v2"
+	mc := makeMetricCheck("i1", "default", "0.001", "Pass")
+	mc.Labels = map[string]string{graph.LabelMetricTemplate: labelvalue.Fit(long),
+		"kardinal.io/bundle": "nginx-demo-v1", "kardinal.io/environment": "prod"}
+	template := makeMetricCheck(long, "default", "", "")
+	template.Spec.PerPromotion = true
+	template.Status = kardinalv1alpha1.MetricCheckStatus{}
+	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1", `metrics["`+long+`"].result == "Pass"`, "1m")
+	c := fake.NewClientBuilder().WithScheme(newScheme()).
+		WithObjects(gate, makeBundle("nginx-demo-v1", "default"), template, mc).WithStatusSubresource(gate).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return metricValidUntil.Add(-time.Minute) }
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"}}
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.True(t, got.Status.Ready, got.Status.Reason)
 }

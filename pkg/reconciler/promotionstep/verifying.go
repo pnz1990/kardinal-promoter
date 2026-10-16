@@ -17,6 +17,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 )
 
 // Verifying: after the health check passed, a step with post-deploy hooks
@@ -85,8 +86,9 @@ func analysisResults(ps *v1alpha1.PromotionStep, inconclusivePasses bool) analys
 	}
 	var v analysisVerdict
 	for _, tmpl := range ps.Spec.Analyses {
-		a, ok := newest[tmpl]
-		if count[tmpl] > 1 {
+		// The runs carry the template in a label, fitted to 63 characters.
+		a, ok := newest[labelvalue.Fit(tmpl)]
+		if count[labelvalue.Fit(tmpl)] > 1 {
 			v.replaced = append(v.replaced, tmpl)
 		}
 		switch {

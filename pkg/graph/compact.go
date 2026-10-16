@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 )
 
 // AnnotationGraphShape on a Pipeline chooses the Graph shape of its Bundles:
@@ -541,7 +542,7 @@ func compactMetricNodes(pipelineName, bundleName string, metrics []compactMetric
 			items[j] = map[string]interface{}{
 				"name":        m.name,
 				"environment": m.env,
-				"template":    m.template,
+				"template":    labelvalue.Fit(m.template), // only its label reads it
 				"upstreams":   toInterfaces(m.upstreams),
 				"spec":        m.spec,
 			}

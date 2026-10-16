@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -159,4 +160,18 @@ func TestVerifyingPolicyFromStep(t *testing.T) {
 	c := newClient(t, ps, pl, makeBundle("b1", "p"))
 	got, _ := reconcileHookStep(t, c, "step")
 	assert.Equal(t, "Failed", got.Status.State, "the step's snapshot says fail")
+}
+
+// TestVerifyingAnalysesLongTemplateName (#2034 class): an AnalysisTemplate
+// named longer than a label value is matched with its run, whose
+// kardinal.io/analysis-template label (and so the mirrored Template) is
+// labelvalue.Fit of the name.
+func TestVerifyingAnalysesLongTemplateName(t *testing.T) {
+	long := "smoke-test-of-the-checkout-service-in-every-region-and-every-zone-v2"
+	ps := verifyingStep(time.Now(), nil, &v1alpha1.PromotionStepLive{Analyses: []v1alpha1.LiveAnalysisRun{
+		{Name: "run-a", Template: labelvalue.Fit(long), Phase: "Successful"}}})
+	ps.Spec.Analyses = []string{long}
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	got, _ := reconcileHookStep(t, c, "step")
+	assert.Equal(t, "Verified", got.Status.State, got.Status.Message)
 }
