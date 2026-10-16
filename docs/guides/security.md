@@ -590,11 +590,20 @@ bundle-rejection and freezes policies. That an agent's stamp names its registere
 sponsor needs the AgentIndex. For a hold, a `spec.lastChange` and a rejection it is checked by
 `<release>-actor-records`, which admits while the index is missing (a fresh install, until the
 controller builds it, so Pipeline writes and Bundle updates never wait for it). In that window
-the stamp on one of these three records can, for an agent only: name another agent or sponsor,
-or leave the agent out; claim `bot` when the agent is a ServiceAccount; and claim `human` when
-it is a user or a member of a registered group. It still names the requester as its principal
-and carries no `via`. A freeze and its lift are checked by `<release>-actor`, which refuses them
-while the index is missing, so they have no such window.
+admission cannot tell an agent's stamp from a forged one: anyone may write a stamp of kind
+`agent` naming any agent and sponsor, and an agent may stamp itself `bot` (a ServiceAccount) or
+`human` (a user or a member of a registered group); the stamp still names the requester as its
+principal and carries no `via`.
+
+The controller therefore checks every such stamp against the AgentIndex again before an AuditEvent
+records it, and agents fail closed: a stamp of kind `agent` is recorded only when the index says
+the requester is that agent of that sponsor (for an agent registered by group, which the
+controller cannot see, that the agent is registered with that sponsor), and never while the index
+is missing or not ready; a non-agent stamp of a user the index names as an agent is not recorded
+either. A stamp that is not recorded leaves the record with no actor, and its message says why
+(`actor stamp not recorded: ...`). People's and bots' stamps are recorded during an index outage
+as at any time. A freeze and its lift are checked by `<release>-actor`, which refuses every
+ChangeWindow write while the index is missing, so they have no such window.
 
 The CRD also accepts the actions `HealthCheckFailed` and `GateBlocked`, but kardinal never writes
 them: a failed health check records `PromotionFailed` (or `RollbackStarted` with

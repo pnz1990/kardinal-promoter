@@ -318,7 +318,9 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 }
 
 // markPRStatusMerged finds PRStatus CRDs matching the merged PR and sets
-// status.merged = true, with status.mergeCommitSHA when the event carries it.
+// status.merged = true and status.mergedVia = webhook. It never writes the
+// event's merge commit or merger: the PRStatus reconciler asks the SCM API for
+// both (#1939, #2021).
 // The PromotionStep reconciler will detect the change on its next reconcile
 // and advance to HealthChecking.
 //

@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
@@ -303,5 +304,51 @@ func TestPipelineHolds_RepeatedIdenticalRelease(t *testing.T) {
 	require.Len(t, released, 2)
 	for _, e := range released {
 		assert.Contains(t, e.Spec.Message, "released by alice: fixed")
+	}
+}
+
+// TestPipelinePauseAudit_AgentStampVerified (#2024 QA): the record carries
+// an agent stamp only when the AgentIndex vouches for it. While the index is
+// missing, admission cannot check an agent's agent and sponsor, so QA's case
+// (a person stamping agent fixer of carol) is admitted; the controller does
+// not record that stamp (agents fail closed), says why, and still records a
+// person's own stamp.
+func TestPipelinePauseAudit_AgentStampVerified(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		stamp *kardinalv1alpha1.Actor
+		kept  bool
+	}{
+		{"a person stamping agent, index missing", &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorAgent,
+			Principal: "alice", Agent: "fixer", Sponsor: "carol"}, false},
+		{"a person's own stamp, index missing", &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman,
+			Principal: "alice"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := makePipelineWithEnvs("app", "default", "test")
+			c := newClientWithIndex(newPipelineScheme(), p)
+			r := &pipeline.Reconciler{Client: c, Now: time.Now,
+				Agents: &actor.Source{Reader: c, Name: "kardinal-promoter"}} // no AgentIndex in the cluster
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+			_, err := r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			require.NoError(t, lifecycle.Pause(ctx, c, "default", "app", &kardinalv1alpha1.PipelineChange{By: "alice", Actor: tc.stamp}))
+			var cur kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &cur))
+			cur.Generation++
+			require.NoError(t, c.Update(ctx, &cur))
+			_, err = r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			paused := auditsOf(t, c, pipeline.AuditActionPipelinePaused)
+			require.Len(t, paused, 1)
+			assert.Contains(t, paused[0].Spec.Message, "alice paused pipeline app")
+			if tc.kept {
+				assert.Equal(t, tc.stamp, paused[0].Spec.Actor)
+			} else {
+				assert.Nil(t, paused[0].Spec.Actor, "an agent stamp the AgentIndex cannot vouch for is not recorded")
+				assert.Contains(t, paused[0].Spec.Message, "actor stamp not recorded: its agent stamp could not be verified")
+			}
+		})
 	}
 }

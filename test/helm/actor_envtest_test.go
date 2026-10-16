@@ -333,6 +333,14 @@ func TestActorsOnAPIServer(t *testing.T) {
 		Actor: &v1alpha1.Actor{Kind: "human", Principal: "alice", Via: "ui"}}), "23b via, index missing")
 	require.NoError(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Resume", By: "alice", Actor: hu("alice")}),
 		"23b a person's own stamp, index missing")
+	// QA's case on #2024: a person stamping agent fixer of carol. Admission
+	// cannot see the index, so it admits the write (refusing it would need
+	// the index, which would stop every Pipeline write during an outage);
+	// the controller does not record the unverified agent stamp
+	// (actor.VerifyStamp; TestPipelinePauseAudit_AgentStampVerified).
+	require.NoError(t, pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice",
+		Actor: &v1alpha1.Actor{Kind: "agent", Principal: "alice", Agent: "fixer", Sponsor: "carol"}}),
+		"23b an agent stamp is admitted while the index is missing; the controller does not record it")
 	rb2.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("bob")}
 	require.Error(t, as("alice").Update(ctx, rb2), "23b a rejection stamped with someone else, index missing")
 	var fz3 v1alpha1.ChangeWindow

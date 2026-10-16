@@ -54,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -155,6 +156,10 @@ type graphReader interface {
 // manages Bundle supersession, syncs evidence from PromotionStep status into
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
+	// Agents reads the release's AgentIndex, which vouches for a
+	// rejection's agent stamp (actor.VerifyStamp); nil records no agent
+	// stamp.
+	Agents *actor.Source
 	// Workers is how many Bundles are reconciled at once (--bundle-workers);
 	// 0 is the manager's default. One Bundle is never reconciled twice at
 	// once (the work queue); the maxConcurrentPromotions count of one
@@ -995,7 +1000,7 @@ func (r *Reconciler) markRejected(ctx context.Context, log zerolog.Logger,
 		// The record of who rejected the Bundle, in the same write as the
 		// phase (the audit outbox): a crash before it is written retries it.
 		// The time is read for this CRD status write (Graph-first).
-		b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, rejectionAuditEntry(b, r.now()))
+		b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, r.rejectionAuditEntry(ctx, b, r.now()))
 	}
 	setPhase(b, phaseRejected, r.now())
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Rejected", msg)
@@ -1037,13 +1042,14 @@ const AuditActionBundleRejected = "BundleRejected"
 // and why, as spec.rejected records them (the requester, verified by the
 // bundle-rejection admission policy or by the UI's review). Its name is
 // fixed per Bundle, so writing it again is a no-op.
-func rejectionAuditEntry(b *kardinalv1alpha1.Bundle, now time.Time) kardinalv1alpha1.PendingAuditEvent {
+func (r *Reconciler) rejectionAuditEntry(ctx context.Context, b *kardinalv1alpha1.Bundle, now time.Time) kardinalv1alpha1.PendingAuditEvent {
 	name := b.Name + "-rejected"
 	if len(name) > 253 {
 		sum := sha256.Sum256([]byte(b.Name))
 		name = b.Name[:200] + "-" + hex.EncodeToString(sum[:])[:10] + "-rejected"
 	}
 	rej := b.Spec.Rejected
+	stamp, note := r.rejectionStamp(ctx, rej)
 	return audit.Entry(name, map[string]string{
 		lifecycle.LabelPipeline: b.Spec.Pipeline,
 		lifecycle.LabelBundle:   b.Name,
@@ -1055,8 +1061,8 @@ func rejectionAuditEntry(b *kardinalv1alpha1.Bundle, now time.Time) kardinalv1al
 		Environment: rejectionEnvironment,
 		Action:      AuditActionBundleRejected,
 		Outcome:     "Success",
-		Message:     fmt.Sprintf("%s rejected bundle %s: %s", rej.By, b.Name, rej.Reason),
-		Actor:       rejectionStamp(rej),
+		Message:     fmt.Sprintf("%s rejected bundle %s: %s%s", rej.By, b.Name, rej.Reason, note),
+		Actor:       stamp,
 	}, metav1.NewTime(now))
 }
 
@@ -2343,12 +2349,19 @@ func (r *Reconciler) lockPipeline(namespace, pipeline string) (unlock func()) {
 	return mu.Unlock
 }
 
-// rejectionStamp is the rejection's actor stamp when it names the rejecting
-// user (rej.by), else nil: admission refuses another's stamp, and the record
-// never carries one either.
-func rejectionStamp(rej *kardinalv1alpha1.BundleRejection) *kardinalv1alpha1.Actor {
-	if rej.Actor == nil || rej.Actor.Principal != rej.By {
-		return nil
+// rejectionStamp is the rejection's actor stamp the BundleRejected record may
+// carry, and the message note saying why one is not (actor.VerifyStamp): a
+// stamp naming someone other than rej.by, or an agent the AgentIndex does not
+// vouch for (agents fail closed while it is missing), is not recorded.
+func (r *Reconciler) rejectionStamp(ctx context.Context, rej *kardinalv1alpha1.BundleRejection) (*kardinalv1alpha1.Actor, string) {
+	var idx *kardinalv1alpha1.AgentIndexStatus
+	idxErr := errors.New("no AgentIndex is configured (--agent-index)")
+	if r.Agents != nil && rej.Actor != nil {
+		idx, idxErr = r.Agents.Index(ctx)
 	}
-	return rej.Actor
+	stamp, why := actor.VerifyStamp(rej.Actor, rej.By, idx, idxErr)
+	if why == "" {
+		return stamp, ""
+	}
+	return stamp, " (actor stamp not recorded: " + why + ")"
 }

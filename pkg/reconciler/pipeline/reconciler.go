@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
@@ -117,6 +118,10 @@ func secretNotReferenceable(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
 // and status.phase.
 type Reconciler struct {
+	// Agents reads the release's AgentIndex, which vouches for the agent
+	// stamps the change records name (actor.VerifyStamp); nil records no
+	// agent stamp.
+	Agents *actor.Source
 	// Workers is how many objects are reconciled at once (--pipeline-workers);
 	// 0 is the manager's default. One object is never reconciled twice at
 	// once: the work queue serializes it.
@@ -198,14 +203,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// AuditEvents and status.observedPaused.
 	// spec.lastChange names who made a change only once: the change it was
 	// written with (status.observedLastChange records the one consumed).
-	fresh := freshChange(&p)
-	if err := r.reconcilePauseAudit(ctx, log, &p, fresh); err != nil {
+	rec := r.changeRecord(ctx, &p)
+	if err := r.reconcilePauseAudit(ctx, log, &p, rec); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	// Holds (#1528): expiry, the HoldCreated/HoldReleased AuditEvents and
 	// status.observedHolds.
-	holdRecheck, updated, err := r.reconcileHolds(ctx, log, &p, fresh)
+	holdRecheck, updated, err := r.reconcileHolds(ctx, log, &p, rec)
 	if err != nil || updated {
 		return ctrl.Result{}, err
 	}
