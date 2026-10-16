@@ -804,6 +804,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				return nil, nil, nil, err
 			}
 			compactSteps = append(compactSteps, compactStep{env: envName,
+				stepType:          stepTypeOf(pipeline, findEnvSpec(pipeline, envName), bundle),
 				render:            render,
 				name:              stepName,
 				prStatus:          prName,
@@ -820,11 +821,11 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			continue
 		}
 		// PromotionStep node — node ID must be a valid CEL identifier.
+		envSpec := findEnvSpec(pipeline, envName)
 		stepNode := buildPromotionStepNode(
 			pipelineName, envName, CELSafeSlug(envName), bundle, upstreams, envGates, gates.readyCond, prName,
-			heldCond(pipeline, envName),
+			heldCond(pipeline, envName), stepTypeOf(pipeline, envSpec, bundle),
 		)
-		envSpec := findEnvSpec(pipeline, envName)
 		stepK8s := promotionStepK8sName(pipelineName, bundle.Name, envName)
 		render := ""
 		if kardinalv1alpha1.RendersToBranch(pipeline.Spec, envSpec) {
@@ -1009,9 +1010,8 @@ func buildPromotionStepNode(
 	gateReady func(name string) string,
 	prStatusName string,
 	held string,
+	stepType string,
 ) GraphNode {
-	// Determine step type based on bundle type
-	stepType := defaultStepType(bundle.Spec.Type)
 
 	// metadata.name is a DNS-1123 subdomain: "<pipeline>-<bundle>-<env>",
 	// hash-suffixed when the Bundle or environment name is not a slug.
@@ -1184,16 +1184,30 @@ func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 	}
 }
 
-// defaultStepType returns the primary step type for the given bundle type.
-func defaultStepType(bundleType string) string {
-	switch bundleType {
-	case "config":
+// UpdateStepType is a PromotionStep's spec.stepType: the step that writes the
+// change in the environment, as steps.DefaultSequenceForBundle routes a
+// Bundle of bundleType to an environment with update.strategy strategy that
+// renders to a branch or not (pkg/steps checks that the two agree). kardinal
+// explain, kardinal get steps and the UI print it (#1911).
+func UpdateStepType(bundleType, strategy string, rendersToBranch bool) string {
+	switch {
+	case rendersToBranch:
+		return "render"
+	case strategy == "argocd":
+		return "argocd-set-image"
+	case bundleType == "config":
 		return "config-merge"
-	case "chart":
+	case bundleType == "chart" || strategy == "helm":
 		return "helm-set-image"
-	default:
-		return "kustomize-set-image"
+	case strategy == "yaml":
+		return "yaml-update"
 	}
+	return "kustomize-set-image"
+}
+
+// stepTypeOf is UpdateStepType for env of pipeline.
+func stepTypeOf(pipeline *kardinalv1alpha1.Pipeline, env kardinalv1alpha1.EnvironmentSpec, bundle *kardinalv1alpha1.Bundle) string {
+	return UpdateStepType(bundle.Spec.Type, env.Update.Strategy, kardinalv1alpha1.RendersToBranch(pipeline.Spec, env))
 }
 
 // waveIndex groups environments by wave number (K-06).

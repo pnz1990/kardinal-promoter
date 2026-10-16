@@ -271,7 +271,7 @@ func TestStep_HelmValues(t *testing.T) {
 // not exist) fails the step for good, and nothing is pushed: both files keep
 // the previous release.
 //
-// Covers STEP-YAML-01, STEP-YAML-02.
+// Covers STEP-YAML-01, STEP-YAML-02, STEP-TYPE-01.
 func TestStep_YAMLUpdate(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -295,6 +295,11 @@ func TestStep_YAMLUpdate(t *testing.T) {
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	checkSteps(t, ps, imageSteps("yaml-update", false))
+	// The step is labelled with the step that wrote the change (#1911), and
+	// kardinal explain names it.
+	assert.Equal(t, "yaml-update", ps.Spec.StepType)
+	explained := e.MustKardinal(t, a.ns, "explain", pipelineName, "--env", "test")
+	assert.Regexp(t, `(?m)^test\s.*\sStep\s+yaml-update\s`, explained)
 	dep := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/deployment.yaml")
 	assert.Contains(t, dep, "image: "+imageV2, "deployment.yaml has the new image")
 	release := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/release.yaml")

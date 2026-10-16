@@ -1059,3 +1059,47 @@ func TestCompact_ImageVerificationCommitProvider(t *testing.T) {
 	assert.NotEqual(t, plainName, name, "another provider, another ImageVerification")
 	assert.Equal(t, name, root, "the root step waits for the ImageVerification with the provider")
 }
+
+// TestStepTypeFollowsUpdateStrategy (#1911): a PromotionStep's spec.stepType
+// is the step that writes the change in its environment, from the Bundle type,
+// the environment's update.strategy and its layout, in both Graph shapes
+// (kardinal explain and the UI print it).
+func TestStepTypeFollowsUpdateStrategy(t *testing.T) {
+	envs := []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "kustomize"},
+		{Name: "yaml", Update: kardinalv1alpha1.UpdateConfig{Strategy: "yaml",
+			YAML: &kardinalv1alpha1.YAMLUpdateConfig{Updates: []kardinalv1alpha1.YAMLUpdate{{File: "application.yaml", Path: "spec.image"}}}}},
+		{Name: "helm", Update: kardinalv1alpha1.UpdateConfig{Strategy: "helm"}},
+		{Name: "argocd", Update: kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+			ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-argocd"}}},
+		{Name: "rendered", Layout: "branch"},
+	}
+	want := map[string]string{"kustomize": "kustomize-set-image", "yaml": "yaml-update", "helm": "helm-set-image",
+		"argocd": "argocd-set-image", "rendered": "render"}
+
+	nodes, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipelineOf("app", envs...), Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	require.False(t, nodes.Compact)
+	byID := nodeByID(nodes.Graph.Spec.Nodes)
+	for env, stepType := range want {
+		n, ok := byID[env]
+		require.True(t, ok, "node %s", env)
+		assert.Equal(t, stepType, n.Template["spec"].(map[string]interface{})["stepType"], "node shape, %s", env)
+	}
+
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: compactPipeline(envs...), Bundle: makeBundle("app-x7k2m", "app")})
+	require.NoError(t, err)
+	require.True(t, res.Compact)
+	sim := newCompactSim(t, res.Graph)
+	vars := sim.vars()
+	vars["refRenderRuns"] = []interface{}{} // the rendered environment's RenderRun is not made yet
+	vars[graph.NodePromotionState] = sim.def(graph.NodePromotionState, vars)
+	got := map[string]string{}
+	// Every entry of the DAG, as the wave admits it in turn (pipelineOf chains the environments).
+	for _, item := range nodeByID(res.Graph.Spec.Nodes)[graph.NodePromotionDAG].Def["steps"].([]interface{}) {
+		vars["Step"] = item
+		step := renderValue(t, nodeByID(res.Graph.Spec.Nodes)[graph.NodePromotionSteps].Template, vars).(map[string]interface{})
+		got[item.(map[string]interface{})["environment"].(string)] = step["spec"].(map[string]interface{})["stepType"].(string)
+	}
+	assert.Equal(t, want, got, "compact shape")
+}

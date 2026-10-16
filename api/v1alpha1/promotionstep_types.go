@@ -22,9 +22,10 @@ type PromotionStepSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Environment string `json:"environment"`
 
-	// StepType identifies the built-in step to execute.
-	// Examples: git-clone, kustomize-set-image, git-commit, open-pr,
-	//           wait-for-merge, health-check.
+	// StepType names the built-in step that writes this promotion's change,
+	// as the environment's update strategy and layout select it:
+	// kustomize-set-image, yaml-update, helm-set-image, argocd-set-image or
+	// render. It is informational; no step is executed from it.
 	// +kubebuilder:validation:MinLength=1
 	StepType string `json:"stepType"`
 

@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
@@ -1315,4 +1316,26 @@ func TestPromoteMessage(t *testing.T) {
 		steps.PromoteMessage("app-1", "prod", "app", "team-a"))
 	assert.Equal(t, "[kardinal] Promote app-1 to prod\n\nBundle: app-1\nPipeline: app",
 		steps.PromoteMessage("app-1", "prod", "app", ""), "no namespace line without one")
+}
+
+// TestUpdateStepTypeInSequence (#1911): the PromotionStep's spec.stepType
+// (graph.UpdateStepType, which pkg/graph cannot take from pkg/steps: pkg/steps
+// imports pkg/graph) is a step of the sequence the step runs, for every Bundle
+// type, update strategy and layout graph.Build accepts.
+func TestUpdateStepTypeInSequence(t *testing.T) {
+	for _, bundleType := range []string{"", "image", "config", "mixed", "chart"} {
+		for _, strategy := range []string{"", "kustomize", "helm", "yaml", "argocd"} {
+			for _, branch := range []bool{false, true} {
+				if (bundleType == "chart" && (strategy != "helm" || branch)) || (strategy == "argocd" && branch) {
+					continue // graph.Build refuses these
+				}
+				layout := "directory"
+				if branch {
+					layout = "branch"
+				}
+				assert.Contains(t, parentsteps.DefaultSequenceForBundle("auto", bundleType, strategy, layout),
+					graph.UpdateStepType(bundleType, strategy, branch), "bundle %q, strategy %q, layout %s", bundleType, strategy, layout)
+			}
+		}
+	}
 }

@@ -190,8 +190,10 @@ func (b *Builder) WouldBeCompact(pipeline *kardinalv1alpha1.Pipeline, envs int) 
 // compactStep is one environment of the compact shape's promotion DAG.
 type compactStep struct {
 	env, name, prStatus string
-	upstreams           []string // environment names
-	gates               []string // gate instance names
+	// stepType is the step's spec.stepType (UpdateStepType).
+	stepType  string
+	upstreams []string // environment names
+	gates     []string // gate instance names
 	// fleet, index and maxConcurrent pace a fleet target ("" for an
 	// environment that is not one).
 	fleet         string
@@ -262,6 +264,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		entries[i] = map[string]interface{}{
 			"environment":    s.env,
 			"name":           s.name,
+			"stepType":       s.stepType,
 			"prStatus":       s.prStatus,
 			"upstreams":      toInterfaces(s.upstreams),
 			"upstreamStates": upstreamStates,
@@ -367,7 +370,7 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 		"pipelineName":   pipeline.Name,
 		"bundleName":     bundle.Name,
 		"environment":    step("environment"),
-		"stepType":       defaultStepType(bundle.Spec.Type),
+		"stepType":       step("stepType"),
 		"prStatusRef":    step("prStatus"),
 		"upstreamStates": step("upstreamStates"),
 		"requiredGates":  step("gates"),
