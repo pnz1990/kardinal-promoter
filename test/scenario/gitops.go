@@ -5,6 +5,7 @@ package scenario
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -86,6 +87,10 @@ type GitOps struct {
 	mu sync.Mutex
 	// fail holds environment/tag pairs whose rollout fails.
 	fail map[string]bool
+	// read caches what an environment runs at a commit (Running): a
+	// commit's files never change, and every round reads every
+	// environment's.
+	read map[string]EnvState
 }
 
 // Fail makes env fail its health check while it runs tag.
@@ -152,6 +157,36 @@ func (g *GitOps) Running(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec) (En
 	if err != nil || sha == "" {
 		return EnvState{Branch: branch}, err
 	}
+	how, err := json.Marshal(struct {
+		Dir    string
+		Layout string
+		Update v1alpha1.UpdateConfig
+	}{dir, env.Layout, env.Update})
+	if err != nil {
+		return EnvState{}, fmt.Errorf("running: %w", err)
+	}
+	key := p.Spec.Git.URL + "@" + sha + "\x00" + string(how)
+	g.mu.Lock()
+	cached, ok := g.read[key]
+	g.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+	st, err := g.runningAt(p, env, dir, branch, sha)
+	if err != nil {
+		return st, err
+	}
+	g.mu.Lock()
+	if g.read == nil {
+		g.read = map[string]EnvState{}
+	}
+	g.read[key] = st
+	g.mu.Unlock()
+	return st, nil
+}
+
+// runningAt is what env runs at commit sha of branch (Running).
+func (g *GitOps) runningAt(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, dir, branch, sha string) (EnvState, error) {
 	st := EnvState{Revision: sha, Branch: branch}
 	read := func(p2 string) (string, bool, error) { return g.w.Git.ReadFile(p.Spec.Git.URL, branch, p2) }
 	switch {

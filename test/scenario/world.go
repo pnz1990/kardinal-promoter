@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -211,10 +212,12 @@ type World struct {
 	// around kardinal (reviewers, approvers, CI).
 	Actors []func(w *World) error
 
-	writes     atomic.Int64
-	uids       atomic.Int64
-	mu         sync.Mutex
-	reconciles map[string]int
+	writes atomic.Int64
+	// graphWrites counts the writes of Graphs (Kro.GraphVersion).
+	graphWrites atomic.Int64
+	uids        atomic.Int64
+	mu          sync.Mutex
+	reconciles  map[string]int
 	// perObject counts the reconciles of each object (kind/namespace/name).
 	perObject  map[string]int
 	errors     map[string]int
@@ -257,13 +260,24 @@ func NewWorld(t testing.TB, opts Options) *World {
 		w.clock = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) // a Wednesday
 	}
 	countWrite := func(o client.Object, created bool) {
-		if objKind(o) == "AgentIndex" {
+		switch objKind(o) {
+		case "AgentIndex":
 			w.indexDirty.Store(true)
+		case "Graph":
+			w.graphWrites.Add(1)
 		}
 		w.writes.Add(1)
 		w.noteWrite(o)
 		if w.cache != nil {
 			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), created)
+		}
+	}
+	// A patch admission refuses is stored and then put back (admitPatched):
+	// the object's resourceVersion moved, so the cache drops it, or the next
+	// read-modify-write of it conflicts with a version nobody can see.
+	refusedPatch := func(o client.Object) {
+		if w.cache != nil {
+			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), false)
 		}
 	}
 	statusObjs := []client.Object{
@@ -352,6 +366,8 @@ func NewWorld(t testing.TB, opts Options) *World {
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
+					} else {
+						refusedPatch(o)
 					}
 				}()
 				before, serr := specOf(ctx, c, o)
@@ -419,6 +435,8 @@ func NewWorld(t testing.TB, opts Options) *World {
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
+					} else {
+						refusedPatch(o)
 					}
 				}()
 				old, gerr := w.stored(ctx, c, o)
@@ -445,6 +463,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 	dyn := newDynClient(c, kinds)
 	w.Kro = NewKro(c)
 	w.Kro.Version = w.writes.Load
+	w.Kro.GraphVersion = w.graphWrites.Load
 	if opts.Watch {
 		w.Kro.Skip = w.graphQuiet
 	}
@@ -505,6 +524,11 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.renders = &rrrec.Reconciler{Client: rc, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",
 		AuthorName: "kardinal-promoter", AuthorEmail: "kardinal@kardinal.io", NowFn: now, Timeout: time.Hour}
 	if opts.Actors {
+		// The release's AgentIndex vouches for the agent stamps the Bundle
+		// (rejections) and Pipeline (holds, lastChange) reconcilers record,
+		// as main.go wires them.
+		agents := &actor.Source{Reader: rc, Name: Release}
+		w.bundles.Agents, w.pipelines.Agents = agents, agents
 		w.startActors(opts.MaxIndexBytes)
 		w.agentRuns = &arrec.Reconciler{Client: rc, APIReader: c, WriterClusterRole: Release + "-agentrun-writer",
 			ReaderClusterRole: Release + "-agentrun-reader", ControllerNamespace: ReleaseNamespace, NowFn: now}
