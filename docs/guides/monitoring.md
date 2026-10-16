@@ -281,7 +281,7 @@ helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-p
 | `KardinalAgentIndexNearFull` | agent index entries ≥ 80% of their size bound for 15m | warning | Close to the bound past which the actor policy refuses writes |
 | `KardinalAgentIndexFull` | agent index entries over their size bound for 1m | critical | The index is not Ready (`IndexFull`): Bundles, Approvals and overrides the actor policy checks are refused |
 
-Every alert includes a `runbook_url` annotation pointing to the relevant section in [troubleshooting.md](../troubleshooting.md).
+Every alert includes a `runbook_url` annotation pointing to the relevant section of [Troubleshoot](../troubleshooting.md), [Promotion stuck or failed](../troubleshoot-promotions.md), or, for the two agent index alerts, [Scale and limits](../operate.md#scale-and-limits).
 
 ### Manual alerting (without Prometheus Operator)
 

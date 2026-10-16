@@ -884,7 +884,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.holds[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.holds[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `spec.holds[].artifacts` | string |  | Artifacts is the digest of the rollback Bundle's artifacts (type, images, configRef) when the hold was made (lifecycle.ArtifactDigest). The gate exemption applies only while the Bundle still has them. |
-| `spec.holds[].bundle` | string | yes | Bundle is the rollback Bundle the environment is held on: the only Bundle that promotes into it while the hold lasts. |
+| `spec.holds[].bundle` | string | yes | Bundle is the Bundle the environment is held on (a rollback, or the version running there): the only Bundle that promotes into it while the hold lasts. |
 | `spec.holds[].createdAt` | string (date-time) |  | CreatedAt is when. |
 | `spec.holds[].createdBy` | string |  | CreatedBy is who held the environment: the Kubernetes user name of the request that added the hold (the admission policy refuses another value), or, for a hold added through the UI, the UI user the controller authenticated. |
 | `spec.holds[].environment` | string | yes | Environment is the held environment. |
@@ -1036,7 +1036,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.observedHolds[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.observedHolds[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.observedHolds[].artifacts` | string |  | Artifacts is the digest of the rollback Bundle's artifacts (type, images, configRef) when the hold was made (lifecycle.ArtifactDigest). The gate exemption applies only while the Bundle still has them. |
-| `status.observedHolds[].bundle` | string | yes | Bundle is the rollback Bundle the environment is held on: the only Bundle that promotes into it while the hold lasts. |
+| `status.observedHolds[].bundle` | string | yes | Bundle is the Bundle the environment is held on (a rollback, or the version running there): the only Bundle that promotes into it while the hold lasts. |
 | `status.observedHolds[].createdAt` | string (date-time) |  | CreatedAt is when. |
 | `status.observedHolds[].createdBy` | string |  | CreatedBy is who held the environment: the Kubernetes user name of the request that added the hold (the admission policy refuses another value), or, for a hold added through the UI, the UI user the controller authenticated. |
 | `status.observedHolds[].environment` | string | yes | Environment is the held environment. |

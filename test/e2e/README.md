@@ -147,7 +147,7 @@ environments: the invariants read what kardinal wrote to git.
 | Profile | Sizes | Time |
 |---|---|---|
 | `ci` (default) | 30-stage chain, canary and 3 waves x 4 regions, 20 Pipelines, a burst of 100 Bundles, 0.5 Bundles/s for 2 min, chaos for 3 min, an Argo CD fan-out of 41 environments, latency objective p50 15 s, 10 min to settle (a test whose Bundle makes N promotions in a row, the 120-stage chain and the 151 environments on one branch, gets N x 12 s: `SerialStep`, `KARDINAL_E2E_SCALE_SERIAL_STEP`); sized for a GitHub-hosted runner (4 vCPUs, 16 GB), 4 tests at a time (`KARDINAL_E2E_PARALLEL`) | 25 min on a 32-core host |
-| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`) until #1492 is fixed |
+| `full` | 100-stage chain, canary and 9 waves x 11 regions (100 environments), fan-in of 50, 200 Pipelines, a burst of 1,000 Bundles over 100 Pipelines, 2 Bundles/s for 10 min, chaos for 10 min | 2 h on a 32-core host; give the kind node 24 GB (`KARDINAL_E2E_NODE_MEMORY=24g`) and kro 8 GB (`KARDINAL_E2E_KRO_MEMORY=8Gi`), as the release gate does |
 | `soak` | `full`, with 5 Bundles/s for 30 min over 100 Pipelines | `full` plus 40 min |
 
 Any size can be set on its own: `KARDINAL_E2E_SCALE_<FIELD>`, the field name

@@ -1113,13 +1113,16 @@ func (p *Pipeline) HoldState(h *EnvironmentHold) *EnvironmentHoldState {
 	return nil
 }
 
-// EnvironmentHold pins one environment of a Pipeline to a rollback Bundle.
+// EnvironmentHold pins one environment of a Pipeline to one Bundle: a
+// rollback (kardinal rollback --hold) or the version running there
+// (kardinal hold).
 type EnvironmentHold struct {
 	// Environment is the held environment.
 	// +kubebuilder:validation:MinLength=1
 	Environment string `json:"environment"`
 
-	// Bundle is the rollback Bundle the environment is held on: the only
+	// Bundle is the Bundle the environment is held on (a rollback, or the
+	// version running there): the only
 	// Bundle that promotes into it while the hold lasts.
 	// +kubebuilder:validation:MinLength=1
 	Bundle string `json:"bundle"`
