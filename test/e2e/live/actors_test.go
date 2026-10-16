@@ -322,8 +322,12 @@ func TestAudit_AgentShipsWithActor(t *testing.T) {
 	hist := e.MustKardinal(t, a.ns, "history", pipelineName)
 	assert.Contains(t, hist, "ACTOR")
 	assert.Contains(t, hist, sentence)
-	why := e.MustKardinal(t, a.ns, "why", pipelineName, "prod")
-	assert.Contains(t, why, ", by "+sentence)
+	// why reads the Pipeline's status, which writes a running step's state
+	// up to 2s after the step (#1719): wait for prod's entry.
+	framework.Eventually(t, 30*time.Second, "why names the agent", func(context.Context) (bool, string) {
+		why, err := e.Kardinal(t, a.ns, "why", pipelineName, "prod")
+		return err == nil && strings.Contains(why, ", by "+sentence), why
+	})
 
 	for _, format := range []string{"json", "ocsf"} {
 		lines := e.MustKardinal(t, a.ns, "audit", "export", "--format", format, "--pipeline", pipelineName, "--since", "1h")
