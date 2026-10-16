@@ -310,6 +310,62 @@ func TestUnfreeze_Races(t *testing.T) {
 		assert.Equal(t, erin, cw.Spec.Freeze.Lifted, "who lifted it first stays recorded")
 	})
 
+	t.Run("a re-freeze between the read and the mark wins", func(t *testing.T) {
+		raced := false
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !raced {
+				raced = true
+				_, _, err := Freeze(ctx, cl, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-2", CreatedBy: "carol", Now: time.Now()})
+				require.NoError(t, err)
+			}
+			return cl.Update(ctx, obj, opts...)
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+		assert.Contains(t, err.Error(), "changed while it was being lifted")
+		cw := getFreeze(t, base)
+		assert.True(t, cw.DeletionTimestamp.IsZero(), "carol's freeze is not lifted")
+		assert.Equal(t, "INC-2", cw.Spec.Reason)
+		assert.Nil(t, cw.Spec.Freeze.Lifted)
+	})
+
+	t.Run("a mark that keeps conflicting gives up after 4 attempts", func(t *testing.T) {
+		updates := 0
+		gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+		c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error {
+			updates++
+			return apierrors.NewConflict(gr, "kardinal-freeze-everyone", errors.New("modified"))
+		}})
+		err := Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "record who lifts freeze kardinal-freeze-everyone")
+		assert.Equal(t, 4, updates)
+		assert.True(t, getFreeze(t, base).DeletionTimestamp.IsZero(), "not deleted")
+	})
+
+	t.Run("a freeze deleted between the read and the mark", func(t *testing.T) {
+		for _, answer := range []string{"not found", "conflict"} {
+			t.Run(answer, func(t *testing.T) {
+				gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+				c, base := unfreezeFixture(t, interceptor.Funcs{Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					// Someone else lifts it and the controller finishes its audit.
+					cw := getFreeze(t, cl)
+					cw.Finalizers = nil
+					require.NoError(t, cl.Update(ctx, &cw))
+					require.NoError(t, cl.Delete(ctx, &cw))
+					if answer == "conflict" {
+						return apierrors.NewConflict(gr, cw.Name, errors.New("modified"))
+					}
+					return cl.Update(ctx, obj, opts...)
+				}})
+				require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob), "lifted meanwhile is lifted")
+				var cw v1alpha1.ChangeWindow
+				assert.True(t, apierrors.IsNotFound(base.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw)))
+			})
+		}
+	})
+
 	t.Run("an unfreeze of a freeze already being deleted", func(t *testing.T) {
 		c, base := unfreezeFixture(t, interceptor.Funcs{})
 		require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))

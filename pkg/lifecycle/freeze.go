@@ -151,13 +151,24 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 // such as frozen again, is not deleted (ErrConflict). A mark another
 // writer raced is read again.
 func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v1alpha1.FreezeLift) error {
+	var first *v1alpha1.ChangeWindow // the freeze as first read: the one to lift
 	for attempt := 0; ; attempt++ {
 		var cw v1alpha1.ChangeWindow
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
 			if apierrors.IsNotFound(err) {
+				if first != nil {
+					return nil // lifted meanwhile, by another unfreeze
+				}
 				return fmt.Errorf("no freeze %s: %w", name, ErrNotFound)
 			}
 			return fmt.Errorf("get freeze %s: %w", name, err)
+		}
+		if first == nil {
+			first = cw.DeepCopy()
+		} else if cw.Spec.Freeze != nil && cw.DeletionTimestamp.IsZero() && !sameFreeze(first, &cw) {
+			// Frozen again (or edited) since it was read: that freeze is
+			// not the one this unfreeze was asked to lift.
+			return changedMeanwhile(name)
 		}
 		if cw.Spec.Freeze == nil {
 			return fmt.Errorf("ChangeWindow %s is not a freeze; delete it with kubectl if you mean to: %w", name, ErrConflict)
@@ -200,11 +211,33 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 			clearLift(ctx, c, name, lift)
 		}
 		if apierrors.IsConflict(err) {
-			return fmt.Errorf("freeze %s changed while it was being lifted (frozen again?); run kardinal unfreeze %s again if you mean to lift it: %w",
-				name, name, ErrConflict)
+			return changedMeanwhile(name)
 		}
 		return fmt.Errorf("delete freeze %s: %w", name, err)
 	}
+}
+
+// changedMeanwhile is the ErrConflict of an unfreeze whose freeze changed
+// while it was being lifted.
+func changedMeanwhile(name string) error {
+	return fmt.Errorf("freeze %s changed while it was being lifted (frozen again?); run kardinal unfreeze %s again if you mean to lift it: %w",
+		name, name, ErrConflict)
+}
+
+// sameFreeze reports whether b is still freeze a: the same object (UID) with
+// the same spec, the lift mark aside (another unfreeze may have written it).
+func sameFreeze(a, b *v1alpha1.ChangeWindow) bool {
+	if a.UID != b.UID {
+		return false
+	}
+	as, bs := a.Spec.DeepCopy(), b.Spec.DeepCopy()
+	if as.Freeze != nil {
+		as.Freeze.Lifted = nil
+	}
+	if bs.Freeze != nil {
+		bs.Freeze.Lifted = nil
+	}
+	return equality.Semantic.DeepEqual(as, bs)
 }
 
 // clearLift removes spec.freeze.lifted from freeze name when it is still
