@@ -44,7 +44,10 @@ func TestVerifyStamp(t *testing.T) {
 		{"the agent", agent(fx, "fixer", "alice"), fx, idx, nil, true, ""},
 		{"the agent, wrong sponsor", agent(fx, "fixer", "carol"), fx, idx, nil, false, "is agent fixer of alice"},
 		{"the agent claiming human", &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: fx}, fx, idx, nil, false, "is agent fixer"},
-		{"a group agent", agent("oidc:bot1", "triage", "dave"), "oidc:bot1", idx, nil, true, ""},
+		{"a group agent: membership cannot be confirmed (QA's probe)", agent("alice", "triage", "dave"), "alice", idx, nil, false,
+			"registered by group"},
+		{"a group agent's own member", agent("oidc:bot1", "triage", "dave"), "oidc:bot1", idx, nil, false, "registered by group"},
+		{"the agent, wrong agent name", agent(fx, "other", "alice"), fx, idx, nil, false, "is agent fixer of alice"},
 		{"someone else's stamp", human, "carol", idx, nil, false, "names bob"},
 	}
 	for _, tc := range tests {

@@ -15,10 +15,10 @@ import (
 // while the AgentIndex exists, so the controller checks again before it
 // records one: a stamp naming someone other than by is dropped, an agent
 // stamp is recorded only when the index (idx, nil when idxErr says why it
-// is missing or not ready) says by is that agent of that sponsor (for an
-// agent registered by group, which the controller cannot see, that the
-// agent is registered with that sponsor), and a non-agent stamp of a user
-// the index names as an agent is dropped. Agents fail closed: while the
+// is missing or not ready) says by itself is that agent of that sponsor (the
+// stamp of an agent registered by group is never recorded: the controller
+// cannot see whether by belongs to the group), and a non-agent stamp of a
+// user the index names as an agent is dropped. Agents fail closed: while the
 // index is missing, no agent stamp is recorded.
 func VerifyStamp(stamp *v1alpha1.Actor, by string, idx *v1alpha1.AgentIndexStatus, idxErr error) (*v1alpha1.Actor, string) {
 	if stamp == nil {
@@ -51,8 +51,13 @@ func VerifyStamp(stamp *v1alpha1.Actor, by string, idx *v1alpha1.AgentIndexStatu
 		return stamp, ""
 	}
 	for _, g := range idx.Groups {
-		if g.Agent == stamp.Agent && g.Sponsor == stamp.Sponsor {
-			return stamp, ""
+		if g.Agent == stamp.Agent {
+			// The controller does not see the writer's groups, so it cannot
+			// confirm by belongs to the agent's group: admission checks that
+			// only while the index exists, and a stamp written while it was
+			// missing would otherwise be kept once it is back.
+			return nil, fmt.Sprintf("agent %s is registered by group, and the controller cannot confirm that %s belongs to it",
+				stamp.Agent, by)
 		}
 	}
 	return nil, fmt.Sprintf("the AgentIndex has no agent %s of %s for %s", stamp.Agent, stamp.Sponsor, by)

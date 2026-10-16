@@ -597,10 +597,11 @@ principal and carries no `via`.
 
 The controller therefore checks every such stamp against the AgentIndex again before an AuditEvent
 records it, and agents fail closed: a stamp of kind `agent` is recorded only when the index says
-the requester is that agent of that sponsor (for an agent registered by group, which the
-controller cannot see, that the agent is registered with that sponsor), and never while the index
-is missing or not ready; a non-agent stamp of a user the index names as an agent is not recorded
-either. A stamp that is not recorded leaves the record with no actor, and its message says why
+the requester itself (a username or ServiceAccount the AgentIdentity lists) is that agent of that
+sponsor, and never while the index is missing or not ready. The stamp of an agent registered by
+group is never recorded on these three records: the controller cannot see the requester's groups,
+so it cannot confirm membership, and admission confirms it only while the index exists. A
+non-agent stamp of a user the index names as an agent is not recorded either. A stamp that is not recorded leaves the record with no actor, and its message says why
 (`actor stamp not recorded: ...`). People's and bots' stamps are recorded during an index outage
 as at any time. A freeze and its lift are checked by `<release>-actor`, which refuses every
 ChangeWindow write while the index is missing, so they have no such window.
