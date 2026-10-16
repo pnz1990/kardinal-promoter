@@ -54,6 +54,7 @@ func TestWorldAdmitsAsTheChart(t *testing.T) {
 	paused := pipeline.DeepCopy()
 	paused.Spec.PausedFleets = []string{"prod"}
 	held := pipeline.DeepCopy()
+	held.Labels = map[string]string{"kardinal.io/actor-check": "true"} // kardinal's own writes carry it (#1936)
 	now := metav1.Now()
 	held.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "app-1-0-0", Reason: "x", CreatedBy: "someone-else@corp.example.com", CreatedAt: &now}}
 

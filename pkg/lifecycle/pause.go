@@ -349,6 +349,26 @@ func recordChange(p *v1alpha1.Pipeline, who *v1alpha1.PipelineChange, action, ta
 	c := *who
 	c.Action, c.Target, c.ID = action, target, changeID()
 	p.Spec.LastChange = &c
+	MarkActorCheck(p)
+}
+
+// LabelActorCheck marks a Pipeline or Bundle whose write adds an actor stamp
+// (a hold, a spec.lastChange, a rejection), so <release>-actor-records
+// checks it: that policy matches only objects with the label, before the API
+// server converts its AgentIndex param, so the controller's and every other
+// write without a new stamp do not pay for the agent registry (#1936).
+// <release>-actor-record-marker, which has no params, requires the label on
+// every write that adds a stamp.
+const LabelActorCheck = "kardinal.io/actor-check"
+
+// MarkActorCheck sets LabelActorCheck on o.
+func MarkActorCheck(o metav1.Object) {
+	labels := o.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[LabelActorCheck] = "true"
+	o.SetLabels(labels)
 }
 
 // changeID is a random id for one spec.lastChange write.

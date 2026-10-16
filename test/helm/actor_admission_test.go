@@ -23,7 +23,7 @@ import (
 // actorAdmissionObjects is every admission object actor-admission.yaml renders.
 func actorAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"actor", "actor-records", "actor-overrides", "override-marker", "audit-actor", "agent-identities", "agent-index"} {
+	for _, p := range []string{"actor", "actor-records", "actor-overrides", "override-marker", "actor-record-marker", "audit-actor", "agent-identities", "agent-index"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out

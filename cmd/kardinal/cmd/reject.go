@@ -18,6 +18,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newRejectCmd() *cobra.Command {
@@ -94,6 +95,7 @@ func rejectFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, name, 
 		return fmt.Errorf("reject: %w", err)
 	}
 	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: id.Username, At: &at, Actor: stamp}
+	lifecycle.MarkActorCheck(&b)
 	if err := c.Patch(ctx, &b, patch); err != nil {
 		if apierrors.IsConflict(err) {
 			return fmt.Errorf("reject: bundle %s changed while rejecting it; run the command again: %w", name, err)

@@ -362,3 +362,25 @@ health.refresh.enabled, true when unset: a release upgraded with
 {{- define "kardinal-promoter.healthRefresh" -}}
 {{- ne (toString (dig "health" "refresh" "enabled" true .Values.AsMap)) "false" -}}
 {{- end }}
+
+{{/*
+recordStamps is the stamps variable of <release>-actor-records and
+<release>-actor-record-marker: the actor stamps a Pipeline write adds (new
+spec.holds entries, a new spec.lastChange) or a Bundle update adds (a new
+spec.rejected), null where an entry has none.
+*/}}
+{{- define "kardinal-promoter.recordStamps" -}}
+- name: stamps
+  expression: >-
+    request.resource.resource == 'pipelines'
+      ? (has(object.spec.holds)
+          ? object.spec.holds.filter(h,
+              !(oldObject != null && has(oldObject.spec.holds) && h in oldObject.spec.holds))
+            .map(h, has(h.actor) ? h.actor : null)
+          : []) +
+        (has(object.spec.lastChange) &&
+          !(oldObject != null && has(oldObject.spec.lastChange) && oldObject.spec.lastChange == object.spec.lastChange)
+          ? [has(object.spec.lastChange.actor) ? object.spec.lastChange.actor : null] : [])
+      : (has(object.spec.rejected) && !has(oldObject.spec.rejected)
+          ? [has(object.spec.rejected.actor) ? object.spec.rejected.actor : null] : [])
+{{- end }}

@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // whoAmIInterceptor answers SelfSubjectReview creates as the API server does
@@ -114,6 +115,8 @@ func TestReject(t *testing.T) {
 			assert.Equal(t, "CVE in base image", got.Spec.Rejected.Reason)
 			require.NotNil(t, got.Spec.Rejected.At)
 			assert.True(t, got.Spec.Rejected.At.Time.Equal(now.Truncate(time.Second)))
+			assert.Equal(t, "true", got.Labels[lifecycle.LabelActorCheck],
+				"the rejection carries kardinal.io/actor-check, so its stamp is checked (#1936)")
 		})
 	}
 }

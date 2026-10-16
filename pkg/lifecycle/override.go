@@ -181,6 +181,7 @@ func Reject(ctx context.Context, c client.Client, ns, name, reason, by string, s
 	patch := client.MergeFromWithOptions(b.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	at := metav1.NewTime(now.UTC().Truncate(time.Second))
 	b.Spec.Rejected = &v1alpha1.BundleRejection{Reason: reason, By: by, At: &at, Actor: stamp}
+	MarkActorCheck(&b)
 	if err := c.Patch(ctx, &b, patch); err != nil {
 		if apierrors.IsConflict(err) {
 			return nil, fmt.Errorf("reject: bundle %s changed while rejecting it; try again: %w", name, ErrConflict)

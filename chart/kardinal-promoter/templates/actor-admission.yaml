@@ -202,6 +202,15 @@ spec:
     apiVersion: kardinal.io/v1alpha1
     kind: AgentIndex
   matchConstraints:
+    # Only writes labelled kardinal.io/actor-check (#1936): the object selector
+    # is matched before the API server converts the AgentIndex param, which
+    # every matched request pays in full. Writes that add a stamp carry the
+    # label (<release>-actor-record-marker requires it); the controller's and
+    # everyone else's do not pay for the agent registry.
+    objectSelector:
+      matchExpressions:
+        - key: kardinal.io/actor-check
+          operator: Exists
     resourceRules:
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
@@ -230,19 +239,7 @@ spec:
       expression: >-
         variables.agent ? 'agent' :
         request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
-    - name: stamps
-      expression: >-
-        request.resource.resource == 'pipelines'
-          ? (has(object.spec.holds)
-              ? object.spec.holds.filter(h,
-                  !(oldObject != null && has(oldObject.spec.holds) && h in oldObject.spec.holds))
-                .map(h, has(h.actor) ? h.actor : null)
-              : []) +
-            (has(object.spec.lastChange) &&
-              !(oldObject != null && has(oldObject.spec.lastChange) && oldObject.spec.lastChange == object.spec.lastChange)
-              ? [has(object.spec.lastChange.actor) ? object.spec.lastChange.actor : null] : [])
-          : (has(object.spec.rejected) && !has(oldObject.spec.rejected)
-              ? [has(object.spec.rejected.actor) ? object.spec.rejected.actor : null] : [])
+    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
   validations:
     - expression: >-
         variables.controller || variables.stamps.all(s, s == null || (
@@ -257,6 +254,44 @@ spec:
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-records" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Allow")) }}
+---
+# A write that adds an actor stamp to a Pipeline (a hold, a spec.lastChange)
+# or a Bundle (a rejection) carries the label kardinal.io/actor-check: true,
+# so <release>-actor-records checks the stamp. No params: it judges every
+# Pipeline write and Bundle update, the controller's included, at no cost
+# that grows with the agent registry.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-actor-record-marker
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pipelines"]
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources: ["bundles"]
+  variables:
+    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
+  validations:
+    - expression: >-
+        request.userInfo.username in {{ $controllers }} || size(variables.stamps) == 0 ||
+        (has(object.metadata.labels) && 'kardinal.io/actor-check' in object.metadata.labels &&
+          object.metadata.labels['kardinal.io/actor-check'] == 'true')
+      message: >-
+        a write that adds a hold, a spec.lastChange or a rejection must carry the label
+        kardinal.io/actor-check: "true", so its actor stamp is checked: add it to metadata.labels in the
+        same write (kubectl, scripts and GitOps tools), or use kardinal from v0.12 on, which sets it
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-record-marker") }}
 ---
 # Gate override entries, checked like the stamps above, but only on gates
 # labelled kardinal.io/override-check (#1936): the API server converts the

@@ -709,17 +709,19 @@ spec:
         !variables.check.subresource('edit').check('update').allowed()
     - name: serverSet
       expression: "['managedFields', 'resourceVersion', 'generation']"
-    # A gate's labels are unchanged but kardinal.io/override-check, which a
-    # write adding an override sets (<release>-override-marker).
+    # The labels are unchanged but the one marker the limited write sets:
+    # on a gate kardinal.io/override-check (<release>-override-marker), on a
+    # Pipeline kardinal.io/actor-check: "true" (<release>-actor-record-marker,
+    # #1936), which may be added but never removed or set to anything else.
     - name: labelsKept
       expression: >-
-        !variables.pipeline &&
         (has(object.metadata.labels) ? object.metadata.labels : {}).all(k,
-          k == 'kardinal.io/override-check' ||
+          (variables.pipeline ? k == 'kardinal.io/actor-check' && object.metadata.labels[k] == 'true'
+            : k == 'kardinal.io/override-check') ||
           (has(oldObject.metadata.labels) && k in oldObject.metadata.labels &&
            object.metadata.labels[k] == oldObject.metadata.labels[k])) &&
         (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}).all(k,
-          k == 'kardinal.io/override-check' ||
+          (!variables.pipeline && k == 'kardinal.io/override-check') ||
           (has(object.metadata.labels) && k in object.metadata.labels))
     - name: oldOverrides
       expression: "has(oldObject.spec.overrides) ? oldObject.spec.overrides : []"
