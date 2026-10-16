@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -24,7 +25,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 func scheme(t *testing.T) *runtime.Scheme {
@@ -117,7 +120,8 @@ func TestReconcile_AgentIndex(t *testing.T) {
 	assert.Equal(t, "fixer", idx.Status.Users["system:serviceaccount:ci:fixer"].Agent)
 	assert.Equal(t, "alice", idx.Status.Users["system:serviceaccount:ci:fixer"].Sponsor)
 	assert.Equal(t, "suspended", idx.Status.Users["system:serviceaccount:ci:parked"].Blocked)
-	require.Len(t, idx.Status.Conditions, 2, "Ready, and StatusesWritten after the statuses")
+	require.Len(t, idx.Status.Conditions, 3, "Ready, NearFull, and StatusesWritten after the statuses")
+	assert.False(t, meta.IsStatusConditionTrue(idx.Status.Conditions, agentidentity.ConditionNearFull))
 	assert.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, agentidentity.ConditionReady))
 	assert.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, agentidentity.ConditionStatusesWritten))
 
@@ -274,4 +278,58 @@ func TestIndex_TwoBuilders(t *testing.T) {
 	assert.Equal(t, "suspended", idx.Status.Users["system:serviceaccount:ci:fixer"].Blocked)
 	_, has := idx.Status.Users["system:serviceaccount:ci:other"]
 	assert.False(t, has, "the stale view was not written")
+}
+
+// TestReconcile_AgentIndexNearFull (#2076): the index records its entries'
+// size and its bound, and is NearFull from 80% of it, with the numbers in
+// the message; the leader's build exports them as kardinal_agent_index_bytes
+// and kardinal_agent_index_max_bytes, a replica's start-up build does not.
+// Covers ACTOR-REG-03.
+func TestReconcile_AgentIndexNearFull(t *testing.T) {
+	ids := []v1alpha1.AgentIdentity{*id("a", 0, "alice", sa("ci", "a")), *id("b", 1, "alice", sa("ci", "b"))}
+	size := actor.Evaluate(ids, 1<<20).Bytes
+	require.Positive(t, size)
+	for _, tc := range []struct {
+		name     string
+		max      int
+		nearFull metav1.ConditionStatus
+		ready    metav1.ConditionStatus
+		message  []string
+	}{
+		{"70%", size * 10 / 7, metav1.ConditionFalse, metav1.ConditionTrue, []string{"(70%)", "more AgentIdentities of the average size"}},
+		{"85%", size * 100 / 85, metav1.ConditionTrue, metav1.ConditionTrue, []string{"(85%)", "past", "remove AgentIdentities or subjects"}},
+		{"over the bound", size - 1, metav1.ConditionTrue, metav1.ConditionFalse, []string{"(100%)"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			var patches atomic.Int32
+			c := countingClient(t, &patches, &ids[0], &ids[1])
+			observability.AgentIndexBytes.Set(-1)
+			r := &agentidentity.IndexReconciler{Client: c, Name: "k", MaxIndexBytes: tc.max}
+			_, err := r.Reconcile(ctx, reconcile.Request{})
+			require.NoError(t, err)
+			var idx v1alpha1.AgentIndex
+			require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &idx))
+			assert.Equal(t, int64(size), idx.Status.Bytes, "the entries' size, also when over the bound")
+			assert.Equal(t, int64(tc.max), idx.Status.MaxBytes)
+			nf := meta.FindStatusCondition(idx.Status.Conditions, agentidentity.ConditionNearFull)
+			require.NotNil(t, nf)
+			assert.Equal(t, tc.nearFull, nf.Status, nf.Message)
+			for _, m := range tc.message {
+				assert.Contains(t, nf.Message, m)
+			}
+			assert.Equal(t, tc.ready, meta.FindStatusCondition(idx.Status.Conditions, agentidentity.ConditionReady).Status)
+			assert.Equal(t, float64(size), testutil.ToFloat64(observability.AgentIndexBytes))
+			assert.Equal(t, float64(tc.max), testutil.ToFloat64(observability.AgentIndexMaxBytes))
+
+			// A replica's start-up build writes the same status, not the
+			// metrics: only the leader keeps them current.
+			observability.AgentIndexBytes.Set(-1)
+			r2 := &agentidentity.IndexReconciler{Client: countingClient(t, &patches, ids[0].DeepCopy(), ids[1].DeepCopy()),
+				Name: "k", MaxIndexBytes: tc.max, StatusesDisabled: true}
+			_, err = r2.Reconcile(ctx, reconcile.Request{})
+			require.NoError(t, err)
+			assert.Equal(t, float64(-1), testutil.ToFloat64(observability.AgentIndexBytes))
+		})
+	}
 }

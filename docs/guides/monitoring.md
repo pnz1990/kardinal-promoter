@@ -143,6 +143,15 @@ sum(rate(kardinal_git_operations_total{operation="push",result="non_fast_forward
   / sum(rate(kardinal_git_operations_total{operation="push"}[15m]))
 ```
 
+### Agent index fullness
+
+How full the [agent index](../actors.md) is: past 1 (100%) the index is not Ready and the actor
+policy refuses the writes it checks. Only the leader sets these gauges; other replicas export 0.
+
+```promql
+max by (namespace) (kardinal_agent_index_bytes) / max by (namespace) (kardinal_agent_index_max_bytes)
+```
+
 ### Work queue depth (are we falling behind?)
 
 ```promql
@@ -261,13 +270,15 @@ helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-p
 | `KardinalBundleReconcilerStalled` | Bundles queued but none reconciled for 10m | warning | Controller stuck; possible leader election issue |
 | `KardinalWorkQueueBacklog` | work queue depth > 100 for 5m | warning | Controller overloaded or starved of CPU |
 | `KardinalPolicyGateReconcileSlow` | PolicyGate P99 latency > 10s | warning | Gate evaluations stale; promotions blocked late |
+| `KardinalAgentIndexNearFull` | agent index entries ≥ 80% of their size bound for 15m | warning | Close to the bound past which the actor policy refuses writes |
+| `KardinalAgentIndexFull` | agent index entries over their size bound for 1m | critical | The index is not Ready (`IndexFull`): Bundles, Approvals and overrides the actor policy checks are refused |
 
 Every alert includes a `runbook_url` annotation pointing to the relevant section in [troubleshooting.md](../troubleshooting.md).
 
 ### Manual alerting (without Prometheus Operator)
 
 If you don't use the Prometheus Operator, put these rules in a rule file listed under
-`rule_files` in `prometheus.yml`. This block has three of the five alerts; the full set is in
+`rule_files` in `prometheus.yml`. This block has three of the seven alerts; the full set is in
 `chart/kardinal-promoter/templates/prometheusrule.yaml`.
 
 ```yaml

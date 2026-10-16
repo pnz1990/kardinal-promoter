@@ -121,3 +121,50 @@ tests:
               summary: "kardinal PolicyGate reconcile P99 latency is above 10s"
               description: "PolicyGate reconciles are taking more than 10s at P99. Gates may be stale and blocking or unblocking promotions late."
               runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
+  # The agent index at 85% of its bound on the leader (a replica exports 0):
+  # NearFull, not Full. Then over it: Full.
+  - interval: 1m
+    input_series:
+      - series: 'kardinal_agent_index_bytes{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '891289x20 1100000x10'
+      - series: 'kardinal_agent_index_max_bytes{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '1048576x30'
+      - series: 'kardinal_agent_index_bytes{job="kp",instance="10.0.0.2:8080",namespace="kardinal-system"}'
+        values: '0x30'
+      - series: 'kardinal_agent_index_max_bytes{job="kp",instance="10.0.0.2:8080",namespace="kardinal-system"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: KardinalAgentIndexNearFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: kardinal-system
+            exp_annotations:
+              summary: "the kardinal agent index is 85% full"
+              description: "The agent index's entries take 85% of their size bound. Past it, kardinal refuses every write the actor policy checks (Bundles, Approvals, overrides) until AgentIdentities or subjects are removed."
+              runbook_url: "https://pnz1990.github.io/kardinal-promoter/operate/#scale-and-limits"
+      - eval_time: 18m
+        alertname: KardinalAgentIndexFull
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KardinalAgentIndexFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: kardinal-system
+            exp_annotations:
+              summary: "the kardinal agent index is over its size bound"
+              description: "The agent index is not Ready (IndexFull): kardinal refuses every write the actor policy checks (Bundles, Approvals, overrides), people's included, until AgentIdentities or subjects are removed."
+              runbook_url: "https://pnz1990.github.io/kardinal-promoter/operate/#scale-and-limits"
+  # Below 80%: nothing.
+  - interval: 1m
+    input_series:
+      - series: 'kardinal_agent_index_bytes{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '800000x30'
+      - series: 'kardinal_agent_index_max_bytes{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '1048576x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KardinalAgentIndexNearFull
+        exp_alerts: []

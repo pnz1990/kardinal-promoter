@@ -80,7 +80,8 @@ AgentIndex is the registry of agents in the shape admission reads: the &lt;relea
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `status` | object |  | AgentIndexStatus maps every registered subject to its agent. |
-| `status.conditions` | []object |  | Conditions: Ready; IndexFull when an entry was left out to keep the index under its size limit. |
+| `status.bytes` | integer (int64) |  | Bytes is the size of the index's entries as its bound counts them (each entry's JSON, its key and 4 bytes, blocked entries included), also when it is over the bound and written empty. |
+| `status.conditions` | []object |  | Conditions: Ready (False, reason IndexFull, when the entries are over MaxBytes); NearFull (True from 80% of MaxBytes). |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
 | `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
@@ -88,6 +89,7 @@ AgentIndex is the registry of agents in the shape admission reads: the &lt;relea
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.groups` | map[string]object |  | Groups maps a group to its agent. |
+| `status.maxBytes` | integer (int64) |  | MaxBytes is the bound on Bytes: past it the index is not Ready (IndexFull) and the writes the actor policy checks are refused. |
 | `status.observedIdentities` | integer |  | ObservedIdentities is how many AgentIdentities the index was built from. |
 | `status.users` | map[string]object |  | Users maps a username (ServiceAccount subjects as system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;) to its agent. |
 

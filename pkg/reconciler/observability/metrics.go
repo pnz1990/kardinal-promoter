@@ -120,6 +120,18 @@ var (
 		},
 	)
 
+	// AgentIndexBytes is the size of the AgentIndex's entries as its bound
+	// counts them, and AgentIndexMaxBytes the bound (#2076): past it the
+	// index is not Ready and the writes the actor policy checks are refused.
+	AgentIndexBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kardinal_agent_index_bytes",
+		Help: "Size of the agent index's entries, as its bound counts them (blocked entries included).",
+	})
+	AgentIndexMaxBytes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kardinal_agent_index_max_bytes",
+		Help: "The agent index's size bound: past it the index is not Ready and the actor policy refuses the writes it checks.",
+	})
+
 	// AuditEventsPrunedTotal counts the AuditEvents the retention pruner
 	// deleted (--audit-retention-max-age, --audit-retention-max-per-pipeline).
 	AuditEventsPrunedTotal = prometheus.NewCounter(
@@ -191,6 +203,8 @@ var (
 
 func init() {
 	ctrlmetrics.Registry.MustRegister(
+		AgentIndexBytes,
+		AgentIndexMaxBytes,
 		AuditEventsPrunedTotal,
 		VerdictsTotal,
 		AgentRunsTotal,
