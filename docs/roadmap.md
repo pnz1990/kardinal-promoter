@@ -34,6 +34,12 @@ what shipped.
   would be allowed into an environment now: [Connect an agent](agentic/connect-an-agent.md).
 - **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage:
   [Pause one fleet](pause.md#pause-one-fleet), [Roll back a fleet](rollback.md#roll-back-a-fleet).
+- **Who did it, in the audit trail.** AuditEvents name who paused, resumed, froze, lifted a
+  freeze, released a hold and rejected a version, and who merged each `pr-review` pull request:
+  [Audit logging](guides/security.md#audit-logging).
+- **Sync on promotion, scoped.** The controller asks Argo CD or Flux to sync only the Pipeline's
+  own objects (`health.refresh.namespaces` admits more), and `health.refreshTarget` names the
+  object to sync for Rollouts, Canaries and Deployments: [Sync on promotion](health-adapters.md#sync-on-promotion).
 - Planned: move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
 
 ### v0.13: evidence

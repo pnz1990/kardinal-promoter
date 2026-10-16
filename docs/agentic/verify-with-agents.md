@@ -1,5 +1,9 @@
 # Verify with agents
 
+!!! info "New in v0.12.0 (unreleased)"
+    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
+    it. The [changelog](../changelog.md#unreleased) lists every unreleased change.
+
 A **verify gate** holds an environment until verifiers have tested the version where it already
 runs, usually the environment before. A verifier is an agent, a person or a CI job. Each one
 writes a **Verdict**: `pass`, `fail` or `inconclusive`, with a summary, an evidence link and

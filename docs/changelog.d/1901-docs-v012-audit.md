@@ -1,0 +1,5 @@
+---
+section: Documentation
+---
+
+- **The docs say what is unreleased** (#1901) — the home hero, the agentic pages, the threat model and the comparison now mark what arrives in v0.12.0 (unreleased) apart from what v0.11.0 has. The threat model lists every MCP write tool. The comparison's agentic matrix is re-checked against each vendor's page: Octopus has a kill switch and Kargo a dry-run pre-flight (both Partial), GitLab's kill switch is a toggle (Partial, as GitHub's), Harness's worker agents start read-only (Partial), GitHub's renamed Copilot cloud agent pages are linked, and the survey names Kargo v1.12.4 and GitOps Promoter v0.45.3. The roadmap, the architecture and security pages, and the pages for sync on promotion, pause, subscriptions, CI and overrides follow today's changes: the refresh scope and `health.refreshTarget`, the new audit actions and the controller's `patch` on ChangeWindows, the image commit in provenance, and the free-text limits ([Comparison](comparison.md#agentic-governance), [Threat model](agentic/threat-model.md)).

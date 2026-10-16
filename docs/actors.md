@@ -1,5 +1,9 @@
 # Agents and the verified actor
 
+!!! info "New in v0.12.0 (unreleased)"
+    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
+    it. The [changelog](changelog.md#unreleased) lists every unreleased change.
+
 Every version, approval and gate override kardinal records says **who made it, and for whom**:
 the *actor*. A person, a CI bot, kardinal itself, or an AI agent with the person who answers
 for it. The API server verifies the actor when the record is written, so nobody can write a

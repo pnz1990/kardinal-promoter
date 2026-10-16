@@ -3,7 +3,9 @@
 Each incident below beat a guardrail that lived inside the agent or the agent's prompt, or gave
 an agent more credentials than its task needed. This page maps each one to the kardinal control
 that stops the same failure for changes that go through kardinal, and says whether that control
-is **shipped** (on main) or **planned** (on the [roadmap](../roadmap.md)).
+is **shipped** or **planned** (on the [roadmap](../roadmap.md)). A control marked "shipped in
+v0.12.0 (unreleased)" is on main and arrives in v0.12.0; the others are in v0.11.0, the latest
+release.
 
 kardinal governs promotions: a version reaching an environment through Git and the cluster. It
 cannot stop an agent that holds other credentials, such as a cloud API token, a database
@@ -25,10 +27,10 @@ than expected, which let the agent get past its default of asking before acting.
 
 | Control in kardinal | Status |
 |---|---|
-| The agent acts as its own Kubernetes identity, with the RBAC you give it, and holds no other token through kardinal: `kardinal mcp` uses the agent's kubeconfig and opens no port | Shipped: [Connect an agent](connect-an-agent.md) |
+| The agent acts as its own Kubernetes identity, with the RBAC you give it, and holds no other token through kardinal: `kardinal mcp` uses the agent's kubeconfig and opens no port | Shipped in v0.12.0 (unreleased): [Connect an agent](connect-an-agent.md) |
 | A production change waits at a gate the agent cannot pass alone: an approval gate with `excludeAuthor` does not count the version's creator, and `approval: pr-review` opens a pull request for review | Shipped: [Require approvals](../approvals.md) |
-| A registered agent is recorded as that agent, with its human sponsor, on every version, Approval and override; it cannot pass as a person, write outside its scope, or act while suspended | Shipped: [Agents and the verified actor](../actors.md) |
-| Per-environment autonomy for agents (`agents: auto \| approve \| deny`, capped by the agent's registered autonomy), and gates that read the actor (`actor.kind == 'agent'`) | Shipped: [Actor-aware policy](policy.md) |
+| A registered agent is recorded as that agent, with its human sponsor, on every version, Approval and override; it cannot pass as a person, write outside its scope, or act while suspended | Shipped in v0.12.0 (unreleased): [Agents and the verified actor](../actors.md) |
+| Per-environment autonomy for agents (`agents: auto \| approve \| deny`, capped by the agent's registered autonomy), and gates that read the actor (`actor.kind == 'agent'`) | Shipped in v0.12.0 (unreleased): [Actor-aware policy](policy.md) |
 
 ### An agent deletes a production database and its backups (PocketOS, Cursor, April 2026)
 
@@ -43,9 +45,9 @@ destructive call.
 
 | Control in kardinal | Status |
 |---|---|
-| `kardinal mcp` holds no token of its own: each tool runs with the agent's kubeconfig only | Shipped: [Connect an agent](connect-an-agent.md) |
-| No MCP tool deletes anything. The write tools (ship, promote, rollback, pause, resume, reject, approve) are offered only with `--allow-write` | Shipped: [The tools](connect-an-agent.md#the-tools) |
-| Two least-privilege Roles for an agent: read, and ship | Shipped: [A least-privilege identity](connect-an-agent.md#a-least-privilege-identity) |
+| `kardinal mcp` holds no token of its own: each tool runs with the agent's kubeconfig only | Shipped in v0.12.0 (unreleased): [Connect an agent](connect-an-agent.md) |
+| No MCP tool deletes anything. The write tools (ship, promote, rollback, pause, resume, reject, approve, verify, freeze) are offered only with `--allow-write`, and none of them lifts a freeze | Shipped in v0.12.0 (unreleased): [The tools](connect-an-agent.md#the-tools) |
+| Two least-privilege Roles for an agent: read, and ship | Shipped in v0.12.0 (unreleased): [A least-privilege identity](connect-an-agent.md#a-least-privilege-identity) |
 
 ### An agent runs `terraform destroy` on production (DataTalks.Club, Claude Code, March 2026)
 
@@ -61,7 +63,7 @@ credentials and no review.
 |---|---|
 | A change reaches an environment only as a promotion: a version written to Git, gated, health-checked, and for `pr-review` environments a pull request with the evidence in its body | Shipped: [Read PR evidence](../pr-evidence.md) |
 | A failed health check rolls the environment back (`onHealthFailure: rollback`) | Shipped: [Roll back](../rollback.md) |
-| Before prod, a verify gate can require passing verdicts on the version from a verifier other than the author agent's party: another agent, a person or CI | Shipped: [Verify with agents](verify-with-agents.md) |
+| Before prod, a verify gate can require passing verdicts on the version from a verifier other than the author agent's party: another agent, a person or CI | Shipped in v0.12.0 (unreleased): [Verify with agents](verify-with-agents.md) |
 | Per-agent budgets and blast radius | Planned: [v0.14](../roadmap.md#v014-adaptive) |
 
 ### An agent ignores a code freeze (SaaStr, Replit, July 2025)
@@ -77,7 +79,7 @@ live production database, fabricated data and test results, and said a rollback 
 |---|---|
 | A ChangeWindow freeze is enforced by the controller for every pipeline whose gates read it, whoever started the promotion. Breaking glass is a verified, time-limited, audited override | Shipped: [ChangeWindow attributes](../policy-gates.md#changewindow-attributes), [Override a gate](../overrides.md) |
 | `kardinal pause` stops a pipeline's promotions, and `kardinal hold` keeps an environment on what it runs | Shipped: [Pause a pipeline](../pause.md) |
-| A freeze for agents only (`kardinal freeze --agents`) and a stop-the-line for everyone (`--everyone`), cluster-wide or for a namespace, enforced by the controller; an agent cannot exempt itself | Shipped: [Freezes](freezes.md) |
+| A freeze for agents only (`kardinal freeze --agents`) and a stop-the-line for everyone (`--everyone`), cluster-wide or for a namespace, enforced by the controller; an agent cannot exempt itself | Shipped in v0.12.0 (unreleased): [Freezes](freezes.md) |
 
 ### Prompt injection in CI agents (PromptPwnd, Aikido Security, December 2025)
 
@@ -92,7 +94,7 @@ affected and fixed.
 | Control in kardinal | Status |
 |---|---|
 | Gate decisions never read PR, issue or commit prose: PR data enters a gate's CEL only as whether it is approved and how many approvals it has, and a test checks no context string carries prose | Shipped: [CEL context](../reference/cel-context.md) |
-| `kardinal mcp` returns text that came from people, commits and PRs (author, CI URL, messages, reasons, comments) labelled as untrusted data | Shipped: [Connect an agent](connect-an-agent.md) |
+| `kardinal mcp` returns text that came from people, commits and PRs (author, CI URL, messages, reasons, comments) labelled as untrusted data | Shipped in v0.12.0 (unreleased): [Connect an agent](connect-an-agent.md) |
 
 ### A supply-chain attack turns local AI CLIs against their users (Nx s1ngularity, August 2025)
 
@@ -107,7 +109,7 @@ and uploaded what they found to public repositories.
 
 | Control in kardinal | Status |
 |---|---|
-| An agent's kubeconfig carries a ServiceAccount token bound to the agent's own Roles, not the person's credentials, so what leaks is what that identity may do | Shipped: [A least-privilege identity](connect-an-agent.md#a-least-privilege-identity) |
+| An agent's kubeconfig carries a ServiceAccount token bound to the agent's own Roles, not the person's credentials, so what leaks is what that identity may do | Shipped in v0.12.0 (unreleased): [A least-privilege identity](connect-an-agent.md#a-least-privilege-identity) |
 | A version is promoted only with signed, digest-pinned images when `spec.imageVerification` is set, so a malicious build without the signature does not ship | Shipped: [Verify image signatures](../image-verification.md) |
 | SLSA provenance and in-toto attestation checks | Planned: [v0.13](../roadmap.md#v013-evidence) |
 
@@ -123,8 +125,8 @@ untrusted text plus a broad personal access token, not a bug in the server's cod
 
 | Control in kardinal | Status |
 |---|---|
-| Untrusted text is labelled in every MCP result, and the server's instructions say it is data | Shipped: [Connect an agent](connect-an-agent.md) |
-| The MCP server is read-only unless started with `--allow-write`, and has exactly the RBAC of its kubeconfig | Shipped: [Connect an agent](connect-an-agent.md) |
+| Untrusted text is labelled in every MCP result, and the server's instructions say it is data | Shipped in v0.12.0 (unreleased): [Connect an agent](connect-an-agent.md) |
+| The MCP server is read-only unless started with `--allow-write`, and has exactly the RBAC of its kubeconfig | Shipped in v0.12.0 (unreleased): [Connect an agent](connect-an-agent.md) |
 
 ### Our own finding: argument injection through MCP tools (kardinal, October 2026)
 
@@ -138,7 +140,7 @@ agent, could point a tool at another cluster or another identity.
 
 | Control in kardinal | Status |
 |---|---|
-| Tools never build command-line arguments: each calls the command's code with typed values, after checking every name against the Kubernetes and CRD patterns. The kubeconfig and context come only from the server's own startup flags, and a test calls every tool with hostile values | Shipped: [Connect an agent](connect-an-agent.md) |
+| Tools never build command-line arguments: each calls the command's code with typed values, after checking every name against the Kubernetes and CRD patterns. The kubeconfig and context come only from the server's own startup flags, and a test calls every tool with hostile values | Shipped in v0.12.0 (unreleased): [Connect an agent](connect-an-agent.md) |
 
 ## What is not covered yet
 

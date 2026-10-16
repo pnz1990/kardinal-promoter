@@ -34,7 +34,7 @@ What the namespaced rules grant:
 | `replicasets` | get | The `resource` and `flux` health adapters read, by name, the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names, to tell whether the rollout of the current pod template stalled |
 | `pods` | list | While a Deployment's replicas are unavailable, the `resource` health adapter lists, uncached, the pods of its new ReplicaSet (by label selector) to name why one is not ready (`ErrImagePull`, `CrashLoopBackOff`). In cluster mode `list` reaches **every pod in the cluster**, which includes pod specs and their literal `env` values (not Secret contents). Use `controller.watchNamespace` to limit it, or remove the rule in RBAC of your own: the health messages then leave the pod out and nothing else changes |
 
-The cluster-scoped rules cover `changewindows` and `clusterscmproviders` (read, and status writes), Argo Rollouts `clusteranalysistemplates` (get), the `gate-overrides` admission policy and its binding (get), `namespaces` (get,
+The cluster-scoped rules cover `changewindows` and `clusterscmproviders` (read, and status writes; `patch` on `changewindows` for the freeze audit finalizer, and `create`, `update`, `delete` with `ui.freezeControls`), Argo Rollouts `clusteranalysistemplates` (get), the `gate-overrides` admission policy and its binding (get), `namespaces` (get,
 limited to `controller.watchNamespace` in namespace mode: the controller checks whether a
 namespace is being deleted before it translates a Bundle, removes kro's finalizer from a Graph, or
 cleans up a deleted step's PR) and, with
@@ -64,7 +64,9 @@ The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode).
   `approvals` (`get/list/watch/create/delete`: an Approval is never edited), `scmproviders`
   (`get/list/watch`: the controller never creates them) and the cluster-scoped
   `changewindows` and `clusterscmproviders` (`get/list/watch`, in a `ClusterRole` in both
-  modes)
+  modes; `patch` on `changewindows` for the `kardinal.io/freeze-audit` finalizer, which keeps a
+  deleted freeze until its `FreezeLifted` AuditEvent is written, and `create/update/delete` with
+  `ui.freezeControls`)
 - `get/update/patch` on the `status` subresources of those kinds (`auditevents` has none)
 - `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
 - `get/list/watch` on the health targets: `deployments`, Argo CD `applications` and `rollouts`,
@@ -103,7 +105,7 @@ The controller's RBAC, in summary:
 
 | Resources | Verbs |
 |---|---|
-| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) `approvals` (get, list, watch, create, delete) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) `approvals` (get, list, watch, create, delete) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`; `patch` on `changewindows` for the freeze audit finalizer, and create, update, delete with `ui.freezeControls`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
 | `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
@@ -118,7 +120,8 @@ The controller's RBAC, in summary:
 
 Optional rules: `health.refresh.enabled` (on by default: patch Applications, Kustomizations
 and GitRepositories to ask for a sync, confined to the refresh annotation by the
-`<fullname>-gitops-writes` admission policy), `rbac.argocdApplicationsWrite` (patch and update Applications) and `ui.auth.tokenReview` or `bundleAPI.tokenReview`
+`<fullname>-gitops-writes` admission policy, and to the Pipeline's own objects and those
+`health.refresh.namespaces` admits by the controller; see [Sync on promotion](../health-adapters.md#sync-on-promotion)), `rbac.argocdApplicationsWrite` (patch and update Applications) and `ui.auth.tokenReview` or `bundleAPI.tokenReview`
 (create TokenReviews and SubjectAccessReviews). The full list of objects and rules is in
 [Security: Controller RBAC](security.md#controller-rbac). Set `controller.watchNamespace`
 to turn the namespaced rules into a Role in one namespace.
@@ -561,11 +564,11 @@ and turn it on after the export.
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal hold`, `kardinal rollback --hold`) appeared in, or left, `spec.holds`, naming who held and who released it (`kardinal unhold --reason`); or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
-| `PipelinePaused` / `PipelineResumed` | A Pipeline, or one fleet of it (environment set), was paused or resumed (`kardinal pause` / `resume`, the UI, or a `spec.paused` / `spec.pausedFleets` edit), naming who and why (`--reason`); the environment is `*` for the whole Pipeline |
-| `FreezeStarted` / `FreezeLifted` | A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
+| `PipelinePaused` / `PipelineResumed` | (v0.12.0, unreleased) A Pipeline, or one fleet of it (environment set), was paused or resumed (`kardinal pause` / `resume`, the UI, or a `spec.paused` / `spec.pausedFleets` edit), naming who and why (`--reason`); the environment is `*` for the whole Pipeline |
+| `FreezeStarted` / `FreezeLifted` | (v0.12.0, unreleased) A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
 | `FreezeExempted` | A step went on through a freeze under an exemption (`kardinal override --freeze`), once per freeze, naming who made it |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
-| `PRMerged` | A promotion step's pull request (a `pr-review` environment's) was merged: who merged it, asked of the SCM API once the merge is confirmed (never taken from a webhook payload, which anyone holding the webhook secret could write), whether the webhook or polling saw the merge, and the merge commit. The step waits for the name for at most 5 minutes; if the SCM cannot give it, the record says the merger is unknown. The step's `status.outputs.prMergedBy` names the merger too. On GitLab the merger is the API's `merge_user`: with "merge when pipeline succeeds", the user who set it |
+| `PRMerged` | (v0.12.0, unreleased) A promotion step's pull request (a `pr-review` environment's) was merged: who merged it, asked of the SCM API once the merge is confirmed (never taken from a webhook payload, which anyone holding the webhook secret could write), whether the webhook or polling saw the merge, and the merge commit. The step waits for the name for at most 5 minutes; if the SCM cannot give it, the record says the merger is unknown. The step's `status.outputs.prMergedBy` names the merger too. On GitLab the merger is the API's `merge_user`: with "merge when pipeline succeeds", the user who set it |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 | `APIWrite` | A write through the UI API or the Bundle API (promote, roll back, create a version, approve, override, pause, resume, reject, release a hold), refused ones included (outcome `Failure`), naming the caller and the route ([API writes](#api-writes)) |

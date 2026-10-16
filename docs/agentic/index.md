@@ -1,5 +1,9 @@
 # Agentic delivery
 
+!!! info "New in v0.12.0 (unreleased)"
+    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
+    it. The [changelog](../changelog.md#unreleased) lists every unreleased change.
+
 **GitOps Governance for the Agentic Era.**
 
 Coding agents now write and ship a growing share of changes, and a guardrail that lives inside
