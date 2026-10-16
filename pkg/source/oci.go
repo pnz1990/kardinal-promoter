@@ -25,8 +25,11 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
@@ -190,7 +193,94 @@ func (w *OCIWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 
 	// First-run is not considered a change.
 	changed := lastDigest != "" && digest != lastDigest
-	return &WatchResult{Digest: digest, Tag: tag, Changed: changed}, nil
+	res := &WatchResult{Digest: digest, Tag: tag, Changed: changed}
+	if changed {
+		// Best effort: a version is made without it.
+		var rerr error
+		if res.SourceCommit, rerr = s.imageRevision(ctx, digest); rerr != nil {
+			zerolog.Ctx(ctx).Debug().Err(rerr).Str("registry", w.Registry).Str("digest", digest).
+				Msg("could not read the image's " + revisionKey + "; the version has no provenance commit")
+		}
+	}
+	return res, nil
+}
+
+// revisionKey is the OCI annotation (and image label) for the source
+// revision an image was built from.
+const revisionKey = "org.opencontainers.image.revision"
+
+// commitPattern is a full git commit name: SHA-1 (40) or SHA-256 (64) hex,
+// lowercase. Build tools (docker/metadata-action, buildx, ko) record the full
+// commit in the revision; a short one, a tag such as sha-1a2b3c4 or a build
+// number is not taken for a commit.
+var commitPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// imageRevision is the commit the image at digest was built from: the
+// org.opencontainers.image.revision annotation of its manifest (or of the
+// platform image of an index), else that label of its image config. "" when
+// there is none, or it is not a commit SHA (a tag name, a branch).
+func (s *registrySession) imageRevision(ctx context.Context, digest string) (string, error) {
+	m, _, err := s.getManifest(ctx, digest)
+	if err != nil {
+		return "", err
+	}
+	if r := m.Annotations[revisionKey]; r != "" {
+		return commitOrEmpty(ctx, r), nil
+	}
+	if len(m.Manifests) > 0 {
+		child := pickPlatformManifest(m)
+		if child == "" {
+			return "", nil
+		}
+		if m, _, err = s.getManifest(ctx, child); err != nil {
+			return "", err
+		}
+		if r := m.Annotations[revisionKey]; r != "" {
+			return commitOrEmpty(ctx, r), nil
+		}
+	}
+	if m.Config.Digest == "" {
+		return "", nil
+	}
+	body, _, err := s.get(ctx, s.base.JoinPath("v2", s.name, "blobs", m.Config.Digest), "")
+	if err != nil {
+		return "", err
+	}
+	var cfg struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return "", fmt.Errorf("decode image config: %w", err)
+	}
+	return commitOrEmpty(ctx, cfg.Config.Labels[revisionKey]), nil
+}
+
+// commitOrEmpty is r, lowercased, when it is a full commit SHA
+// (commitPattern) and not all digits (a build number); else "". Nothing
+// around the hex is trimmed: a value with a prefix, a suffix or a newline is
+// not a commit.
+func commitOrEmpty(ctx context.Context, r string) string {
+	c := strings.ToLower(r)
+	why := ""
+	switch {
+	case c == "":
+		return ""
+	case !commitPattern.MatchString(c):
+		why = "not a full commit SHA (40 or 64 hex characters, nothing around them)"
+	case strings.Trim(c, "0123456789") == "":
+		why = "all digits, a build number rather than a commit"
+	default:
+		return c
+	}
+	shown := r
+	if len(shown) > 80 {
+		shown = shown[:80] + "..."
+	}
+	zerolog.Ctx(ctx).Debug().Str("revision", strconv.Quote(shown)).Str("reason", why).
+		Msg("the image's " + revisionKey + " is not taken for a commit; the version has no provenance commit")
+	return ""
 }
 
 func (w *OCIWatcher) client() *http.Client {
@@ -338,7 +428,8 @@ type ociManifest struct {
 	Config struct {
 		Digest string `json:"digest"`
 	} `json:"config"`
-	Manifests []struct {
+	Annotations map[string]string `json:"annotations"`
+	Manifests   []struct {
 		Digest   string `json:"digest"`
 		Platform *struct {
 			OS           string `json:"os"`

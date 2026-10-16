@@ -735,3 +735,52 @@ func TestSubscriptionReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 		})
 	}
 }
+
+// sourceCommitWatcher reports a changed image with the source commit its
+// build recorded.
+type sourceCommitWatcher struct{ digest, tag, commit string }
+
+func (w *sourceCommitWatcher) Watch(_ context.Context, lastDigest string) (*source.WatchResult, error) {
+	return &source.WatchResult{Digest: w.digest, Tag: w.tag, Changed: lastDigest != "" && w.digest != lastDigest,
+		SourceCommit: w.commit}, nil
+}
+
+// TestSubscriptionReconciler_ImageProvenance (#1946): an image Subscription's
+// version names the image digest in images[0] only; provenance.commitSHA is
+// the commit the build recorded (org.opencontainers.image.revision), and
+// there is no provenance when it recorded none, never the digest.
+func TestSubscriptionReconciler_ImageProvenance(t *testing.T) {
+	const digest = "sha256:b8cf2d88286ed4371d7ff76963a87957d82a81909ff8c37c99ef0ea75a421cf1"
+	const commit = "7a98d10da0777741569e3c6bfb7e04d02c091005"
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   *kardinalv1alpha1.BundleProvenance
+	}{
+		{"the build recorded its commit", commit, &kardinalv1alpha1.BundleProvenance{CommitSHA: commit}},
+		{"it recorded none", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := makeImageSub("sub-prov", "default", "my-pipeline", "ghcr.io/test/app")
+			sub.Status.LastSeenDigest = "sha256:old"
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
+				WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+			r := &subscription.Reconciler{
+				Client: c,
+				WatcherFn: func(_ *kardinalv1alpha1.Subscription, _ source.Credentials) (source.Watcher, error) {
+					return &sourceCommitWatcher{digest: digest, tag: commit, commit: tc.commit}, nil
+				},
+				NowFn: func() time.Time { return time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC) },
+			}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}})
+			require.NoError(t, err)
+			var list kardinalv1alpha1.BundleList
+			require.NoError(t, c.List(context.Background(), &list))
+			require.Len(t, list.Items, 1)
+			b := list.Items[0]
+			require.Len(t, b.Spec.Images, 1)
+			assert.Equal(t, digest, b.Spec.Images[0].Digest, "the digest is the image's")
+			assert.Equal(t, tc.want, b.Spec.Provenance)
+		})
+	}
+}

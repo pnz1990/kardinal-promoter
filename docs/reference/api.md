@@ -225,7 +225,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.provenance` | object |  | Provenance carries build metadata for audit and rollback. |
 | `spec.provenance.author` | string |  | Author is the committer or triggering actor for this build. |
 | `spec.provenance.ciRunURL` | string |  | CIRunURL is the URL of the CI run that built this Bundle. |
-| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters, or an image digest (a Subscription records the digest it found). |
+| `spec.provenance.commitSHA` | string |  | CommitSHA is the application source commit that produced this Bundle: 4 to 64 hex characters. An image Subscription records the commit the image's build recorded in org.opencontainers.image.revision (a full SHA), and none when the image names none. Versions a Subscription created before v0.12.0 may hold the image digest instead, which the pattern still accepts so they stay valid. |
 | `spec.provenance.rollbackOf` | string |  | RollbackOf is the name of the Bundle this Bundle rolls back (if any). |
 | `spec.provenance.timestamp` | string (date-time) |  | Timestamp is when the bundle was built. |
 | `spec.rejected` | object |  | Rejected marks the Bundle as rejected (kardinal reject): it is never promoted again, its in-flight steps are cancelled, and rollback, promote and Subscriptions skip any Bundle carrying its artifacts. Setting it is one-way: it cannot be changed or removed. The chart's ValidatingAdmissionPolicy requires rejected.by to be the requesting user; without that policy nothing checks it. |

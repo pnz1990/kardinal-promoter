@@ -79,7 +79,34 @@ spec:
     - repository: ghcr.io/myorg/my-app
       tag: v1.4.0
       digest: sha256:3f2a9c1b...
+  provenance:                             # only when the build recorded its commit
+    commitSHA: 7a98d10da0777741569e3c6bfb7e04d02c091005
 ```
+
+`provenance.commitSHA` is the source commit the image's build recorded in
+`org.opencontainers.image.revision`, as `docker buildx --label` and the OCI metadata actions
+write it. kardinal looks, in order, at the annotation of the image's manifest; for a
+multi-architecture index, at the index's own annotation, then the annotation of its
+`linux/amd64` image (or of the first platform when there is none); and then at the label of
+that image's config. The first revision found decides. It counts only when it is a full commit
+SHA, 40 or 64 hex characters (lowercased); a tag such as `sha-1a2b3c4`, a short SHA, a build
+number or a branch is not a commit. An image without one gets no `provenance`, and its PR
+evidence shows `—` for the commit. The digest is in `images[0].digest` only. Versions created
+before v0.12.0 may still hold the digest in `provenance.commitSHA`.
+
+Not every builder records the revision. `docker buildx` with the OCI metadata action does
+(`org.opencontainers.image.revision` is the full commit); ko, Jib and Cloud Native Buildpacks
+do not by default. Set it to the full commit, for example in CI with `$GITHUB_SHA`:
+
+| Builder | How to record the revision |
+|---|---|
+| `docker buildx` | `--label org.opencontainers.image.revision=$GITHUB_SHA` (or `docker/metadata-action`'s labels) |
+| ko | `ko build --image-label org.opencontainers.image.revision=$GITHUB_SHA` |
+| Jib (Maven or Gradle) | `jib.container.labels`, e.g. `-Djib.container.labels=org.opencontainers.image.revision=$GITHUB_SHA` |
+| Paketo buildpacks | the `BP_OCI_REVISION` build environment variable, e.g. `pack build --env BP_OCI_REVISION=$GITHUB_SHA` |
+
+BuildKit's own git labels (`BUILDX_GIT_LABELS`) append `-dirty` to the revision of a build
+from a modified working tree; such a value is not a commit SHA and is not taken.
 
 Version names are lowercased and made DNS-safe (`Build_42` becomes `build-42`) and are
 at most 63 characters. The digest suffix means a re-pushed mutable tag (`latest`,

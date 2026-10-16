@@ -359,8 +359,11 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 				Digest:     result.Digest,
 			},
 		}
-		bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{
-			CommitSHA: result.Digest,
+		// The digest is the image's, already in images[0]; the commit is the
+		// one the build recorded (org.opencontainers.image.revision), when it
+		// did (#1946).
+		if result.SourceCommit != "" {
+			bundle.Spec.Provenance = &kardinalv1alpha1.BundleProvenance{CommitSHA: result.SourceCommit}
 		}
 	case sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit && sub.Spec.Git != nil:
 		bundle.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{

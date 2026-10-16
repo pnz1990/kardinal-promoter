@@ -190,8 +190,11 @@ type ChartRef struct {
 // BundleProvenance carries build origin metadata.
 type BundleProvenance struct {
 	// CommitSHA is the application source commit that produced this Bundle:
-	// 4 to 64 hex characters, or an image digest (a Subscription records
-	// the digest it found).
+	// 4 to 64 hex characters. An image Subscription records the commit the
+	// image's build recorded in org.opencontainers.image.revision (a full
+	// SHA), and none when the image names none. Versions a Subscription
+	// created before v0.12.0 may hold the image digest instead, which the
+	// pattern still accepts so they stay valid.
 	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{4,64}|[a-z0-9]+([+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]{32,})$`
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
