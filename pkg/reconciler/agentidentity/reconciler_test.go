@@ -298,7 +298,8 @@ func TestReconcile_AgentIndexNearFull(t *testing.T) {
 	}{
 		{"70%", size * 10 / 7, metav1.ConditionFalse, metav1.ConditionTrue, []string{"(70%)", "more AgentIdentities of the average size"}},
 		{"85%", size * 100 / 85, metav1.ConditionTrue, metav1.ConditionTrue, []string{"(85%)", "past", "remove AgentIdentities or subjects"}},
-		{"over the bound", size - 1, metav1.ConditionTrue, metav1.ConditionFalse, []string{"(100%)"}},
+		{"exactly at the bound", size, metav1.ConditionTrue, metav1.ConditionTrue, []string{"(100%)"}},
+		{"one byte over the bound", size - 1, metav1.ConditionTrue, metav1.ConditionFalse, []string{"(100%)"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
