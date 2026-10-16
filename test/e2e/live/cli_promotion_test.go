@@ -655,13 +655,14 @@ func TestCLI_Reports(t *testing.T) {
 	r = c.Fail(a.ns, "diff", bA)
 	assert.Contains(t, r.Stderr, "accepts 2 arg(s), received 1")
 
-	// get auditevents: what the controller wrote, newest first.
-	framework.Eventually(t, time.Minute, "8 AuditEvents", func(ctx context.Context) (bool, string) {
+	// get auditevents: what the controller wrote, newest first. prod is
+	// pr-review: its merge is audited too (PRMerged, #1939).
+	framework.Eventually(t, time.Minute, "10 AuditEvents", func(ctx context.Context) (bool, string) {
 		var list v1alpha1.AuditEventList
 		if err := e.Client.List(ctx, &list, client.InNamespace(a.ns)); err != nil {
 			return false, err.Error()
 		}
-		return len(list.Items) == 8, fmt.Sprintf("%d AuditEvents", len(list.Items))
+		return len(list.Items) == 10, fmt.Sprintf("%d AuditEvents", len(list.Items))
 	})
 	aeOut := c.Must(a.ns, "get", "auditevents")
 	events := framework.ParseTable(aeOut)
@@ -681,6 +682,7 @@ func TestCLI_Reports(t *testing.T) {
 				aeRow{pipelineName, b, env, "PromotionStarted", "Pending"},
 				aeRow{pipelineName, b, env, "PromotionSucceeded", "Success"})
 		}
+		want = append(want, aeRow{pipelineName, b, "prod", "PRMerged", "Success"})
 	}
 	assert.ElementsMatch(t, want, aes, aeOut)
 	assert.Equal(t, aeOut, c.Must(a.ns, "get", "ae"), "ae is an alias")
