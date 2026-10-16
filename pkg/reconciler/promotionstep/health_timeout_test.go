@@ -283,3 +283,55 @@ func TestHealthTimeoutLateAdapterError(t *testing.T) {
 	assert.Contains(t, got.Status.Message, "last result: waiting for resource: Deployment test/p not updated yet")
 	assert.Contains(t, got.Status.Message, "the health check past the timeout failed: get deployment test/p: etcdserver: request timed out")
 }
+
+// TestRollbackPerEnvironment (#2082): when two environments of one Bundle
+// fail at once with onHealthFailure=rollback (fan-out, waves, a fleet's
+// targets in flight together), each gets its own rollback Bundle; neither
+// takes the other's as its own. A step reconciled again reuses its own.
+func TestRollbackPerEnvironment(t *testing.T) {
+	envs := []string{"prod-eu", "prod-us"}
+	pipeline := makePipeline("p")
+	pipeline.Spec.Environments = nil
+	objs := []client.Object{pipeline}
+	for _, e := range envs {
+		pipeline.Spec.Environments = append(pipeline.Spec.Environments, v1alpha1.EnvironmentSpec{Name: e,
+			Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"}, OnHealthFailure: "rollback"})
+		objs = append(objs, crashLoopDeployment("p", e, appsv1.RecreateDeploymentStrategyType))
+		s0 := labelled(makeStep("step-b0-"+e, "p", "b0", e))
+		s0.Status = v1alpha1.PromotionStepStatus{State: "Verified", Conditions: []metav1.Condition{{
+			Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified",
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Hour))}}}
+		expired := metav1.NewTime(time.Now().Add(-time.Second))
+		ps := labelled(makeStep("step-"+e, "p", "b1", e))
+		ps.Status = v1alpha1.PromotionStepStatus{State: "HealthChecking", Steps: recordedSteps(""), HealthCheckExpiry: &expired}
+		objs = append(objs, s0, ps)
+	}
+	b0 := makeBundle("b0", "p")
+	b0.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}}
+	b0.Status.Phase = "Superseded"
+	b1 := makeBundle("b1", "p")
+	b1.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2-bad"}}
+	c := newClient(t, append(objs, b0, b1)...)
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
+	for _, e := range append(envs, envs...) {
+		_, err := r.Reconcile(context.Background(), reqFor("step-"+e))
+		require.NoError(t, err)
+	}
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	targets := map[string]string{}
+	for _, b := range bundles.Items {
+		if b.Labels["kardinal.io/rollback"] == "true" {
+			require.NotNil(t, b.Spec.Intent, b.Name)
+			targets[b.Spec.Intent.TargetEnvironment] = b.Name
+		}
+	}
+	assert.Equal(t, map[string]string{"prod-eu": "b1-rollback-alarm", "prod-us": "b1-rollback-alarm-prod-us"}, targets,
+		"one rollback Bundle per failing environment")
+	for _, e := range envs {
+		got := getStep(t, c, "step-"+e)
+		assert.Equal(t, "RollingBack", got.Status.State, got.Status.Message)
+		assert.Contains(t, got.Status.Message, "rollback Bundle "+targets[e]+" created", "%s names its own rollback", e)
+	}
+}

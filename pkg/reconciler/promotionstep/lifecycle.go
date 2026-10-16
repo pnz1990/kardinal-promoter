@@ -182,7 +182,10 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 	if existing != "" {
 		return existing, nil, nil
 	}
-	name = lifecycle.AutoRollbackName(ps.Spec.BundleName, "alarm")
+	name, err = lifecycle.AutoRollbackNameIn(ctx, r.Client, ps.Namespace, ps.Spec.BundleName, "alarm", ps.Spec.Environment)
+	if err != nil {
+		return "", nil, fmt.Errorf("name rollback of bundle %s: %w", ps.Spec.BundleName, err)
+	}
 
 	plan, planErr := lifecycle.PlanRollback(ctx, r.Client, lifecycle.RollbackRequest{
 		Namespace:   ps.Namespace,
@@ -205,7 +208,20 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		return "", nil, fmt.Errorf("plan rollback: %w", planErr)
 	}
 	plan.Bundle.Spec.Actor = actor.Controller(cmp.Or(r.ControllerUser, lifecycle.ControllerCreator), v1alpha1.ViaAutoRollback)
-	if createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+	createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator)
+	if apierrors.IsAlreadyExists(createErr) {
+		// A retried reconcile's own, or another environment's created in the
+		// meantime: that one is not this environment's rollback (#2082).
+		taken, takenErr := lifecycle.RollbackTaken(ctx, r.apiReader(), ps.Namespace, name, ps.Spec.Environment)
+		if takenErr != nil {
+			return "", nil, takenErr
+		}
+		if taken {
+			return "", nil, fmt.Errorf("rollback bundle %s rolls another environment back; retrying with %s's own", name, ps.Spec.Environment)
+		}
+		createErr = nil
+	}
+	if createErr != nil {
 		return "", nil, fmt.Errorf("create rollback bundle %s: %w", name, createErr)
 	}
 	return name, nil, nil

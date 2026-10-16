@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -38,6 +40,27 @@ func AutoRollbackName(bundle, source string) string {
 	return strings.TrimRight(bundle[:keep], "-.") + suffix
 }
 
+// AutoRollbackNameIn is AutoRollbackName for the rollback of bundle in env:
+// AutoRollbackName(bundle, source), unless a Bundle of that name exists and
+// rolls another environment back (another environment of the Bundle failed
+// first: fan-out, waves, a fleet's targets in flight at once), then
+// AutoRollbackName(bundle, source+"-"+env), so each environment gets its own
+// (#2082).
+func AutoRollbackNameIn(ctx context.Context, c client.Reader, ns, bundle, source, env string) (string, error) {
+	name := AutoRollbackName(bundle, source)
+	var b v1alpha1.Bundle
+	err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b)
+	switch {
+	case apierrors.IsNotFound(err):
+		return name, nil
+	case err != nil:
+		return "", fmt.Errorf("get bundle %s: %w", name, err)
+	case b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != env:
+		return AutoRollbackName(bundle, source+"-"+env), nil
+	}
+	return name, nil
+}
+
 // FindRollback returns the name of an existing rollback Bundle that rolls the
 // environment env of pipeline back from the Bundle from, or "" when there is
 // none. Automatic rollback paths (onHealthFailure=rollback and RollbackPolicy)
@@ -58,4 +81,16 @@ func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from 
 		}
 	}
 	return "", nil
+}
+
+// RollbackTaken reports whether rollback Bundle name, which a create found
+// existing, rolls another environment than env back: created by a
+// concurrent reconcile of another environment, it is not env's, and the
+// caller retries (AutoRollbackNameIn then names env's own).
+func RollbackTaken(ctx context.Context, c client.Reader, ns, name, env string) (bool, error) {
+	var b v1alpha1.Bundle
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); err != nil {
+		return false, fmt.Errorf("get bundle %s: %w", name, err)
+	}
+	return b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != env, nil
 }
