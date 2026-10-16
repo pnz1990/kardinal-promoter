@@ -2353,14 +2353,16 @@ func (r *Reconciler) handleBake(
 		policy = "reset-on-alarm"
 	}
 	switch {
-	case !result.Healthy && !result.Progressing && !result.NotFound && ps.Status.BakeStartedAt == nil && policy == "fail-on-alarm":
+	case !result.Healthy && !result.Progressing && ps.Status.BakeStartedAt == nil && policy == "fail-on-alarm" &&
+		(!result.NotFound || ps.Status.BakeFirstStartedAt != nil):
 		// fail-on-alarm applies onHealthFailure at the first unhealthy check,
 		// also before the first healthy one (#2006): the adapters report
 		// Waiting until the promoted change is deployed, so an unhealthy
 		// result is about this change, not the release before it. A target
 		// that does not exist yet (the GitOps tool has not created it: the
 		// first promotion into a new environment) waits for the first
-		// healthy check instead.
+		// healthy check instead. Once a window started (BakeFirstStartedAt),
+		// the target existed: one deleted after a window stopped is an alarm.
 		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, adapterName, result.Reason)
 	case !result.Healthy && ps.Status.BakeStartedAt == nil:
 		// The bake window has not started: the environment was never healthy,
@@ -2371,7 +2373,7 @@ func (r *Reconciler) handleBake(
 		}
 		ps.Status.Message = fmt.Sprintf("bake: waiting for the first healthy check (%s %s): %s",
 			verdict, adapterName, result.Reason)
-		if ps.Status.BakeResets > 0 {
+		if ps.Status.BakeResets > 0 || ps.Status.BakeFirstStartedAt != nil {
 			ps.Status.Message = fmt.Sprintf("bake: waiting for a healthy check to restart the window (resets=%d, %s %s): %s",
 				ps.Status.BakeResets, verdict, adapterName, result.Reason)
 		}

@@ -74,13 +74,22 @@ func TestAdapters_NotFound(t *testing.T) {
 // after the change can have reached git (its Progressing condition with
 // reason RolloutAborted): an earlier release's abort is Waiting, not a
 // Failed result that would fail the change before the GitOps tool applies
-// it. A Rollout without the condition cannot tell, and stays Unhealthy.
+// it. The abort time is the condition's lastUpdateTime, which moves when the
+// reason changes, with lastTransitionTime as the fallback. A Rollout without
+// the condition cannot tell, and stays Unhealthy.
 func TestArgoRolloutsAdapter_StaleAbort(t *testing.T) {
 	changed := time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)
 	withAbortAt := func(at time.Time) map[string]interface{} {
 		st := abortedRolloutStatus("6")
 		st["conditions"] = []interface{}{map[string]interface{}{"type": "Progressing", "status": "False",
 			"reason": "RolloutAborted", "lastTransitionTime": at.Format(time.RFC3339)}}
+		return st
+	}
+	withAbortUpdated := func(transition, update time.Time) map[string]interface{} {
+		st := abortedRolloutStatus("6")
+		st["conditions"] = []interface{}{map[string]interface{}{"type": "Progressing", "status": "False",
+			"reason": "RolloutAborted", "lastTransitionTime": transition.Format(time.RFC3339),
+			"lastUpdateTime": update.Format(time.RFC3339)}}
 		return st
 	}
 	same := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
@@ -99,6 +108,15 @@ func TestArgoRolloutsAdapter_StaleAbort(t *testing.T) {
 			isTerminal, "aborted the update (status.abort)"},
 		{"same image: an abort after the change fails", withAbortAt(changed.Add(time.Minute)), same,
 			isTerminal, "aborted the update (status.abort)"},
+		// Argo Rollouts keeps lastTransitionTime when only the reason changes
+		// (Progressing was already False, ProgressDeadlineExceeded); the
+		// abort time is lastUpdateTime (#2010, QA).
+		{"config-only: an abort after the change whose status did not change fails",
+			withAbortUpdated(changed.Add(-time.Hour), changed.Add(time.Minute)), nil,
+			isTerminal, "aborted the update (status.abort)"},
+		{"config-only: an abort updated before the change waits",
+			withAbortUpdated(changed.Add(-2*time.Hour), changed.Add(-time.Hour)), nil,
+			isProgressing, "the abort is from an earlier release"},
 		{"no RolloutAborted condition: cannot tell, Unhealthy", abortedRolloutStatus("6"), nil,
 			isUnhealthy, "cannot tell whether the abort is from this release"},
 	}
