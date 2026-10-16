@@ -288,6 +288,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		WithGlobalResourceVersionCounter().
 		WithStatusSubresource(statusObjs...).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+		WithIndex(&v1alpha1.Pipeline{}, pipelinerec.IndexPipelineRepo, pipelinerec.PipelineRepoValues).
 		WithIndex(&v1alpha1.PromotionStep{}, "spec.pipelineName", func(o client.Object) []string {
 			if ps, ok := o.(*v1alpha1.PromotionStep); ok && ps.Spec.PipelineName != "" {
 				return []string{ps.Spec.PipelineName}

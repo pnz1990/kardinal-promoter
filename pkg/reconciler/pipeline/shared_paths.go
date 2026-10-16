@@ -20,6 +20,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // conditionPathConflict is True on a Pipeline when two of its environments,
@@ -42,6 +43,51 @@ func repoKey(p *kardinalv1alpha1.Pipeline) string {
 		b = "main"
 	}
 	return normalizeRepoURL(p.Spec.Git.URL) + "#" + b
+}
+
+// IndexPipelineRepo indexes Pipelines by the repository they write, so the
+// checks that compare a Pipeline with the others of its repository
+// (PathConflict, the rendered branch conflict, and the watches that re-check
+// them) read only those Pipelines rather than every Pipeline in the cluster
+// (#1684: 69 GB of a 100-Pipeline soak's allocations). The values are
+// repoBranchValue (the repository and branch, PathConflict) and
+// repoURLValue (scm.RepoURLKey, the rendered branch conflict).
+const IndexPipelineRepo = "kardinal.io/git-repo"
+
+// repoBranchValue is the IndexPipelineRepo value of the repository and
+// branch p writes: Pipelines with the same value are PathConflict peers.
+func repoBranchValue(p *kardinalv1alpha1.Pipeline) string { return "branch:" + repoKey(p) }
+
+// repoURLValue is the IndexPipelineRepo value of a repository URL, or ""
+// when scm.SameRepoURL matches no URL to it.
+func repoURLValue(url string) string {
+	if k, ok := scm.RepoURLKey(url); ok {
+		return "url:" + k
+	}
+	return ""
+}
+
+// PipelineRepoValues is the IndexPipelineRepo index function.
+func PipelineRepoValues(obj client.Object) []string {
+	p, ok := obj.(*kardinalv1alpha1.Pipeline)
+	if !ok {
+		return nil
+	}
+	out := []string{repoBranchValue(p)}
+	if v := repoURLValue(p.Spec.Git.URL); v != "" {
+		out = append(out, v)
+	}
+	return out
+}
+
+// listRepoPeers lists the Pipelines whose IndexPipelineRepo values include
+// value, in every namespace the controller sees, with p itself among them.
+func (r *Reconciler) listRepoPeers(ctx context.Context, value string) ([]kardinalv1alpha1.Pipeline, error) {
+	var list kardinalv1alpha1.PipelineList
+	if err := r.List(ctx, &list, client.MatchingFields{IndexPipelineRepo: value}); err != nil {
+		return nil, fmt.Errorf("list pipelines of repository: %w", err)
+	}
+	return list.Items, nil
 }
 
 // normalizeRepoURL reduces the ways to spell one repository's URL to
@@ -131,8 +177,8 @@ func writtenPaths(p *kardinalv1alpha1.Pipeline) []written {
 	return out
 }
 
-// pathConflict returns the PathConflict condition for p given every
-// Pipeline the controller sees, or nil when p shares no path: two of p's
+// pathConflict returns the PathConflict condition for p given the Pipelines
+// the controller sees on its repository and branch (others are skipped), or nil when p shares no path: two of p's
 // own environments, or one of p's and one of another Pipeline on the same
 // repository and branch, write overlapping paths. Pipelines of p's namespace
 // are named; those of other namespaces only counted, since p's status must
@@ -237,15 +283,14 @@ func (r *Reconciler) pipelinesSharingRepo(ctx context.Context, obj client.Object
 	if !ok {
 		return nil
 	}
-	var list kardinalv1alpha1.PipelineList
-	if err := r.List(ctx, &list); err != nil {
+	peers, err := r.listRepoPeers(ctx, repoBranchValue(p))
+	if err != nil {
 		return nil
 	}
-	key := repoKey(p)
 	var reqs []ctrl.Request
-	for i := range list.Items {
-		o := &list.Items[i]
-		if repoKey(o) == key && (o.Namespace != p.Namespace || o.Name != p.Name) {
+	for i := range peers {
+		o := &peers[i]
+		if o.Namespace != p.Namespace || o.Name != p.Name {
 			reqs = append(reqs, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(o)})
 		}
 	}

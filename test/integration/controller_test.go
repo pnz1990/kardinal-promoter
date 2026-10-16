@@ -121,6 +121,7 @@ func TestControllerIntegration(t *testing.T) {
 		WithObjects(pipeline, bundle, gitSecret).
 		WithStatusSubresource(pipeline, bundle).
 		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+		WithIndex(&kardinalv1alpha1.Pipeline{}, pipelinereconciler.IndexPipelineRepo, pipelinereconciler.PipelineRepoValues).
 		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName",
 			func(obj client.Object) []string {
 				s, ok := obj.(*kardinalv1alpha1.PromotionStep)

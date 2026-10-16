@@ -111,6 +111,7 @@ func TestPipelineLifecycle_ListErrorKeepsStatus(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(newPipelineScheme()).WithObjects(objs...).
 				WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
 				WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+				WithIndex(&kardinalv1alpha1.Pipeline{}, pipeline.IndexPipelineRepo, pipeline.PipelineRepoValues).
 				WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName", func(obj client.Object) []string {
 					return []string{obj.(*kardinalv1alpha1.PromotionStep).Spec.PipelineName}
 				}).
@@ -434,6 +435,7 @@ func TestPipelineLifecycle_FreezeGateInTerminatingNamespace(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(newPipelineScheme()).WithObjects(p.DeepCopy()).
 				WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
 				WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+				WithIndex(&kardinalv1alpha1.Pipeline{}, pipeline.IndexPipelineRepo, pipeline.PipelineRepoValues).
 				WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName", func(obj client.Object) []string {
 					return []string{obj.(*kardinalv1alpha1.PromotionStep).Spec.PipelineName}
 				}).

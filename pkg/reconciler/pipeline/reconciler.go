@@ -319,12 +319,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
 	// Pipelines that share a repository and branch must write separate paths
-	// (PathConflict). Reads Pipelines, writes only this Pipeline's status.
-	var pipelines kardinalv1alpha1.PipelineList
-	if err := r.List(ctx, &pipelines); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list pipelines: %w", err)
+	// (PathConflict). Reads the Pipelines of this repository and branch
+	// through the IndexPipelineRepo index (#1684), writes only this
+	// Pipeline's status.
+	peers, err := r.listRepoPeers(ctx, repoBranchValue(&p))
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	desiredConflict := pathConflict(&p, pipelines.Items)
+	desiredConflict := pathConflict(&p, peers)
 
 	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
 	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items,
@@ -846,6 +848,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
 		return err
+	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kardinalv1alpha1.Pipeline{},
+		IndexPipelineRepo, PipelineRepoValues); err != nil {
+		return fmt.Errorf("index Pipeline by repository: %w", err)
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).

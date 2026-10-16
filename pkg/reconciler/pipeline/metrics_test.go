@@ -273,6 +273,7 @@ func newClientWithIndex(scheme *runtime.Scheme, objs ...client.Object) client.Cl
 		WithObjects(objs...).
 		WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
 		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).
+		WithIndex(&kardinalv1alpha1.Pipeline{}, pipeline.IndexPipelineRepo, pipeline.PipelineRepoValues).
 		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName",
 			func(obj client.Object) []string {
 				s, ok := obj.(*kardinalv1alpha1.PromotionStep)

@@ -420,12 +420,26 @@ func ParseWebhookRequest(p SCMProvider, payload []byte, h http.Header) (WebhookE
 // ignoring a ".git" suffix and letter case of the path. SameRepo compares
 // repository names (owner/name) for a provider.
 func SameRepoURL(a, b string) bool {
-	if !SameOrigin(a, b) {
-		return false
+	ka, okA := RepoURLKey(a)
+	kb, okB := RepoURLKey(b)
+	return okA && okB && ka == kb
+}
+
+// RepoURLKey is the key SameRepoURL compares: the http(s) origin and the
+// repository path (RepoFromURL) in lower case. Two URLs have the same key
+// exactly when SameRepoURL holds, so an index on the key finds every
+// Pipeline of a repository. ok is false for a URL SameRepoURL never matches
+// (not http or https, or no repository path).
+func RepoURLKey(raw string) (string, bool) {
+	origin, ok := httpOrigin(raw)
+	if !ok {
+		return "", false
 	}
-	ra, errA := RepoFromURL(a)
-	rb, errB := RepoFromURL(b)
-	return errA == nil && errB == nil && strings.EqualFold(ra, rb)
+	repo, err := RepoFromURL(raw)
+	if err != nil {
+		return "", false
+	}
+	return origin + "/" + strings.ToLower(repo), true
 }
 
 // canonicalOf is p's canonical form of repo: its CanonicalRepo when it has
