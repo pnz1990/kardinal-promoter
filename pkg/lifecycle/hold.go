@@ -388,6 +388,7 @@ func setHold(ctx context.Context, c client.Client, ns, pipeline string, hold v1a
 		}
 		kept = append(kept, hold)
 		p.Spec.Holds = kept
+		MarkActorCheck(&p)
 		return c.Update(ctx, &p)
 	})
 }

@@ -297,3 +297,40 @@ func TestHoldCurrent(t *testing.T) {
 		assert.Error(t, err, name)
 	}
 }
+
+// TestActorCheckLabel (#1936): every write that records who acted on a
+// Pipeline or a Bundle (a hold, a release, a pause or resume, a rejection)
+// carries kardinal.io/actor-check, which <release>-actor-records matches on
+// and <release>-actor-record-marker requires.
+func TestActorCheckLabel(t *testing.T) {
+	ctx := context.Background()
+	who := &v1alpha1.PipelineChange{By: "alice"}
+	labelled := func(t *testing.T, o metav1.Object, what string) {
+		t.Helper()
+		assert.Equal(t, "true", o.GetLabels()[lifecycle.LabelActorCheck], what)
+	}
+
+	c := newClient(t, holdObjects()...)
+	_, _, err := lifecycle.HoldCurrent(ctx, c, lifecycle.HoldCurrentRequest{Namespace: ns, Pipeline: "app", Environment: "prod",
+		Reason: "audit", Actor: "alice", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	p := getPipeline(t, c)
+	labelled(t, p, "a hold")
+
+	p.Labels = nil
+	require.NoError(t, c.Update(ctx, p))
+	_, err = lifecycle.ReleaseHold(ctx, c, ns, "app", "prod", who)
+	require.NoError(t, err)
+	p = getPipeline(t, c)
+	labelled(t, p, "a release")
+
+	p.Labels = nil
+	require.NoError(t, c.Update(ctx, p))
+	require.NoError(t, lifecycle.SetPaused(ctx, c, ns, "app", true, who))
+	p = getPipeline(t, c)
+	labelled(t, p, "a pause")
+
+	b, err := lifecycle.Reject(ctx, c, ns, "v2", "bad", "alice", nil, t0)
+	require.NoError(t, err)
+	labelled(t, b, "a rejection")
+}

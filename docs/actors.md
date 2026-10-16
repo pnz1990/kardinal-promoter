@@ -73,6 +73,14 @@ run, so a missing index would stop kro's and kardinal's writes too. `helm uninst
 index (`helm.sh/resource-policy: keep`); delete it afterwards with
 `kubectl delete agentindex <release>`.
 
+Who paused, resumed or released a Pipeline, and who rejected a Bundle, is checked the same way:
+the write that records it carries the label `kardinal.io/actor-check: "true"` (`kardinal pause`,
+`resume`, `hold`, `release-hold`, `reject`, the UI and the MCP tools set it), and the
+`<release>-actor-record-marker` policy refuses such a write without it, by anyone but the
+controller. So `<release>-actor-records` converts the index only for those writes, not for the
+controller's many Pipeline and Bundle updates. The label stays on the object; later writes to it
+pay that cost too.
+
 A gate override is checked when the write that adds it carries the label
 `kardinal.io/override-check: "true"`: `kardinal override` and the UI set it, and the
 `<release>-override-marker` policy refuses an override added without it, by anyone but the

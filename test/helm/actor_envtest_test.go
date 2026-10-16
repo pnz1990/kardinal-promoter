@@ -269,13 +269,25 @@ func TestActorsOnAPIServer(t *testing.T) {
 		Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: "https://github.com/acme/app"},
 			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}}}}
 	require.NoError(t, admin.Create(ctx, app))
-	pauseAs := func(c client.Client, ch *v1alpha1.PipelineChange) error {
+	pauseWith := func(c client.Client, ch *v1alpha1.PipelineChange, label bool) error {
 		var cur v1alpha1.Pipeline
 		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(app), &cur))
 		cur.Spec.Paused = !cur.Spec.Paused
 		cur.Spec.LastChange = ch
+		cur.Labels = nil
+		if label {
+			cur.Labels = map[string]string{"kardinal.io/actor-check": "true"} // as kardinal pause writes it (#1936)
+		}
 		return c.Update(ctx, &cur)
 	}
+	pauseAs := func(c client.Client, ch *v1alpha1.PipelineChange) error { return pauseWith(c, ch, true) }
+	// A stamped write without kardinal.io/actor-check is refused by the
+	// params-free marker, so -actor-records (which matches only the label)
+	// cannot be skipped (#1936).
+	err = pauseWith(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "alice", Actor: hu("alice")}, false)
+	require.Error(t, err, "18c a stamped pause without the label")
+	require.Contains(t, err.Error(), `must carry the label kardinal.io/actor-check: "true"`)
+	require.NoError(t, pauseWith(as("bob"), nil, false), "18c kubectl without a record or the label")
 	// Only by is wrong: the stamp is alice's own, so only the hold-writes
 	// policy refuses (two refusing policies answer in no fixed order).
 	err = pauseAs(as("alice"), &v1alpha1.PipelineChange{Action: "Pause", By: "bob", Actor: hu("alice")})
@@ -295,6 +307,12 @@ func TestActorsOnAPIServer(t *testing.T) {
 	require.NoError(t, as("alice").Create(ctx, rb))
 	rb2 := bundle("payments-a", "checkout", nil) // rejected in 23b, with the index missing
 	require.NoError(t, as("alice").Create(ctx, rb2))
+	rb.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("alice")}
+	err = as("alice").Update(ctx, rb)
+	require.Error(t, err, "18c a rejection without the label")
+	require.Contains(t, err.Error(), `must carry the label kardinal.io/actor-check: "true"`)
+	require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(rb), rb))
+	rb.Labels = map[string]string{"kardinal.io/actor-check": "true"}
 	rb.Spec.Rejected = &v1alpha1.BundleRejection{By: "alice", Reason: "bad", Actor: hu("bob")}
 	require.Error(t, as("alice").Update(ctx, rb), "18c a rejection with a forged stamp")
 	rb.Spec.Rejected.Actor = hu("alice")
