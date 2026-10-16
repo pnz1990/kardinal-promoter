@@ -809,21 +809,32 @@ func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 // ─── K-04: ChangeWindow CRD ───────────────────────────────────────────────────
 
 // TestPolicyGateReconciler_LiftingFreezeBlocksNothing (#2034): a freeze
-// ChangeWindow being lifted (marked by kardinal unfreeze, or deleted and
-// kept by its audit finalizer) is false in changewindow.<name>, though its
-// spec still describes an active blackout.
+// ChangeWindow being deleted (kept by its audit finalizer), by kardinal
+// unfreeze or kubectl, is false in changewindow.<name>, though its spec
+// still describes an active blackout; a lift mark whose delete failed still
+// blocks.
 func TestPolicyGateReconciler_LiftingFreezeBlocksNothing(t *testing.T) {
-	for _, deleted := range []bool{false, true} {
-		t.Run(fmt.Sprintf("deleted=%t", deleted), func(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		marked, deleted bool
+		wantReady       bool
+	}{
+		{"deleted by kardinal unfreeze", true, true, true},
+		{"deleted by kubectl", false, true, true},
+		{"marked, the delete failed", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			scheme := newScheme()
 			cw := &kardinalv1alpha1.ChangeWindow{
 				ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-everyone"},
 				Spec: kardinalv1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.NewTime(time.Now().Add(-time.Hour)),
-					Freeze: &kardinalv1alpha1.ChangeWindowFreeze{Actors: kardinalv1alpha1.FreezeEveryone, CreatedBy: "alice",
-						Lifted: &kardinalv1alpha1.FreezeLift{By: "bob"}}},
+					Freeze: &kardinalv1alpha1.ChangeWindowFreeze{Actors: kardinalv1alpha1.FreezeEveryone, CreatedBy: "alice"}},
 				Status: kardinalv1alpha1.ChangeWindowStatus{Active: true},
 			}
-			if deleted {
+			if tc.marked {
+				cw.Spec.Freeze.Lifted = &kardinalv1alpha1.FreezeLift{By: "bob"}
+			}
+			if tc.deleted {
 				cw.Finalizers = []string{"kardinal.io/freeze-audit"}
 				cw.DeletionTimestamp = &metav1.Time{Time: time.Now().Add(-time.Second)}
 			}
@@ -842,7 +853,7 @@ func TestPolicyGateReconciler_LiftingFreezeBlocksNothing(t *testing.T) {
 			require.NoError(t, err)
 			var got kardinalv1alpha1.PolicyGate
 			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
-			assert.True(t, got.Status.Ready, "a freeze being lifted blocks nothing: %s", got.Status.Reason)
+			assert.Equal(t, tc.wantReady, got.Status.Ready, got.Status.Reason)
 		})
 	}
 }

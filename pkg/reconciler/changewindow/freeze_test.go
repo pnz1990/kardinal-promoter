@@ -31,10 +31,13 @@ func freezeWindow(name, actors string, namespaces []string, exemptions ...kardin
 	}
 }
 
-// lifting marks w as kardinal unfreeze leaves it: spec.freeze.lifted, and,
-// with deleted, a deletion its audit finalizer holds.
-func lifting(w *kardinalv1alpha1.ChangeWindow, deleted bool) *kardinalv1alpha1.ChangeWindow {
-	w.Spec.Freeze.Lifted = &kardinalv1alpha1.FreezeLift{By: "carol"}
+// lifting marks w as an unfreeze leaves it: with marked, spec.freeze.lifted
+// (kardinal unfreeze writes it, kubectl delete does not); with deleted, a
+// deletion its audit finalizer holds.
+func lifting(w *kardinalv1alpha1.ChangeWindow, marked, deleted bool) *kardinalv1alpha1.ChangeWindow {
+	if marked {
+		w.Spec.Freeze.Lifted = &kardinalv1alpha1.FreezeLift{By: "carol"}
+	}
 	if deleted {
 		w.Finalizers = []string{changewindow.FreezeAuditFinalizer}
 		w.DeletionTimestamp = &metav1.Time{Time: at("2026-10-14T10:00:00Z")}
@@ -251,11 +254,12 @@ func TestFreezesFor(t *testing.T) {
 			forPipeline("cart", exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
 		{"an agent's exemption never counts", reconciled(freezeWindow("f", "everyone", nil,
 			byAgent(exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
-		// Lifted (#2034): kardinal unfreeze wrote spec.freeze.lifted, or it is
-		// deleted and its audit finalizer keeps it.
-		{"a freeze marked lifted holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), false), personVersion, false, false},
-		{"a freeze marked lifted, status behind, holds nothing", lifting(freezeWindow("f", "everyone", nil), false), personVersion, false, false},
-		{"a deleted freeze holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), true), personVersion, false, false},
+		// Being deleted (#2034): its audit finalizer keeps it; a lift mark
+		// alone (an unfreeze whose delete failed) changes nothing.
+		{"a freeze deleted by kardinal unfreeze holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), true, true), personVersion, false, false},
+		{"a freeze deleted by kubectl holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), false, true), personVersion, false, false},
+		{"a lift mark without a delete still holds", lifting(reconciled(freezeWindow("f", "everyone", nil), true), true, false), personVersion, true, false},
+		{"a lift mark, status behind, still holds", lifting(freezeWindow("f", "everyone", nil), true, false), personVersion, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

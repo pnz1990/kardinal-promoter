@@ -88,6 +88,9 @@ func TestUIFreeze(t *testing.T) {
 	list = uiFreezesResponse{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
 	assert.Empty(t, list.Freezes, "a freeze being lifted is not shown")
+	again := call("POST", "/api/v1/ui/freeze", `{"actors":"everyone","namespace":"payments","reason":"again"}`, "alice")
+	assert.Equal(t, http.StatusConflict, again.Code, "freezing a scope being lifted is refused (#2034 QA)")
+	assert.Contains(t, again.Body.String(), "is being lifted; try again in a few seconds")
 	var all v1alpha1.ChangeWindowList
 	require.NoError(t, c.List(context.Background(), &all))
 	require.Len(t, all.Items, 2, "its audit finalizer keeps it until FreezeLifted is written")

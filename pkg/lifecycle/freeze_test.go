@@ -11,8 +11,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -113,15 +115,15 @@ func TestExemptFromFreezes(t *testing.T) {
 	lifted.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "carol"}
 	lifted.Finalizers = []string{"kardinal.io/freeze-audit"}
 	lifted.DeletionTimestamp = &metav1.Time{Time: now.Add(-time.Second)}
-	// Marked lifted, not deleted yet (the unfreeze's delete is still to
-	// come): no exemption either (#2034).
-	marked := window("e-marked", true)
-	marked.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "carol"}
+	// Deleted with kubectl: no lift mark, the finalizer keeps it (#2034).
+	kubectlDeleted := window("f-kubectl", true)
+	kubectlDeleted.Finalizers = []string{"kardinal.io/freeze-audit"}
+	kubectlDeleted.DeletionTimestamp = &metav1.Time{Time: now.Add(-time.Second)}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(window("a-cluster", true), window("b-billing", true, "billing"),
-		window("c-ended", false), lifted, marked).Build()
+		window("c-ended", false), lifted, kubectlDeleted).Build()
 
-	// The CLI, UI and MCP list freezes through ListFreezes: neither lifting
-	// one is listed (#2034).
+	// The CLI, UI and MCP list freezes through ListFreezes: no freeze being
+	// deleted is listed (#2034).
 	listed, err := ListFreezes(ctx, c)
 	require.NoError(t, err)
 	var listedNames []string
@@ -179,4 +181,66 @@ func TestUnfreeze_RecordsWhoLifted(t *testing.T) {
 	bob := &v1alpha1.FreezeLift{By: "bob", Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}}
 	require.NoError(t, Unfreeze(ctx, c, "kardinal-freeze-everyone", "", bob))
 	assert.Equal(t, bob, lifted, "written before the delete")
+}
+
+// TestUnfreeze_FailedDeleteKeepsTheFreeze (#2034 QA): an unfreeze whose
+// delete fails (a role with update but not delete, a timeout) returns the
+// error and takes its lift mark back: the freeze stays in force, listed and
+// unmarked, and kardinal freeze of the same scope works.
+func TestUnfreeze_FailedDeleteKeepsTheFreeze(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "changewindows"}
+	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+			return apierrors.NewForbidden(gr, "kardinal-freeze-everyone", errors.New("no delete"))
+		}}).Build()
+	_, _, err := Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-1", CreatedBy: "alice", Now: time.Now()})
+	require.NoError(t, err)
+
+	err = Unfreeze(ctx, c, "kardinal-freeze-everyone", "", &v1alpha1.FreezeLift{By: "bob"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete freeze kardinal-freeze-everyone")
+	var cw v1alpha1.ChangeWindow
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw))
+	assert.Nil(t, cw.Spec.Freeze.Lifted, "the mark is taken back")
+	listed, err := ListFreezes(ctx, c)
+	require.NoError(t, err)
+	assert.Len(t, listed, 1, "still listed")
+
+	// A stale mark (an older controller, or a failed take-back) is cleared
+	// by freezing again.
+	cw.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: "bob"}
+	require.NoError(t, c.Update(ctx, &cw))
+	_, created, err := Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeEveryone, Reason: "INC-2", CreatedBy: "alice", Now: time.Now()})
+	require.NoError(t, err)
+	assert.False(t, created)
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone"}, &cw))
+	assert.Nil(t, cw.Spec.Freeze.Lifted)
+	assert.Equal(t, "INC-2", cw.Spec.Reason)
+}
+
+// TestFreeze_RefusesAFreezeBeingLifted (#2034 QA): freezing a scope whose
+// freeze is being deleted (kept by its audit finalizer) is a conflict that
+// says so, not an update of a window about to vanish.
+func TestFreeze_RefusesAFreezeBeingLifted(t *testing.T) {
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(s))
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	_, _, err := Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeAgents, Namespace: "payments", Reason: "INC-1", CreatedBy: "alice", Now: time.Now()})
+	require.NoError(t, err)
+	var cw v1alpha1.ChangeWindow
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents-payments"}, &cw))
+	cw.Finalizers = []string{"kardinal.io/freeze-audit"}
+	require.NoError(t, c.Update(ctx, &cw))
+	require.NoError(t, c.Delete(ctx, &cw))
+
+	_, _, err = Freeze(ctx, c, FreezeRequest{Actors: v1alpha1.FreezeAgents, Namespace: "payments", Reason: "INC-2", CreatedBy: "alice", Now: time.Now()})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrConflict), "%v", err)
+	assert.Contains(t, err.Error(), "freeze kardinal-freeze-agents-payments is being lifted; try again in a few seconds")
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents-payments"}, &cw))
+	assert.Equal(t, "INC-1", cw.Spec.Reason, "not updated")
 }

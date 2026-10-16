@@ -84,6 +84,13 @@ func TestFreezeCommands(t *testing.T) {
 	require.NoError(t, overrideFreezeFn(&out, c, "payments", "checkout", "prod", "", "hotfix", 30*time.Minute, now))
 	assert.Contains(t, out.String(), "Exemption added to kardinal-freeze-agents:")
 	assert.NotContains(t, out.String(), "kardinal-freeze-everyone-payments")
+
+	// Freezing that scope again while it is being lifted is refused, not an
+	// update that then vanishes (#2034 QA).
+	out.Reset()
+	err := freezeFn(&out, c, v1alpha1.FreezeEveryone, "payments", "again", 0, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "freeze kardinal-freeze-everyone-payments is being lifted; try again in a few seconds")
 }
 
 // TestFreezeFlags: the scope flags name one actor set and one scope.
