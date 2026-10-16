@@ -100,3 +100,63 @@ func TestChartDashboardDatasourceResolves(t *testing.T) {
 	walk(dash.Panels)
 	assert.Positive(t, queries, "the dashboard has queries")
 }
+
+// TestChartDashboardScopedToKardinal (#1941): in a Prometheus that scrapes
+// more than kardinal (other controller-runtime operators, other clusters),
+// every panel shows only the kardinal-promoter controller the cluster and
+// namespace variables select. kardinal_* series carry the variables'
+// selector; controller-runtime, work queue and Go runtime series, which every
+// operator exports, are kept to kardinal's targets with
+// `and on (cluster, job, instance)` its kardinal_pr_duration_seconds_count.
+// Both variables default to All (allValue .*, which also matches a series
+// without the label), so a single-cluster Prometheus needs no setup.
+func TestChartDashboardScopedToKardinal(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(chartPath(t), "dashboards", "kardinal-promoter-dashboard.json"))
+	require.NoError(t, err)
+	var dash struct {
+		Panels     []dashboardPanel `json:"panels"`
+		Templating struct {
+			List []struct {
+				Name       string `json:"name"`
+				Type       string `json:"type"`
+				IncludeAll bool   `json:"includeAll"`
+				AllValue   string `json:"allValue"`
+				Current    struct {
+					Value string `json:"value"`
+				} `json:"current"`
+			} `json:"list"`
+		} `json:"templating"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &dash))
+	vars := map[string]bool{}
+	for _, v := range dash.Templating.List {
+		if v.Type == "query" {
+			assert.True(t, v.IncludeAll, "variable %s offers All", v.Name)
+			assert.Equal(t, ".*", v.AllValue, "variable %s: All matches a series without the label", v.Name)
+			assert.Equal(t, "$__all", v.Current.Value, "variable %s defaults to All", v.Name)
+			vars[v.Name] = true
+		}
+	}
+	assert.Equal(t, map[string]bool{"cluster": true, "namespace": true}, vars)
+
+	const sel = `{namespace=~"$namespace", cluster=~"$cluster"`
+	const anchor = `and on (cluster, job, instance) kardinal_pr_duration_seconds_count` + sel + `}`
+	kardinal := regexp.MustCompile(`\bkardinal_\w+`)
+	shared := regexp.MustCompile(`\b(controller_runtime_|workqueue_|go_|process_)\w+`)
+	var walk func([]dashboardPanel)
+	walk = func(panels []dashboardPanel) {
+		for _, p := range panels {
+			walk(p.Panels)
+			for _, q := range p.Targets {
+				for _, loc := range kardinal.FindAllStringIndex(q.Expr, -1) {
+					assert.True(t, len(q.Expr) >= loc[1]+len(sel) && q.Expr[loc[1]:loc[1]+len(sel)] == sel,
+						"panel %q: %s is not scoped by the variables in %s", p.Title, q.Expr[loc[0]:loc[1]], q.Expr)
+				}
+				for _, m := range shared.FindAllString(q.Expr, -1) {
+					assert.Contains(t, q.Expr, anchor, "panel %q: %s, which every operator exports, is not kept to kardinal's targets", p.Title, m)
+				}
+			}
+		}
+	}
+	walk(dash.Panels)
+}

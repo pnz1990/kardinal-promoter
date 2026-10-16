@@ -22,6 +22,41 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
+// allVariables replaces the dashboard's query variables with the value
+// Grafana sends for All.
+var allVariables = strings.NewReplacer(`"$namespace"`, `".*"`, `"$cluster"`, `".*"`)
+
+// pushIntruder puts another controller-runtime operator's metrics into the
+// suite's Prometheus, through the Pushgateway, as a shared Prometheus holds
+// them: a reconcile counter for controller "intruder" and a work queue named
+// bundle. It deletes them when the test ends.
+func pushIntruder(t *testing.T, e *framework.Env) {
+	t.Helper()
+	path := "/api/v1/namespaces/" + framework.MonitoringNamespace + "/services/http:pushgateway:9091/proxy/metrics/job/e2e-intruder"
+	body := "# TYPE controller_runtime_reconcile_total counter\n" +
+		"controller_runtime_reconcile_total{controller=\"intruder\",result=\"success\"} 5\n" +
+		"# TYPE controller_runtime_reconcile_errors_total counter\n" +
+		"controller_runtime_reconcile_errors_total{controller=\"intruder\"} 3\n" +
+		"# TYPE workqueue_depth gauge\n" +
+		"workqueue_depth{name=\"bundle\",controller=\"intruder\"} 7\n"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, e.Kube.CoreV1().RESTClient().Put().AbsPath(path).
+		SetHeader("Content-Type", "text/plain; version=0.0.4").Body([]byte(body)).Do(ctx).Error())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = e.Kube.CoreV1().RESTClient().Delete().AbsPath(path).Do(ctx).Error()
+	})
+	framework.Eventually(t, time.Minute, "Prometheus to scrape the intruder's metrics", func(ctx context.Context) (bool, string) {
+		s, err := e.PromQuery(ctx, `workqueue_depth{job="e2e-intruder"}`)
+		if err != nil {
+			return false, err.Error()
+		}
+		return len(s) == 1, fmt.Sprintf("%v", s)
+	})
+}
+
 // alwaysHasData reports whether a dashboard query has data on any running
 // controller: the controller's own job, controller-runtime's metrics, and
 // the stats that fall back to vector(0). The kardinal_* series appear once
@@ -40,8 +75,9 @@ func alwaysHasData(expr string) bool {
 // dashboard; Grafana lists it by title and serves it by uid as provisioned;
 // every panel's query names a datasource the dashboard resolves to the
 // Prometheus datasource, and runs there through Grafana without error; the
-// controller's panels show data; and the Work Queue Depth panel shows the
-// policygate queue once a gate is queued.
+// controller's panels show data; the Work Queue Depth panel shows the
+// policygate queue once a gate is queued; and with another operator's
+// controller-runtime metrics in the same Prometheus, no panel shows them.
 //
 // Covers CHART-MON-02.
 func TestObs_GrafanaDashboard(t *testing.T) {
@@ -92,6 +128,9 @@ func TestObs_GrafanaDashboard(t *testing.T) {
 	var queries []query
 	resolved := true
 	for _, q := range dash.Queries() {
+		// The dashboard's cluster and namespace variables default to All:
+		// Grafana sends their allValue, .*, which this test sends too.
+		q.Expr = allVariables.Replace(q.Expr)
 		ds, err := dash.Resolve(q.Datasource, datasources)
 		resolved = assert.NoError(t, err, "panel %q", q.Panel) &&
 			assert.Equal(t, framework.GrafanaPrometheusUID, ds.UID, "panel %q queries the Prometheus datasource", q.Panel) && resolved
@@ -141,5 +180,21 @@ func TestObs_GrafanaDashboard(t *testing.T) {
 	})
 	for _, q := range queues {
 		assert.Contains(t, []string{"bundle", "promotionstep", "policygate"}, q, "the panel shows only the controller's queues")
+	}
+
+	// In a Prometheus that also scrapes other controller-runtime operators,
+	// the controller-runtime and work queue panels show kardinal's series
+	// only (#1941): each is scoped to kardinal's targets.
+	pushIntruder(t, e)
+	for _, q := range queries {
+		if !strings.Contains(q.Expr, "controller_runtime_") && !strings.Contains(q.Expr, "workqueue_") {
+			continue
+		}
+		r, err := e.GrafanaQuery(ctx, q.ds, q.Expr)
+		require.NoError(t, err, "panel %q", q.Panel)
+		for _, l := range r.SeriesLabels() {
+			assert.NotEqual(t, "e2e-intruder", l["job"], "panel %q shows another operator's series: %v", q.Panel, l)
+			assert.NotEqual(t, "intruder", l["controller"], "panel %q shows another operator's controller: %v", q.Panel, l)
+		}
 	}
 }
