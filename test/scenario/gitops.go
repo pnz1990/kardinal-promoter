@@ -290,7 +290,14 @@ func (g *GitOps) reflect(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, st 
 			if failed {
 				// Argo Rollouts records when it aborted in the Progressing
 				// condition (reason RolloutAborted); keep the first time.
-				abortedAt := g.w.Now().UTC().Format(time.RFC3339)
+				// The step engine stamps some step times from the wall clock,
+				// not the World's: the abort takes the later of the two, so
+				// it is never older than the change it aborts.
+				at := g.w.Now()
+				if wall := time.Now(); wall.After(at) {
+					at = wall
+				}
+				abortedAt := at.UTC().Format(time.RFC3339)
 				if st, ok := o["status"].(map[string]interface{}); ok && st["abort"] == true {
 					if conds, ok := st["conditions"].([]interface{}); ok && len(conds) > 0 {
 						if c, ok := conds[0].(map[string]interface{}); ok {
