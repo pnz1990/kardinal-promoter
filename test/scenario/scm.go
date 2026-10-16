@@ -142,6 +142,8 @@ func (s *SCMServer) Merge(repo string, number int) error {
 	}
 	head, base := p.Head, p.Base
 	s.mu.Unlock()
+	// The PR's head is its branch's head when it merges, as on the SCM.
+	headSHA := s.headSHA(repo, head)
 	sha, err := s.git.Merge(s.repoURL(repo), head, base)
 	if err != nil {
 		return err
@@ -149,6 +151,9 @@ func (s *SCMServer) Merge(repo string, number int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p.State, p.MergeSHA, p.MergedAt = "merged", sha, time.Now().UTC()
+	if headSHA != "" {
+		p.HeadSHA = headSHA
+	}
 	return nil
 }
 
@@ -264,7 +269,19 @@ func (s *SCMServer) webURL(p *PR) string {
 	return fmt.Sprintf("https://%s/%s/pull/%d", SCMHost[s.Kind], p.Repo, p.Number)
 }
 
+// refreshHead sets an open PR's head to its branch's head: a push to the
+// branch moves the PR, as on the SCM.
+func (s *SCMServer) refreshHead(p *PR) {
+	if p.State != "open" {
+		return
+	}
+	if sha := s.headSHA(p.Repo, p.Head); sha != "" {
+		p.HeadSHA = sha
+	}
+}
+
 func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
+	s.refreshHead(p)
 	state := p.State
 	if state == "merged" {
 		state = "closed"
@@ -508,6 +525,7 @@ var gitlabRoutes = []route{
 }
 
 func (s *SCMServer) mrJSON(p *PR) map[string]interface{} {
+	s.refreshHead(p)
 	state := map[string]string{"open": "opened", "closed": "closed", "merged": "merged"}[p.State]
 	return map[string]interface{}{
 		"iid": p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
