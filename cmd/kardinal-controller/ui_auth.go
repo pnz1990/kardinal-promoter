@@ -48,18 +48,41 @@ type uiAuthConfig struct {
 	freezeControls bool
 }
 
-// reviewOptions are the TokenReview settings shared by the UI API and the
-// Bundle API (--tokenreview-audiences, --tokenreview-accept-apiserver-audience).
+// reviewOptions are the TokenReview settings of the UI API and the Bundle
+// API. The audiences are shared (--tokenreview-audiences); accepting the API
+// server's own audience is decided per API (#1930):
+// --tokenreview-accept-apiserver-audience for the UI API, which SSO needs,
+// and --bundle-api-tokenreview-accept-apiserver-audience for the Bundle API.
 type reviewOptions struct {
-	audiences       []string
+	audiences []string
+	// acceptAPIServer is the UI API's opt-in.
 	acceptAPIServer bool
+	// bundleAcceptAPIServer is the Bundle API's own opt-in.
+	bundleAcceptAPIServer bool
 	// apiServerAudiences are the API server's own token audiences (from the
 	// controller's ServiceAccount token); none of them may be in audiences.
 	apiServerAudiences []string
-	// shared, when set, makes every newReviewers call return the same
+	// shared, when set, makes every newReviewers call build on the same
 	// reviewers, so the UI API and the Bundle API share one cache and one
-	// rate limit.
+	// rate limit. Each API's audience rule is applied after the cache
+	// (uiauth.RequireAudience).
 	shared *sharedReviewers
+}
+
+// reviewedAPI names the API a reviewer authenticates for.
+type reviewedAPI string
+
+const (
+	reviewForUI      reviewedAPI = "the UI API"
+	reviewForBundles reviewedAPI = "the Bundle API"
+)
+
+// acceptAPIServerFor is api's opt-in to tokens for the API server's audience.
+func (o reviewOptions) acceptAPIServerFor(api reviewedAPI) bool {
+	if api == reviewForBundles {
+		return o.bundleAcceptAPIServer
+	}
+	return o.acceptAPIServer
 }
 
 // sharedReviewers builds the review clients once.
@@ -98,7 +121,7 @@ func buildUIAuth(cfg *rest.Config, f uiAuthFlags) (uiAuthConfig, error) {
 	if f.staticToken != "" || !f.tokenReview {
 		return auth, nil
 	}
-	tokens, access, accessCheck, err := newReviewers(cfg, f.review)
+	tokens, access, accessCheck, err := newReviewers(cfg, f.review, reviewForUI)
 	if err != nil {
 		return uiAuthConfig{}, err
 	}
@@ -107,24 +130,46 @@ func buildUIAuth(cfg *rest.Config, f uiAuthFlags) (uiAuthConfig, error) {
 }
 
 // newReviewers builds the cached TokenReview and SubjectAccessReview clients
-// the UI API and the Bundle API authenticate and authorize callers with.
-// TokenReviews that miss the cache are limited per client address. The third
-// reviewer serves POST /api/v1/ui/access only: its SubjectAccessReviews are
-// limited per user and in total, under a cache of its own, while access (for
-// request authorization and the Bundle API) is not limited.
-func newReviewers(cfg *rest.Config, opts reviewOptions) (tokens uiauth.TokenReviewer, access, accessCheck uiauth.AccessReviewer, err error) {
+// the UI API and the Bundle API authenticate and authorize callers with, for
+// api: the token reviewer applies api's audience rule (#1930) over reviews
+// shared by both APIs. TokenReviews that miss the cache are limited per
+// client address. The third reviewer serves POST /api/v1/ui/access only: its
+// SubjectAccessReviews are limited per user and in total, under a cache of
+// its own, while access (for request authorization and the Bundle API) is
+// not limited.
+func newReviewers(cfg *rest.Config, opts reviewOptions, api reviewedAPI) (tokens uiauth.TokenReviewer, access, accessCheck uiauth.AccessReviewer, err error) {
+	accept := opts.acceptAPIServerFor(api)
+	if len(opts.audiences) == 0 && !accept {
+		flag := "--tokenreview-accept-apiserver-audience (tokenReview.acceptAPIServerAudience)"
+		if api == reviewForBundles {
+			flag = "--bundle-api-tokenreview-accept-apiserver-audience (bundleAPI.acceptAPIServerAudience)"
+		}
+		return nil, nil, nil, fmt.Errorf("%s accepts no token: --tokenreview-audiences (tokenReview.audiences) is empty "+
+			"and %s is off; set an audience such as %s", api, flag, uiauth.DefaultAudience)
+	}
+	base, access, accessCheck, err := newBaseReviewers(cfg, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return uiauth.RequireAudience(base, opts.audiences, accept), access, accessCheck, nil
+}
+
+// newBaseReviewers builds the reviewers of newReviewers before any API's
+// audience rule: the token reviewer accepts the API server's audience when
+// either API opts in. With opts.shared they are built once.
+func newBaseReviewers(cfg *rest.Config, opts reviewOptions) (tokens uiauth.TokenReviewer, access, accessCheck uiauth.AccessReviewer, err error) {
 	if s := opts.shared; s != nil {
 		s.once.Do(func() {
 			o := opts
 			o.shared = nil
-			s.tokens, s.access, s.accessCheck, s.err = newReviewers(cfg, o)
+			s.tokens, s.access, s.accessCheck, s.err = newBaseReviewers(cfg, o)
 		})
 		return s.tokens, s.access, s.accessCheck, s.err
 	}
 	if err := uiauth.CheckAudiences(opts.audiences, opts.apiServerAudiences); err != nil {
 		return nil, nil, nil, err
 	}
-	kubeTokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer)
+	kubeTokens, err := uiauth.NewKubeTokenReviewer(cfg, opts.audiences, opts.acceptAPIServer || opts.bundleAcceptAPIServer)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("token reviewer: %w", err)
 	}

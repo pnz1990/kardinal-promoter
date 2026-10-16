@@ -356,8 +356,8 @@ also accepts a Kubernetes token for kardinal's audience, for example a ServiceAc
 from `kubectl create token ci -n team-a --duration=1h --audience kardinal-promoter` or a
 projected token with `audience: kardinal-promoter` in a CI pod. The controller authenticates it
 with a `TokenReview` for the audiences in `tokenReview.audiences` (default
-`kardinal-promoter`; tokens for the API server's own audience only with
-`tokenReview.acceptAPIServerAudience=true`, see
+`kardinal-promoter`; a person's tokens for the API server's own audience only with
+`bundleAPI.acceptAPIServerAudience=true`, and a ServiceAccount's never, see
 [Option 2](guides/security.md#option-2-kubernetes-tokens-tokenreview)) and checks with a `SubjectAccessReview` that
 the caller may `get` the Pipeline and `create` bundles in the target namespace, the
 [promoter role](guides/security.md#user-roles):

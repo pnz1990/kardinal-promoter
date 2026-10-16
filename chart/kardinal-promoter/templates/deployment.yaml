@@ -188,12 +188,18 @@ spec:
             - --bundle-api-tokenreview-auth=true
             {{- end }}
             {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
-            {{- if and (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
-            {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or tokenReview.acceptAPIServerAudience=true" }}
+            {{- if and .Values.ui.auth.tokenReview (not .Values.tokenReview.audiences) (not .Values.tokenReview.acceptAPIServerAudience) }}
+            {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or, for the UI, tokenReview.acceptAPIServerAudience=true" }}
+            {{- end }}
+            {{- if and .Values.bundleAPI.tokenReview (not .Values.tokenReview.audiences) (not .Values.bundleAPI.acceptAPIServerAudience) }}
+            {{- fail "tokenReview.audiences is empty: set an audience (kardinal-promoter) or, for the Bundle API, bundleAPI.acceptAPIServerAudience=true" }}
             {{- end }}
             - --tokenreview-audiences={{ join "," .Values.tokenReview.audiences }}
-            {{- if .Values.tokenReview.acceptAPIServerAudience }}
+            {{- if and .Values.ui.auth.tokenReview .Values.tokenReview.acceptAPIServerAudience }}
             - --tokenreview-accept-apiserver-audience=true
+            {{- end }}
+            {{- if and .Values.bundleAPI.tokenReview .Values.bundleAPI.acceptAPIServerAudience }}
+            - --bundle-api-tokenreview-accept-apiserver-audience=true
             {{- end }}
             {{- end }}
             {{- if and .Values.ui.auth.tokenReview .Values.ui.auth.tokenSecretRef.name }}

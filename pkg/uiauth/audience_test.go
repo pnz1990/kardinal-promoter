@@ -93,3 +93,59 @@ func TestNewKubeTokenReviewer_NeedsAnAudience(t *testing.T) {
 	_, err := newKubeTokenReviewer(fake.NewClientset(), nil, false)
 	require.Error(t, err)
 }
+
+// staticReviewer answers every review with st or err.
+type staticReviewer struct {
+	st  *authv1.TokenReviewStatus
+	err error
+}
+
+func (s staticReviewer) Review(context.Context, string) (*authv1.TokenReviewStatus, error) {
+	return s.st, s.err
+}
+
+// TestRequireAudience (#1930): one API's audience rule over a shared review.
+// A token for kardinal's audience passes. Any other authenticated token
+// passes only with the API's opt-in, and never for a ServiceAccount.
+//
+// Covers TOKENREVIEW-AUD-02.
+func TestRequireAudience(t *testing.T) {
+	human := authv1.UserInfo{Username: "oidc:alice"}
+	sa := authv1.UserInfo{Username: "system:serviceaccount:team-a:default"}
+	kardinal := []string{DefaultAudience}
+	tests := []struct {
+		name      string
+		audiences []string
+		accept    bool
+		st        authv1.TokenReviewStatus
+		want      bool
+		wantError string
+	}{
+		{"kardinal audience", kardinal, false, authv1.TokenReviewStatus{Authenticated: true, User: sa, Audiences: kardinal}, true, ""},
+		{"API server token, no opt-in", kardinal, false,
+			authv1.TokenReviewStatus{Authenticated: true, User: human, Audiences: []string{apiServerAudience}}, false, "audience is not kardinal-promoter"},
+		{"OIDC (no audience), no opt-in", kardinal, false, authv1.TokenReviewStatus{Authenticated: true, User: human}, false, "audience is not"},
+		{"API server token, opt-in", kardinal, true,
+			authv1.TokenReviewStatus{Authenticated: true, User: human, Audiences: []string{apiServerAudience}}, true, ""},
+		{"OIDC (no audience), opt-in", kardinal, true, authv1.TokenReviewStatus{Authenticated: true, User: human}, true, ""},
+		{"Pod's default token, opt-in", kardinal, true,
+			authv1.TokenReviewStatus{Authenticated: true, User: sa, Audiences: []string{apiServerAudience}}, false, "ServiceAccount token"},
+		{"Pod's default token, no audience configured", nil, true,
+			authv1.TokenReviewStatus{Authenticated: true, User: sa, Audiences: []string{apiServerAudience}}, false, "ServiceAccount token"},
+		{"human, no audience configured", nil, true, authv1.TokenReviewStatus{Authenticated: true, User: human}, true, ""},
+		{"not authenticated stays so", kardinal, true, authv1.TokenReviewStatus{Error: "bad"}, false, "bad"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := tt.st
+			got, err := RequireAudience(staticReviewer{st: &st}, tt.audiences, tt.accept).Review(context.Background(), "t")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Authenticated, "%+v", got)
+			if tt.wantError != "" {
+				assert.Contains(t, got.Error, tt.wantError)
+			}
+		})
+	}
+	_, err := RequireAudience(staticReviewer{err: assert.AnError}, kardinal, true).Review(context.Background(), "t")
+	assert.ErrorIs(t, err, assert.AnError, "an API failure stays an error (503)")
+}
