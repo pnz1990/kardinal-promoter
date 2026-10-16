@@ -91,6 +91,13 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 		{name: "reuses the onHealthFailure rollback of the same bundle",
 			history:  []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), alarm()},
 			wantName: lifecycle.AutoRollbackName("bundle-1", "alarm")},
+		{name: "reuses an earlier rollback of another naming scheme, found by its labels",
+			history: []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), func() client.Object {
+				b := alarm()
+				b.SetName("bundle-1-rollback-alarm-0a1b2c3d") // a v0.11 controller's long name
+				return b
+			}()},
+			wantName: "bundle-1-rollback-alarm-0a1b2c3d"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
