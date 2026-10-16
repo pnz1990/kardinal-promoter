@@ -24,7 +24,6 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
@@ -219,10 +218,8 @@ func Run(t *testing.T, phase Phase) {
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
 	require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), "the index is Ready: %v", idx.Status.Conditions)
-	raw, err := yaml.Marshal(idx.Status)
-	require.NoError(t, err)
-	t.Logf("registry: %d AgentIdentities, %d users and %d groups in the index (%d KiB of %d), built and checked in %s with %d AgentIdentity reconciles",
-		sz.Identities, len(idx.Status.Users), len(idx.Status.Groups), len(raw)>>10, sz.bound()>>10,
+	t.Logf("registry: %d AgentIdentities, %d users and %d groups in the index (%d KiB of %d, as the bound counts it), built and checked in %s with %d AgentIdentity reconciles",
+		sz.Identities, len(idx.Status.Users), len(idx.Status.Groups), indexBytes(idx.Status)>>10, sz.bound()>>10,
 		time.Since(start).Round(time.Millisecond), w.Reconciles()["AgentIdentity"]-before)
 	assert.Equal(t, sz.Identities, idx.Status.ObservedIdentities)
 
@@ -802,10 +799,8 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	t.Helper()
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
-	raw, err := yaml.Marshal(idx.Status)
-	require.NoError(t, err)
 	per := 16 * 260
-	extra := (sz.bound()-len(raw))/per + 2
+	extra := (sz.bound()-indexBytes(idx.Status))/per + 2
 	admin := scenario.AsUser(w.Ctx, scenario.AdminUser, scenario.AdminGroups...)
 	var names []string
 	for i := 0; i < extra; i++ {

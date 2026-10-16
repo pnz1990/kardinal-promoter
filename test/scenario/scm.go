@@ -71,6 +71,23 @@ type SCMServer struct {
 	// unknown are the requests no route served: the fake is missing an API
 	// kardinal calls, and the scenario fails.
 	unknown []string
+
+	// OnChange, when set, is told of every request that changed something
+	// (a side effect of the controller, World.CrashAfter); Dying, when it
+	// reports true, drops requests that would change something.
+	OnChange func(what string)
+	Dying    func() bool
+}
+
+// statusRecorder keeps the status code a route answered.
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.code = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // NewSCMServer starts the fake API of kind over git.
@@ -203,9 +220,18 @@ func (s *SCMServer) serve(w http.ResponseWriter, r *http.Request) {
 					m[i] = u
 				}
 			}
+			if r.Method != http.MethodGet && s.Dying != nil && s.Dying() {
+				// The controller that sent it is dead: it never arrives.
+				http.Error(w, `{"message":"connection reset"}`, http.StatusBadGateway)
+				return
+			}
+			rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
 			s.mu.Lock()
-			rt.fn(s, w, m, body, r.URL.Query())
+			rt.fn(s, rec, m, body, r.URL.Query())
 			s.mu.Unlock()
+			if r.Method != http.MethodGet && rec.code < 300 && s.OnChange != nil {
+				s.OnChange(r.Method + " " + path)
+			}
 			return
 		}
 	}
