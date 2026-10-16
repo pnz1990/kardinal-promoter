@@ -40,6 +40,12 @@ const (
 	// referrer manifest, so a reader of image signatures can skip receipts
 	// before it fetches them (ImageVerification does).
 	PredicateTypeAnnotation = "dev.sigstore.bundle.predicateType"
+	// ReceiptAnnotation ("true") marks a referrer as a kardinal receipt.
+	// Receipts share the VSA predicate type with a builder's verification
+	// summaries: a reader of attestations skips receipts by it before it
+	// counts them (one per environment, rollback and fleet member could
+	// crowd out the builder's), and Referrers reads only receipts.
+	ReceiptAnnotation = "kardinal.io/receipt"
 	// maxBundleBytes bounds a receipt blob read from a registry.
 	maxBundleBytes = 2 << 20
 	// maxReferrers bounds the receipt referrers read per image.
@@ -101,7 +107,7 @@ func (r *Registry) PushReferrer(ctx context.Context, repository, image, digest s
 	img = mutate.ConfigMediaType(img, types.MediaType(BundleMediaType))
 	// Annotations before Subject: mutate.Annotations rebuilds the image
 	// from its manifest and would drop a subject set before it.
-	img = mutate.Annotations(img, map[string]string{PredicateTypeAnnotation: PredicateVSA}).(v1.Image)
+	img = mutate.Annotations(img, map[string]string{PredicateTypeAnnotation: PredicateVSA, ReceiptAnnotation: "true"}).(v1.Image)
 	img = mutate.Subject(img, desc).(v1.Image)
 	d, err := img.Digest()
 	if err != nil {
@@ -167,7 +173,8 @@ func (r *Registry) Referrers(ctx context.Context, repository, digest string) ([]
 	}
 	var out [][]byte
 	for _, d := range m.Manifests {
-		if d.ArtifactType != BundleMediaType || d.Annotations[PredicateTypeAnnotation] != PredicateVSA {
+		if d.ArtifactType != BundleMediaType || d.Annotations[PredicateTypeAnnotation] != PredicateVSA ||
+			d.Annotations[ReceiptAnnotation] != "true" {
 			continue
 		}
 		if len(out) == maxReferrers {

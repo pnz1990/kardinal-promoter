@@ -25,8 +25,13 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/static"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,9 +86,34 @@ func TestRegistry_PushReferrer(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, m.Manifests, 1)
 			assert.Equal(t, PredicateVSA, m.Manifests[0].Annotations[PredicateTypeAnnotation])
+			assert.Equal(t, "true", m.Manifests[0].Annotations[ReceiptAnnotation], "marked as a receipt")
 			assert.Equal(t, BundleMediaType, m.Manifests[0].ArtifactType)
+
+			// A builder's VSA (same artifact and predicate type, no receipt
+			// annotation) is not read as a receipt.
+			pushBuilderVSA(t, repo, d.String())
+			got, err = r.Referrers(context.Background(), repo, d.String())
+			require.NoError(t, err)
+			assert.Len(t, got, 1, "the builder's VSA is skipped")
 		})
 	}
+}
+
+// pushBuilderVSA pushes a referrer as a build system's verification
+// summary: a Sigstore bundle with the VSA predicate type, not a receipt.
+func pushBuilderVSA(t *testing.T, repo, digest string) {
+	t.Helper()
+	subject, err := remote.Get(mustRef(t, repo+"@"+digest))
+	require.NoError(t, err)
+	img, err := mutate.Append(empty.Image, mutate.Addendum{Layer: static.NewLayer([]byte(`{}`), types.MediaType(BundleMediaType))})
+	require.NoError(t, err)
+	img = mutate.MediaType(img, types.OCIManifestSchema1)
+	img = mutate.ConfigMediaType(img, types.MediaType(BundleMediaType))
+	img = mutate.Annotations(img, map[string]string{PredicateTypeAnnotation: PredicateVSA}).(v1.Image)
+	img = mutate.Subject(img, subject.Descriptor).(v1.Image)
+	vd, err := img.Digest()
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(mustRef(t, repo+"@"+vd.String()), img))
 }
 
 func mustRef(t *testing.T, s string) name.Reference {
