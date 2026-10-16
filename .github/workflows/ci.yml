@@ -242,6 +242,11 @@ jobs:
           go list ./... | go run ./hack/citool shard "$SHARD/$SHARDS" hack/ci/test-durations.txt > "$RUNNER_TEMP/packages"
           mapfile -t packages < "$RUNNER_TEMP/packages"
           echo "shard $SHARD/$SHARDS: ${#packages[@]} packages"
+          # test/helm's PromQL tests need promtool, and fail without it in CI
+          # (hack/tool-versions.env PROMTOOL_VERSION).
+          if grep -qx 'github.com/kardinal-promoter/kardinal-promoter/test/helm' "$RUNNER_TEMP/packages"; then
+            bash hack/ci/install-promtool.sh
+          fi
           go test -race -count=1 -timeout 120s "${packages[@]}"
 
   # The Go tests that read the docs (hack/ci/docs-tests.txt: generated
@@ -829,4 +834,8 @@ jobs:
         if: steps.chart_check.outputs.has_chart == 'true'
         env:
           KARDINAL_REQUIRE_HELM: "1"
-        run: go test ./test/helm/... -count=1
+        # The PromQL tests need promtool (hack/tool-versions.env), and fail
+        # without it in CI.
+        run: |
+          bash hack/ci/install-promtool.sh
+          go test ./test/helm/... -count=1

@@ -37,10 +37,27 @@ The ServiceMonitor scrapes the chart Service's `metrics` port over plain HTTP, i
 release namespace. It collects every metric on this page, the SCM API and git metrics
 included; no extra endpoint or relabeling is needed. Prometheus Operator sets the `job` label to the Service name, which
 is the chart's full name (`kardinal-promoter` for a release named `kardinal-promoter`).
-The alerts from `prometheusRule.enabled` select `job="<full name>"`, so they match this
-ServiceMonitor with no extra settings. If you scrape with your own ServiceMonitor or a
+`KardinalControllerDown` from `prometheusRule.enabled` selects `job="<full name>"`, so it matches
+this ServiceMonitor with no extra settings. If you scrape with your own ServiceMonitor or a
 static config instead, keep the job label equal to that Service name, or the
-`KardinalControllerDown` alert fires.
+`KardinalControllerDown` alert fires. The other alerts work with any job name.
+
+**In a Prometheus that scrapes other operators.** Every controller-runtime operator (kro, Argo CD,
+Crossplane, External Secrets) exports `controller_runtime_*`, `workqueue_*`, `go_*` and
+`process_*` under the same names, and some name a controller or a queue `bundle` too. Keep
+those to kardinal's own targets by joining them with a series only kardinal exports:
+
+```promql
+<query> and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+```
+
+`kardinal_pr_duration_seconds_count` is a histogram without labels, so each kardinal target
+exports it from start-up, before any pull request. The chart's alerts and dashboard and the
+queries on this page use this join. They depend on that series: a relabel rule that drops it
+leaves the dashboard's controller panels empty and the alerts silent. The join tells
+installations apart by `cluster`, `job` and `instance`, and the alerts and the dashboard by
+`cluster` and `namespace` too; two releases in one namespace, scraped under one job name, can
+be told apart only by `instance`.
 
 ---
 
@@ -51,15 +68,16 @@ static config instead, keep the job label equal to that Service name, or the
 ```promql
 # Bundle reconciles per second
 rate(controller_runtime_reconcile_total{controller="bundle"}[5m])
+  and on (cluster, job, instance) kardinal_pr_duration_seconds_count
 ```
 
 ### Promotion step error rate
 
 ```promql
 # Fraction of PromotionStep reconciles that error
-rate(controller_runtime_reconcile_errors_total{controller="promotionstep"}[5m])
+(rate(controller_runtime_reconcile_errors_total{controller="promotionstep"}[5m]) and on (cluster, job, instance) kardinal_pr_duration_seconds_count)
 /
-rate(controller_runtime_reconcile_total{controller="promotionstep"}[5m])
+(rate(controller_runtime_reconcile_total{controller="promotionstep"}[5m]) and on (cluster, job, instance) kardinal_pr_duration_seconds_count)
 ```
 
 ### PolicyGate evaluation rate
@@ -97,7 +115,10 @@ histogram_quantile(0.9, sum by (le) (rate(kardinal_pr_duration_seconds_bucket[1d
 
 ```promql
 histogram_quantile(0.99,
-  rate(controller_runtime_reconcile_time_seconds_bucket{controller="promotionstep"}[5m])
+  sum by (cluster, namespace, le) (
+    rate(controller_runtime_reconcile_time_seconds_bucket{controller="promotionstep"}[5m])
+      and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+  )
 )
 ```
 
@@ -126,6 +147,7 @@ sum(rate(kardinal_git_operations_total{operation="push",result="non_fast_forward
 
 ```promql
 workqueue_depth{name=~"bundle|promotionstep|policygate"}
+  and on (cluster, job, instance) kardinal_pr_duration_seconds_count
 ```
 
 ---
@@ -255,8 +277,9 @@ groups:
 
       - alert: KardinalHighReconcileErrors
         expr: |
-          sum by (controller) (
+          sum by (cluster, namespace, controller) (
             rate(controller_runtime_reconcile_errors_total[5m])
+              and on (cluster, job, instance) kardinal_pr_duration_seconds_count
           ) > 0.1
         for: 5m
         labels:
@@ -266,7 +289,11 @@ groups:
           runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"
 
       - alert: KardinalWorkQueueBacklog
-        expr: workqueue_depth{name=~"bundle|promotionstep|policygate"} > 100
+        expr: |
+          (
+            workqueue_depth{name=~"bundle|promotionstep|policygate"}
+              and on (cluster, job, instance) kardinal_pr_duration_seconds_count
+          ) > 100
         for: 5m
         labels:
           severity: warning

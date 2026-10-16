@@ -462,8 +462,11 @@ func unitSteps(r *Repo, o Options) []Step {
 		// tool is missing (each is listed).
 		MinTests: 20000, MaxSkips: 10,
 		// -p 8: at most 8 test binaries at once, so the host keeps room for
-		// others while the gate holds the heavy-load lock.
-		Script: `go test -race -count=3 -p 8 -timeout 60m -json ./... > "$STEP_DIR/tests.json"`,
+		// others while the gate holds the heavy-load lock. The pinned
+		// promtool, and KARDINAL_REQUIRE_PROMTOOL, so test/helm's PromQL
+		// tests fail rather than skip without it (#2037).
+		Script: "bash hack/ci/install-promtool.sh\n" +
+			`KARDINAL_REQUIRE_PROMTOOL=1 go test -race -count=3 -p 8 -timeout 60m -json ./... > "$STEP_DIR/tests.json"`,
 	}}
 	for _, f := range r.FuzzTargets {
 		steps = append(steps, Step{
