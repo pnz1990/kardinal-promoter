@@ -5,7 +5,6 @@ package scm_test
 
 import (
 	"context"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,38 +18,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
-	"github.com/kardinal-promoter/kardinal-promoter/test/gitbackend"
 )
-
-// gitHTTPBackend serves the bare repositories under root with git's own
-// smart HTTP server (git http-backend), pushes enabled, and no backend
-// outliving the test (test/gitbackend, #1875). slowRead, when set, throttles
-// how fast the server reads a request body.
-func gitHTTPBackend(t *testing.T, root string, slowRead time.Duration) *httptest.Server {
-	t.Helper()
-	return gitbackend.Serve(t, root, func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if slowRead > 0 && r.Method == http.MethodPost {
-				r.Body = io.NopCloser(&slowReader{r: r.Body, every: slowRead})
-			}
-			h.ServeHTTP(w, r)
-		})
-	})
-}
-
-// slowReader reads at most 16 KiB per call, each after a pause.
-type slowReader struct {
-	r     io.Reader
-	every time.Duration
-}
-
-func (s *slowReader) Read(p []byte) (int, error) {
-	time.Sleep(s.every)
-	if len(p) > 16<<10 {
-		p = p[:16<<10]
-	}
-	return s.r.Read(p)
-}
 
 // TestGoGitClient_StalledHTTPServer (#1491): an HTTPS (here HTTP) git server
 // that accepts the request and never answers fails the clone after the idle
