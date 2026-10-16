@@ -43,7 +43,7 @@ the extension field `kardinalPromotion`, which those tools ignore.
 |---|---|
 | `subject` | Each image digest (`sha256`), and the config commit (`gitCommit`) of a config or mixed version. A version with neither (images by tag only) is named by its Bundle spec's digest. |
 | `resourceUri` | `kardinal://<cluster>/namespaces/<ns>/pipelines/<pipeline>/environments/<env>`. The cluster is the `kube-system` Namespace UID (or `receipts.clusterID`), so two clusters' `prod` never match. |
-| `policy` | The Pipeline generation, and a digest of the policy set: the Pipeline's spec hash and each gate template's UID, generation and spec digest. A template's status writes do not change it. |
+| `policy` | The Pipeline generation, and a digest of the policy set: the Pipeline's spec hash and each gate template's UID, generation and spec digest, as they were when the version's Graph was built (the gate instance carries them, `kardinal.io/gate-template-{uid,generation,digest}`): a template edited later is not what the gate evaluated, so the receipt does not name it. A template's status writes do not change it. |
 | `verificationResult` | Always `PASSED`: a receipt exists only for a promotion that landed. |
 | `verifiedLevels` | What the record shows, and nothing more: `KARDINAL_GATES_PASSED` (every required gate passed), `KARDINAL_APPROVED` (at least one counted approval), `KARDINAL_VERIFIED_BY_AGENT` (a verify gate counted a passing Verdict), `KARDINAL_HEALTHY` (the health check passed), `KARDINAL_OVERRIDDEN` (a gate passed by override). |
 | `kardinalPromotion.version` | The Bundle: name, UID, version, type, images, config commit, provenance. |

@@ -51,6 +51,9 @@ const (
 const (
 	AnnotationGateTemplateGeneration = "kardinal.io/gate-template-generation"
 	AnnotationGateTemplateDigest     = "kardinal.io/gate-template-digest"
+	// AnnotationGateTemplateUID is the template's metadata.uid, which a
+	// promotion receipt records with the generation and digest (#1951).
+	AnnotationGateTemplateUID = "kardinal.io/gate-template-uid"
 )
 
 // gateCollections collects a Graph's PolicyGate instances as data for the
@@ -191,6 +194,7 @@ func gateTemplateData(gate kardinalv1alpha1.PolicyGate, orgNS map[string]bool) m
 	return map[string]interface{}{
 		"spec":              spec,
 		"generation":        strconv.FormatInt(gate.Generation, 10),
+		"uid":               string(gate.UID),
 		"digest":            TemplateDigest(gate),
 		"template":          gate.Name,
 		"templateNamespace": gate.Namespace,
@@ -262,6 +266,7 @@ func (c *gateCollections) instance(tmpl, item map[string]interface{}, skip bool)
 	}
 	g.Annotations = map[string]string{
 		AnnotationGateTemplateGeneration: tmpl["generation"].(string),
+		AnnotationGateTemplateUID:        tmpl["uid"].(string),
 		AnnotationGateTemplateDigest:     tmpl["digest"].(string),
 	}
 	if skip {
@@ -371,6 +376,7 @@ func (c *gateCollections) collectionNode(id, field string, skip bool) GraphNode 
 	}
 	annotations := map[string]interface{}{
 		AnnotationGateTemplateGeneration: tmpl("generation"),
+		AnnotationGateTemplateUID:        tmpl("uid"),
 		AnnotationGateTemplateDigest:     tmpl("digest"),
 	}
 	metadata := map[string]interface{}{

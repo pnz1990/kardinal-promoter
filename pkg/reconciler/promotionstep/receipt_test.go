@@ -257,3 +257,35 @@ func TestReceiptJourney_CannotBuild(t *testing.T) {
 	assert.Equal(t, "Failure", events.Items[0].Spec.Outcome)
 	assert.Contains(t, events.Items[0].Spec.Message, "no promotion receipt")
 }
+
+// TestReceiptJourney_TemplateAsTranslated (#1951 finding 6): the template
+// is edited after the Bundle starts, and its gate instance keeps the
+// expression of the generation it was translated from (#1360). The receipt
+// names that generation and its digest, as the Graph builder stamped them on
+// the instance, not the template's current one.
+//
+// Covers RECEIPT-JOURNEY-04.
+func TestReceiptJourney_TemplateAsTranslated(t *testing.T) {
+	f := newReceiptFixture(t, true, nil)
+	ctx := context.Background()
+	var tmpl, g v1alpha1.PolicyGate
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "agents-approve"}, &tmpl))
+	require.NoError(t, f.c.Get(ctx, f.gate, &g))
+	translated := graph.GateTemplateDigest(tmpl.Spec)
+	g.Annotations = map[string]string{graph.AnnotationGateTemplateUID: "tmpl-uid",
+		graph.AnnotationGateTemplateGeneration: "3", graph.AnnotationGateTemplateDigest: translated}
+	require.NoError(t, f.c.Update(ctx, &g))
+
+	tmpl.Spec.Expression = "approvals.count >= 2"
+	tmpl.Generation = 4
+	require.NoError(t, f.c.Update(ctx, &tmpl))
+
+	f.toVerified(t)
+	_, st := f.receipt(t)
+	require.Len(t, st.Predicate.Kardinal.Gates, 1)
+	gate := st.Predicate.Kardinal.Gates[0]
+	assert.Equal(t, "approvals.count >= 1", gate.Expression, "the instance's expression")
+	assert.Equal(t, int64(3), gate.TemplateGeneration, "the generation evaluated, not the template's current 4")
+	assert.Equal(t, strings.TrimPrefix(translated, "sha256:"), gate.TemplateDigest["sha256"])
+	assert.NotEqual(t, strings.TrimPrefix(graph.GateTemplateDigest(tmpl.Spec), "sha256:"), gate.TemplateDigest["sha256"])
+}

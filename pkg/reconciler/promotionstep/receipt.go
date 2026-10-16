@@ -102,6 +102,16 @@ func (r *Reconciler) decisionGate(ctx context.Context, ps *v1alpha1.PromotionSte
 		ns = g.Namespace
 	}
 	out.Template = ns + "/" + name
+	// The template the instance was translated from, as the Graph builder
+	// stamped it: the instance's expression is that generation's, even when
+	// the template was edited since (#1360).
+	if gen, err := strconv.ParseInt(g.Annotations[graph.AnnotationGateTemplateGeneration], 10, 64); err == nil &&
+		g.Annotations[graph.AnnotationGateTemplateDigest] != "" {
+		out.TemplateUID, out.TemplateGeneration = g.Annotations[graph.AnnotationGateTemplateUID], gen
+		out.TemplateDigest = g.Annotations[graph.AnnotationGateTemplateDigest]
+		return out
+	}
+	// An instance built before the stamp: the template as it is now.
 	var tmpl v1alpha1.PolicyGate
 	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &tmpl); err != nil {
 		zerolog.Ctx(ctx).Debug().Err(err).Str("template", out.Template).Msg("receipt: gate template not read; recorded without its versions")
