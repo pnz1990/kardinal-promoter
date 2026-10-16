@@ -485,7 +485,9 @@ func unitSteps(r *Repo, o Options) []Step {
 	})
 	ent := Step{ID: "scenario-enterprise", Area: areaUnit, Title: "enterprise scenario at full size", Heavy: true, Tests: "tests.json",
 		MinTests: 2,
-		Script:   `KARDINAL_SCENARIO_ENTERPRISE=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}
+		// KARDINAL_SCENARIO_SCALE=full: the agent scale scenario at its full
+		// 5,000 AgentIdentities, which PR CI runs at 2,000.
+		Script: `KARDINAL_SCENARIO_ENTERPRISE=full KARDINAL_SCENARIO_SCALE=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}
 	if !r.Enterprise {
 		ent.Script = ""
 		ent.Missing = "no test/scenario/enterprise on this commit (#1860)"

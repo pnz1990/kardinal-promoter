@@ -30,16 +30,30 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise"
 )
 
-// The scale of agents: fullScale is the release gate's
-// (KARDINAL_SCENARIO_ENTERPRISE=full): 5,000 AgentIdentities, 50 tenants
-// with 4 Pipelines each (200 Pipelines) and 98 agents (100 asked; the 50th
-// team has none) shipping 2 bursts: 3 took CI's runner 14.5 of the
-// 15 minutes the scenario-enterprise job gives go test.
-// quickScale keeps go test ./... under its budget.
+// The scale of agents. fullScale is the release gate's
+// (KARDINAL_SCENARIO_SCALE=full): 5,000 AgentIdentities, 50 tenants with 4
+// Pipelines each (200 Pipelines) and 98 agents (100 asked; the 50th team
+// has none) shipping 2 bursts. It takes CI's runner 10 of the 15 minutes
+// its scenario-enterprise job gives go test (3 bursts took 14.5), so that
+// job (KARDINAL_SCENARIO_ENTERPRISE=full) runs mediumScale: 2,000
+// AgentIdentities in 20 tenants. quickScale keeps go test ./... under its
+// budget.
 var (
-	fullScale  = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 5000, Agents: 100, Bursts: 2}
-	quickScale = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 150, Agents: 6, Bursts: 2}
+	fullScale   = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 5000, Agents: 100, Bursts: 2}
+	mediumScale = agentSize{Teams: 20, PipelinesPerTeam: 4, Identities: 2000, Agents: 40, Bursts: 2}
+	quickScale  = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 150, Agents: 6, Bursts: 2}
 )
+
+// scaleFromEnv is the size and mode (its budgets' prefix) of RunScale.
+func scaleFromEnv() (agentSize, string) {
+	switch {
+	case os.Getenv("KARDINAL_SCENARIO_SCALE") == "full":
+		return fullScale, "full"
+	case os.Getenv("KARDINAL_SCENARIO_ENTERPRISE") == "full":
+		return mediumScale, "medium"
+	}
+	return quickScale, "quick"
+}
 
 // PerfBaseline is the file of the scale scenario's budgets, from the repository root.
 const PerfBaseline = "hack/ci/perf-baseline.txt"
@@ -55,11 +69,7 @@ const PerfBaseline = "hack/ci/perf-baseline.txt"
 // people's Approvals) must stay within its budget (PerfBaseline, where the
 // numbers come from).
 func RunScale(t *testing.T) {
-	full := os.Getenv("KARDINAL_SCENARIO_ENTERPRISE") == "full"
-	sz, mode := quickScale, "quick"
-	if full {
-		sz, mode = fullScale, "full"
-	}
+	sz, mode := scaleFromEnv()
 	budget := readBudgets(t, mode)
 	reg := agentRegistry(sz)
 	// One team in 50 has no plain agent (agentRegistry gives every 50th
