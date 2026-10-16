@@ -93,7 +93,7 @@ spec:
         - alert: KardinalPolicyGateReconcileSlow
           expr: |
             histogram_quantile(0.99,
-              sum by (cluster, namespace, le) (
+              sum by (cluster, namespace, controller, le) (
                 rate(controller_runtime_reconcile_time_seconds_bucket{controller="policygate"}[5m])
                   and on (cluster, job, instance) kardinal_pr_duration_seconds_count
               )

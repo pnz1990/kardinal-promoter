@@ -108,7 +108,8 @@ func promtoolBin(t *testing.T) string {
 // unit tests (testdata/prometheusrule_test.yaml) on the rendered rules:
 // Crossplane's reconcile errors, another target of kardinal's job name, and
 // Rancher Fleet's stalled "bundle" controller with a backlog alert nothing;
-// kardinal's own errors, stall and backlog do. It needs promtool in CI
+// kardinal's own errors, stall and backlog do, and its slow PolicyGate
+// reconciles alert once per installation (cluster, namespace, controller). It needs promtool in CI
 // (promtoolBin); the structure test above runs without it.
 func TestChartPrometheusRuleAlertsOnlyOnKardinal(t *testing.T) {
 	promtool := promtoolBin(t)

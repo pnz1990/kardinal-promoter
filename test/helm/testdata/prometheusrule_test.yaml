@@ -84,3 +84,40 @@ tests:
               summary: "kardinal bundle work queue depth > 100"
               description: "The bundle work queue has 150 items pending for more than 5 minutes. Controller may be overloaded."
               runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#graph-controller-issues"
+  # kardinal's PolicyGate reconciles take 30s on both replicas; another
+  # operator's "policygate" controller is as slow: one alert, for kardinal's
+  # installation, labelled with its namespace and controller.
+  - interval: 1m
+    input_series:
+      - series: 'kardinal_pr_duration_seconds_count{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system"}'
+        values: '0x20'
+      - series: 'kardinal_pr_duration_seconds_count{job="kp",instance="10.0.0.3:8080",namespace="kardinal-system"}'
+        values: '0x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",controller="policygate",le="10"}'
+        values: '0x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",controller="policygate",le="60"}'
+        values: '0+60x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="kp",instance="10.0.0.1:8080",namespace="kardinal-system",controller="policygate",le="+Inf"}'
+        values: '0+60x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="kp",instance="10.0.0.3:8080",namespace="kardinal-system",controller="policygate",le="10"}'
+        values: '0x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="kp",instance="10.0.0.3:8080",namespace="kardinal-system",controller="policygate",le="60"}'
+        values: '0+60x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="kp",instance="10.0.0.3:8080",namespace="kardinal-system",controller="policygate",le="+Inf"}'
+        values: '0+60x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="other",instance="10.0.0.9:8080",namespace="other-system",controller="policygate",le="10"}'
+        values: '0x20'
+      - series: 'controller_runtime_reconcile_time_seconds_bucket{job="other",instance="10.0.0.9:8080",namespace="other-system",controller="policygate",le="+Inf"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: KardinalPolicyGateReconcileSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: kardinal-system
+              controller: policygate
+            exp_annotations:
+              summary: "kardinal PolicyGate reconcile P99 latency is above 10s"
+              description: "PolicyGate reconciles are taking more than 10s at P99. Gates may be stale and blocking or unblocking promotions late."
+              runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshoot-promotions/#promotion-is-stuck"

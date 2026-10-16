@@ -6,7 +6,9 @@
 # PROMTOOL_SHA256 before it is unpacked; a promtool already there at that
 # version is kept. test/helm runs bin/e2e/promtool first, then promtool on
 # PATH (TestChartPrometheusRuleAlertsOnlyOnKardinal). ci.yml runs this in
-# the jobs that run test/helm; run it yourself for those tests locally.
+# the jobs that run test/helm, release.yml in its test job and
+# hack/release-gate before its unit-race step; run it yourself for those
+# tests locally.
 # linux-amd64 only, as the sum is.
 #
 # Copyright 2026 The kardinal-promoter Authors.

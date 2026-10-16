@@ -90,6 +90,9 @@ func TestPlan(t *testing.T) {
 
 	// Each step's proof threshold.
 	assert.Equal(t, 20000, ids["unit-race"].MinTests)
+	// The PromQL tests of test/helm run, never skip, in the gate (#2037).
+	assert.Contains(t, ids["unit-race"].Script, "bash hack/ci/install-promtool.sh\n")
+	assert.Contains(t, ids["unit-race"].Script, "KARDINAL_REQUIRE_PROMTOOL=1 go test -race")
 	assert.Equal(t, 40, ids["scenario-matrix"].MinTests)
 	assert.Equal(t, 1, ids["fuzz-FuzzA"].MinTests)
 	assert.Zero(t, ids["scenario-matrix"].MaxSkips, "the scenario matrix may not skip")
