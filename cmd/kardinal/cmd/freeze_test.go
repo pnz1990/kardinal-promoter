@@ -64,6 +64,33 @@ func TestFreezeCommands(t *testing.T) {
 	require.NoError(t, unfreezeFn(&out, c, "kardinal-freeze-agents"))
 	assert.Contains(t, out.String(), "Freeze kardinal-freeze-agents lifted")
 	assert.Error(t, unfreezeFn(&out, c, "kardinal-freeze-agents"))
+
+	// #2034: the freeze audit finalizer keeps an unfrozen window for up to
+	// two minutes. kardinal freeze does not list it, and override --freeze
+	// adds nothing to it (TestGate_FreezeAgentsAndStopTheLine).
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone-payments"}, &cw))
+	cw.Finalizers = []string{"kardinal.io/freeze-audit"}
+	require.NoError(t, c.Update(ctx, &cw))
+	require.NoError(t, freezeFn(&out, c, v1alpha1.FreezeAgents, "", "INC-4212", 0, now))
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents"}, &cw))
+	cw.Status.Active, cw.Status.ObservedGeneration = true, cw.Generation
+	require.NoError(t, c.Status().Update(ctx, &cw))
+	require.NoError(t, unfreezeFn(&out, c, "kardinal-freeze-everyone-payments"))
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone-payments"}, &cw), "kept by its finalizer")
+	out.Reset()
+	require.NoError(t, listFreezesFn(&out, c))
+	assert.NotContains(t, out.String(), "kardinal-freeze-everyone-payments")
+	out.Reset()
+	require.NoError(t, overrideFreezeFn(&out, c, "payments", "checkout", "prod", "", "hotfix", 30*time.Minute, now))
+	assert.Contains(t, out.String(), "Exemption added to kardinal-freeze-agents:")
+	assert.NotContains(t, out.String(), "kardinal-freeze-everyone-payments")
+
+	// Freezing that scope again while it is being lifted is refused, not an
+	// update that then vanishes (#2034 QA).
+	out.Reset()
+	err := freezeFn(&out, c, v1alpha1.FreezeEveryone, "payments", "again", 0, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "freeze kardinal-freeze-everyone-payments is being lifted; try again in a few seconds")
 }
 
 // TestFreezeFlags: the scope flags name one actor set and one scope.

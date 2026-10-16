@@ -5,6 +5,8 @@ package changewindow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -163,7 +166,7 @@ func (r *Reconciler) writeFreezeAudit(ctx context.Context, cw *kardinalv1alpha1.
 	}
 	ae := &kardinalv1alpha1.AuditEvent{
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", string(cw.UID), suffix), Namespace: ns,
-			Labels: map[string]string{"kardinal.io/changewindow": cw.Name, "kardinal.io/action": action},
+			Labels: map[string]string{"kardinal.io/changewindow": windowLabel(cw.Name), "kardinal.io/action": action},
 			// spec.timestamp has one-second resolution; the annotation orders
 			// records within a second (lifecycle.AnnotationCreatedAt; the
 			// package cannot import lifecycle).
@@ -189,6 +192,19 @@ func (r *Reconciler) writeFreezeAudit(ctx context.Context, cw *kardinalv1alpha1.
 		return fmt.Errorf("write the %s AuditEvent of %s: %w", action, cw.Name, err)
 	}
 	return nil
+}
+
+// windowLabel is a ChangeWindow name as a label value: the name when it is
+// one, else its first 52 characters and a hash of the whole name. A
+// ChangeWindow name can be 253 characters, a label value only 63, and a
+// freeze named after its namespace (kardinal-freeze-agents-<namespace>) is
+// often longer: its AuditEvent was refused (#2034).
+func windowLabel(name string) string {
+	if len(validation.IsValidLabelValue(name)) == 0 {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	return strings.TrimRight(name[:min(len(name), 52)], "-_.") + "-" + hex.EncodeToString(sum[:])[:10]
 }
 
 func orUnknown(s string) string {

@@ -808,6 +808,56 @@ func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 
 // ─── K-04: ChangeWindow CRD ───────────────────────────────────────────────────
 
+// TestPolicyGateReconciler_LiftingFreezeBlocksNothing (#2034): a freeze
+// ChangeWindow being deleted (kept by its audit finalizer), by kardinal
+// unfreeze or kubectl, is false in changewindow.<name>, though its spec
+// still describes an active blackout; a lift mark whose delete failed still
+// blocks.
+func TestPolicyGateReconciler_LiftingFreezeBlocksNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		marked, deleted bool
+		wantReady       bool
+	}{
+		{"deleted by kardinal unfreeze", true, true, true},
+		{"deleted by kubectl", false, true, true},
+		{"marked, the delete failed", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := newScheme()
+			cw := &kardinalv1alpha1.ChangeWindow{
+				ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-everyone"},
+				Spec: kardinalv1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.NewTime(time.Now().Add(-time.Hour)),
+					Freeze: &kardinalv1alpha1.ChangeWindowFreeze{Actors: kardinalv1alpha1.FreezeEveryone, CreatedBy: "alice"}},
+				Status: kardinalv1alpha1.ChangeWindowStatus{Active: true},
+			}
+			if tc.marked {
+				cw.Spec.Freeze.Lifted = &kardinalv1alpha1.FreezeLift{By: "bob"}
+			}
+			if tc.deleted {
+				cw.Finalizers = []string{"kardinal.io/freeze-audit"}
+				cw.DeletionTimestamp = &metav1.Time{Time: time.Now().Add(-time.Second)}
+			}
+			gate := &kardinalv1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: "cw-gate", Namespace: "default", Labels: map[string]string{
+					"kardinal.io/bundle": "bundle-1", "kardinal.io/pipeline": "my-app", "kardinal.io/environment": "test"}},
+				Spec: kardinalv1alpha1.PolicyGateSpec{Expression: `!changewindow["kardinal-freeze-everyone"]`},
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gate, makeBundle("bundle-1", "default"), cw).
+				WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+				WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tc.wantReady, got.Status.Ready, got.Status.Reason)
+		})
+	}
+}
+
 // TestPolicyGateReconciler_ChangeWindowBlocked verifies that a PolicyGate using
 // changewindow.isBlocked() returns ready=false when a blackout ChangeWindow is active.
 func TestPolicyGateReconciler_ChangeWindowBlocked(t *testing.T) {

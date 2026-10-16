@@ -31,6 +31,20 @@ func freezeWindow(name, actors string, namespaces []string, exemptions ...kardin
 	}
 }
 
+// lifting marks w as an unfreeze leaves it: with marked, spec.freeze.lifted
+// (kardinal unfreeze writes it, kubectl delete does not); with deleted, a
+// deletion its audit finalizer holds.
+func lifting(w *kardinalv1alpha1.ChangeWindow, marked, deleted bool) *kardinalv1alpha1.ChangeWindow {
+	if marked {
+		w.Spec.Freeze.Lifted = &kardinalv1alpha1.FreezeLift{By: "carol"}
+	}
+	if deleted {
+		w.Finalizers = []string{changewindow.FreezeAuditFinalizer}
+		w.DeletionTimestamp = &metav1.Time{Time: at("2026-10-14T10:00:00Z")}
+	}
+	return w
+}
+
 func exempt(env, bundle, expires string) kardinalv1alpha1.FreezeExemption {
 	return kardinalv1alpha1.FreezeExemption{Namespace: "payments", Pipeline: "checkout", Environment: env, Bundle: bundle,
 		Reason: "hotfix", CreatedBy: "bob", ExpiresAt: metav1.NewTime(at(expires))}
@@ -240,6 +254,12 @@ func TestFreezesFor(t *testing.T) {
 			forPipeline("cart", exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
 		{"an agent's exemption never counts", reconciled(freezeWindow("f", "everyone", nil,
 			byAgent(exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
+		// Being deleted (#2034): its audit finalizer keeps it; a lift mark
+		// alone (an unfreeze whose delete failed) changes nothing.
+		{"a freeze deleted by kardinal unfreeze holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), true, true), personVersion, false, false},
+		{"a freeze deleted by kubectl holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), false, true), personVersion, false, false},
+		{"a lift mark without a delete still holds", lifting(reconciled(freezeWindow("f", "everyone", nil), true), true, false), personVersion, true, false},
+		{"a lift mark, status behind, still holds", lifting(freezeWindow("f", "everyone", nil), true, false), personVersion, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

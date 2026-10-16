@@ -72,7 +72,13 @@ gone or the controller may not write there. `kardinal unfreeze` and the UI recor
 (`spec.freeze.lifted`) just before they delete the window, and a finalizer
 (`kardinal.io/freeze-audit`) keeps the window until `FreezeLifted` is written, so a
 `kubectl delete` is recorded too, without an actor. While the controller is down, a deleted freeze
-waits for it; it holds nothing meanwhile.
+waits for it. A freeze being deleted (by `kardinal unfreeze`, the UI or `kubectl delete`, and
+kept by the finalizer) is gone for everything else at once: it holds no step, takes no
+`kardinal override --freeze` exemption, is not listed by `kardinal freeze`, the UI or the MCP
+`freezes` tool, and is false in a gate's `changewindow.<name>`. Freezing its scope again
+meanwhile is refused with `freeze <name> is being lifted; try again in a few seconds`.
+`spec.freeze.lifted` only names who lifts it: when the delete fails, `kardinal unfreeze` reports
+the error and takes the mark back, and the freeze stays in force.
 
 An audit write never holds a freeze back. A freeze takes effect (its status is written) whether
 or not its `FreezeStarted` record could be written; a failed write is retried, with a

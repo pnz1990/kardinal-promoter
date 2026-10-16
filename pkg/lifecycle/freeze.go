@@ -118,10 +118,18 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 		if out.Spec.Freeze == nil {
 			return fmt.Errorf("ChangeWindow %s exists and is not a freeze; rename or delete it: %w", name, ErrConflict)
 		}
+		if !out.DeletionTimestamp.IsZero() {
+			// Updating it would report a freeze that vanishes when its
+			// FreezeLifted record is written (#2034).
+			return fmt.Errorf("freeze %s is being lifted; try again in a few seconds: %w", name, ErrConflict)
+		}
 		if req.OnlyOwn && out.Spec.Freeze.CreatedBy != req.CreatedBy {
 			return notYours(name, out.Spec.Freeze.CreatedBy, "change")
 		}
 		out.Spec.Reason, out.Spec.End = req.Reason, end
+		// A lift mark an unfreeze left when its delete failed would name the
+		// wrong person on the next lift.
+		out.Spec.Freeze.Lifted = nil
 		return c.Update(ctx, &out)
 	})
 	if err != nil {
@@ -136,7 +144,9 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 // otherwise): the UI sets it for a caller whose rights are a namespace's.
 // lift, when set, is written to spec.freeze.lifted just before the delete,
 // so the FreezeLifted AuditEvent names who lifted it; a caller who may not
-// update the window still deletes it, audited with an unknown actor.
+// update the window still deletes it, audited with an unknown actor. A
+// delete that fails takes the mark back and returns the error: the freeze
+// is still in force (#2034).
 func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v1alpha1.FreezeLift) error {
 	var cw v1alpha1.ChangeWindow
 	if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
@@ -152,19 +162,47 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 		return notYours(name, cw.Spec.Freeze.CreatedBy, "lift")
 	}
 	// The requester replaces a lift an earlier, failed unfreeze left.
+	marked := false
 	if lift != nil && lift.By != "" && !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
+		previous := cw.Spec.Freeze.Lifted
 		cw.Spec.Freeze.Lifted = lift
-		if err := c.Update(ctx, &cw); err != nil && !apierrors.IsForbidden(err) {
-			if apierrors.IsNotFound(err) {
-				return nil
-			}
+		err := c.Update(ctx, &cw)
+		switch {
+		case err == nil:
+			marked = true
+		case apierrors.IsNotFound(err):
+			return nil
+		case apierrors.IsForbidden(err):
+			cw.Spec.Freeze.Lifted = previous
+		default:
 			return fmt.Errorf("record who lifts freeze %s: %w", name, err)
 		}
 	}
 	if err := c.Delete(ctx, &cw, client.Preconditions{UID: &cw.UID}); err != nil && !apierrors.IsNotFound(err) {
+		if marked {
+			// The freeze stays in force: take back the mark, so it names
+			// no one who did not lift it.
+			clearLift(ctx, c, name, lift)
+		}
 		return fmt.Errorf("delete freeze %s: %w", name, err)
 	}
 	return nil
+}
+
+// clearLift removes spec.freeze.lifted from freeze name when it is still
+// lift, best effort: Freeze clears a stale mark too.
+func clearLift(ctx context.Context, c client.Client, name string, lift *v1alpha1.FreezeLift) {
+	_ = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cw v1alpha1.ChangeWindow
+		if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		if cw.Spec.Freeze == nil || !cw.DeletionTimestamp.IsZero() || !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
+			return nil
+		}
+		cw.Spec.Freeze.Lifted = nil
+		return c.Update(ctx, &cw)
+	})
 }
 
 // notYours is the ErrForbidden of a caller with a namespace's rights acting
@@ -177,7 +215,10 @@ func notYours(name, by, verb string) error {
 		"(the chart's freezer role), not a namespace's: %w", name, by, verb, ErrForbidden)
 }
 
-// ListFreezes returns the ChangeWindows with spec.freeze, sorted by name.
+// ListFreezes returns the ChangeWindows with spec.freeze, sorted by name,
+// without those being lifted (changewindow.FreezeLifting): a deleted freeze
+// its audit finalizer still keeps.
+// The CLI, the UI and the MCP tools list freezes through it.
 func ListFreezes(ctx context.Context, c client.Reader) ([]v1alpha1.ChangeWindow, error) {
 	var list v1alpha1.ChangeWindowList
 	if err := c.List(ctx, &list); err != nil {
@@ -185,7 +226,7 @@ func ListFreezes(ctx context.Context, c client.Reader) ([]v1alpha1.ChangeWindow,
 	}
 	var out []v1alpha1.ChangeWindow
 	for _, cw := range list.Items {
-		if cw.Spec.Freeze != nil {
+		if cw.Spec.Freeze != nil && !changewindow.FreezeLifting(&cw) {
 			out = append(out, cw)
 		}
 	}
