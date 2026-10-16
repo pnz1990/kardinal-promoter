@@ -470,7 +470,7 @@ jobs:
               ./pkg/steps/steps:FuzzYAMLUpdate ./pkg/steps/steps:FuzzKustomizeSetImage; do
             pkg=${target%%:*} name=${target##*:}
             echo "::group::$name"
-            go test "$pkg" -run '^$' -fuzz "^${name}\$" -fuzztime 20s
+            bash hack/ci/fuzz.sh "$pkg" "$name" 20s
             echo "::endgroup::"
           done
 
