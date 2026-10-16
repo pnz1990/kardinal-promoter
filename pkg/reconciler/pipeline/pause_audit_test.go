@@ -5,6 +5,7 @@ package pipeline_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,10 @@ func TestPipelinePauseAudit(t *testing.T) {
 	assert.Equal(t, "alice paused pipeline app: INC-7: bad config in prod", paused[0].Spec.Message)
 	assert.Equal(t, alice, paused[0].Spec.Actor)
 	assert.Equal(t, "app", paused[0].Spec.PipelineName)
+	var pl kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &pl))
+	assert.Equal(t, strconv.FormatInt(pl.Generation, 10), paused[0].Labels[pipeline.LabelPipelineGeneration],
+		"the change's generation, so two pauses are told apart from one recorded twice")
 
 	// kubectl patch spec.paused=false: no record of who.
 	var cur kardinalv1alpha1.Pipeline

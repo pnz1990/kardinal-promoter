@@ -4,7 +4,9 @@
 package invariants
 
 import (
+	"fmt"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -419,6 +421,20 @@ func TestAuditViolations(t *testing.T) {
 			events: []v1alpha1.AuditEvent{ev("b", "prod", "PromotionStarted", "")},
 			steps:  []v1alpha1.PromotionStep{step("b", "prod", "Failed", "boom")},
 			want:   []string{"step b-prod Failed with no PromotionFailed, PromotionSuperseded or PromotionRejected AuditEvent"}},
+		{name: "a Pipeline paused and resumed 80 times: one event per change",
+			events: pauseToggles(80)},
+		{name: "one pause recorded twice",
+			events: append(pauseToggles(2), pauseEvent("e2e", "app", "PipelinePaused", "1", "app-pause-again")),
+			want:   []string{"2 AuditEvents */*/PipelinePaused e2e/app@1"}},
+		{name: "two Pipelines of one name in two namespaces, paused at one generation",
+			events: []v1alpha1.AuditEvent{pauseEvent("team-a", "app", "PipelinePaused", "2", "a"), pauseEvent("team-b", "app", "PipelinePaused", "2", "b")}},
+		{name: "pauses recorded before the generation label: told apart by name",
+			events: []v1alpha1.AuditEvent{pauseEvent("e2e", "app", "PipelinePaused", "", "app-pause-1"), pauseEvent("e2e", "app", "PipelinePaused", "", "app-pause-2")}},
+		{name: "a freeze started and lifted, then the window recreated and frozen again",
+			events: []v1alpha1.AuditEvent{freezeEvent("FreezeStarted", 0), freezeEvent("FreezeLifted", 60), freezeEvent("FreezeStarted", 120)}},
+		{name: "one freeze recorded twice",
+			events: []v1alpha1.AuditEvent{freezeEvent("FreezeStarted", 0), freezeEvent("FreezeStarted", 0)},
+			want:   []string{"2 AuditEvents /*/FreezeStarted e2e/release-freeze@2026-10-16T10:00:00Z"}},
 		{name: "a step action twice",
 			events: []v1alpha1.AuditEvent{ev("b", "prod", "PromotionSucceeded", ""), ev("b", "prod", "PromotionSucceeded", "")},
 			steps:  []v1alpha1.PromotionStep{step("b", "prod", "Verified", "")},
@@ -433,4 +449,37 @@ func TestAuditViolations(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// pauseEvent is a PipelinePaused or PipelineResumed record of the change at
+// generation gen ("": recorded before the label) of Pipeline p in ns.
+func pauseEvent(ns, p, action, gen, name string) v1alpha1.AuditEvent {
+	a := v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name,
+		Labels: map[string]string{"kardinal.io/pipeline": p, "kardinal.io/action": action}},
+		Spec: v1alpha1.AuditEventSpec{BundleName: "*", PipelineName: p, Environment: "*", Action: action, Outcome: "Success"}}
+	if gen != "" {
+		a.Labels["kardinal.io/pipeline-generation"] = gen
+	}
+	return a
+}
+
+// pauseToggles is n changes of one Pipeline, pause and resume in turn.
+func pauseToggles(n int) []v1alpha1.AuditEvent {
+	var out []v1alpha1.AuditEvent
+	for i := 1; i <= n; i++ {
+		action := "PipelinePaused"
+		if i%2 == 0 {
+			action = "PipelineResumed"
+		}
+		out = append(out, pauseEvent("e2e", "app", action, strconv.Itoa(i), fmt.Sprintf("app-pause-%d", i)))
+	}
+	return out
+}
+
+// freezeEvent is a Freeze* record of ChangeWindow release-freeze at
+// 10:00:00 plus seconds.
+func freezeEvent(action string, seconds int) v1alpha1.AuditEvent {
+	return v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Namespace: "e2e", Labels: map[string]string{"kardinal.io/changewindow": "release-freeze"}},
+		Spec: v1alpha1.AuditEventSpec{Environment: "*", Action: action, Outcome: "Success",
+			Timestamp: metav1.NewTime(time.Date(2026, 10, 16, 10, 0, seconds, 0, time.UTC))}}
 }

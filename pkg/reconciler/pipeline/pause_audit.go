@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/rs/zerolog"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -117,7 +118,10 @@ func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, rec changeRec
 	if len(prefix) > 200 {
 		prefix = prefix[:200]
 	}
-	labels := map[string]string{"kardinal.io/pipeline": p.Name, "kardinal.io/action": auditAction}
+	// The generation names the change (as the event's name does): a check
+	// can tell two pauses apart from one pause recorded twice.
+	labels := map[string]string{"kardinal.io/pipeline": p.Name, "kardinal.io/action": auditAction,
+		LabelPipelineGeneration: strconv.FormatInt(p.Generation, 10)}
 	env := "*" // the whole Pipeline
 	if target != "" {
 		env = target
@@ -134,6 +138,11 @@ func (r *Reconciler) pauseAuditEntry(p *kardinalv1alpha1.Pipeline, rec changeRec
 			Actor:        stamp,
 		}, metav1.NewTime(r.now()))
 }
+
+// LabelPipelineGeneration is the label of a PipelinePaused or
+// PipelineResumed AuditEvent naming the Pipeline generation whose change it
+// records.
+const LabelPipelineGeneration = "kardinal.io/pipeline-generation"
 
 // changeRecord is what a reconcile names a change's author from: the
 // spec.lastChange not yet consumed (fresh, freshChange), and the AgentIndex

@@ -731,6 +731,26 @@ func approvalDecision(msg string) string {
 	return msg
 }
 
+// changeIdentity names the change a Pipeline* (pause, resume) or Freeze*
+// (started, lifted) AuditEvent records, whose Bundle is "*": the Pipeline in
+// its namespace and the generation of its change (the pipeline-generation
+// label, else the event's name, fixed per change), or the ChangeWindow and
+// when it froze or lifted. Two events of one identity are one change
+// recorded twice.
+func changeIdentity(a v1alpha1.AuditEvent) (string, bool) {
+	switch {
+	case strings.HasPrefix(a.Spec.Action, "Pipeline"):
+		gen := a.Labels["kardinal.io/pipeline-generation"]
+		if gen == "" {
+			gen = "name " + a.Name
+		}
+		return a.Namespace + "/" + a.Spec.PipelineName + "@" + gen, true
+	case strings.HasPrefix(a.Spec.Action, "Freeze") && a.Spec.Action != "FreezeExempted":
+		return a.Namespace + "/" + a.Labels["kardinal.io/changewindow"] + "@" + a.Spec.Timestamp.UTC().Format(time.RFC3339), true
+	}
+	return "", false
+}
+
 // auditViolations checks events against steps: at most one event per
 // (Bundle, environment, action), GateEvaluated aside, and one Approval* event
 // per approver and decision; a Verified step has its PromotionSucceeded
@@ -743,6 +763,11 @@ func auditViolations(events []v1alpha1.AuditEvent, steps []v1alpha1.PromotionSte
 	approvals := map[string]int{}
 	for _, a := range events {
 		k := a.Spec.BundleName + "/" + a.Spec.Environment + "/" + a.Spec.Action
+		if id, ok := changeIdentity(a); ok {
+			// A Pipeline or a freeze records each change once; one Pipeline
+			// pausing 80 times records 80 PipelinePaused events.
+			k += " " + id
+		}
 		count[k]++
 		if strings.HasPrefix(a.Spec.Action, "Approval") {
 			approvals[k+" "+approvalDecision(a.Spec.Message)]++
