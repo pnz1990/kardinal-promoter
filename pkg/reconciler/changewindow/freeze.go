@@ -119,9 +119,12 @@ func exemptionFor(w *kardinalv1alpha1.ChangeWindow, t FreezeTarget) (*kardinalv1
 
 // FreezeActive reports whether freeze window w is active, from the status
 // its reconciler writes (status.active). A status behind the spec counts as
-// active: a new or edited freeze holds at once, and fails closed.
+// active: a new or edited freeze holds at once, and fails closed. A freeze
+// being deleted is lifted, though its finalizer keeps it until FreezeLifted
+// is recorded and the unfreeze's spec.freeze.lifted write leaves its status
+// a generation behind.
 func FreezeActive(w *kardinalv1alpha1.ChangeWindow) bool {
-	return w.Spec.Freeze != nil && (statusBehind(w) || w.Status.Active)
+	return w.Spec.Freeze != nil && w.DeletionTimestamp.IsZero() && (statusBehind(w) || w.Status.Active)
 }
 
 // statusBehind reports whether w's status does not describe its spec yet:
