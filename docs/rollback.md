@@ -332,7 +332,7 @@ spec:
 
 - the PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, or of a bake window stopping;
 - the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded` from this promotion's rollout, Flagger canary `Failed`, an Argo Rollouts Rollout aborted on the promoted revision: `argoRollouts`, or `argocd` when the Application reports it);
-- a health check is Unhealthy under `bake.policy: fail-on-alarm`, during the bake window or before its first healthy check (a target that does not exist yet waits for the first healthy check instead: the GitOps tool may not have created it).
+- a health check is Unhealthy under `bake.policy: fail-on-alarm`, during the bake window or before its first healthy check (a target that does not exist yet waits for the first healthy check instead: the GitOps tool may not have created it; one deleted after a bake window started is Unhealthy).
 
 An abort is acted on at the first check that sees it, so `kubectl argo rollouts retry` afterwards does not resume the step: promote the version again. Under `onHealthFailure: rollback` a retry also races the rollback version.
 

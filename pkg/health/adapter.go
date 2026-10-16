@@ -1543,16 +1543,23 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 
 // abortSetBefore reports whether the Rollout's abort predates since: its
 // Progressing condition has reason RolloutAborted, which Argo Rollouts sets
-// when it aborts, and that condition's lastTransitionTime is before since
-// (whole seconds). known is false when the condition is missing or has no
-// time. A zero since (the promotion changed nothing in git) is never stale.
+// when it aborts, and that condition's lastUpdateTime is before since (whole
+// seconds). lastUpdateTime moves when the reason changes; lastTransitionTime
+// moves only when the status does, so a Progressing condition already False
+// (ProgressDeadlineExceeded, say) keeps the older time when the Rollout
+// aborts. lastTransitionTime is the fallback when lastUpdateTime is not set.
+// known is false when the condition is missing or has no time. A zero since
+// (the promotion changed nothing in git) is never stale.
 func abortSetBefore(rollout *unstructured.Unstructured, since time.Time) (stale, known bool) {
 	conditions, _, _ := unstructured.NestedSlice(rollout.Object, "status", "conditions")
 	cond := findCondition(conditions, "Progressing")
 	if cond == nil || cond["reason"] != "RolloutAborted" {
 		return false, since.IsZero()
 	}
-	lt, _ := cond["lastTransitionTime"].(string)
+	lt, _ := cond["lastUpdateTime"].(string)
+	if lt == "" {
+		lt, _ = cond["lastTransitionTime"].(string)
+	}
 	at, err := time.Parse(time.RFC3339, lt)
 	if err != nil {
 		return false, since.IsZero()
