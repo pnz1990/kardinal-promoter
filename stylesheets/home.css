@@ -77,6 +77,13 @@
 .k-hero__proof strong {
   color: var(--k-ink);
 }
+.k-hero__status {
+  max-width: var(--k-layout-measure);
+  margin: var(--k-space-4) 0 0;
+  font-size: var(--k-text-sm);
+  line-height: var(--k-leading-sm);
+  color: var(--k-ink-2);
+}
 
 .k-hero__actions {
   display: flex;
