@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 )
 
 // LabelMetricTemplate, on a MetricCheck the Graph created, is the name of the
@@ -236,7 +237,7 @@ func metricCheckLabels(pipelineName, bundleName, envName, template string) map[s
 		"kardinal.io/pipeline":    pipelineName,
 		"kardinal.io/bundle":      bundleName,
 		"kardinal.io/environment": envName,
-		LabelMetricTemplate:       template,
+		LabelMetricTemplate:       labelvalue.Fit(template),
 	}
 }
 

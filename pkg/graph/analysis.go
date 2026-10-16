@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 )
 
 // Argo Rollouts analysis (docs/analysis.md, #1444).
@@ -216,7 +217,7 @@ func buildAnalysisNodes(in hookNodesInput, a AnalysisInput, bundle *kardinalv1al
 						"kardinal.io/pipeline":    in.pipeline,
 						"kardinal.io/bundle":      in.bundle,
 						"kardinal.io/environment": in.env.Name,
-						LabelAnalysisTemplate:     run.template,
+						LabelAnalysisTemplate:     labelvalue.Fit(run.template),
 						LabelBundleUID:            in.bundleUID,
 					},
 				},

@@ -45,6 +45,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 
 	"github.com/rs/zerolog"
@@ -332,7 +333,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 			Namespace: ns,
 			Labels: map[string]string{
 				"kardinal.io/pipeline":     sub.Spec.Pipeline,
-				"kardinal.io/subscription": sub.Name,
+				"kardinal.io/subscription": labelvalue.Fit(sub.Name),
 				// source-digest enables idempotent dedup by label selector (#620):
 				// any reconcile (including concurrent HA replicas) can find this
 				// bundle before creating a duplicate. The value is the first 63
@@ -403,7 +404,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 			return "", fmt.Errorf("get existing bundle %s: %w", bundleName, getErr)
 		}
 		if !sourceDigestMatches(existing.Labels[sourceDigestLabelKey], result.Digest) ||
-			existing.Labels["kardinal.io/subscription"] != sub.Name {
+			existing.Labels["kardinal.io/subscription"] != labelvalue.Fit(sub.Name) {
 			return "", fmt.Errorf("bundle %s already exists for another artifact or owner; not creating a Bundle for digest %s",
 				bundleName, result.Digest)
 		}
@@ -615,7 +616,7 @@ func (r *Reconciler) bundlesForDigest(ctx context.Context, namespace, subscripti
 	var list kardinalv1alpha1.BundleList
 	if err := r.List(ctx, &list,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"kardinal.io/subscription": subscriptionName},
+		client.MatchingLabels{"kardinal.io/subscription": labelvalue.Fit(subscriptionName)},
 	); err != nil {
 		return "", 0, fmt.Errorf("list bundles of subscription %s: %w", subscriptionName, err)
 	}
