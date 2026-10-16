@@ -297,6 +297,7 @@ func TestReconcile_AgentIndexNearFull(t *testing.T) {
 		message  []string
 	}{
 		{"70%", size * 10 / 7, metav1.ConditionFalse, metav1.ConditionTrue, []string{"(70%)", "more AgentIdentities of the average size"}},
+		{"exactly 80%", size * 100 / 80, metav1.ConditionTrue, metav1.ConditionTrue, []string{"(80%)", "past"}},
 		{"85%", size * 100 / 85, metav1.ConditionTrue, metav1.ConditionTrue, []string{"(85%)", "past", "remove AgentIdentities or subjects"}},
 		{"exactly at the bound", size, metav1.ConditionTrue, metav1.ConditionTrue, []string{"(100%)"}},
 		{"one byte over the bound", size - 1, metav1.ConditionTrue, metav1.ConditionFalse, []string{"(100%)"}},
@@ -321,6 +322,19 @@ func TestReconcile_AgentIndexNearFull(t *testing.T) {
 			}
 			assert.Equal(t, tc.ready, meta.FindStatusCondition(idx.Status.Conditions, agentidentity.ConditionReady).Status)
 			assert.Equal(t, float64(size), testutil.ToFloat64(observability.AgentIndexBytes))
+			assert.Equal(t, float64(tc.max), testutil.ToFloat64(observability.AgentIndexMaxBytes))
+
+			// A new leader (after a restart or a failover) whose build
+			// changes nothing still sets the metrics, or both alerts would
+			// stay silent until the next AgentIdentity change.
+			observability.AgentIndexBytes.Set(-1)
+			observability.AgentIndexMaxBytes.Set(-1)
+			n := patches.Load()
+			leader := &agentidentity.IndexReconciler{Client: c, Name: "k", MaxIndexBytes: tc.max}
+			_, err = leader.Reconcile(ctx, reconcile.Request{})
+			require.NoError(t, err)
+			assert.Equal(t, n, patches.Load(), "the index is current: nothing is written")
+			assert.Equal(t, float64(size), testutil.ToFloat64(observability.AgentIndexBytes), "the new leader sets the metrics")
 			assert.Equal(t, float64(tc.max), testutil.ToFloat64(observability.AgentIndexMaxBytes))
 
 			// A replica's start-up build writes the same status, not the
