@@ -1,6 +1,6 @@
 # Upgrade
 
-**Upgrading from v0.11.0** to the next release: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
+**Upgrading from v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
 **From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
@@ -61,11 +61,6 @@ after a downgrade, remove the marker, so the controller reads those Graphs in fu
 
 ## Upgrading from v0.11.0
 
-!!! note "v0.12.0 is not released yet"
-    These steps take a v0.11.0 installation to the next release, v0.12.0, once it is released:
-    `<version>` in the commands is that release's chart version. Until then v0.11.0 is the latest
-    release, and there is nothing to upgrade to.
-
 The upgrade suite runs these steps as written (`TestUpgradeV0110_Estate`, on the oldest and newest
 supported Kubernetes minors), on an estate of 30 Pipelines in 5 namespaces. Everything stored
 under v0.11.0 keeps working:
@@ -75,10 +70,10 @@ under v0.11.0 keeps working:
 - Approvals recorded before the upgrade still count toward their gate's quorum.
 - Paused Pipelines stay paused and held environments stay held, until you resume or release them.
 
-The next release targets the same kro as v0.11.0, so kro is not upgraded.
+v0.12.0 targets the same kro as v0.11.0, so kro is not upgraded.
 
-**1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section
-lists every change since v0.11.0; its "Before you upgrade" list is what can change for you:
+**1. Read the upgrade notes.** The changelog's [From v0.11.0](changelog.md#from-v0110) lists
+what can change for you, and its v0.12.0 section every change since v0.11.0:
 
 - **Kubernetes 1.35 or later.** The chart's `kubeVersion` refuses an older cluster. Check the
   server version first:
@@ -108,14 +103,14 @@ lists every change since v0.11.0; its "Before you upgrade" list is what can chan
 v0.11.0 chart installed, so `--force-conflicts` is required:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
 new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
