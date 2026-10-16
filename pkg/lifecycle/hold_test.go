@@ -79,7 +79,9 @@ func TestRollbackAndHold(t *testing.T) {
 	assert.Equal(t, &h, lifecycle.HeldFrom(p, "prod", "v3"), "every other Bundle is")
 	assert.Nil(t, lifecycle.HeldFrom(p, "uat", "v3"), "other environments are not held")
 	assert.Equal(t, "environment prod is held on rollback "+h.Bundle+" (INC-42: v2 leaks connections) — release with: kardinal release-hold app --env prod",
-		lifecycle.HeldMessage("app", &h))
+		lifecycle.HeldMessage("app", &h, true))
+	assert.Equal(t, "environment prod is held on "+h.Bundle+" (INC-42: v2 leaks connections) — release with: kardinal release-hold app --env prod",
+		lifecycle.HeldMessage("app", &h, false), "a kardinal hold of the running version is not a rollback (#2067)")
 	ex := lifecycle.GateExemption(&h, "expression false")
 	assert.Equal(t, "EXEMPT: rollback "+h.Bundle+" holds prod (by alice: INC-42: v2 leaks connections); without the hold: expression false", ex)
 	assert.True(t, lifecycle.IsHoldExemption(ex))

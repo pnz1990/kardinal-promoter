@@ -18,10 +18,12 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
@@ -224,7 +226,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 		if !observed[holdKey(h)] {
 			stamp, note := rec.stamp(h.Actor, h.CreatedBy)
 			entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldCreated, fmt.Sprintf(
-				"%s held %s on rollback %s: %s%s%s", orUnknown(h.CreatedBy), h.Environment, h.Bundle, h.Reason, expiresNote(h), note),
+				"%s held %s on %s: %s%s%s", orUnknown(h.CreatedBy), h.Environment, r.heldOn(ctx, p.Namespace, h), h.Reason, expiresNote(h), note),
 				stamp))
 		}
 	}
@@ -246,7 +248,7 @@ func (r *Reconciler) reconcileHolds(ctx context.Context, log zerolog.Logger, p *
 			why, stamp = "expired at "+h.ExpiresAt.UTC().Format(time.RFC3339)+", removed by the controller", nil
 		}
 		entries = append(entries, r.holdAuditEntry(p, h, AuditActionHoldReleased, fmt.Sprintf(
-			"hold of %s on rollback %s (held by %s: %s) %s", h.Environment, h.Bundle, orUnknown(h.CreatedBy), h.Reason, why), stamp))
+			"hold of %s on %s (held by %s: %s) %s", h.Environment, r.heldOn(ctx, p.Namespace, h), orUnknown(h.CreatedBy), h.Reason, why), stamp))
 	}
 	chk := r.holdStates(ctx, p, now)
 	if chk.next > 0 && (next == 0 || chk.next < next) {
@@ -392,4 +394,16 @@ func (r *Reconciler) flushAudit(ctx context.Context, p *kardinalv1alpha1.Pipelin
 			Msg("failed to write AuditEvent; kept in status.pendingAuditEvents to retry")
 	}
 	return ferr
+}
+
+// heldOn is what hold h holds its environment on, for its records:
+// "rollback <bundle>" when the Bundle is a rollback (kardinal rollback
+// --hold), else the Bundle (kardinal hold); a Bundle that cannot be read is
+// named as it is.
+func (r *Reconciler) heldOn(ctx context.Context, ns string, h *kardinalv1alpha1.EnvironmentHold) string {
+	var b kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: h.Bundle}, &b); err != nil {
+		return lifecycle.HeldOn(h, false)
+	}
+	return lifecycle.HeldOn(h, lifecycle.IsRollbackBundle(&b))
 }

@@ -1573,9 +1573,10 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	// saying why. A step already HealthChecking, or whose PR merged, has
 	// merged; it finishes.
 	if h := lifecycle.HeldFrom(pipeline, ps.Spec.Environment, ps.Spec.BundleName); h != nil && !merged {
-		res, _, err := r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h),
-			fmt.Sprintf("environment %s is held on rollback %s (%s), so kardinal cancelled this promotion; "+
-				"once the hold is released, a newer Bundle promotes here", h.Environment, h.Bundle, h.Reason),
+		rollback := r.heldOnRollback(ctx, ps.Namespace, h)
+		res, _, err := r.cancelStep(ctx, log, ps, lifecycle.HeldMessage(ps.Spec.PipelineName, h, rollback),
+			fmt.Sprintf("environment %s is held on %s (%s), so kardinal cancelled this promotion; "+
+				"once the hold is released, a newer Bundle promotes here", h.Environment, lifecycle.HeldOn(h, rollback), h.Reason),
 			AuditActionPromotionFailed, "Superseded", false)
 		return res, err
 	}
@@ -2241,8 +2242,16 @@ func (r *Reconciler) applyHealthFailurePolicy(
 // onHealthFailure=rollback, a RollbackPolicy, `kardinal rollback` or the UI.
 // lifecycle.PlanRollback sets both the label and spec.provenance.rollbackOf;
 // either is enough.
-func isRollbackBundle(b *v1alpha1.Bundle) bool {
-	return b.Labels[lifecycle.LabelRollback] == "true" || (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "")
+func isRollbackBundle(b *v1alpha1.Bundle) bool { return lifecycle.IsRollbackBundle(b) }
+
+// heldOnRollback reports whether the Bundle hold h names is a rollback, for
+// its message; a Bundle that cannot be read is not.
+func (r *Reconciler) heldOnRollback(ctx context.Context, ns string, h *v1alpha1.EnvironmentHold) bool {
+	var b v1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: h.Bundle}, &b); err != nil {
+		return false
+	}
+	return lifecycle.IsRollbackBundle(&b)
 }
 
 // checkRequiredGates returns why a Pending step may not start yet, or "" when
