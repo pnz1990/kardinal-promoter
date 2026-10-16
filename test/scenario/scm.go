@@ -36,15 +36,18 @@ var SCMHost = map[string]string{
 
 // PR is a pull request (a GitLab merge request) on the fake SCM.
 type PR struct {
-	Repo      string
-	Number    int
-	Title     string
-	Body      string
-	Head      string
-	Base      string
-	HeadSHA   string
-	State     string // open, closed, merged
-	MergeSHA  string
+	Repo     string
+	Number   int
+	Title    string
+	Body     string
+	Head     string
+	Base     string
+	HeadSHA  string
+	State    string // open, closed, merged
+	MergeSHA string
+	// MergedBy is who merged it (MergeAs); the API reports it as GitHub's
+	// merged_by, GitLab's merge_user and Forgejo's merged_by.
+	MergedBy  string
 	Labels    []string
 	Comments  []string
 	Approvals []string
@@ -130,6 +133,11 @@ func (s *SCMServer) Approve(repo string, number int, user string) error {
 
 // Merge merges an open PR the way a reviewer clicking merge does.
 func (s *SCMServer) Merge(repo string, number int) error {
+	return s.MergeAs(repo, number, "")
+}
+
+// MergeAs is Merge by user, whom the API then names as the merger.
+func (s *SCMServer) MergeAs(repo string, number int, user string) error {
 	s.mu.Lock()
 	p := s.find(repo, number)
 	if p == nil || p.State != "open" {
@@ -144,7 +152,7 @@ func (s *SCMServer) Merge(repo string, number int) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p.State, p.MergeSHA = "merged", sha
+	p.State, p.MergeSHA, p.MergedBy = "merged", sha, user
 	return nil
 }
 
@@ -268,8 +276,13 @@ func (s *SCMServer) prJSON(p *PR) map[string]interface{} {
 	for _, l := range p.Labels {
 		labels = append(labels, map[string]interface{}{"name": l, "id": s.labelID(l)})
 	}
+	var mergedBy interface{}
+	if p.MergedBy != "" {
+		mergedBy = map[string]interface{}{"login": p.MergedBy}
+	}
 	return map[string]interface{}{
-		"number": p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
+		"merged_by": mergedBy,
+		"number":    p.Number, "html_url": s.webURL(p), "state": state, "merged": p.State == "merged",
 		"merge_commit_sha": p.MergeSHA, "node_id": fmt.Sprintf("PR_%d", p.Number), "title": p.Title, "body": p.Body,
 		"head":   map[string]interface{}{"ref": p.Head, "label": p.Head, "sha": p.HeadSHA},
 		"base":   map[string]interface{}{"ref": p.Base},
@@ -495,8 +508,13 @@ var gitlabRoutes = []route{
 
 func (s *SCMServer) mrJSON(p *PR) map[string]interface{} {
 	state := map[string]string{"open": "opened", "closed": "closed", "merged": "merged"}[p.State]
+	var mergeUser interface{}
+	if p.MergedBy != "" {
+		mergeUser = map[string]interface{}{"username": p.MergedBy}
+	}
 	return map[string]interface{}{
-		"iid": p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
+		"merge_user": mergeUser,
+		"iid":        p.Number, "id": p.Number, "web_url": s.webURL(p), "state": state, "title": p.Title, "description": p.Body,
 		"source_branch": p.Head, "target_branch": p.Base, "sha": p.HeadSHA, "merge_commit_sha": p.MergeSHA,
 		"labels": p.Labels, "detailed_merge_status": "mergeable", "reviewers": []interface{}{}, "assignees": []interface{}{},
 	}

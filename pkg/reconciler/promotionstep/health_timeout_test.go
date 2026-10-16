@@ -187,3 +187,34 @@ func TestHealthTimeoutAppliesOnHealthFailure(t *testing.T) {
 		})
 	}
 }
+
+// TestHealthTimeoutChecksOnceMore: a step reconciled after its
+// health.timeout passed (the controller was down or behind for longer than
+// the timeout) checks the environment once more before it applies
+// onHealthFailure, also when its last check was a moment ago. An environment
+// that became healthy in time is Verified, not failed and rolled back on the
+// result read before; one still not updated fails with this check's result.
+func TestHealthTimeoutChecksOnceMore(t *testing.T) {
+	env := v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "1m"},
+		OnHealthFailure: "rollback"}
+	images := []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v2"}}
+	expired := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	checked := metav1.NewTime(time.Now().Add(-time.Second))
+	stale := "waiting for resource: Deployment test/p not updated yet: runs ghcr.io/org/app:v1, Bundle has ghcr.io/org/app:v2"
+	status := v1alpha1.PromotionStepStatus{HealthCheckExpiry: &expired, LastHealthCheckAt: &checked, Message: stale}
+	for _, tc := range []struct {
+		name, image, state, msg string
+	}{
+		{"healthy by now", "ghcr.io/org/app:v2", "Verified", "health check passed via resource"},
+		{"still not updated", "ghcr.io/org/app:v1", "RollingBack", "health check timeout after 1m0s; last result: waiting for resource: Deployment test/p not updated yet"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append(verifiedBefore("test"), withImage(healthyDeployment("p", "test"), tc.image))
+			c, got, _ := healthCase{env: env, images: images, objs: objs, status: *status.DeepCopy()}.run(t)
+			assert.Equal(t, tc.state, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tc.msg)
+			_, err := getBundle(c, "b1-rollback-alarm")
+			assert.Equal(t, tc.state == "Verified", apierrors.IsNotFound(err), "a rollback Bundle only when it is still not updated: %v", err)
+		})
+	}
+}

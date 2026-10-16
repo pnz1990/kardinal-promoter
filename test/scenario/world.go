@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -267,6 +268,14 @@ func NewWorld(t testing.TB, opts Options) *World {
 			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), created)
 		}
 	}
+	// A patch admission refuses is stored and then put back (admitPatched):
+	// the object's resourceVersion moved, so the cache drops it, or the next
+	// read-modify-write of it conflicts with a version nobody can see.
+	refusedPatch := func(o client.Object) {
+		if w.cache != nil {
+			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), false)
+		}
+	}
 	statusObjs := []client.Object{
 		&v1alpha1.Pipeline{}, &v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{},
 		&v1alpha1.PRStatus{}, &v1alpha1.ChangeWindow{}, &v1alpha1.MetricCheck{}, &v1alpha1.RollbackPolicy{},
@@ -353,6 +362,8 @@ func NewWorld(t testing.TB, opts Options) *World {
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
+					} else {
+						refusedPatch(o)
 					}
 				}()
 				before, serr := specOf(ctx, c, o)
@@ -420,6 +431,8 @@ func NewWorld(t testing.TB, opts Options) *World {
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
+					} else {
+						refusedPatch(o)
 					}
 				}()
 				old, gerr := w.stored(ctx, c, o)
@@ -506,6 +519,11 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.renders = &rrrec.Reconciler{Client: rc, APIReader: c, Image: "kardinal-render:scenario", ControllerNamespace: "kardinal-system",
 		AuthorName: "kardinal-promoter", AuthorEmail: "kardinal@kardinal.io", NowFn: now, Timeout: time.Hour}
 	if opts.Actors {
+		// The release's AgentIndex vouches for the agent stamps the Bundle
+		// (rejections) and Pipeline (holds, lastChange) reconcilers record,
+		// as main.go wires them.
+		agents := &actor.Source{Reader: rc, Name: Release}
+		w.bundles.Agents, w.pipelines.Agents = agents, agents
 		w.startActors(opts.MaxIndexBytes)
 		w.agentRuns = &arrec.Reconciler{Client: rc, APIReader: c, WriterClusterRole: Release + "-agentrun-writer",
 			ReaderClusterRole: Release + "-agentrun-reader", ControllerNamespace: ReleaseNamespace, NowFn: now}
