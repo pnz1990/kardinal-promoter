@@ -32,7 +32,7 @@ const AuditActionFreezeExempted = "FreezeExempted"
 
 // condFreezeExempted is the step condition that records the exemption the
 // step went on under, so it is audited once.
-const condFreezeExempted = "FreezeExempted"
+const condFreezeExempted = v1alpha1.ConditionFreezeExempted
 
 // holdIfFrozen keeps a step where it is while an active freeze holds it
 // (docs/design/18-actor-policy.md section 9.2): a ChangeWindow with
@@ -145,13 +145,20 @@ func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.Pro
 		msgs[i] = exemptionMessage(m)
 	}
 	msg := strings.Join(msgs, "; ")
-	if c := meta.FindStatusCondition(ps.Status.Conditions, condFreezeExempted); c != nil && c.Message == msg {
+	recorded := recordedExemptions(ps.Status.FreezeExemptions, matches)
+	c := meta.FindStatusCondition(ps.Status.Conditions, condFreezeExempted)
+	audited := c != nil && c.Message == msg
+	if audited && len(recorded) == len(ps.Status.FreezeExemptions) {
 		return false, nil
 	}
+	// A step let through by v0.12 has the condition (and its AuditEvents)
+	// and no record: the record is written now, while the freeze still
+	// holds. Its AuditEvents are named for the exemption, so enqueuing them
+	// again creates nothing new.
 	patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{Type: condFreezeExempted,
 		Status: metav1.ConditionTrue, Reason: "Exempted", Message: msg, ObservedGeneration: ps.Generation})
-	ps.Status.FreezeExemptions = recordedExemptions(ps.Status.FreezeExemptions, matches)
+	ps.Status.FreezeExemptions = recorded
 	for i, m := range matches {
 		if entry, ok := freezeAuditEntry(ps, m, msgs[i], now); ok {
 			ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, entry)
