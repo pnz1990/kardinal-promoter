@@ -1397,9 +1397,26 @@ func TestOpenPR_NothingToCommit(t *testing.T) {
 			merged: &scm.FoundPR{Number: 6, URL: "https://github.com/owner/repo/pull/6", HeadSHA: testPushed}}
 		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
 		assert.Equal(t, parentsteps.StepSuccess, res.Status)
-		assert.Equal(t, map[string]string{"prURL": "https://github.com/owner/repo/pull/6", "prNumber": "6", "noChanges": "false"}, res.Outputs)
+		assert.Equal(t, map[string]string{"prURL": "https://github.com/owner/repo/pull/6", "prNumber": "6", "noChanges": "false",
+			steps.OutputPRAdoptedHead: testPushed, steps.OutputPROpenedBy: ""}, res.Outputs)
+		assert.Equal(t, "adopted PR #6 (head "+testPushed+", opened by (unknown)): https://github.com/owner/repo/pull/6, already merged",
+			res.Message, "not claimed as kardinal's own: who opened it is not known")
 		assert.Equal(t, [][]string{{testPushed}}, m.mergedSHA, "only a PR with a commit kardinal pushed")
 		assert.Zero(t, m.openPRCalls)
+	})
+	// #2092 (QA): a PR adopted by its commit list names its head, who
+	// opened it, and the commits kardinal did not push.
+	t.Run("its merged PR, with fixups on top", func(t *testing.T) {
+		const fix1, fix2 = "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1", "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, merged: &scm.FoundPR{Number: 6, URL: "https://github.com/owner/repo/pull/6",
+			HeadSHA: fix2, Author: "alice", Unpushed: []scm.PRCommit{{SHA: fix1, Author: "bob"}, {SHA: fix2, Author: "carol"}}}}
+		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
+		assert.Equal(t, parentsteps.StepSuccess, res.Status)
+		assert.Equal(t, "adopted PR #6 (head "+fix2+", opened by alice, 2 commits not pushed by kardinal: "+fix1+" by bob, "+fix2+
+			" by carol): https://github.com/owner/repo/pull/6, already merged", res.Message)
+		assert.Equal(t, fix2, res.Outputs[steps.OutputPRAdoptedHead])
+		assert.Equal(t, "alice", res.Outputs[steps.OutputPROpenedBy])
+		assert.Equal(t, []scm.PRCommit{{SHA: fix1, Author: "bob"}, {SHA: fix2, Author: "carol"}}, steps.AdoptedPRUnpushed(res.Outputs))
 	})
 	t.Run("no recorded push: nothing is adopted", func(t *testing.T) {
 		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, merged: &scm.FoundPR{Number: 6, HeadSHA: testPushed}}
@@ -1677,4 +1694,18 @@ func TestPushedSHAs(t *testing.T) {
 	assert.Equal(t, []string{"a"}, steps.PushedSHAs(map[string]string{"pushedSHA": "a"}), "a step from before the history")
 	assert.Equal(t, []string{"a", "b"}, steps.PushedSHAs(map[string]string{"pushedSHA": "b", "pushedSHAs": "a,b"}))
 	assert.Equal(t, []string{"a", "b", "c"}, steps.PushedSHAs(map[string]string{"pushedSHA": "c", "pushedSHAs": "a,b"}))
+}
+
+// AdoptedPRDetail describes only an adopted PR: nothing for a PR kardinal
+// opened, the head and opener, and each commit kardinal did not push.
+func TestAdoptedPRDetail(t *testing.T) {
+	assert.Empty(t, steps.AdoptedPRDetail(map[string]string{"prNumber": "4"}), "a PR kardinal opened")
+	assert.Empty(t, steps.AdoptedSuffix(nil))
+	one := map[string]string{steps.OutputPRAdoptedHead: "h", steps.OutputPROpenedBy: "alice",
+		steps.OutputPRUnpushedCommits: `[{"sha":"h","author":""}]`}
+	assert.Equal(t, "head h, opened by alice, 1 commit not pushed by kardinal: h by (unknown)", steps.AdoptedPRDetail(one))
+	assert.Equal(t, " (adopted PR: head h, opened by alice, 1 commit not pushed by kardinal: h by (unknown))", steps.AdoptedSuffix(one))
+	bad := map[string]string{steps.OutputPRAdoptedHead: "h", steps.OutputPRUnpushedCommits: "not json"}
+	assert.Equal(t, "head h, opened by (unknown), 1 commit not pushed by kardinal: (unreadable: not json) by (unknown)",
+		steps.AdoptedPRDetail(bad), "never silently dropped")
 }

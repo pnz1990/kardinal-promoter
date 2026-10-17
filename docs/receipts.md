@@ -50,7 +50,7 @@ the extension field `kardinalPromotion`, which those tools ignore.
 | `kardinalPromotion.actor` | Who made the version and for whom ([the actor](actors.md#the-actor)); asserted fields stay under `asserted`. |
 | `kardinalPromotion.gates` | Each required gate **as it was when the step started**: expression, result, reason, when it was evaluated, the override in effect (with its actor and whether it was verified), its approvals and, for a verify gate, its Verdicts, with whether each counted. |
 | `kardinalPromotion.checks` | The per-promotion MetricCheck results, the ImageVerification result per image, and the health check. |
-| `kardinalPromotion.change` | The environment and the PR (URL, number, merge commit), or the commit pushed for `approval: auto`. |
+| `kardinalPromotion.change` | The environment and the PR (URL, number, merge commit), or the commit pushed for `approval: auto`. For a PR the step adopted after a restart rather than opened ([PR evidence](pr-evidence.md#commit-messages)), `pr.adopted` holds its head commit (`headSHA`), the SCM account that opened it (`openedBy`), and each commit kardinal did not push with its author (`unpushedCommits`). |
 | `kardinalPromotion.rollbackOf` | The version a rollback restores. |
 
 ### Gates are recorded when the step starts

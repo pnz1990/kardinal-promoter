@@ -235,6 +235,24 @@ type PR struct {
 	Number      int    `json:"number,omitempty"`
 	MergeCommit string `json:"mergeCommit,omitempty"`
 	MergedAt    string `json:"mergedAt,omitempty"`
+	// Adopted is set for a merged PR of the promotion's branch that the
+	// step found rather than recorded opening (#2092): kardinal may not
+	// have opened it, and it may carry commits kardinal did not push.
+	Adopted *AdoptedPR `json:"adopted,omitempty"`
+}
+
+// AdoptedPR is what is known of an adopted PR: its head commit, the SCM
+// account that opened it, and its commits kardinal did not push.
+type AdoptedPR struct {
+	HeadSHA  string     `json:"headSHA,omitempty"`
+	OpenedBy string     `json:"openedBy,omitempty"`
+	Unpushed []PRCommit `json:"unpushedCommits,omitempty"`
+}
+
+// PRCommit is one commit of a pull request and its author.
+type PRCommit struct {
+	SHA    string `json:"sha"`
+	Author string `json:"author,omitempty"`
 }
 
 // Input is everything a statement is built from. The caller has read it.

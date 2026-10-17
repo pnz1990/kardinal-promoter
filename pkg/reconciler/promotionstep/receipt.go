@@ -34,6 +34,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+	builtinsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // LabelReceiptStep names the UID of the PromotionStep whose receipt a
@@ -286,7 +287,8 @@ func (r *Reconciler) pendingReceipt(ctx context.Context, ps *v1alpha1.PromotionS
 	}
 	pr := receiptPR(ps)
 	if pr != nil {
-		in.PR = &receipt.PR{URL: pr.URL, Number: pr.Number, MergeCommit: ps.Status.Outputs["mergeCommitSHA"]}
+		in.PR = &receipt.PR{URL: pr.URL, Number: pr.Number, MergeCommit: ps.Status.Outputs["mergeCommitSHA"],
+			Adopted: adoptedPR(ps.Status.Outputs)}
 		if s := stepNamed(ps, "wait-for-merge"); s != nil && s.CompletedAt != nil {
 			in.PR.MergedAt = s.CompletedAt.UTC().Format("2006-01-02T15:04:05Z")
 		}
@@ -346,6 +348,20 @@ func (r *Reconciler) readGates(ctx context.Context, ps *v1alpha1.PromotionStep) 
 }
 
 // receiptPR is the step's PR, nil for a step that opened none.
+// adoptedPR is the receipt's record of a PR the step adopted (#2092), from
+// its outputs; nil for a PR kardinal opened.
+func adoptedPR(outputs map[string]string) *receipt.AdoptedPR {
+	head, ok := outputs[builtinsteps.OutputPRAdoptedHead]
+	if !ok {
+		return nil
+	}
+	a := &receipt.AdoptedPR{HeadSHA: head, OpenedBy: outputs[builtinsteps.OutputPROpenedBy]}
+	for _, c := range builtinsteps.AdoptedPRUnpushed(outputs) {
+		a.Unpushed = append(a.Unpushed, receipt.PRCommit{SHA: c.SHA, Author: c.Author})
+	}
+	return a
+}
+
 func receiptPR(ps *v1alpha1.PromotionStep) *v1alpha1.ReceiptPullRequest {
 	url := ps.Status.Outputs["prURL"]
 	if url == "" {

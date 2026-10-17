@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -120,6 +121,51 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 		records := merged(c)
 		require.Len(t, records, 1, "one PRMerged record")
 		assert.Contains(t, records[0].Spec.Message, "PR #7 merged by reviewer (seen by poll) as abc1234")
+	})
+
+	// #2092 (QA): a PR adopted by its commit list, with a reviewer's fixup
+	// on top, is recorded as adopted, with its head, who opened it and the
+	// commit kardinal did not push, in the step's message, the PRMerged
+	// AuditEvent and the receipt.
+	//
+	// Covers SCM-MERGED-BEFORE-03.
+	t.Run("an adopted PR with a fixup says so everywhere", func(t *testing.T) {
+		const fixup = "5555555555555555555555555555555555555555"
+		s := &mergedFinderSCM{mockSCM: &mockSCM{merged: true},
+			found: &scm.FoundPR{Number: 7, URL: "https://github.com/test/repo/pull/7", HeadSHA: fixup, Author: "bob",
+				OpenedAt: time.Now().Add(-5 * time.Minute), Unpushed: []scm.PRCommit{{SHA: fixup, Author: "bob"}}}}
+		c, r, _ := setup(t, s)
+		r.Receipts = &promotionstep.ReceiptConfig{ClusterID: "cluster-1"}
+		reconcileStep(t, r, "step")
+		got := getStep(t, c, "step")
+		want := "head " + fixup + ", opened by bob, 1 commit not pushed by kardinal: " + fixup + " by bob"
+		assert.Equal(t, fixup, got.Status.Outputs["prAdoptedHead"])
+		assert.Equal(t, "bob", got.Status.Outputs["prOpenedBy"])
+		assert.Equal(t, "PR #7 merged; recording the merge (adopted PR: "+want+")", got.Status.Message)
+
+		var prs v1alpha1.PRStatus
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "prs-step"}, &prs))
+		prs.Status = v1alpha1.PRStatusStatus{ObservedGeneration: prs.Generation, Merged: true, MergedBy: "reviewer",
+			MergedVia: v1alpha1.PRMergedViaPoll, MergeCommitSHA: "abc1234"}
+		require.NoError(t, c.Status().Update(context.Background(), &prs))
+		for i := 0; i < 20 && got.Status.State != "Verified" && got.Status.State != "Failed"; i++ {
+			reconcileStep(t, r, "step")
+			got = getStep(t, c, "step")
+		}
+		require.Equal(t, "Verified", got.Status.State, got.Status.Message)
+		records := merged(c)
+		require.Len(t, records, 1)
+		assert.Equal(t, "PR #7 merged by reviewer (seen by poll) as abc1234: https://github.com/test/repo/pull/7 (adopted PR: "+want+")",
+			records[0].Spec.Message)
+
+		var rcs v1alpha1.PromotionReceiptList
+		require.NoError(t, c.List(context.Background(), &rcs))
+		require.Len(t, rcs.Items, 1, "the receipt")
+		st, err := receipt.Parse([]byte(rcs.Items[0].Spec.Statement))
+		require.NoError(t, err)
+		require.NotNil(t, st.Predicate.Kardinal.Change.PR)
+		assert.Equal(t, &receipt.AdoptedPR{HeadSHA: fixup, OpenedBy: "bob",
+			Unpushed: []receipt.PRCommit{{SHA: fixup, Author: "bob"}}}, st.Predicate.Kardinal.Change.PR.Adopted)
 	})
 
 	t.Run("no PR of its own: no changes, as before", func(t *testing.T) {

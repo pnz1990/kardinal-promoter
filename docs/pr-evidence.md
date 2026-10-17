@@ -401,7 +401,14 @@ help, because the branch still carries the other commit.
   merge as for any PR: the step's outputs name the PR, its merge commit and who merged it (asked
   of the SCM), and the `PRMerged` AuditEvent is written. Only a PR opened after the PromotionStep
   was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is
-  not taken for this one.
+  not taken for this one. kardinal does not claim an adopted PR as its own: a person may have
+  opened it from kardinal's branch, and it may carry commits kardinal did not push. The step's
+  message, the `PRMerged` AuditEvent and the receipt (`change.pr.adopted`) name its head, the SCM
+  account that opened it, and each commit kardinal did not push with its author, for example
+  `adopted PR #7 (head 5555…, opened by bob, 1 commit not pushed by kardinal: 5555… by bob)`.
+  The step's outputs keep them as `prAdoptedHead`, `prOpenedBy` and `prUnpushedCommits`. An SCM
+  that has no commit list for a PR (HTTP 404), or a token that may list PRs but not their
+  commits (HTTP 403), adopts nothing by its commits.
 - **Neither, or no recorded commit:** the step records `noChanges`, as before.
 
 One case is accepted: a PR that someone opens by hand on kardinal's branch, in the repository
