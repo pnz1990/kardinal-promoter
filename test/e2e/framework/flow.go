@@ -564,3 +564,27 @@ func (e *Env) RecordStepStates(t *testing.T, ns string) *StateLog {
 
 // JoinStates renders a state sequence for a failure message.
 func JoinStates(states []string) string { return strings.Join(states, " -> ") }
+
+// NudgeGraph annotates the Bundle's Graph, so kro reconciles it now. kro
+// wakes a Graph on events from the objects it applies, but its watch router
+// drops events when its buffer is full ("event buffer full; dropping
+// enqueue", kro pkg/graphengine/watchrouter), and a Graph whose applies kept
+// failing waits out controller-runtime's error backoff (up to 1000s) until
+// the next event. A Graph update event is never dropped (#2159).
+func (e *Env) NudgeGraph(t *testing.T, ns, bundle string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var b v1alpha1.Bundle
+	if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundle}, &b); err != nil {
+		t.Fatalf("read bundle %s/%s: %v", ns, bundle, err)
+	}
+	if b.Status.GraphRef == "" {
+		t.Fatalf("bundle %s/%s has no Graph yet", ns, bundle)
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"e2e.kardinal.io/nudged-at":%q}}}`, time.Now().UTC().Format(time.RFC3339Nano))
+	if _, err := e.Dynamic.Resource(GraphGVR).Namespace(ns).Patch(ctx, b.Status.GraphRef, types.MergePatchType, []byte(patch),
+		metav1.PatchOptions{}); err != nil {
+		t.Fatalf("nudge graph %s/%s: %v", ns, b.Status.GraphRef, err)
+	}
+}
