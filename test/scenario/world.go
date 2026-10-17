@@ -221,6 +221,8 @@ type World struct {
 	// refuse is the API server's throttling of kardinal's writes (Throttle).
 	refuseMu sync.Mutex
 	refuse   func(o client.Object) bool
+	// gitReadFail fails the controller's remote git reads (FailGitReads).
+	gitReadFail error
 
 	// admissions are the recorded admission times (RecordAdmissions).
 	admissions map[string][]time.Duration
@@ -575,7 +577,7 @@ func (w *World) startManager() {
 	if w.incarnation > 1 {
 		work = filepath.Join(w.Dir, fmt.Sprintf("work-%d", w.incarnation))
 	}
-	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git, effect: w.effect, dying: w.dying}
+	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git, effect: w.effect, dying: w.dying, readFail: w.gitReadErr}
 	w.bundles = &bundlerec.Reconciler{Client: rc, APIReader: c, Translator: tr, GraphChecker: graph.NewGraphClient(dyn, logger),
 		PolicyNamespaces: m.policyNS, NowFn: now}
 	w.pipelines = &pipelinerec.Reconciler{Client: rc, Reader: c, CompactAbove: &compactAbove, Now: now}

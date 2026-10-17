@@ -4,6 +4,7 @@
 package scenario
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -138,4 +139,71 @@ func TestHealth_EnvironmentOverwrittenIsNotVerified(t *testing.T) {
 func kustomizationAt(tag string) string {
 	return "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deployment.yaml\nimages:\n  - name: " +
 		AppRepository + "\n    newTag: " + tag + "\n"
+}
+
+// TestHealth_BranchUnreadableWaits (#2137 QA): when the git host cannot be
+// read (branch heads and history fail), the resource check of a workload
+// whose images do not name the version waits, saying why: it never passes
+// on availability alone. It passes once the branch can be read again.
+// Covers HEALTH-STALE-02.
+func TestHealth_BranchUnreadableWaits(t *testing.T) {
+	w, p := staleWorld(t)
+	ns := p.NS
+	w.GitOps.Fail(ns, "staging", "1.1.0")
+	w.GitOps.Fail(ns, "staging", BaseTag)
+	a := ImageBundle(ns, PipelineName, "1.1.0")
+	p.Ship(t, w, a)
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		s, ok := w.Steps(ns, a.Name)["staging"]
+		return ok && s.Status.State == "HealthChecking"
+	}), "1.1.0 is health-checking staging")
+	w.FailGitReads(errors.New("HTTP 503: the git host is unavailable"))
+	w.GitOps.Heal(ns, "staging", "1.1.0") // the Deployment is available now
+	for i := 0; i < 2*BlockRounds; i++ {
+		w.Round()
+	}
+	s := w.Steps(ns, a.Name)["staging"]
+	assert.Equal(t, "HealthChecking", s.Status.State, "it waits: %s", s.Status.Message)
+	assert.Contains(t, s.Status.Message, "could not be read")
+	assert.Zero(t, auditOf(t, w, ns, a.Name, "staging")["PromotionSucceeded"])
+
+	w.FailGitReads(nil)
+	require.True(t, w.RunUntil(MaxRounds, func() bool { return w.Steps(ns, a.Name)["staging"].Status.State == "Verified" }),
+		"once the branch reads, it holds 1.1.0's commit: Verified")
+}
+
+// TestHealth_TimeoutAfterANewerPushIsSuperseded (#2137 QA): a step whose
+// health check times out after a newer version pushed to its environment is
+// Superseded with a PromotionSuperseded record, not Failed: the environment
+// runs the newer version, so this one's health no longer says anything.
+// Covers HEALTH-STALE-01.
+func TestHealth_TimeoutAfterANewerPushIsSuperseded(t *testing.T) {
+	w, p := staleWorld(t)
+	ns := p.NS
+	for _, tag := range []string{BaseTag, "1.1.0", "1.2.0"} {
+		w.GitOps.Fail(ns, "staging", tag) // staging never becomes healthy
+	}
+	a := ImageBundle(ns, PipelineName, "1.1.0")
+	p.Ship(t, w, a)
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		s, ok := w.Steps(ns, a.Name)["staging"]
+		return ok && s.Status.State == "HealthChecking"
+	}), "1.1.0 is health-checking staging")
+	w.Throttle(func(o client.Object) bool { return objKind(o) == "Bundle" && o.GetName() == a.Name })
+	b := ImageBundle(ns, PipelineName, "1.2.0")
+	p.Ship(t, w, b)
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		s, ok := w.Steps(ns, b.Name)["staging"]
+		return ok && s.Status.State == "HealthChecking"
+	}), "1.2.0 pushed to staging")
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		st := w.Steps(ns, a.Name)["staging"].Status.State
+		return st != "HealthChecking"
+	}), "1.1.0's health check ends at its timeout")
+	s := w.Steps(ns, a.Name)["staging"]
+	assert.Equal(t, "Superseded", s.Status.State, "not Failed: %s", s.Status.Message)
+	got := auditOf(t, w, ns, a.Name, "staging")
+	assert.Equal(t, 1, got["PromotionSuperseded"])
+	assert.Zero(t, got["PromotionFailed"]+got["HealthCheckFailed"]+got["PromotionSucceeded"], "%v", got)
+	w.Throttle(nil)
 }

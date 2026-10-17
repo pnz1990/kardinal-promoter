@@ -2078,6 +2078,13 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// write can come late (an API server throttling it); the step decides
 	// from the newer step's recorded push (newerPushed, read from the API
 	// server), before it passes or times out.
+	//
+	// newerPushed also counts a newer step that has only recorded its push
+	// intent, or (pr-review) pushed its PR branch, without having changed the
+	// environment yet. If that push then fails, this step is Superseded while
+	// the environment still runs this version. That is no wider than the
+	// Bundle reconciler's supersession, which supersedes an older promoting
+	// Bundle as soon as a newer one is in flight, with no push at all.
 	if result.Healthy || expired {
 		newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle)
 		if err != nil {

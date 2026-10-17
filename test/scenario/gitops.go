@@ -128,6 +128,13 @@ func (g *GitOps) Fail(ns, env, tag string) {
 	g.fail[ns+"/"+env+"@"+tag] = true
 }
 
+// Heal undoes Fail: env's health follows its rollout again while it runs tag.
+func (g *GitOps) Heal(ns, env, tag string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.fail, ns+"/"+env+"@"+tag)
+}
+
 func (g *GitOps) failing(ns, env, tag string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()

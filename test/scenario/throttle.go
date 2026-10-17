@@ -28,3 +28,18 @@ func (w *World) throttled(o client.Object) error {
 	}
 	return apierrors.NewTooManyRequests("the server has received too many requests and has asked us to try again later", 1)
 }
+
+// FailGitReads makes the controller's reads of the git host's branch heads
+// and histories fail with err (nil: they work again), as an unreachable or
+// rate-limited git host does.
+func (w *World) FailGitReads(err error) {
+	w.refuseMu.Lock()
+	defer w.refuseMu.Unlock()
+	w.gitReadFail = err
+}
+
+func (w *World) gitReadErr() error {
+	w.refuseMu.Lock()
+	defer w.refuseMu.Unlock()
+	return w.gitReadFail
+}
