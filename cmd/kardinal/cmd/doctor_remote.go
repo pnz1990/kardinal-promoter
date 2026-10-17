@@ -103,6 +103,21 @@ func remoteAccessResult(ctx context.Context, c sigs_client.Client, ns string, re
 	if key == "" {
 		key = health.DefaultKubeconfigKey
 	}
+	if ref.EKS != nil {
+		// The controller signs the cluster's tokens with its own AWS
+		// identity, as roleARN: doctor cannot act as that role, so it
+		// checks the kubeconfig only.
+		if err := health.CheckEKSKubeconfig(secret.Data[key]); err != nil {
+			return fail(fmt.Sprintf("kubeconfig Secret %s/%s key %q: %v", ns, ref.Name, key, err),
+				"See docs/health-adapters.md#remote-clusters-on-eks.")
+		}
+		r.icon, r.warned = doctorWarn, true
+		r.detail = fmt.Sprintf("EKS cluster %s (%s) as %s: the controller signs the tokens; access is not checked from here",
+			ref.EKS.ClusterName, ref.EKS.Region, ref.EKS.RoleARN)
+		r.hint = "The role must be in the controller's health.eks.allowedRoleARNs, trust the controller with the session tag " +
+			"kardinal-namespace=" + ns + ", and have an EKS access entry: docs/health-adapters.md#remote-clusters-on-eks."
+		return r
+	}
 	cfg, err := health.RemoteConfig(secret.Data[key], doctorRemoteDial)
 	if err != nil {
 		return fail(fmt.Sprintf("kubeconfig Secret %s/%s key %q: %v", ns, ref.Name, key, err),

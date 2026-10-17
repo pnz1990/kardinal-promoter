@@ -293,11 +293,13 @@ health:
   (`client-certificate`, `client-key`, `certificate-authority`), `proxy-url` or
   `insecure-skip-tls-verify` is refused and the step fails with `kubeconfig not allowed: ... is not
   supported`: these would run a command or read a file inside the controller, or send the
-  credentials to a server that is not verified. For EKS or GKE, use a ServiceAccount token in the remote cluster
-  (a `kubernetes.io/service-account-token` Secret there, or a token an external tool refreshes into
-  the kubeconfig Secret), bound to a role that can `get` and `list` the checked objects, and
-  `list` pods in their namespace (the `resource` check reads the new ReplicaSet's pods to name why
-  they do not start; without it the message just omits the pod's reason).
+  credentials to a server that is not verified. For EKS, use `kubeconfigSecretRef.eks`
+  ([Remote clusters on EKS](#remote-clusters-on-eks)): no secret exists. For GKE or another
+  cluster, use a ServiceAccount token in the remote cluster (a `kubernetes.io/service-account-token`
+  Secret there, or a token an external tool refreshes into the kubeconfig Secret). Either way, bind
+  the identity to a role that can `get` and `list` the checked objects, and `list` pods in their
+  namespace (the `resource` check reads the new ReplicaSet's pods to name why they do not start;
+  without it the message just omits the pod's reason).
 - `kardinal doctor --pipeline <name>` checks each such environment before a promotion does: it
   reads the kubeconfig Secret (you need `get` on it), and asks the remote cluster, as the
   kubeconfig's identity (SelfSubjectAccessReview), whether it may `get` the object the health check
@@ -319,6 +321,72 @@ health:
   bounds the wait for the next healthy check again.
 - Remote health is polled, not watched (kro reads only the cluster it runs in; see the
   [Graph capability ledger](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph)).
+
+### Remote clusters on EKS
+
+With `kubeconfigSecretRef.eks`, the controller authenticates to an EKS cluster with its own AWS
+identity (IRSA or EKS Pod Identity), the way `aws eks get-token` does, but in the controller, with
+no command run and no long-lived token anywhere:
+
+```yaml
+health:
+  type: resource
+  kubeconfigSecretRef:
+    name: prod-eu                 # server and certificate-authority-data only: no users[].user credentials
+    eks:
+      clusterName: prod-eu
+      region: eu-west-1
+      roleARN: arn:aws:iam::111122223333:role/kardinal-health-team-a
+```
+
+For each health check the controller:
+
+1. assumes `roleARN` from its own credentials, with the session tags `kardinal-namespace` and
+   `kardinal-pipeline` set to the Pipeline's namespace and name (session name
+   `kardinal-<namespace>-<pipeline>`, in CloudTrail), and keeps the role's credentials for an hour;
+2. signs an `sts:GetCallerIdentity` request for `clusterName` (the `x-k8s-aws-id` header, 60
+   seconds) and sends it as the bearer token, signed again every 10 minutes (EKS accepts one for
+   15). EKS verifies it with STS and maps the role through an access entry.
+
+The STS calls go through the egress guard and allowlist (`sts.<region>.amazonaws.com`); the
+credential chain's own requests (Pod Identity, instance metadata) go directly.
+
+Setup, once per team:
+
+- **The operator allows the roles** Pipelines may name, in the Helm values:
+  `health.eks.allowedRoleARNs: ["arn:aws:iam::111122223333:role/kardinal-health-*"]`
+  (`--health-eks-role-arns`, path.Match patterns). Empty, the default, allows none: a Pipeline
+  cannot have the controller assume an arbitrary role. Give the controller an AWS identity (for
+  IRSA, `serviceAccount.annotations` with `eks.amazonaws.com/role-arn`) allowed
+  `sts:AssumeRole` and `sts:TagSession` on those roles.
+- **Each role trusts the controller only for its team's Pipelines**, through the session tag
+  (the controller sets it from the Pipeline's real namespace; a Pipeline cannot choose it):
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::111122223333:role/kardinal-controller"},
+      "Action": ["sts:AssumeRole", "sts:TagSession"],
+      "Condition": {"StringEquals": {"aws:RequestTag/kardinal-namespace": "team-a"}}
+    }]
+  }
+  ```
+
+- **An EKS access entry maps the role** to a Kubernetes group on the cluster
+  (`aws eks create-access-entry --cluster-name prod-eu --principal-arn <roleARN>
+  --kubernetes-groups kardinal-health-team-a`), and a Role or ClusterRole bound to that group
+  grants the reads above.
+- **The kubeconfig Secret** holds the cluster's `server` and `certificate-authority-data` (from
+  `aws eks describe-cluster`) and a user with no credentials; one with a token, certificate,
+  password or plugin is refused with `eks`.
+
+A role outside `allowedRoleARNs`, or `eks` on a controller where it is empty, fails the step
+(`kubeconfig not allowed: ... roleARN ... is not one of the controller's --health-eks-role-arns`). An
+STS error, an expired role session or a missing access entry is `ClusterUnreachable` (`forbidden`,
+`unauthorized`), and the step keeps checking until `health.timeout`. GKE and AKS have no built-in
+source yet.
 
 **2. Read the GitOps hub's object.** Run kardinal next to the GitOps hub that manages the cluster:
 

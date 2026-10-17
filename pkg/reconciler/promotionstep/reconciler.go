@@ -3390,7 +3390,9 @@ func (r *Reconciler) healthDetector(ctx context.Context, log zerolog.Logger, ps 
 		return nil, true, fmt.Sprintf("SecretNotReferenceable: kubeconfig Secret %q does not have the label %s: \"true\"",
 			ref.Name, labelReferenceable), nil
 	}
-	d, err = r.RemoteClusters.Detector(&secret, ref.Key)
+	// With eks the token is signed for this step's Pipeline: the role's
+	// session tags name it.
+	d, err = r.RemoteClusters.DetectorWith(&secret, ref.Key, ref.EKS, ps.Spec.PipelineName)
 	switch {
 	case errors.Is(err, health.ErrKubeconfigNotAllowed):
 		return nil, true, "", fmt.Errorf("health.kubeconfigSecretRef %q: %w", ref.Name, err)
