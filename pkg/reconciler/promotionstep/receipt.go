@@ -73,19 +73,33 @@ func (r *Reconciler) decision(ctx context.Context, ps *v1alpha1.PromotionStep, g
 	if bundle != nil {
 		d.PipelineSpecHash = bundle.Status.PipelineSpecHash
 	}
+	all := make([]v1alpha1.DecisionGate, 0, len(gates))
 	for i := range gates {
-		if len(d.Gates) == v1alpha1.MaxDecisionGates {
-			d.OmittedGates = len(gates) - i
-			break
-		}
-		d.Gates = append(d.Gates, r.decisionGate(ctx, ps, &gates[i]))
+		all = append(all, r.decisionGate(ctx, ps, &gates[i]))
 	}
-	// The digest of every gate, before any cut.
-	d.PolicyDigest = receipt.PolicyDigest(d.PipelineGeneration, d.PipelineSpecHash, d.Gates)
+	// The facts and the digest of every gate, before any cut.
+	facts := receipt.GateFacts(all)
+	d.Facts = &facts
+	d.PolicyDigest = receipt.PolicyDigest(d.PipelineGeneration, d.PipelineSpecHash, all)
+	d.Gates = all
+	if len(d.Gates) > v1alpha1.MaxDecisionGates {
+		omit(d, len(d.Gates)-v1alpha1.MaxDecisionGates)
+	}
 	if !fitDecision(d) {
 		return nil
 	}
 	return d
+}
+
+// omit leaves the last n gates of d out, by name.
+func omit(d *v1alpha1.PromotionDecision, n int) {
+	for _, g := range d.Gates[len(d.Gates)-n:] {
+		if len(d.OmittedGateNames) < v1alpha1.MaxDecisionGates {
+			d.OmittedGateNames = append(d.OmittedGateNames, g.Name)
+		}
+	}
+	d.Gates = d.Gates[:len(d.Gates)-n]
+	d.OmittedGates += n
 }
 
 // maxDecisionText bounds a gate's expression, message and reason, and an
@@ -112,15 +126,19 @@ func fitDecision(d *v1alpha1.PromotionDecision) bool {
 	d.Truncated = true
 	for i := range d.Gates {
 		g := &d.Gates[i]
+		n := len(g.Approvals) + len(g.Verdicts)
 		g.Approvals = slices.DeleteFunc(g.Approvals, func(a v1alpha1.GateApprovalStatus) bool { return !a.Counted })
 		g.Verdicts = slices.DeleteFunc(g.Verdicts, func(v v1alpha1.GateVerdictStatus) bool { return !v.Counted })
+		g.Truncated = g.Truncated || len(g.Approvals)+len(g.Verdicts) < n
 	}
 	if decisionSize(d) <= v1alpha1.MaxDecisionBytes {
 		return true
 	}
 	for i := range d.Gates {
 		g := &d.Gates[i]
+		before := len(g.Expression) + len(g.Message) + len(g.Reason)
 		g.Expression, g.Message, g.Reason = cutText(g.Expression), cutText(g.Message), cutText(g.Reason)
+		g.Truncated = g.Truncated || len(g.Expression)+len(g.Message)+len(g.Reason) < before
 		for j := range g.Approvals {
 			g.Approvals[j].Reason = cutText(g.Approvals[j].Reason)
 		}
@@ -129,8 +147,7 @@ func fitDecision(d *v1alpha1.PromotionDecision) bool {
 		}
 	}
 	for decisionSize(d) > v1alpha1.MaxDecisionBytes && len(d.Gates) > 1 {
-		d.Gates = d.Gates[:len(d.Gates)-1]
-		d.OmittedGates++
+		omit(d, 1)
 	}
 	return decisionSize(d) <= v1alpha1.MaxDecisionBytes
 }

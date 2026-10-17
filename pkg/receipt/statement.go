@@ -112,11 +112,13 @@ type Record struct {
 	DecisionSnapshot bool   `json:"decisionSnapshot"`
 	Gates            []Gate `json:"gates"`
 	OmittedGates     int    `json:"omittedGates,omitempty"`
-	Checks           Checks `json:"checks"`
-	Change           Change `json:"change"`
-	Controller       string `json:"controller,omitempty"`
-	Chart            string `json:"chart,omitempty"`
-	Truncated        bool   `json:"truncated"`
+	// OmittedGateNames name the gates the snapshot left out.
+	OmittedGateNames []string `json:"omittedGateNames,omitempty"`
+	Checks           Checks   `json:"checks"`
+	Change           Change   `json:"change"`
+	Controller       string   `json:"controller,omitempty"`
+	Chart            string   `json:"chart,omitempty"`
+	Truncated        bool     `json:"truncated"`
 }
 
 // Version is the promoted Bundle.
@@ -147,8 +149,11 @@ type Gate struct {
 	Approvals          []Approval        `json:"approvals"`
 	ApprovalsOmitted   int               `json:"approvalsOmitted,omitempty"`
 	VerifyRequired     bool              `json:"verifyRequired,omitempty"`
-	Verdicts           []Verdict         `json:"verdicts,omitempty"`
-	VerdictsOmitted    int               `json:"verdictsOmitted,omitempty"`
+	// Truncated: the snapshot cut this gate (approvals or Verdicts that did
+	// not count, or long texts).
+	Truncated       bool      `json:"truncated,omitempty"`
+	Verdicts        []Verdict `json:"verdicts,omitempty"`
+	VerdictsOmitted int       `json:"verdictsOmitted,omitempty"`
 }
 
 // Verdict is one Verdict a verify gate counted or refused.
@@ -363,10 +368,12 @@ func statement(in Input) Statement {
 		rec.RollbackOf = b.Spec.Provenance.RollbackOf
 	}
 	policy := ResourceDescriptor{URI: fmt.Sprintf("kardinal://%s/namespaces/%s/pipelines/%s", in.ClusterID, ns, ps.Spec.PipelineName)}
+	var facts *v1alpha1.DecisionFacts
 	if d := in.Decision; d != nil {
 		policy.URI += fmt.Sprintf("?generation=%d", d.PipelineGeneration)
 		policy.Digest = digestMap(d.PolicyDigest)
-		rec.OmittedGates, rec.Truncated = d.OmittedGates, d.Truncated
+		rec.OmittedGates, rec.Truncated, rec.OmittedGateNames = d.OmittedGates, d.Truncated, d.OmittedGateNames
+		facts = d.Facts
 		for i := range d.Gates {
 			rec.Gates = append(rec.Gates, gate(&d.Gates[i]))
 		}
@@ -385,7 +392,7 @@ func statement(in Input) Statement {
 			ResourceURI:        ResourceURI(in.ClusterID, ns, ps.Spec.PipelineName, ps.Spec.Environment),
 			Policy:             policy,
 			VerificationResult: ResultPassed,
-			VerifiedLevels:     levels(rec),
+			VerifiedLevels:     levels(rec, facts),
 			SlsaVersion:        slsaVersion,
 			Kardinal:           rec,
 		},
@@ -454,7 +461,7 @@ func gate(g *v1alpha1.DecisionGate) Gate {
 	for _, a := range g.Approvals {
 		out.Approvals = append(out.Approvals, Approval{User: a.User, Actor: a.Actor, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason})
 	}
-	out.VerifyRequired = g.VerifyRequired
+	out.VerifyRequired, out.Truncated = g.VerifyRequired, g.Truncated
 	for _, v := range g.Verdicts {
 		out.Verdicts = append(out.Verdicts, Verdict{Name: v.Name, Verifier: v.Verifier, Result: v.Result, Counted: v.Counted,
 			Reason: v.Reason, EvidenceURL: v.EvidenceURL, Findings: v.Findings})
@@ -501,11 +508,51 @@ func checks(in Input) Checks {
 	return c
 }
 
-// levels are the verifiedLevels the record supports, computed before any
-// cut (a truncated record keeps them). Nothing is claimed that the full
-// record does not show.
-func levels(rec Record) []string {
+// GateFacts are the level facts of gates: whether every one passed, and
+// whether one counted an approval, passed by an override, or counted a
+// passing Verdict. The step takes them over all its gates before it cuts
+// its snapshot (PromotionDecision.Facts).
+func GateFacts(gates []v1alpha1.DecisionGate) v1alpha1.DecisionFacts {
+	f := v1alpha1.DecisionFacts{Gates: len(gates), Passed: len(gates) > 0}
+	for _, g := range gates {
+		f.Passed = f.Passed && g.Ready
+		f.Overridden = f.Overridden || g.Override != nil
+		for _, a := range g.Approvals {
+			f.Approved = f.Approved || (a.Counted && a.Decision == "approve")
+		}
+		for _, v := range g.Verdicts {
+			f.VerifiedByAgent = f.VerifiedByAgent || (v.Counted && v.Result == "pass")
+		}
+	}
+	return f
+}
+
+// levels are the verifiedLevels the record supports. The gates' come from
+// the snapshot's facts, taken over every gate before any cut, so a gate
+// left out of the snapshot or the statement still counts (its override is
+// still OVERRIDDEN); a snapshot without facts (an older controller's) has
+// them computed from its gates. Nothing is claimed that the full record
+// does not show.
+func levels(rec Record, facts *v1alpha1.DecisionFacts) []string {
 	out := []string{}
+	if facts != nil {
+		if facts.Passed {
+			out = append(out, LevelGatesPassed)
+		}
+		if facts.Approved {
+			out = append(out, LevelApproved)
+		}
+		if facts.VerifiedByAgent {
+			out = append(out, LevelVerifiedByAgent)
+		}
+		if rec.Checks.Health != nil && rec.Checks.Health.Result == "Healthy" {
+			out = append(out, LevelHealthy)
+		}
+		if facts.Overridden {
+			out = append(out, LevelOverridden)
+		}
+		return out
+	}
 	passed, approved, overridden, verified := len(rec.Gates) > 0, false, false, false
 	for _, g := range rec.Gates {
 		if g.Result != "pass" {

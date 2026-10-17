@@ -63,9 +63,12 @@ recorded as passed: that is what the promotion started on.
 The record is bounded (128 KiB): it leaves out what a receipt never shows (an approval's
 comment, a Verdict's summary), and a step with many heavy gates keeps the approvals and Verdicts
 that counted, cuts long texts to 1 KiB, and then leaves out the last gates (`omittedGates`); the
-receipt says so (`truncated: true`), and its policy digest still covers every gate. A step whose
-record would not fit even with one gate starts without one, and gets no receipt
-(`status.receiptError`), rather than waiting.
+receipt says so (`truncated: true`, the gates left out in `omittedGateNames`, and `truncated` on
+each gate it cut), and its policy digest still covers every gate. The receipt's levels are
+decided over every gate before any cut: a gate passed by an override and left out still makes
+it `KARDINAL_OVERRIDDEN`. A single gate too large for the record even cut (101 counted approvals
+and 101 counted Verdicts with long reasons) means the step starts without a record, and gets no
+receipt (`status.receiptError`), rather than waiting.
 
 A step that started before receipts were enabled has no record. Its receipt reads the gates at
 Verified and says so: `decisionSnapshot: false`, and `kardinal verify-receipt` prints "gates
@@ -186,16 +189,18 @@ kardinal verify-receipt checkout prod --bundle checkout-1-5-0 \
   --identity https://kubernetes.io/namespaces/kardinal-system/serviceaccounts/kardinal-promoter \
   --issuer https://oidc.eks.us-east-2.amazonaws.com/id/EXAMPLE
 
-# From the image's OCI referrers, in any cluster or none: pin the namespace, the Pipeline
-# and the environment
+# From the image's OCI referrers, in any cluster or none: pin the namespace, the Pipeline,
+# the environment and the cluster (receipts.clusterID, or its kube-system Namespace UID)
+CLUSTER=$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')
 kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... \
-  -n payments --pipeline checkout --env prod --key receipt.pub
+  -n payments --pipeline checkout --env prod --cluster "$CLUSTER" --key receipt.pub
 
 # From a file: pin the subject too
 kubectl get promotionstep <step> -o jsonpath='{.status.receipt}'   # the receipt's name
 kubectl get promotionreceipt <receipt> -o jsonpath='{.status.bundle}' > receipt.sigstore.json
 kardinal verify-receipt --file receipt.sigstore.json -n payments --pipeline checkout --env prod \
-  --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN
+  --cluster "$CLUSTER" --subject sha256:9f2c... --key receipt.pub \
+  --require GATES_PASSED,APPROVED,!OVERRIDDEN
 ```
 
 It checks, and exits non-zero when any check fails:
@@ -211,9 +216,10 @@ It checks, and exits non-zero when any check fails:
 3. **What it is for**: the cluster, namespace, Pipeline and environment of its `resourceUri`,
    exactly, and the subject. From the cluster these are the receipt's own; with `--image` and
    `--file`, `-n`, `--pipeline` and `--env` are required, `--subject` too for a file (the
-   `--image` digest is the subject), and `--cluster` pins the cluster (its `kube-system`
-   Namespace UID, or `receipts.clusterID`). A receipt of another tenant's Pipeline, or another
-   cluster's, signed with the same key for the same image, is refused.
+   `--image` digest is the subject), and `--cluster` whenever the receipt names a cluster (its
+   `kube-system` Namespace UID, or `receipts.clusterID`); `--any-cluster` accepts any cluster's,
+   with a warning. A receipt of another tenant's Pipeline, or another cluster's, signed with the
+   same key for the same image, is refused.
 4. **The summary**: `PASSED`, with each `--require`d level present (`!LEVEL` absent).
 5. **From the cluster**: the PromotionReceipt's statement is the signed one, byte for byte, and
    the Bundle it names, when it still exists, has the UID it records. A receipt edited after it

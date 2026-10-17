@@ -43,18 +43,25 @@ const receiptDigest = "sha256:9f2c0000000000000000000000000000000000000000000000
 // fresh key, its Bundle, and the public key file.
 func signedReceipt(t *testing.T) (*v1alpha1.PromotionReceipt, *v1alpha1.Bundle, string) {
 	t.Helper()
+	return signedReceiptFor(t, "checkout")
+}
+
+// signedReceiptFor is signedReceipt with its statement for pipeline, its
+// labels for checkout.
+func signedReceiptFor(t *testing.T, pipeline string) (*v1alpha1.PromotionReceipt, *v1alpha1.Bundle, string) {
+	t.Helper()
 	priv, pub, err := receipttest.Key()
 	require.NoError(t, err)
 	b := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "checkout-1-5-0", Namespace: "default", UID: "bundle-uid"},
-		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "checkout",
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipeline,
 			Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/acme/checkout", Digest: receiptDigest}},
 			Actor:  &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: "system:serviceaccount:ci:fixer", Agent: "fixer", Sponsor: "alice@example.com"}},
 		Status: v1alpha1.BundleStatus{Version: "1.5.0"},
 	}
 	ps := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
-		Spec:       v1alpha1.PromotionStepSpec{PipelineName: "checkout", BundleName: b.Name, Environment: "prod"},
+		Spec:       v1alpha1.PromotionStepSpec{PipelineName: pipeline, BundleName: b.Name, Environment: "prod"},
 		Status: v1alpha1.PromotionStepStatus{Steps: []v1alpha1.StepStatus{
 			{Name: "health-check", State: v1alpha1.StepExecutionCompleted}}},
 	}
@@ -178,7 +185,7 @@ func TestVerifyReceipt_File(t *testing.T) {
 	rc, _, key := signedReceipt(t)
 	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
 	require.NoError(t, os.WriteFile(file, []byte(rc.Status.Bundle), 0o600))
-	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}
+	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest, "--cluster", "c1"}
 	out, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key}, pin...)...)
 	require.NoError(t, err)
 	assert.Contains(t, out, "VERIFIED receipt checkout-1-5-0-prod")
@@ -191,19 +198,26 @@ func TestVerifyReceipt_File(t *testing.T) {
 	}{
 		{[]string{"--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}, "need -n, --pipeline and --env"},
 		{[]string{"-n", "default", "--env", "prod", "--subject", receiptDigest}, "need -n, --pipeline and --env"},
-		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod"}, "--file needs --subject"},
-		{[]string{"-n", "team-b", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}, "not namespace team-b"},
-		{[]string{"-n", "default", "--pipeline", "evil", "--env", "prod", "--subject", receiptDigest}, "not pipeline evil"},
-		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "test", "--subject", receiptDigest}, "not environment test"},
-		{append(pin, "--cluster", "other-cluster"), "not cluster other-cluster"},
-		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", "sha256:" + strings.Repeat("e", 64)}, "is not about"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--cluster", "c1"}, "--file needs --subject"},
+		{[]string{"-n", "team-b", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest, "--cluster", "c1"}, "not namespace team-b"},
+		{[]string{"-n", "default", "--pipeline", "evil", "--env", "prod", "--subject", receiptDigest, "--cluster", "c1"}, "not pipeline evil"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "test", "--subject", receiptDigest, "--cluster", "c1"}, "not environment test"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest, "--cluster", "other-cluster"},
+			"not cluster other-cluster"},
+		// The coordinator's decision on #1961: a receipt that names a cluster
+		// needs --cluster (cross-cluster replay in key mode), or --any-cluster.
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest},
+			"pin it with --cluster c1, or give --any-cluster"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", "sha256:" + strings.Repeat("e", 64), "--cluster", "c1"}, "is not about"},
 	} {
 		_, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key}, tc.args...)...)
 		require.Error(t, err, tc.args)
 		assert.Contains(t, err.Error(), tc.want, tc.args)
 	}
-	_, _, err = runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key, "--cluster", "c1"}, pin...)...)
-	require.NoError(t, err, "the cluster it names")
+	_, stderr, err := runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "--key", key, "-n", "default",
+		"--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest, "--any-cluster")
+	require.NoError(t, err, "--any-cluster accepts any cluster")
+	assert.Contains(t, stderr, "warning: --any-cluster")
 
 	_, _, other := signedReceipt(t)
 	_, _, err = runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", other}, pin...)...)
@@ -239,7 +253,7 @@ func TestVerifyReceipt_Keyless(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(root, raw, 0o600))
 
-	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}
+	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest, "--cluster", "c1"}
 	out, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--identity", id, "--issuer", issuer, "--trusted-root", root}, pin...)...)
 	require.NoError(t, err)
 	assert.Contains(t, out, "signed by:   "+id)
@@ -292,4 +306,17 @@ func TestReceiptMarks(t *testing.T) {
 	out, _, err = runOutput(t, bare, "why", "checkout", "prod")
 	require.NoError(t, err)
 	assert.NotContains(t, out, "Receipt")
+}
+
+// TestVerifyReceipt_ClusterBindsPipeline (QA-3): from the cluster, a receipt
+// found by its labels for checkout's prod but signed for another pipeline is
+// refused: the statement must be the arguments' pipeline, not only the
+// labels.
+func TestVerifyReceipt_ClusterBindsPipeline(t *testing.T) {
+	keepStyle(t)
+	rc, b, key := signedReceiptFor(t, "other")
+	b.Spec.Pipeline = "checkout"
+	_, _, err := runOutput(t, receiptClient(t, rc, b), "verify-receipt", "checkout", "prod", "--key", key)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not pipeline checkout")
 }

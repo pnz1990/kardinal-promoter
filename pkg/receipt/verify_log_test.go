@@ -69,3 +69,27 @@ func TestVerify_LogEntryClaimedOnlyWhenChecked(t *testing.T) {
 	_, err = Verify(forged, VerifyOptions{Key: pub, TrustedRoot: vs})
 	require.Error(t, err, "a forged entry fails against a trusted root")
 }
+
+// TestVerify_StatementPipelineMatchesResource (QA-3): a signed statement
+// whose kardinalPromotion.pipeline is not its resourceUri's is refused,
+// whatever the pins; a resourceUri that is not kardinal://<cluster>/
+// namespaces/<ns>/pipelines/<p>/environments/<env> is refused too.
+func TestVerify_StatementPipelineMatchesResource(t *testing.T) {
+	s, pub := keySigner(t)
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	for name, edit := range map[string]func(*Statement){
+		"another pipeline in the record": func(st *Statement) { st.Predicate.Kardinal.Pipeline = "evil" },
+		"a resourceUri of another shape": func(st *Statement) { st.Predicate.ResourceURI = "kardinal://9b1e/pipelines/checkout" },
+	} {
+		st, err := Parse(raw)
+		require.NoError(t, err)
+		edit(st)
+		b, err := json.Marshal(st)
+		require.NoError(t, err)
+		signed, err := s.Sign(context.Background(), b)
+		require.NoError(t, err)
+		_, err = Verify(signed.Bundle, VerifyOptions{Key: pub})
+		assert.Error(t, err, name)
+	}
+}

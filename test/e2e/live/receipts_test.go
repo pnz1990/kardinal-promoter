@@ -63,6 +63,15 @@ func waitReceipt(t *testing.T, e *framework.Env, ns, name, phase string) *v1alph
 	return &rc
 }
 
+// clusterIdentity is the cluster identity receipts name: the kube-system
+// Namespace UID (no receipts.clusterID in the suite).
+func clusterIdentity(t *testing.T, e *framework.Env) string {
+	t.Helper()
+	ns, err := e.Kube.CoreV1().Namespaces().Get(context.Background(), "kube-system", metav1.GetOptions{})
+	require.NoError(t, err)
+	return string(ns.UID)
+}
+
 // promotionReceipt waits for the PromotionReceipt of bundle in env (by its
 // labels: its name has a hash suffix, receipt.Name) to reach phase.
 func promotionReceipt(t *testing.T, e *framework.Env, ns, bundle, env, phase string) *v1alpha1.PromotionReceipt {
@@ -146,7 +155,8 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 	assert.Equal(t, pr.Number, res.Statement.Predicate.Kardinal.Change.PR.Number)
 
 	reg := framework.NewRegistry(t)
-	out = e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--pipeline", pipelineName, "--env", "prod", "--key", pub,
+	out = e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--pipeline", pipelineName, "--env", "prod",
+		"--cluster", clusterIdentity(t, e), "--key", pub,
 		"--repository", reg.HostRepository(receiptsRepository), "--insecure-registry")
 	assert.Contains(t, out, "VERIFIED receipt")
 
@@ -203,7 +213,7 @@ func TestReceipts_TamperedReceiptFails(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(file, raw, 0o600))
 	_, err = e.Kardinal(t, a.ns, "verify-receipt", "--file", file, "--pipeline", pipelineName, "--env", "test",
-		"--subject", fixtures.V2Digest, "--key", pub)
+		"--subject", fixtures.V2Digest, "--cluster", clusterIdentity(t, e), "--key", pub)
 	require.Error(t, err, "a changed payload fails the signature")
 
 	// The admin removes the binding and replaces the receipt.

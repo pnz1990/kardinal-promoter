@@ -1445,6 +1445,12 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.contendedRetries` | integer |  | ContendedRetries is the number of consecutive retries of a git-push that lost to other writers of the base branch every time within one reconcile (the base branch kept moving). They have no limit, since contention is not a fault of the step, and do not use up the retries of retryCount; they only back off. Reset with retryCount. |
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery. |
 | `status.decision` | object |  | Decision is what the step started on: its required gates as it read them when it left Pending, and the policy versions. Written in the same patch as the move to Promoting when receipts are enabled, and cleared once the step's PromotionReceipt exists. |
+| `status.decision.facts` | object |  | Facts are what every required gate showed, decided before any cut: the receipt's levels come from them, so a gate left out of the snapshot still counts (an override on it is still OVERRIDDEN). |
+| `status.decision.facts.approved` | boolean | yes |  |
+| `status.decision.facts.gates` | integer | yes | Gates is how many required gates the step read. |
+| `status.decision.facts.overridden` | boolean | yes |  |
+| `status.decision.facts.passed` | boolean | yes | Passed: every one was ready. Approved: one counted an approval. Overridden: one passed by an override. VerifiedByAgent: a verify gate counted a passing Verdict. |
+| `status.decision.facts.verifiedByAgent` | boolean | yes |  |
 | `status.decision.gates` | []object |  | Gates are the required gates, in spec.requiredGates order. |
 | `status.decision.gates[].approvalRequired` | boolean |  | ApprovalRequired is true for a gate with spec.approval. |
 | `status.decision.gates[].approvals` | []object |  | Approvals are the gate's status.approvals. |
@@ -1489,6 +1495,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].templateDigest` | string |  | TemplateDigest is sha256:&lt;hex&gt; of the template's canonical spec. |
 | `status.decision.gates[].templateGeneration` | integer (int64) |  | TemplateGeneration is the template's metadata.generation. |
 | `status.decision.gates[].templateUID` | string |  | TemplateUID is the template's UID. |
+| `status.decision.gates[].truncated` | boolean |  | Truncated is true when the snapshot cut this gate: approvals or Verdicts that did not count, or long texts. |
 | `status.decision.gates[].verdicts` | []object |  | Verdicts are the gate's status.verdicts. |
 | `status.decision.gates[].verdicts[].attempt` | integer |  |  |
 | `status.decision.gates[].verdicts[].counted` | boolean | yes | Counted reports whether the verdict is a vote. |
@@ -1502,6 +1509,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].verdicts[].summary` | string |  | Summary is the verifier's summary. |
 | `status.decision.gates[].verdicts[].verifier` | string | yes | Verifier names the writer (an actor sentence). |
 | `status.decision.gates[].verifyRequired` | boolean |  | VerifyRequired is true for a verify gate (spec.verify). |
+| `status.decision.omittedGateNames` | []string |  | OmittedGateNames name the gates left out by MaxDecisionGates or MaxDecisionBytes, at most MaxDecisionGates of them (OmittedGates counts them all). |
 | `status.decision.omittedGates` | integer |  | OmittedGates counts the gates past MaxDecisionGates, or past MaxDecisionBytes. |
 | `status.decision.pipelineGeneration` | integer (int64) |  | PipelineGeneration is the Pipeline's metadata.generation. |
 | `status.decision.pipelineSpecHash` | string |  | PipelineSpecHash is the Bundle's status.pipelineSpecHash. |

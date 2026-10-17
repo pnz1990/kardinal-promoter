@@ -43,7 +43,7 @@ type verifyReceiptOptions struct {
 	pipeline, subject, cluster     string
 	key, identity, issuer, trRoot  string
 	require                        []string
-	insecure                       bool
+	insecure, anyCluster           bool
 }
 
 func newVerifyReceiptCmd() *cobra.Command {
@@ -61,9 +61,9 @@ trusts any identity). The exit code is 0 only when every check passes.`,
   kardinal verify-receipt checkout prod --bundle checkout-1-5-0 \
     --identity https://kubernetes.io/namespaces/kardinal-system/serviceaccounts/kardinal-promoter \
     --issuer https://oidc.eks.us-east-2.amazonaws.com/id/EXAMPLE
-  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... -n payments --pipeline checkout --env prod --key receipt.pub
+  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... -n payments --pipeline checkout --env prod --cluster 1f0c... --key receipt.pub
   kardinal verify-receipt --file receipt.sigstore.json -n payments --pipeline checkout --env prod \
-    --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN`,
+    --cluster 1f0c... --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN`,
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runVerifyReceipt(cmd, args, o)
@@ -76,7 +76,8 @@ trusts any identity). The exit code is 0 only when every check passes.`,
 	f.StringVar(&o.file, "file", "", "Read the receipt from this Sigstore bundle file")
 	f.StringVar(&o.pipeline, "pipeline", "", "The Pipeline the receipt must be for (required with --image and --file, with -n)")
 	f.StringVar(&o.subject, "subject", "", "The image digest (sha256:...) or commit the receipt must be about (required with --file)")
-	f.StringVar(&o.cluster, "cluster", "", "The cluster identity the receipt must name (its kube-system Namespace UID, or receipts.clusterID)")
+	f.StringVar(&o.cluster, "cluster", "", "The cluster identity the receipt must name (its kube-system Namespace UID, or receipts.clusterID); required with --image and --file")
+	f.BoolVar(&o.anyCluster, "any-cluster", false, "With --image or --file, accept a receipt of any cluster (prints a warning)")
 	f.StringVar(&o.key, "key", "", "Public key file (PEM) of a key or KMS receipt")
 	f.StringVar(&o.identity, "identity", "", "Certificate identity (subject alternative name) of a keyless receipt")
 	f.StringVar(&o.issuer, "issuer", "", "OIDC issuer of a keyless receipt")
@@ -124,6 +125,10 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 				"one namespace, Pipeline and environment, or another tenant's receipt of the same image would pass")
 		}
 		vo.Namespace = globalNamespace
+		vo.RequireCluster = !o.anyCluster
+		if o.anyCluster && o.cluster == "" {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: --any-cluster: a receipt of any cluster, signed with this key or identity, passes")
+		}
 		if o.file != "" && o.subject == "" {
 			return errors.New("verify-receipt: --file needs --subject (the image digest sha256:... or the commit it must be about)")
 		}
@@ -379,8 +384,8 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 const verifyReceiptReference = `A receipt names the cluster, namespace, Pipeline and environment it is
 for, and its subjects. From the cluster they are the receipt's own; with
 --image and --file pin them (-n, --pipeline and --env, --subject for a file,
-and --cluster to pin the cluster), so another tenant's or another cluster's
-receipt of the same image is refused.
+and --cluster when the receipt names a cluster, or --any-cluster), so another
+tenant's or another cluster's receipt of the same image is refused.
 
 It checks the signature (and the certificate chain against the trusted
 root); the transparency log entry or timestamp when there is one; the

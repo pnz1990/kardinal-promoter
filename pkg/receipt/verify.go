@@ -55,6 +55,10 @@ type VerifyOptions struct {
 	Namespace   string
 	Pipeline    string
 	ClusterID   string
+	// RequireCluster refuses a receipt that names a cluster when ClusterID
+	// is not set: outside the cluster, another cluster's receipt signed with
+	// the same key would pass (verify-receipt --any-cluster opts out).
+	RequireCluster bool
 	// Require lists levels that must be present (KARDINAL_ is optional);
 	// a leading ! means the level must be absent.
 	Require []string
@@ -195,6 +199,9 @@ func checkPredicate(st *Statement, o VerifyOptions) error {
 	if st.Predicate.Kardinal.Pipeline != r.Pipeline {
 		return fmt.Errorf("the receipt's pipeline %q is not its resourceUri's (%s)", st.Predicate.Kardinal.Pipeline, p.ResourceURI)
 	}
+	if o.RequireCluster && o.ClusterID == "" && r.ClusterID != "" {
+		return fmt.Errorf("the receipt is for cluster %s: pin it with --cluster %s, or give --any-cluster to accept any", r.ClusterID, r.ClusterID)
+	}
 	for _, c := range []struct{ what, want, got string }{
 		{"cluster", o.ClusterID, r.ClusterID}, {"namespace", o.Namespace, r.Namespace},
 		{"pipeline", o.Pipeline, r.Pipeline}, {"environment", o.Environment, r.Environment},
@@ -234,7 +241,8 @@ func ParseResourceURI(uri string) (Resource, error) {
 	if !ok || len(parts) != 7 || parts[1] != "namespaces" || parts[3] != "pipelines" || parts[5] != "environments" {
 		return Resource{}, fmt.Errorf("resourceUri %q is not kardinal://<cluster>/namespaces/<ns>/pipelines/<pipeline>/environments/<env>", uri)
 	}
-	for _, p := range []int{0, 2, 4, 6} {
+	// The cluster may be empty (a receipt without a cluster identity).
+	for _, p := range []int{2, 4, 6} {
 		if parts[p] == "" {
 			return Resource{}, fmt.Errorf("resourceUri %q has an empty part", uri)
 		}

@@ -495,6 +495,34 @@ spec:
                   same patch as the move to Promoting when receipts are enabled, and
                   cleared once the step's PromotionReceipt exists.
                 properties:
+                  facts:
+                    description: |-
+                      Facts are what every required gate showed, decided before any cut:
+                      the receipt's levels come from them, so a gate left out of the
+                      snapshot still counts (an override on it is still OVERRIDDEN).
+                    properties:
+                      approved:
+                        type: boolean
+                      gates:
+                        description: Gates is how many required gates the step read.
+                        type: integer
+                      overridden:
+                        type: boolean
+                      passed:
+                        description: |-
+                          Passed: every one was ready. Approved: one counted an approval.
+                          Overridden: one passed by an override. VerifiedByAgent: a verify gate
+                          counted a passing Verdict.
+                        type: boolean
+                      verifiedByAgent:
+                        type: boolean
+                    required:
+                    - approved
+                    - gates
+                    - overridden
+                    - passed
+                    - verifiedByAgent
+                    type: object
                   gates:
                     description: Gates are the required gates, in spec.requiredGates
                       order.
@@ -744,6 +772,11 @@ spec:
                         templateUID:
                           description: TemplateUID is the template's UID.
                           type: string
+                        truncated:
+                          description: |-
+                            Truncated is true when the snapshot cut this gate: approvals or
+                            Verdicts that did not count, or long texts.
+                          type: boolean
                         verdicts:
                           description: Verdicts are the gate's status.verdicts.
                           items:
@@ -803,6 +836,16 @@ spec:
                       - name
                       - ready
                       type: object
+                    maxItems: 64
+                    type: array
+                  omittedGateNames:
+                    description: |-
+                      OmittedGateNames name the gates left out by MaxDecisionGates or
+                      MaxDecisionBytes, at most MaxDecisionGates of them (OmittedGates counts
+                      them all).
+                    items:
+                      maxLength: 253
+                      type: string
                     maxItems: 64
                     type: array
                   omittedGates:

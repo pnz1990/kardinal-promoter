@@ -218,6 +218,20 @@ type PromotionDecision struct {
 	// +optional
 	OmittedGates int `json:"omittedGates,omitempty"`
 
+	// OmittedGateNames name the gates left out by MaxDecisionGates or
+	// MaxDecisionBytes, at most MaxDecisionGates of them (OmittedGates counts
+	// them all).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=253
+	// +optional
+	OmittedGateNames []string `json:"omittedGateNames,omitempty"`
+
+	// Facts are what every required gate showed, decided before any cut:
+	// the receipt's levels come from them, so a gate left out of the
+	// snapshot still counts (an override on it is still OVERRIDDEN).
+	// +optional
+	Facts *DecisionFacts `json:"facts,omitempty"`
+
 	// Truncated is true when the snapshot was cut to MaxDecisionBytes:
 	// approvals and Verdicts that did not count, long gate texts, or gates
 	// (OmittedGates). PolicyDigest covers every gate.
@@ -237,6 +251,20 @@ type PromotionDecision struct {
 	// name, UID, generation and spec digest.
 	// +optional
 	PolicyDigest string `json:"policyDigest,omitempty"`
+}
+
+// DecisionFacts are the level facts of a step's required gates, over all
+// of them.
+type DecisionFacts struct {
+	// Gates is how many required gates the step read.
+	Gates int `json:"gates"`
+	// Passed: every one was ready. Approved: one counted an approval.
+	// Overridden: one passed by an override. VerifiedByAgent: a verify gate
+	// counted a passing Verdict.
+	Passed          bool `json:"passed"`
+	Approved        bool `json:"approved"`
+	Overridden      bool `json:"overridden"`
+	VerifiedByAgent bool `json:"verifiedByAgent"`
 }
 
 // DecisionGate is one required gate as the step read it.
@@ -286,6 +314,11 @@ type DecisionGate struct {
 	// +kubebuilder:validation:MaxItems=101
 	// +optional
 	Verdicts []GateVerdictStatus `json:"verdicts,omitempty"`
+
+	// Truncated is true when the snapshot cut this gate: approvals or
+	// Verdicts that did not count, or long texts.
+	// +optional
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // DecisionOverride is the override a gate passed by.

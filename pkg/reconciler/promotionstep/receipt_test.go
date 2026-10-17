@@ -405,3 +405,111 @@ func TestReceiptJourney_NameTakenByAnother(t *testing.T) {
 	require.NoError(t, f.c.Get(ctx, client.ObjectKeyFromObject(other), &got))
 	assert.Equal(t, "sha256:other", got.Spec.StatementDigest, "left alone")
 }
+
+// addGates adds n gates to the fixture step's required gates, the last
+// passed by an override; heavy gates carry 101 approvals and Verdicts with
+// 4 KiB texts.
+func addGates(t *testing.T, f receiptFixture, n int, heavy bool) string {
+	t.Helper()
+	ctx := context.Background()
+	long := strings.Repeat("x", 4000)
+	evaluated := metav1.NewTime(time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC))
+	var names []string
+	for i := 0; i < n; i++ {
+		g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("gate-%03d", i), Namespace: "default"},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
+		last := i == n-1
+		if last {
+			g.Spec.Overrides = []v1alpha1.PolicyGateOverride{{Reason: "hotfix", CreatedBy: "carol",
+				ExpiresAt: metav1.NewTime(evaluated.Add(time.Hour))}}
+		}
+		require.NoError(t, f.c.Create(ctx, g))
+		g.Status = v1alpha1.PolicyGateStatus{Ready: true, Reason: "passed", LastEvaluatedAt: &evaluated}
+		if last {
+			g.Status.Reason = "OVERRIDDEN by carol: hotfix"
+		}
+		if heavy {
+			for j := 0; j < 101; j++ {
+				g.Status.Approvals = append(g.Status.Approvals, v1alpha1.GateApprovalStatus{User: fmt.Sprintf("u%d", j),
+					Decision: "approve", Counted: true, Reason: long})
+				g.Status.Verdicts = append(g.Status.Verdicts, v1alpha1.GateVerdictStatus{Name: fmt.Sprintf("v%d", j),
+					Verifier: "agent", Result: "pass", Counted: true, Reason: long, EvidenceURL: long})
+			}
+		}
+		require.NoError(t, f.c.Status().Update(ctx, g))
+		names = append(names, g.Name)
+	}
+	var ps v1alpha1.PromotionStep
+	require.NoError(t, f.c.Get(ctx, f.step, &ps))
+	ps.Spec.RequiredGates = append(ps.Spec.RequiredGates, names...)
+	require.NoError(t, f.c.Update(ctx, &ps))
+	return names[n-1]
+}
+
+// TestReceiptJourney_LevelsOverAllGates (QA-3 B6): the receipt's levels
+// come from every required gate, before the snapshot is cut. A gate passed
+// by an override and left out of the snapshot, past the 64-gate cap or past
+// the size cap, still makes the receipt OVERRIDDEN, so --require
+// '!OVERRIDDEN' refuses it; the snapshot and the statement name the gate
+// left out.
+//
+// Covers RECEIPT-JOURNEY-09.
+func TestReceiptJourney_LevelsOverAllGates(t *testing.T) {
+	for name, tc := range map[string]struct {
+		n     int
+		heavy bool
+	}{"gate cap": {70, false}, "size cap": {12, true}} {
+		t.Run(name, func(t *testing.T) {
+			f := newReceiptFixture(t, true, nil)
+			overridden := addGates(t, f, tc.n, tc.heavy)
+			s := f.reconcile(t)
+			require.Equal(t, "Promoting", s.Status.State, s.Status.Message)
+			d := s.Status.Decision
+			require.NotNil(t, d)
+			require.NotNil(t, d.Facts)
+			assert.Equal(t, tc.n+1, d.Facts.Gates, "every gate")
+			assert.True(t, d.Facts.Overridden)
+			assert.Positive(t, d.OmittedGates)
+			assert.Contains(t, d.OmittedGateNames, overridden, "the overridden gate is the one left out")
+			for _, g := range d.Gates {
+				assert.NotEqual(t, overridden, g.Name)
+			}
+			f.toVerified(t)
+			_, st := f.receipt(t)
+			assert.Contains(t, st.Predicate.VerifiedLevels, receipt.LevelOverridden, "OVERRIDDEN though its gate was left out")
+			assert.Contains(t, st.Predicate.Kardinal.OmittedGateNames, overridden)
+		})
+	}
+}
+
+// TestReceiptJourney_OneHugeGate (QA-3): a single gate whose snapshot is
+// over MaxDecisionBytes even cut (101 counted approvals and 101 counted
+// Verdicts, each still 1 KiB of reason after the cuts) does not hold the
+// step: it starts without a snapshot, says why in status.receiptError,
+// reaches Verified, and gets no receipt.
+//
+// Covers RECEIPT-JOURNEY-10.
+func TestReceiptJourney_OneHugeGate(t *testing.T) {
+	f := newReceiptFixture(t, true, nil)
+	ctx := context.Background()
+	var g v1alpha1.PolicyGate
+	require.NoError(t, f.c.Get(ctx, f.gate, &g))
+	long := strings.Repeat("x", 4000)
+	g.Status.Approvals, g.Status.Verdicts = nil, nil
+	for j := 0; j < 101; j++ {
+		g.Status.Approvals = append(g.Status.Approvals, v1alpha1.GateApprovalStatus{User: fmt.Sprintf("u%d", j),
+			Decision: "approve", Counted: true, Reason: long})
+		g.Status.Verdicts = append(g.Status.Verdicts, v1alpha1.GateVerdictStatus{Name: fmt.Sprintf("v%d", j),
+			Verifier: "agent", Result: "pass", Counted: true, Reason: long, EvidenceURL: long})
+	}
+	require.NoError(t, f.c.Status().Update(ctx, &g))
+	s := f.reconcile(t)
+	require.Equal(t, "Promoting", s.Status.State, s.Status.Message)
+	assert.Nil(t, s.Status.Decision)
+	assert.Contains(t, s.Status.ReceiptError, "even with one gate")
+	s = f.toVerified(t)
+	assert.Empty(t, s.Status.Receipt)
+	var list v1alpha1.PromotionReceiptList
+	require.NoError(t, f.c.List(ctx, &list))
+	assert.Empty(t, list.Items, "no receipt")
+}

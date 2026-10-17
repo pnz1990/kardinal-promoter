@@ -13,8 +13,8 @@ trusts any identity). The exit code is 0 only when every check passes.
 A receipt names the cluster, namespace, Pipeline and environment it is
 for, and its subjects. From the cluster they are the receipt's own; with
 --image and --file pin them (-n, --pipeline and --env, --subject for a file,
-and --cluster to pin the cluster), so another tenant's or another cluster's
-receipt of the same image is refused.
+and --cluster when the receipt names a cluster, or --any-cluster), so another
+tenant's or another cluster's receipt of the same image is refused.
 
 It checks the signature (and the certificate chain against the trusted
 root); the transparency log entry or timestamp when there is one; the
@@ -38,16 +38,17 @@ kardinal verify-receipt [<pipeline> <env>] [flags]
   kardinal verify-receipt checkout prod --bundle checkout-1-5-0 \
     --identity https://kubernetes.io/namespaces/kardinal-system/serviceaccounts/kardinal-promoter \
     --issuer https://oidc.eks.us-east-2.amazonaws.com/id/EXAMPLE
-  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... -n payments --pipeline checkout --env prod --key receipt.pub
+  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... -n payments --pipeline checkout --env prod --cluster 1f0c... --key receipt.pub
   kardinal verify-receipt --file receipt.sigstore.json -n payments --pipeline checkout --env prod \
-    --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN
+    --cluster 1f0c... --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN
 ```
 
 ### Options
 
 ```
+      --any-cluster           With --image or --file, accept a receipt of any cluster (prints a warning)
       --bundle string         The Bundle whose receipt to verify (default: the newest receipt of the environment)
-      --cluster string        The cluster identity the receipt must name (its kube-system Namespace UID, or receipts.clusterID)
+      --cluster string        The cluster identity the receipt must name (its kube-system Namespace UID, or receipts.clusterID); required with --image and --file
       --env string            The environment the receipt must be for (with --image or --file)
       --file string           Read the receipt from this Sigstore bundle file
   -h, --help                  help for verify-receipt
