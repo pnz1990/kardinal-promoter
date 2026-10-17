@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +57,11 @@ const (
 func TestSLSACheck(t *testing.T) {
 	one := []string{imgA}
 	two := []string{imgA, imgB}
+	lvl := func(n int) *int { return &n }
+	verified := func(img string, n int, source string) SLSAImage {
+		return SLSAImage{Image: img, Status: SLSAVerified, BuildLevel: lvl(n), LevelSource: source}
+	}
+	none := func(img string) SLSAImage { return SLSAImage{Image: img, Status: SLSANone} }
 	cases := map[string]struct {
 		iv   *v1alpha1.ImageVerification
 		want *SLSA
@@ -63,25 +69,53 @@ func TestSLSACheck(t *testing.T) {
 		"no ImageVerification":  {nil, nil},
 		"no slsa in the policy": {ivWith(one, v1alpha1.AttestationResult{Name: "sbom", Image: imgA, Verified: true}), nil},
 		"level 0, an unlisted builder": {ivWith(one, slsaResult("provenance", imgA, true, 0, "builder")),
-			&SLSA{BuildLevel: 0, LevelSource: "builder", Images: 1}},
+			&SLSA{BuildLevel: 0, LevelSource: "builder", Images: []SLSAImage{verified(imgA, 0, "builder")}}},
 		"level 3 from the builder": {ivWith(one, slsaResult("provenance", imgA, true, 3, "builder")),
-			&SLSA{BuildLevel: 3, LevelSource: "builder", Images: 1}},
-		"not verified: level 0": {ivWith(one, slsaResult("provenance", imgA, false, 3, "builder")),
-			&SLSA{BuildLevel: 0, Images: 1}},
+			&SLSA{BuildLevel: 3, LevelSource: "builder", Images: []SLSAImage{verified(imgA, 3, "builder")}}},
+		"not verified: none": {ivWith(one, slsaResult("provenance", imgA, false, 3, "builder")),
+			&SLSA{BuildLevel: 0, Images: []SLSAImage{none(imgA)}}},
 		"two images: the lowest": {ivWith(two, slsaResult("provenance", imgA, true, 3, "builder"), slsaResult("provenance", imgB, true, 1, "builder")),
-			&SLSA{BuildLevel: 1, LevelSource: "builder", Images: 2}},
-		"an image without one: 0": {ivWith(two, slsaResult("provenance", imgA, true, 3, "builder")),
-			&SLSA{BuildLevel: 0, Images: 2}},
+			&SLSA{BuildLevel: 1, LevelSource: "builder", Images: []SLSAImage{verified(imgA, 3, "builder"), verified(imgB, 1, "builder")}}},
+		"an image without one: none, level 0": {ivWith(two, slsaResult("provenance", imgA, true, 3, "builder")),
+			&SLSA{BuildLevel: 0, Images: []SLSAImage{verified(imgA, 3, "builder"), none(imgB)}}},
 		"an image's best of two policies": {ivWith(one, slsaResult("provenance", imgA, true, 1, "builder"), slsaResult("vsa", imgA, true, 3, "vsa")),
-			&SLSA{BuildLevel: 3, LevelSource: "vsa", Images: 1}},
+			&SLSA{BuildLevel: 3, LevelSource: "vsa", Images: []SLSAImage{verified(imgA, 3, "vsa")}}},
 		"sources that differ are left out": {ivWith(two, slsaResult("provenance", imgA, true, 2, "builder"), slsaResult("vsa", imgB, true, 2, "vsa")),
-			&SLSA{BuildLevel: 2, Images: 2}},
+			&SLSA{BuildLevel: 2, Images: []SLSAImage{verified(imgA, 2, "builder"), verified(imgB, 2, "vsa")}}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, tc.want, slsaCheck(tc.iv))
 		})
 	}
+}
+
+// TestBuild_SLSAMixedBundle (QA-2 #2169): a version of an image whose
+// provenance verified at level 3 and one with no verified attestation (an
+// unverified one, here) records the first's level and "none" for the
+// second, and claims no SLSA level: never one for an unchecked image.
+func TestBuild_SLSAMixedBundle(t *testing.T) {
+	in := input("image")
+	sidecar := "ghcr.io/acme/sidecar@sha256:" + strings.Repeat("b", 64)
+	in.ImageVerification = ivWith([]string{"ghcr.io/acme/checkout@" + imageDigest, sidecar},
+		slsaResult("provenance", "ghcr.io/acme/checkout@"+imageDigest, true, 3, "builder"),
+		slsaResult("provenance", sidecar, false, 3, "builder"))
+	raw, _, err := Build(in)
+	require.NoError(t, err)
+	st, err := Parse(raw)
+	require.NoError(t, err)
+	got := st.Predicate.Kardinal.Checks.SLSA
+	require.NotNil(t, got)
+	require.Len(t, got.Images, 2)
+	assert.Equal(t, SLSAVerified, got.Images[0].Status)
+	require.NotNil(t, got.Images[0].BuildLevel)
+	assert.Equal(t, 3, *got.Images[0].BuildLevel)
+	assert.Equal(t, SLSAImage{Image: sidecar, Status: SLSANone}, got.Images[1])
+	assert.Equal(t, 0, got.BuildLevel)
+	for _, l := range st.Predicate.VerifiedLevels {
+		assert.False(t, strings.HasPrefix(l, "SLSA_"), "no SLSA level claimed: %s", l)
+	}
+	assert.Contains(t, string(raw), `"status":"none"`)
 }
 
 // slsaInput is the test promotion with an ImageVerification whose images

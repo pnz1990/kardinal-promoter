@@ -12,25 +12,46 @@ import (
 )
 
 // SLSA is the SLSA build level of the promoted version, from its newest
-// Verified ImageVerification (docs/design/20-attestations.md): the lowest
-// level of its images, as attestations.<name>.slsa.buildLevel folds them
-// for a gate.
+// Verified ImageVerification (docs/design/20-attestations.md), image by
+// image: an image's level is recorded only when one of its attestations
+// that decide a level verified; every other image is recorded "none". The
+// version's level is the lowest of its images' and is claimed only when
+// every image has one: a receipt never claims a level for an image whose
+// level was not checked.
 type SLSA struct {
-	// BuildLevel is 0 to 3. An image's level is the highest of its verified
-	// attestations that decide one (provenance from a builder the policy
-	// grants a level, or a VSA); an image with none is 0.
+	// BuildLevel is 0 to 3: the lowest image's level, 0 when an image has
+	// none.
 	BuildLevel int `json:"buildLevel"`
 	// LevelSource is builder or vsa: what decided the level, when every
 	// image's level was decided the same way; left out otherwise.
 	LevelSource string `json:"levelSource,omitempty"`
-	// Images counts the images folded.
-	Images int `json:"images"`
+	// Images is each image's level, in the ImageVerification's order.
+	Images []SLSAImage `json:"images"`
 }
 
-// slsaCheck is the SLSA build level of iv, nil when no attestation of iv
-// decides one (its policy has no slsa): then the receipt claims no level.
-// Only verified attestations count: a level an attestation claims that did
-// not verify is never the receipt's.
+// SLSAImage is one image's SLSA build level.
+type SLSAImage struct {
+	Image string `json:"image"`
+	// Status is verified (an attestation that decides a level verified for
+	// the image) or none.
+	Status string `json:"status"`
+	// BuildLevel is the highest level of the image's verified attestations;
+	// left out when Status is none.
+	BuildLevel *int `json:"buildLevel,omitempty"`
+	// LevelSource is builder or vsa, when Status is verified.
+	LevelSource string `json:"levelSource,omitempty"`
+}
+
+// The SLSAImage statuses.
+const (
+	SLSAVerified = "verified"
+	SLSANone     = "none"
+)
+
+// slsaCheck is the SLSA build level of iv, image by image; nil when no
+// attestation of iv decides one (its policy has no slsa): then the receipt
+// claims no level. Only verified attestations count: a level an
+// attestation claims that did not verify is never the receipt's.
 func slsaCheck(iv *v1alpha1.ImageVerification) *SLSA {
 	if iv == nil {
 		return nil
@@ -56,26 +77,33 @@ func slsaCheck(iv *v1alpha1.ImageVerification) *SLSA {
 	if !decides || len(images) == 0 {
 		return nil
 	}
-	out := &SLSA{BuildLevel: -1, Images: len(images)}
+	out := &SLSA{BuildLevel: -1}
 	sources := map[string]bool{}
 	for _, image := range images {
+		img := SLSAImage{Image: image, Status: SLSANone}
 		level, source := 0, ""
-		found := false
 		for _, r := range iv.Status.Attestations {
 			if r.Image != image || !r.Verified || r.SLSA == nil {
 				continue
 			}
 			switch {
-			case !found || r.SLSA.BuildLevel > level:
-				level, source, found = r.SLSA.BuildLevel, r.SLSA.LevelSource, true
+			case img.Status == SLSANone || r.SLSA.BuildLevel > level:
+				level, source, img.Status = r.SLSA.BuildLevel, r.SLSA.LevelSource, SLSAVerified
 			case r.SLSA.BuildLevel == level && r.SLSA.LevelSource != source:
 				source = ""
 			}
 		}
+		if img.Status == SLSAVerified {
+			l := level
+			img.BuildLevel, img.LevelSource = &l, source
+		} else {
+			level = 0
+		}
 		if out.BuildLevel < 0 || level < out.BuildLevel {
 			out.BuildLevel = level
 		}
-		sources[source] = true
+		sources[img.LevelSource] = true
+		out.Images = append(out.Images, img)
 	}
 	if len(sources) == 1 {
 		for s := range sources {
@@ -86,12 +114,16 @@ func slsaCheck(iv *v1alpha1.ImageVerification) *SLSA {
 }
 
 // slsaLevels are the SLSA verifiedLevels of a record: SLSA_BUILD_LEVEL_<n>
-// for a build level of at least 1 (the VSA's highest level of the track).
+// for a build level of at least 1 (the VSA's highest level of the track)
+// when every image's level was verified.
 func slsaLevels(rec Record) []string {
-	if s := rec.Checks.SLSA; s != nil && s.BuildLevel >= 1 {
-		return []string{fmt.Sprintf("SLSA_BUILD_LEVEL_%d", s.BuildLevel)}
+	// An image recorded none makes the build level 0: a level is never
+	// claimed for an unchecked image.
+	s := rec.Checks.SLSA
+	if s == nil || s.BuildLevel < 1 {
+		return nil
 	}
-	return nil
+	return []string{fmt.Sprintf("SLSA_BUILD_LEVEL_%d", s.BuildLevel)}
 }
 
 // slsaLevel matches a SLSA track level, SLSA_<TRACK>_LEVEL_<n>.

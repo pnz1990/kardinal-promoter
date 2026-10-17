@@ -35,7 +35,14 @@
         ],
         "slsa": {
           "buildLevel": 0,
-          "images": 1,
+          "images": [
+            {
+              "buildLevel": 0,
+              "image": "ghcr.io/acme/checkout@sha256:9f2c000000000000000000000000000000000000000000000000000000000001",
+              "levelSource": "builder",
+              "status": "verified"
+            }
+          ],
           "levelSource": "builder"
         }
       },
