@@ -48,11 +48,12 @@ func TestReceiptFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		"public rekor":        {[]string{"--receipt-rekor-url=https://rekor.sigstore.dev"}, "--receipt-rekor-public"},
-		"key without secret":  {[]string{"--receipt-signing-mode=key"}, "key Secret"},
-		"kms not built":       {[]string{"--receipt-signing-mode=kms", "--receipt-kms-key=gcpkms://k"}, "not built with the gcpkms KMS provider"},
-		"keyless without tsa": {nil, "Rekor or a timestamp authority"},
-		"bad rekor url":       {[]string{"--receipt-rekor-url=::"}, "is not a URL"},
+		"public rekor":         {[]string{"--receipt-rekor-url=https://rekor.sigstore.dev"}, "--receipt-rekor-public"},
+		"key without secret":   {[]string{"--receipt-signing-mode=key"}, "key Secret"},
+		"kms not built":        {[]string{"--receipt-signing-mode=kms", "--receipt-kms-key=gcpkms://k"}, "not built with the gcpkms KMS provider"},
+		"keyless without tsa":  {nil, "Rekor or a timestamp authority"},
+		"rekor v2 without tsa": {[]string{"--receipt-rekor-url=https://rekor.example", "--receipt-rekor-version=2"}, "Rekor v2 needs a timestamp authority"},
+		"bad rekor url":        {[]string{"--receipt-rekor-url=::"}, "is not a URL"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

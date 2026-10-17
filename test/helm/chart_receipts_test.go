@@ -95,3 +95,23 @@ func TestChartReceipts(t *testing.T) {
 	assert.True(t, ns.allowed(releaseNS, "kardinal-promoter", releaseNS, "kardinal.io", "promotionreceipts", "create", ""))
 	assert.False(t, ns.allowed(releaseNS, "kardinal-promoter", releaseNS, "kardinal.io", "promotionreceipts", "delete", ""))
 }
+
+// TestChartReceiptsRekorV2NeedsTSA (QA-2 #2120): keyless signing with Rekor
+// v2 and no timestamp authority is refused by the values schema: a Rekor
+// v2 entry does not prove the signing time, so the receipt could never
+// verify once its short-lived certificate expired. With a TSA, with Rekor
+// v1, or with key signing it renders.
+func TestChartReceiptsRekorV2NeedsTSA(t *testing.T) {
+	base := []string{"--set", "receipts.enabled=true", "--set", "receipts.signing.mode=keyless",
+		"--set", "receipts.signing.keyless.fulcioURL=https://fulcio.example", "--set", "receipts.sinks.rekor.url=https://rekor.example"}
+	out, err := helmTemplate(t, "kardinal-promoter", append(base, "--set", "receipts.sinks.rekor.version=2")...)
+	require.Error(t, err, out)
+	assert.Contains(t, out+err.Error(), "tsaURL")
+	for name, extra := range map[string][]string{
+		"with a TSA": {"--set", "receipts.sinks.rekor.version=2", "--set", "receipts.signing.tsaURL=https://tsa.example/api/v1/timestamp"},
+		"rekor v1":   {"--set", "receipts.sinks.rekor.version=1"},
+	} {
+		_, err := helmTemplate(t, "kardinal-promoter", append(base, extra...)...)
+		assert.NoError(t, err, name)
+	}
+}
