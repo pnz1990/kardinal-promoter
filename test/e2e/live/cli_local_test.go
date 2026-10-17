@@ -131,8 +131,9 @@ func waitPipelineValid(t *testing.T, e *framework.Env, ns, name string) {
 // With a cluster, Controller is the version in the kardinal-version ConfigMap
 // of --controller-namespace (kardinal-system by default) and Graph is the kro
 // controller's image tag. Without a cluster, or without the ConfigMap, they
-// read unknown and the command still exits 0.
-// Covers CLI-VERSION-01, CLI-VERSION-02.
+// read unknown and the command still exits 0. A CLI a minor version apart
+// from the controller warns once on stderr (#1757).
+// Covers CLI-VERSION-01, CLI-VERSION-02, CLI-VERSION-04.
 func TestCLI_Version(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -172,6 +173,23 @@ func TestCLI_Version(t *testing.T) {
 	empty := e.Namespace(t)
 	assert.Contains(t, cli.Must("", "version", "--controller-namespace", empty), "\nController: unknown\n",
 		"a namespace without the ConfigMap")
+
+	// #1757: a CLI a minor version apart from the controller warns once, on
+	// stderr, with the command that upgrades the controller; -o json does
+	// not, and version prints both versions without it. The suite's own
+	// controller (version e2e, not a release) never gets the warning.
+	const skew = "warning: kardinal CLI v9.9.9-e2e talks to controller "
+	r = cli.Exec(framework.CLIOptions{Bin: stamped}, "--context", e.Context, "status", "--controller-namespace", ns)
+	assert.Equal(t, 1, strings.Count(r.Stderr, skew+"v7.7.7-e2e (in "+ns+"); some output may not match: upgrade the controller: "+
+		"helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 9.9.9-e2e "+
+		"--namespace "+ns+" --create-namespace\n"), r.Stderr)
+	r = cli.Exec(framework.CLIOptions{Bin: stamped}, "--context", e.Context, "status", "--controller-namespace", ns, "-o", "json")
+	assert.NotContains(t, r.Stderr, skew, "-o json")
+	r = cli.Exec(framework.CLIOptions{Bin: stamped}, "--context", e.Context, "version", "--controller-namespace", ns)
+	assert.NotContains(t, r.Stderr, skew, "version")
+	r = cli.Exec(framework.CLIOptions{Bin: stamped}, "--context", e.Context, "-n", ns, "get", "pipelines")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.NotContains(t, r.Stderr, skew, "the controller in kardinal-system is %s", controllerVersion(t, e))
 }
 
 // TestCLI_GlobalFlags checks how the global flags pick the cluster and the

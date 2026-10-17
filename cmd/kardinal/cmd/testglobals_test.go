@@ -31,7 +31,7 @@ import (
 
 // setForTest sets *p to v until t ends: t.Cleanup puts back what was there,
 // whether the test passes, fails or stops at a require. A package variable
-// (globalOutput, errOut, buildClient, ...) a test changes and resets on a
+// (globalOutput, errOut, newClient, ...) a test changes and resets on a
 // plain line stays changed when the test stops before that line, and every
 // later test that reads it fails.
 func setForTest[T any](t testing.TB, p *T, v T) {
@@ -42,20 +42,20 @@ func setForTest[T any](t testing.TB, p *T, v T) {
 }
 
 // keepStyle puts back, when t ends, what running the root command sets for
-// the whole package: sty and errOut (useStyle, before every command). A test
+// the whole package: sty, errOut and skewCheck (useStyle, before every command). A test
 // that runs the root command (Execute) calls it, so a later test that calls
 // a function directly does not write to this test's buffer.
 func keepStyle(t testing.TB) {
 	t.Helper()
-	oldSty, oldErr := sty, errOut
-	t.Cleanup(func() { sty, errOut = oldSty, oldErr })
+	oldSty, oldErr, oldSkew := sty, errOut, skewCheck
+	t.Cleanup(func() { sty, errOut, skewCheck = oldSty, oldErr, oldSkew })
 }
 
 // TestPackageVariablesAreRestored: every test that changes a package
 // variable of this package puts it back when it ends, so one failing test
 // cannot fail the ones after it. A change is an assignment to the variable
 // (or to a field, element or pointee of it), ++ or --, or running the root
-// command (Execute sets errOut and sty). It is put back by an assignment to
+// command (Execute sets errOut, sty and skewCheck). It is put back by an assignment to
 // it in a t.Cleanup or defer function, by setForTest or keepStyle, or by a
 // helper that registers such a cleanup (noCluster) or returns one that the
 // test registers (t.Cleanup(stub())). Names are resolved by scope: a local
@@ -108,15 +108,15 @@ func TestA(t *testing.T) { t.Cleanup(stub()) }`, nil},
 		{"a helper that leaks", `func stub() { x = "a" }
 func TestA(t *testing.T) { stub() }`, []string{"TestA changes x"}},
 		{"running the root command", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }`,
-			[]string{"TestA changes errOut", "TestA changes sty"}},
-		{"keepStyle", `func keepStyle(t *testing.T) { a, b := errOut, sty; t.Cleanup(func() { errOut, sty = a, b }) }
+			[]string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"}},
+		{"keepStyle", `func keepStyle(t *testing.T) { a, b, c := errOut, sty, skewCheck; t.Cleanup(func() { errOut, sty, skewCheck = a, b, c }) }
 func TestA(t *testing.T) { keepStyle(t); root := NewRootCmd(); _ = root.Execute() }`, nil},
 		{"TestMain", `func TestMain(m *testing.M) { x = "a"; m.Run() }`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			leaks, err := restoreLeaks(map[string]string{
-				"x.go":      pkg + "var errOut, sty any\n",
+				"x.go":      pkg + "var errOut, sty, skewCheck any\n",
 				"x_test.go": "package cmd\n\nimport \"testing\"\n\n" + tc.test + "\n",
 			})
 			require.NoError(t, err)
@@ -354,6 +354,7 @@ func (a *restoreCheck) summary(name string) *restoreSummary {
 				case "Execute", "ExecuteContext", "ExecuteC", "ExecuteContextC":
 					write("errOut", n.Pos()) // useStyle, before every command
 					write("sty", n.Pos())
+					write("skewCheck", n.Pos())
 				default:
 					// An exported helper, from the cmd_test package (cmd.KeepStyle).
 					if x, ok := sel.X.(*ast.Ident); ok && x.Name == "cmd" && a.funcs[sel.Sel.Name] != nil {

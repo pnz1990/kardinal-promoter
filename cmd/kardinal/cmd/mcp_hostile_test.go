@@ -50,7 +50,7 @@ func mcpWorld(t *testing.T) (*scenario.World, *mcp.ClientSession, scenario.Ident
 	kube := w.ClientAsRBAC(&user.DefaultInfo{Name: agent.Username, Groups: agent.Groups}, []string{"team-a"}, []string{scenario.PolicyNS})
 	// As clusterClient: --namespace (the tools' namespace argument) wins
 	// over the kubeconfig's namespace.
-	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) {
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
 		if globalNamespace != "" {
 			return kube, globalNamespace, nil
 		}

@@ -12,6 +12,16 @@ the controller writes to its namespace) and the kro version (the image tag of
 the kro controller in kro-system). Cluster versions show as unknown when the
 cluster cannot be reached.
 
+Every other command that talks to the cluster compares the two versions too:
+when the CLI and the controller (in kardinal-system, or --controller-namespace
+where the command has it) are a minor version apart, it prints one warning
+on stderr with the command that upgrades the older side, for example:
+
+  warning: kardinal CLI v0.12.0 talks to controller v0.11.2 (in kardinal-system); some output may not match: upgrade the controller: helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 --namespace kardinal-system --create-namespace
+
+There is no warning for a patch apart, with -o json or yaml, for a dev
+build of either side, or when the controller's version cannot be read.
+
 ```
 kardinal version [flags]
 ```

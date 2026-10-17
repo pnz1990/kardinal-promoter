@@ -135,6 +135,10 @@ kardinal version
 # Graph:      kro v0.10.0-rc.0
 ```
 
+Keep the CLI and the controller on the same minor version. When they are a minor version apart,
+each command that talks to the cluster prints one `warning: kardinal CLI ... talks to controller ...`
+line on stderr, with the command that upgrades the older one ([`kardinal version`](reference/cli/kardinal-version.md)).
+
 ---
 
 ## Accessing the UI

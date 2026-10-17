@@ -698,7 +698,7 @@ func TestRedactor_Args(t *testing.T) {
 // the manifest says which mode ran.
 func TestEvidencePackCmd_IncludeCommands(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(packScheme(t)).WithObjects(packWorld(t, 20)...).Build()
-	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) { return c, "pay", nil })
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return c, "pay", nil })
 	setForTest(t, &identityOf, func(context.Context, sigs_client.Client) (Identity, error) { return Identity{Username: "auditor"}, nil })
 	setForTest(t, &globalNamespace, "")
 	for _, tc := range []struct {

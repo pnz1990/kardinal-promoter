@@ -34,8 +34,9 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print the CLI, controller, and kro (Graph) versions",
 		Long: `Print the versions of the CLI, the controller and kro; the cluster ones are
 unknown when the cluster cannot be reached.`,
-		Example:     `  kardinal version`,
-		Annotations: map[string]string{ReferenceAnnotation: versionReference},
+		Example: `  kardinal version`,
+		// It prints both versions: no skew warning on top.
+		Annotations: map[string]string{ReferenceAnnotation: versionReference, noSkewAnnotation: "true"},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			controllerVer, graphVer := "unknown", ""
 			// Best-effort: without a cluster the CLI version is still printed.
@@ -116,4 +117,14 @@ func buildInfoVersion() string {
 const versionReference = `Print the CLI version, the controller version (the kardinal-version ConfigMap
 the controller writes to its namespace) and the kro version (the image tag of
 the kro controller in kro-system). Cluster versions show as unknown when the
-cluster cannot be reached.`
+cluster cannot be reached.
+
+Every other command that talks to the cluster compares the two versions too:
+when the CLI and the controller (in kardinal-system, or --controller-namespace
+where the command has it) are a minor version apart, it prints one warning
+on stderr with the command that upgrades the older side, for example:
+
+  warning: kardinal CLI v0.12.0 talks to controller v0.11.2 (in kardinal-system); some output may not match: upgrade the controller: helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 --namespace kardinal-system --create-namespace
+
+There is no warning for a patch apart, with -o json or yaml, for a dev
+build of either side, or when the controller's version cannot be read.`

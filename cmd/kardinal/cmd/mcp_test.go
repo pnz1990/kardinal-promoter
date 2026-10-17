@@ -95,7 +95,7 @@ func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *intercept
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	c := b.Build()
-	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) { return c, "default", nil })
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return c, "default", nil })
 	stubIdentity(t, Identity{Username: "system:serviceaccount:agents:fixer"})
 	if opts.maxBytes == 0 {
 		opts.maxBytes = defaultMCPMaxBytes
@@ -522,7 +522,7 @@ func TestMCP_PersistentFlags(t *testing.T) {
 	assert.Equal(t, []string{"--kubeconfig", "/tmp/kc", "--context", "kind-kp", "--namespace", "team-a"}, persistentArgs())
 
 	var seen []string
-	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) {
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
 		seen = append(seen, globalKubeconfig+"|"+globalContext+"|"+globalNamespace)
 		return nil, "", errors.New("no cluster")
 	})
@@ -555,8 +555,8 @@ func TestMCP_HostileArguments(t *testing.T) {
 	setForTest(t, &globalContext, "")
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
 	var seen []string
-	inner := buildClient
-	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) {
+	inner := newClient
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
 		seen = append(seen, globalKubeconfig+"|"+globalContext)
 		return inner()
 	})
