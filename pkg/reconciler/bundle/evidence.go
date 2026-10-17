@@ -113,28 +113,7 @@ func (r *Reconciler) verifyGateOn(ctx context.Context, pipeline *kardinalv1alpha
 	if err != nil {
 		return "", fmt.Errorf("upstream evidence: %w", err)
 	}
-	// A gate names an environment, or a fleet for all of its targets.
-	target := b.Spec.Intent.TargetEnvironment
-	targets := map[string]bool{target: true}
-	if f := graph.FleetOf(pipeline, target); f != "" {
-		targets[f] = true
-	}
-	if byFleet, err := graph.FleetTargetEnvironments(pipeline); err == nil {
-		for _, t := range byFleet[target] {
-			targets[t] = true
-		}
-	}
-	for _, g := range gates {
-		if g.Spec.Verify == nil {
-			continue
-		}
-		for _, env := range strings.Split(g.Labels["kardinal.io/applies-to"], ",") {
-			if targets[strings.TrimSpace(env)] {
-				return g.Namespace + "/" + g.Name, nil
-			}
-		}
-	}
-	return "", nil
+	return lifecycle.VerifyGateOn(pipeline, b, gates), nil
 }
 
 // newestVerification is the newest verification in env of b's artifacts by

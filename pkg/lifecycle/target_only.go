@@ -6,6 +6,7 @@ package lifecycle
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -47,4 +48,34 @@ func UpstreamOfTarget(pipeline *v1alpha1.Pipeline, b *v1alpha1.Bundle) ([]string
 		targets = byFleet[target]
 	}
 	return slices.DeleteFunc(path, func(e string) bool { return slices.Contains(targets, e) }), nil
+}
+
+// VerifyGateOn returns the namespace/name of a verify gate (spec.verify)
+// among gates that applies to b's target, or "": a gate names an
+// environment, or a fleet for all of its targets. Its verified environment
+// is an upstream one, whose verdicts a Bundle that does not promote it never
+// gets, so a targetOnly Bundle with one is promoted through its upstream
+// environments whatever its artifacts (#1311).
+func VerifyGateOn(pipeline *v1alpha1.Pipeline, b *v1alpha1.Bundle, gates []v1alpha1.PolicyGate) string {
+	target := b.Spec.Intent.TargetEnvironment
+	targets := map[string]bool{target: true}
+	if f := graph.FleetOf(pipeline, target); f != "" {
+		targets[f] = true
+	}
+	if byFleet, err := graph.FleetTargetEnvironments(pipeline); err == nil {
+		for _, t := range byFleet[target] {
+			targets[t] = true
+		}
+	}
+	for _, g := range gates {
+		if g.Spec.Verify == nil {
+			continue
+		}
+		for _, env := range strings.Split(g.Labels["kardinal.io/applies-to"], ",") {
+			if targets[strings.TrimSpace(env)] {
+				return g.Namespace + "/" + g.Name
+			}
+		}
+	}
+	return ""
 }
