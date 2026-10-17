@@ -706,10 +706,12 @@ func (f *fakeGH) called(prefix string) int {
 // "core on Kubernetes 1.37" (55) fails until it is re-run.
 type fakeCI struct {
 	t                   *testing.T
-	views, runViews     atomic.Int32
+	views, resetAsked   atomic.Int32
 	mu                  sync.Mutex
 	conclusion, jobName string
 	artifact            bool // the job's attempt-1 artifact exists
+	runDone             bool // the last view saw the run completed
+	limited             int  // views to answer with GitHub's rate-limit error
 }
 
 func (f *fakeCI) reply(call string) ([]byte, error) {
@@ -723,19 +725,27 @@ func (f *fakeCI) reply(call string) ([]byte, error) {
 	case strings.HasPrefix(call, "run list"):
 		now := time.Now().UTC().Format(time.RFC3339)
 		return []byte(`[{"databaseId":7,"headSha":"other","createdAt":"` + now + `"},{"databaseId":9,"headSha":"abc","createdAt":"` + now + `"}]`), nil
-	case call == "run view 9 --repo o/r --json status":
-		if f.runViews.Add(1) == 1 {
-			return []byte(`{"status":"in_progress"}`), nil
-		}
-		return []byte(`{"status":"completed"}`), nil
+	case call == "api rate_limit --jq .resources.core.reset":
+		f.resetAsked.Add(1)
+		return []byte(fmt.Sprint(time.Now().Add(time.Second).Unix())), nil
 	case strings.HasPrefix(call, "run view 9 --repo o/r --job 55 --log"):
 		return []byte("the job's log\n"), nil
-	case strings.HasPrefix(call, "run view 9"):
-		status := "in_progress"
-		if f.views.Add(1) > 1 {
+	case call == "run view 9 --repo o/r --json status,attempt,jobs":
+		if f.limited > 0 {
+			f.limited--
+			return nil, errors.New("HTTP 403: API rate limit exceeded for user ID 1. (https://api.github.com/graphql)")
+		}
+		// The job finishes on the second look, the run on the third.
+		n := f.views.Add(1)
+		status, run := "in_progress", "in_progress"
+		if n > 1 {
 			status = "completed"
 		}
-		return []byte(`{"attempt":2,"jobs":[{"databaseId":55,"name":"` + f.jobName + `","status":"` + status +
+		if n > 2 {
+			run = "completed"
+		}
+		f.runDone = run == "completed"
+		return []byte(`{"status":"` + run + `","attempt":2,"jobs":[{"databaseId":55,"name":"` + f.jobName + `","status":"` + status +
 			`","conclusion":"` + f.conclusion + `","url":"https://x/job/55"}]}`), nil
 	case strings.HasPrefix(call, "run download 9 --repo o/r -n e2e-images -D "):
 		dir := strings.Fields(call)[len(strings.Fields(call))-1]
@@ -751,6 +761,9 @@ func (f *fakeCI) reply(call string) ([]byte, error) {
 	case strings.HasPrefix(call, "run download 9"):
 		return nil, errors.New("no artifact")
 	case strings.HasPrefix(call, "run rerun 9 --repo o/r --job 55"):
+		if !f.runDone {
+			return nil, errors.New("run 9 cannot be rerun; its workflow run is still in progress")
+		}
 		f.conclusion = "success"
 		f.views.Store(0)
 		return nil, nil
@@ -764,7 +777,8 @@ func TestCIRunner(t *testing.T) {
 	f := &fakeGH{reply: ci.reply}
 	runner := func(out string, sha string) *ciRunner {
 		return &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: sha, out: out, count: 2, suites: []string{"core", "gitlab"},
-			minors: "1.35 1.37", poll: time.Millisecond, jobWait: 50 * time.Millisecond, log: func(string, ...any) {}}
+			minors: "1.35 1.37", poll: time.Millisecond, jobWait: 50 * time.Millisecond, log: func(string, ...any) {},
+			wait: func(context.Context, time.Duration) error { return nil }}
 	}
 	st := Step{ID: "ci-core-137", CIJob: &ciJob{ID: "core-137", Suite: "core", Minor: "1.37", Shard: "-"}}
 	dir := filepath.Join(out, st.ID)
@@ -784,8 +798,7 @@ func TestCIRunner(t *testing.T) {
 	st.ciRetry = true
 	require.NoError(t, runner(out, "abc").Run(context.Background(), st, dir))
 	assert.Equal(t, 1, f.called("workflow run"), "dispatched once per commit")
-	assert.Equal(t, 1, f.called("run rerun 9 --repo o/r --job 55"))
-	assert.Equal(t, 2, f.called("run view 9 --repo o/r --json status"), "the re-run waited for the whole run to finish")
+	assert.Equal(t, 1, f.called("run rerun 9 --repo o/r --job 55"), "once, after the whole run finished (the fake refuses earlier)")
 	assert.FileExists(t, filepath.Join(dir, "e2e", "test.json"), "the attempt-1 artifact, the job's latest")
 
 	// A green job that left no artifact proves nothing.
@@ -974,4 +987,84 @@ func TestHostRules(t *testing.T) {
 	assert.NoError(t, hostRulesProblem([]Step{cluster}, "", "/s", false, false))
 	assert.NoError(t, hostRulesProblem([]Step{cluster}, "", "", false, true))
 	assert.NoError(t, hostRulesProblem([]Step{{ID: "m", Missing: "x", Heavy: true}}, "", "", false, false), "a step that never runs needs nothing")
+}
+
+// TestCIRunner_OnePollForAllSteps (#2096): 32 CI steps waiting together
+// share one gh call per poll interval, not one each; GitHub's rate limit
+// (403) and a 502 on that call are waited out (until the limit resets, from
+// gh api rate_limit) instead of failing the steps; each step ends on its
+// job's conclusion only.
+func TestCIRunner_OnePollForAllSteps(t *testing.T) {
+	const steps = 32
+	var views, resets, limited atomic.Int32
+	limited.Store(3)
+	reply := func(call string) ([]byte, error) {
+		switch call {
+		case "api rate_limit --jq .resources.core.reset":
+			resets.Add(1)
+			return []byte(fmt.Sprint(time.Now().Add(time.Second).Unix())), nil
+		case "run view 9 --repo o/r --json status,attempt,jobs":
+			if limited.Add(-1) >= 0 {
+				return nil, errors.New("HTTP 403: API rate limit exceeded for user ID 1.")
+			}
+			if limited.Load() == -1 {
+				return nil, errors.New("HTTP 502: Bad Gateway (https://api.github.com/graphql)")
+			}
+			n := views.Add(1)
+			var jobs []string
+			for i := 0; i < steps; i++ {
+				status := "in_progress"
+				if n > 4 {
+					status = "completed"
+				}
+				jobs = append(jobs, fmt.Sprintf(`{"databaseId":%d,"name":"core %d/%d on Kubernetes 1.37","status":"%s","conclusion":"failure","url":"https://x/job/%d"}`,
+					100+i, i+1, steps, status, 100+i))
+			}
+			return []byte(`{"status":"in_progress","attempt":1,"jobs":[` + strings.Join(jobs, ",") + `]}`), nil
+		}
+		return nil, fmt.Errorf("no %s", call) // logs and images: not needed here
+	}
+	f := &fakeGH{reply: reply}
+	out := t.TempDir()
+	c := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 1, suites: []string{"core"}, minors: "1.37",
+		poll: 50 * time.Millisecond, jobWait: time.Minute, log: func(string, ...any) {},
+		wait: func(context.Context, time.Duration) error { return nil }}
+	c.run = &ciRun{ID: 9, SHA: "abc"}
+	var wg sync.WaitGroup
+	errs := make([]error, steps)
+	for i := 0; i < steps; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			st := Step{ID: fmt.Sprintf("ci-core-%d", i), CIJob: &ciJob{ID: fmt.Sprintf("core-137-%dof%d", i+1, steps), Suite: "core",
+				Minor: "1.37", Shard: fmt.Sprintf("%d/%d", i+1, steps)}}
+			dir := filepath.Join(out, st.ID)
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			errs[i] = c.Run(context.Background(), st, dir)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		require.Error(t, err, "step %d", i)
+		assert.Contains(t, err.Error(), fmt.Sprintf("CI job https://x/job/%d: failure", 100+i), "only the job's conclusion fails a step")
+	}
+	calls := f.called("run view 9 --repo o/r --json status,attempt,jobs")
+	assert.Less(t, calls, 20, "one shared look per poll interval: %d calls for %d steps over 5 looks", calls, steps)
+	assert.Positive(t, resets.Load(), "the rate limit's reset was read to wait for it")
+}
+
+func TestTransient(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"HTTP 403: API rate limit exceeded for user ID 1.":             true,
+		"HTTP 403: You have exceeded a secondary rate limit":           true,
+		"HTTP 429: Too Many Requests":                                  true,
+		"HTTP 502: Bad Gateway":                                        true,
+		"HTTP 503: Service Unavailable":                                true,
+		"read tcp 1.2.3.4: connection reset by peer":                   true,
+		"HTTP 404: Not Found":                                          false,
+		"no valid artifacts found to download":                         false,
+		"run 9 cannot be rerun; its workflow run is still in progress": false,
+	} {
+		assert.Equal(t, want, transient(errors.New(msg)), msg)
+	}
 }
