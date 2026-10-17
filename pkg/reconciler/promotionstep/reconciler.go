@@ -2129,7 +2129,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// commit with the files it wrote, as the Argo CD and Flux checks require
 	// of the revision they synced (#1575, #2132).
 	if result.Healthy && adapter.Name() == "resource" && !result.TargetUpdated && opts.ExpectedRevision != "" {
-		if why := r.branchMoved(ctx, log, pipeline, env, opts.ExpectedRevision, stepsLanded(ps)); why != "" {
+		if why := r.stepMoved(ctx, log, pipeline, env, ps, opts.ExpectedRevision); why != "" {
 			// A newer rollback of another fleet target pushes this
 			// environment on its way there: when one has, the branch moved
 			// under the newer version, and this promotion is superseded,

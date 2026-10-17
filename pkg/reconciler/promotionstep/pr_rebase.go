@@ -151,8 +151,15 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 // nor always the step's own (another step read them before this one pushed,
 // #2137: 300 environments on one branch), so they are read again, once per
 // step at most, before the check passes or says the branch moved.
+//
+// The health check calls it through stepMoved, which takes landed from the
+// step itself. A zero landed (no step completed) fails closed: the commit
+// has not landed, and the check waits.
 func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
 	env v1alpha1.EnvironmentSpec, want string, landed time.Time) string {
+	if landed.IsZero() {
+		return "commit " + short(want) + " has not landed yet: no step of this promotion has completed"
+	}
 	rh, ok := r.GitClient.(scm.RemoteHeadReader)
 	gr, gok := r.GitClient.(scm.BranchGraphReader)
 	if !ok || !gok || pipeline == nil {
@@ -193,6 +200,13 @@ func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeli
 			branch, short(want), env.Name, short(head))
 	}
 	return ""
+}
+
+// stepMoved is branchMoved for ps, the health-checking step: want is its
+// promoted commit, landed when its last step completed (stepsLanded).
+func (r *Reconciler) stepMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
+	env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep, want string) string {
+	return r.branchMoved(ctx, log, pipeline, env, want, stepsLanded(ps))
 }
 
 // revisionBehind is health.CheckOptions.RevisionBehind for the step: how

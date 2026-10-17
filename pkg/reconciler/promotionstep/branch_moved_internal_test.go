@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -173,4 +174,53 @@ func TestBranchMoved_RenderedBranch(t *testing.T) {
 	g.push("env/prod-t00") // a later render of the environment replaced it
 	*now = now.Add(remoteHeadsTTL)
 	assert.Contains(t, r.branchMoved(ctx, zerolog.Nop(), p, env, want, landed), "branch env/prod-t00 no longer holds")
+}
+
+// TestStepMoved_LandedFromTheStep (#2153 QA): the health check's call takes
+// landed from the step. Its git-push completed at T; the shared cache holds
+// heads read at T-5s whose head is the step's commit; the remote has since
+// a hand edit of the environment's files. The cached heads predate the
+// commit's landing, so they are read again, and the check does not pass. A
+// step with no completed step waits: a zero landed fails closed.
+func TestStepMoved_LandedFromTheStep(t *testing.T) {
+	ctx := context.Background()
+	g := &growingBranch{n: map[string]int{"main": 10}}
+	r, now, p := movedWorld(g)
+	want := g.push("main")
+	_, err := r.remotes.remoteHeads(ctx, g, "file:///repo", scm.GitAuth{}, now.Add(-5*time.Second)) // head == want
+	require.NoError(t, err)
+	g.pushPath("main", "environments/w29-r0/kustomization.yaml") // a hand edit
+	pushed := metav1.NewTime(*now)
+	ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: []v1alpha1.StepStatus{
+		{Name: "git-push", State: v1alpha1.StepExecutionCompleted, CompletedAt: &pushed}}}}
+	*now = now.Add(2 * time.Second)
+	assert.Contains(t, r.stepMoved(ctx, zerolog.Nop(), p, w29, ps, want), "no longer holds")
+
+	none := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: []v1alpha1.StepStatus{{Name: "git-push"}}}}
+	assert.Contains(t, r.stepMoved(ctx, zerolog.Nop(), p, w29, none, want), "has not landed yet")
+}
+
+// TestStepsLanded (#2153 QA): the latest CompletedAt of the step's steps
+// (wait-for-merge after git-push), zero when none completed.
+func TestStepsLanded(t *testing.T) {
+	t0 := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *metav1.Time { v := metav1.NewTime(t0.Add(d)); return &v }
+	for _, tc := range []struct {
+		name  string
+		steps []v1alpha1.StepStatus
+		want  time.Time
+	}{
+		{"none completed", []v1alpha1.StepStatus{{Name: "git-clone"}, {Name: "git-push"}}, time.Time{}},
+		{"the push", []v1alpha1.StepStatus{{Name: "git-clone", CompletedAt: at(0)}, {Name: "git-push", CompletedAt: at(time.Second)}},
+			t0.Add(time.Second)},
+		{"the merge, after the push", []v1alpha1.StepStatus{{Name: "git-push", CompletedAt: at(time.Second)},
+			{Name: "wait-for-merge", CompletedAt: at(time.Hour)}, {Name: "health-check"}}, t0.Add(time.Hour)},
+		{"the latest, whatever the order", []v1alpha1.StepStatus{{Name: "wait-for-merge", CompletedAt: at(time.Hour)},
+			{Name: "git-push", CompletedAt: at(time.Second)}}, t0.Add(time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: tc.steps}}
+			assert.True(t, tc.want.Equal(stepsLanded(ps)), "got %s", stepsLanded(ps))
+		})
+	}
 }
