@@ -29,8 +29,11 @@ import (
 // A ref to a ClusterAnalysisTemplate would also need a cluster-scoped grant
 // for every namespace's Graph identity (ledger G5).
 //
-// When the cluster does not serve AnalysisRun, Unavailable says so and the
-// Build of a Graph with verification fails: verification fails closed.
+// When the cluster does not serve AnalysisRun (discovery says "no match"),
+// Unavailable says so and the Build of a Graph with verification fails:
+// verification fails closed. Any other discovery error is returned, so the
+// translation is retried rather than the version failed as if Argo Rollouts
+// were not installed.
 // Templates that do not exist are left out (Build fails with their name).
 // Other API errors are returned so the translation is retried.
 func (t *Translator) collectAnalyses(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline) (graph.AnalysisInput, error) {
@@ -52,7 +55,11 @@ func CollectAnalyses(ctx context.Context, k8s client.Reader, mapper meta.RESTMap
 	if len(refs) == 0 {
 		return in, nil
 	}
-	if !servedKind(mapper, graph.AnalysisRunAPIVersion, "AnalysisRun") {
+	served, err := servedKind(mapper, graph.AnalysisRunAPIVersion, "AnalysisRun")
+	if err != nil {
+		return in, err
+	}
+	if !served {
 		in.Unavailable = fmt.Sprintf("%s AnalysisRun is not served by the cluster: install Argo Rollouts "+
 			"(its CRDs) or remove spec.verification; kardinal does not promote without the analysis",
 			graph.AnalysisRunAPIVersion)
@@ -64,7 +71,11 @@ func CollectAnalyses(ctx context.Context, k8s client.Reader, mapper meta.RESTMap
 		if _, done := in.Templates[key]; done {
 			continue
 		}
-		if !servedKind(mapper, graph.AnalysisRunAPIVersion, kind) {
+		served, err := servedKind(mapper, graph.AnalysisRunAPIVersion, kind)
+		if err != nil {
+			return in, err
+		}
+		if !served {
 			continue // Build reports it as not found
 		}
 		obj := &unstructured.Unstructured{}

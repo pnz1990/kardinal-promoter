@@ -63,11 +63,14 @@ type previewVerification struct {
 }
 
 // buildPreview builds in as the controller would, with the AnalysisTemplates
-// its verification names read from the cluster through c (#2011). When the
-// controller would fail the version for its verification, the result is the
-// Graph without verification, and Fails says why; when the CLI cannot read
-// the templates (RBAC), it is also the Graph without verification, and
-// NotChecked says why. Other build errors are returned.
+// its verification names read from the cluster through c (#2011). Whether
+// verification would fail is decided on the whole Pipeline, as the
+// controller builds a version's Graph (no intent): a template missing for
+// any environment fails every version, whichever environment the preview
+// looks at (#2171). When it would, the result is the Graph without
+// verification, and Fails says why; when the CLI cannot read the templates
+// (RBAC, a discovery outage), it is also the Graph without verification,
+// and NotChecked says why. Other build errors are returned.
 func buildPreview(ctx context.Context, c sigs_client.Client, b *graph.Builder, in graph.BuildInput) (*graph.BuildResult, previewVerification, error) {
 	preview, analyses, err := previewPipeline(in.Pipeline)
 	if err != nil {
@@ -84,15 +87,38 @@ func buildPreview(ctx context.Context, c sigs_client.Client, b *graph.Builder, i
 		res, err := b.Build(without)
 		return res, previewVerification{NotChecked: "the AnalysisTemplates could not be read: " + readErr.Error()}, err
 	}
+	if fails := wholePipelineFails(b, in, read); fails != "" {
+		res, err := b.Build(without)
+		return res, previewVerification{Fails: fails}, err
+	}
 	full := in
 	full.Analyses = read
-	res, fullErr := b.Build(full)
-	if fullErr == nil {
-		return res, previewVerification{}, nil
+	res, err := b.Build(full)
+	return res, previewVerification{}, err
+}
+
+// wholePipelineFails is why the controller would fail a version of in's
+// Pipeline for its verification (the Graph of every environment, with the
+// templates read), or "": a build error that the same Pipeline without
+// verification does not have.
+func wholePipelineFails(b *graph.Builder, in graph.BuildInput, read graph.AnalysisInput) string {
+	whole := in
+	whole.Analyses = read
+	if in.Bundle != nil {
+		version := in.Bundle.DeepCopy()
+		version.Spec.Intent = nil
+		whole.Bundle = version
 	}
-	res, err = b.Build(without)
-	if err != nil {
-		return nil, previewVerification{}, err // not verification's: report the build error
+	_, err := b.Build(whole)
+	if err == nil {
+		return ""
 	}
-	return res, previewVerification{Fails: strings.TrimPrefix(fullErr.Error(), "build: ")}, nil
+	preview, _, _ := previewPipeline(in.Pipeline)
+	without := whole
+	without.Pipeline = preview
+	without.Analyses = graph.AnalysisInput{}
+	if _, perr := b.Build(without); perr != nil {
+		return "" // not verification's: the targeted build reports it
+	}
+	return strings.TrimPrefix(err.Error(), "build: ")
 }

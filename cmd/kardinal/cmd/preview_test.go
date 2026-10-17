@@ -235,3 +235,46 @@ func TestPreviewPipeline_CopiesThePipeline(t *testing.T) {
 	assert.NotNil(t, p.Spec.Environments[0].Verification, "the original keeps its verification")
 	assert.Equal(t, map[string][]string{"test": {"smoke", "cluster/org-slo"}}, analyses)
 }
+
+// QA-3 on #2171: a template missing for an environment after the one
+// simulated still fails every version, so simulate of the earlier
+// environment is BLOCKED by verification too.
+func TestPreview_VerificationOfTheWholePipeline(t *testing.T) {
+	p := policyPipeline("demo", "test", "prod")
+	p.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
+	c := verifyCluster(t, true, nil, p)
+	out, err := runSimulate(t, c, simulateOptions{Env: "test", Time: "Tuesday 10am"})
+	require.Error(t, err, out)
+	assert.Contains(t, out, "RESULT: BLOCKED\nBlocked by: verification\n")
+	assert.Contains(t, err.Error(), `environment "prod" verification: AnalysisTemplate "smoke" not found`)
+}
+
+// erringMapper is a RESTMapper whose discovery of Argo Rollouts fails with
+// err (a timeout, a forbidden discovery request), not a "no match".
+type erringMapper struct {
+	meta.RESTMapper
+	err error
+}
+
+func (m erringMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+	if gk.Group == "argoproj.io" {
+		return nil, m.err
+	}
+	return m.RESTMapper.RESTMapping(gk, versions...)
+}
+
+// QA-3 on #2171: only a "no match" from discovery is Argo Rollouts not
+// installed. A discovery error of another kind is "Verification not
+// checked", with the gates' result.
+func TestPreview_DiscoveryErrorIsNotChecked(t *testing.T) {
+	base := verifyCluster(t, true, nil)
+	s := base.Scheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithRESTMapper(erringMapper{RESTMapper: base.RESTMapper(), err: context.DeadlineExceeded}).
+		WithObjects(verifiedPipeline(), policyGate("block-prod", "default", "prod", "false")).
+		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+	out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "Blocked by: block-prod")
+	assert.NotContains(t, out, "Blocked by: verification")
+	assert.Contains(t, out, "Verification not checked: the AnalysisTemplates could not be read: discover argoproj.io/v1alpha1 AnalysisRun")
+}
