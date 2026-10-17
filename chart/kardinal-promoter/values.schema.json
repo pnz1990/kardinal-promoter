@@ -797,6 +797,7 @@
               "additionalProperties": false,
               "properties": {
                 "url": {"type": "string", "pattern": "^(https?://.+)?$"},
+                "version": {"type": "integer", "enum": [1, 2]},
                 "public": {"type": "boolean", "description": "Allow the public-good Rekor, which publishes each receipt's names, emails and pipeline names."}
               }
             }

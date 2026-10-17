@@ -159,6 +159,7 @@ Where a value sets a controller flag, the flag is in [Controller flags](controll
 | `receipts.sinks.oci.allowedRepositories` | `[]` | When repository is empty: the repositories, or path prefixes (ghcr.io/acme/), the controller may push referrers to with its push Secret. An image's repository is the tenant's choice, so in a shared install set repository or this list: empty pushes to every image's repository the Secret reaches. Other images get no referrer (the receipt's Stored condition is False, RepositoryNotAllowed). |
 | `receipts.sinks.oci.insecure` | `false` | Push over plain HTTP (an in-cluster registry). |
 | `receipts.sinks.rekor.url` | `""` | Rekor URL that logs every receipt signature; empty logs nothing. |
+| `receipts.sinks.rekor.version` | `1` | Rekor API version of url: 1 (rekor.sigstore.dev) or 2 (rekor-tiles: the public log20xx shards, and sigstore scaffolding's Rekor). |
 | `receipts.sinks.rekor.public` | `false` | Allow the public-good Rekor (rekor.sigstore.dev). It publishes each receipt's statement metadata: names, emails and pipeline names. |
 | `metricCheck` |  | MetricCheck providers. |
 | `metricCheck.cloudWatch.ambientCredentials` | `false` | Let cloudwatch MetricChecks that name no credential Secret use the controller's own AWS identity (IRSA, EKS Pod Identity, environment). Off by default: anyone who can create a MetricCheck could then read CloudWatch with that identity. Annotate serviceAccount for IRSA. |

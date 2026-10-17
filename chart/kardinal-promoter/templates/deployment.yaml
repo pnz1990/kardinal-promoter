@@ -109,6 +109,7 @@ spec:
             {{- end }}
             {{- with .sinks.rekor.url }}
             - --receipt-rekor-url={{ . }}
+            - --receipt-rekor-version={{ $.Values.receipts.sinks.rekor.version | default 1 }}
             {{- end }}
             {{- if .sinks.rekor.public }}
             - --receipt-rekor-public=true

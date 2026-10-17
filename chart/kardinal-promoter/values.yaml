@@ -715,6 +715,9 @@ receipts:
     rekor:
       # -- Rekor URL that logs every receipt signature; empty logs nothing.
       url: ""
+      # -- Rekor API version of url: 1 (rekor.sigstore.dev) or 2 (rekor-tiles:
+      # the public log20xx shards, and sigstore scaffolding's Rekor).
+      version: 1
       # -- Allow the public-good Rekor (rekor.sigstore.dev). It publishes each
       # receipt's statement metadata: names, emails and pipeline names.
       public: false

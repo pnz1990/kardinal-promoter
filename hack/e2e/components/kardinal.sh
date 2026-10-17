@@ -159,6 +159,16 @@ if [ "${KARDINAL_E2E_RECEIPTS:-0}" = 1 ]; then
     --set receipts.sinks.oci.enabled=true --set receipts.sinks.oci.insecure=true
     --set "receipts.sinks.oci.repository=${KARDINAL_E2E_REGISTRY#http://}/e2e/receipts")
 fi
+# The receipts-keyless suite: keyless receipts (Fulcio, with the
+# controller's projected token of audience sigstore), logged in Rekor v2 and
+# timestamped, against the private sigstore of components/sigstore.sh.
+if [ "${KARDINAL_E2E_RECEIPTS:-0}" = keyless ]; then
+  : "${KARDINAL_E2E_FULCIO_URL:?components/sigstore.sh must run first}"
+  args+=(--set receipts.enabled=true --set receipts.signing.mode=keyless
+    --set "receipts.signing.keyless.fulcioURL=$KARDINAL_E2E_FULCIO_URL"
+    --set "receipts.signing.tsaURL=$KARDINAL_E2E_TSA_URL"
+    --set "receipts.sinks.rekor.url=$KARDINAL_E2E_REKOR_URL" --set receipts.sinks.rekor.version=2)
+fi
 # shellcheck disable=SC2206
 args+=(${KARDINAL_E2E_HELM_ARGS:-})
 

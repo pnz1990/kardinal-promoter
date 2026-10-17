@@ -78,6 +78,9 @@ type Signer struct {
 	TokenFile string
 	// RekorURL, when set, logs every signature in that Rekor instance.
 	RekorURL string
+	// RekorVersion is the Rekor API: 1 (the default, rekor.sigstore.dev) or
+	// 2 (rekor-tiles, the log20xx shards).
+	RekorVersion uint32
 	// TSAURL, when set, timestamps every signature with that RFC 3161
 	// timestamp authority.
 	TSAURL string
@@ -188,13 +191,26 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 		})}
 	}
 	if s.RekorURL != "" {
-		rc, err := s.rekorClient()
-		if err != nil {
-			return nil, err
+		switch s.RekorVersion {
+		case 0, 1:
+			rc, err := s.rekorClient()
+			if err != nil {
+				return nil, err
+			}
+			opts.TransparencyLogs = []sign.Transparency{sign.NewRekor(&sign.RekorOptions{
+				BaseURL: s.RekorURL, Timeout: s.timeout(), Client: rc.Entries,
+			})}
+		case 2:
+			w, err := newRekorV2Writer(s.RekorURL, s.Transport, s.timeout())
+			if err != nil {
+				return nil, err
+			}
+			opts.TransparencyLogs = []sign.Transparency{sign.NewRekor(&sign.RekorOptions{
+				BaseURL: s.RekorURL, Timeout: s.timeout(), ClientV2: w, Version: 2,
+			})}
+		default:
+			return nil, fmt.Errorf("unknown Rekor API version %d (1 or 2)", s.RekorVersion)
 		}
-		opts.TransparencyLogs = []sign.Transparency{sign.NewRekor(&sign.RekorOptions{
-			BaseURL: s.RekorURL, Timeout: s.timeout(), Client: rc.Entries,
-		})}
 	}
 	pb, err := sign.Bundle(&sign.DSSEData{Data: statement, PayloadType: PayloadType}, keypair, opts)
 	if err != nil {
