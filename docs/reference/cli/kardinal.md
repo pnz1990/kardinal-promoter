@@ -13,6 +13,32 @@ Getting started:
   kardinal ship my-app --image app:1.4 --wait            ship a version and follow it
   kardinal why my-app prod                               why it waits, and what moves it on
 
+Defaults for a repository: in an application's repository the pipeline and the
+namespace need not be repeated. A command that takes <pipeline> [<env>]
+(why, explain, history, logs, ship, approve, promote, rollback, hold, unhold,
+pause, resume, override, verify) takes, in order: the argument, then
+KARDINAL_PIPELINE, then the pipeline of .kardinal.yaml; the namespace is -n,
+then KARDINAL_NAMESPACE, then the file's namespace, then the kubeconfig
+context's. The file is the nearest .kardinal.yaml from the working
+directory up to the root of the git repository (outside a repository, the
+working directory's only):
+
+  pipeline: my-app
+  namespace: team-a
+
+With a default pipeline, no argument is that pipeline, and one argument is
+an environment when the default pipeline has an environment of that name
+(kardinal why prod), else a pipeline (kardinal why other-app); when the
+cluster cannot say (the default pipeline cannot be read), the command
+refuses rather than guess. Each default a command uses is said once on
+stderr with its source ("using namespace team-a (from
+/src/app/.kardinal.yaml)"), so a value the command line does not show is
+never silent. The file may set pipeline and namespace only: it never names
+a context or a cluster, and any other key is an error; -n (or
+KARDINAL_NAMESPACE) and an explicit pipeline go without a broken file.
+kardinal mcp's tools never read the file: the agent's working directory
+may be a repository it does not trust.
+
 Output follows where it goes. On a terminal, each state reads as a glyph and
 its label in the status colours of the UI, from its design tokens
 (web/tokens/tokens.json): Live (spruce), Promoting and Checking health

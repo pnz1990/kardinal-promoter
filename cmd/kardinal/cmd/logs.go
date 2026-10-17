@@ -51,7 +51,7 @@ once, and exits when every step shown (only <env>'s, if given) has finished.`,
 		Example: `  kardinal logs my-app
   kardinal logs my-app prod -f
   kardinal logs my-app --bundle my-app-v1-29-0`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, envFlag)
 			if err != nil {

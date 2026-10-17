@@ -344,9 +344,9 @@ func untrusted(s string) map[string]any { return map[string]any{"untrusted": s} 
 // flags, the output style, the stamp's asserted fields) and returns the
 // func that puts them back.
 func keepGlobals() (restore func()) {
-	ns, kc, ctx, out, s, e, a := globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut, assertedOf
+	ns, kc, ctx, out, s, e, a, irf := globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut, assertedOf, ignoreRepoFile
 	return func() {
-		globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut, assertedOf = ns, kc, ctx, out, s, e, a
+		globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut, assertedOf, ignoreRepoFile = ns, kc, ctx, out, s, e, a, irf
 	}
 }
 
