@@ -522,6 +522,12 @@ func walkFirstPipeline(t *testing.T, w *walkthrough) {
 	require.NotEqual(t, bundle, next)
 	weekend := time.Now().UTC().Weekday() == time.Saturday || time.Now().UTC().Weekday() == time.Sunday
 	e.WaitGateReady(t, "default", next, "prod", "no-weekend-deploys", !weekend, "", promoteTimeout)
+	if weekend {
+		// The gate is not ready at once on a weekend, but explain says
+		// Blocking only once it holds prod: once uat, prod's upstream, is
+		// Verified for the version.
+		e.WaitStepState(t, "default", app, next, "uat", "Verified", promoteTimeout)
+	}
 	const explain = "no-weekend-deploys   Blocking"
 	out = w.must(fp, explain)
 	if weekend {
