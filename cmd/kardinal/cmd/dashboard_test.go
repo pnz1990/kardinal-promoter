@@ -147,9 +147,9 @@ func TestFindUITarget(t *testing.T) {
 // otherwise (a port-forward may not be running).
 func TestUILink(t *testing.T) {
 	c := policyClient(t, policyPipeline("demo", "test", "prod"))
-	prev := buildClient
-	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
-	t.Cleanup(func() { buildClient, globalOutput, globalNamespace = prev, "", "" })
+	prev := newClient
+	newClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { newClient, globalOutput, globalNamespace = prev, "", "" })
 	var stdout bytes.Buffer
 	run := func(args ...string) string {
 		var errb bytes.Buffer

@@ -93,9 +93,9 @@ var outputCommands = [][]string{
 // runOutput runs kardinal args against c and returns stdout and stderr.
 func runOutput(t *testing.T, c sigs_client.Client, args ...string) (string, string, error) {
 	t.Helper()
-	prevClient, prevOutput := buildClient, globalOutput
-	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
-	t.Cleanup(func() { buildClient, globalOutput, sty = prevClient, prevOutput, style.Plain() })
+	prevClient, prevOutput := newClient, globalOutput
+	newClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { newClient, globalOutput, sty = prevClient, prevOutput, style.Plain() })
 	root := NewRootCmd()
 	var out, errb bytes.Buffer
 	root.SetOut(&out)
