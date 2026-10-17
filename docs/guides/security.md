@@ -1317,7 +1317,7 @@ cluster network.
 
 ### User roles
 
-The chart installs four ClusterRoles (`rbac.userRoles.enabled`, default `true`) to bind people,
+The chart installs these ClusterRoles (`rbac.userRoles.enabled`, default `true`) to bind people,
 CI and bots to. Bind them with a **RoleBinding** in a namespace for that namespace only, or with a
 ClusterRoleBinding for all. In TokenReview mode they decide what a caller can do through the UI
 API and the Bundle API, and they work the same for `kubectl` and the `kardinal` CLI.
@@ -1327,6 +1327,9 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | `<fullname>-viewer` | `get`, `list`, `watch` on every kardinal kind; `get`, `list`, `watch` on `events` | Dashboards, read-only users |
 | `<fullname>-promoter` | viewer, `create` on `bundles`, `update` on `pipelines/pause`, `pipelines/hold` and `bundles/reject` | CI (Bundle API, `kardinal create bundle`), promote, roll back (and hold), pause and resume, and reject a Bundle in the UI |
 | `<fullname>-approver` | viewer, `update` on `policygates/override` and `bundles/reject`, `create` and `delete` on `approvals` | Gate overrides and Bundle rejection in the UI, approvals |
+| `<fullname>-verifier` | `get`, `list`, `watch`, `create` and `delete` on `verdicts` (admission lets a verifier delete only its own), and `get`, `list`, `watch` on `bundles`, `policygates` and `pipelines` | The agents and CI that verify versions ([Verify with agents](../agentic/verify-with-agents.md)) |
+| `<fullname>-freezer` | every verb on `changewindows`, `update` on `changewindows/freeze`; bind it with a ClusterRoleBinding | Incident commanders ([Freezes](../agentic/freezes.md)) |
+| `<fullname>-auditor` | `get` and `list` on the kinds `kardinal audit evidence-pack` reads (`auditevents`, `approvals`, `policygates`, `bundles`, `pipelines`, `changewindows`, `agentidentities`, `verdicts`) and on `validatingadmissionpolicies` and their bindings; no write. Bind it with a ClusterRoleBinding: three of these are cluster-scoped. Not part of the admin role | Auditors ([Produce an evidence pack](../compliance.md#produce-an-evidence-pack)) |
 | `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
 
 `<fullname>` is the release's full name: `kardinal-promoter` for the default release, so

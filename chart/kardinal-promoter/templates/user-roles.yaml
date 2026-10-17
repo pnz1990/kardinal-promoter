@@ -29,6 +29,13 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-freezer   create, update and delete freezes (cluster-scoped
                        ChangeWindows) and changewindows/freeze; for incident
                        commanders, with a ClusterRoleBinding
+  <fullname>-auditor   get and list on exactly what kardinal audit
+                       evidence-pack reads: the record kinds of the pack and
+                       the chart's ValidatingAdmissionPolicies and bindings
+                       (listed by label, so list as well as get). No write.
+                       Bind it with a ClusterRoleBinding: ChangeWindows,
+                       AgentIdentities and the policies are cluster-scoped.
+                       Not aggregated into admin (docs/compliance.md)
 
 pipelines/pause, pipelines/hold, pipelines/edit, policygates/override,
 policygates/edit and bundles/reject are virtual subresources: the API server serves no such
@@ -196,6 +203,20 @@ rules:
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/freeze"]
   verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-auditor
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["kardinal.io"]
+  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "changewindows", "agentidentities", "verdicts"]
+  verbs: ["get", "list"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+  verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
