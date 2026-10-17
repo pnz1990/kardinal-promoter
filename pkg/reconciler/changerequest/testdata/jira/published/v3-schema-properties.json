@@ -1,0 +1,90 @@
+{
+  "CreatedIssue": [
+    "id",
+    "key",
+    "self",
+    "transition",
+    "watchers"
+  ],
+  "ErrorCollection": [
+    "errorMessages",
+    "errors",
+    "status"
+  ],
+  "IssueBean": [
+    "changelog",
+    "editmeta",
+    "expand",
+    "fields",
+    "fieldsToInclude",
+    "id",
+    "key",
+    "names",
+    "operations",
+    "properties",
+    "renderedFields",
+    "schema",
+    "self",
+    "transitions",
+    "versionedRepresentations"
+  ],
+  "Resolution": [
+    "description",
+    "id",
+    "name",
+    "self"
+  ],
+  "SearchAndReconcileRequestBean": [
+    "expand",
+    "fields",
+    "fieldsByKeys",
+    "includeArchivedProjects",
+    "jql",
+    "maxResults",
+    "nextPageToken",
+    "properties",
+    "reconcileIssues"
+  ],
+  "SearchAndReconcileResults": [
+    "isLast",
+    "issues",
+    "names",
+    "nextPageToken",
+    "schema",
+    "warnings"
+  ],
+  "StatusCategory": [
+    "colorName",
+    "id",
+    "key",
+    "name",
+    "self"
+  ],
+  "StatusDetails": [
+    "description",
+    "iconUrl",
+    "id",
+    "name",
+    "scope",
+    "self",
+    "statusCategory"
+  ],
+  "User": [
+    "accountId",
+    "accountType",
+    "active",
+    "appType",
+    "applicationRoles",
+    "avatarUrls",
+    "displayName",
+    "emailAddress",
+    "expand",
+    "groups",
+    "guest",
+    "key",
+    "locale",
+    "name",
+    "self",
+    "timeZone"
+  ]
+}
