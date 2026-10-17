@@ -187,9 +187,17 @@ func (e *Env) WaitControllerLog(t *testing.T, since time.Time, timeout time.Dura
 	return e.ControllerLog(since).Wait(t, timeout, "controller log: "+what, match)
 }
 
+// minLogWait is the shortest a log wait waits: one read of the pod log is
+// an API server call that, on a loaded host, can take seconds by itself
+// (#2172: a 5s wait spent on a single read). A line already written is
+// found at the first read that succeeds, so the floor costs nothing then.
+const minLogWait = 30 * time.Second
+
 // Wait waits until a line read from now on matches match, and returns it.
+// It reads again after a failed read, until timeout (at least minLogWait).
 func (r *LogReader) Wait(t *testing.T, timeout time.Duration, what string, match func(LogLine) bool) LogLine {
 	t.Helper()
+	timeout = max(timeout, minLogWait)
 	var found LogLine
 	read := 0
 	Eventually(t, timeout, what, func(ctx context.Context) (bool, string) {
