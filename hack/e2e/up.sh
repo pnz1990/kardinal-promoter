@@ -73,6 +73,12 @@
 #   KARDINAL_E2E_TOOLS  pinned (default): install the kind, kubectl and helm
 #                    of hack/tool-versions.env into bin/e2e (tools.sh) and use
 #                    them; path: use the ones on PATH
+#   KARDINAL_E2E_REUSE  1: the cluster and E2E_OUT's env file and secrets
+#                    exist (an earlier up.sh of SUITE): rebuild and reinstall
+#                    only the controller (components/kardinal.sh, then the
+#                    suite's AFTER components) and keep the env file's other
+#                    entries; kro and the suite's other components are left
+#                    as they are (hack/e2e/local-live.sh -reuse)
 #   plus the KARDINAL_E2E_* build settings of components/kardinal.sh
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -183,6 +189,14 @@ if [ -n "${KIND_K8S:-}" ]; then
   [ -n "$NODE_IMAGE" ] || die "KIND_K8S=$KIND_K8S: no $var in hack/tool-versions.env"
 fi
 
+REUSE=${KARDINAL_E2E_REUSE:-}
+if [ -n "$REUSE" ]; then
+  [ -f "$E2E_OUT/env" ] || die "KARDINAL_E2E_REUSE: no $E2E_OUT/env; set the suite up first"
+  grep -qx "export KARDINAL_E2E_SUITE=$SUITE" "$E2E_OUT/env" || die "KARDINAL_E2E_REUSE: $E2E_OUT/env is not suite $SUITE's"
+  kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER" || die "KARDINAL_E2E_REUSE: no kind cluster $KIND_CLUSTER"
+  BEFORE=() COMPONENTS=()
+fi
+
 start=$(date +%s)
 for c in "${BEFORE[@]}"; do
   bash "$E2E_DIR/components/$c"
@@ -206,14 +220,14 @@ if [ -n "$NODE_IMAGE" ]; then
   [ "$have" = "$KIND_K8S" ] || die "$KIND_CLUSTER runs Kubernetes $have, not $KIND_K8S; make e2e-down SUITE=$SUITE first"
 fi
 mkdir -p "$E2E_OUT"
-rm -f "$E2E_OUT/env"
+[ -n "$REUSE" ] || rm -f "$E2E_OUT/env"
 env_set KARDINAL_E2E_SUITE "$SUITE"
 env_set KARDINAL_E2E_CONTEXT "$CTX"
 env_set KARDINAL_E2E_RUN "$RUN"
 env_set KARDINAL_E2E_ARTIFACTS "$E2E_OUT/diagnostics"
 env_set KUBECONFIG "$KUBECONFIG"
 
-if [ "${KARDINAL_E2E_KRO:-1}" = 1 ]; then
+if [ "${KARDINAL_E2E_KRO:-1}" = 1 ] && [ -z "$REUSE" ]; then
   KUBE_CONTEXT="$CTX" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
   if [ -n "${KARDINAL_E2E_KRO_MEMORY:-}" ]; then
     "${KUBECTL[@]}" -n kro-system set resources deploy/kro --limits="memory=$KARDINAL_E2E_KRO_MEMORY" >/dev/null

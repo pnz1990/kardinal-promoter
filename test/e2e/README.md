@@ -38,6 +38,35 @@ used, with a warning for each version that differs. The core suite also
 needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 
+## Run a suite on a shared host
+
+```bash
+hack/e2e/local-live.sh core 1.37            # one suite as its CI job runs it
+hack/e2e/local-live.sh -pr 2137 -shard 1/3 core
+KEEP=1 hack/e2e/local-live.sh gitea         # keep the cluster for a re-run
+hack/e2e/local-live.sh -reuse kardinal-e2e-ll-gitea-37 gitea  # from any worktree
+```
+
+`hack/e2e/local-live.sh SUITE [MINOR]` runs one suite of
+`hack/e2e/matrix.txt` the way its `e2e-live.yml` job does: the pinned kind,
+kubectl and helm, the minor's pinned node image (default the suite's first
+minor in `matrix.txt`), `up.sh`, then `run.sh`. The controller is built on the
+host (`KARDINAL_E2E_BUILD=host`) unless you set another build. It holds the
+host's heavy-load lock (`$LOADLOCK`, through `hack/loadlock.sh`) and a cluster
+slot (`$RELEASE_GATE_SLOTS/1..4`, as `hack/release-gate -slots` takes them)
+for the whole run, refuses to start without them (`-no-lock` on a host of your
+own), and deletes the cluster `kardinal-e2e-ll-<suite>-<minor>` and releases
+both when it ends, however it ends. It prints a pass/fail summary with the
+commit, node image and tool pins, and `-pr N` posts it on pull request N.
+
+A cluster's state (its kubeconfig, the env file, the git server's and
+Argo CD's generated secrets) is kept in `$KARDINAL_E2E_STATE/<cluster>`
+(default `e2e-state` next to `$LOADLOCK`), not in the worktree that set it
+up, so `-reuse <cluster>` from any worktree rebuilds and reinstalls only the
+controller (`up.sh` with `KARDINAL_E2E_REUSE=1`) on a cluster an earlier
+`KEEP=1` run kept, and runs the suite. Each run's log, report and summary are
+kept in `<state>/<cluster>/runs/<UTC time>/`.
+
 ## Run every suite
 
 ```bash
