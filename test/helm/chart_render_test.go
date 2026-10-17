@@ -1951,3 +1951,17 @@ func keysOf[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+// TestChartHealthEKS (#2008): health.eks.allowedRoleARNs passes
+// --health-eks-role-arns; empty (the default) passes nothing, so the
+// controller signs no EKS tokens; the schema refuses an entry that is not
+// an IAM role ARN pattern.
+func TestChartHealthEKS(t *testing.T) {
+	assert.NotContains(t, argValues(controllerContainer(t, render(t, "kardinal-promoter"))), "health-eks-role-arns")
+	c := controllerContainer(t, render(t, "kardinal-promoter",
+		"--set", "health.eks.allowedRoleARNs={arn:aws:iam::111122223333:role/kardinal-health-*,arn:aws:iam::*:role/kardinal-health-reader}"))
+	assert.Equal(t, "arn:aws:iam::111122223333:role/kardinal-health-*,arn:aws:iam::*:role/kardinal-health-reader",
+		argValues(c)["health-eks-role-arns"])
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "health.eks.allowedRoleARNs={*}")
+	require.Error(t, err, out)
+}

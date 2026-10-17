@@ -24,6 +24,7 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 )
 
@@ -149,14 +150,20 @@ type RemoteClusters struct {
 	Dial func(ctx context.Context, network, address string) (net.Conn, error)
 	// NowFn returns the current time (tests); nil means time.Now.
 	NowFn func() time.Time
+	// EKS signs the tokens of health.kubeconfigSecretRef.eks; nil refuses
+	// such a kubeconfig.
+	EKS *EKSAuth
 
 	mu      sync.Mutex
 	entries map[remoteKey]*remoteEntry
 }
 
-// remoteKey identifies one kubeconfig: a Secret and the key in it.
+// remoteKey identifies one kubeconfig: a Secret and the key in it, and for
+// EKS the cluster, role and Pipeline its tokens are signed for.
 type remoteKey struct {
 	namespace, name, key string
+	eks                  v1alpha1.EKSCredentials
+	pipeline             string
 }
 
 type remoteEntry struct {
@@ -195,6 +202,15 @@ func (r *RemoteClusters) Len() int {
 // kubeconfig is refused; any other error is a missing key. Errors never
 // list the Secret's keys.
 func (r *RemoteClusters) Detector(secret *corev1.Secret, key string) (*AutoDetector, error) {
+	return r.DetectorWith(secret, key, nil, "")
+}
+
+// DetectorWith is Detector for a kubeconfigSecretRef with eks: the
+// kubeconfig holds the server and its CA only, and every request carries
+// an EKS token signed as eks.RoleARN for the Pipeline pipeline (in the
+// Secret's namespace). A role the controller does not allow, or a
+// kubeconfig with credentials, is refused (ErrKubeconfigNotAllowed).
+func (r *RemoteClusters) DetectorWith(secret *corev1.Secret, key string, eks *v1alpha1.EKSCredentials, pipeline string) (*AutoDetector, error) {
 	if key == "" {
 		key = DefaultKubeconfigKey
 	}
@@ -203,6 +219,21 @@ func (r *RemoteClusters) Detector(secret *corev1.Secret, key string) (*AutoDetec
 		return nil, fmt.Errorf("secret %q has no key %q", secret.Name, key)
 	}
 	id := remoteKey{namespace: secret.Namespace, name: secret.Name, key: key}
+	var src *EKSTokenSource
+	if eks != nil {
+		if r.EKS == nil {
+			return nil, fmt.Errorf("%w: health.kubeconfigSecretRef.eks: this controller signs no EKS tokens "+
+				"(--health-eks-role-arns, Helm health.eks.allowedRoleARNs, is empty)", ErrKubeconfigNotAllowed)
+		}
+		if err := noCredentials(data); err != nil {
+			return nil, err
+		}
+		var err error
+		if src, err = r.EKS.TokenSource(eks, secret.Namespace, pipeline); err != nil {
+			return nil, err
+		}
+		id.eks, id.pipeline = *eks, pipeline
+	}
 	version := string(secret.UID) + "/" + secret.ResourceVersion
 	now := r.now()
 
@@ -215,6 +246,9 @@ func (r *RemoteClusters) Detector(secret *corev1.Secret, key string) (*AutoDetec
 	cfg, err := RemoteConfig(data, r.Dial)
 	if err != nil {
 		return nil, err
+	}
+	if src != nil {
+		cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper { return eksBearer{rt: rt, src: src} }
 	}
 	sch := r.Scheme
 	if sch == nil {
@@ -235,6 +269,41 @@ func (r *RemoteClusters) Detector(secret *corev1.Secret, key string) (*AutoDetec
 	r.entries[id] = &remoteEntry{version: version, detector: d, lastUsed: now}
 	r.evict(now)
 	return d, nil
+}
+
+// CheckEKSKubeconfig reports whether kubeconfig is usable with
+// health.kubeconfigSecretRef.eks: a usable kubeconfig (RemoteConfig) whose
+// current context's user has no credentials.
+func CheckEKSKubeconfig(kubeconfig []byte) error {
+	if err := noCredentials(kubeconfig); err != nil {
+		return err
+	}
+	_, err := RemoteConfig(kubeconfig, nil)
+	return err
+}
+
+// noCredentials refuses a kubeconfig whose current context's user has
+// credentials: with eks the controller authenticates, and a credential in
+// the Secret would be a second, long-lived way in.
+func noCredentials(kubeconfig []byte) error {
+	raw, err := clientcmd.Load(kubeconfig)
+	if err != nil {
+		return fmt.Errorf("%w: not a kubeconfig", ErrKubeconfigNotAllowed)
+	}
+	kctx, ok := raw.Contexts[raw.CurrentContext]
+	if !ok {
+		return fmt.Errorf("%w: no current-context", ErrKubeconfigNotAllowed)
+	}
+	u, ok := raw.AuthInfos[kctx.AuthInfo]
+	if !ok {
+		return nil
+	}
+	if u.Token != "" || u.TokenFile != "" || len(u.ClientCertificateData) > 0 || u.ClientCertificate != "" ||
+		len(u.ClientKeyData) > 0 || u.ClientKey != "" || u.Username != "" || u.Password != "" || u.Exec != nil || u.AuthProvider != nil {
+		return fmt.Errorf("%w: with health.kubeconfigSecretRef.eks the kubeconfig holds the server and its "+
+			"certificate-authority-data only: remove users[].user's credentials", ErrKubeconfigNotAllowed)
+	}
+	return nil
 }
 
 // evict drops expired entries, then the least recently used ones over the
