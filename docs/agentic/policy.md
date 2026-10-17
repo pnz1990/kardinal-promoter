@@ -1,8 +1,7 @@
 # Actor-aware policy
 
-!!! info "New in v0.12.0 (unreleased)"
-    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
-    it. The [changelog](../changelog.md#unreleased) lists every unreleased change.
+!!! info "New in v0.12.0"
+    v0.11.0 and earlier do not have this. The [changelog](../changelog.md) lists every v0.12.0 change.
 
 kardinal records who created each version, and for an agent which person answers for it
 ([Actors](../actors.md)). Policy uses that record: an agent can ship to test on its

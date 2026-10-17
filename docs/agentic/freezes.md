@@ -1,8 +1,7 @@
 # Freeze agents, stop the line
 
-!!! info "New in v0.12.0 (unreleased)"
-    This page describes main. It ships in v0.12.0; v0.11.0, the latest release, does not have
-    it. The [changelog](../changelog.md#unreleased) lists every unreleased change.
+!!! info "New in v0.12.0"
+    v0.11.0 and earlier do not have this. The [changelog](../changelog.md) lists every v0.12.0 change.
 
 A freeze holds promotions until it is lifted, in every Graph, including versions already on
 their way. An **agent freeze** holds the versions agents created and lets people's through. A

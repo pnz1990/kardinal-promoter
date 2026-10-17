@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **Lead time leaves rollbacks out, and refuses a commit time more than a year old** (#1942) — rollback versions were in the p50 and p90 lead time (from their creation) and in `kardinal metrics`' `lead_time_avg`, so many fast rollbacks pulled the median down. DORA's lead time for changes leaves them out, and so do these now; they still count in `rollback_rate` and `auto_rollback_rate`. The Bundle API and `kardinal create bundle --commit-time` also refuse a `provenance.commitTime` more than a year old, and the metrics ignore one more than a year before the version's creation (set with kubectl): such a time is almost always a wrong value, such as the Unix epoch, and one alone set the p90. The `p50_commit_to_prod` note no longer gives a count of versions measured from their creation that it cannot know, and reads `-` when only rollbacks were Verified. The [monitoring guide](guides/monitoring.md) now says that anyone who can write Bundles can set the automatic rollback labels.

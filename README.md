@@ -7,6 +7,7 @@
 <h1 align="center">kardinal-promoter</h1>
 
 <p align="center">
+  <strong>GitOps Governance for the Agentic Era</strong><br/>
   Promote every version of your app through test, uat and prod, with gates you can read.<br/>
   <a href="https://pnz1990.github.io/kardinal-promoter/">Docs</a> ·
   <a href="https://pnz1990.github.io/kardinal-promoter/quickstart/">Quickstart</a> ·

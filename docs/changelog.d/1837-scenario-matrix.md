@@ -1,5 +1,0 @@
----
-section: Development
----
-
-- **Scenario matrix** (`test/scenario`, #1837) — 48 fake-client scenarios, generated pairwise over update strategy (kustomize, helm, yaml, argocd, rendered), health adapter (Deployment, resource selector, Argo CD, Flux, Argo Rollouts, Flagger), gate (CEL, approval, metric, change window, soak, upstream soak), topology (linear, fan-out, fan-in, waves, fleet with `maxConcurrent` and `maxUnavailable`), delivery (pr-review, direct), SCM (GitHub, GitLab, Forgejo) and outcome (success, health failure, gate block, superseded, rejected, rollback). Each runs the translator and every kardinal reconciler as the controller wires them, against real git repositories (kardinal's own git client), the real GitHub, GitLab and Forgejo clients over a fake of each host's API, a kro Graph executor that follows kro v0.10.0-rc.0's evaluation rules, and objects admitted with the CRDs' own schema and CEL rules; the combinations the API server refuses are asserted refused. `go test ./test/scenario/` (under 90 s with `-race` on four cores).

@@ -43,7 +43,7 @@ cleans up a deleted step's PR) and, with
 To see the exact rules for your values:
 
 ```bash
-helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   --namespace kardinal-system -f my-values.yaml \
   --show-only templates/clusterrole.yaml
 ```
@@ -330,14 +330,14 @@ instead of a cluster-wide `ClusterRole`.
 
 ```bash
 # Team A — installs kardinal watching only the "team-a" namespace
-helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
   --set scm.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
-helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
@@ -564,11 +564,11 @@ and turn it on after the export.
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal hold`, `kardinal rollback --hold`) appeared in, or left, `spec.holds`, naming who held and who released it (`kardinal unhold --reason`); or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
-| `PipelinePaused` / `PipelineResumed` | (v0.12.0, unreleased) A Pipeline, or one fleet of it (environment set), was paused or resumed (`kardinal pause` / `resume`, the UI, or a `spec.paused` / `spec.pausedFleets` edit), naming who and why (`--reason`); the environment is `*` for the whole Pipeline |
-| `FreezeStarted` / `FreezeLifted` | (v0.12.0, unreleased) A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
+| `PipelinePaused` / `PipelineResumed` | (since v0.12.0) A Pipeline, or one fleet of it (environment set), was paused or resumed (`kardinal pause` / `resume`, the UI, or a `spec.paused` / `spec.pausedFleets` edit), naming who and why (`--reason`); the environment is `*` for the whole Pipeline |
+| `FreezeStarted` / `FreezeLifted` | (since v0.12.0) A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
 | `FreezeExempted` | A step went on through a freeze under an exemption (`kardinal override --freeze`), once per freeze, naming who made it |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
-| `PRMerged` | (v0.12.0, unreleased) A promotion step's pull request (a `pr-review` environment's) was merged: who merged it, asked of the SCM API once the merge is confirmed (never taken from a webhook payload, which anyone holding the webhook secret could write), whether the webhook or polling saw the merge, and the merge commit. The step waits for the name for at most 5 minutes; if the SCM cannot give it, the record says the merger is unknown. The step's `status.outputs.prMergedBy` names the merger too. On GitLab the merger is the API's `merge_user`: with "merge when pipeline succeeds", the user who set it |
+| `PRMerged` | (since v0.12.0) A promotion step's pull request (a `pr-review` environment's) was merged: who merged it, asked of the SCM API once the merge is confirmed (never taken from a webhook payload, which anyone holding the webhook secret could write), whether the webhook or polling saw the merge, and the merge commit. The step waits for the name for at most 5 minutes; if the SCM cannot give it, the record says the merger is unknown. The step's `status.outputs.prMergedBy` names the merger too. On GitLab the merger is the API's `merge_user`: with "merge when pipeline succeeds", the user who set it |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 | `APIWrite` | A write through the UI API or the Bundle API (promote, roll back, create a version, approve, override, pause, resume, reject, release a hold), refused ones included (outcome `Failure`), naming the caller and the route ([API writes](#api-writes)) |
@@ -822,7 +822,7 @@ both records.
 By default, no NetworkPolicy is applied. In environments with a NetworkPolicy-capable CNI (Calico, Cilium, etc.), enable the built-in policy to restrict the controller's network access:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   --set networkPolicy.enabled=true
 ```
 
@@ -1092,7 +1092,7 @@ Store a random token in a Secret and point the chart at it (`--ui-auth-token`, o
 kubectl create secret generic kardinal-ui-token -n kardinal-system \
   --from-literal=token="$(openssl rand -hex 32)"
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   -n kardinal-system --reset-then-reuse-values \
   --set ui.auth.tokenSecretRef.name=kardinal-ui-token
 ```
@@ -1113,7 +1113,7 @@ one team, or behind an authenticating proxy; for several teams, use Option 2 and
 ### Option 2: Kubernetes tokens (TokenReview)
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   -n kardinal-system --reset-then-reuse-values \
   --set ui.auth.tokenReview=true
 ```
@@ -1265,7 +1265,7 @@ This is Option 2 with three pieces in front of it, and needs no change to kardin
    own audience, and allow the host name people browse to:
 
     ```bash
-    helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+    helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
       -n kardinal-system --reset-then-reuse-values \
       --set ui.auth.tokenReview=true \
       --set tokenReview.acceptAPIServerAudience=true \
@@ -1426,7 +1426,7 @@ non-default cluster domain, or the node IP you browse to. Clients that come in t
 way are not local, so they also need a UI auth mode (see above):
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   -n kardinal-system --reset-then-reuse-values \
   --set 'ui.allowedHosts={kardinal.example.com}'
 ```
@@ -1531,7 +1531,7 @@ controller:
       readOnly: true
 ```
 
-Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 -f tls-values.yaml`.
+Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 -f tls-values.yaml`.
 The paths must point at a mounted certificate. The chart refuses a path that is not in a
 `secret`, `projected` or `csi` volume mounted with `controller.extraVolumes` and
 `controller.extraVolumeMounts` (in the mounted directory, or the file a `subPath` mount puts

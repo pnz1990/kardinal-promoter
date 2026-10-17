@@ -1,5 +1,0 @@
----
-section: Development
----
-
-- **Enterprise scenario** (`test/scenario/enterprise`, #1837) — 20 team namespaces with 200 Pipelines on one controller, the platform team's org gates (a schedule gate and a release-manager approval gate) on every prod, each team's own soak gate, and 1,000 versions created at once: the newest version of every Pipeline ends Verified everywhere, nothing a promotion creates (steps, gate instances, PRStatuses, AuditEvents, Approvals, PRs, Graph reads) crosses a team's namespace, an Approval in another namespace for a Bundle of the same name and UID does not open a team's gate, and reconciles per object stay bounded. With the chart's user roles bound per namespace and its admission policies, no team member reads, approves, rejects or overrides in another team's namespace. The full size runs in CI's `scenario enterprise` job; `go test ./...` runs a small one (3 teams of 3 Pipelines, 3 versions each). The scenario World also has a watch mode, which reconciles an object only when kardinal's watches would wake it, and reads through an in-memory cache as the controller reads from its informers.

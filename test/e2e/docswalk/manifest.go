@@ -79,7 +79,7 @@ var Manifest = map[string][]Block{
 		{Match: "kubectl config set-credentials release-agent"},
 	},
 	"first-pipeline.md": {
-		{Match: "kardinal version", Skip: "shows v0.11.0; the suite runs this checkout's CLI and controller"},
+		{Match: "kardinal version", Skip: "shows v0.12.0; the suite runs this checkout's CLI and controller"},
 		{Match: "kind: ApplicationSet"},
 		{Match: "--from-literal=token=<your-github-pat>"},
 		{Match: "kardinal init --name kardinal-test-app"},

@@ -68,7 +68,7 @@ jobs:
 
       - name: Create Bundle
         id: bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.11.0
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.0
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -86,7 +86,7 @@ jobs:
 
 ```yaml
       - name: Create Bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.11.0
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.0
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -195,7 +195,7 @@ kardinal create bundle my-app --type config \
   --config-repo https://github.com/myorg/app-config --config-commit "${CONFIG_SHA}"
 ```
 
-`--commit`, `--author` and `--ci-run-url` set `spec.provenance`. In v0.12.0 (unreleased) the
+`--commit`, `--author` and `--ci-run-url` set `spec.provenance`. Since v0.12.0 the
 API server refuses an author over 256 characters or a CI run URL over 2048. See
 [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
 
@@ -333,7 +333,7 @@ kubectl create secret generic kardinal-ci-token \
   --namespace=kardinal-system \
   --from-literal=token=$(openssl rand -hex 32)
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.11.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
   -n kardinal-system --reset-then-reuse-values \
   --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```
