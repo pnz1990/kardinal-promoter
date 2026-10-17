@@ -20,6 +20,7 @@ var PackFiles = map[string]string{
 	// signed envelope (status.bundle), which kardinal verify-receipt --file
 	// checks offline.
 	"PromotionReceipt": "receipts.ndjson",
+	"ChangeRequest":    "changerequests.ndjson",
 }
 
 // PackEvidence is a row of controls.json: the evidence with the pack files

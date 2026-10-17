@@ -15,9 +15,10 @@ A period that ends before the oldest AuditEvent fails: export continuously
 with kardinal audit export.
 
 The period is the versions (Bundles) created in [--since, --until) and the
-AuditEvents timestamped in it. A version brings its Approvals, gate instances
-and Verdicts. The Pipelines, gate templates, ChangeWindows, AgentIdentities
-and admission policies are the ones in force at export.
+AuditEvents timestamped in it. A version brings its Approvals, gate instances,
+Verdicts, receipts and change request tickets. The Pipelines, gate and change request
+templates, ChangeWindows, AgentIdentities and admission policies are the ones
+in force at export.
 
     manifest.json                format, kardinal version, exporter, period,
                                  filters, each file's records, bytes and
@@ -33,8 +34,12 @@ and admission policies are the ones in force at export.
     receipts.ndjson              their PromotionReceipts, statement and
                                  Sigstore bundle as signed (verify one
                                  with kardinal verify-receipt --file)
+    changerequests.ndjson        their ChangeRequest instances (ticket,
+                                 state, approvers, whether it was verified)
     pipelines.ndjson             the Pipelines
     policygate-templates.ndjson  the gate templates
+    changerequest-templates.ndjson
+                                 the ChangeRequest templates
     changewindows.ndjson         windows and freezes, with exemptions
     agentidentities.ndjson       the agent registry
     admission.yaml               the chart's ValidatingAdmissionPolicies

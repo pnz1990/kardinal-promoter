@@ -495,6 +495,106 @@ spec:
                   same patch as the move to Promoting when receipts are enabled, and
                   cleared once the step's PromotionReceipt exists.
                 properties:
+                  changeRequests:
+                    description: |-
+                      ChangeRequests are the step's ChangeRequest instances (the tickets
+                      of its Bundle and environment, docs/change-requests.md) as the step
+                      read them when it left Pending: the inputs its gates read as
+                      changeRequests.<name>.
+                    items:
+                      description: DecisionChangeRequest is one ChangeRequest instance
+                        as a step read it.
+                      properties:
+                        approvers:
+                          description: Approvers are the ticket's approvers, as the
+                            provider reported them.
+                          items:
+                            description: |-
+                              ChangeRequestApprover is one approver's decision, when the provider
+                              exposes it.
+                            properties:
+                              at:
+                                format: date-time
+                                type: string
+                              decision:
+                                description: Decision is the provider's (approved,
+                                  rejected, requested).
+                                type: string
+                              name:
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          maxItems: 32
+                          type: array
+                        approversOmitted:
+                          description: ApproversOmitted counts the approvers the snapshot
+                            cut.
+                          type: integer
+                        instance:
+                          description: Instance is the ChangeRequest instance.
+                          type: string
+                        name:
+                          description: |-
+                            Name is the ChangeRequest template the instance was made from: the
+                            name a gate reads as changeRequests.<name>.
+                          type: string
+                        observedAt:
+                          description: ObservedAt is when the ticket was last read.
+                          format: date-time
+                          type: string
+                        provider:
+                          description: Provider is servicenow or jira.
+                          type: string
+                        providerState:
+                          description: ProviderState is the instance's status.providerState.
+                          type: string
+                        state:
+                          description: State is the instance's status.state.
+                          type: string
+                        ticket:
+                          description: Ticket is the ticket the instance tracks; nil
+                            when it has none yet.
+                          properties:
+                            id:
+                              description: ID is the ServiceNow sys_id or the Jira
+                                issue id.
+                              type: string
+                            key:
+                              description: Key is the ServiceNow number (CHG0031337)
+                                or the Jira issue key (CHG-42).
+                              type: string
+                            url:
+                              description: URL is the ticket's page.
+                              type: string
+                          required:
+                          - key
+                          type: object
+                        timedOut:
+                          description: TimedOut is the instance's status.timedOut.
+                          type: boolean
+                        validUntil:
+                          description: |-
+                            ValidUntil is until when that reading counts: a gate evaluated later
+                            reads the ticket's state as unknown.
+                          format: date-time
+                          type: string
+                        verified:
+                          description: |-
+                            Verified reports whether the ticket is this promotion's: one kardinal
+                            opened, or a linked one the reconciler verified
+                            (ChangeRequestStatus.TicketVerified).
+                          type: boolean
+                        verifiedReason:
+                          description: VerifiedReason is the instance's status.verifiedReason.
+                          type: string
+                      required:
+                      - instance
+                      - name
+                      - verified
+                      type: object
+                    maxItems: 32
+                    type: array
                   facts:
                     description: |-
                       Facts are what every required gate showed, decided before any cut:
@@ -880,8 +980,9 @@ spec:
                   truncated:
                     description: |-
                       Truncated is true when the snapshot was cut to MaxDecisionBytes:
-                      approvals and Verdicts that did not count, long gate texts, or gates
-                      (OmittedGates). PolicyDigest covers every gate.
+                      approvals and Verdicts that did not count, long gate texts, change
+                      request approvers, or gates (OmittedGates). PolicyDigest covers every
+                      gate.
                     type: boolean
                 required:
                 - takenAt

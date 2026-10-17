@@ -161,7 +161,7 @@ func TestAudit_EvidencePack(t *testing.T) {
 	r = c.Exec(framework.CLIOptions{Kubeconfig: auditorKubeconfig(t, e, "", auditor)},
 		c.Args(a.ns, "audit", "evidence-pack", "--since", "1h", "-o", pack)...)
 	require.Zero(t, r.Code, r.Output())
-	assert.Regexp(t, `sha256:[0-9a-f]{64}  `+pack+` \(15 files, \d+ records\)`, r.Stderr)
+	assert.Regexp(t, `sha256:[0-9a-f]{64}  `+pack+` \(17 files, \d+ records\)`, r.Stderr)
 	dir, m := packOf(t, pack)
 	sums := exec.Command("sha256sum", "-c", "SHA256SUMS")
 	sums.Dir = dir

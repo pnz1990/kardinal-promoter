@@ -135,12 +135,24 @@ func packWorld(t *testing.T, events int) []sigs_client.Object {
 			ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "v-" + a.bundle + "-" + a.env, CreationTimestamp: at("2026-09-02T00:00:00Z")},
 			Spec:       v1alpha1.VerdictSpec{Pipeline: "app", Bundle: a.bundle, Environment: a.env, Check: "smoke", Result: "pass", By: "ci"},
 		})
+		objs = append(objs, &v1alpha1.ChangeRequest{
+			ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "cr-" + a.bundle + "-" + a.env, CreationTimestamp: at("2026-09-02T00:00:00Z"),
+				Labels: map[string]string{"kardinal.io/bundle": a.bundle, "kardinal.io/environment": a.env, "kardinal.io/change-request-template": "prod-change"}},
+			Spec: v1alpha1.ChangeRequestSpec{Provider: "jira"},
+			Status: v1alpha1.ChangeRequestStatus{Ticket: &v1alpha1.ChangeRequestTicket{Key: "CHG-" + a.env, URL: "https://jira.example.com/browse/CHG-1"},
+				State: "approved", Approvers: []v1alpha1.ChangeRequestApprover{{Name: "carol"}}},
+		})
 	}
 	objs = append(objs,
 		&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "gate", CreationTimestamp: at("2026-01-01T00:00:00Z")},
 			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}},
 		&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "freeze-app", CreationTimestamp: at("2026-01-01T00:00:00Z")},
 			Spec: v1alpha1.PolicyGateSpec{Expression: "false", Generated: true}},
+		// A template, labelled as a version's: still a template (no
+		// change-request-template label), not an instance.
+		&v1alpha1.ChangeRequest{ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "prod-change", CreationTimestamp: at("2026-01-01T00:00:00Z"),
+			Labels: map[string]string{"kardinal.io/bundle": "app-v2", "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.ChangeRequestSpec{PerPromotion: true, Provider: "jira"}},
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "app", CreationTimestamp: at("2026-01-01T00:00:00Z")}},
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "web", CreationTimestamp: at("2026-01-01T00:00:00Z")}},
 		&v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "holidays", CreationTimestamp: at("2026-01-01T00:00:00Z")},
@@ -261,13 +273,14 @@ func TestEvidencePack(t *testing.T) {
 	b, stderr, err := buildPack(t, objs, pg, packPeriodOpts)
 	require.NoError(t, err)
 	assert.Equal(t, auditExportPage, pg.maxPage, "every kind is read in pages of %d", auditExportPage)
-	assert.Regexp(t, `^sha256:[0-9a-f]{64}  .*pack\.tar\.gz \(15 files, \d+ records\)\n$`, stderr)
+	assert.Regexp(t, `^sha256:[0-9a-f]{64}  .*pack\.tar\.gz \(17 files, \d+ records\)\n$`, stderr)
 	sum := sha256.Sum256(b)
 	assert.Contains(t, stderr, hex.EncodeToString(sum[:]), "the printed digest is the pack's")
 
 	files, order := readPack(t, b)
 	assert.Equal(t, []string{"manifest.json", "SHA256SUMS", "admission.yaml", "agentidentities.ndjson", "approvals.ndjson",
-		"auditevents.ndjson", "auditevents.ocsf.ndjson", "bundles.ndjson", "changewindows.ndjson", "controls.json",
+		"auditevents.ndjson", "auditevents.ocsf.ndjson", "bundles.ndjson", "changerequest-templates.ndjson", "changerequests.ndjson",
+		"changewindows.ndjson", "controls.json",
 		"pipelines.ndjson", "policygate-templates.ndjson", "policygates.ndjson", "receipts.ndjson", "verdicts.ndjson"}, order)
 
 	var m packManifest
@@ -304,6 +317,14 @@ func TestEvidencePack(t *testing.T) {
 	assert.Equal(t, []string{"ops/gate-app-v9-prod", "pay/gate-app-v2-prod", "pay/gate-app-v2-uat"}, names(packLines(files["policygates.ndjson"])))
 	assert.Equal(t, []string{"ops/v-app-v9-prod", "pay/v-app-v2-prod", "pay/v-app-v2-uat"}, names(packLines(files["verdicts.ndjson"])))
 	assert.Equal(t, []string{"pay/gate"}, names(packLines(files["policygate-templates.ndjson"])), "templates, not instances or generated gates")
+	crs := packLines(files["changerequests.ndjson"])
+	assert.Equal(t, []string{"ops/cr-app-v9-prod", "pay/cr-app-v2-prod", "pay/cr-app-v2-uat"}, names(crs),
+		"the change requests of the period's versions, not app-v1's, and not the template")
+	require.NotEmpty(t, crs)
+	assert.Equal(t, "ChangeRequest", crs[0]["kind"])
+	assert.Equal(t, map[string]interface{}{"key": "CHG-prod", "url": "https://jira.example.com/browse/CHG-1"},
+		crs[0]["status"].(map[string]interface{})["ticket"], "the ticket, as the instance's status holds it")
+	assert.Equal(t, []string{"pay/prod-change"}, names(packLines(files["changerequest-templates.ndjson"])), "templates, not instances")
 	assert.Equal(t, []string{"pay/app", "pay/web"}, names(packLines(files["pipelines.ndjson"])))
 	assert.Equal(t, []string{"/holidays"}, names(packLines(files["changewindows.ndjson"])))
 	assert.Equal(t, []string{"/fixer"}, names(packLines(files["agentidentities.ndjson"])))
@@ -351,6 +372,7 @@ func TestEvidencePack_Filters(t *testing.T) {
 	assert.Equal(t, []string{"pay/app-v2"}, names(packLines(files["bundles.ndjson"])))
 	assert.Equal(t, []string{"pay/app-v2-prod"}, names(packLines(files["approvals.ndjson"])))
 	assert.Equal(t, []string{"pay/gate-app-v2-prod"}, names(packLines(files["policygates.ndjson"])))
+	assert.Equal(t, []string{"pay/cr-app-v2-prod"}, names(packLines(files["changerequests.ndjson"])), "the environment filter applies")
 	assert.Equal(t, []string{"pay/app"}, names(packLines(files["pipelines.ndjson"])))
 	var m packManifest
 	require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
@@ -372,7 +394,7 @@ func TestEvidencePack_Coverage(t *testing.T) {
 		assert.Equal(t, []string{"ValidatingAdmissionPolicy", "Verdict"}, m.Coverage.Forbidden)
 		assert.NotContains(t, files, "verdicts.ndjson")
 		assert.NotContains(t, files, "admission.yaml")
-		assert.Contains(t, stderr, "(13 files,")
+		assert.Contains(t, stderr, "(15 files,")
 		assert.Contains(t, stderr, "warning: you may not read some kinds in every namespace (-A)")
 	})
 	t.Run("an export that fails part way leaves no pack", func(t *testing.T) {

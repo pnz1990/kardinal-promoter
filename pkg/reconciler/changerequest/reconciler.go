@@ -392,12 +392,13 @@ func (r *Reconciler) record(ctx context.Context, st *kardinalv1alpha1.ChangeRequ
 	if action != "" {
 		r.enqueue(ctx, st, cr, action, "Success", now, auditMessage(action, cr, st))
 	}
-	if st.State != prevState && (st.State == kardinalv1alpha1.ChangeRequestApproved || st.State == kardinalv1alpha1.ChangeRequestRejected) {
-		a := AuditActionApproved
-		if st.State == kardinalv1alpha1.ChangeRequestRejected {
-			a = AuditActionRejected
+	if st.State != prevState {
+		switch st.State {
+		case kardinalv1alpha1.ChangeRequestApproved:
+			r.enqueue(ctx, st, cr, AuditActionApproved, "Success", now, auditMessage(AuditActionApproved, cr, st))
+		case kardinalv1alpha1.ChangeRequestRejected:
+			r.enqueue(ctx, st, cr, AuditActionRejected, "Success", now, auditMessage(AuditActionRejected, cr, st))
 		}
-		r.enqueue(ctx, st, cr, a, "Success", now, auditMessage(a, cr, st))
 	}
 }
 

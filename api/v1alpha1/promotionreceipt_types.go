@@ -232,9 +232,18 @@ type PromotionDecision struct {
 	// +optional
 	Facts *DecisionFacts `json:"facts,omitempty"`
 
+	// ChangeRequests are the step's ChangeRequest instances (the tickets
+	// of its Bundle and environment, docs/change-requests.md) as the step
+	// read them when it left Pending: the inputs its gates read as
+	// changeRequests.<name>.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	ChangeRequests []DecisionChangeRequest `json:"changeRequests,omitempty"`
+
 	// Truncated is true when the snapshot was cut to MaxDecisionBytes:
-	// approvals and Verdicts that did not count, long gate texts, or gates
-	// (OmittedGates). PolicyDigest covers every gate.
+	// approvals and Verdicts that did not count, long gate texts, change
+	// request approvers, or gates (OmittedGates). PolicyDigest covers every
+	// gate.
 	// +optional
 	Truncated bool `json:"truncated,omitempty"`
 
@@ -338,6 +347,54 @@ type DecisionOverride struct {
 	// Actor is its actor stamp.
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
+}
+
+// MaxDecisionChangeRequests bounds status.decision.changeRequests.
+const MaxDecisionChangeRequests = 32
+
+// DecisionChangeRequest is one ChangeRequest instance as a step read it.
+type DecisionChangeRequest struct {
+	// Name is the ChangeRequest template the instance was made from: the
+	// name a gate reads as changeRequests.<name>.
+	Name string `json:"name"`
+	// Instance is the ChangeRequest instance.
+	Instance string `json:"instance"`
+	// Provider is servicenow or jira.
+	// +optional
+	Provider string `json:"provider,omitempty"`
+	// Ticket is the ticket the instance tracks; nil when it has none yet.
+	// +optional
+	Ticket *ChangeRequestTicket `json:"ticket,omitempty"`
+	// State is the instance's status.state.
+	// +optional
+	State string `json:"state,omitempty"`
+	// ProviderState is the instance's status.providerState.
+	// +optional
+	ProviderState string `json:"providerState,omitempty"`
+	// Verified reports whether the ticket is this promotion's: one kardinal
+	// opened, or a linked one the reconciler verified
+	// (ChangeRequestStatus.TicketVerified).
+	Verified bool `json:"verified"`
+	// VerifiedReason is the instance's status.verifiedReason.
+	// +optional
+	VerifiedReason string `json:"verifiedReason,omitempty"`
+	// Approvers are the ticket's approvers, as the provider reported them.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Approvers []ChangeRequestApprover `json:"approvers,omitempty"`
+	// ApproversOmitted counts the approvers the snapshot cut.
+	// +optional
+	ApproversOmitted int `json:"approversOmitted,omitempty"`
+	// TimedOut is the instance's status.timedOut.
+	// +optional
+	TimedOut bool `json:"timedOut,omitempty"`
+	// ObservedAt is when the ticket was last read.
+	// +optional
+	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
+	// ValidUntil is until when that reading counts: a gate evaluated later
+	// reads the ticket's state as unknown.
+	// +optional
+	ValidUntil *metav1.Time `json:"validUntil,omitempty"`
 }
 
 // PendingReceipt is the receipt outbox of a PromotionStep: the receipt it
