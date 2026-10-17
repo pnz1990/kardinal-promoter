@@ -50,6 +50,9 @@ The controller registers these on the same `/metrics` endpoint (`pkg/reconciler/
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 | `kardinal_auditevents_pruned_total` | Counter | — | AuditEvents deleted by retention (`audit.retention`) |
+| `kardinal_receipts_total` | Counter | `mode` (`keyless`, `key`, `kms`) | Promotion receipts signed ([Receipts](../receipts.md#size)); each Pipeline environment's count and size are in `status.environments[].receipts` |
+| `kardinal_receipt_bytes_total` | Counter | — | Bytes of the promotion receipts signed (statements and signed bundles) |
+| `kardinal_receipts_failed_total` | Counter | `sink` (`signing`, `oci`, `pr-comment`, `build`) | Failed promotion receipt attempts, retried with backoff; `build` once per step whose receipt can never be built. A failing sink never holds a promotion |
 | `kardinal_agent_index_bytes` | Gauge | — | Size of the agent index's entries, as its 1 MiB bound counts them (blocked entries included); set by the leader only, 0 on other replicas ([Agent identities](../actors.md)) |
 | `kardinal_agent_index_max_bytes` | Gauge | — | The agent index's size bound: past it the index is not Ready and the actor policy refuses the writes it checks |
 | `kardinal_events_dropped_total` | Counter | `recorder`, `type` | Kubernetes Events not written because the controller was over its rate: `type="Normal"` over `--event-qps`/`--event-burst`, `type="Warning"` over a namespace's `--event-warning-qps`/`--event-warning-burst` ([Kubernetes Events](../operate.md#kubernetes-events) lists each Warning's durable record) |

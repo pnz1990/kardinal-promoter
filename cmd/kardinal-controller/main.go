@@ -951,7 +951,8 @@ func main() {
 	}
 
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient(), AllowedRepositories: allowedRepos,
-		Agents:           actors.source, // vouches for the agent stamps of holds and lastChange
+		Receipts:         receiptOpts.enabled, // status.environments[].receipts
+		Agents:           actors.source,       // vouches for the agent stamps of holds and lastChange
 		ControllerSecret: controllerSecret,
 		CompactAbove:     &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
 		HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder,

@@ -1,0 +1,60 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package cmd
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+)
+
+// TestDoctor_ReceiptGrowth (#2136): doctor reports the receipts' count and
+// size from the Pipelines' status, and warns past 1 GiB when the controller
+// keeps every receipt (no --receipt-retention-max-age); with retention, or
+// below the threshold, or without receipts, it passes.
+//
+// Covers RECEIPT-SIZE-01.
+func TestDoctor_ReceiptGrowth(t *testing.T) {
+	pipeline := func(bytes int64) *v1alpha1.Pipeline {
+		return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+			Status: v1alpha1.PipelineStatus{Environments: []v1alpha1.PipelineEnvironmentStatus{
+				{Name: "test", Receipts: &v1alpha1.EnvironmentReceipts{Count: 3000, Bytes: bytes / 2}},
+				{Name: "prod", Receipts: &v1alpha1.EnvironmentReceipts{Count: 1000, Bytes: bytes / 2}},
+			}}}
+	}
+	controller := func(args ...string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter", Namespace: "kardinal-system"},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "controller", Args: append([]string{"--receipts=true"}, args...)}}}}}}
+	}
+	for name, tc := range map[string]struct {
+		objs   []sigs_client.Object
+		warned bool
+		detail string
+	}{
+		"over 1 GiB, retention off": {[]sigs_client.Object{pipeline(2 << 30), controller()}, true, "4000 receipts, 2.0 GiB (all namespaces; retention off)"},
+		"over 1 GiB, retention on":  {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age=2160h")}, false, "retention 2160h"},
+		"under 1 GiB":               {[]sigs_client.Object{pipeline(10 << 20), controller()}, false, "4000 receipts, 10.0 MiB"},
+		"no receipts":               {[]sigs_client.Object{controller()}, false, "no promotion receipts"},
+		"controller unreadable":     {[]sigs_client.Object{pipeline(2 << 30)}, false, "retention unknown"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(tc.objs...).Build()
+			r := checkReceiptGrowth(context.Background(), c, "team-a", "kardinal-system")
+			assert.Equal(t, tc.warned, r.warned, r.detail)
+			assert.Contains(t, r.detail, tc.detail)
+			if tc.warned {
+				assert.Contains(t, r.hint, "receipts.retention.maxAge")
+			}
+		})
+	}
+}

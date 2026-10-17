@@ -80,9 +80,9 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Run pre-flight checks to verify the cluster is correctly configured",
 		Long: `Check that kardinal can work in this cluster: the controller answers, the
-CRDs are installed, kro and its Graph CRD run, and the controller has an SCM
-token. --pipeline also checks one Pipeline. Run it first when something is
-wrong.`,
+CRDs are installed, kro and its Graph CRD run, the controller has an SCM
+token, and promotion receipts do not outgrow etcd while retention is off.
+--pipeline also checks one Pipeline. Run it first when something is wrong.`,
 		Example: `  kardinal doctor
   kardinal doctor --pipeline my-app -n team-a`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -121,6 +121,7 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 		checkKroController(ctx, client),
 		checkKroCRDs(disco),
 		checkGitHubToken(ctx, client, controllerNS),
+		checkReceiptGrowth(ctx, client, ns, controllerNS),
 	}
 	if pipeline != "" {
 		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))

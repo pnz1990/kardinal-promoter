@@ -19,12 +19,20 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -106,14 +114,21 @@ func TestVerifyReceipt_FromCluster(t *testing.T) {
 	out, _, err := runOutput(t, c, "verify-receipt", "checkout", "prod", "--key", key, "--require", "GATES_PASSED,APPROVED,!OVERRIDDEN")
 	require.NoError(t, err)
 	for _, want := range []string{
-		"VERIFIED receipt checkout-1-5-0-prod",
+		"receipt checkout-1-5-0-prod: every check below that was made passed",
+		"✓ signature:        key sha256:",
+		"– transparency log: no entry",
+		"✓ statement:        the cluster's spec.statement, sha256:",
+		"– subject digest:   not pinned (give --image or --subject)",
+		"✓ resource:         kardinal://c1/namespaces/default/pipelines/checkout/environments/prod (namespace, pipeline, environment pinned)",
+		"✓ levels:           GATES_PASSED, APPROVED, !OVERRIDDEN as required",
+		"✓ bundle:           checkout-1-5-0 is the Bundle the receipt was made for (UID bundle-uid)",
 		"version:     checkout-1-5-0 (1.5.0)",
 		"actor:       agent fixer for alice@example.com",
 		"signed by:   key",
 		"change:      https://github.com/acme/deploy/pull/412",
 		"gate approve: pass (1 of 1)",
 		"approved by: carol@example.com",
-		"verified by: agent qa for alice",
+		"verdicts by: agent qa for alice",
 		"levels:      KARDINAL_GATES_PASSED, KARDINAL_APPROVED, KARDINAL_VERIFIED_BY_AGENT, KARDINAL_HEALTHY",
 		"policy:      sha256:",
 	} {
@@ -126,6 +141,11 @@ func TestVerifyReceipt_FromCluster(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &res))
 	assert.True(t, res.Verified)
 	assert.Equal(t, "checkout-1-5-0-prod", res.Receipt)
+	require.NotEmpty(t, res.Checks)
+	assert.Equal(t, receipt.Check{Name: "signature", Checked: true, Detail: res.Checks[0].Detail}, res.Checks[0])
+	for _, c := range res.Checks {
+		assert.NotEqual(t, "verified", strings.ToLower(c.Detail), "never a bare verified")
+	}
 	assert.Equal(t, "bundle-uid", res.Statement.Predicate.Kardinal.Version.BundleUID)
 }
 
@@ -188,7 +208,10 @@ func TestVerifyReceipt_File(t *testing.T) {
 	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest, "--cluster", "c1"}
 	out, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key}, pin...)...)
 	require.NoError(t, err)
-	assert.Contains(t, out, "VERIFIED receipt checkout-1-5-0-prod")
+	assert.Contains(t, out, "receipt checkout-1-5-0-prod: every check below that was made passed")
+	assert.Contains(t, out, "✓ subject digest:   "+receiptDigest)
+	assert.Contains(t, out, "(cluster, namespace, pipeline, environment pinned)")
+	assert.NotContains(t, out, "VERIFIED receipt", "never a bare verified")
 
 	// QA-3 B2: a file is verified for one namespace, Pipeline, environment
 	// and subject, each required; another's is refused.
@@ -289,14 +312,15 @@ func TestReceiptMarks(t *testing.T) {
 	out, _, err := runOutput(t, c, "history", "checkout")
 	require.NoError(t, err)
 	assert.Contains(t, out, "RECEIPT")
-	assert.Contains(t, out, "verified")
+	assert.Contains(t, out, "signed")
+	assert.NotContains(t, out, "verified", "the controller signs; verify-receipt verifies (#2135)")
 	out, _, err = runOutput(t, c, "history", "checkout", "-o", "json")
 	require.NoError(t, err)
 	assert.Contains(t, out, `"receipt": {`)
-	assert.Contains(t, out, `"verified": true`)
+	assert.Contains(t, out, `"signed": true`)
 	out, _, err = runOutput(t, c, "why", "checkout", "prod")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Receipt  checkout-1-5-0-prod, verified: kardinal verify-receipt checkout prod --bundle checkout-1-5-0")
+	assert.Contains(t, out, "Receipt  checkout-1-5-0-prod, signed: kardinal verify-receipt checkout prod --bundle checkout-1-5-0")
 
 	bare := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(b, step, p).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
@@ -319,4 +343,77 @@ func TestVerifyReceipt_ClusterBindsPipeline(t *testing.T) {
 	_, _, err := runOutput(t, receiptClient(t, rc, b), "verify-receipt", "checkout", "prod", "--key", key)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not pipeline checkout")
+}
+
+// TestVerifyReceipt_ImageReferrers (#1951 N3): --image reads the image's
+// receipt referrers from a registry and verifies the one of the pinned
+// resource, whatever the other environments' receipts; when the image has
+// more referrers than are read and none is the pinned resource's, it fails
+// closed: whether a receipt exists is unknown, never "not found = OK".
+//
+// Covers RECEIPT-OCI-03.
+func TestVerifyReceipt_ImageReferrers(t *testing.T) {
+	keepStyle(t)
+	other := "sha256:" + strings.Repeat("e", 64)
+	inner := registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Another image whose referrers are 1,025 receipts of test, none of
+		// prod: more than are read. Only the index is served: no test
+		// receipt is fetched.
+		if strings.HasSuffix(r.URL.Path, "/referrers/"+other) {
+			idx := v1.IndexManifest{SchemaVersion: 2, MediaType: types.OCIImageIndex}
+			for i := 0; i <= receipt.MaxReferrerEntries; i++ {
+				idx.Manifests = append(idx.Manifests, v1.Descriptor{MediaType: types.OCIManifestSchema1, Size: 1,
+					Digest: v1.Hash{Algorithm: "sha256", Hex: fmt.Sprintf("%064x", i)}, ArtifactType: receipt.BundleMediaType,
+					Annotations: map[string]string{receipt.PredicateTypeAnnotation: receipt.PredicateVSA, receipt.ReceiptAnnotation: "true",
+						receipt.ResourceAnnotation: fmt.Sprintf("kardinal://c1/namespaces/default/pipelines/checkout/environments/test-%d", i)}})
+			}
+			w.Header().Set("Content-Type", string(types.OCIImageIndex))
+			_ = json.NewEncoder(w).Encode(idx)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	rc, _, key := signedReceipt(t)
+	reg := &receipt.Registry{Insecure: true}
+	const prod = "kardinal://c1/namespaces/default/pipelines/checkout/environments/prod"
+	_, err := reg.PushReferrer(context.Background(), host+"/acme/receipts", "ghcr.io/acme/checkout", receiptDigest, prod, []byte(rc.Status.Bundle))
+	require.NoError(t, err)
+	args := []string{"verify-receipt", "--image", "ghcr.io/acme/checkout@" + receiptDigest, "-n", "default", "--pipeline", "checkout",
+		"--env", "prod", "--cluster", "c1", "--key", key, "--repository", host + "/acme/receipts", "--insecure-registry"}
+	out, _, err := runOutput(t, receiptClient(t), args...)
+	require.NoError(t, err)
+	assert.Contains(t, out, "✓ subject digest:   "+receiptDigest)
+
+	args[2] = "ghcr.io/acme/checkout@" + other
+	_, stderr, err := runOutput(t, receiptClient(t), args...)
+	require.Error(t, err, "fails closed")
+	assert.Contains(t, err.Error(), "whether one exists is unknown")
+	assert.Contains(t, stderr, "more receipt referrers than are read")
+}
+
+// TestVerifyReceipt_Timeout (QA-2 #2174): a registry that does not answer
+// makes verify-receipt fail within --timeout, saying it cannot verify,
+// rather than hang or report the receipt absent.
+func TestVerifyReceipt_Timeout(t *testing.T) {
+	keepStyle(t)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	_, _, key := signedReceipt(t)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	start := time.Now()
+	_, _, err := runOutput(t, receiptClient(t), "verify-receipt", "--image", "ghcr.io/acme/checkout@"+receiptDigest, "-n", "default",
+		"--pipeline", "checkout", "--env", "prod", "--cluster", "c1", "--key", key, "--repository", host+"/acme/receipts",
+		"--insecure-registry", "--timeout", "500ms")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot verify: no answer within --timeout 500ms")
+	assert.Less(t, time.Since(start), 10*time.Second)
 }

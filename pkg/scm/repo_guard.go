@@ -46,6 +46,9 @@ type guardedProvider struct {
 	host  string
 }
 
+// wrapped is the provider g guards (ForgetIdentity).
+func (g *guardedProvider) wrapped() SCMProvider { return g.inner }
+
 func (g *guardedProvider) check(op, repo string) error {
 	if g.allow.AllowsRepo(g.host, repo) {
 		return nil

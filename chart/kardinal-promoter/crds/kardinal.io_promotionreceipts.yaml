@@ -149,6 +149,13 @@ spec:
                   transparency log entry or timestamp when there is one. Set once.
                 maxLength: 786432
                 type: string
+              bytes:
+                description: |-
+                  Bytes is the size of spec.statement and status.bundle, written with
+                  the signature: they leave the controller's cache once the receipt is
+                  done, and the Pipeline's status.environments[].receipts sums it.
+                format: int64
+                type: integer
               conditions:
                 description: Conditions are Signed and Stored, with reasons naming
                   a failing sink.

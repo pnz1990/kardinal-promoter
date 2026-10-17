@@ -301,6 +301,7 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 			return false // signed meanwhile: that signature stands
 		}
 		rc.Status.Bundle, rc.Status.SignedBy, rc.Status.Phase = string(signed.Bundle), &signed.SignedBy, v1alpha1.ReceiptSigned
+		rc.Status.Bytes = int64(len(rc.Spec.Statement) + len(signed.Bundle))
 		rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{Sink: v1alpha1.ReceiptSinkCRD, At: at})
 		if signed.LogIndex != nil {
 			rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{
@@ -315,7 +316,12 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 	// A conflict re-applies this signature to the stored receipt instead of
 	// signing again: a second signature would be a second certificate and,
 	// with Rekor, a second public log entry.
-	return ctrlruntime.Result{Requeue: true}, r.patchKeeping(ctx, base, rc, record)
+	if err := r.patchKeeping(ctx, base, rc, record); err != nil {
+		return ctrlruntime.Result{}, err
+	}
+	observability.ReceiptsTotal.WithLabelValues(signed.SignedBy.Mode).Inc()
+	observability.ReceiptBytesTotal.Add(float64(len(rc.Spec.Statement) + len(signed.Bundle)))
+	return ctrlruntime.Result{Requeue: true}, nil
 }
 
 // ociStored reports whether every image subject of rc has its referrer.
@@ -388,13 +394,19 @@ func (r *Reconciler) storeOCI(ctx context.Context, base, rc *v1alpha1.PromotionR
 		}
 		reg.Keychain = kc
 	}
+	// The resourceUri is annotated on each referrer, for verify-receipt
+	// --image to skip other environments' receipts before it reads them.
+	resource := ""
+	if st, err := receipt.Parse([]byte(rc.Spec.Statement)); err == nil {
+		resource = st.Predicate.ResourceURI
+	}
 	for _, s := range r.pendingImages(rc) {
 		sctx, cancel := context.WithTimeout(ctx, sinkTimeout)
 		repo := s.Name
 		if r.OCI.Repository != "" {
 			repo = r.OCI.Repository
 		}
-		ref, err := reg.PushReferrer(sctx, repo, s.Name, "sha256:"+s.Digest["sha256"], []byte(rc.Status.Bundle))
+		ref, err := reg.PushReferrer(sctx, repo, s.Name, "sha256:"+s.Digest["sha256"], resource, []byte(rc.Status.Bundle))
 		cancel()
 		if err != nil {
 			return r.sinkFailed(ctx, base, rc, "OCIPushFailed", err, now)

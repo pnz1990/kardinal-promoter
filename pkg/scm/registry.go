@@ -279,7 +279,15 @@ type Resolved struct {
 }
 
 func (r *Registry) init() {
-	r.once.Do(func() { r.clients = lru.New(maxRegistryClients) })
+	r.once.Do(func() {
+		// A client evicted (least recently used, or by Evict) is not used
+		// again: its cached identity goes with it.
+		r.clients = lru.NewWithEvictionFunc(maxRegistryClients, func(_ lru.Key, v interface{}) {
+			if e, ok := v.(registryEntry); ok {
+				ForgetIdentity(e.provider)
+			}
+		})
+	})
 }
 
 func (r *Registry) now() time.Time {
@@ -534,9 +542,13 @@ func (r *Registry) client(ctx context.Context, spec ProviderSpec) (SCMProvider, 
 	key := spec.Identity.UID
 	rvs := tokenRV + "/" + webhookRV
 	if v, ok := r.clients.Get(key); ok {
-		if e := v.(registryEntry); e.generation == spec.Generation && e.secretRVs == rvs {
+		e := v.(registryEntry)
+		if e.generation == spec.Generation && e.secretRVs == rvs {
 			return e.provider, nil
 		}
+		// Replaced below (Add does not call the eviction func): the old
+		// client's identity goes now.
+		ForgetIdentity(e.provider)
 	}
 	build := r.New
 	if build == nil {
