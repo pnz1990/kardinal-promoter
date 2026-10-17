@@ -308,3 +308,18 @@ func TestRedactText_EscapedQuote(t *testing.T) {
 	assert.NotContains(t, got, "SECRET")
 	assert.Contains(t, got, "host/x")
 }
+
+// TestRedactText_StatusTextUnchanged (#2128, QA-2): RedactText removes URL
+// credentials only. Status, CLI and log text that names authorization or a
+// Bearer challenge is ordinary text and stays as written.
+func TestRedactText_StatusTextUnchanged(t *testing.T) {
+	for _, s := range []string{
+		"Authorization: approved by bob",
+		"authorization: pending",
+		`registry answered 401: WWW-Authenticate: Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:org/app:pull"`,
+		"the request has no bearer token",
+		"Bearer realm=example",
+	} {
+		assert.Equal(t, s, scm.RedactText(s))
+	}
+}

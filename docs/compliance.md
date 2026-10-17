@@ -61,6 +61,39 @@ kubectl create clusterrolebinding auditors --clusterrole=kardinal-promoter-audit
 
 An auditor of the whole cluster gets both with ClusterRoleBindings and exports with `-A`.
 
+The pack leaves the cluster, so no credential goes with it. In every record:
+
+- the user name, token or password of each URL is removed, and so is the value of a secret
+  query parameter (`token=`, `access_token=` and the like), as kardinal does for its status, CLI
+  output and logs: a Pipeline whose `spec.git.url` carries a token is exported without it;
+- each container environment variable keeps its name and its `valueFrom`, and a literal
+  `value` becomes `<redacted>`, in hook Job specs too;
+- container commands and arguments (of containers, init containers, probes and lifecycle
+  handlers) are not exported: each list becomes `{"sha256": "…", "length": N}`, the SHA-256 of
+  its arguments, each followed by a NUL byte, and how many there are. A secret can hide in any
+  form in a command, so the pack holds none. The digest is unkeyed, so that anyone can check it:
+  a short or guessable secret in a command could be found from it by trying candidates. Check a
+  command against the one you expect:
+
+  ```bash
+  printf '%s\0' sh -c 'run --env prod' | sha256sum
+  ```
+
+- the `kubectl.kubernetes.io/last-applied-configuration` annotation is removed, since it
+  repeats the spec as applied.
+
+To read the commands themselves, add `--include-commands`. The values of flags, of
+`NAME=value` assignments (with `export` or not) and of HTTP headers (`-H 'Name: value'`) whose
+name contains `token`, `password`, `passwd`, `passphrase`, `pwd`, `secret`, `apikey`, `api-key`,
+`api_key`, `key`, `credential` or `authorization`, or has the part `auth`, `bearer`, `pat` or
+`pass`, then become `<redacted>`, and so do a `Bearer` token and the password of `-u` or
+`--user user:password`, also inside one shell string (`sh -c "…"`). This is best-effort, and the command warns: a secret passed as a
+positional argument, after a short flag such as `-p`, or under another name is exported as
+written. Keep secrets in Secrets and pass them with `valueFrom`.
+
+`manifest.json`'s `redactions` records the mode (`commands`: `digest` or `redacted`), the rules
+and how often each changed something.
+
 Check the files against their checksums after extracting:
 
 ```bash

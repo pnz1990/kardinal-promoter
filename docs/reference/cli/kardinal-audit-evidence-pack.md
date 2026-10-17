@@ -21,7 +21,7 @@ and admission policies are the ones in force at export.
 
     manifest.json                format, kardinal version, exporter, period,
                                  filters, each file's records, bytes and
-                                 SHA-256, coverage, integrity note
+                                 SHA-256, coverage, redactions, integrity note
     SHA256SUMS                   sha256sum -c input for every other file
     controls.json                each control, its records and their files
     auditevents.ndjson           as kardinal audit export --format json
@@ -36,6 +36,17 @@ and admission policies are the ones in force at export.
     agentidentities.ndjson       the agent registry
     admission.yaml               the chart's ValidatingAdmissionPolicies
                                  and bindings
+
+Every record is redacted: the userinfo of each URL and secret query
+parameters (as for status, CLI output and logs), literal env values (<redacted>, names and valueFrom kept, hook Jobs
+included), and kubectl's last-applied-configuration annotation. Container
+command and args, probes and lifecycle handlers included, are exported as
+{"sha256": ..., "length": N}: SHA-256 of each argument followed by a NUL
+(printf '%s\0' ARG... | sha256sum); the digest is unkeyed, so a short or
+guessable secret could be found from it. --include-commands exports them
+with credential-named flags, NAME=value assignments and headers, Bearer
+tokens and -u user:password redacted, best-effort.
+manifest.json's redactions records the mode, the rules and the counts.
 
 coverage.oldest is the oldest record of each kind the cluster still holds,
 coverage.missing the kinds it does not serve, coverage.forbidden the kinds
@@ -63,6 +74,7 @@ kardinal audit evidence-pack --since <time> [--until <time>] [-A | -n <ns>] [--p
   -A, --all-namespaces       Records of every namespace
       --environment string   Only this environment's AuditEvents, gate instances, Approvals and Verdicts
   -h, --help                 help for evidence-pack
+      --include-commands     Export container commands and arguments, with credential-named values redacted best-effort, instead of their SHA-256
   -o, --output string        Write the pack to this file instead of standard output
       --pipeline string      Only this pipeline's records
       --since string         Start of the period: a date (2026-07-01), an RFC 3339 time, or a duration before now (30d)

@@ -50,6 +50,9 @@ type evidencePackOptions struct {
 	Since       time.Time
 	Until       time.Time
 	ExportedBy  string
+	// IncludeCommands exports container command and args, redacted
+	// best-effort, instead of their digests.
+	IncludeCommands bool
 	// TempDir holds the per-kind files while they are hashed.
 	TempDir string
 }
@@ -57,7 +60,7 @@ type evidencePackOptions struct {
 func newAuditEvidencePackCmd() *cobra.Command {
 	var (
 		since, until, pipeline, environment, out string
-		allNamespaces                            bool
+		allNamespaces, includeCommands           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "evidence-pack --since <time> [--until <time>] [-A | -n <ns>] [--pipeline <name>] [--environment <env>] [-o pack.tar.gz]",
@@ -95,7 +98,12 @@ the pack with your own identity (docs/compliance.md).`,
 				ns = ""
 			}
 			ctx := contextOf(cmd)
-			opts := evidencePackOptions{Namespace: ns, Pipeline: pipeline, Environment: environment, Since: from, Until: to}
+			opts := evidencePackOptions{Namespace: ns, Pipeline: pipeline, Environment: environment, Since: from, Until: to,
+				IncludeCommands: includeCommands}
+			if includeCommands {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: --include-commands exports container commands and arguments; "+
+					"their redaction is best-effort: a secret it does not recognise is exported")
+			}
 			if id, err := identityOf(ctx, c); err == nil {
 				opts.ExportedBy = id.Username
 			} else {
@@ -110,6 +118,8 @@ the pack with your own identity (docs/compliance.md).`,
 	cmd.Flags().StringVar(&environment, "environment", "", "Only this environment's AuditEvents, gate instances, Approvals and Verdicts")
 	cmd.Flags().StringVarP(&out, "output", "o", "", "Write the pack to this file instead of standard output")
 	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false, "Records of every namespace")
+	cmd.Flags().BoolVar(&includeCommands, "include-commands", false,
+		"Export container commands and arguments, with credential-named values redacted best-effort, instead of their SHA-256")
 	_ = cmd.MarkFlagRequired("since")
 	return cmd
 }
@@ -183,14 +193,15 @@ func writeEvidencePack(ctx context.Context, c sigs_client.Client, opts evidenceP
 
 // packManifest is manifest.json.
 type packManifest struct {
-	Format          string       `json:"format"`
-	KardinalVersion string       `json:"kardinalVersion"`
-	ExportedBy      string       `json:"exportedBy,omitempty"`
-	Period          packPeriod   `json:"period"`
-	Filters         packFilters  `json:"filters"`
-	Files           []packFile   `json:"files"`
-	Coverage        packCoverage `json:"coverage"`
-	Integrity       string       `json:"integrity"`
+	Format          string         `json:"format"`
+	KardinalVersion string         `json:"kardinalVersion"`
+	ExportedBy      string         `json:"exportedBy,omitempty"`
+	Period          packPeriod     `json:"period"`
+	Filters         packFilters    `json:"filters"`
+	Files           []packFile     `json:"files"`
+	Coverage        packCoverage   `json:"coverage"`
+	Redactions      packRedactions `json:"redactions"`
+	Integrity       string         `json:"integrity"`
 }
 
 type packPeriod struct {
@@ -234,6 +245,7 @@ type evidence struct {
 	dir      string
 	until    time.Time
 	manifest packManifest
+	red      redactor
 }
 
 func (p *evidence) records() int {
@@ -354,7 +366,7 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 	if nsName == "" {
 		nsName = "*"
 	}
-	p := &evidence{dir: opts.TempDir, until: opts.Until, manifest: packManifest{
+	p := &evidence{dir: opts.TempDir, until: opts.Until, red: redactor{includeCommands: opts.IncludeCommands}, manifest: packManifest{
 		Format:          packFormat,
 		KardinalVersion: CLIVersion,
 		ExportedBy:      opts.ExportedBy,
@@ -448,10 +460,11 @@ func (p *evidence) auditEvents(ctx context.Context, c sigs_client.Reader, nsOpts
 			if !opts.inPeriod(ev.Spec.Timestamp.Time) || !envOK(ev.Spec.Environment) {
 				continue
 			}
-			if err := js.write(jsonAuditRecord(ev)); err != nil {
+			ev = ev.DeepCopy()
+			if err := js.write(p.red.value(jsonAuditRecord(ev))); err != nil {
 				return err
 			}
-			if err := ocsf.write(ocsfAuditRecord(ev)); err != nil {
+			if err := ocsf.write(p.red.value(ocsfAuditRecord(ev))); err != nil {
 				return err
 			}
 		}
@@ -504,7 +517,7 @@ func (p *evidence) bundles(ctx context.Context, c sigs_client.Reader, nsOpts []s
 				continue
 			}
 			in[bundleKey{b.Namespace, b.Name}] = true
-			if err := kf.write(record(b, "Bundle")); err != nil {
+			if err := kf.write(p.record(b, "Bundle")); err != nil {
 				return err
 			}
 		}
@@ -546,7 +559,7 @@ func (p *evidence) kindAs(ctx context.Context, c sigs_client.Reader, kind, file,
 			}
 			obj := o.(sigs_client.Object)
 			p.oldest(label, obj.GetCreationTimestamp().Time)
-			if err := kf.write(record(obj, kind)); err != nil {
+			if err := kf.write(p.record(obj, kind)); err != nil {
 				return err
 			}
 		}
@@ -559,12 +572,13 @@ func (p *evidence) kindAs(ctx context.Context, c sigs_client.Reader, kind, file,
 	return p.done(kf)
 }
 
-// record is obj as written to the pack: with its kind, without
-// managedFields.
-func record(obj sigs_client.Object, kind string) sigs_client.Object {
+// record is obj as written to the pack: a redacted copy (redactor), with
+// its kind and without managedFields.
+func (p *evidence) record(obj sigs_client.Object, kind string) sigs_client.Object {
 	o := obj.DeepCopyObject().(sigs_client.Object)
 	o.SetManagedFields(nil)
 	o.GetObjectKind().SetGroupVersionKind(v1alpha1.GroupVersion.WithKind(kind))
+	p.red.object(o)
 	return o
 }
 
@@ -577,7 +591,7 @@ func (p *evidence) admission(ctx context.Context, c sigs_client.Client) error {
 	var policies admissionregistrationv1.ValidatingAdmissionPolicyList
 	err := eachPage(ctx, c, &policies, []sigs_client.ListOption{sel}, func() error {
 		for i := range policies.Items {
-			d, err := admissionDoc(&policies.Items[i], c.Scheme())
+			d, err := p.admissionDoc(&policies.Items[i], c.Scheme())
 			if err != nil {
 				return err
 			}
@@ -591,7 +605,7 @@ func (p *evidence) admission(ctx context.Context, c sigs_client.Client) error {
 	var bindings admissionregistrationv1.ValidatingAdmissionPolicyBindingList
 	err = eachPage(ctx, c, &bindings, []sigs_client.ListOption{sel}, func() error {
 		for i := range bindings.Items {
-			d, err := admissionDoc(&bindings.Items[i], c.Scheme())
+			d, err := p.admissionDoc(&bindings.Items[i], c.Scheme())
 			if err != nil {
 				return err
 			}
@@ -608,9 +622,10 @@ func (p *evidence) admission(ctx context.Context, c sigs_client.Client) error {
 
 // admissionDoc is obj as one YAML document, with its apiVersion and kind
 // and without managedFields.
-func admissionDoc(obj sigs_client.Object, scheme *runtime.Scheme) (string, error) {
+func (p *evidence) admissionDoc(obj sigs_client.Object, scheme *runtime.Scheme) (string, error) {
 	o := obj.DeepCopyObject().(sigs_client.Object)
 	o.SetManagedFields(nil)
+	p.red.object(o)
 	gvk, err := apiutil.GVKForObject(o, scheme)
 	if err != nil {
 		return "", err
@@ -649,6 +664,12 @@ func (p *evidence) writeTar(w io.Writer) error {
 	sort.Slice(p.manifest.Files, func(i, j int) bool { return p.manifest.Files[i].Name < p.manifest.Files[j].Name })
 	sort.Strings(p.manifest.Coverage.Missing)
 	sort.Strings(p.manifest.Coverage.Forbidden)
+	p.manifest.Redactions = p.red.counts
+	p.manifest.Redactions.Rules = p.red.rules()
+	p.manifest.Redactions.Commands = commandsDigest
+	if p.red.includeCommands {
+		p.manifest.Redactions.Commands = commandsRedacted
+	}
 	manifest, err := json.MarshalIndent(p.manifest, "", "  ")
 	if err != nil {
 		return err
@@ -720,7 +741,7 @@ and admission policies are the ones in force at export.
 
     manifest.json                format, kardinal version, exporter, period,
                                  filters, each file's records, bytes and
-                                 SHA-256, coverage, integrity note
+                                 SHA-256, coverage, redactions, integrity note
     SHA256SUMS                   sha256sum -c input for every other file
     controls.json                each control, its records and their files
     auditevents.ndjson           as kardinal audit export --format json
@@ -735,6 +756,17 @@ and admission policies are the ones in force at export.
     agentidentities.ndjson       the agent registry
     admission.yaml               the chart's ValidatingAdmissionPolicies
                                  and bindings
+
+Every record is redacted: the userinfo of each URL and secret query
+parameters (as for status, CLI output and logs), literal env values (<redacted>, names and valueFrom kept, hook Jobs
+included), and kubectl's last-applied-configuration annotation. Container
+command and args, probes and lifecycle handlers included, are exported as
+{"sha256": ..., "length": N}: SHA-256 of each argument followed by a NUL
+(printf '%s\0' ARG... | sha256sum); the digest is unkeyed, so a short or
+guessable secret could be found from it. --include-commands exports them
+with credential-named flags, NAME=value assignments and headers, Bearer
+tokens and -u user:password redacted, best-effort.
+manifest.json's redactions records the mode, the rules and the counts.
 
 coverage.oldest is the oldest record of each kind the cluster still holds,
 coverage.missing the kinds it does not serve, coverage.forbidden the kinds

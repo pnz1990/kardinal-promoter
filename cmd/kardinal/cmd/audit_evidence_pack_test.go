@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -466,8 +467,261 @@ func reflectNew(typ reflect.Type) runtime.Object {
 // the object read is not changed.
 func TestEvidencePackRecord(t *testing.T) {
 	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "v1", ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl"}}}}
-	r := record(b, "Bundle")
+	r := (&evidence{}).record(b, "Bundle")
 	assert.Nil(t, r.GetManagedFields())
 	assert.Equal(t, v1alpha1.GroupVersion.WithKind("Bundle"), r.GetObjectKind().GroupVersionKind())
 	assert.Len(t, b.ManagedFields, 1, "the listed object is not changed")
+}
+
+// redactProbe is the credential probe of #2127 (QA-2): secrets in a
+// Pipeline's git URL, kubectl's last-applied annotation, a hook Job's env,
+// command, args and probe, a version's CI run URL and an AuditEvent
+// message.
+type redactProbe struct {
+	objs    []sigs_client.Object
+	secrets []string
+	command []string
+	args    []string
+	probe   []string
+}
+
+func newRedactProbe(t *testing.T) redactProbe {
+	t.Helper()
+	const (
+		token  = "ghp_SECRETTOKEN123"
+		apiKey = "sk-live-APIKEY456"
+		param  = "QUERYSECRET789"
+	)
+	p := redactProbe{
+		secrets: []string{token, apiKey, param, "FLAGTOKEN1", "FLAGKEY2", "FLAGPASSWORD3", "BEARERTOKEN4abc", "GHTOKEN5", "EXPORTKEY6",
+			"PASSPHRASE7", "PWD8", "AUTH9", "BEARERFLAG10", "PAT11", "PROBEPW12", "USERPASS13", "XAUTH14", "PRIV15", "DBPASS16"},
+		command: []string{"sh", "-c", "GITHUB_TOKEN=GHTOKEN5 curl --token=FLAGTOKEN1 -H 'X: 1' --api-key 'FLAGKEY2' https://example.com; " +
+			"export API_KEY=EXPORTKEY6; DB_PASS=DBPASS16 run --path /etc --author bob"},
+		args: []string{"--password", "FLAGPASSWORD3", "--verbose", "--name", "smoke", "-H", "Authorization: Bearer BEARERTOKEN4abc",
+			"--passphrase", "PASSPHRASE7", "--pwd=PWD8", "--auth", "AUTH9", "--bearer", "BEARERFLAG10", "--github-pat", "PAT11",
+			"-u", "admin:USERPASS13", "-H", "X-Auth-Token: XAUTH14", "-H", "PRIVATE-TOKEN: PRIV15"},
+		probe: []string{"check", "--db-password=PROBEPW12"},
+	}
+	url := "https://x-access-token:" + token + "@github.com/org/gitops.git"
+	list := func(l []string) string { b, _ := json.Marshal(l); return string(b) }
+	p.objs = packWorld(t, 100)
+	for _, o := range p.objs {
+		switch v := o.(type) {
+		case *v1alpha1.Pipeline:
+			if v.Name != "app" {
+				continue
+			}
+			v.Spec.Git = v1alpha1.PipelineGit{URL: url}
+			v.Annotations = map[string]string{lastAppliedAnnotation: `{"spec":{"git":{"url":"` + url + `"}}}`, "team": "payments"}
+			v.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "prod", Hooks: []v1alpha1.HookSpec{{Name: "smoke", Phase: "post",
+				Job: runtime.RawExtension{Raw: []byte(`{"template":{"spec":{"containers":[{"name":"t","image":"curl",` +
+					`"command":` + list(p.command) + `,"args":` + list(p.args) + `,` +
+					`"livenessProbe":{"exec":{"command":` + list(p.probe) + `}},` +
+					`"env":[{"name":"API_KEY","value":"` + apiKey + `"},{"name":"FROM_SECRET","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]}]}}}`)}}}}}
+		case *v1alpha1.Bundle:
+			if v.Name == "app-v2" {
+				v.Spec.Provenance = &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run/1?token=" + param}
+			}
+		case *v1alpha1.AuditEvent:
+			if v.Name == "ev-0050" {
+				v.Spec.Message = "pushed to " + url
+			}
+		}
+	}
+	return p
+}
+
+// export builds the probe's pack and returns its files, the app Pipeline's
+// hook container and the manifest.
+func (p redactProbe) export(t *testing.T, includeCommands bool) (map[string][]byte, map[string]interface{}, map[string]interface{}, packManifest) {
+	t.Helper()
+	opts := packPeriodOpts
+	opts.IncludeCommands = includeCommands
+	b, _, err := buildPack(t, p.objs, &pager{}, opts)
+	require.NoError(t, err)
+	files, _ := readPack(t, b)
+	var app map[string]interface{}
+	for _, pl := range packLines(files["pipelines.ndjson"]) {
+		if pl["metadata"].(map[string]interface{})["name"] == "app" {
+			app = pl
+		}
+	}
+	require.NotNil(t, app)
+	hook := app["spec"].(map[string]interface{})["environments"].([]interface{})[0].(map[string]interface{})["hooks"].([]interface{})[0]
+	container := hook.(map[string]interface{})["job"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})["containers"].([]interface{})[0]
+	var m packManifest
+	require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
+	return files, app, container.(map[string]interface{}), m
+}
+
+// TestEvidencePack_Redacts (#2127): the pack is handed to an auditor, so no
+// credential leaves the cluster with it. By default container commands and
+// arguments (probes included) are exported as their SHA-256 and length
+// only, so no secret in them is exported whatever its form; the git URL
+// keeps no userinfo, the last-applied annotation is gone, literal env
+// values are <redacted> with their names kept, and the manifest says what
+// it did.
+//
+// Covers EVIDENCE-PACK-REDACT-01.
+func TestEvidencePack_Redacts(t *testing.T) {
+	p := newRedactProbe(t)
+	files, app, container, m := p.export(t, false)
+	for name, content := range files {
+		for _, secret := range p.secrets {
+			assert.NotContains(t, string(content), secret, "%s holds a credential", name)
+		}
+		if name != "manifest.json" { // its redaction rules name the annotation
+			assert.NotContains(t, string(content), lastAppliedAnnotation, "%s keeps the last-applied annotation", name)
+		}
+	}
+	assert.Equal(t, "https://github.com/org/gitops.git", app["spec"].(map[string]interface{})["git"].(map[string]interface{})["url"],
+		"the URL is kept without its userinfo")
+	assert.Equal(t, map[string]interface{}{"team": "payments"}, app["metadata"].(map[string]interface{})["annotations"], "other annotations stay")
+	assert.Equal(t, []interface{}{
+		map[string]interface{}{"name": "API_KEY", "value": redactedValue},
+		map[string]interface{}{"name": "FROM_SECRET", "valueFrom": map[string]interface{}{"secretKeyRef": map[string]interface{}{"name": "s", "key": "k"}}},
+	}, container["env"], "the variable's name stays, its value goes; a reference to a Secret is kept")
+	digest := func(l []string) map[string]interface{} {
+		d := commandDigest(l)
+		return map[string]interface{}{"sha256": d["sha256"], "length": float64(len(l))}
+	}
+	assert.Equal(t, digest(p.command), container["command"], "the command is its digest")
+	assert.Equal(t, digest(p.args), container["args"])
+	assert.Equal(t, digest(p.probe), container["livenessProbe"].(map[string]interface{})["exec"].(map[string]interface{})["command"], "a probe's command too")
+	// The digest is the one printf '%s\0' ARG... | sha256sum gives.
+	sum := sha256.Sum256([]byte(strings.Join(p.probe, "\x00") + "\x00"))
+	assert.Equal(t, hex.EncodeToString(sum[:]), digest(p.probe)["sha256"])
+
+	rules := (&redactor{}).rules()
+	assert.Equal(t, packRedactions{Rules: rules, URLCredentials: 4, EnvValues: 1, LastApplied: 1, Commands: commandsDigest, CommandDigests: 3}, m.Redactions,
+		"the git URL, the CI run URL, the AuditEvent message in auditevents.ndjson and its OCSF copy; command, args and the probe")
+}
+
+// TestEvidencePack_IncludeCommands (#2127, QA-2): --include-commands exports
+// the commands and arguments with the values of credential-named flags and
+// NAME=value assignments (export included) redacted, also in a shell
+// string, and the Authorization header's token; --path and --author stay.
+// The manifest records the mode.
+func TestEvidencePack_IncludeCommands(t *testing.T) {
+	p := newRedactProbe(t)
+	files, _, container, m := p.export(t, true)
+	for name, content := range files {
+		for _, secret := range p.secrets {
+			assert.NotContains(t, string(content), secret, "%s holds a credential", name)
+		}
+	}
+	assert.Equal(t, []interface{}{"sh", "-c", "GITHUB_TOKEN=<redacted> curl --token=<redacted> -H 'X: 1' --api-key <redacted> https://example.com; " +
+		"export API_KEY=<redacted>; DB_PASS=<redacted> run --path /etc --author bob"}, container["command"], "only the credentials go")
+	assert.Equal(t, []interface{}{"--password", "<redacted>", "--verbose", "--name", "smoke", "-H", "Authorization: Bearer <redacted>",
+		"--passphrase", "<redacted>", "--pwd=<redacted>", "--auth", "<redacted>", "--bearer", "<redacted>", "--github-pat", "<redacted>",
+		"-u", "admin:<redacted>", "-H", "X-Auth-Token: <redacted>", "-H", "PRIVATE-TOKEN: <redacted>"}, container["args"])
+	assert.Equal(t, commandsRedacted, m.Redactions.Commands)
+	assert.Equal(t, 16, m.Redactions.FlagValues,
+		"5 in the command (GITHUB_TOKEN, --token, --api-key, API_KEY, DB_PASS), 9 in args (6 flags, -u, 3 headers), the probe's --db-password")
+	assert.Zero(t, m.Redactions.CommandDigests)
+	assert.Equal(t, (&redactor{includeCommands: true}).rules(), m.Redactions.Rules)
+	assert.Contains(t, strings.Join(m.Redactions.Rules, " "), "best-effort")
+}
+
+// TestRedactor_TypedEnv: a typed container's literal env value is replaced
+// and its name kept; a valueFrom is kept.
+func TestRedactor_TypedEnv(t *testing.T) {
+	r := &redactor{}
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Env: []corev1.EnvVar{
+		{Name: "A", Value: "secret"}, {Name: "B", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{Key: "k"}}},
+	}}}}}
+	r.object(pod)
+	assert.Equal(t, []corev1.EnvVar{{Name: "A", Value: redactedValue},
+		{Name: "B", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{Key: "k"}}}}, pod.Spec.Containers[0].Env)
+	assert.Equal(t, 1, r.counts.EnvValues)
+}
+
+// TestRedactor_Args (--include-commands): the value of a flag or a
+// NAME=value assignment whose name says it is a credential is redacted, in
+// --flag=value and --flag value forms, with or without export, and inside
+// one shell string; other flags, names and values stay (--path, --author).
+func TestRedactor_Args(t *testing.T) {
+	for _, tc := range []struct {
+		in, want []string
+		n        int
+	}{
+		{[]string{"--token=abc", "--verbose"}, []string{"--token=<redacted>", "--verbose"}, 1},
+		{[]string{"--password", "abc", "--user", "bob"}, []string{"--password", "<redacted>", "--user", "bob"}, 1},
+		{[]string{"-api-key", "abc"}, []string{"-api-key", "<redacted>"}, 1},
+		{[]string{"--GITHUB_TOKEN=abc"}, []string{"--GITHUB_TOKEN=<redacted>"}, 1},
+		{[]string{"--client-secret", `"a b"`}, []string{"--client-secret", "<redacted>"}, 1},
+		{[]string{"sh", "-c", "login --user=bob --passwd=abc && run --apikey 'x y'"},
+			[]string{"sh", "-c", "login --user=bob --passwd=<redacted> && run --apikey <redacted>"}, 2},
+		{[]string{"--key", "--verbose"}, []string{"--key", "--verbose"}, 0},
+		{[]string{"sh", "-c", "run --key --verbose"}, []string{"sh", "-c", "run --key --verbose"}, 0},
+		{[]string{"--ssh-key", "abc"}, []string{"--ssh-key", "<redacted>"}, 1},
+		{[]string{"--credential"}, []string{"--credential"}, 0},
+		{[]string{"-p", "abc", "deploy", "abc"}, []string{"-p", "abc", "deploy", "abc"}, 0},
+		{[]string{"--passphrase", "x", "--pwd=y", "--auth", "z", "--bearer", "w", "--github-pat", "v", "--pat=u"},
+			[]string{"--passphrase", "<redacted>", "--pwd=<redacted>", "--auth", "<redacted>", "--bearer", "<redacted>", "--github-pat", "<redacted>", "--pat=<redacted>"}, 6},
+		{[]string{"--path", "/etc", "--author", "bob", "--patch", "p"}, []string{"--path", "/etc", "--author", "bob", "--patch", "p"}, 0},
+		{[]string{"sh", "-c", "GITHUB_TOKEN=a run; export API_KEY=\"b c\"; HOME=/root x; export PATH=/bin"},
+			[]string{"sh", "-c", "GITHUB_TOKEN=<redacted> run; export API_KEY=<redacted>; HOME=/root x; export PATH=/bin"}, 2},
+		{[]string{"GH_PAT=abc", "AUTH_HEADER=def", "AUTHOR=me"}, []string{"GH_PAT=<redacted>", "AUTH_HEADER=<redacted>", "AUTHOR=me"}, 2},
+		{[]string{"curl", "-u", "bob:hunter2", "--user=amy:pw", "-H", "Authorization: Bearer abcdefgh123", "-H", "Accept: application/json"},
+			[]string{"curl", "-u", "bob:<redacted>", "--user=amy:<redacted>", "-H", "Authorization: Bearer <redacted>", "-H", "Accept: application/json"}, 3},
+		{[]string{"sh", "-c", "curl -u bob:hunter2 -H 'PRIVATE-TOKEN: x1' -H 'X-Api-Key: x2' https://h; DB_PASS=x3 PASSIVE=1 run"},
+			[]string{"sh", "-c", "curl -u bob:<redacted> -H 'PRIVATE-TOKEN: <redacted>' -H 'X-Api-Key: <redacted>' https://h; DB_PASS=<redacted> PASSIVE=1 run"}, 4},
+		{[]string{"run", "--header", "Bearer eyJhbGciOiJIUzI1NiJ9.e30"}, []string{"run", "--header", "Bearer <redacted>"}, 1},
+		{[]string{"echo", "Authorization: approved"}, []string{"echo", "Authorization: <redacted>"}, 1},
+	} {
+		r := &redactor{}
+		got := append([]string(nil), tc.in...)
+		r.args(got)
+		assert.Equal(t, tc.want, got, "%q", tc.in)
+		assert.Equal(t, tc.n, r.counts.FlagValues, "%q", tc.in)
+	}
+	r := &redactor{includeCommands: true}
+	pod := &corev1.Pod{Spec: corev1.PodSpec{InitContainers: []corev1.Container{{Name: "i", Command: []string{"app", "--token", "abc"}}}}}
+	r.object(pod)
+	assert.Equal(t, []string{"app", "--token", "<redacted>"}, pod.Spec.InitContainers[0].Command, "typed containers too")
+	// By default a typed container's command and args are dropped: a
+	// []string cannot hold a digest.
+	r = &redactor{}
+	pod = &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Command: []string{"app", "--token", "abc"}, Args: []string{"x"}}}}}
+	r.object(pod)
+	assert.Nil(t, pod.Spec.Containers[0].Command)
+	assert.Nil(t, pod.Spec.Containers[0].Args)
+	assert.Equal(t, 2, r.counts.CommandDigests)
+}
+
+// TestEvidencePackCmd_IncludeCommands: the command exports digests by
+// default; --include-commands warns that its redaction is best-effort and
+// the manifest says which mode ran.
+func TestEvidencePackCmd_IncludeCommands(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(packScheme(t)).WithObjects(packWorld(t, 20)...).Build()
+	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) { return c, "pay", nil })
+	setForTest(t, &identityOf, func(context.Context, sigs_client.Client) (Identity, error) { return Identity{Username: "auditor"}, nil })
+	setForTest(t, &globalNamespace, "")
+	for _, tc := range []struct {
+		args    []string
+		mode    string
+		warning bool
+	}{
+		{nil, commandsDigest, false},
+		{[]string{"--include-commands"}, commandsRedacted, true},
+	} {
+		out := filepath.Join(t.TempDir(), "pack.tar.gz")
+		var stderr bytes.Buffer
+		keepStyle(t)
+		root := NewRootCmd()
+		root.SetOut(io.Discard)
+		root.SetErr(&stderr)
+		root.SetArgs(append([]string{"audit", "evidence-pack", "--since", "2026-01-01", "--until", "2026-12-01", "-o", out}, tc.args...))
+		require.NoError(t, root.Execute(), stderr.String())
+		assert.Equal(t, tc.warning, strings.Contains(stderr.String(),
+			"warning: --include-commands exports container commands and arguments; their redaction is best-effort"), stderr.String())
+		b, err := os.ReadFile(out)
+		require.NoError(t, err)
+		files, _ := readPack(t, b)
+		var m packManifest
+		require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
+		assert.Equal(t, tc.mode, m.Redactions.Commands)
+		assert.Equal(t, "auditor", m.ExportedBy)
+	}
 }
