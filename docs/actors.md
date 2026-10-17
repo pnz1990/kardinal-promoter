@@ -154,6 +154,7 @@ The AgentIdentity is ready unless it is invalid:
 - **SubjectConflict**: another AgentIdentity already lists one of its subjects. The older one
   keeps it: a principal is never two agents.
 - **InvalidSponsor**: its sponsor is itself an agent.
+- **InvalidSigningIdentity**: a `signingIdentities[].subjectRegExp` does not compile.
 - **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 5,000
   AgentIdentities of one subject each, blocked ones included; kardinal supports up to 4,000, see
   [Scale and limits](operate.md#scale-and-limits)). The whole index is then not Ready, and kardinal refuses every write
@@ -179,6 +180,33 @@ alone: with `approve`, each of its versions waits in every environment until a p
 Registering an agent decides how kardinal *records* it. What it may *do* is still decided by
 RBAC: give its ServiceAccount the chart's roles as for anyone else
 ([User roles](guides/security.md#user-roles)).
+
+### Signing identities
+
+The actor stamp verifies who **created** a version. The commit it promotes, and the provenance of
+its images, were signed by whoever ran the job. `spec.signingIdentities` lists the Sigstore
+(Fulcio) certificate identities that are the agent's own workload, so a verified signature can
+name the agent:
+
+```yaml
+spec:
+  signingIdentities:            # up to 8
+    - issuer: https://token.actions.githubusercontent.com
+      subjectRegExp: https://github\.com/myorg/agents/\.github/workflows/fixer\.yml@refs/heads/.+
+```
+
+Each entry has the OIDC `issuer`, and exactly one of `subject` and `subjectRegExp` (which must
+match the whole subject). When a config commit's [gitsign signature](image-verification.md#commit-signatures-with-gitsign),
+or a keyless attestation, verifies with a certificate that matches the identities of exactly one
+ready, unsuspended AgentIdentity, its ImageVerification records that agent: `commit.agent` and
+`attestations.<name>.agent` in a gate. A signer that matches none, or several, records no agent
+(the second with a note naming them in `status.commit.message`). The mapping is made when the
+signature verifies; suspending the agent afterwards shows through
+[`agent.*`](reference/cel-context.md#agent), which a gate reads at each evaluation:
+
+```yaml
+expression: 'actor.kind != "agent" || (commit.agent == actor.agent && agent.registered && !agent.suspended)'
+```
 
 ### Suspend or remove an agent
 

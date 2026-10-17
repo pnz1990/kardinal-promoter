@@ -131,6 +131,21 @@ func TestEvaluate(t *testing.T) {
 		assert.Equal(t, actor.ReasonInvalidSponsor, reg.Verdicts["b"].Reason)
 		assert.NotEmpty(t, reg.Index.Users["oidc:b"].Blocked)
 	})
+	t.Run("a signing identity whose expression does not compile", func(t *testing.T) {
+		bad := identity("a", 0, "alice", user("oidc:a"))
+		bad.Spec.SigningIdentities = []v1alpha1.AgentSigningIdentity{
+			{Issuer: "https://token.actions.githubusercontent.com", Subject: "https://github.com/org/a"},
+			{Issuer: "https://token.actions.githubusercontent.com", SubjectRegExp: "("},
+		}
+		good := identity("b", 1, "alice", user("oidc:b"))
+		good.Spec.SigningIdentities = []v1alpha1.AgentSigningIdentity{
+			{Issuer: "https://token.actions.githubusercontent.com", SubjectRegExp: `https://github\.com/org/b/.*`},
+		}
+		reg := actor.Evaluate([]v1alpha1.AgentIdentity{bad, good}, actor.MaxIndexBytes)
+		assert.Equal(t, actor.ReasonInvalidSigningIdentity, reg.Verdicts["a"].Reason)
+		assert.Contains(t, reg.Verdicts["a"].Message, "signingIdentities[1].subjectRegExp")
+		assert.True(t, reg.Verdicts["b"].Ready)
+	})
 	t.Run("suspended is ready but blocked", func(t *testing.T) {
 		id := identity("a", 0, "alice", group("g"))
 		id.Spec.Suspended = true

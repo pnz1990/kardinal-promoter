@@ -191,6 +191,37 @@ type AgentIdentitySpec struct {
 	// can be deleted only once it is suspended.
 	// +optional
 	Suspended bool `json:"suspended,omitempty"`
+
+	// SigningIdentities are the Sigstore (Fulcio) certificate identities of
+	// the agent's workload. A config commit or an attestation whose
+	// verified signer matches exactly one ready, unsuspended AgentIdentity
+	// records that agent (commit.agent, attestations.<name>.agent), so a
+	// gate can require that the agent that created a version also signed
+	// it. See docs/actors.md#signing-identities.
+	// +kubebuilder:validation:MaxItems=8
+	// +optional
+	SigningIdentities []AgentSigningIdentity `json:"signingIdentities,omitempty"`
+}
+
+// AgentSigningIdentity is a Fulcio certificate identity: the OIDC issuer,
+// and the subject (SAN) or a regular expression the whole subject matches.
+// +kubebuilder:validation:XValidation:rule="has(self.subject) != has(self.subjectRegExp)",message="set exactly one of subject and subjectRegExp"
+type AgentSigningIdentity struct {
+	// Issuer is the OIDC issuer, for example
+	// https://token.actions.githubusercontent.com.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	Issuer string `json:"issuer"`
+
+	// Subject is the certificate's subject (SAN).
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Subject string `json:"subject,omitempty"`
+
+	// SubjectRegExp is a regular expression the whole subject must match.
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	SubjectRegExp string `json:"subjectRegExp,omitempty"`
 }
 
 // AgentIdentityStatus is the reconciler's verdict on the registration.
