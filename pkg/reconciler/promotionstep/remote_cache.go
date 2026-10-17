@@ -207,6 +207,20 @@ func (c *remoteCache) remoteHeads(ctx context.Context, rh scm.RemoteHeadReader, 
 	return c.loadHeads(ctx, rh, url, auth, now, false)
 }
 
+// remoteHeadsSince returns branch heads of url read at since or later: from
+// the cache when its heads were read then (and are younger than
+// remoteHeadsTTL), otherwise read now, bypassing the cache and any read in
+// progress (readHeads). A check that must not act on heads older than an
+// event (a step's own push) asks with since at that event.
+func (c *remoteCache) remoteHeadsSince(ctx context.Context, rh scm.RemoteHeadReader, url string, auth scm.GitAuth,
+	now, since time.Time) (map[string]string, error) {
+	if h, at, ok := c.cachedHeadsAt(headsKey(url, auth), now); ok && !at.Before(since) {
+		return h, nil
+	}
+	c.missed("heads")
+	return c.loadHeads(ctx, rh, url, auth, now, true)
+}
+
 // readHeads reads the branch heads of url now, bypassing the cache, and
 // stores them for the others. The read starts after the call: a read another
 // step started earlier, which can predate a commit this caller knows of, is
@@ -250,13 +264,19 @@ func headsKey(url string, auth scm.GitAuth) string {
 // cachedHeads returns the cached heads under key (headsKey) when they are
 // younger than remoteHeadsTTL at now.
 func (c *remoteCache) cachedHeads(key string, now time.Time) (map[string]string, bool) {
+	h, _, ok := c.cachedHeadsAt(key, now)
+	return h, ok
+}
+
+// cachedHeadsAt is cachedHeads with the time the heads were read at.
+func (c *remoteCache) cachedHeadsAt(key string, now time.Time) (map[string]string, time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.heads[key]
 	if ok && now.Sub(e.at) < remoteHeadsTTL && !now.Before(e.at) {
-		return e.heads, true
+		return e.heads, e.at, true
 	}
-	return nil, false
+	return nil, time.Time{}, false
 }
 
 // storeHeads caches heads read by the ls-remote that started at seq
