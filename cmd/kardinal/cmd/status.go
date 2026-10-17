@@ -522,6 +522,8 @@ func envState(e v1alpha1.PipelineEnvironmentStatus) display.State {
 	switch {
 	case e.State == "":
 		return display.State{Label: "-"}
+	case e.FrozenBy != "":
+		return display.Frozen(e.State, e.FrozenBy)
 	case e.Held:
 		return display.Held(e.State)
 	case len(e.BlockedBy) > 0:

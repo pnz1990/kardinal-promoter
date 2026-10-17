@@ -57,6 +57,13 @@ describe('fleetRow', () => {
       states: ['settled', 'held', 'ahead'], liveGroup: 1, live: 'held', incoming: '2.0.0',
     },
     {
+      name: 'a freeze holds the active Bundle in uat (#1974)',
+      p: base({ environmentTopology: linear, deployed, activeBundleName: 'app-2', activeBundleVersion: '2.0.0',
+        environmentStates: { test: 'Verified', uat: 'Promoting', prod: 'Pending' },
+        environments: [{ name: 'test', state: 'Verified' }, { name: 'uat', state: 'Promoting', frozenBy: 'release-freeze' }, { name: 'prod' }] }),
+      states: ['settled', 'frozen', 'ahead'], liveGroup: 1, live: 'frozen', incoming: '2.0.0',
+    },
+    {
       name: 'all Verified: nothing moving',
       p: base({ environmentTopology: linear, deployed, activeBundleName: 'app-1', activeBundleVersion: '1.0.0', environmentStates: { test: 'Verified', uat: 'Verified', prod: 'Verified' } }),
       states: ['settled', 'settled', 'settled'], liveGroup: -1,

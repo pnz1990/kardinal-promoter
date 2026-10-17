@@ -121,6 +121,11 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	state, message string, closed stepObservations, entries ...v1alpha1.PendingAuditEvent) (bool, error) {
 	ps.Status.State = state
 	ps.Status.Message = message
+	if state != "Pending" && state != "Promoting" {
+		// Only a step that has not started, or is between git steps, is
+		// held by a freeze (holdIfFrozen): one that moved on is not.
+		ps.Status.FrozenBy = nil
+	}
 	changed := base.Status.State != state
 	receiptFailed := false
 	if changed {

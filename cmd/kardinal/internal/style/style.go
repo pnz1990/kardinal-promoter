@@ -216,7 +216,7 @@ var tokenOf = map[display.Tone]string{
 // sgr is the SGR parameters of tone for s; "" for no colour.
 func (s Styler) sgr(tone display.Tone) string {
 	switch tone {
-	case display.TonePaused, display.ToneHeld:
+	case display.TonePaused, display.ToneHeld, display.ToneFrozen:
 		return "1"
 	}
 	path, ok := tokenOf[tone]

@@ -143,6 +143,11 @@ func ProjectEnvironments(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha
 		if curBundle != "" && (e.State == "Pending") && lifecycle.HeldFrom(p, name, curBundle) != nil {
 			e.Held = true
 		}
+		// A freeze holds the step before it starts or between its git steps
+		// (status.frozenBy, #1974).
+		if cur != nil && cur.Status.FrozenBy != nil && (e.State == "Pending" || e.State == "Promoting") {
+			e.FrozenBy = cur.Status.FrozenBy.Name
+		}
 		if curBundle != "" && curBundle != e.Bundle {
 			e.IncomingBundle = curBundle
 			e.IncomingVersion = version(curBundle)
@@ -302,6 +307,8 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 		}
 		st := display.Step(e.State)
 		switch {
+		case e.FrozenBy != "":
+			st = display.Frozen(e.State, e.FrozenBy)
 		case e.Held:
 			st = display.Held(e.State)
 		case len(e.BlockedBy) > 0:

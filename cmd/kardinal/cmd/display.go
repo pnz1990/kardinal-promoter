@@ -38,6 +38,9 @@ func envCellState(cell string) display.State {
 	if gates, ok := strings.CutPrefix(cell, cellHeldByGate); ok {
 		return display.HeldByGate("Pending", gates)
 	}
+	if window, ok := strings.CutPrefix(cell, cellFrozen); ok {
+		return display.Frozen("Pending", window)
+	}
 	if st := display.Step(cell); st.Tone != display.ToneUnknown {
 		return st
 	}
@@ -50,13 +53,18 @@ func envCellState(cell string) display.State {
 const (
 	cellHeld       = "Held"
 	cellHeldByGate = "HeldByGate:"
+	// cellFrozen, followed by the freeze's name: a freeze holds the step.
+	cellFrozen = "Frozen:"
 )
 
 // heldCell is cell for an environment of a Pipeline row where the current
 // Bundle waits (cell is "Waiting" or "Pending"): cellHeld when a rollback
 // hold keeps the Bundle out, cellHeldByGate and the gate names when gates
 // hold it, else cell.
-func heldCell(cell string, held bool, gates []string) string {
+func heldCell(cell string, held bool, gates []string, frozenBy string) string {
+	if frozenBy != "" && (cell == "Pending" || cell == "Promoting") {
+		return cellFrozen + frozenBy
+	}
 	if cell != "Waiting" && cell != "Pending" {
 		return cell
 	}

@@ -65,6 +65,20 @@ describe('FleetBoard', () => {
     expect(within(st).getByText('+ config abcdef0')).toHaveAttribute('title', 'from mixed-cfg')
   })
 
+  it('names the freeze that holds a station (#1974)', () => {
+    const p: Pipeline = {
+      name: 'cart', namespace: 'team-d', phase: 'Ready', environmentCount: 2,
+      activeBundleName: 'cart-4', activeBundleVersion: '4.0.0', environmentTopology: linear,
+      environmentStates: { test: 'Verified', prod: 'Pending' },
+      environments: [{ name: 'test', state: 'Verified' }, { name: 'prod', state: 'Pending', frozenBy: 'release-freeze' }],
+    }
+    render(<FleetBoard pipelines={[p]} total={1} onSelect={() => {}} now={now} />)
+    const prod = screen.getByRole('button', { name: /^cart prod:/ })
+    expect(prod).toHaveAttribute('data-state', 'frozen')
+    expect(within(prod).getByText('frozen by release-freeze')).toBeInTheDocument()
+    expect(screen.getByText('1 needs attention')).toBeInTheDocument()
+  })
+
   it('lists pipelines by namespace, then name', () => {
     render(<FleetBoard pipelines={pipelines} total={3} onSelect={() => {}} now={now} />)
     const names = screen.getAllByRole('listitem').map(li => li.querySelector('.fleet-line__name')?.textContent)

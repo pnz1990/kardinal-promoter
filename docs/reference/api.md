@@ -1032,6 +1032,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.environments` | []object |  | Environments is, per environment in spec order (a fleet environment expands to its targets), what runs there and where the newest version stands. Written by the PipelineReconciler from the Bundles, PromotionSteps and gate instances of the Pipeline. It is a display projection: no controller decision reads it. |
 | `status.environments[].blockedBy` | []string |  | BlockedBy names the gates that hold the newest Bundle back in the environment, sorted. |
 | `status.environments[].bundle` | string |  | Bundle is the Bundle whose change runs in the environment: the newest one whose change landed there. Empty when none has. |
+| `status.environments[].frozenBy` | string |  | FrozenBy is the freeze (ChangeWindow name) that holds the newest Bundle's step here: its PromotionStep's status.frozenBy. |
 | `status.environments[].held` | boolean |  | Held is true when a rollback hold (spec.holds) keeps the environment on Bundle, so the newest Bundle waits. |
 | `status.environments[].incomingBundle` | string |  | IncomingBundle is a newer Bundle on its way into the environment (its step there is not yet live, or gates hold it before its step exists). Empty when the newest Bundle there is Bundle. |
 | `status.environments[].incomingVersion` | string |  | IncomingVersion is what IncomingBundle ships. |
@@ -1516,6 +1517,9 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.policyDigest` | string |  | PolicyDigest is sha256:&lt;hex&gt; of the canonical policy set: the Pipeline generation and spec hash, and each gate template's namespace, name, UID, generation and spec digest. |
 | `status.decision.takenAt` | string (date-time) | yes | TakenAt is when the step left Pending. |
 | `status.decision.truncated` | boolean |  | Truncated is true when the snapshot was cut to MaxDecisionBytes: approvals and Verdicts that did not count, long gate texts, or gates (OmittedGates). PolicyDigest covers every gate. |
+| `status.frozenBy` | object |  | FrozenBy is the freeze (a ChangeWindow with spec.freeze) that holds the step before it starts or before its next git step. Set with the "frozen by" message and cleared when no freeze holds it any more, so views show the hold without reading the message (#1974). |
+| `status.frozenBy.name` | string | yes | Name is the ChangeWindow's name (ChangeWindows are cluster-scoped). |
+| `status.frozenBy.since` | string (date-time) |  | Since is when the freeze started (the ChangeWindow's spec.start). |
 | `status.gitCredentialRetries` | integer |  | GitCredentialRetries is the number of consecutive retries of a git-clone or git-push that the remote refused while git had no credentials because spec.git.secretRef is not set, or names a Secret that does not exist or has no token key (condition GitCredentialMissing). These retries have no limit, so creating the Secret is enough for the step to continue, and they do not use up the retries of retryCount. Reset with retryCount, and when git has a token. |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for a healthy check: health.timeout after the health check began, moved to health.timeout after the moment a bake window stops. It does not apply while a bake window runs. A Graph CEL expression can observe this field to detect a stale health check. |
 | `status.hookRecords` | []object |  | HookRecords records each hook that ran for this step (HookRecord). |

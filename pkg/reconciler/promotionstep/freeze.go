@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -49,6 +50,15 @@ func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v
 		return true, ctrl.Result{}, err
 	}
 	held := changewindow.Holding(matches)
+	if len(held) == 0 && ps.Status.FrozenBy != nil {
+		// No freeze holds it any more: clear the hold first, then go on in
+		// a new reconcile, so the step's next status write (locked on the
+		// resourceVersion it read) starts from the cleared one.
+		if err := r.clearFrozenBy(ctx, ps); err != nil {
+			return true, ctrl.Result{}, err
+		}
+		return true, ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 	if len(held) == 0 {
 		if len(matches) == 0 {
 			return false, ctrl.Result{}, nil
@@ -66,9 +76,11 @@ func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v
 		return false, ctrl.Result{}, nil
 	}
 	msg := changewindow.FrozenMessage(held[0], ps.Spec.PipelineName, ps.Spec.Environment)
-	if ps.Status.Message != msg {
+	by := changewindow.StepFreezeOf(held[0])
+	if ps.Status.Message != msg || !equality.Semantic.DeepEqual(ps.Status.FrozenBy, by) {
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.Message = msg
+		ps.Status.FrozenBy = by
 		if err := r.Status().Patch(ctx, ps, patch); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("patch frozen message: %w", err)
 		}
@@ -78,6 +90,17 @@ func (r *Reconciler) holdIfFrozen(ctx context.Context, log zerolog.Logger, ps *v
 	// The ChangeWindow watch wakes the step when the freeze ends or an
 	// exemption takes effect; the minute is the fallback.
 	return true, ctrl.Result{RequeueAfter: requeuePaused}, nil
+}
+
+// clearFrozenBy removes status.frozenBy from a step no freeze holds any
+// more.
+func (r *Reconciler) clearFrozenBy(ctx context.Context, ps *v1alpha1.PromotionStep) error {
+	patch := client.MergeFrom(ps.DeepCopy())
+	ps.Status.FrozenBy = nil
+	if err := r.Status().Patch(ctx, ps, patch); err != nil {
+		return fmt.Errorf("clear status.frozenBy: %w", err)
+	}
+	return nil
 }
 
 // freezesFor returns the active freezes that select ps

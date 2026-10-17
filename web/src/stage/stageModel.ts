@@ -55,15 +55,6 @@ export function awaitingQuorum(g: PolicyGate): boolean {
   return !!g.approval && !g.approval.rejected && g.approval.approved < g.approval.required
 }
 
-/** The prefix of the message a freeze writes on the step it holds
- *  (pkg/reconciler/changewindow FrozenMessage, docs/agentic/freezes.md). */
-const FROZEN_PREFIX = 'frozen by '
-
-/** Whether a step's message is a freeze's hold. */
-function isFrozenMessage(message: string): boolean {
-  return message.startsWith(FROZEN_PREFIX)
-}
-
 /** Step states a freeze no longer holds. */
 const TERMINAL_STEP = new Set(['Verified', 'Failed', 'AbortedByAlarm', 'Superseded'])
 
@@ -188,7 +179,9 @@ export function stageView(input: StageInput): StageView {
   if (p.paused) {
     why.push({ kind: 'paused', title: 'The pipeline is paused: nothing new starts until it is resumed.', next: 'resume' })
   }
-  if (step?.message && isFrozenMessage(step.message) && !TERMINAL_STEP.has(stepState)) {
+  // status.frozenBy names the freeze that holds the step (#1974); the
+  // message says how to lift it or let this through.
+  if (step?.frozenBy && !TERMINAL_STEP.has(stepState)) {
     why.push({ kind: 'frozen', title: 'Held by a freeze: it promotes once the freeze is lifted, or exempted here.', detail: step.message })
   }
   if (hold) {

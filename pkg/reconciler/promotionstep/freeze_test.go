@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -140,6 +141,10 @@ func TestFreeze_HoldsStep(t *testing.T) {
 			}
 			assert.True(t, strings.HasPrefix(got.Status.Message, "frozen by "+tc.freeze.Name), got.Status.Message)
 			assert.Contains(t, got.Status.Message, "INC-4211")
+			// #1974: the hold is in status.frozenBy too, for views.
+			require.NotNil(t, got.Status.FrozenBy)
+			assert.Equal(t, tc.freeze.Name, got.Status.FrozenBy.Name)
+			require.NotNil(t, got.Status.FrozenBy.Since)
 			assert.Equal(t, tc.state, got.Status.State)
 			assert.Positive(t, res.RequeueAfter)
 			assert.Empty(t, got.Status.Outputs, "no git step ran")
@@ -154,9 +159,67 @@ func TestFreeze_HoldsStep(t *testing.T) {
 			_, err = r.Reconcile(ctx, req)
 			require.NoError(t, err)
 			require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
-			assert.NotEqual(t, tc.state, got.Status.State, "after unfreeze the step advances")
+			assert.Nil(t, got.Status.FrozenBy, "after unfreeze the hold is cleared first")
+			_, err = r.Reconcile(ctx, req)
+			require.NoError(t, err)
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+			assert.NotEqual(t, tc.state, got.Status.State, "then the step advances")
 		})
 	}
+}
+
+// TestFreeze_PauseClearsFrozenBy (QA F1 on #2149): a step frozen, then
+// paused, then unfrozen shows the pause, not the lifted freeze: the pause
+// hold, which runs first, clears status.frozenBy. Once resumed, a freeze
+// that still holds records itself again.
+//
+// Covers FREEZE-PAUSE-01.
+func TestFreeze_PauseClearsFrozenBy(t *testing.T) {
+	ctx := context.Background()
+	p := makePipeline("nginx-demo")
+	p.UID = "uid-nginx-demo"
+	step := makeStep("step-test", "nginx-demo", "bundle-1", "test")
+	step.Labels = map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1",
+		"kardinal.io/environment": "test"}
+	freeze := activeFreeze("everyone")
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.ChangeWindow{}).
+		WithObjects(step, p, makeBundle("bundle-1", "nginx-demo"), freeze).Build()
+	r := &promotionstep.Reconciler{
+		Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+		NowFn:     func() time.Time { return time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"}}
+	get := func() v1alpha1.PromotionStep {
+		var got v1alpha1.PromotionStep
+		require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+		return got
+	}
+	_, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NotNil(t, get().Status.FrozenBy, "frozen")
+
+	pause := lifecycle.DesiredFreezeGate(p)
+	require.NoError(t, c.Create(ctx, pause))
+	require.NoError(t, c.Delete(ctx, freeze))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	got := get()
+	assert.Nil(t, got.Status.FrozenBy, "the lifted freeze is not shown while paused")
+	assert.Equal(t, lifecycle.PausedMessage("nginx-demo"), got.Status.Message)
+	assert.Empty(t, got.Status.State, "still held, by the pause")
+
+	// A freeze that still holds after resume records itself again.
+	again := activeFreeze("everyone")
+	require.NoError(t, c.Create(ctx, again))
+	require.NoError(t, c.Status().Update(ctx, again))
+	require.NoError(t, c.Delete(ctx, pause))
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	got = get()
+	require.NotNil(t, got.Status.FrozenBy)
+	assert.Equal(t, again.Name, got.Status.FrozenBy.Name)
 }
 
 // TestFreeze_ExemptionAuditedOnce: a step that goes on under an exemption,

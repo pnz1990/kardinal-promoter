@@ -6,11 +6,11 @@
 
 export type Tone =
   | 'verified' | 'promoting' | 'waiting' | 'blocked' | 'failed'
-  | 'superseded' | 'paused' | 'held' | 'pending' | 'degraded' | 'unknown'
+  | 'superseded' | 'paused' | 'held' | 'frozen' | 'pending' | 'degraded' | 'unknown'
 
 export const TONES: readonly Tone[] = [
   'verified', 'promoting', 'waiting', 'blocked', 'failed',
-  'superseded', 'paused', 'held', 'pending', 'degraded', 'unknown',
+  'superseded', 'paused', 'held', 'frozen', 'pending', 'degraded', 'unknown',
 ]
 
 /** The --k-* custom properties of a tone: its text colour, and its chip background (or none). */
@@ -23,7 +23,9 @@ export function toneVars(tone: Tone): { fg: string; bg: string } {
     case 'failed': return { fg: 'var(--k-status-failed-on-fill)', bg: 'var(--k-status-failed-fill)' }
     case 'superseded': return { fg: 'var(--k-status-superseded-fg)', bg: 'transparent' }
     case 'paused': return { fg: 'var(--k-status-paused-fg)', bg: 'var(--k-hatch)' }
-    case 'held': return { fg: 'var(--k-status-held-fg)', bg: 'var(--k-hatch)' }
+    case 'held':
+    // A freeze holds it on purpose, like a rollback hold (#1974).
+    case 'frozen': return { fg: 'var(--k-status-held-fg)', bg: 'var(--k-hatch)' }
     case 'degraded': return { fg: 'var(--k-status-failed-fg)', bg: 'transparent' }
     case 'pending':
     case 'unknown': return { fg: 'var(--k-ink-3)', bg: 'transparent' }

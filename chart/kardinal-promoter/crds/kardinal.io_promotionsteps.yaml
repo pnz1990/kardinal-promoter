@@ -879,6 +879,26 @@ spec:
                 required:
                 - takenAt
                 type: object
+              frozenBy:
+                description: |-
+                  FrozenBy is the freeze (a ChangeWindow with spec.freeze) that holds the
+                  step before it starts or before its next git step. Set with the "frozen
+                  by" message and cleared when no freeze holds it any more, so views show
+                  the hold without reading the message (#1974).
+                properties:
+                  name:
+                    description: Name is the ChangeWindow's name (ChangeWindows are
+                      cluster-scoped).
+                    maxLength: 253
+                    type: string
+                  since:
+                    description: Since is when the freeze started (the ChangeWindow's
+                      spec.start).
+                    format: date-time
+                    type: string
+                required:
+                - name
+                type: object
               gitCredentialRetries:
                 description: |-
                   GitCredentialRetries is the number of consecutive retries of a git-clone

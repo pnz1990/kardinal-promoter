@@ -13,7 +13,7 @@
 // PipelineLaneView bug). The followed Bundle is the incoming version.
 
 import type { Bundle, EnvironmentHold, GraphNode, GraphResponse, Pipeline, GateApproval, PolicyGate, ActorRef } from '../types'
-import { displayState, heldByGate, heldByRollback, type DisplayState, type Tone } from './display'
+import { displayState, frozen, heldByGate, heldByRollback, type DisplayState, type Tone } from './display'
 import { environmentUpstreams, groupByDepth } from '../fleetModel'
 import { GRAPH } from './geometry'
 import { lowerFirst } from '../sentence'
@@ -152,11 +152,13 @@ export interface Attention {
   failed: string[]
   blocked: Array<{ env: string; gate: string }>
   held: string[]
+  /** Environments a freeze holds (#1974). */
+  frozen: string[]
   waiting: string[]
 }
 
 /** Tones by urgency: the first one present is a group's colour. */
-export const TONE_ORDER: Tone[] = ['failed', 'blocked', 'held', 'promoting', 'waiting', 'verified', 'pending', 'superseded', 'paused', 'degraded', 'unknown']
+export const TONE_ORDER: Tone[] = ['failed', 'blocked', 'held', 'frozen', 'promoting', 'waiting', 'verified', 'pending', 'superseded', 'paused', 'degraded', 'unknown']
 
 /** The followed Bundle and its graph. */
 export interface Followed {
@@ -295,7 +297,7 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
   depthGroups.forEach((g, d) => g.forEach(n => depth.set(n, d)))
 
   const stations = new Map<string, Station>()
-  const attention: Attention = { failed: [], blocked: [], held: [], waiting: [] }
+  const attention: Attention = { failed: [], blocked: [], held: [], frozen: [], waiting: [] }
   // P1 (Pipeline status.environments) says what runs where; deployed is the
   // older controllers' source of the same.
   const p1 = new Map((p.environments ?? []).map(e => [e.name, e]))
@@ -331,7 +333,14 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
     // (a PR may be open when the gate turns): the thread stops at the bar.
     const holding = gates.find(g => g.holding) ??
       (!step && p1State && pe?.blockedBy?.length ? { name: pe.blockedBy[0] } as GateMark : undefined)
-    if ((e.hold && e.hold.bundle !== followedName) || (pe?.held && pe.bundle !== followedName && !e.hold)) display = heldByRollback(stepState)
+    // A freeze holds the step before it starts or between its git steps:
+    // the step's status.frozenBy, or P1's without the followed graph.
+    // A step held before it starts has no state yet (the graph says
+    // NotStarted): it is queued, Pending, as the Pipeline's projection says.
+    const freeze = step?.frozenBy?.name ?? (!step && p1State ? pe?.frozenBy : undefined)
+    const frozenState = step && !reached ? 'Pending' : stepState
+    if (freeze && (frozenState === 'Pending' || frozenState === 'Promoting')) display = frozen(frozenState, freeze)
+    else if ((e.hold && e.hold.bundle !== followedName) || (pe?.held && pe.bundle !== followedName && !e.hold)) display = heldByRollback(stepState)
     else if (holding && !SETTLED.has(stepState)) {
       // An approval gate holds it for a person, not for a rule.
       display = holding.approval ? { ...heldByGate(stepState, holding.name), label: `Waiting for approval at ${holding.name}` } : heldByGate(stepState, holding.name)
@@ -366,6 +375,7 @@ export function buildModel(p: Pipeline, followed: Followed | undefined, opts: Bu
     if (display.tone === 'failed') attention.failed.push(e.name)
     else if (display.tone === 'blocked' && holding) attention.blocked.push({ env: e.name, gate: holding.name })
     else if (display.tone === 'held') attention.held.push(e.name)
+    else if (display.tone === 'frozen') attention.frozen.push(e.name)
     else if (display.tone === 'waiting' || gates.some(g => g.approval && !g.holding && g.state !== 'Pass' && g.state !== 'Superseded')) attention.waiting.push(e.name)
   }
   const order = depthGroups.flat()
@@ -490,7 +500,7 @@ export function threadOf(edges: MapEdge[], stations: Map<string, Station>, group
     const from = nodeTone(e.from, stations, groups)
     const to = nodeTone(e.to, stations, groups)
     if (!from.done) continue
-    if (to.tone === 'held') out.push({ ...e, kind: 'held' })
+    if (to.tone === 'held' || to.tone === 'frozen') out.push({ ...e, kind: 'held' })
     else if (to.tone === 'blocked') out.push({ ...e, kind: 'stopped' })
     else if (!to.reached) continue
     else if (to.tone === 'failed') out.push({ ...e, kind: 'snap' })

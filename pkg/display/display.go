@@ -31,6 +31,7 @@ const (
 	ToneSuperseded Tone = "superseded" // replaced by a newer version: final, not a failure
 	TonePaused     Tone = "paused"     // the Pipeline is paused
 	ToneHeld       Tone = "held"       // an environment is held (rollback --hold)
+	ToneFrozen     Tone = "frozen"     // a freeze (kardinal freeze) holds it
 	TonePending    Tone = "pending"    // not reached yet
 	ToneDegraded   Tone = "degraded"   // something failed somewhere below (Pipeline)
 	ToneUnknown    Tone = "unknown"    // a value this table does not know
@@ -163,6 +164,13 @@ func HeldByGate(stepState, gate string) State {
 // Held is an environment held by a rollback (kardinal rollback --hold).
 func Held(stepState string) State {
 	return State{Value: stepState, Label: "Held by rollback", Glyph: "⊙", ASCII: "@", Tone: ToneHeld}
+}
+
+// Frozen is an environment whose step a freeze holds before it starts or
+// before its next git step (kardinal freeze): "Frozen by <window>",
+// ToneFrozen. Value stays the step state.
+func Frozen(stepState, window string) State {
+	return State{Value: stepState, Label: "Frozen by " + window, Glyph: "❄", ASCII: "*", Tone: ToneFrozen}
 }
 
 // Table returns every known state of every kind: what the UI API serves at

@@ -1336,6 +1336,11 @@ type PipelineEnvironmentStatus struct {
 	// on Bundle, so the newest Bundle waits.
 	// +optional
 	Held bool `json:"held,omitempty"`
+	// FrozenBy is the freeze (ChangeWindow name) that holds the newest
+	// Bundle's step here: its PromotionStep's status.frozenBy.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	FrozenBy string `json:"frozenBy,omitempty"`
 }
 
 // FleetStatus is the resolved membership of one selector fleet.

@@ -10,7 +10,7 @@
 /** The design-system status bucket of a state: picks colour and shape. */
 export type Tone =
   | 'verified' | 'promoting' | 'waiting' | 'blocked' | 'failed' | 'superseded'
-  | 'paused' | 'held' | 'pending' | 'degraded' | 'unknown'
+  | 'paused' | 'held' | 'frozen' | 'pending' | 'degraded' | 'unknown'
 
 /** The object a state belongs to. */
 export type DisplayKind = 'pipeline' | 'bundle' | 'step' | 'substep' | 'gate'
@@ -107,4 +107,9 @@ export function heldByGate(stepState: string, gate: string): DisplayState {
 export function held(stepState: string): DisplayState {
   const h: DisplayState = { value: "", label: "Held by rollback", glyph: "⊙", ascii: "@", tone: "held" }
   return { ...h, value: stepState }
+}
+
+/** An environment whose step a freeze holds (Go: display.Frozen). */
+export function frozen(stepState: string, freeze: string): DisplayState {
+  return { value: stepState, label: "Frozen by {freeze}".replace("{freeze}", freeze), glyph: "❄", ascii: "*", tone: "frozen" }
 }

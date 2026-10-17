@@ -13,7 +13,8 @@ import (
 )
 
 // TestStepStateChanged (#1509): only the PromotionStep updates the Pipeline
-// status depends on requeue the Pipeline. Covers PERF-REQUEUE-01.
+// status depends on requeue the Pipeline, the freeze holding a step included
+// (#1974). Covers PERF-REQUEUE-01.
 func TestStepStateChanged(t *testing.T) {
 	step := func(state, msg, noChanges string, retry int) *kardinalv1alpha1.PromotionStep {
 		s := &kardinalv1alpha1.PromotionStep{}
@@ -21,6 +22,10 @@ func TestStepStateChanged(t *testing.T) {
 		if noChanges != "" {
 			s.Status.Outputs = map[string]string{"noChanges": noChanges}
 		}
+		return s
+	}
+	frozen := func(s *kardinalv1alpha1.PromotionStep, name string) *kardinalv1alpha1.PromotionStep {
+		s.Status.FrozenBy = &kardinalv1alpha1.StepFreeze{Name: name}
 		return s
 	}
 	cases := []struct {
@@ -33,6 +38,11 @@ func TestStepStateChanged(t *testing.T) {
 		{"a message", step("Promoting", "cloning", "", 0), step("Promoting", "pushing", "", 0), false},
 		{"a retry", step("Promoting", "", "", 0), step("Promoting", "retrying", "", 1), false},
 		{"a health check", step("HealthChecking", "a", "", 0), step("HealthChecking", "b", "", 0), false},
+		// #1974: the Pipeline projects status.frozenBy per environment.
+		{"a freeze holds it", step("Pending", "", "", 0), frozen(step("Pending", "", "", 0), "release-freeze"), true},
+		{"the freeze is cleared", frozen(step("Pending", "", "", 0), "release-freeze"), step("Pending", "", "", 0), true},
+		{"another freeze holds it", frozen(step("Pending", "", "", 0), "a"), frozen(step("Pending", "", "", 0), "b"), true},
+		{"the same freeze, a new message", frozen(step("Pending", "x", "", 0), "a"), frozen(step("Pending", "y", "", 0), "a"), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

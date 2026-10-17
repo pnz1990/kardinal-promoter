@@ -23,6 +23,7 @@ kardinal has four core words: **version**, **pipeline**, **environment** and **g
 | Supersede | phase `Superseded` | A newer version of the same type replaces an unfinished older one ([details](../architecture.md#bundle-supersession)) | Replaced by newer version |
 | Reject | `spec.rejected` | Stop a version everywhere for good (`kardinal reject`) | Rejected (a version), Version rejected (a gate) |
 | Hold | Pipeline `spec.holds` | Keep an environment on what runs there (`kardinal hold`) or on a rolled-back version (`kardinal rollback --hold`) | Held by rollback |
+| Freeze | `ChangeWindow` `spec.freeze`, PromotionStep `status.frozenBy` | Hold promotions of agents' versions, or of every version, until lifted (`kardinal freeze`; [details](../agentic/freezes.md)) | Frozen by <freeze> |
 | Pause | Pipeline `spec.paused`, `spec.pausedFleets` | Stop new promotions of a Pipeline, or of one fleet (`kardinal pause`, `--env <fleet>`) | Paused |
 | PR evidence | | The provenance, gate results and upstream health kardinal writes into a promotion pull request |
 | Subscription | `Subscription` | Watches a registry, Git or a chart repository and creates versions |  |
@@ -75,7 +76,8 @@ objects and the UI API keep the API value. The UI API serves this table at
 | `Superseded` | Replaced by newer version |
 
 An environment whose step waits for a gate is shown as "Held by gate <gate>", and one held on a
-rolled-back version as "Held by rollback".
+rolled-back version as "Held by rollback". One a [freeze](../agentic/freezes.md) holds is shown as
+"Frozen by <freeze>".
 
 ### Sub-step
 

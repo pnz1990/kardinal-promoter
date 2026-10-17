@@ -83,7 +83,7 @@
 .k-chip--blocked { color: var(--k-status-blocked-fg); background: var(--k-status-blocked-wash); }
 .k-chip--failed { color: var(--k-status-failed-on-fill); background: var(--k-status-failed-fill); }
 .k-chip--superseded { color: var(--k-status-superseded-fg); border-color: var(--k-line-strong); border-style: dashed; }
-.k-chip--paused, .k-chip--held { color: var(--k-ink); background: var(--k-hatch); border-color: var(--k-line-strong); }
+.k-chip--paused, .k-chip--held, .k-chip--frozen { color: var(--k-ink); background: var(--k-hatch); border-color: var(--k-line-strong); }
 .k-chip--pending, .k-chip--unknown { color: var(--k-ink-3); border-color: var(--k-status-pending-ring); }
 .k-chip--degraded { color: var(--k-status-failed-fg); border-color: var(--k-status-failed-fg); }
 
@@ -349,7 +349,7 @@
 .k-tone-text[data-tone="degraded"] { color: var(--k-status-failed-fg); }
 .k-tone-text[data-tone="superseded"] { color: var(--k-status-superseded-fg); }
 .k-tone-text[data-tone="paused"] { color: var(--k-status-paused-fg); }
-.k-tone-text[data-tone="held"] { color: var(--k-status-held-fg); }
+.k-tone-text[data-tone="held"], .k-tone-text[data-tone="frozen"] { color: var(--k-status-held-fg); }
 .k-tone-text[data-tone="pending"],
 .k-tone-text[data-tone="unknown"] { color: var(--k-ink-3); }
 

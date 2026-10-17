@@ -451,3 +451,27 @@ func TestProjectEnvironments_ZeroNow(t *testing.T) {
 		assert.False(t, e.Since.IsZero(), e.Name)
 	}
 }
+
+// TestProjectEnvironments_Frozen (#1974): a step a freeze holds (its
+// status.frozenBy), Pending or between git steps, projects frozenBy, and the
+// summary says so; a step that moved on does not, whatever it carries.
+func TestProjectEnvironments_Frozen(t *testing.T) {
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}})
+	bundles := []kardinalv1alpha1.Bundle{envBundle("b1", "1.4.0", "Promoting", envT0)}
+	frozen := func(s kardinalv1alpha1.PromotionStep) kardinalv1alpha1.PromotionStep {
+		s.Status.FrozenBy = &kardinalv1alpha1.StepFreeze{Name: "release-freeze"}
+		return s
+	}
+	steps := []kardinalv1alpha1.PromotionStep{
+		frozen(projStep("b1", "test", "Verified", envT0, envT0.Add(time.Minute))),
+		frozen(projStep("b1", "uat", "Promoting", envT0, time.Time{})),
+		frozen(projStep("b1", "prod", "Pending", envT0, time.Time{})),
+	}
+	envs := pipeline.ProjectEnvironments(p, bundles, steps, nil, nil, envT0.Add(time.Hour))
+	require.Len(t, envs, 3)
+	assert.Empty(t, envs[0].FrozenBy, "a Verified step is not held")
+	assert.Equal(t, "release-freeze", envs[1].FrozenBy)
+	assert.Equal(t, "release-freeze", envs[2].FrozenBy)
+	sum := pipeline.Summarize(p, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue}, envs)
+	assert.Contains(t, sum, "frozen by release-freeze in uat")
+}

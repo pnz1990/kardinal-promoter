@@ -266,6 +266,9 @@ type uiDisplayStates struct {
 	HeldByGate uiDisplayState `json:"heldByGate"`
 	// Held is the label of an environment held by a rollback (rollback --hold).
 	Held uiDisplayState `json:"held"`
+	// Frozen is the label of an environment a freeze holds; {freeze} is the
+	// freeze's name. Its tone is frozen.
+	Frozen uiDisplayState `json:"frozen"`
 }
 
 // uiFreeze is one freeze (a ChangeWindow with spec.freeze) for the banner.

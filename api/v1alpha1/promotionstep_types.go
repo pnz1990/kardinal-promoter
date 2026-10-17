@@ -531,6 +531,13 @@ type PromotionStepStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=1024
 	ReceiptError string `json:"receiptError,omitempty"`
+
+	// FrozenBy is the freeze (a ChangeWindow with spec.freeze) that holds the
+	// step before it starts or before its next git step. Set with the "frozen
+	// by" message and cleared when no freeze holds it any more, so views show
+	// the hold without reading the message (#1974).
+	// +optional
+	FrozenBy *StepFreeze `json:"frozenBy,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -564,4 +571,15 @@ type PromotionStepList struct {
 
 func init() {
 	SchemeBuilder.Register(&PromotionStep{}, &PromotionStepList{})
+}
+
+// StepFreeze names the freeze that holds a PromotionStep. Who froze, whom it
+// holds and why are on the ChangeWindow it names, and in the step's message.
+type StepFreeze struct {
+	// Name is the ChangeWindow's name (ChangeWindows are cluster-scoped).
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Since is when the freeze started (the ChangeWindow's spec.start).
+	// +optional
+	Since *metav1.Time `json:"since,omitempty"`
 }
