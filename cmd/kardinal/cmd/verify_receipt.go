@@ -82,7 +82,7 @@ trusts any identity). The exit code is 0 only when every check passes.`,
 	f.StringVar(&o.identity, "identity", "", "Certificate identity (subject alternative name) of a keyless receipt")
 	f.StringVar(&o.issuer, "issuer", "", "OIDC issuer of a keyless receipt")
 	f.StringVar(&o.trRoot, "trusted-root", "", "Sigstore trusted_root.json (default: the public-good root, fetched with TUF)")
-	f.StringSliceVar(&o.require, "require", nil, "Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, ...); !LEVEL must be absent")
+	f.StringSliceVar(&o.require, "require", nil, "Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, SLSA_BUILD_LEVEL_3, ...); !LEVEL must be absent")
 	f.StringVar(&o.repo, "repository", "", "Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's")
 	f.BoolVar(&o.insecure, "insecure-registry", false, "Read --image over plain HTTP")
 	return withStructuredOutput(cmd)
