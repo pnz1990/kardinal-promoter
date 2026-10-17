@@ -151,6 +151,7 @@ func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.Pro
 	patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{Type: condFreezeExempted,
 		Status: metav1.ConditionTrue, Reason: "Exempted", Message: msg, ObservedGeneration: ps.Generation})
+	ps.Status.FreezeExemptions = recordedExemptions(ps.Status.FreezeExemptions, matches)
 	for i, m := range matches {
 		if entry, ok := freezeAuditEntry(ps, m, msgs[i], now); ok {
 			ps.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, ps.Status.PendingAuditEvents, entry)
@@ -162,6 +163,37 @@ func (r *Reconciler) recordFreezeExemption(ctx context.Context, ps *v1alpha1.Pro
 	_ = r.flushAudit(ctx, ps)
 	return true, nil
 }
+
+// recordedExemptions is have plus the exemptions of matches it lacks, for
+// status.freezeExemptions: a step let through again later (another git step,
+// another freeze) keeps what it recorded before. At most MaxStepFreezeExemptions.
+func recordedExemptions(have []v1alpha1.StepFreezeExemption, matches []changewindow.FreezeMatch) []v1alpha1.StepFreezeExemption {
+	out := append([]v1alpha1.StepFreezeExemption(nil), have...)
+	for _, m := range matches {
+		if m.Exemption == nil {
+			continue
+		}
+		until := m.Until
+		if until.IsZero() {
+			until = m.Exemption.ExpiresAt.Time
+		}
+		e := v1alpha1.StepFreezeExemption{Freeze: m.Window.Name, Actors: m.Window.Spec.Freeze.Actors,
+			Exemption: *m.Exemption.DeepCopy(), Until: metav1.NewTime(until.UTC())}
+		dup := false
+		for _, h := range out {
+			if h.Freeze == e.Freeze && changewindow.ExemptionKey(&h.Exemption) == changewindow.ExemptionKey(&e.Exemption) {
+				dup = true
+			}
+		}
+		if !dup && len(out) < MaxStepFreezeExemptions {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// MaxStepFreezeExemptions bounds status.freezeExemptions (its CRD MaxItems).
+const MaxStepFreezeExemptions = 8
 
 // exemptionMessage says that a step went on through freeze m: by whom, until
 // when (the exemption's end, the controller's cap applied) and why.

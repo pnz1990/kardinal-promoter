@@ -252,6 +252,15 @@ func TestFreeze_ExemptionAuditedOnce(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, n)
+	// The exemption is recorded on the step once, for its receipt (#2060).
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	require.Len(t, got.Status.FreezeExemptions, 1)
+	x := got.Status.FreezeExemptions[0]
+	assert.Equal(t, "everyone", x.Actors)
+	assert.Equal(t, "carol", x.Exemption.CreatedBy)
+	assert.Equal(t, "hotfix", x.Exemption.Reason)
+	assert.Equal(t, ex.ExpiresAt.UTC(), x.Until.UTC())
 }
 
 // TestFreeze_EveryExemptingFreezeAudited covers the QA finding on #1869

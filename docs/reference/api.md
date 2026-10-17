@@ -1695,6 +1695,28 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.policyDigest` | string |  | PolicyDigest is sha256:&lt;hex&gt; of the canonical policy set: the Pipeline generation and spec hash, and each gate template's namespace, name, UID, generation and spec digest. |
 | `status.decision.takenAt` | string (date-time) | yes | TakenAt is when the step left Pending. |
 | `status.decision.truncated` | boolean |  | Truncated is true when the snapshot was cut to MaxDecisionBytes: approvals and Verdicts that did not count, long gate texts, or gates (OmittedGates). PolicyDigest covers every gate. |
+| `status.freezeExemptions` | []object |  | FreezeExemptions are the freezes the step went on through under an exemption (kardinal override --freeze), as it recorded them with its FreezeExempted condition; the step's receipt records them. |
+| `status.freezeExemptions[].actors` | string | yes | Actors is whom the freeze holds: agents or everyone. |
+| `status.freezeExemptions[].exemption` | object | yes | Exemption is the spec.freeze.exemptions entry that let the step through: who made it, why, and its actor stamp. |
+| `status.freezeExemptions[].exemption.actor` | object |  | Actor is who made the exception, as the chart's actor admission policy verified it (kardinal override --freeze stamps it). An exemption whose actor is an agent is never honoured: break-glass is for people (docs/design/18-actor-policy.md section 6). |
+| `status.freezeExemptions[].exemption.actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `status.freezeExemptions[].exemption.actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `status.freezeExemptions[].exemption.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `status.freezeExemptions[].exemption.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `status.freezeExemptions[].exemption.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `status.freezeExemptions[].exemption.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.freezeExemptions[].exemption.actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `status.freezeExemptions[].exemption.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `status.freezeExemptions[].exemption.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
+| `status.freezeExemptions[].exemption.bundle` | string |  | Bundle, when set, limits the exemption to that version. |
+| `status.freezeExemptions[].exemption.createdBy` | string |  | CreatedBy is who made the exception, as admission verified it. |
+| `status.freezeExemptions[].exemption.environment` | string |  | Environment, when set, limits the exemption to that environment. |
+| `status.freezeExemptions[].exemption.expiresAt` | string (date-time) | yes | ExpiresAt ends the exemption. |
+| `status.freezeExemptions[].exemption.namespace` | string | yes | Namespace and Pipeline are the pipeline let through. |
+| `status.freezeExemptions[].exemption.pipeline` | string | yes |  |
+| `status.freezeExemptions[].exemption.reason` | string | yes | Reason says why (recorded in the FreezeExempted audit record). |
+| `status.freezeExemptions[].freeze` | string | yes | Freeze is the freezing ChangeWindow. |
+| `status.freezeExemptions[].until` | string (date-time) | yes | Until is when the exemption stops counting: its expiresAt, or earlier with the controller's cap. |
 | `status.frozenBy` | object |  | FrozenBy is the freeze (a ChangeWindow with spec.freeze) that holds the step before it starts or before its next git step. Set with the "frozen by" message and cleared when no freeze holds it any more, so views show the hold without reading the message (#1974). |
 | `status.frozenBy.name` | string | yes | Name is the ChangeWindow's name (ChangeWindows are cluster-scoped). |
 | `status.frozenBy.since` | string (date-time) |  | Since is when the freeze started (the ChangeWindow's spec.start). |

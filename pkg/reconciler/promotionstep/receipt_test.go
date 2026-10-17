@@ -549,3 +549,27 @@ func TestReceiptJourney_TokenInProvenance(t *testing.T) {
 	_, err = receipt.Verify(signed.Bundle, receipt.VerifyOptions{Key: pub, Statement: []byte(rc.Spec.Statement)})
 	require.NoError(t, err)
 }
+
+// TestReceiptJourney_FreezeExempted (#2060): a step that went on through a
+// freeze under an exemption has a receipt that records it (the freeze, who
+// made the exemption, why, until when) and claims KARDINAL_FREEZE_EXEMPTED.
+//
+// Covers RECEIPT-JOURNEY-06.
+func TestReceiptJourney_FreezeExempted(t *testing.T) {
+	until := metav1.NewTime(time.Date(2026, 10, 14, 11, 0, 0, 0, time.UTC))
+	f := newReceiptFixture(t, true, func(_ *v1alpha1.Bundle, ps *v1alpha1.PromotionStep) {
+		ps.Status.FreezeExemptions = []v1alpha1.StepFreezeExemption{{Freeze: "kardinal-freeze-everyone", Actors: "everyone",
+			Exemption: v1alpha1.FreezeExemption{Namespace: "default", Pipeline: "nginx-demo", Reason: "hotfix INC-7",
+				CreatedBy: "carol", Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "carol"}, ExpiresAt: until},
+			Until: until}}
+	})
+	f.toVerified(t)
+	_, st := f.receipt(t)
+	require.Len(t, st.Predicate.Kardinal.FreezeExemptions, 1)
+	x := st.Predicate.Kardinal.FreezeExemptions[0]
+	assert.Equal(t, "kardinal-freeze-everyone", x.Freeze)
+	assert.Equal(t, "carol", x.CreatedBy)
+	assert.Equal(t, "hotfix INC-7", x.Reason)
+	assert.Equal(t, "2026-10-14T11:00:00Z", x.Until)
+	assert.Contains(t, st.Predicate.VerifiedLevels, receipt.LevelFreezeExempted)
+}
