@@ -23,7 +23,11 @@ On hosts where `docker build` can't download Go modules, set
 `make test-e2e-live` fails when a test fails or skips, or when no test ran,
 and keeps the `go test -json` stream in `test/e2e/results/<cluster>/test.json`.
 `COUNT=3` repeats every test, `SHARD=2/3` runs every third of the suite's
-tests starting at the second. `make e2e-up KIND_K8S=1.37` picks the
+tests starting at the second (split by `hack/e2e/durations.txt`, or the file
+`DURATIONS` names), and `SKIP='^TestX$'` leaves tests out. The release gate
+runs the scale suite's full profile in two parts on two clusters this way
+(`hack/e2e/durations-scale-full.txt`), leaving its sustained load to the soak
+profile, which loads harder. `make e2e-up KIND_K8S=1.37` picks the
 Kubernetes minor (one of the `KIND_NODE_*` images in `hack/tool-versions.env`;
 the default is `test/e2e/kind-config.yaml`'s).
 
