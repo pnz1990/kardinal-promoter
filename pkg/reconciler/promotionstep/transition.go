@@ -222,13 +222,6 @@ func (r *Reconciler) auditEntries(ctx context.Context, ps *v1alpha1.PromotionSte
 		add(action, AuditOutcomeFailure, message)
 	case StateRollingBack:
 		add(AuditActionRollbackStarted, AuditOutcomePending, message)
-	case StateSuperseded:
-		// A step that did not push (#1603) records nothing; one superseded
-		// while it health-checked (#2132) closes its PromotionStarted with
-		// PromotionSuperseded, as a halt does.
-		if auditAction != "" {
-			add(auditAction, AuditOutcomeFailure, message)
-		}
 	case StateHealthChecking:
 		if auditAction == AuditActionPRMerged {
 			// The merge of a pr-review PR is that environment's approval: the

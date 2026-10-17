@@ -135,45 +135,6 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 }
 
-// branchMoved says why the environment's branch no longer holds want, the
-// step's promoted commit, with the files the promotion wrote (its head does
-// not descend from want, or a later commit changed the environment's
-// paths), or "" when it does or the history cannot be read by this git
-// client. A read that fails says so: the check waits rather than passes.
-func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
-	env v1alpha1.EnvironmentSpec, want string) string {
-	rh, ok := r.GitClient.(scm.RemoteHeadReader)
-	gr, gok := r.GitClient.(scm.BranchGraphReader)
-	if !ok || !gok || pipeline == nil {
-		return ""
-	}
-	cred := r.resolveGitCredential(ctx, log, pipeline)
-	if cred.refused != nil {
-		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + cred.refused.Error()
-	}
-	if cred.reason == reasonSecretNotReferenceable {
-		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + cred.notReferenceable()
-	}
-	branch := baseBranch(pipeline)
-	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
-	defer cancel()
-	heads, err := r.remotes.remoteHeads(hctx, rh, pipeline.Spec.Git.URL, cred.auth(), r.now())
-	if err != nil {
-		return fmt.Sprintf("the environment's branch could not be read to check it still holds commit %s: %v", short(want), err)
-	}
-	head := heads[branch]
-	holds, err := r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, branch, cred.auth(), head, want, prPaths(env))
-	switch {
-	case err != nil:
-		return fmt.Sprintf("the environment's branch could not be read to check it still holds commit %s: %v", short(want), err)
-	case !holds:
-		return fmt.Sprintf("branch %s no longer holds this promotion's commit %s with the files it wrote for %s (head %s): "+
-			"the workload's images do not say which version runs, so its health does not verify this promotion",
-			branch, short(want), env.Name, short(head))
-	}
-	return ""
-}
-
 // revisionBehind is health.CheckOptions.RevisionBehind for the step: how
 // many commits want, the promoted commit, has on the environment's branch
 // that rev does not, when rev is an ancestor of it (#1883). It reads the same
