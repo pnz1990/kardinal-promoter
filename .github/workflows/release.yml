@@ -19,6 +19,17 @@ on:
 permissions:
   contents: read
 
+# Two releases never run at once, so they cannot race the latest image tags
+# and the latest GitHub release. GitHub keeps at most one run pending per
+# group: a third run arriving cancels the pending one (cancel-in-progress
+# only spares the running one). So push one release tag at a time, and
+# re-run a release shown as cancelled; its tag is still there
+# (CONTRIBUTING.md, Patch releases). A dry run publishes nothing and queues
+# only behind another dry run of the same ref.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'release-publish' || format('release-dry-run-{0}', github.ref) }}
+  cancel-in-progress: false
+
 env:
   # "true" on a dispatch: every step that publishes is skipped.
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
@@ -75,6 +86,24 @@ jobs:
           MINOR="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
           PATCH="${BASH_REMATCH[3]}"
           BRANCH="release/${MINOR}"
+          # A patch of vX.Y never contains a release of a later line (vX.Y+1.0,
+          # v(X+1).0.0, or one of their prereleases): that is main merged
+          # into the maintenance branch, or an old line's patch tagged on
+          # main. It would ship the later line's work as a patch. Every tag
+          # is fetched, and the decision is made from the local tags, so a
+          # failed fetch cannot skip it.
+          if [ "$PATCH" != 0 ]; then
+            X="${BASH_REMATCH[1]}" Y="${BASH_REMATCH[2]}"
+            git fetch --no-tags origin '+refs/tags/v*:refs/tags/v*' 2>/dev/null || true
+            while read -r t; do
+              [[ "$t" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-.*)?$ ]] || continue
+              [[ "$t" == *dryrun* ]] && continue
+              if (( BASH_REMATCH[1] > X || (BASH_REMATCH[1] == X && BASH_REMATCH[2] > Y) )); then
+                echo "::error::${VERSION} (${GITHUB_SHA}) contains ${t}: a ${MINOR} patch must not carry a later line's work. Tag it on ${BRANCH}, made from ${MINOR}.0, with only cherry-picked fixes."
+                exit 1
+              fi
+            done < <(git tag --merged "$GITHUB_SHA" -l 'v*' 2>/dev/null)
+          fi
           if [ "${DRY_RUN:-false}" != true ]; then
             # Fetch main explicitly, so the check does not depend on which refs
             # actions/checkout fetched for the tag.
