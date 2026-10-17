@@ -626,6 +626,13 @@ spec:
                               decision:
                                 description: Decision is approve or reject.
                                 type: string
+                              fields:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  Fields are the decision's values of the fields the gate declares,
+                                  each cut to 256 bytes (the Approval holds them whole).
+                                type: object
                               firstSeenAt:
                                 description: FirstSeenAt is when the gate first saw
                                   the decision.

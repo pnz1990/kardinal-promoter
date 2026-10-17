@@ -1483,6 +1483,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].approvals[].comment` | string |  | Comment is the approver's comment. |
 | `status.decision.gates[].approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
 | `status.decision.gates[].approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.decision.gates[].approvals[].fields` | map[string]string |  | Fields are the decision's values of the fields the gate declares, each cut to 256 bytes (the Approval holds them whole). |
 | `status.decision.gates[].approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
 | `status.decision.gates[].approvals[].reason` | string |  | Reason says why a decision does not count. |
 | `status.decision.gates[].approvals[].user` | string | yes | User is the approver. |
