@@ -32,6 +32,11 @@ var (
 	Harmless = []string{
 		"monkey", "donkey", "turkey", "jockey", "hockey", "whiskey", "hotkey", "sortkey", "primarykey",
 		"foreignkey", "partitionkey", "groupkey", "cachekey", "lookupkey",
+		// CI identifiers (Bamboo plan, build, job, result, chain and stage
+		// keys; SonarQube project keys; Jira issue keys): a CI run URL from
+		// a normal CI provider is never refused.
+		"buildkey", "plankey", "jobkey", "resultkey", "buildresultkey", "chainkey", "stagekey", "projectkey",
+		"issuekey", "branchkey",
 	}
 )
 

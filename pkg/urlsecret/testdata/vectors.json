@@ -484,5 +484,167 @@
   "refused": false,
   "redacted": "https://ci.example.com/run/7?Primary-Key=1",
   "why": "harmless name Primary-Key"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?buildKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?buildKey=PROJ-PLAN-42",
+  "why": "CI identifier buildKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?planKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?planKey=PROJ-PLAN-42",
+  "why": "CI identifier planKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?jobKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?jobKey=PROJ-PLAN-42",
+  "why": "CI identifier jobKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?resultKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?resultKey=PROJ-PLAN-42",
+  "why": "CI identifier resultKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?buildResultKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?buildResultKey=PROJ-PLAN-42",
+  "why": "CI identifier buildResultKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?chainKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?chainKey=PROJ-PLAN-42",
+  "why": "CI identifier chainKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?stageKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?stageKey=PROJ-PLAN-42",
+  "why": "CI identifier stageKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?projectKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?projectKey=PROJ-PLAN-42",
+  "why": "CI identifier projectKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?issueKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?issueKey=PROJ-PLAN-42",
+  "why": "CI identifier issueKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?branchKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?branchKey=PROJ-PLAN-42",
+  "why": "CI identifier branchKey"
+ },
+ {
+  "url": "https://github.com/acme/app/actions/runs/12345678901/job/98765432101?pr=42#step:4:12",
+  "refused": false,
+  "redacted": "https://github.com/acme/app/actions/runs/12345678901/job/98765432101?pr=42#step:4:12",
+  "why": "GitHub Actions run"
+ },
+ {
+  "url": "https://gitlab.com/acme/app/-/pipelines/1234567",
+  "refused": false,
+  "redacted": "https://gitlab.com/acme/app/-/pipelines/1234567",
+  "why": "GitLab pipeline"
+ },
+ {
+  "url": "https://gitlab.example.com/acme/app/-/jobs/987654?ref_type=heads",
+  "refused": false,
+  "redacted": "https://gitlab.example.com/acme/app/-/jobs/987654?ref_type=heads",
+  "why": "GitLab job"
+ },
+ {
+  "url": "https://jenkins.example.com/job/acme/job/app/job/main/42/console",
+  "refused": false,
+  "redacted": "https://jenkins.example.com/job/acme/job/app/job/main/42/console",
+  "why": "Jenkins build"
+ },
+ {
+  "url": "https://jenkins.example.com/blue/organizations/jenkins/app/detail/main/42/pipeline",
+  "refused": false,
+  "redacted": "https://jenkins.example.com/blue/organizations/jenkins/app/detail/main/42/pipeline",
+  "why": "Jenkins Blue Ocean"
+ },
+ {
+  "url": "https://app.circleci.com/pipelines/github/acme/app/1234/workflows/5d0f3c1e-8a2b-4c3d-9e7f-1a2b3c4d5e6f/jobs/5678",
+  "refused": false,
+  "redacted": "https://app.circleci.com/pipelines/github/acme/app/1234/workflows/5d0f3c1e-8a2b-4c3d-9e7f-1a2b3c4d5e6f/jobs/5678",
+  "why": "CircleCI job"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/PROJ-PLAN-JOB1-42/log",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/PROJ-PLAN-JOB1-42/log",
+  "why": "Bamboo job result"
+ },
+ {
+  "url": "https://bamboo.example.com/chain/result/viewChainResult.action?planKey=PROJ-PLAN&buildNumber=42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/chain/result/viewChainResult.action?planKey=PROJ-PLAN&buildNumber=42",
+  "why": "Bamboo chain result"
+ },
+ {
+  "url": "https://bamboo.example.com/build/result/viewBuildResultLogs.action?buildKey=PROJ-PLAN-JOB1&buildNumber=42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/build/result/viewBuildResultLogs.action?buildKey=PROJ-PLAN-JOB1&buildNumber=42",
+  "why": "Bamboo build logs"
+ },
+ {
+  "url": "https://teamcity.example.com/buildConfiguration/Acme_App_Build/12345?buildTab=log",
+  "refused": false,
+  "redacted": "https://teamcity.example.com/buildConfiguration/Acme_App_Build/12345?buildTab=log",
+  "why": "TeamCity build"
+ },
+ {
+  "url": "https://teamcity.example.com/viewLog.html?buildId=12345&buildTypeId=Acme_App_Build&tab=buildLog",
+  "refused": false,
+  "redacted": "https://teamcity.example.com/viewLog.html?buildId=12345&buildTypeId=Acme_App_Build&tab=buildLog",
+  "why": "TeamCity build log"
+ },
+ {
+  "url": "https://dev.azure.com/acme/app/_build/results?buildId=1234&view=results",
+  "refused": false,
+  "redacted": "https://dev.azure.com/acme/app/_build/results?buildId=1234&view=results",
+  "why": "Azure Pipelines run"
+ },
+ {
+  "url": "https://buildkite.com/acme/app/builds/1234#0189e1a2-3b4c-5d6e-7f80-91a2b3c4d5e6",
+  "refused": false,
+  "redacted": "https://buildkite.com/acme/app/builds/1234#0189e1a2-3b4c-5d6e-7f80-91a2b3c4d5e6",
+  "why": "Buildkite build"
+ },
+ {
+  "url": "https://tekton-dashboard.example.com/#/namespaces/ci/pipelineruns/app-run-x7k2p?pipelineTask=build&step=compile",
+  "refused": false,
+  "redacted": "https://tekton-dashboard.example.com/#/namespaces/ci/pipelineruns/app-run-x7k2p?pipelineTask=build&step=compile",
+  "why": "Tekton PipelineRun"
+ },
+ {
+  "url": "https://console.cloud.google.com/cloud-build/builds;region=global/1234?project=acme",
+  "refused": false,
+  "redacted": "https://console.cloud.google.com/cloud-build/builds;region=global/1234?project=acme",
+  "why": "Google Cloud Build"
+ },
+ {
+  "url": "https://argo.example.com/workflows/ci/app-x7k2p?tab=workflow&nodeId=app-x7k2p-123&uid=6f1e9c2a",
+  "refused": false,
+  "redacted": "https://argo.example.com/workflows/ci/app-x7k2p?tab=workflow&nodeId=app-x7k2p-123&uid=6f1e9c2a",
+  "why": "Argo Workflows run"
+ },
+ {
+  "url": "https://drone.example.com/acme/app/42",
+  "refused": false,
+  "redacted": "https://drone.example.com/acme/app/42",
+  "why": "Drone build"
  }
 ]

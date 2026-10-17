@@ -438,7 +438,12 @@ credential when its name is normalized (percent-decoded, a trailing array index 
   `credentials`, `key`, `accesskeyid`, `session`, `sessionid`, `assertion`, `ticket` or `bearer`,
   and is not one of the harmless names that end in `key`: `monkey`, `donkey`, `turkey`, `jockey`,
   `hockey`, `whiskey`, `hotkey`, `sortkey`, `primarykey`, `foreignkey`, `partitionkey`,
-  `groupkey`, `cachekey`, `lookupkey`.
+  `groupkey`, `cachekey`, `lookupkey`, and the CI identifiers `buildKey`, `planKey`, `jobKey`,
+  `resultKey`, `buildResultKey`, `chainKey`, `stageKey` (Bamboo), `projectKey` and `issueKey`
+  (SonarQube, Jira) and `branchKey`.
+
+The run URLs of GitHub Actions, GitLab, Jenkins, CircleCI, Bamboo, TeamCity, Azure Pipelines,
+Buildkite, Tekton, Google Cloud Build, Argo Workflows and Drone pass (each has a test vector).
 
 So `circle-token`, `job_token`, `X-Goog-Signature`, `AWSAccessKeyId`, `subscription-key`,
 `;jsessionid`, `client_assertion` and `token[]` are refused. `tokens`, `keyboard` and `sort_key`

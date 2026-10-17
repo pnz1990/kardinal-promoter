@@ -38,6 +38,8 @@ const CREDENTIAL_EXACT = ['sig', 'auth', 'authorization', 'jwt', 'code', 'pass',
 const CREDENTIAL_HARMLESS = [
   'monkey', 'donkey', 'turkey', 'jockey', 'hockey', 'whiskey', 'hotkey', 'sortkey', 'primarykey',
   'foreignkey', 'partitionkey', 'groupkey', 'cachekey', 'lookupkey',
+  'buildkey', 'plankey', 'jobkey', 'resultkey', 'buildresultkey', 'chainkey', 'stagekey', 'projectkey',
+  'issuekey', 'branchkey',
 ]
 
 function isCredentialName(raw: string): boolean {
