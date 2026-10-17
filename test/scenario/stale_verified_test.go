@@ -172,6 +172,37 @@ func TestHealth_BranchUnreadableWaits(t *testing.T) {
 		"once the branch reads, it holds 1.1.0's commit: Verified")
 }
 
+// TestHealth_BranchHistoryUnreadableWaits (#2137 QA): the branch's head
+// reads but its history does not, so whether the head still holds the
+// step's commit is unknown: the step waits, it does not pass. Covers
+// HEALTH-STALE-02.
+func TestHealth_BranchHistoryUnreadableWaits(t *testing.T) {
+	w, p := staleWorld(t)
+	ns := p.NS
+	w.GitOps.Fail(ns, "staging", "1.1.0")
+	w.GitOps.Fail(ns, "staging", BaseTag)
+	a := ImageBundle(ns, PipelineName, "1.1.0")
+	p.Ship(t, w, a)
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		s, ok := w.Steps(ns, a.Name)["staging"]
+		return ok && s.Status.State == "HealthChecking"
+	}), "1.1.0 is health-checking staging")
+	w.FailGitHistoryReads(errors.New("HTTP 503: the git host is unavailable"))
+	w.GitOps.Heal(ns, "staging", "1.1.0") // the Deployment is available now
+	for i := 0; i < 2*BlockRounds; i++ {
+		w.Round()
+	}
+	s := w.Steps(ns, a.Name)["staging"]
+	assert.Equal(t, "HealthChecking", s.Status.State, "it waits: %s", s.Status.Message)
+	assert.Contains(t, s.Status.Message, "could not be read")
+	assert.Contains(t, s.Status.Message, "read the history of", "the history read failed, not the heads read")
+	assert.Zero(t, auditOf(t, w, ns, a.Name, "staging")["PromotionSucceeded"])
+
+	w.FailGitHistoryReads(nil)
+	require.True(t, w.RunUntil(MaxRounds, func() bool { return w.Steps(ns, a.Name)["staging"].Status.State == "Verified" }),
+		"once the history reads, the branch holds 1.1.0's commit: Verified")
+}
+
 // TestHealth_TimeoutAfterANewerPushIsSuperseded (#2137 QA): a step whose
 // health check times out after a newer version pushed to its environment is
 // Superseded with a PromotionSuperseded record, not Failed: the environment

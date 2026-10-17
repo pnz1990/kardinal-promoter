@@ -221,8 +221,10 @@ type World struct {
 	// refuse is the API server's throttling of kardinal's writes (Throttle).
 	refuseMu sync.Mutex
 	refuse   func(o client.Object) bool
-	// gitReadFail fails the controller's remote git reads (FailGitReads).
-	gitReadFail error
+	// gitReadFail and gitHistoryFail fail the controller's remote reads of
+	// branch heads and of branch histories (FailGitReads,
+	// FailGitHistoryReads).
+	gitReadFail, gitHistoryFail error
 
 	// admissions are the recorded admission times (RecordAdmissions).
 	admissions map[string][]time.Duration

@@ -35,11 +35,22 @@ func (w *World) throttled(o client.Object) error {
 func (w *World) FailGitReads(err error) {
 	w.refuseMu.Lock()
 	defer w.refuseMu.Unlock()
-	w.gitReadFail = err
+	w.gitReadFail, w.gitHistoryFail = err, err
 }
 
-func (w *World) gitReadErr() error {
+// FailGitHistoryReads makes only the controller's reads of branch histories
+// fail with err (nil: they work again); its reads of the branch heads work.
+func (w *World) FailGitHistoryReads(err error) {
 	w.refuseMu.Lock()
 	defer w.refuseMu.Unlock()
+	w.gitHistoryFail = err
+}
+
+func (w *World) gitReadErr(history bool) error {
+	w.refuseMu.Lock()
+	defer w.refuseMu.Unlock()
+	if history {
+		return w.gitHistoryFail
+	}
 	return w.gitReadFail
 }
