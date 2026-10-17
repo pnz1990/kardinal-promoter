@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,19 +122,20 @@ func TestSharedBranch_SixtyWritersThroughTheEngine(t *testing.T) {
 		require.NoError(t, err, "writer %d after %d reconciles", i, attempts[i])
 	}
 
-	repo, err := gogit.PlainOpen(remote)
-	require.NoError(t, err)
-	ref, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
-	require.NoError(t, err)
-	head, err := repo.CommitObject(ref.Hash())
-	require.NoError(t, err)
-	tree, err := head.Tree()
-	require.NoError(t, err)
+	head := branchHead(t, remote)
 	for i := range writers {
-		f, err := tree.File(fmt.Sprintf("environments/p%02d/kustomization.yaml", i))
+		path := fmt.Sprintf("environments/p%02d/kustomization.yaml", i)
+		content, err := fileAt(head, path)
+		if err != nil && !errors.Is(err, errMissing) {
+			// A failed object read is not a lost write (#2143): read again.
+			t.Logf("reading %s at %s failed (%v); reading the branch again", path, head.Hash, err)
+			head = branchHead(t, remote)
+			content, err = fileAt(head, path)
+		}
+		if errors.Is(err, errMissing) {
+			dumpLostWrite(t.Logf, head, path)
+		}
 		require.NoError(t, err, "writer %d's change is on the branch", i)
-		content, err := f.Contents()
-		require.NoError(t, err)
 		assert.Equal(t, fmt.Sprintf("newTag: b%02d\n", i), content)
 	}
 	n := 0
@@ -149,4 +151,155 @@ func TestSharedBranch_SixtyWritersThroughTheEngine(t *testing.T) {
 	if raceWriters == 0 {
 		assert.Positive(t, retried, "sixty writers lose some reconciles (ErrContended) and retry them")
 	}
+}
+
+// errMissing is fileAt's error when the tree has no such file: the path's
+// entry or one of its directories is not there. Any other error is a failed
+// object read (go-git's Tree.File reports both as "file not found").
+var errMissing = errors.New("not in the tree")
+
+// branchHead opens remote again and returns the commit main points at.
+func branchHead(t *testing.T, remote string) *object.Commit {
+	t.Helper()
+	repo, err := gogit.PlainOpen(remote)
+	require.NoError(t, err)
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName("main"), true)
+	require.NoError(t, err)
+	head, err := repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	return head
+}
+
+// fileAt returns the content of path at commit c, errMissing when the tree
+// has no such file.
+func fileAt(c *object.Commit, path string) (string, error) {
+	tree, err := c.Tree()
+	if err != nil {
+		return "", fmt.Errorf("read the tree of %s: %w", c.Hash, err)
+	}
+	if _, err := tree.FindEntry(path); errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return "", fmt.Errorf("%s at %s: %w", path, c.Hash, errMissing)
+	} else if err != nil {
+		return "", fmt.Errorf("look up %s at %s: %w", path, c.Hash, err)
+	}
+	f, err := tree.File(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s at %s: %w", path, c.Hash, err)
+	}
+	return f.Contents()
+}
+
+// dumpLostWrite logs main's history, newest first, with whether each commit
+// has path, and for the commit that dropped it (it lacks path, its parent
+// has it) every change against that parent: which writer's commit lost the
+// write, and whether it was rebased (its committer time is later than its
+// author time), so a rare failure on CI says what happened (#2143).
+func dumpLostWrite(logf func(format string, args ...any), head *object.Commit, path string) {
+	var chain []*object.Commit
+	if err := object.NewCommitPreorderIter(head, nil, nil).ForEach(func(c *object.Commit) error {
+		chain = append(chain, c)
+		return nil
+	}); err != nil {
+		logf("lost write: walking main's history stopped: %v", err)
+	}
+	has := func(c *object.Commit) string {
+		_, err := fileAt(c, path)
+		switch {
+		case err == nil:
+			return "has"
+		case errors.Is(err, errMissing):
+			return "missing"
+		}
+		return "unreadable (" + err.Error() + ")"
+	}
+	logf("lost write: %s is not at main %s; main's history, newest first:", path, head.Hash)
+	for k, c := range chain {
+		logf("  %3d %s parents=%d %s author=%s committer=%s %q", k, c.Hash.String()[:10], c.NumParents(), has(c),
+			c.Author.When.Format("15:04:05.000000"), c.Committer.When.Format("15:04:05.000000"), firstLine(c.Message))
+	}
+	for k := 0; k+1 < len(chain); k++ {
+		c, parent := chain[k], chain[k+1]
+		if has(c) != "missing" || has(parent) != "has" {
+			continue
+		}
+		logf("lost write: %s dropped %s (its parent %s has it); its changes against the parent:", c.Hash, path, parent.Hash)
+		ct, err1 := c.Tree()
+		pt, err2 := parent.Tree()
+		if err1 != nil || err2 != nil {
+			logf("  cannot read the trees: %v, %v", err1, err2)
+			continue
+		}
+		changes, err := object.DiffTree(pt, ct)
+		if err != nil {
+			logf("  cannot diff the trees: %v", err)
+			continue
+		}
+		for _, ch := range changes {
+			logf("  %q -> %q", ch.From.Name, ch.To.Name)
+		}
+	}
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
+}
+
+// TestLostWriteDiagnostics (#2143): fileAt tells a file that is not in the
+// tree from one whose objects cannot be read, and dumpLostWrite names the
+// commit that dropped a file and its changes.
+func TestLostWriteDiagnostics(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	dir := t.TempDir()
+	_, err := gogit.PlainInitWithOptions(dir, &gogit.PlainInitOptions{
+		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")}})
+	require.NoError(t, err)
+	write := func(p, content string) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, p), []byte(content), 0o600))
+	}
+	write("environments/p01/kustomization.yaml", "newTag: b01\n")
+	write("environments/p02/kustomization.yaml", "newTag: b02\n")
+	require.NoError(t, c.CommitAll(ctx, dir, "both", "t", "t@example.com"))
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, "environments/p02")))
+	require.NoError(t, c.CommitAll(ctx, dir, "drops p02", "t", "t@example.com"))
+	write("README.md", "x\n")
+	require.NoError(t, c.CommitAll(ctx, dir, "later", "t", "t@example.com"))
+
+	head := branchHead(t, dir)
+	content, err := fileAt(head, "environments/p01/kustomization.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "newTag: b01\n", content)
+	_, err = fileAt(head, "environments/p02/kustomization.yaml")
+	assert.ErrorIs(t, err, errMissing)
+	_, err = fileAt(head, "nowhere/at/all.yaml")
+	assert.ErrorIs(t, err, errMissing, "a missing directory is missing too")
+
+	var lines []string
+	dumpLostWrite(func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) },
+		head, "environments/p02/kustomization.yaml")
+	out := strings.Join(lines, "\n")
+	dropper, err := head.Parent(0)
+	require.NoError(t, err)
+	assert.Contains(t, out, "lost write: "+dropper.Hash.String()+" dropped environments/p02/kustomization.yaml")
+	assert.Contains(t, out, `"environments/p02/kustomization.yaml" -> ""`, "the dropping change is listed")
+	assert.Contains(t, out, `"drops p02"`)
+
+	// An object that cannot be read is not a missing file.
+	repo, err := gogit.PlainOpen(dir)
+	require.NoError(t, err)
+	tree, err := head.Tree()
+	require.NoError(t, err)
+	envs, err := tree.FindEntry("environments")
+	require.NoError(t, err)
+	envTree, err := repo.TreeObject(envs.Hash)
+	require.NoError(t, err)
+	p01, err := envTree.FindEntry("p01")
+	require.NoError(t, err)
+	h := p01.Hash.String()
+	require.NoError(t, os.Remove(filepath.Join(dir, ".git", "objects", h[:2], h[2:])))
+	_, err = fileAt(branchHead(t, dir), "environments/p01/kustomization.yaml")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errMissing, "a failed read is not a lost write")
 }
