@@ -29,40 +29,55 @@ func (e *BuildError) Error() string { return e.Err.Error() }
 // Unwrap returns the wrapped build error.
 func (e *BuildError) Unwrap() error { return e.Err }
 
-// GatesHash returns the SHA-256 hex hash of the gates that apply to
-// pipeline's environments: namespace, name, labels and spec of each gate
-// whose kardinal.io/applies-to names one of them, in namespace and name
+// ApplicableGates returns the gates whose kardinal.io/applies-to names one
+// of pipeline's environments (fleet targets included), in namespace and name
 // order. A gate of other environments (an org gate for other Pipelines) is
-// left out, so changing it does not change the hash.
-func GatesHash(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.PolicyGate) string {
+// left out.
+func ApplicableGates(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.PolicyGate) []kardinalv1alpha1.PolicyGate {
 	if pipeline == nil {
-		return ""
+		return nil
 	}
 	envs := make(map[string]bool, len(pipeline.Spec.Environments))
 	for _, name := range graph.EnvironmentNames(pipeline) { // fleet targets included: a gate can name one
 		envs[name] = true
 	}
-	type entry struct {
-		Namespace string                          `json:"namespace"`
-		Name      string                          `json:"name"`
-		Labels    map[string]string               `json:"labels,omitempty"`
-		Spec      kardinalv1alpha1.PolicyGateSpec `json:"spec"`
-	}
-	entries := []entry{}
+	var out []kardinalv1alpha1.PolicyGate
 	for i := range gates {
 		g := &gates[i]
-		if !slices.ContainsFunc(strings.Split(g.Labels["kardinal.io/applies-to"], ","),
+		if slices.ContainsFunc(strings.Split(g.Labels["kardinal.io/applies-to"], ","),
 			func(e string) bool { return envs[strings.TrimSpace(e)] }) {
-			continue
+			out = append(out, *g)
 		}
-		entries = append(entries, entry{Namespace: g.Namespace, Name: g.Name, Labels: g.Labels, Spec: g.Spec})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Namespace != entries[j].Namespace {
-			return entries[i].Namespace < entries[j].Namespace
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
 		}
-		return entries[i].Name < entries[j].Name
+		return out[i].Name < out[j].Name
 	})
+	return out
+}
+
+// GatesHash returns the SHA-256 hex hash of the gates that apply to
+// pipeline's environments (ApplicableGates): namespace, name, generation,
+// labels and spec of each. The generation is in it so that an edit reverted
+// before a Bundle saw it still changes the hash: the Bundle's gate instances
+// then get the template's new generation (#2145).
+func GatesHash(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.PolicyGate) string {
+	if pipeline == nil {
+		return ""
+	}
+	type entry struct {
+		Namespace  string                          `json:"namespace"`
+		Name       string                          `json:"name"`
+		Generation int64                           `json:"generation,omitempty"`
+		Labels     map[string]string               `json:"labels,omitempty"`
+		Spec       kardinalv1alpha1.PolicyGateSpec `json:"spec"`
+	}
+	entries := []entry{}
+	for _, g := range ApplicableGates(pipeline, gates) {
+		entries = append(entries, entry{Namespace: g.Namespace, Name: g.Name, Generation: g.Generation, Labels: g.Labels, Spec: g.Spec})
+	}
 	data, err := json.Marshal(entries)
 	if err != nil {
 		return ""

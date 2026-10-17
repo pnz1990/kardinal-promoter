@@ -41,7 +41,7 @@ type AuditEventSpec struct {
 	//               "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
 	//               "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed",
 	//               "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved",
-	//               "ChangeRequestRejected".
+	//               "ChangeRequestRejected", "GateChanged".
 	// The ChangeRequest actions are written by a per-promotion ChangeRequest
 	// when it opens or links its ticket, and when the ticket is first read
 	// approved or rejected (docs/design/23-change-requests.md section 9).
@@ -64,11 +64,16 @@ type AuditEventSpec struct {
 	// FreezeExempted is written once per exemption when a PromotionStep goes
 	// on through an active freeze under it (kardinal override --freeze),
 	// naming who made the exemption and why.
+	// GateChanged is written by the BundleReconciler when a PolicyGate
+	// template that applies to a Promoting version was created, edited or
+	// deleted and the version's Graph got the change; gates lists the
+	// templates of that rebuild with their old and new digest, one event per
+	// version and rebuild (#2144).
 	// HealthCheckFailed and GateBlocked are accepted but never written: a
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed;ChangeRequestOpened;ChangeRequestLinked;ChangeRequestApproved;ChangeRequestRejected
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed;ChangeRequestOpened;ChangeRequestLinked;ChangeRequestApproved;ChangeRequestRejected;GateChanged
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -95,6 +100,57 @@ type AuditEventSpec struct {
 	// and no token.
 	// +optional
 	Request *AuditRequest `json:"request,omitempty"`
+
+	// Gates are the PolicyGate template changes a GateChanged event records:
+	// one event per version and rebuild, listing at most
+	// MaxAuditGateChanges changes in template order.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Gates []AuditGateChange `json:"gates,omitempty"`
+
+	// GatesOmitted counts the changes of the same rebuild that Gates leaves
+	// out, past its first MaxAuditGateChanges.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	GatesOmitted int32 `json:"gatesOmitted,omitempty"`
+}
+
+// MaxAuditGateChanges bounds AuditEventSpec.Gates.
+const MaxAuditGateChanges = 20
+
+// AuditGateChange is a PolicyGate template's change under a version in
+// flight: the template, and what the version's gate instances copied from
+// it before and after (kardinal.io/gate-template-digest and -generation).
+// An empty digest is a template that did not apply before (created) or no
+// longer does (deleted).
+type AuditGateChange struct {
+	// Template is the PolicyGate template's name.
+	// +kubebuilder:validation:MaxLength=253
+	Template string `json:"template"`
+	// Namespace is the template's namespace.
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// OldDigest is the digest the instances had.
+	// +optional
+	// +kubebuilder:validation:MaxLength=80
+	OldDigest string `json:"oldDigest,omitempty"`
+	// NewDigest is the digest the instances have now.
+	// +optional
+	// +kubebuilder:validation:MaxLength=80
+	NewDigest string `json:"newDigest,omitempty"`
+	// OldGeneration is the template generation the instances had.
+	// +optional
+	OldGeneration int64 `json:"oldGeneration,omitempty"`
+	// NewGeneration is the template generation the instances have now.
+	// +optional
+	NewGeneration int64 `json:"newGeneration,omitempty"`
+	// Manager is the field manager of the template's newest managedFields
+	// entry, as the writing client declared it (kubectl --field-manager sets
+	// any name). It is not verified and does not say who wrote the
+	// template: the API server's audit log does.
+	// +optional
+	// +kubebuilder:validation:MaxLength=128
+	Manager string `json:"manager,omitempty"`
 }
 
 // AuditRequest names the API request an APIWrite AuditEvent records.
@@ -149,6 +205,7 @@ var AuditActions = []string{
 	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked", "FreezeExempted",
 	"PipelinePaused", "PipelineResumed", "FreezeStarted", "FreezeLifted",
 	"PRMerged", "ReceiptFailed", "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved", "ChangeRequestRejected",
+	"GateChanged",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

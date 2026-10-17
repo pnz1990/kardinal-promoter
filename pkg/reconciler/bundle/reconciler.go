@@ -614,9 +614,16 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	}
 	// Hashed before Translate reads the gates: a gate edited in between
 	// re-translates once more, rather than being missed.
-	builtGatesHash := gatesHash
-	if builtGatesHash == "" {
-		builtGatesHash = r.gatesHashFor(ctx, log, pipeline)
+	gates, gatesRead := r.currentGates(ctx, log, pipeline)
+	builtGatesHash := ""
+	if gatesRead {
+		builtGatesHash = translator.GatesHash(pipeline, gates)
+	}
+	// A gate change under a Promoting version is recorded (#2144): what its
+	// instances carried is read from the Graph before it is updated.
+	var stamps map[string]graph.TemplateStamp
+	if gatesChanged && gatesRead && b.Status.Phase == phasePromoting {
+		stamps = r.graphStamps(ctx, log, b)
 	}
 	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
 		if !pipelineChanged && errors.Is(err, graph.ErrInvalid) &&
@@ -628,7 +635,30 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	b.Status.PipelineSpecHash = currentHash
 	b.Status.PolicyGatesHash = builtGatesHash
 	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
+	if stamps != nil {
+		if e, ok := gateChangeEntry(b, pipeline, stamps, gates, r.now()); ok {
+			b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
+		}
+	}
 	return nil
+}
+
+// graphStamps is graph.TemplateStamps of b's Graph, or nil when it cannot be
+// read (the change is then not recorded, and a warning says so).
+func (r *Reconciler) graphStamps(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle) map[string]graph.TemplateStamp {
+	if r.GraphChecker == nil {
+		return nil
+	}
+	name := b.Status.GraphRef
+	if name == "" {
+		name = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
+	}
+	g, _, err := r.readGraph(ctx, b.Namespace, name)
+	if err != nil || g == nil {
+		log.Warn().Err(err).Str("graph", name).Msg("cannot read the Graph's gate stamps: the gate change is not recorded as an AuditEvent")
+		return nil
+	}
+	return graph.TemplateStamps(g)
 }
 
 // errGatesNotApplied is the error of a re-translate for changed PolicyGate
@@ -642,8 +672,19 @@ var errGatesNotApplied = errors.New("the changed PolicyGates cannot be applied t
 // (translator.CollectGates, translator.GatesHash). "" when they cannot be
 // read; no retry is keyed on it then.
 func (r *Reconciler) gatesHashFor(ctx context.Context, log zerolog.Logger, pipeline *kardinalv1alpha1.Pipeline) string {
-	if pipeline == nil {
+	gates, ok := r.currentGates(ctx, log, pipeline)
+	if !ok {
 		return ""
+	}
+	return translator.GatesHash(pipeline, gates)
+}
+
+// currentGates reads the PolicyGate templates as the Translator reads them
+// (translator.CollectGates, through the template index when it is
+// registered), and reports false when they cannot be read.
+func (r *Reconciler) currentGates(ctx context.Context, log zerolog.Logger, pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, bool) {
+	if pipeline == nil {
+		return nil, false
 	}
 	var opts []client.ListOption
 	if r.templateIndex {
@@ -652,9 +693,9 @@ func (r *Reconciler) gatesHashFor(ctx context.Context, log zerolog.Logger, pipel
 	gates, err := translator.CollectGates(ctx, r.Client, r.PolicyNamespaces, pipeline, opts...)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to read policy gates for the change hash (non-fatal)")
-		return ""
+		return nil, false
 	}
-	return translator.GatesHash(pipeline, gates)
+	return gates, true
 }
 
 // usedGatesHash returns the hash of the PolicyGate templates the failed

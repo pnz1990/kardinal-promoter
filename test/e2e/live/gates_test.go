@@ -1021,6 +1021,27 @@ func TestGate_EditReachesInFlight(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, latest, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
 
+	// #2144: the edits under the in-flight version are recorded.
+	framework.Eventually(t, time.Minute, "GateChanged records for "+latest, func(ctx context.Context) (bool, string) {
+		var evs v1alpha1.AuditEventList
+		if err := e.Client.List(ctx, &evs, client.InNamespace(a.ns), client.MatchingLabels{"kardinal.io/action": "GateChanged"}); err != nil {
+			return false, err.Error()
+		}
+		templates := map[string]bool{}
+		for _, ev := range evs.Items {
+			if ev.Spec.BundleName == verified {
+				return false, "a GateChanged for the Verified version"
+			}
+			// One record per rebuild, listing its changes (#2146).
+			for _, gc := range ev.Spec.Gates {
+				if gc.NewDigest != "" {
+					templates[gc.Template] = true
+				}
+			}
+		}
+		return templates["edit-hold"] && templates["late"], fmt.Sprintf("%d records: %v", len(evs.Items), templates)
+	})
+
 	kept, ok, err := e.GateInstance(ctx, a.ns, verified, "prod", "edit-hold")
 	require.NoError(t, err)
 	require.True(t, ok)
