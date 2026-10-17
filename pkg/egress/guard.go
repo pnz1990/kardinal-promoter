@@ -181,6 +181,15 @@ func allowlistDialer(dialer *net.Dialer, proxies *proxyHosts) func(context.Conte
 	}
 }
 
+// DialContext dials directly (no proxy) with the guard and the controller-wide
+// allowlist applied to the address after DNS resolution, as NewTransport's
+// connections are: for clients that are not HTTP, such as gRPC
+// (grpc.WithContextDialer).
+func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return allowlistDialer(&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: Control},
+		&proxyHosts{})(ctx, network, addr)
+}
+
 // checkTargetBeforeProxy wraps a Transport.Proxy function. When it returns a
 // proxy, the request's target host must pass CheckAddr: an IP literal
 // directly, a host name through every address it resolves to.

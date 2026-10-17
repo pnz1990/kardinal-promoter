@@ -151,7 +151,7 @@ Where a value sets a controller flag, the flag is in [Controller flags](controll
 | `receipts.signing.keyless.fulcioURL` | `https://fulcio.sigstore.dev` | Fulcio URL. The public-good Fulcio accepts the OIDC issuers of EKS, GKE and AKS clusters; kind and on-prem clusters need a private Fulcio that trusts their issuer. |
 | `receipts.signing.keyless.tokenExpirationSeconds` | `600` | Expiry of the projected token, seconds (at least 600). |
 | `receipts.signing.key.secretRef` | `{"key":"cosign.key","name":""}` | Secret in the release namespace holding the PEM private key (unencrypted PKCS #8 or SEC 1, ECDSA P-256). Anyone who can read it can sign receipts. |
-| `receipts.signing.kmsKey` | `""` | KMS key reference (mode kms), for example awskms:///alias/receipts. |
+| `receipts.signing.kmsKey` | `""` | KMS key reference (mode kms): awskms:///alias/receipts, awskms:///arn:aws:kms:&lt;region&gt;:&lt;account&gt;:key/&lt;id&gt;, or gcpkms://projects/&lt;p&gt;/locations/&lt;l&gt;/keyRings/&lt;r&gt;/cryptoKeys/&lt;k&gt;/cryptoKeyVersions/&lt;v&gt;. Credentials come from the cloud's default chain (IRSA or Pod Identity: serviceAccount.annotations; GKE Workload Identity). |
 | `receipts.signing.tsaURL` | `""` | RFC 3161 timestamp authority URL. Keyless signing needs a timestamp or a Rekor entry to prove the signing time. |
 | `receipts.sinks.oci.enabled` | `false` | Push every receipt as an OCI referrer of each of its images. |
 | `receipts.sinks.oci.secretRef` | `{"name":""}` | kubernetes.io/dockerconfigjson Secret in the release namespace with push credentials. Never a tenant's pull Secret. |

@@ -3,8 +3,9 @@
 
 // hygiene fails on dead code and dead files (make hygiene, CI job hygiene):
 //
-//   - Go functions no main reaches (deadcode ./cmd/... ./hack/...), and test
-//     code no test reaches (deadcode -test -tags e2e ./...). A function only
+//   - Go functions no main reaches (deadcode -tags kms_aws,kms_gcp ./cmd/...
+//     ./hack/..., the image's tags), and test code no test reaches (deadcode
+//     -test -tags e2e,kms_aws,kms_gcp ./...). A function only
 //     tests call belongs in an export_test.go or _internal_test.go file of its
 //     package, not in the production code.
 //   - docs pages that are neither in mkdocs.yml nor linked from another page;
@@ -256,8 +257,10 @@ func orphanScripts(r *repo) []string {
 func deadcode(root, bin string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, args := range [][]string{
-		{"-f", deadcodeFormat, "./cmd/...", "./hack/..."},
-		{"-test", "-tags", "e2e", "-f", deadcodeFormat, "./..."},
+		// The tags the controller image is built with (the KMS receipt
+		// signers, Dockerfile), and e2e for the live suites.
+		{"-tags", "kms_aws,kms_gcp", "-f", deadcodeFormat, "./cmd/...", "./hack/..."},
+		{"-test", "-tags", "e2e,kms_aws,kms_gcp", "-f", deadcodeFormat, "./..."},
 	} {
 		cmd := exec.Command(bin, args...)
 		cmd.Dir = root
