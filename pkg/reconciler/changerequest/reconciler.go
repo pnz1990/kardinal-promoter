@@ -805,14 +805,16 @@ func (r *Reconciler) versionFinal(ctx context.Context, cr *kardinalv1alpha1.Chan
 	return ""
 }
 
-// becameFinal passes a Bundle update that moved it to Superseded or Rejected.
+// becameFinal passes a Bundle update that moved it to Superseded or
+// Rejected, or back out of either: a final instance asks for no requeue, so
+// a version that is promoting again must enqueue its instances to resume.
 var becameFinal = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		final := func(o client.Object) bool {
 			b, ok := o.(*kardinalv1alpha1.Bundle)
 			return ok && (b.Status.Phase == "Superseded" || b.Status.Phase == "Rejected")
 		}
-		return final(e.ObjectNew) && !final(e.ObjectOld)
+		return final(e.ObjectNew) != final(e.ObjectOld)
 	},
 	CreateFunc:  func(event.CreateEvent) bool { return false },
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },

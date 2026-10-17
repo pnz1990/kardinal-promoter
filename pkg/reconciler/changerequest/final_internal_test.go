@@ -20,7 +20,7 @@ import (
 )
 
 // TestBecameFinalAndBundleInstances: the Bundle watch passes only a move to
-// Superseded or Rejected, and maps it to that Bundle's instances only.
+// Superseded or Rejected, or back out of either (polling resumes), and maps it to that Bundle's instances only.
 func TestBecameFinalAndBundleInstances(t *testing.T) {
 	b := func(phase string) *kardinalv1alpha1.Bundle {
 		return &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "checkout"},
@@ -36,6 +36,8 @@ func TestBecameFinalAndBundleInstances(t *testing.T) {
 		{"Promoting", "Verified", false},
 		{"Superseded", "Superseded", false},
 		{"Superseded", "Rejected", false},
+		{"Superseded", "Promoting", true},
+		{"Rejected", "Verified", true},
 	} {
 		assert.Equal(t, tc.want, becameFinal.Update(event.UpdateEvent{ObjectOld: b(tc.from), ObjectNew: b(tc.to)}), "%s → %s", tc.from, tc.to)
 	}
