@@ -114,6 +114,43 @@ spec:
                     maxItems: 64
                     type: array
                 type: object
+              signingIdentities:
+                description: |-
+                  SigningIdentities are the Sigstore (Fulcio) certificate identities of
+                  the agent's workload. A config commit or an attestation whose
+                  verified signer matches exactly one ready, unsuspended AgentIdentity
+                  records that agent (commit.agent, attestations.<name>.agent), so a
+                  gate can require that the agent that created a version also signed
+                  it. See docs/actors.md#signing-identities.
+                items:
+                  description: |-
+                    AgentSigningIdentity is a Fulcio certificate identity: the OIDC issuer,
+                    and the subject (SAN) or a regular expression the whole subject matches.
+                  properties:
+                    issuer:
+                      description: |-
+                        Issuer is the OIDC issuer, for example
+                        https://token.actions.githubusercontent.com.
+                      maxLength: 512
+                      minLength: 1
+                      type: string
+                    subject:
+                      description: Subject is the certificate's subject (SAN).
+                      maxLength: 1024
+                      type: string
+                    subjectRegExp:
+                      description: SubjectRegExp is a regular expression the whole
+                        subject must match.
+                      maxLength: 1024
+                      type: string
+                  required:
+                  - issuer
+                  type: object
+                  x-kubernetes-validations:
+                  - message: set exactly one of subject and subjectRegExp
+                    rule: has(self.subject) != has(self.subjectRegExp)
+                maxItems: 8
+                type: array
               sponsor:
                 description: Sponsor is the person accountable for the agent.
                 properties:

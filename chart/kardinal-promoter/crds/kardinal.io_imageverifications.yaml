@@ -382,6 +382,22 @@ spec:
                           type: string
                         maxItems: 50
                         type: array
+                      authorities:
+                        description: |-
+                          Authorities, when set, has kardinal verify the commit's gitsign
+                          (Sigstore) signature itself instead of asking the SCM: they name
+                          keyless spec.imageVerification.authorities, and the commit verifies
+                          when its signature verifies against one of them. The signed payload
+                          is read from the SCM API (GitHub, Forgejo, Gitea), the commit SHA is
+                          recomputed from it, and the Rekor entry embedded in the signature is
+                          checked offline against the authority's trusted root. A GPG or SSH
+                          signature is then refused, and allowedSigners does not apply. See
+                          docs/image-verification.md#commit-signatures-with-gitsign.
+                        items:
+                          maxLength: 63
+                          type: string
+                        maxItems: 10
+                        type: array
                       requireSigned:
                         description: |-
                           RequireSigned requires the config Bundle's commit to be signed with a
@@ -442,6 +458,10 @@ spec:
                 - message: set authorities, commits.requireSigned, or both
                   rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
                     && self.commits.requireSigned)
+                - message: commits.authorities must name keyless spec.imageVerification.authorities
+                  rule: '!has(self.commits) || !has(self.commits.authorities) || self.commits.authorities.all(n,
+                    has(self.authorities) && self.authorities.exists(x, x.name ==
+                    n && has(x.keyless)))'
                 - message: an attestation's authorities and vex.authorities must name
                     spec.imageVerification.authorities
                   rule: '!has(self.attestations) || self.attestations.all(a, a.authorities.all(n,
@@ -472,6 +492,12 @@ spec:
                     AttestationResult is one attestation of one image: whether it verified,
                     who signed it, and its typed summary and predicate.
                   properties:
+                    agent:
+                      description: |-
+                        Agent is the ready AgentIdentity whose spec.signingIdentities match
+                        the signing certificate, when exactly one does; empty otherwise.
+                      maxLength: 253
+                      type: string
                     authority:
                       description: Authority is the authority that verified it.
                       maxLength: 63
@@ -639,15 +665,40 @@ spec:
               commit:
                 description: Commit is the commit result.
                 properties:
+                  agent:
+                    description: |-
+                      Agent is the ready AgentIdentity whose spec.signingIdentities match
+                      the signer, when exactly one does (gitsign); empty otherwise.
+                    maxLength: 253
+                    type: string
+                  authority:
+                    description: Authority is the commits.authorities entry that verified
+                      it (gitsign).
+                    maxLength: 63
+                    type: string
+                  issuer:
+                    description: Issuer is the OIDC issuer of the signing certificate
+                      (gitsign).
+                    maxLength: 1024
+                    type: string
                   message:
-                    description: Message is the SCM's reason when not verified.
+                    description: Message is the reason when not verified, or a note.
+                    type: string
+                  method:
+                    description: |-
+                      Method is how: "scm" (the SCM verified it) or "gitsign" (kardinal
+                      verified a Sigstore signature against commits.authorities).
+                    enum:
+                    - scm
+                    - gitsign
                     type: string
                   signer:
-                    description: Signer is who signed, as the SCM reports it.
+                    description: |-
+                      Signer is who signed: as the SCM reports it, or the certificate
+                      identity (SAN) for gitsign.
                     type: string
                   verified:
-                    description: Verified is true when the SCM verified the commit's
-                      signature.
+                    description: Verified is true when the commit's signature verified.
                     type: boolean
                 required:
                 - verified

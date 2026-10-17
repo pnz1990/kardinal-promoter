@@ -32,7 +32,7 @@ func attestedIV(name, bundle string, created time.Time, phase string) *kardinalv
 		level := 3 - i
 		iv.Status.Attestations = append(iv.Status.Attestations,
 			kardinalv1alpha1.AttestationResult{Name: "provenance", Image: img, PredicateType: "https://slsa.dev/provenance/v1",
-				Verified: true, Signer: "release", Authority: "release",
+				Verified: true, Signer: "release", Authority: "release", Agent: "builder-bot",
 				SLSA: &kardinalv1alpha1.SLSAResult{BuildLevel: level, LevelSource: "builder", BuilderID: "https://builder.example",
 					SourceCommit: "abc123def", SourceURI: "git+https://github.com/acme/app"}},
 			kardinalv1alpha1.AttestationResult{Name: "vulns", Image: img, PredicateType: "https://cosign.sigstore.dev/attestation/vuln/v1",
@@ -99,6 +99,8 @@ func TestAttestationContext(t *testing.T) {
 		{`attestations.tests.images.all(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")`, false, ""},
 		{`attestations.tests.images.exists(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")`, true, ""},
 		{"attestations.provenance.signer == 'release' && size(attestations.provenance.images) == 2", true, ""},
+		{"attestations.provenance.agent == 'builder-bot' && attestations.provenance.images.all(i, i.agent == 'builder-bot')", true, ""},
+		{"attestations.vulns.agent == ''", false, "no such key"}, // no agent: left out, fails closed
 		{`json.unmarshal(attestations.sbom.predicate).name != ""`, false, "no such key"},
 		{"attestations.missing.verified", false, "no such key"},
 	} {

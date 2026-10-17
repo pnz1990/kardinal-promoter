@@ -84,6 +84,26 @@ func InstanceCommitAs(ctx context.Context, s Server, r Repo, name, path string, 
 // commit of path=content to r's branch, signed with that key when sign is
 // set (as a person signs), unsigned otherwise. It returns the commit SHA.
 func CommitAs(ctx context.Context, s Server, r Repo, name, path string, content []byte, sign bool) (string, error) {
+	return commitAs(ctx, s, r, name, path, content, func(opts *git.CommitOptions, entity *openpgp.Entity) {
+		if sign {
+			opts.SignKey = entity
+		}
+	})
+}
+
+// CommitSignedWith is CommitAs with the commit signed by signer (for
+// example a gitsign-style signer, signtest.GitsignSigner) instead of the
+// user's GPG key. It returns the commit SHA.
+func CommitSignedWith(ctx context.Context, s Server, r Repo, name, path string, content []byte, signer git.Signer) (string, error) {
+	return commitAs(ctx, s, r, name, path, content, func(opts *git.CommitOptions, _ *openpgp.Entity) {
+		opts.Signer = signer
+	})
+}
+
+// commitAs makes the user as signingUser does and pushes a commit of
+// path=content to r's branch, with the options sign sets.
+func commitAs(ctx context.Context, s Server, r Repo, name, path string, content []byte,
+	sign func(*git.CommitOptions, *openpgp.Entity)) (string, error) {
 	f, err := asForgejo(s)
 	if err != nil {
 		return "", err
@@ -120,9 +140,7 @@ func CommitAs(ctx context.Context, s Server, r Repo, name, path string, content 
 	}
 	sig := &object.Signature{Name: name, Email: email, When: time.Now()}
 	opts := &git.CommitOptions{Author: sig, Committer: sig}
-	if sign {
-		opts.SignKey = entity
-	}
+	sign(opts, entity)
 	h, err := wt.Commit("commit by "+name, opts)
 	if err != nil {
 		return "", fmt.Errorf("commit: %w", err)
