@@ -264,10 +264,13 @@ expression: '!attestations.vulns.stale && attestations.vulns.effective.critical 
 
 - **Age.** A scan's age counts from the earlier of its `scannedAt` and its verified signing time
   (the transparency log's or timestamp authority's time), so a scan cannot claim to be newer than
-  its signature. Any other attestation counts from its signing time. One with no signing time and
+  its signature, and never from later than when kardinal first recorded it (`datedAt`): a scan
+  with no signing time that claims a future `scannedAt` ages from when it was first seen, and
+  reading the same attestation again keeps that date. Any other attestation counts from its
+  signing time. One with no signing time and
   no scan time (a key signature without a transparency log entry) cannot be dated: it is stale at
   once.
-- **Status.** Each result records `verifiedAt`, `staleAt` (its age base plus `maxAge`) and
+- **Status.** Each result records `verifiedAt`, `datedAt`, `staleAt` (its age base plus `maxAge`) and
   `stale`. The reconciler comes back at `staleAt` and sets `stale`. The phase stays Verified, and a
   gate reads [`attestations.<name>.stale`](reference/cel-context.md#attestations), true when any
   image's result is stale.

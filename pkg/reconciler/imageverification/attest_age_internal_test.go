@@ -30,6 +30,10 @@ func TestAgeBaseAndSetAge(t *testing.T) {
 		{"a scannedAt after the signature", v1alpha1.AttestationResult{VerifiedAt: at(signed), Vulns: scan("2026-10-20T00:00:00Z")}, signed},
 		{"an unparsable scannedAt", v1alpha1.AttestationResult{VerifiedAt: at(signed), Vulns: scan("yesterday")}, signed},
 		{"no time", v1alpha1.AttestationResult{}, time.Time{}},
+		// Never later than when kardinal first recorded it.
+		{"a future scannedAt, no signing time", v1alpha1.AttestationResult{DatedAt: at(signed), Vulns: scan("2099-01-01T00:00:00Z")}, signed},
+		{"a scan older than its first sighting", v1alpha1.AttestationResult{DatedAt: at(signed), Vulns: scan("2026-10-14T08:00:00Z")}, signed.Add(-time.Hour)},
+		{"first seen alone does not date it", v1alpha1.AttestationResult{DatedAt: at(signed)}, time.Time{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,6 +52,21 @@ func TestAgeBaseAndSetAge(t *testing.T) {
 	unverified := v1alpha1.AttestationResult{VerifiedAt: at(signed)}
 	setAge(&unverified, time.Hour, signed.Add(2*time.Hour))
 	assert.False(t, unverified.Stale, "an attestation that did not verify is not stale, it is missing")
+}
+
+func TestDateAttestation(t *testing.T) {
+	t0 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	m := metav1.NewTime(t0)
+	prev := v1alpha1.AttestationResult{Verified: true, Digest: "sha256:aa", DatedAt: &m}
+	same := v1alpha1.AttestationResult{Verified: true, Digest: "sha256:aa"}
+	dateAttestation(&same, &prev, t0.Add(time.Hour))
+	assert.Equal(t, t0, same.DatedAt.Time, "the same attestation keeps its date")
+	other := v1alpha1.AttestationResult{Verified: true, Digest: "sha256:bb"}
+	dateAttestation(&other, &prev, t0.Add(time.Hour))
+	assert.Equal(t, t0.Add(time.Hour), other.DatedAt.Time, "another attestation is dated now")
+	missing := v1alpha1.AttestationResult{Digest: "sha256:aa", DatedAt: &m}
+	dateAttestation(&missing, &prev, t0.Add(time.Hour))
+	assert.Nil(t, missing.DatedAt, "an attestation that did not verify has no date")
 }
 
 func TestRefetchInterval(t *testing.T) {

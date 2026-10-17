@@ -215,3 +215,31 @@ func scaleN() int {
 	}
 	return 20
 }
+
+// TestAttestations_MaxAgeFutureScannedAt (QA on #2121): a key-signed scan
+// with no transparency-log time that claims it finished in 2099 does not
+// stay fresh: its age counts from when kardinal first recorded it
+// (datedAt), it goes stale a maxAge later, and reading the same scan again
+// keeps that date.
+func TestAttestations_MaxAgeFutureScannedAt(t *testing.T) {
+	k := newKeys(t)
+	secrets := k.secrets(t)
+	policy := v1alpha1.AttestationPolicy{Name: "vulns", PredicateType: iv.PredicateCosignVuln, Authorities: []string{"release"}, MaxAge: "24h"}
+	h := newHarness(t, nil, attestIV("", policy), secrets[0], secrets[1])
+	h.reg.sigs[digestA] = iv.Signatures{Bundles: [][]byte{sign(t, k.release)},
+		Attestations: [][]byte{attest(t, k.release, iv.PredicateCosignVuln, scanAt(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)))}}
+	first := h.now
+	got, res := h.reconcile()
+	require.Equal(t, v1alpha1.ImageVerificationVerified, got.Status.Phase, got.Status.Message)
+	r := resultOf(t, got, "vulns")
+	require.NotNil(t, r.DatedAt)
+	assert.Equal(t, first.UTC().Truncate(time.Second), r.DatedAt.UTC())
+	assert.Equal(t, first.Add(24*time.Hour).UTC().Truncate(time.Second), r.StaleAt.UTC(), "from first seen, not from 2099")
+	assert.InDelta(t, (24 * time.Hour).Seconds(), res.RequeueAfter.Seconds(), 2)
+
+	h.now = first.Add(25 * time.Hour)
+	got, _ = h.reconcile()
+	r = resultOf(t, got, "vulns")
+	assert.True(t, r.Stale, "the same scan, read again, does not get a new date")
+	assert.Equal(t, first.UTC().Truncate(time.Second), r.DatedAt.UTC())
+}

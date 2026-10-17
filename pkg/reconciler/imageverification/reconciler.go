@@ -408,6 +408,13 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 			default:
 				res = evaluateAttestation(img, p, sigs.Attestations, authorities)
 			}
+			var before *v1alpha1.AttestationResult
+			if pr, ok := prev[key]; ok {
+				before = &pr
+			}
+			if before == nil || before.DatedAt == nil || res.DatedAt == nil {
+				dateAttestation(&res, before, now)
+			}
 			setAge(&res, policyMaxAge(p), now)
 			switch {
 			case !res.Verified && p.Required:

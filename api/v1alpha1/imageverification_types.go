@@ -382,6 +382,11 @@ type AttestationResult struct {
 	// transparency log or timestamp authority time.
 	// +optional
 	VerifiedAt *metav1.Time `json:"verifiedAt,omitempty"`
+	// DatedAt is when kardinal first recorded this attestation (its
+	// digest): the age base never counts from later than this, so a scan
+	// that claims a future scannedAt ages from when it was first seen.
+	// +optional
+	DatedAt *metav1.Time `json:"datedAt,omitempty"`
 	// StaleAt is when the attestation passes the policy's maxAge.
 	// +optional
 	StaleAt *metav1.Time `json:"staleAt,omitempty"`

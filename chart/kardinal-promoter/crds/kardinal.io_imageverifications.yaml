@@ -494,6 +494,13 @@ spec:
                       description: Count is how many attestations of the type verified;
                         the newest is used.
                       type: integer
+                    datedAt:
+                      description: |-
+                        DatedAt is when kardinal first recorded this attestation (its
+                        digest): the age base never counts from later than this, so a scan
+                        that claims a future scannedAt ages from when it was first seen.
+                      format: date-time
+                      type: string
                     digest:
                       description: Digest is the sha256 of the verified DSSE payload.
                       maxLength: 80

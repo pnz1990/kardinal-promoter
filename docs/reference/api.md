@@ -710,6 +710,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status.attestations` | []object |  | Attestations has one result per attestation policy and image. |
 | `status.attestations[].authority` | string |  | Authority is the authority that verified it. |
 | `status.attestations[].count` | integer |  | Count is how many attestations of the type verified; the newest is used. |
+| `status.attestations[].datedAt` | string (date-time) |  | DatedAt is when kardinal first recorded this attestation (its digest): the age base never counts from later than this, so a scan that claims a future scannedAt ages from when it was first seen. |
 | `status.attestations[].digest` | string |  | Digest is the sha256 of the verified DSSE payload. |
 | `status.attestations[].image` | string | yes | Image is "repository@digest". |
 | `status.attestations[].message` | string |  | Message says why it is not verified, or what was dropped. |

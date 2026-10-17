@@ -51,8 +51,11 @@ func policyMaxAge(p v1alpha1.AttestationPolicy) time.Duration {
 
 // ageBase is the time res's age counts from: the earlier of its scan's
 // scannedAt and its verified signing time, so a scan that claims a later
-// scannedAt than it was signed at does not stay fresh longer. Zero when it
-// has neither.
+// scannedAt than it was signed at does not stay fresh longer; never later
+// than datedAt, when kardinal first recorded it, so a scan with no signing
+// time that claims a future scannedAt ages from when it was first seen.
+// Zero when it has neither a signing time nor a scan time: it cannot be
+// dated.
 func ageBase(res v1alpha1.AttestationResult) time.Time {
 	var base time.Time
 	if res.VerifiedAt != nil {
@@ -63,7 +66,25 @@ func ageBase(res v1alpha1.AttestationResult) time.Time {
 			base = t
 		}
 	}
+	if !base.IsZero() && res.DatedAt != nil && res.DatedAt.Before(&metav1.Time{Time: base}) {
+		base = res.DatedAt.Time
+	}
 	return base
+}
+
+// dateAttestation sets res.DatedAt: kept from prev when it records the same
+// attestation (digest), else now.
+func dateAttestation(res *v1alpha1.AttestationResult, prev *v1alpha1.AttestationResult, now time.Time) {
+	if !res.Verified {
+		res.DatedAt = nil
+		return
+	}
+	if prev != nil && prev.DatedAt != nil && prev.Verified && prev.Digest != "" && prev.Digest == res.Digest {
+		res.DatedAt = prev.DatedAt
+		return
+	}
+	t := metav1.NewTime(now.UTC().Truncate(time.Second))
+	res.DatedAt = &t
 }
 
 // setAge sets res.StaleAt and res.Stale for a maxAge of d at now. A result
@@ -162,7 +183,9 @@ func (r *Reconciler) refreshAges(ctx context.Context, log zerolog.Logger, iv *v1
 			continue
 		}
 		if res.StaleAt == nil {
-			setAge(res, d, now) // verified before maxAge was read: date it now
+			// Verified before maxAge was read: date it now.
+			dateAttestation(res, nil, now)
+			setAge(res, d, now)
 		}
 		if !res.Stale && !now.Before(res.StaleAt.Time) {
 			res.Stale = true
@@ -228,6 +251,7 @@ func (r *Reconciler) refetchStale(ctx context.Context, log zerolog.Logger, iv *v
 			old := iv.Status.Attestations[i]
 			p := policies[old.Name]
 			fresh := evaluateAttestation(img, p, sigs.Attestations, auths)
+			dateAttestation(&fresh, &old, now)
 			setAge(&fresh, policyMaxAge(p), now)
 			if fresh.Verified && !fresh.Stale {
 				log.Info().Str("attestation", old.Name).Str("image", ref).Msg("a newer attestation replaces a stale one")

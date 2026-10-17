@@ -635,6 +635,10 @@ func (in *AttestationResult) DeepCopyInto(out *AttestationResult) {
 		in, out := &in.VerifiedAt, &out.VerifiedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.DatedAt != nil {
+		in, out := &in.DatedAt, &out.DatedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.StaleAt != nil {
 		in, out := &in.StaleAt, &out.StaleAt
 		*out = (*in).DeepCopy()
