@@ -351,6 +351,33 @@ func TestReconcile_OCIAllowedRepositories(t *testing.T) {
 	assert.False(t, (&OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}).allowed("ghcr.io/acme-evil/app"), "a path prefix, not a string prefix")
 	assert.True(t, (&OCISink{Repository: "ghcr.io/acme/receipts", AllowedRepositories: []string{"x/"}}).allowed("anything"),
 		"a fixed repository is the admin's own")
+
+	// QA-3 B1: the repository is parsed as a registry would see it, and a
+	// path a registry or proxy could normalise into another repository is
+	// refused.
+	sink := &OCISink{AllowedRepositories: []string{"allowed.example.com/team-a"}}
+	for repo, want := range map[string]bool{
+		"allowed.example.com/team-a/app":              true,
+		"allowed.example.com/team-a":                  true,
+		"ALLOWED.example.com/team-a/app":              true, // host names are case-insensitive
+		"allowed.example.com/team-a/../team-b/x":      false,
+		"allowed.example.com/team-a/./../../team-b/x": false,
+		"allowed.example.com/team-a//x":               false,
+		"allowed.example.com/team-a/.":                false,
+		"allowed.example.com.evil.com/team-a/x":       false,
+		"evil.allowed.example.com/team-a/x":           false,
+		"allowed.example.com:443/team-a/x":            false,
+		"allowed.example.com/team-a-evil/x":           false,
+		"allowed.example.com/Team-A/x":                false, // not a valid path component
+		"allowed.example.com/team-b/x":                false,
+		"team-a/app":                                  false, // docker.io
+	} {
+		assert.Equal(t, want, sink.allowed(repo), repo)
+	}
+	hub := &OCISink{AllowedRepositories: []string{"docker.io/acme"}}
+	assert.True(t, hub.allowed("acme/app"), "docker.io/acme and acme are one repository")
+	assert.True(t, hub.allowed("index.docker.io/acme/app"))
+	assert.False(t, hub.allowed("acme-evil/app"))
 }
 
 // findingSCM is a commentSCM that can search its PR's comments.

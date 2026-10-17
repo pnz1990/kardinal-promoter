@@ -42,7 +42,6 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -1478,11 +1477,11 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 // stepReceipt is ps's PromotionReceipt, nil when receipts are off, the step
 // is not Verified or the receipt cannot be read (it is shown, never needed).
 func (s *uiAPIServer) stepReceipt(ctx context.Context, ps *v1alpha1.PromotionStep) *uiReceipt {
-	if !s.receipts || ps.Status.State != "Verified" {
+	if !s.receipts || ps.Status.State != "Verified" || ps.Status.Receipt == "" {
 		return nil
 	}
 	var rc v1alpha1.PromotionReceipt
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: receipt.Name(ps.Spec.BundleName, ps.Spec.Environment)}, &rc); err != nil {
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: ps.Namespace, Name: ps.Status.Receipt}, &rc); err != nil {
 		return nil
 	}
 	return &uiReceipt{Name: rc.Name, Phase: rc.Status.Phase,

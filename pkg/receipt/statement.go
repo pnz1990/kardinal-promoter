@@ -255,16 +255,19 @@ type Input struct {
 // ErrTooLarge is a statement over MaxReceiptStatementBytes after every cut.
 var ErrTooLarge = errors.New("receipt statement exceeds the size cap after truncation")
 
-// Name is the PromotionReceipt name of the step of bundle in environment:
-// <bundle>-<environment>, cut to 253 characters with a hash suffix when
-// longer.
-func Name(bundle, environment string) string {
+// Name is the PromotionReceipt name of a promotion: the step stepUID of
+// bundle in environment. It is <bundle>-<environment> for the eye, cut to
+// fit, and a hash of the three, so that no two promotions share one: Bundle
+// a-b in c and Bundle a in b-c differ, and so does a second step of the
+// same Bundle and environment.
+func Name(bundle, environment, stepUID string) string {
+	sum := sha256.Sum256([]byte(bundle + "\x00" + environment + "\x00" + stepUID))
+	suffix := "-" + hex.EncodeToString(sum[:])[:10]
 	n := strings.ToLower(bundle + "-" + environment)
-	if len(n) <= 253 {
-		return n
+	if limit := 253 - len(suffix); len(n) > limit {
+		n = strings.TrimRight(n[:limit], "-.")
 	}
-	sum := sha256.Sum256([]byte(n))
-	return n[:240] + "-" + hex.EncodeToString(sum[:])[:12]
+	return n + suffix
 }
 
 // Digest is sha256:<hex> of b.
@@ -363,7 +366,7 @@ func statement(in Input) Statement {
 	if d := in.Decision; d != nil {
 		policy.URI += fmt.Sprintf("?generation=%d", d.PipelineGeneration)
 		policy.Digest = digestMap(d.PolicyDigest)
-		rec.OmittedGates = d.OmittedGates
+		rec.OmittedGates, rec.Truncated = d.OmittedGates, d.Truncated
 		for i := range d.Gates {
 			rec.Gates = append(rec.Gates, gate(&d.Gates[i]))
 		}

@@ -195,6 +195,11 @@ func init() {
 // counted in status.decision.omittedGates.
 const MaxDecisionGates = 64
 
+// MaxDecisionBytes bounds a step's status.decision as JSON: it is written in
+// the patch that moves the step to Promoting, next to the rest of the
+// status, and must stay well under the API server's request limit.
+const MaxDecisionBytes = 128 * 1024
+
 // PromotionDecision is what a PromotionStep started on: its required gates
 // as it read them when it left Pending, and the policy versions. The
 // receipt records it, so a gate that changes later does not change the
@@ -208,9 +213,16 @@ type PromotionDecision struct {
 	// +optional
 	Gates []DecisionGate `json:"gates,omitempty"`
 
-	// OmittedGates counts the gates past MaxDecisionGates.
+	// OmittedGates counts the gates past MaxDecisionGates, or past
+	// MaxDecisionBytes.
 	// +optional
 	OmittedGates int `json:"omittedGates,omitempty"`
+
+	// Truncated is true when the snapshot was cut to MaxDecisionBytes:
+	// approvals and Verdicts that did not count, long gate texts, or gates
+	// (OmittedGates). PolicyDigest covers every gate.
+	// +optional
+	Truncated bool `json:"truncated,omitempty"`
 
 	// PipelineGeneration is the Pipeline's metadata.generation.
 	// +optional

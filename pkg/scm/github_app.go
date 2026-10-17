@@ -217,6 +217,10 @@ func (s *GitHubAppTokenSource) cachedLocked() (tok string, done bool, err error)
 	return "", false, nil
 }
 
+// AppID is the GitHub App's ID: the App's comments carry it
+// (performed_via_github_app.id).
+func (s *GitHubAppTokenSource) AppID() int64 { return s.appID }
+
 // Token returns a cached installation token, or mints a new one when the
 // cached one expires within appTokenRefreshBefore.
 func (s *GitHubAppTokenSource) Token(ctx context.Context) (string, error) {

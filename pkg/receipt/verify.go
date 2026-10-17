@@ -46,8 +46,15 @@ type VerifyOptions struct {
 	// Subject, when set, must be one of the statement's subjects: a
 	// sha256:<hex> image digest or a git commit.
 	Subject string
-	// Environment, when set, must be the environment of resourceUri.
+	// Environment, Namespace, Pipeline and ClusterID, when set, must be
+	// those of resourceUri (kardinal://<cluster>/namespaces/<ns>/pipelines/
+	// <pipeline>/environments/<env>), exactly: a receipt for another
+	// tenant's pipeline, or another cluster's, is refused. The statement's
+	// own pipeline must match its resourceUri.
 	Environment string
+	Namespace   string
+	Pipeline    string
+	ClusterID   string
 	// Require lists levels that must be present (KARDINAL_ is optional);
 	// a leading ! means the level must be absent.
 	Require []string
@@ -61,8 +68,12 @@ type Verified struct {
 	Statement *Statement
 	// Signer is the certificate identity, or "key" for a key receipt.
 	Signer string
-	// Logged is true when a Rekor entry was verified.
+	// Logged is true when a Rekor entry was verified: its inclusion, against
+	// the trusted root's log keys.
 	Logged bool
+	// LogNotChecked is true when the bundle has a Rekor entry that was not
+	// verified: a key receipt verified without a trusted root.
+	LogNotChecked bool
 }
 
 // Verify checks a receipt bundle against o. Every failure is an error: a
@@ -76,6 +87,9 @@ func Verify(bundleJSON []byte, o VerifyOptions) (*Verified, error) {
 		return nil, errors.New("give either a public key or a certificate identity (--key, or --identity and --issuer)")
 	}
 	logged := b.HasInclusionPromise() || b.HasInclusionProof()
+	// Whether the entry is verified: keyless always requires it; a key
+	// receipt only with a trusted root holding the log's keys.
+	logChecked := logged && (len(o.Key) == 0 || o.TrustedRoot != nil)
 	var v *verify.Verifier
 	var policy verify.PolicyBuilder
 	signer := "key"
@@ -138,7 +152,7 @@ func Verify(bundleJSON []byte, o VerifyOptions) (*Verified, error) {
 	if err := checkPredicate(st, o); err != nil {
 		return nil, err
 	}
-	return &Verified{Statement: st, Signer: signer, Logged: logged}, nil
+	return &Verified{Statement: st, Signer: signer, Logged: logChecked, LogNotChecked: logged && !logChecked}, nil
 }
 
 func keyVerifier(pub crypto.PublicKey, trusted root.TrustedMaterial, logged bool) (*verify.Verifier, error) {
@@ -174,8 +188,20 @@ func checkPredicate(st *Statement, o VerifyOptions) error {
 	if o.Subject != "" && !hasSubject(st, o.Subject) {
 		return fmt.Errorf("the receipt is not about %s", o.Subject)
 	}
-	if o.Environment != "" && !strings.HasSuffix(p.ResourceURI, "/environments/"+o.Environment) {
-		return fmt.Errorf("the receipt is for %s, not environment %s", p.ResourceURI, o.Environment)
+	r, err := ParseResourceURI(p.ResourceURI)
+	if err != nil {
+		return err
+	}
+	if st.Predicate.Kardinal.Pipeline != r.Pipeline {
+		return fmt.Errorf("the receipt's pipeline %q is not its resourceUri's (%s)", st.Predicate.Kardinal.Pipeline, p.ResourceURI)
+	}
+	for _, c := range []struct{ what, want, got string }{
+		{"cluster", o.ClusterID, r.ClusterID}, {"namespace", o.Namespace, r.Namespace},
+		{"pipeline", o.Pipeline, r.Pipeline}, {"environment", o.Environment, r.Environment},
+	} {
+		if c.want != "" && c.want != c.got {
+			return fmt.Errorf("the receipt is for %s, not %s %s", p.ResourceURI, c.what, c.want)
+		}
 	}
 	for _, r := range o.Require {
 		want := true
@@ -193,6 +219,27 @@ func checkPredicate(st *Statement, o VerifyOptions) error {
 		}
 	}
 	return nil
+}
+
+// Resource is a parsed resourceUri.
+type Resource struct {
+	ClusterID, Namespace, Pipeline, Environment string
+}
+
+// ParseResourceURI parses kardinal://<cluster>/namespaces/<ns>/pipelines/
+// <pipeline>/environments/<env>; anything else is an error.
+func ParseResourceURI(uri string) (Resource, error) {
+	rest, ok := strings.CutPrefix(uri, "kardinal://")
+	parts := strings.Split(rest, "/")
+	if !ok || len(parts) != 7 || parts[1] != "namespaces" || parts[3] != "pipelines" || parts[5] != "environments" {
+		return Resource{}, fmt.Errorf("resourceUri %q is not kardinal://<cluster>/namespaces/<ns>/pipelines/<pipeline>/environments/<env>", uri)
+	}
+	for _, p := range []int{0, 2, 4, 6} {
+		if parts[p] == "" {
+			return Resource{}, fmt.Errorf("resourceUri %q has an empty part", uri)
+		}
+	}
+	return Resource{ClusterID: parts[0], Namespace: parts[2], Pipeline: parts[4], Environment: parts[6]}, nil
 }
 
 func hasSubject(st *Statement, want string) bool {

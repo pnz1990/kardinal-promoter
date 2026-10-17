@@ -63,6 +63,26 @@ func waitReceipt(t *testing.T, e *framework.Env, ns, name, phase string) *v1alph
 	return &rc
 }
 
+// promotionReceipt waits for the PromotionReceipt of bundle in env (by its
+// labels: its name has a hash suffix, receipt.Name) to reach phase.
+func promotionReceipt(t *testing.T, e *framework.Env, ns, bundle, env, phase string) *v1alpha1.PromotionReceipt {
+	t.Helper()
+	var rc v1alpha1.PromotionReceipt
+	framework.Eventually(t, 3*time.Minute, "the receipt of "+bundle+" in "+env+" "+phase, func(ctx context.Context) (bool, string) {
+		var list v1alpha1.PromotionReceiptList
+		if err := e.Client.List(ctx, &list, client.InNamespace(ns),
+			client.MatchingLabels{"kardinal.io/bundle": bundle, "kardinal.io/environment": env}); err != nil {
+			return false, err.Error()
+		}
+		if len(list.Items) != 1 {
+			return false, fmt.Sprintf("%d receipts", len(list.Items))
+		}
+		rc = list.Items[0]
+		return rc.Status.Phase == phase, fmt.Sprintf("%s phase=%q conditions=%v", rc.Name, rc.Status.Phase, rc.Status.Conditions)
+	})
+	return &rc
+}
+
 // TestReceipts_SignedPromotion promotes a version by digest through test
 // and prod (a PR) with receipts signed by a static key. Each environment
 // gets a PromotionReceipt, signed, stored in the CR and pushed as a
@@ -85,8 +105,12 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 
+	var prodReceipt string
 	for _, env := range []string{"test", "prod"} {
-		rc := waitReceipt(t, e, a.ns, bundle+"-"+env, v1alpha1.ReceiptStored)
+		rc := promotionReceipt(t, e, a.ns, bundle, env, v1alpha1.ReceiptStored)
+		if env == "prod" {
+			prodReceipt = rc.Name
+		}
 		assert.Equal(t, v1alpha1.ReceiptSigningKey, rc.Status.SignedBy.Mode)
 		sinks := map[string]bool{}
 		for _, s := range rc.Status.Stored {
@@ -100,13 +124,13 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 		if err != nil || !ok {
 			return false, fmt.Sprint(ok, err)
 		}
-		return step.Status.Receipt == bundle+"-prod" && step.Status.Decision == nil,
+		return step.Status.Receipt == prodReceipt && step.Status.Decision == nil,
 			fmt.Sprintf("receipt=%q decision cleared=%v", step.Status.Receipt, step.Status.Decision == nil)
 	})
 
 	out := e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "prod", "--key", pub,
 		"--require", "HEALTHY,!OVERRIDDEN")
-	assert.Contains(t, out, "VERIFIED receipt "+bundle+"-prod")
+	assert.Contains(t, out, "VERIFIED receipt "+prodReceipt)
 	assert.Contains(t, out, "change:      "+pr.URL)
 	out = e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "prod", "--bundle", bundle, "--key", pub, "-o", "json")
 	var res struct {
@@ -122,12 +146,12 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 	assert.Equal(t, pr.Number, res.Statement.Predicate.Kardinal.Change.PR.Number)
 
 	reg := framework.NewRegistry(t)
-	out = e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--env", "prod", "--key", pub,
+	out = e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--pipeline", pipelineName, "--env", "prod", "--key", pub,
 		"--repository", reg.HostRepository(receiptsRepository), "--insecure-registry")
 	assert.Contains(t, out, "VERIFIED receipt")
 
 	framework.Eventually(t, 2*time.Minute, "the receipt comment on the prod PR", func(context.Context) (bool, string) {
-		c := e.PRComments(t, a.repo, pr.Number, "Promotion receipt: `"+bundle+"-prod`")
+		c := e.PRComments(t, a.repo, pr.Number, "Promotion receipt: `"+prodReceipt+"`")
 		return len(c) == 1, fmt.Sprintf("%d comments", len(c))
 	})
 	got := e.PRComments(t, a.repo, pr.Number, "Promotion receipt:")
@@ -138,7 +162,7 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 	assert.Contains(t, hist, "RECEIPT")
 	why := e.MustKardinal(t, a.ns, "why", pipelineName, "prod")
 	assert.Contains(t, why, "Receipt")
-	assert.Contains(t, why, bundle+"-prod")
+	assert.Contains(t, why, prodReceipt)
 }
 
 // TestReceipts_TamperedReceiptFails: an admin who removed the receipts
@@ -157,7 +181,7 @@ func TestReceipts_TamperedReceiptFails(t *testing.T) {
 	pub := receiptPublicKey(t, e)
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	rc := waitReceipt(t, e, a.ns, bundle+"-test", v1alpha1.ReceiptStored)
+	rc := promotionReceipt(t, e, a.ns, bundle, "test", v1alpha1.ReceiptStored)
 	e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "test", "--key", pub)
 
 	// A user may not write receipts while the policy is bound.
@@ -178,7 +202,8 @@ func TestReceipts_TamperedReceiptFails(t *testing.T) {
 	raw, err := json.Marshal(b)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(file, raw, 0o600))
-	_, err = e.Kardinal(t, a.ns, "verify-receipt", "--file", file, "--key", pub)
+	_, err = e.Kardinal(t, a.ns, "verify-receipt", "--file", file, "--pipeline", pipelineName, "--env", "test",
+		"--subject", fixtures.V2Digest, "--key", pub)
 	require.Error(t, err, "a changed payload fails the signature")
 
 	// The admin removes the binding and replaces the receipt.

@@ -6,9 +6,15 @@ Verify a signed promotion receipt: its signature, subject, environment and level
 
 Verify a promotion's signed receipt (docs/receipts.md), from the cluster
 (<pipeline> <env>, the newest unless --bundle), an image's OCI referrers
-(--image with --env) or a file (--file). Check it with --key, or with
---identity and --issuer (both required: no default trusts any identity).
-The exit code is 0 only when every check passes.
+(--image) or a file (--file, with -n, --pipeline, --env and --subject). Check
+it with --key, or with --identity and --issuer (both required: no default
+trusts any identity). The exit code is 0 only when every check passes.
+
+A receipt names the cluster, namespace, Pipeline and environment it is
+for, and its subjects. From the cluster they are the receipt's own; with
+--image and --file pin them (-n, --pipeline and --env, --subject for a file,
+and --cluster to pin the cluster), so another tenant's or another cluster's
+receipt of the same image is refused.
 
 It checks the signature (and the certificate chain against the trusted
 root); the transparency log entry or timestamp when there is one; the
@@ -32,14 +38,16 @@ kardinal verify-receipt [<pipeline> <env>] [flags]
   kardinal verify-receipt checkout prod --bundle checkout-1-5-0 \
     --identity https://kubernetes.io/namespaces/kardinal-system/serviceaccounts/kardinal-promoter \
     --issuer https://oidc.eks.us-east-2.amazonaws.com/id/EXAMPLE
-  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... --env prod --key receipt.pub
-  kardinal verify-receipt --file receipt.sigstore.json --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN
+  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... -n payments --pipeline checkout --env prod --key receipt.pub
+  kardinal verify-receipt --file receipt.sigstore.json -n payments --pipeline checkout --env prod \
+    --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN
 ```
 
 ### Options
 
 ```
       --bundle string         The Bundle whose receipt to verify (default: the newest receipt of the environment)
+      --cluster string        The cluster identity the receipt must name (its kube-system Namespace UID, or receipts.clusterID)
       --env string            The environment the receipt must be for (with --image or --file)
       --file string           Read the receipt from this Sigstore bundle file
   -h, --help                  help for verify-receipt
@@ -48,8 +56,10 @@ kardinal verify-receipt [<pipeline> <env>] [flags]
       --insecure-registry     Read --image over plain HTTP
       --issuer string         OIDC issuer of a keyless receipt
       --key string            Public key file (PEM) of a key or KMS receipt
+      --pipeline string       The Pipeline the receipt must be for (required with --image and --file, with -n)
       --repository string     Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's
       --require strings       Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, ...); !LEVEL must be absent
+      --subject string        The image digest (sha256:...) or commit the receipt must be about (required with --file)
       --trusted-root string   Sigstore trusted_root.json (default: the public-good root, fetched with TUF)
 ```
 

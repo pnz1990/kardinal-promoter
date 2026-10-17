@@ -17,8 +17,10 @@ package promotionstep
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,6 +35,10 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
+
+// LabelReceiptStep names the UID of the PromotionStep whose receipt a
+// PromotionReceipt is: a receipt is adopted on AlreadyExists only when it is.
+const LabelReceiptStep = "kardinal.io/promotion-step-uid"
 
 // ReceiptConfig turns promotion receipts on (docs/receipts.md): the step
 // takes a decision snapshot when it starts, and creates its
@@ -74,8 +80,66 @@ func (r *Reconciler) decision(ctx context.Context, ps *v1alpha1.PromotionStep, g
 		}
 		d.Gates = append(d.Gates, r.decisionGate(ctx, ps, &gates[i]))
 	}
+	// The digest of every gate, before any cut.
 	d.PolicyDigest = receipt.PolicyDigest(d.PipelineGeneration, d.PipelineSpecHash, d.Gates)
+	if !fitDecision(d) {
+		return nil
+	}
 	return d
+}
+
+// maxDecisionText bounds a gate's expression, message and reason, and an
+// approval's or Verdict's reason, after the second cut.
+const maxDecisionText = 1024
+
+// decisionSize is d as JSON, in bytes.
+func decisionSize(d *v1alpha1.PromotionDecision) int {
+	b, err := json.Marshal(d)
+	if err != nil {
+		return v1alpha1.MaxDecisionBytes + 1
+	}
+	return len(b)
+}
+
+// fitDecision cuts d to MaxDecisionBytes, in the statement's order: the
+// approvals and Verdicts that did not count, then long texts, then gates from
+// the end (OmittedGates). It reports whether d fits; one that does not even
+// with a single gate is not taken (the step starts without a snapshot).
+func fitDecision(d *v1alpha1.PromotionDecision) bool {
+	if decisionSize(d) <= v1alpha1.MaxDecisionBytes {
+		return true
+	}
+	d.Truncated = true
+	for i := range d.Gates {
+		g := &d.Gates[i]
+		g.Approvals = slices.DeleteFunc(g.Approvals, func(a v1alpha1.GateApprovalStatus) bool { return !a.Counted })
+		g.Verdicts = slices.DeleteFunc(g.Verdicts, func(v v1alpha1.GateVerdictStatus) bool { return !v.Counted })
+	}
+	if decisionSize(d) <= v1alpha1.MaxDecisionBytes {
+		return true
+	}
+	for i := range d.Gates {
+		g := &d.Gates[i]
+		g.Expression, g.Message, g.Reason = cutText(g.Expression), cutText(g.Message), cutText(g.Reason)
+		for j := range g.Approvals {
+			g.Approvals[j].Reason = cutText(g.Approvals[j].Reason)
+		}
+		for j := range g.Verdicts {
+			g.Verdicts[j].Reason, g.Verdicts[j].EvidenceURL = cutText(g.Verdicts[j].Reason), cutText(g.Verdicts[j].EvidenceURL)
+		}
+	}
+	for decisionSize(d) > v1alpha1.MaxDecisionBytes && len(d.Gates) > 1 {
+		d.Gates = d.Gates[:len(d.Gates)-1]
+		d.OmittedGates++
+	}
+	return decisionSize(d) <= v1alpha1.MaxDecisionBytes
+}
+
+func cutText(s string) string {
+	if len(s) <= maxDecisionText {
+		return s
+	}
+	return strings.ToValidUTF8(s[:maxDecisionText-3], "") + "..."
 }
 
 func (r *Reconciler) decisionGate(ctx context.Context, ps *v1alpha1.PromotionStep, g *v1alpha1.PolicyGate) v1alpha1.DecisionGate {
@@ -90,6 +154,16 @@ func (r *Reconciler) decisionGate(ctx context.Context, ps *v1alpha1.PromotionSte
 	out.VerifyRequired, out.Verdicts = g.Spec.Verify != nil, g.Status.Verdicts
 	if len(out.Verdicts) > 101 {
 		out.Verdicts = out.Verdicts[:101]
+	}
+	// Copies without what the statement never reads: an approval's comment
+	// and when it was first seen, a Verdict's summary.
+	out.Approvals = slices.Clone(out.Approvals)
+	for i := range out.Approvals {
+		out.Approvals[i].Comment, out.Approvals[i].FirstSeenAt = "", nil
+	}
+	out.Verdicts = slices.Clone(out.Verdicts)
+	for i := range out.Verdicts {
+		out.Verdicts[i].Summary = ""
 	}
 	if strings.HasPrefix(g.Status.Reason, gateOverridden) {
 		out.Override = activeOverride(g, ps.Spec.Environment)
@@ -158,7 +232,7 @@ func (r *Reconciler) pendingReceipt(ctx context.Context, ps *v1alpha1.PromotionS
 		return nil, err
 	}
 	in := receipt.Input{
-		Name: receipt.Name(ps.Spec.BundleName, ps.Spec.Environment), ClusterID: r.Receipts.ClusterID,
+		Name: receipt.Name(ps.Spec.BundleName, ps.Spec.Environment, string(ps.UID)), ClusterID: r.Receipts.ClusterID,
 		ControllerVersion: r.Receipts.ControllerVersion, ChartVersion: r.Receipts.ChartVersion,
 		Now: r.now(), Bundle: bundle, Step: ps, Decision: ps.Status.Decision, Snapshot: ps.Status.Decision != nil,
 		HealthAdapter: findEnv(pipeline, ps.Spec.Environment).Health.Type,
@@ -304,18 +378,36 @@ func (r *Reconciler) flushReceipt(ctx context.Context, ps *v1alpha1.PromotionSte
 	labels["kardinal.io/pipeline"] = ps.Spec.PipelineName
 	labels["kardinal.io/bundle"] = ps.Spec.BundleName
 	labels["kardinal.io/environment"] = ps.Spec.Environment
+	labels[LabelReceiptStep] = string(ps.UID)
 	rc := &v1alpha1.PromotionReceipt{
 		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: ps.Namespace, Labels: labels},
 		Spec:       p.Spec,
 	}
-	if err := r.Create(ctx, rc); err != nil && !apierrors.IsAlreadyExists(err) {
-		zerolog.Ctx(ctx).Error().Err(err).Str("receipt", p.Name).
-			Msg("failed to create PromotionReceipt; kept in status.pendingReceipt to retry")
-		return fmt.Errorf("create promotion receipt %s: %w", p.Name, err)
+	name, receiptErr := p.Name, ""
+	if err := r.Create(ctx, rc); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			zerolog.Ctx(ctx).Error().Err(err).Str("receipt", p.Name).
+				Msg("failed to create PromotionReceipt; kept in status.pendingReceipt to retry")
+			return fmt.Errorf("create promotion receipt %s: %w", p.Name, err)
+		}
+		// A retry after a crash finds the one it created: the same step and
+		// statement. Anything else is not this promotion's receipt.
+		var have v1alpha1.PromotionReceipt
+		if err := r.Get(ctx, client.ObjectKeyFromObject(rc), &have); err != nil {
+			return fmt.Errorf("read promotion receipt %s: %w", p.Name, err)
+		}
+		if have.Labels[LabelReceiptStep] != string(ps.UID) || have.Spec.StatementDigest != p.Spec.StatementDigest {
+			zerolog.Ctx(ctx).Error().Str("receipt", p.Name).Msg("a PromotionReceipt of another promotion has this step's name: no receipt")
+			name, receiptErr = "", fmt.Sprintf("PromotionReceipt %s exists and is not this promotion's (step %s, statement %s): no receipt",
+				p.Name, have.Labels[LabelReceiptStep], have.Spec.StatementDigest)
+		}
 	}
 	patch := client.MergeFromWithOptions(ps.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	decision := ps.Status.Decision
-	ps.Status.PendingReceipt, ps.Status.Decision, ps.Status.Receipt = nil, nil, p.Name
+	ps.Status.PendingReceipt, ps.Status.Decision, ps.Status.Receipt = nil, nil, name
+	if receiptErr != "" {
+		ps.Status.ReceiptError = receiptErr
+	}
 	if err := r.Status().Patch(ctx, ps, patch); err != nil && !apierrors.IsNotFound(err) {
 		// The receipt exists: the next flush finds it (AlreadyExists).
 		ps.Status.PendingReceipt, ps.Status.Decision, ps.Status.Receipt = p, decision, ""

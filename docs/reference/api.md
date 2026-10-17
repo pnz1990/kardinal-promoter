@@ -1502,11 +1502,12 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].verdicts[].summary` | string |  | Summary is the verifier's summary. |
 | `status.decision.gates[].verdicts[].verifier` | string | yes | Verifier names the writer (an actor sentence). |
 | `status.decision.gates[].verifyRequired` | boolean |  | VerifyRequired is true for a verify gate (spec.verify). |
-| `status.decision.omittedGates` | integer |  | OmittedGates counts the gates past MaxDecisionGates. |
+| `status.decision.omittedGates` | integer |  | OmittedGates counts the gates past MaxDecisionGates, or past MaxDecisionBytes. |
 | `status.decision.pipelineGeneration` | integer (int64) |  | PipelineGeneration is the Pipeline's metadata.generation. |
 | `status.decision.pipelineSpecHash` | string |  | PipelineSpecHash is the Bundle's status.pipelineSpecHash. |
 | `status.decision.policyDigest` | string |  | PolicyDigest is sha256:&lt;hex&gt; of the canonical policy set: the Pipeline generation and spec hash, and each gate template's namespace, name, UID, generation and spec digest. |
 | `status.decision.takenAt` | string (date-time) | yes | TakenAt is when the step left Pending. |
+| `status.decision.truncated` | boolean |  | Truncated is true when the snapshot was cut to MaxDecisionBytes: approvals and Verdicts that did not count, long gate texts, or gates (OmittedGates). PolicyDigest covers every gate. |
 | `status.gitCredentialRetries` | integer |  | GitCredentialRetries is the number of consecutive retries of a git-clone or git-push that the remote refused while git had no credentials because spec.git.secretRef is not set, or names a Secret that does not exist or has no token key (condition GitCredentialMissing). These retries have no limit, so creating the Secret is enough for the step to continue, and they do not use up the retries of retryCount. Reset with retryCount, and when git has a token. |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for a healthy check: health.timeout after the health check began, moved to health.timeout after the moment a bake window stops. It does not apply while a bake window runs. A Graph CEL expression can observe this field to detect a stale health check. |
 | `status.hookRecords` | []object |  | HookRecords records each hook that ran for this step (HookRecord). |

@@ -462,10 +462,17 @@ func TestParsePrivateKey(t *testing.T) {
 	}
 }
 
-// TestName bounds receipt names.
+// TestName (QA-3): receipt names are readable, bounded and collision-free:
+// a dash join of Bundle a-b in c and Bundle a in b-c would be one name, and
+// so would two steps of one Bundle and environment.
 func TestName(t *testing.T) {
-	assert.Equal(t, "checkout-1-5-0-prod", Name("checkout-1-5-0", "Prod"))
-	long := Name(strings.Repeat("b", 250), "prod")
-	assert.Len(t, long, 253)
-	assert.NotEqual(t, long, Name(strings.Repeat("b", 250), "prod-eu"))
+	n := Name("checkout-1-5-0", "Prod", "uid-1")
+	assert.Regexp(t, `^checkout-1-5-0-prod-[0-9a-f]{10}$`, n)
+	assert.Equal(t, n, Name("checkout-1-5-0", "Prod", "uid-1"), "deterministic: a retry finds it")
+	assert.NotEqual(t, Name("a-b", "c", "u"), Name("a", "b-c", "u"))
+	assert.NotEqual(t, Name("a", "prod", "u1"), Name("a", "prod", "u2"), "another step of the same promotion")
+	long := Name(strings.Repeat("b", 250), "prod", "u")
+	assert.LessOrEqual(t, len(long), 253)
+	assert.NotEqual(t, long, Name(strings.Repeat("b", 250), "prod-eu", "u"))
+	assert.Regexp(t, `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`, Name("Bundle.", "-env-", "u"), "a DNS subdomain")
 }

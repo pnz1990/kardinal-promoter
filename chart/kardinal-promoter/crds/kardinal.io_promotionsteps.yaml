@@ -806,7 +806,9 @@ spec:
                     maxItems: 64
                     type: array
                   omittedGates:
-                    description: OmittedGates counts the gates past MaxDecisionGates.
+                    description: |-
+                      OmittedGates counts the gates past MaxDecisionGates, or past
+                      MaxDecisionBytes.
                     type: integer
                   pipelineGeneration:
                     description: PipelineGeneration is the Pipeline's metadata.generation.
@@ -825,6 +827,12 @@ spec:
                     description: TakenAt is when the step left Pending.
                     format: date-time
                     type: string
+                  truncated:
+                    description: |-
+                      Truncated is true when the snapshot was cut to MaxDecisionBytes:
+                      approvals and Verdicts that did not count, long gate texts, or gates
+                      (OmittedGates). PolicyDigest covers every gate.
+                    type: boolean
                 required:
                 - takenAt
                 type: object

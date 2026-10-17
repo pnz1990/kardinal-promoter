@@ -17,6 +17,8 @@ package promotionstep_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +26,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -64,6 +65,7 @@ func newReceiptFixture(t *testing.T, receipts bool, mutate func(*v1alpha1.Bundle
 				Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "carol@example.com"}}}},
 	}
 	step := makeStep("bundle-1-test", "nginx-demo", "bundle-1", "test")
+	step.UID = "step-uid"
 	step.Labels = map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1", "kardinal.io/environment": "test"}
 	step.Spec.RequiredGates = []string{gate.Name}
 	bundle := makeBundle("bundle-1", "nginx-demo")
@@ -114,7 +116,11 @@ func (f receiptFixture) toVerified(t *testing.T) *v1alpha1.PromotionStep {
 func (f receiptFixture) receipt(t *testing.T) (*v1alpha1.PromotionReceipt, *receipt.Statement) {
 	t.Helper()
 	var rc v1alpha1.PromotionReceipt
-	require.NoError(t, f.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "bundle-1-test"}, &rc))
+	var list v1alpha1.PromotionReceiptList
+	require.NoError(t, f.c.List(context.Background(), &list, client.InNamespace("default"),
+		client.MatchingLabels{"kardinal.io/bundle": "bundle-1", "kardinal.io/environment": "test"}))
+	require.Len(t, list.Items, 1, "one receipt of the promotion")
+	rc = list.Items[0]
 	st, err := receipt.Parse([]byte(rc.Spec.Statement))
 	require.NoError(t, err)
 	assert.Equal(t, receipt.Digest([]byte(rc.Spec.Statement)), rc.Spec.StatementDigest)
@@ -147,13 +153,13 @@ func TestReceiptJourney_AgentThroughApprovalGate(t *testing.T) {
 	require.NoError(t, f.c.Status().Update(context.Background(), &gate))
 
 	s = f.toVerified(t)
-	assert.Equal(t, "bundle-1-test", s.Status.Receipt)
+	assert.Regexp(t, `^bundle-1-test-[0-9a-f]{10}$`, s.Status.Receipt)
 	assert.Nil(t, s.Status.Decision, "cleared once the receipt exists")
 	assert.Nil(t, s.Status.PendingReceipt)
 
 	rc, st := f.receipt(t)
 	assert.Empty(t, rc.OwnerReferences, "a receipt outlives the Bundle and the step")
-	assert.Equal(t, map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1",
+	assert.Equal(t, map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1", promotionstep.LabelReceiptStep: "step-uid",
 		"kardinal.io/environment": "test"}, rc.Labels)
 	r := st.Predicate.Kardinal
 	assert.True(t, r.DecisionSnapshot)
@@ -217,9 +223,9 @@ func TestReceiptJourney_Off(t *testing.T) {
 	s := f.toVerified(t)
 	assert.Nil(t, s.Status.Decision)
 	assert.Empty(t, s.Status.Receipt)
-	var rc v1alpha1.PromotionReceipt
-	err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "bundle-1-test"}, &rc)
-	assert.True(t, apierrors.IsNotFound(err))
+	var list v1alpha1.PromotionReceiptList
+	require.NoError(t, f.c.List(context.Background(), &list))
+	assert.Empty(t, list.Items, "no receipt")
 }
 
 // TestReceiptJourney_CannotBuild: a receipt that can never be built (the
@@ -230,22 +236,20 @@ func TestReceiptJourney_Off(t *testing.T) {
 //
 // Covers RECEIPT-JOURNEY-03.
 func TestReceiptJourney_CannotBuild(t *testing.T) {
-	f := newReceiptFixture(t, true, nil)
-	var g v1alpha1.PolicyGate
-	require.NoError(t, f.c.Get(context.Background(), f.gate, &g))
-	// A counted approval's reason, which the cuts keep, past the cap (the fake
+	// The version's provenance, which no cut shortens, past the cap (the fake
 	// client does not enforce the CRD's bounds).
-	g.Status.Approvals[0].Reason = strings.Repeat("x", v1alpha1.MaxReceiptStatementBytes+1)
-	require.NoError(t, f.c.Status().Update(context.Background(), &g))
+	f := newReceiptFixture(t, true, func(b *v1alpha1.Bundle, _ *v1alpha1.PromotionStep) {
+		b.Spec.Provenance = &v1alpha1.BundleProvenance{CIRunURL: strings.Repeat("x", v1alpha1.MaxReceiptStatementBytes+1)}
+	})
 	before := testutil.ToFloat64(observability.ReceiptsFailedTotal.WithLabelValues("build"))
 
 	s := f.toVerified(t)
 	assert.Contains(t, s.Status.ReceiptError, "exceeds the size cap")
 	assert.Nil(t, s.Status.PendingReceipt)
 	assert.Empty(t, s.Status.Receipt)
-	var rc v1alpha1.PromotionReceipt
-	err := f.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "bundle-1-test"}, &rc)
-	assert.True(t, apierrors.IsNotFound(err), "no receipt")
+	var list v1alpha1.PromotionReceiptList
+	require.NoError(t, f.c.List(context.Background(), &list))
+	assert.Empty(t, list.Items, "no receipt")
 	for i := 0; i < 3; i++ {
 		f.reconcile(t)
 	}
@@ -314,4 +318,90 @@ func TestReceiptJourney_NewestImageVerification(t *testing.T) {
 	_, st := f.receipt(t)
 	require.Len(t, st.Predicate.Kardinal.Checks.ImageVerification, 1)
 	assert.Equal(t, "new-policy", st.Predicate.Kardinal.Checks.ImageVerification[0].By)
+}
+
+// TestReceiptJourney_HeavyGatesSnapshotBounded (QA-3 B4): six required gates,
+// each with 101 approvals and 101 Verdicts carrying long comments, reasons
+// and summaries, would make a snapshot of megabytes, over the API server's
+// request limit, and hold the step at Pending forever. The snapshot leaves
+// out what the statement never reads, is cut to MaxDecisionBytes, says it was
+// cut, and keeps the digest of every gate: the step reaches Promoting and
+// then Verified with its receipt.
+//
+// Covers RECEIPT-JOURNEY-07.
+func TestReceiptJourney_HeavyGatesSnapshotBounded(t *testing.T) {
+	var names []string
+	f := newReceiptFixture(t, true, nil)
+	ctx := context.Background()
+	long := strings.Repeat("x", 4000)
+	evaluated := metav1.NewTime(time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC))
+	for i := 0; i < 6; i++ {
+		g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("heavy-%d", i), Namespace: "default"},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "approvals.count >= 1", Approval: &v1alpha1.GateApprovalPolicy{Required: 1}}}
+		require.NoError(t, f.c.Create(ctx, g))
+		g.Status = v1alpha1.PolicyGateStatus{Ready: true, Reason: "approved", LastEvaluatedAt: &evaluated}
+		for j := 0; j < 101; j++ {
+			g.Status.Approvals = append(g.Status.Approvals, v1alpha1.GateApprovalStatus{User: fmt.Sprintf("u%d", j),
+				Decision: "approve", Counted: j == 0, Reason: long, Comment: long, FirstSeenAt: &evaluated})
+			g.Status.Verdicts = append(g.Status.Verdicts, v1alpha1.GateVerdictStatus{Name: fmt.Sprintf("v%d", j),
+				Verifier: "agent", Result: "pass", Counted: j == 0, Reason: long, Summary: long})
+		}
+		require.NoError(t, f.c.Status().Update(ctx, g))
+		names = append(names, g.Name)
+	}
+	var ps v1alpha1.PromotionStep
+	require.NoError(t, f.c.Get(ctx, f.step, &ps))
+	ps.Spec.RequiredGates = append(ps.Spec.RequiredGates, names...)
+	require.NoError(t, f.c.Update(ctx, &ps))
+
+	s := f.reconcile(t)
+	require.Equal(t, "Promoting", s.Status.State, s.Status.Message)
+	require.NotNil(t, s.Status.Decision)
+	b, err := json.Marshal(s.Status.Decision)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(b), v1alpha1.MaxDecisionBytes)
+	assert.True(t, s.Status.Decision.Truncated)
+	assert.Equal(t, 7, len(s.Status.Decision.Gates)+s.Status.Decision.OmittedGates, "every gate is counted")
+	for _, g := range s.Status.Decision.Gates {
+		for _, a := range g.Approvals {
+			assert.Empty(t, a.Comment)
+			assert.Nil(t, a.FirstSeenAt)
+		}
+		for _, v := range g.Verdicts {
+			assert.Empty(t, v.Summary)
+		}
+	}
+	s = f.toVerified(t)
+	assert.Empty(t, s.Status.ReceiptError)
+	_, st := f.receipt(t)
+	assert.True(t, st.Predicate.Kardinal.Truncated)
+}
+
+// TestReceiptJourney_NameTakenByAnother (QA-3): a PromotionReceipt that
+// already has this promotion's name but another step's UID (or another
+// statement) is not adopted: the step records no receipt and says why in
+// status.receiptError, so history and why never show another promotion's
+// receipt as this one's.
+//
+// Covers RECEIPT-JOURNEY-08.
+func TestReceiptJourney_NameTakenByAnother(t *testing.T) {
+	f := newReceiptFixture(t, true, nil)
+	ctx := context.Background()
+	var ps v1alpha1.PromotionStep
+	require.NoError(t, f.c.Get(ctx, f.step, &ps))
+	other := &v1alpha1.PromotionReceipt{ObjectMeta: metav1.ObjectMeta{Namespace: "default",
+		Name:   receipt.Name(ps.Spec.BundleName, ps.Spec.Environment, string(ps.UID)),
+		Labels: map[string]string{promotionstep.LabelReceiptStep: "another-step"}},
+		Spec: v1alpha1.PromotionReceiptSpec{Statement: "{}", StatementDigest: "sha256:other"}}
+	require.NoError(t, f.c.Create(ctx, other))
+	s := f.toVerified(t)
+	for i := 0; i < 3; i++ {
+		s = f.reconcile(t)
+	}
+	assert.Empty(t, s.Status.Receipt, "not adopted")
+	assert.Nil(t, s.Status.PendingReceipt)
+	assert.Contains(t, s.Status.ReceiptError, "is not this promotion's")
+	var got v1alpha1.PromotionReceipt
+	require.NoError(t, f.c.Get(ctx, client.ObjectKeyFromObject(other), &got))
+	assert.Equal(t, "sha256:other", got.Spec.StatementDigest, "left alone")
 }

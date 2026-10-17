@@ -29,10 +29,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -90,18 +93,70 @@ type OCISink struct {
 	SecretNamespace, SecretName string
 }
 
-// allowed reports whether the sink may push a referrer of an image in repo.
+// pathComponent is the OCI distribution spec's repository path component:
+// it rules out ".", ".." and empty components.
+var pathComponent = regexp.MustCompile(`^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*$`)
+
+// parseRepository is repo's registry and path components, as a registry
+// sees them (docker.io/acme and acme are the same repository); false when a
+// component is not a valid one (a "..", ".", an empty one), whatever a
+// registry or a proxy in front of it would make of it.
+func parseRepository(repo string) (string, []string, bool) {
+	r, err := name.NewRepository(repo)
+	if err != nil {
+		return "", nil, false
+	}
+	comps := strings.Split(r.RepositoryStr(), "/")
+	for _, c := range comps {
+		if !pathComponent.MatchString(c) {
+			return "", nil, false
+		}
+	}
+	return strings.ToLower(r.RegistryStr()), comps, true
+}
+
+// allowed reports whether the sink may push a referrer of an image in repo:
+// a fixed Repository is the admin's own; otherwise, with
+// AllowedRepositories, repo's parsed registry must be an entry's and its
+// path must start with the entry's path components.
 func (o *OCISink) allowed(repo string) bool {
 	if o.Repository != "" || len(o.AllowedRepositories) == 0 {
 		return true
 	}
+	reg, path, ok := parseRepository(repo)
+	if !ok {
+		return false
+	}
 	for _, p := range o.AllowedRepositories {
-		p = strings.TrimSuffix(p, "/")
-		if p != "" && (repo == p || strings.HasPrefix(repo, p+"/")) {
+		ereg, epath, ok := parseAllowed(p)
+		if !ok || ereg != reg || len(epath) > len(path) {
+			continue
+		}
+		if slices.Equal(epath, path[:len(epath)]) {
 			return true
 		}
 	}
 	return false
+}
+
+// parseAllowed is an allowedRepositories entry: a registry and an optional
+// path prefix (ghcr.io/acme/, ghcr.io/acme, registry.local:5000).
+func parseAllowed(entry string) (string, []string, bool) {
+	entry = strings.TrimSuffix(strings.TrimSpace(entry), "/")
+	host, path, hasPath := strings.Cut(entry, "/")
+	if !hasPath {
+		if _, err := name.NewRegistry(host); err != nil {
+			return "", nil, false
+		}
+		return strings.ToLower(host), nil, true
+	}
+	// A prefix, not a repository: parsed with a last component added, so a
+	// single Docker Hub component is not read as library/<name>.
+	reg, comps, ok := parseRepository(host + "/" + path + "/x")
+	if !ok {
+		return "", nil, false
+	}
+	return reg, comps[:len(comps)-1], true
 }
 
 // Reconciler signs and stores PromotionReceipts.

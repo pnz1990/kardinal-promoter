@@ -18,117 +18,177 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
-// TestHasPRComment: GitHub, GitLab and Forgejo search a pull request's
-// comments page by page, oldest first, for a marker: found on a later page,
-// and not found once a short page ends the list.
+const commentMarker = "<!-- kardinal-receipt:payments/checkout-prod -->"
+
+// commentAPI is a fake SCM API: self answers the token's identity, and
+// page(n, mine) the n-th page of comments, where mine says whether the
+// marker comment on the second page is kardinal's or someone else's.
+type commentAPI struct {
+	selfPath, commentsPath string
+	self                   interface{}
+	page                   func(n int, mine bool) interface{}
+}
+
+// TestHasPRComment (QA-3, marker spoofing): every provider searches a pull
+// request's comments page by page for the marker, and counts it only in a
+// comment its own SCM identity wrote. A marker posted first by anyone who may
+// comment does not stop kardinal from posting.
 func TestHasPRComment(t *testing.T) {
+	full := func(size int, f func(i int) map[string]interface{}) []map[string]interface{} {
+		out := make([]map[string]interface{}, size)
+		for i := range out {
+			out[i] = f(i)
+		}
+		return out
+	}
+	other := func(i int) string { return fmt.Sprintf("comment %d", i) }
 	tests := []struct {
-		kind, path string
-		size       int
+		kind, repo string
+		api        commentAPI
 	}{
-		{"github", "/repos/acme/app/issues/5/comments", 100},
-		{"gitlab", "/api/v4/projects/acme%2Fapp/merge_requests/5/notes", 100},
-		{"forgejo", "/api/v1/repos/acme/app/issues/5/comments", 50},
+		{"github", "acme/app", commentAPI{"/user", "/repos/acme/app/issues/5/comments", map[string]string{"login": "kardinal-bot"},
+			func(n int, mine bool) interface{} {
+				who := map[string]string{"login": "mallory"}
+				if mine {
+					who = map[string]string{"login": "kardinal-bot"}
+				}
+				if n == 1 {
+					return full(100, func(i int) map[string]interface{} { return map[string]interface{}{"body": other(i), "user": who} })
+				}
+				return []map[string]interface{}{{"body": "Promotion receipt\n\n" + commentMarker, "user": who}}
+			}}},
+		{"gitlab", "acme/app", commentAPI{"/api/v4/user", "/api/v4/projects/acme%2Fapp/merge_requests/5/notes", map[string]int{"id": 7},
+			func(n int, mine bool) interface{} {
+				who := map[string]int{"id": 9}
+				if mine {
+					who = map[string]int{"id": 7}
+				}
+				if n == 1 {
+					// A system note on a full page: the page is still full.
+					return full(100, func(i int) map[string]interface{} {
+						return map[string]interface{}{"body": other(i), "author": who, "system": i == 0}
+					})
+				}
+				return []map[string]interface{}{{"body": commentMarker, "author": who}}
+			}}},
+		{"forgejo", "acme/app", commentAPI{"/api/v1/user", "/api/v1/repos/acme/app/issues/5/comments", map[string]int{"id": 3},
+			func(n int, mine bool) interface{} {
+				who := map[string]int{"id": 4}
+				if mine {
+					who = map[string]int{"id": 3}
+				}
+				if n == 1 {
+					return full(50, func(i int) map[string]interface{} { return map[string]interface{}{"body": other(i), "user": who} })
+				}
+				return []map[string]interface{}{{"body": commentMarker, "user": who}}
+			}}},
+		{"bitbucket", "acme/app", commentAPI{"/2.0/user", "/2.0/repositories/acme/app/pullrequests/5/comments", map[string]string{"uuid": "{me}"},
+			func(n int, mine bool) interface{} {
+				who := map[string]string{"uuid": "{mallory}"}
+				if mine {
+					who = map[string]string{"uuid": "{me}"}
+				}
+				if n == 1 {
+					return map[string]interface{}{"values": []map[string]interface{}{{"content": map[string]string{"raw": "lgtm"}, "user": who}},
+						"next": "https://api.bitbucket.org/2.0/...page=2"}
+				}
+				return map[string]interface{}{"values": []map[string]interface{}{{"content": map[string]string{"raw": commentMarker}, "user": who}}}
+			}}},
+		{"azuredevops", "acme/Web/app", commentAPI{"/acme/_apis/connectionData", "/acme/Web/_apis/git/repositories/app/pullrequests/5/threads",
+			map[string]interface{}{"authenticatedUser": map[string]string{"id": "AAAA-me"}},
+			func(_ int, mine bool) interface{} {
+				who := map[string]string{"id": "bbbb-mallory"}
+				if mine {
+					who = map[string]string{"id": "aaaa-me"}
+				}
+				return map[string]interface{}{"value": []map[string]interface{}{
+					{"comments": []map[string]interface{}{{"content": "lgtm", "author": who}}},
+					{"comments": []map[string]interface{}{{"content": commentMarker, "author": who}}}}}
+			}}},
 	}
 	for _, tc := range tests {
-		t.Run(tc.kind, func(t *testing.T) {
-			marker := "<!-- kardinal-receipt:payments/checkout-prod -->"
-			pages := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.EscapedPath() != tc.path && r.URL.Path != tc.path {
-					t.Errorf("unexpected request %s", r.URL)
-					w.WriteHeader(http.StatusNotFound)
-					return
-				}
-				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-				pages++
-				var out []map[string]string
-				switch page {
-				case 1: // a full page without it
-					for i := 0; i < tc.size; i++ {
-						out = append(out, map[string]string{"body": fmt.Sprintf("comment %d", i)})
+		for _, mine := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s mine=%v", tc.kind, mine), func(t *testing.T) {
+				selfCalls := 0
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					switch r.URL.EscapedPath() {
+					case tc.api.selfPath:
+						selfCalls++
+						_ = json.NewEncoder(w).Encode(tc.api.self)
+					case tc.api.commentsPath:
+						page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+						if page == 0 {
+							page = 1
+						}
+						_ = json.NewEncoder(w).Encode(tc.api.page(page, mine))
+					default:
+						t.Errorf("unexpected request %s", r.URL)
+						w.WriteHeader(http.StatusNotFound)
 					}
-				case 2: // a short page with it
-					out = append(out, map[string]string{"body": "Promotion receipt ...\n\n" + marker})
+				}))
+				defer srv.Close()
+				p, err := scm.NewProvider(tc.kind, "token", srv.URL, "")
+				require.NoError(t, err)
+				f, ok := p.(scm.PRCommentFinder)
+				require.True(t, ok, "%s searches comments", tc.kind)
+				for range 2 {
+					found, err := f.HasPRComment(context.Background(), tc.repo, 5, commentMarker)
+					require.NoError(t, err)
+					assert.Equal(t, mine, found, "only kardinal's own comment counts")
 				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(out)
-			}))
-			defer srv.Close()
-			p, err := scm.NewProvider(tc.kind, "token", srv.URL, "")
-			require.NoError(t, err)
-			f, ok := p.(scm.PRCommentFinder)
-			require.True(t, ok, "%s searches comments", tc.kind)
-			found, err := f.HasPRComment(context.Background(), "acme/app", 5, marker)
-			require.NoError(t, err)
-			assert.True(t, found, "on the second page")
-			assert.Equal(t, 2, pages)
-
-			pages = 0
-			found, err = f.HasPRComment(context.Background(), "acme/app", 5, "<!-- kardinal-receipt:other -->")
-			require.NoError(t, err)
-			assert.False(t, found)
-			assert.Equal(t, 2, pages, "the short page ends the search")
-		})
+				assert.Equal(t, 1, selfCalls, "the identity is read once")
+			})
+		}
 	}
 }
 
-// TestHasPRComment_BitbucketAndAzure: Bitbucket Cloud follows next links,
-// Bitbucket Data Center follows nextPageStart through the PR's activities
-// (COMMENTED only), and Azure DevOps reads every thread at once.
-func TestHasPRComment_BitbucketAndAzure(t *testing.T) {
-	marker := "<!-- kardinal-receipt:payments/checkout-prod -->"
-	ctx := context.Background()
-
-	t.Run("bitbucket", func(t *testing.T) {
-		path := "GET /2.0/repositories/acme/app/pullrequests/5/comments"
-		f := newFakeAPI(t, nil)
-		f.queued[path] = []apiReply{
-			{200, `{"values":[{"content":{"raw":"lgtm"}}],"next":"https://api.bitbucket.org/2.0/...page=2"}`},
-			{200, `{"values":[{"content":{"raw":"Promotion receipt\n\n` + marker + `"}}]}`},
-			{200, `{"values":[{"content":{"raw":"lgtm"}}]}`},
+// TestHasPRComment_BitbucketDC: Bitbucket Data Center follows nextPageStart
+// through the PR's activities (COMMENTED only), and counts the marker only in
+// a comment of the token's user (applinks whoami).
+func TestHasPRComment_BitbucketDC(t *testing.T) {
+	for _, mine := range []bool{false, true} {
+		author := "mallory"
+		if mine {
+			author = "kardinal-bot"
 		}
-		p, err := scm.NewProvider("bitbucket", "token", f.URL, "")
-		require.NoError(t, err)
-		finder := p.(scm.PRCommentFinder)
-		found, err := finder.HasPRComment(ctx, "acme/app", 5, marker)
-		require.NoError(t, err)
-		assert.True(t, found, "on the second page")
-		found, err = finder.HasPRComment(ctx, "acme/app", 5, marker)
-		require.NoError(t, err)
-		assert.False(t, found, "a last page without it")
-	})
-
-	t.Run("bitbucket-datacenter", func(t *testing.T) {
-		path := "GET " + dcPRs + "/12/activities"
-		f := newFakeAPI(t, nil)
-		f.queued[path] = []apiReply{
-			{200, `{"values":[{"action":"APPROVED"},{"action":"COMMENTED","comment":{"text":"lgtm"}}],"isLastPage":false,"nextPageStart":100}`},
-			// A reply quoting the marker in another action does not count.
-			{200, `{"values":[{"action":"RESCOPED","comment":{"text":"` + marker + `"}},{"action":"COMMENTED","comment":{"text":"` + marker + `"}}],"isLastPage":true}`},
+		f := newFakeAPI(t, map[string]apiReply{"GET /bitbucket/plugins/servlet/applinks/whoami": {200, "kardinal-bot\n"}})
+		f.queued["GET "+dcPRs+"/12/activities"] = []apiReply{
+			{200, `{"values":[{"action":"APPROVED"},{"action":"COMMENTED","comment":{"text":"lgtm","author":{"name":"kardinal-bot"}}}],"isLastPage":false,"nextPageStart":100}`},
+			{200, `{"values":[{"action":"RESCOPED","comment":{"text":"` + commentMarker + `","author":{"name":"kardinal-bot"}}},` +
+				`{"action":"COMMENTED","comment":{"text":"` + commentMarker + `","author":{"name":"` + author + `"}}}],"isLastPage":true}`},
 		}
-		found, err := dcProvider(t, f, "").HasPRComment(ctx, "PLAT/web-app", 12, marker)
+		found, err := dcProvider(t, f, "").HasPRComment(context.Background(), "PLAT/web-app", 12, commentMarker)
 		require.NoError(t, err)
-		assert.True(t, found)
-		require.Len(t, f.calls, 2)
-		assert.Equal(t, "100", f.calls[1].Query.Get("start"), "the next page")
-	})
+		assert.Equal(t, mine, found, "author %s", author)
+	}
+}
 
-	t.Run("azuredevops", func(t *testing.T) {
-		path := "GET /acme/Web/_apis/git/repositories/app/pullrequests/5/threads"
-		f := newFakeAPI(t, nil)
-		f.queued[path] = []apiReply{
-			{200, `{"value":[{"comments":[{"content":"lgtm"}]},{"comments":[{"content":"x"},{"content":"` + marker + `"}]}]}`},
-			{200, `{"value":[{"comments":[{"content":"lgtm"}]}]}`},
-		}
-		p, err := scm.NewProvider("azuredevops", "token", f.URL, "")
-		require.NoError(t, err)
-		finder := p.(scm.PRCommentFinder)
-		found, err := finder.HasPRComment(ctx, "acme/Web/app", 5, marker)
-		require.NoError(t, err)
-		assert.True(t, found)
-		found, err = finder.HasPRComment(ctx, "acme/Web/app", 5, marker)
-		require.NoError(t, err)
-		assert.False(t, found)
-	})
+type appTokens struct{}
+
+func (appTokens) Token(context.Context) (string, error) { return "installation-token", nil }
+func (appTokens) AppID() int64                          { return 42 }
+
+// TestHasPRComment_GitHubApp: a GitHub App's own comments are matched by the
+// App (performed_via_github_app.id), not by a login anyone could imitate.
+func TestHasPRComment_GitHubApp(t *testing.T) {
+	comments := []map[string]interface{}{
+		{"body": commentMarker, "user": map[string]string{"login": "kardinal[bot]"}},
+		{"body": commentMarker, "user": map[string]string{"login": "other[bot]"}, "performed_via_github_app": map[string]int{"id": 7}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/repos/acme/app/issues/5/comments", r.URL.Path, "an installation token does not read /user")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(comments)
+	}))
+	defer srv.Close()
+	p := scm.NewGitHubAppProvider(appTokens{}, srv.URL, "")
+	found, err := p.HasPRComment(context.Background(), "acme/app", 5, commentMarker)
+	require.NoError(t, err)
+	assert.False(t, found, "neither comment is the App's")
+	comments = append(comments, map[string]interface{}{"body": commentMarker,
+		"user": map[string]string{"login": "kardinal[bot]"}, "performed_via_github_app": map[string]int{"id": 42}})
+	found, err = p.HasPRComment(context.Background(), "acme/app", 5, commentMarker)
+	require.NoError(t, err)
+	assert.True(t, found, "the App's own comment")
 }

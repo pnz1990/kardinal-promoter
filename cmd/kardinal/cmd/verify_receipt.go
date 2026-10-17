@@ -40,6 +40,7 @@ import (
 // verifyReceiptOptions are the flags of kardinal verify-receipt.
 type verifyReceiptOptions struct {
 	bundle, image, env, file, repo string
+	pipeline, subject, cluster     string
 	key, identity, issuer, trRoot  string
 	require                        []string
 	insecure                       bool
@@ -52,16 +53,17 @@ func newVerifyReceiptCmd() *cobra.Command {
 		Short: "Verify a signed promotion receipt: its signature, subject, environment and levels",
 		Long: `Verify a promotion's signed receipt (docs/receipts.md), from the cluster
 (<pipeline> <env>, the newest unless --bundle), an image's OCI referrers
-(--image with --env) or a file (--file). Check it with --key, or with
---identity and --issuer (both required: no default trusts any identity).
-The exit code is 0 only when every check passes.`,
+(--image) or a file (--file, with -n, --pipeline, --env and --subject). Check
+it with --key, or with --identity and --issuer (both required: no default
+trusts any identity). The exit code is 0 only when every check passes.`,
 		Annotations: map[string]string{ReferenceAnnotation: verifyReceiptReference},
 		Example: `  kardinal verify-receipt checkout prod --key receipt.pub
   kardinal verify-receipt checkout prod --bundle checkout-1-5-0 \
     --identity https://kubernetes.io/namespaces/kardinal-system/serviceaccounts/kardinal-promoter \
     --issuer https://oidc.eks.us-east-2.amazonaws.com/id/EXAMPLE
-  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... --env prod --key receipt.pub
-  kardinal verify-receipt --file receipt.sigstore.json --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN`,
+  kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... -n payments --pipeline checkout --env prod --key receipt.pub
+  kardinal verify-receipt --file receipt.sigstore.json -n payments --pipeline checkout --env prod \
+    --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN`,
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runVerifyReceipt(cmd, args, o)
@@ -72,6 +74,9 @@ The exit code is 0 only when every check passes.`,
 	f.StringVar(&o.image, "image", "", "Read the receipt from this image's OCI referrers (repository@sha256:...)")
 	f.StringVar(&o.env, "env", "", "The environment the receipt must be for (with --image or --file)")
 	f.StringVar(&o.file, "file", "", "Read the receipt from this Sigstore bundle file")
+	f.StringVar(&o.pipeline, "pipeline", "", "The Pipeline the receipt must be for (required with --image and --file, with -n)")
+	f.StringVar(&o.subject, "subject", "", "The image digest (sha256:...) or commit the receipt must be about (required with --file)")
+	f.StringVar(&o.cluster, "cluster", "", "The cluster identity the receipt must name (its kube-system Namespace UID, or receipts.clusterID)")
 	f.StringVar(&o.key, "key", "", "Public key file (PEM) of a key or KMS receipt")
 	f.StringVar(&o.identity, "identity", "", "Certificate identity (subject alternative name) of a keyless receipt")
 	f.StringVar(&o.issuer, "issuer", "", "OIDC issuer of a keyless receipt")
@@ -84,11 +89,13 @@ The exit code is 0 only when every check passes.`,
 
 // verifyReceiptResult is -o json|yaml of verify-receipt.
 type verifyReceiptResult struct {
-	Receipt   string             `json:"receipt"`
-	Verified  bool               `json:"verified"`
-	Signer    string             `json:"signer"`
-	Logged    bool               `json:"logged"`
-	Statement *receipt.Statement `json:"statement"`
+	Receipt  string `json:"receipt"`
+	Verified bool   `json:"verified"`
+	Signer   string `json:"signer"`
+	Logged   bool   `json:"logged"`
+	// LogNotChecked: the receipt has a log entry that was not verified.
+	LogNotChecked bool               `json:"logNotChecked,omitempty"`
+	Statement     *receipt.Statement `json:"statement"`
 }
 
 func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions) error {
@@ -108,7 +115,19 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 	if len(args) == 1 {
 		return errors.New("verify-receipt: give both <pipeline> and <env>")
 	}
-	vo := receipt.VerifyOptions{Identity: o.identity, Issuer: o.issuer, Environment: o.env, Require: o.require}
+	vo := receipt.VerifyOptions{Identity: o.identity, Issuer: o.issuer, Environment: o.env, Require: o.require,
+		Pipeline: o.pipeline, ClusterID: o.cluster, Subject: o.subject}
+	if len(args) == 0 {
+		// Outside the cluster nothing else ties the receipt to a tenant.
+		if globalNamespace == "" || o.pipeline == "" || o.env == "" {
+			return errors.New("verify-receipt: --image and --file need -n, --pipeline and --env: a receipt is verified for " +
+				"one namespace, Pipeline and environment, or another tenant's receipt of the same image would pass")
+		}
+		vo.Namespace = globalNamespace
+		if o.file != "" && o.subject == "" {
+			return errors.New("verify-receipt: --file needs --subject (the image digest sha256:... or the commit it must be about)")
+		}
+	}
 	if o.key != "" {
 		raw, err := os.ReadFile(o.key)
 		if err != nil {
@@ -128,11 +147,12 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 	var name string
 	switch {
 	case len(args) == 2:
-		vo.Environment = args[1]
+		vo.Environment, vo.Pipeline = args[1], args[0]
 		rc, err := clusterReceipt(ctx, args[0], args[1], o.bundle)
 		if err != nil {
 			return fmt.Errorf("verify-receipt: %w", err)
 		}
+		vo.Namespace = rc.Namespace
 		vo.Statement = []byte(rc.Spec.Statement)
 		bundles, name = [][]byte{[]byte(rc.Status.Bundle)}, rc.Name
 	case o.file != "":
@@ -146,8 +166,8 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 		if !ok || !strings.HasPrefix(digest, "sha256:") {
 			return fmt.Errorf("verify-receipt: --image %q needs a digest (repository@sha256:...)", o.image)
 		}
-		if o.env == "" {
-			return errors.New("verify-receipt: --image needs --env: an image has a receipt per environment")
+		if o.subject != "" && o.subject != digest {
+			return fmt.Errorf("verify-receipt: --subject %s is not --image's digest %s", o.subject, digest)
 		}
 		vo.Subject = digest
 		reg := &receipt.Registry{Keychain: authn.DefaultKeychain, Insecure: o.insecure}
@@ -181,7 +201,8 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 		}
 		out := cmd.OutOrStdout()
 		if structured() {
-			return writeStructured(out, verifyReceiptResult{Receipt: name, Verified: true, Signer: v.Signer, Logged: v.Logged, Statement: v.Statement})
+			return writeStructured(out, verifyReceiptResult{Receipt: name, Verified: true, Signer: v.Signer, Logged: v.Logged,
+				LogNotChecked: v.LogNotChecked, Statement: v.Statement})
 		}
 		printReceipt(out, name, v)
 		return nil
@@ -299,6 +320,9 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 		_, _ = fmt.Fprintf(w, "  actor:       %s\n", who)
 	}
 	signed := v.Signer
+	if v.LogNotChecked {
+		signed += "; its transparency log entry is not checked (give --trusted-root)"
+	}
 	if v.Logged {
 		signed += ", in the transparency log"
 	}
@@ -352,7 +376,13 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 
 // verifyReceiptReference is the detail of the command for its reference
 // page.
-const verifyReceiptReference = `It checks the signature (and the certificate chain against the trusted
+const verifyReceiptReference = `A receipt names the cluster, namespace, Pipeline and environment it is
+for, and its subjects. From the cluster they are the receipt's own; with
+--image and --file pin them (-n, --pipeline and --env, --subject for a file,
+and --cluster to pin the cluster), so another tenant's or another cluster's
+receipt of the same image is refused.
+
+It checks the signature (and the certificate chain against the trusted
 root); the transparency log entry or timestamp when there is one; the
 subject; that the summary is PASSED for the environment asked; and each
 --require'd level (a leading ! means it must be absent). From the cluster, the receipt's spec.statement must be the signed statement

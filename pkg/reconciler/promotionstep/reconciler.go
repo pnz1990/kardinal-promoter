@@ -1021,6 +1021,13 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	// patch as Promoting (docs/receipts.md).
 	if r.Receipts != nil {
 		ps.Status.Decision = r.decision(ctx, ps, gates, pipeline, bundle)
+		if ps.Status.Decision == nil {
+			// Too large even cut to one gate: the step starts without one,
+			// and without a receipt, rather than waiting (no promotion waits
+			// for a receipt).
+			ps.Status.ReceiptError = fmt.Sprintf("the decision snapshot is over %d bytes even with one gate: no receipt",
+				v1alpha1.MaxDecisionBytes)
+		}
 	}
 	if err := r.transition(ctx, base, ps, StatePromoting, fmt.Sprintf("initialized with %d steps", len(seq))); err != nil {
 		return ctrl.Result{}, fmt.Errorf("pending→promoting: %w", err)

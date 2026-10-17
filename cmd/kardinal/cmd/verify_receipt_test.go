@@ -178,12 +178,35 @@ func TestVerifyReceipt_File(t *testing.T) {
 	rc, _, key := signedReceipt(t)
 	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
 	require.NoError(t, os.WriteFile(file, []byte(rc.Status.Bundle), 0o600))
-	out, _, err := runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "--key", key, "--env", "prod")
+	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}
+	out, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key}, pin...)...)
 	require.NoError(t, err)
 	assert.Contains(t, out, "VERIFIED receipt checkout-1-5-0-prod")
 
+	// QA-3 B2: a file is verified for one namespace, Pipeline, environment
+	// and subject, each required; another's is refused.
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}, "need -n, --pipeline and --env"},
+		{[]string{"-n", "default", "--env", "prod", "--subject", receiptDigest}, "need -n, --pipeline and --env"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod"}, "--file needs --subject"},
+		{[]string{"-n", "team-b", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}, "not namespace team-b"},
+		{[]string{"-n", "default", "--pipeline", "evil", "--env", "prod", "--subject", receiptDigest}, "not pipeline evil"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "test", "--subject", receiptDigest}, "not environment test"},
+		{append(pin, "--cluster", "other-cluster"), "not cluster other-cluster"},
+		{[]string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", "sha256:" + strings.Repeat("e", 64)}, "is not about"},
+	} {
+		_, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key}, tc.args...)...)
+		require.Error(t, err, tc.args)
+		assert.Contains(t, err.Error(), tc.want, tc.args)
+	}
+	_, _, err = runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", key, "--cluster", "c1"}, pin...)...)
+	require.NoError(t, err, "the cluster it names")
+
 	_, _, other := signedReceipt(t)
-	_, _, err = runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "--key", other)
+	_, _, err = runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--key", other}, pin...)...)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "NOT VERIFIED")
 
@@ -216,12 +239,13 @@ func TestVerifyReceipt_Keyless(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(root, raw, 0o600))
 
-	out, _, err := runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "--identity", id, "--issuer", issuer, "--trusted-root", root)
+	pin := []string{"-n", "default", "--pipeline", "checkout", "--env", "prod", "--subject", receiptDigest}
+	out, _, err := runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--identity", id, "--issuer", issuer, "--trusted-root", root}, pin...)...)
 	require.NoError(t, err)
 	assert.Contains(t, out, "signed by:   "+id)
-	_, _, err = runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "--identity", id+"/other", "--issuer", issuer, "--trusted-root", root)
+	_, _, err = runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--identity", id + "/other", "--issuer", issuer, "--trusted-root", root}, pin...)...)
 	require.Error(t, err)
-	_, _, err = runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "--identity", id, "--trusted-root", root)
+	_, _, err = runOutput(t, receiptClient(t), append([]string{"verify-receipt", "--file", file, "--identity", id, "--trusted-root", root}, pin...)...)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "needs both --identity and --issuer")
 }

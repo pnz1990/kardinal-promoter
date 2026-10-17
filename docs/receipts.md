@@ -60,6 +60,13 @@ same write that moves it to Promoting. The receipt uses that record, not the gat
 A schedule gate that passed at 10:00 and reads false at 10:20, when the health check ends, is
 recorded as passed: that is what the promotion started on.
 
+The record is bounded (128 KiB): it leaves out what a receipt never shows (an approval's
+comment, a Verdict's summary), and a step with many heavy gates keeps the approvals and Verdicts
+that counted, cuts long texts to 1 KiB, and then leaves out the last gates (`omittedGates`); the
+receipt says so (`truncated: true`), and its policy digest still covers every gate. A step whose
+record would not fit even with one gate starts without one, and gets no receipt
+(`status.receiptError`), rather than waiting.
+
 A step that started before receipts were enabled has no record. Its receipt reads the gates at
 Verified and says so: `decisionSnapshot: false`, and `kardinal verify-receipt` prints "gates
 read when the step was verified".
@@ -120,8 +127,11 @@ The keyless certificate names the ServiceAccount, not the cluster: always pin th
 The OCI sink pushes with the controller's Secret, but a Bundle's image repositories are chosen
 by whoever creates the Bundle. In a shared install, bound where it writes: set
 `receipts.sinks.oci.repository` (every referrer goes to one repository you own), or
-`receipts.sinks.oci.allowedRepositories` (repositories or path prefixes, `ghcr.io/acme/`).
-An image outside the list gets no referrer: its receipt is still signed and kept, and its
+`receipts.sinks.oci.allowedRepositories` (a registry, or a registry and path prefix:
+`ghcr.io/acme/`, `docker.io/acme`). An image's repository is parsed as the registry sees it,
+and matched by registry and whole path components: `docker.io/acme` and `acme` are one, a
+repository with a `.`, `..` or empty path component (`ghcr.io/acme/../other`) is never
+allowed. An image outside the list gets no referrer: its receipt is still signed and kept, and its
 `Stored` condition is `False` with reason `RepositoryNotAllowed`, naming the repository. Left
 empty, the sink pushes to every image's repository its Secret reaches.
 
@@ -137,7 +147,11 @@ NAME                  PIPELINE   ENV    BUNDLE           PHASE    AGE
 checkout-1-5-0-prod   checkout   prod   checkout-1-5-0   Stored   2m
 ```
 
-- **Name**: `<bundle>-<environment>`, so re-running the Verified transition finds it.
+- **Name**: `<bundle>-<environment>-<hash>`, the hash of the Bundle, the environment and the
+  step's UID, so no two promotions share one; the step records it in `status.receipt`, and
+  the receipt is labelled with the step's UID (`kardinal.io/promotion-step-uid`). Re-running the
+  Verified transition finds it; a receipt of that name that is not the step's is never adopted
+  (`status.receiptError`).
 - **Phase**: `Pending` (not signed yet), `Signed` (signed; a sink is not written yet), `Stored`
   (every sink holds it), `Failed` (its statement does not match `spec.statementDigest`: it was
   changed, and is never signed).
@@ -172,13 +186,16 @@ kardinal verify-receipt checkout prod --bundle checkout-1-5-0 \
   --identity https://kubernetes.io/namespaces/kardinal-system/serviceaccounts/kardinal-promoter \
   --issuer https://oidc.eks.us-east-2.amazonaws.com/id/EXAMPLE
 
-# From the image's OCI referrers, in any cluster or none
-kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... --env prod --key receipt.pub
+# From the image's OCI referrers, in any cluster or none: pin the namespace, the Pipeline
+# and the environment
+kardinal verify-receipt --image ghcr.io/acme/checkout@sha256:9f2c... \
+  -n payments --pipeline checkout --env prod --key receipt.pub
 
-# From a file
-kubectl get promotionreceipt checkout-1-5-0-prod -o jsonpath='{.status.bundle}' > receipt.sigstore.json
-kardinal verify-receipt --file receipt.sigstore.json --key receipt.pub \
-  --require GATES_PASSED,APPROVED,!OVERRIDDEN
+# From a file: pin the subject too
+kubectl get promotionstep <step> -o jsonpath='{.status.receipt}'   # the receipt's name
+kubectl get promotionreceipt <receipt> -o jsonpath='{.status.bundle}' > receipt.sigstore.json
+kardinal verify-receipt --file receipt.sigstore.json -n payments --pipeline checkout --env prod \
+  --subject sha256:9f2c... --key receipt.pub --require GATES_PASSED,APPROVED,!OVERRIDDEN
 ```
 
 It checks, and exits non-zero when any check fails:
@@ -187,10 +204,17 @@ It checks, and exits non-zero when any check fails:
    trusted root (`--trusted-root`, default the public-good root) and the exact `--identity` and
    `--issuer`. Both are required: no default trusts any identity.
 2. **The log entry or timestamp**, when the receipt has one, against the trusted root. It never
-   contacts Rekor: the entry and its inclusion proof are in the receipt.
-3. **The subject**: the `--image` digest, when given.
-4. **The summary**: `PASSED`, for the environment asked, with each `--require`d level present
-   (`!LEVEL` absent).
+   contacts Rekor: the entry and its inclusion proof are in the receipt. A key receipt verified
+   without `--trusted-root` does not check its log entry, and says so ("its transparency log
+   entry is not checked"; `logged: false, logNotChecked: true` with `-o json`): it is "in the
+   transparency log" only once the entry is verified.
+3. **What it is for**: the cluster, namespace, Pipeline and environment of its `resourceUri`,
+   exactly, and the subject. From the cluster these are the receipt's own; with `--image` and
+   `--file`, `-n`, `--pipeline` and `--env` are required, `--subject` too for a file (the
+   `--image` digest is the subject), and `--cluster` pins the cluster (its `kube-system`
+   Namespace UID, or `receipts.clusterID`). A receipt of another tenant's Pipeline, or another
+   cluster's, signed with the same key for the same image, is refused.
+4. **The summary**: `PASSED`, with each `--require`d level present (`!LEVEL` absent).
 5. **From the cluster**: the PromotionReceipt's statement is the signed one, byte for byte, and
    the Bundle it names, when it still exists, has the UID it records. A receipt edited after it
    was signed fails.
@@ -206,8 +230,10 @@ It checks, and exits non-zero when any check fails:
   (condition `PRCommented=False`, reason `GaveUp`). The comment ends with a hidden marker,
   `<!-- kardinal-receipt:<namespace>/<receipt> -->`: the controller searches the PR's comments
   for it before posting (GitHub, GitLab, Forgejo/Gitea, Bitbucket Cloud and Data Center,
-  Azure DevOps), so a post whose status write was lost (a crash) is not posted again. The
-  search reads at most 20 pages of comments, oldest first.
+  Azure DevOps), so a post whose status write was lost (a crash) is not posted again. Only a
+  comment by kardinal's own SCM identity counts (the token's user; a GitHub App's comments by the
+  App), so anyone who may comment on the PR cannot keep the receipt's comment from being posted
+  by posting the marker first. The search reads at most 20 pages of comments, oldest first.
 - **`kardinal history`** adds a RECEIPT column once a promotion has one: "verified" when it is
   signed.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to
