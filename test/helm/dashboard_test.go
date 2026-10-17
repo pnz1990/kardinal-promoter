@@ -43,6 +43,7 @@ var dashboardVariableRef = regexp.MustCompile(`^\$(?:\{(\w+)\}|(\w+))$`)
 // ${DS_PROMETHEUS} showed "Datasource ${DS_PROMETHEUS} was not found" in
 // every panel and sent no queries.
 func TestChartDashboardDatasourceResolves(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join(chartPath(t), "dashboards", "kardinal-promoter-dashboard.json"))
 	require.NoError(t, err)
 	var dash struct {
@@ -111,6 +112,7 @@ func TestChartDashboardDatasourceResolves(t *testing.T) {
 // Both variables default to All (allValue .*, which also matches a series
 // without the label), so a single-cluster Prometheus needs no setup.
 func TestChartDashboardScopedToKardinal(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join(chartPath(t), "dashboards", "kardinal-promoter-dashboard.json"))
 	require.NoError(t, err)
 	var dash struct {

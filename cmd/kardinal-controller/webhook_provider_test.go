@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -171,6 +172,10 @@ func providerWebhookFixture(t *testing.T) (*webhookServer, *secretGets, func(pat
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 	api := &secretGets{Client: c}
 	srv := newWebhookServerWithConfig(&mockSCMProvider{}, c, zerolog.Nop(), true)
+	// The buckets' clock stands still: no token refills between deliveries
+	// however slowly the host runs them.
+	stopped := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	srv.now = func() time.Time { return stopped }
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /webhook/scm/namespaces/{namespace}/{name}", srv.ProviderHandler(&scm.Registry{Client: c, APIReader: api}))
 	body := []byte(`{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"acme/app"}}`)

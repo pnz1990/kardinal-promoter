@@ -176,6 +176,7 @@ var allFeatures = []string{
 // policy (gitops-admission.yaml, health.refresh), named per release and
 // always shipped.
 func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{nil} {
 		var got []string
 		for _, d := range render(t, "kardinal-promoter", args...) {
@@ -201,6 +202,7 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 // TestChartClusterScopedNamesUniquePerRelease: two releases (the documented
 // one-install-per-team recipe) must not own the same cluster-scoped object.
 func TestChartClusterScopedNamesUniquePerRelease(t *testing.T) {
+	t.Parallel()
 	clusterScoped := map[string]bool{
 		"ClusterRole": true, "ClusterRoleBinding": true,
 		"ValidatingAdmissionPolicy": true, "ValidatingAdmissionPolicyBinding": true,
@@ -232,6 +234,7 @@ func TestChartClusterScopedNamesUniquePerRelease(t *testing.T) {
 // config/crd/bases byte for byte, and every kardinal.io object the chart
 // renders must have its CRD in crds/.
 func TestChartShipsGeneratedCRDs(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	generated, err := filepath.Glob(filepath.Join(root, "config", "crd", "bases", "*.yaml"))
 	require.NoError(t, err)
@@ -503,6 +506,7 @@ var optionalAccess = []struct {
 // patch grants of the refresh request, and rbac.argocdApplicationsWrite
 // still grants patch on Applications for the argocd update strategy.
 func TestChartRBACHealthRefreshOff(t *testing.T) {
+	t.Parallel()
 	off := []string{"--set", "health.refresh.enabled=false"}
 	v := newRBACView(t, render(t, "kardinal-promoter", off...))
 	watched := []string{"team-a", "argocd"}
@@ -550,6 +554,7 @@ func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc ap
 // makes against the rendered RBAC, in cluster mode and namespace mode, with
 // the optional grants off and on.
 func TestChartRBACGrantsControllerAccess(t *testing.T) {
+	t.Parallel()
 	modes := []struct {
 		name    string
 		args    []string
@@ -584,6 +589,7 @@ func TestChartRBACGrantsControllerAccess(t *testing.T) {
 // the controller write ChangeWindows for the UI's freeze controls, and
 // passes --ui-freeze-controls; without it the controller cannot.
 func TestChartRBACFreezeControls(t *testing.T) {
+	t.Parallel()
 	sa := "kardinal-promoter"
 	on := newRBACView(t, render(t, "kardinal-promoter", "--set", "ui.auth.tokenReview=true", "--set", "ui.freezeControls=true"))
 	off := newRBACView(t, render(t, "kardinal-promoter", "--set", "ui.auth.tokenReview=true"))
@@ -605,6 +611,7 @@ func TestChartRBACFreezeControls(t *testing.T) {
 // TestChartUIBasePath: ui.basePath passes --ui-base-path (#1933); a prefix
 // the UI server already serves, or one with a dot segment, fails the install.
 func TestChartUIBasePath(t *testing.T) {
+	t.Parallel()
 	deployment := func(args ...string) string {
 		var out []string
 		for _, d := range render(t, "kardinal-promoter", args...) {
@@ -624,6 +631,7 @@ func TestChartUIBasePath(t *testing.T) {
 
 // TestChartRBACLeastPrivilege: grants the code does not use are gone.
 func TestChartRBACLeastPrivilege(t *testing.T) {
+	t.Parallel()
 	v := newRBACView(t, render(t, "kardinal-promoter", allFeatures...))
 	sa := "kardinal-promoter"
 	denied := []struct {
@@ -674,6 +682,7 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 // of each deleted Graph. Cluster mode may read any namespace; namespace mode
 // only the watched one.
 func TestChartRBACNamespaceGet(t *testing.T) {
+	t.Parallel()
 	sa := "kardinal-promoter"
 	cluster := newRBACView(t, render(t, "kardinal-promoter"))
 	assert.True(t, cluster.allowed(releaseNS, sa, "", "", "namespaces", "get", "team-a"), "cluster mode")
@@ -693,6 +702,7 @@ func TestChartRBACNamespaceGet(t *testing.T) {
 // rotated token whatever the namespaced rules cover. With no Secret name the
 // rule is not rendered: empty resourceNames would mean every Secret.
 func TestChartRBACSCMTokenSecret(t *testing.T) {
+	t.Parallel()
 	const role = releaseNS + "/kardinal-promoter-leader-election"
 	secretRules := func(v rbacView) []rbacv1.PolicyRule {
 		var out []rbacv1.PolicyRule
@@ -739,6 +749,7 @@ func TestChartRBACSCMTokenSecret(t *testing.T) {
 // there (the default, platform-policies, is outside the cache and failed every
 // translation), set POD_NAMESPACE, and reject values it cannot serve.
 func TestChartNamespaceModeWiring(t *testing.T) {
+	t.Parallel()
 	docs := render(t, "kardinal-promoter", "--set", "controller.watchNamespace="+releaseNS)
 	c := controllerContainer(t, docs)
 	args := argValues(c)
@@ -769,6 +780,7 @@ func TestChartNamespaceModeWiring(t *testing.T) {
 // ── C08-api-config-10: UI and webhook ports ───────────────────────────────────
 
 func TestChartExposesUIAndWebhookPorts(t *testing.T) {
+	t.Parallel()
 	docs := render(t, "kardinal-promoter", "--set", "networkPolicy.enabled=true")
 	c := controllerContainer(t, docs)
 	ports := map[string]int32{}
@@ -818,6 +830,7 @@ func TestChartExposesUIAndWebhookPorts(t *testing.T) {
 // Before the fix a custom bind address left the probes on a port nothing
 // listened on and the install never became ready.
 func TestChartPortsFollowBindAddresses(t *testing.T) {
+	t.Parallel()
 	docs := render(t, "kardinal-promoter", "--set", "networkPolicy.enabled=true",
 		"--set", "metricsBindAddress=:9100", "--set", "healthProbeBindAddress=0.0.0.0:9101",
 		"--set", "service.metricsPort=9090", "--set", "service.healthPort=9091")
@@ -870,6 +883,7 @@ func TestChartPortsFollowBindAddresses(t *testing.T) {
 // terminationGracePeriodSeconds 0 is a valid value (kill at once); the chart
 // used `default 60`, which treats 0 as unset and rendered 60.
 func TestChartTerminationGracePeriod(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want int64
@@ -892,6 +906,7 @@ func TestChartTerminationGracePeriod(t *testing.T) {
 // until Services stop routing to it; 0 removes the hook, and null is the
 // default.
 func TestChartShutdownDelay(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want []string
@@ -997,6 +1012,7 @@ var everyValue = []string{
 // TestChartFlagsAndEnvExistInController: every rendered --flag is defined by
 // the controller (an unknown flag makes it exit), and every env var is read.
 func TestChartFlagsAndEnvExistInController(t *testing.T) {
+	t.Parallel()
 	flags := controllerFlags(t)
 	env := controllerEnvReads(t)
 	for _, args := range [][]string{nil, everyValue, {"--set", "controller.watchNamespace=" + releaseNS}} {
@@ -1013,6 +1029,7 @@ func TestChartFlagsAndEnvExistInController(t *testing.T) {
 // TestChartValuesWireControllerFlags maps each documented value to the flag or
 // env var the controller reads.
 func TestChartValuesWireControllerFlags(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter", everyValue...))
 	args := argValues(c)
 	env := envByName(c)
@@ -1079,6 +1096,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 // controller.tlsCertFile without controller.tlsKeyFile (and the reverse)
 // before anything is applied, naming the value that is missing its pair.
 func TestChartTLSFilesSetTogether(t *testing.T) {
+	t.Parallel()
 	for set, only := range map[string]string{
 		"controller.tlsCertFile=/tls/tls.crt": "tlsCertFile",
 		"controller.tlsKeyFile=/tls/tls.key":  "tlsKeyFile",
@@ -1098,6 +1116,7 @@ func TestChartTLSFilesSetTogether(t *testing.T) {
 // and extraVolumeMounts, naming the value and its path. A directory mount and
 // subPath mounts of the two files both render.
 func TestChartTLSFilesInASecret(t *testing.T) {
+	t.Parallel()
 	tls := func(cert, key string) []string {
 		return []string{"--set", "controller.tlsCertFile=" + cert, "--set", "controller.tlsKeyFile=" + key}
 	}
@@ -1158,6 +1177,7 @@ func TestChartTLSFilesInASecret(t *testing.T) {
 // TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so a
 // misspelled or unknown value is never silently ignored.
 func TestChartRejectsUnknownValues(t *testing.T) {
+	t.Parallel()
 	for _, set := range []string{
 		"controller.shard=eu",
 		"controller.github.token.secretName=github-token",
@@ -1174,6 +1194,7 @@ func TestChartRejectsUnknownValues(t *testing.T) {
 // TestChartAcceptsRepoSetKeys: every --set this repo passes to this chart
 // (Makefile, hack/, workflows, demo/, docs) still renders.
 func TestChartAcceptsRepoSetKeys(t *testing.T) {
+	t.Parallel()
 	for _, set := range []string{
 		"image.repository=ghcr.io/pnz1990/kardinal-promoter",
 		"image.tag=dev",
@@ -1210,6 +1231,7 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 // was a bare namespaceSelector, not a field of an egress rule) and every rule
 // must be restrictive (an empty rule allows everything).
 func TestChartNetworkPolicyIsValid(t *testing.T) {
+	t.Parallel()
 	docs := render(t, "kardinal-promoter",
 		"--set", "networkPolicy.enabled=true",
 		"--set", "networkPolicy.ingressFrom.metrics[0].namespaceSelector.matchLabels.name=monitoring",
@@ -1267,6 +1289,7 @@ func TestChartNetworkPolicyIsValid(t *testing.T) {
 // ── C08-api-config-18: GitHub token never in the Deployment ──────────────────
 
 func TestChartGitHubTokenNotPlaintext(t *testing.T) {
+	t.Parallel()
 	const dummy = "dummy-not-a-real-token-c08-18"
 	docs := render(t, "kardinal-promoter", "--set", "github.token="+dummy, "--set", "demo.enabled=true")
 	for _, d := range docs {
@@ -1318,6 +1341,7 @@ func TestChartGitHubTokenNotPlaintext(t *testing.T) {
 // TestChartDemoGitURLConfigurable: the demo Pipeline pushes to spec.git.url,
 // so users must be able to point it at a fork they can write to.
 func TestChartDemoGitURLConfigurable(t *testing.T) {
+	t.Parallel()
 	gitURL := func(docs []renderedDoc) string {
 		t.Helper()
 		pipelines := docsOfKind(docs, "Pipeline")
@@ -1348,6 +1372,7 @@ func TestChartDemoGitURLConfigurable(t *testing.T) {
 // ── C08-api-config-31: logLevel sets both loggers ─────────────────────────────
 
 func TestChartLogLevelSetsBothLoggers(t *testing.T) {
+	t.Parallel()
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		c := controllerContainer(t, render(t, "kardinal-promoter", "--set", "logLevel="+level))
 		args := argValues(c)
@@ -1365,6 +1390,7 @@ func TestChartLogLevelSetsBothLoggers(t *testing.T) {
 // ── C08-api-config-29: dashboard copies in sync ───────────────────────────────
 
 func TestChartDashboardInSync(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	chartCopy, err := os.ReadFile(filepath.Join(chartPath(t), "dashboards", "kardinal-promoter-dashboard.json"))
 	require.NoError(t, err)
@@ -1378,6 +1404,7 @@ func TestChartDashboardInSync(t *testing.T) {
 // ── C08-api-config-20: PrometheusRule uses metrics that exist ────────────────
 
 func TestChartPrometheusRuleAlertsCanFire(t *testing.T) {
+	t.Parallel()
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "prometheusRule.enabled=true")
 	require.NoError(t, err, out)
 	// controller_runtime_webhook_requests_total is only emitted by the
@@ -1393,6 +1420,7 @@ func TestChartPrometheusRuleAlertsCanFire(t *testing.T) {
 // including a managed cluster's pre-release version such as
 // v1.35.2-eks-ce1d5eb. Covers UPG-OLDK8S-01.
 func TestChartRequiresKubernetes135(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		kube string
 		ok   bool
@@ -1420,6 +1448,7 @@ func TestChartRequiresKubernetes135(t *testing.T) {
 // GITHUB_TOKEN (the Secret has no token key, and a secretKeyRef to a missing
 // key would keep the Pod from starting). It needs github.secretRef.name.
 func TestChartGitHubApp(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter",
 		"--set", "github.secretRef.name=github-app", "--set", "github.app.enabled=true"))
 	env := envByName(c)
@@ -1435,6 +1464,7 @@ func TestChartGitHubApp(t *testing.T) {
 // TestChartNamespaceShard: controller.namespaceShard passes --namespace-shard,
 // and cannot be combined with namespace mode or be an invalid label value.
 func TestChartNamespaceShard(t *testing.T) {
+	t.Parallel()
 	found := false
 	for _, d := range render(t, "kardinal-promoter", "--set", "controller.namespaceShard=b") {
 		if d.Kind == "Deployment" && strings.Contains(string(d.raw), `"--namespace-shard=b"`) {
@@ -1471,6 +1501,7 @@ func TestChartNamespaceShard(t *testing.T) {
 // --gate-status-heartbeat; empty keeps the controller default (10m), and the
 // schema refuses a value that is not a Go duration.
 func TestChartGateStatusHeartbeat(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	assert.NotContains(t, argValues(c), "gate-status-heartbeat")
 	for _, v := range []string{"0s", "30m", "1h30m"} {
@@ -1485,6 +1516,7 @@ func TestChartGateStatusHeartbeat(t *testing.T) {
 // digest when render.image.digest is set) and the chart's imagePullSecrets;
 // image.digest pins the controller image the same way.
 func TestChartRenderImage(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	args := argValues(c)
 	assert.Regexp(t, `^ghcr.io/pnz1990/kardinal-promoter/render:v?[0-9]`, args["render-image"])
@@ -1506,6 +1538,7 @@ func TestChartRenderImage(t *testing.T) {
 // --audit-retention=false, since the flag defaults to on, and drops delete.
 // The schema refuses a maxAge that is not a Go duration and a negative count.
 func TestChartAuditRetention(t *testing.T) {
+	t.Parallel()
 	def := render(t, "kardinal-promoter")
 	c := controllerContainer(t, def)
 	assert.Equal(t, "true", argValues(c)["audit-retention"])
@@ -1547,6 +1580,7 @@ func TestChartAuditRetention(t *testing.T) {
 //
 // Covers PERF-WORKERS-01.
 func TestChartControllerWorkers(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	for _, f := range []string{"promotionstep-workers", "prstatus-workers", "policygate-workers", "bundle-workers", "pipeline-workers"} {
 		assert.NotContains(t, argValues(c), f)
@@ -1569,6 +1603,7 @@ func TestChartControllerWorkers(t *testing.T) {
 // (0 included); null keeps the controller default, and a negative value is
 // refused by the schema.
 func TestChartGraphCompactAbove(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	assert.NotContains(t, argValues(c), "graph-compact-above")
 	for _, v := range []string{"0", "50", "200"} {
@@ -1583,6 +1618,7 @@ func TestChartGraphCompactAbove(t *testing.T) {
 // controller's MetricCheck query caps, 12 and 1 by default; 0 is refused by
 // the schema.
 func TestChartMetricCheckQuerySlots(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args               []string
 		global, perNamespc string
@@ -1606,6 +1642,7 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 // limit fit the loads the scale suite measured (peak 409 MiB), so a default
 // install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.
 func TestChartControllerMemoryDefaults(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	limit, request := c.Resources.Limits.Memory(), c.Resources.Requests.Memory()
 	assert.Equal(t, "1Gi", limit.String())
@@ -1616,6 +1653,7 @@ func TestChartControllerMemoryDefaults(t *testing.T) {
 // TestChartControllerMemoryLimitEnv (#1553): the controller gets its memory
 // limit from the downward API, from which it sets GOMEMLIMIT to 90%.
 func TestChartControllerMemoryLimitEnv(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	var found bool
 	for _, e := range c.Env {
@@ -1639,6 +1677,7 @@ func TestChartControllerMemoryLimitEnv(t *testing.T) {
 //
 // Covers FLEET-03.
 func TestChartFleetNamespaces(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	assert.Equal(t, "argocd", argValues(c)["fleet-application-namespaces"])
 	assert.NotContains(t, argValues(c), "fleet-clusterprofile-namespaces")
@@ -1656,6 +1695,7 @@ func TestChartFleetNamespaces(t *testing.T) {
 //
 // Covers INST-PPROF-01.
 func TestChartPprofAddress(t *testing.T) {
+	t.Parallel()
 	c := controllerContainer(t, render(t, "kardinal-promoter"))
 	_, set := argValues(c)["pprof-address"]
 	assert.False(t, set, "no --pprof-address unless pprofAddress is set")
@@ -1675,6 +1715,7 @@ func TestChartPprofAddress(t *testing.T) {
 //
 // Covers CHART-SCM-ALIAS-01.
 func TestChartSCMTokenAliases(t *testing.T) {
+	t.Parallel()
 	set := func(vals ...string) []string {
 		var args []string
 		for _, v := range vals {
@@ -1724,6 +1765,7 @@ func TestChartSCMTokenAliases(t *testing.T) {
 //
 // Covers CHART-SCM-ALIAS-02.
 func TestChartControllerSecretNeverReferenceable(t *testing.T) {
+	t.Parallel()
 	secretsOf := func(docs []renderedDoc) map[string]corev1.Secret {
 		out := map[string]corev1.Secret{}
 		for _, d := range docsOfKind(docs, "Secret") {
@@ -1774,6 +1816,7 @@ func TestChartControllerSecretNeverReferenceable(t *testing.T) {
 //
 // Covers CHART-FLAGS-ONCE-01.
 func TestChartFlagsRenderedOnce(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{nil, everyValue, {"--set", "controller.watchNamespace=" + releaseNS}} {
 		c := controllerContainer(t, render(t, "kardinal-promoter", args...))
 		seen := map[string]int{}
@@ -1797,6 +1840,7 @@ func TestChartFlagsRenderedOnce(t *testing.T) {
 //
 // Covers CHART-AGGREGATED-RULES-01.
 func TestChartAggregatedClusterRolesLeaveRulesUnset(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{nil, everyValue} {
 		aggregated := 0
 		for _, d := range docsOfKind(render(t, "kardinal-promoter", args...), "ClusterRole") {
@@ -1819,6 +1863,7 @@ func TestChartAggregatedClusterRolesLeaveRulesUnset(t *testing.T) {
 // Role in default grants get on the kubernetes EndpointSlice alone; in
 // cluster mode the manager ClusterRole grants it.
 func TestChartAPIServerEndpointsNamespaceMode(t *testing.T) {
+	t.Parallel()
 	docs := render(t, "kardinal-promoter", "--set", "controller.watchNamespace="+releaseNS)
 	v := newRBACView(t, docs)
 	// The ClusterRoles bound to the controller cluster-wide (the AgentRun

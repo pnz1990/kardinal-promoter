@@ -30,6 +30,7 @@ func controllerPod(t *testing.T, docs []renderedDoc) corev1.PodSpec {
 //
 // Covers RECEIPT-CHART-01.
 func TestChartReceipts(t *testing.T) {
+	t.Parallel()
 	off := render(t, "kardinal-promoter")
 	assert.NotContains(t, argValues(controllerContainer(t, off)), "receipts")
 	for _, v := range controllerPod(t, off).Volumes {

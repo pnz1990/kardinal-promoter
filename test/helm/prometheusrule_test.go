@@ -53,6 +53,7 @@ func renderedRuleSpec(t *testing.T) map[string]any {
 // installations alert apart. A metric without the join (the chart before
 // #2037) fails here.
 func TestChartPrometheusRuleScopedToKardinal(t *testing.T) {
+	t.Parallel()
 	spec := renderedRuleSpec(t)
 	groups, _ := spec["groups"].([]any)
 	require.NotEmpty(t, groups)
@@ -112,6 +113,7 @@ func promtoolBin(t *testing.T) string {
 // reconciles alert once per installation (cluster, namespace, controller). It needs promtool in CI
 // (promtoolBin); the structure test above runs without it.
 func TestChartPrometheusRuleAlertsOnlyOnKardinal(t *testing.T) {
+	t.Parallel()
 	promtool := promtoolBin(t)
 	raw, err := yaml.Marshal(renderedRuleSpec(t))
 	require.NoError(t, err)
