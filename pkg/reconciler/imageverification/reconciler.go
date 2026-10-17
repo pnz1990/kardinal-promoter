@@ -362,6 +362,7 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 	}
 	var results []v1alpha1.AttestationResult
 	var authorities []authority
+	var agents []v1alpha1.AgentIdentity
 	var loadErr error
 	for _, img := range iv.Spec.Images {
 		ref := img.Repository + "@" + img.Digest
@@ -375,7 +376,11 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 		var fetchErr error
 		if pending {
 			if authorities == nil && loadErr == nil {
-				authorities, loadErr = r.authorities(ctx, iv)
+				if authorities, loadErr = r.authorities(ctx, iv); loadErr == nil {
+					// A verified attestation is kept as it is: its agent is
+					// read now, or the attestation waits.
+					agents, loadErr = r.signingAgents(ctx)
+				}
 			}
 			fetchErr = loadErr
 			if fetchErr == nil {
@@ -400,7 +405,7 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 				res = v1alpha1.AttestationResult{Name: p.Name, Image: ref, PredicateType: p.PredicateType,
 					Message: clip("registry: " + fetchErr.Error())}
 			default:
-				res = evaluateAttestation(img, p, sigs.Attestations, authorities)
+				res = evaluateAttestation(img, p, sigs.Attestations, authorities, agents)
 			}
 			switch {
 			case !res.Verified && p.Required:
@@ -455,13 +460,19 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 		iv.Status.Commit = &v1alpha1.CommitVerificationResult{Message: "SCM provider: " + err.Error()}
 		return outcome{waiting: fmt.Sprintf("commit %s: SCM provider: %v", c.SHA, err)}
 	}
-	cv, ok := cs.provider.(scm.CommitVerifier)
-	if !ok || cs.provider == nil {
+	if cs.provider == nil {
 		return failed(scm.ErrCommitVerificationUnsupported.Error())
 	}
 	if cs.host == "" || !strings.EqualFold(host, cs.host) {
 		return failed(fmt.Sprintf("repository %s is on %s, not on the %s SCM host %q; "+
 			"its commit signature cannot be checked", repo, host, cs.name, cs.host))
+	}
+	if names := commitAuthorities(iv); len(names) > 0 {
+		return r.checkGitsignCommit(ctx, iv, cs.provider, repo, names)
+	}
+	cv, ok := cs.provider.(scm.CommitVerifier)
+	if !ok {
+		return failed(scm.ErrCommitVerificationUnsupported.Error())
 	}
 	sig, err := cv.VerifyCommit(ctx, repo, c.SHA)
 	switch {
@@ -495,7 +506,7 @@ func (r *Reconciler) checkCommit(ctx context.Context, iv *v1alpha1.ImageVerifica
 		return outcome{failed: fmt.Sprintf("commit %s of %s is signed by %s (%s), who is not in commits.allowedSigners",
 			c.SHA, repo, sig.Signer, strings.Join(sig.Identities, ", ")), reason: ReasonCommitNotVerified}
 	}
-	iv.Status.Commit = &v1alpha1.CommitVerificationResult{Verified: true, Signer: sig.Signer}
+	iv.Status.Commit = &v1alpha1.CommitVerificationResult{Verified: true, Method: CommitMethodSCM, Signer: sig.Signer}
 	return outcome{}
 }
 

@@ -24,6 +24,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `actor` | map | Who created the version: its verified actor stamp. See [`actor.*`](#actor) |
 | `agent` | map | The version's agent as the registry says now. See [`agent.*`](#agent) |
 | `attestations` | map | The version's verified attestations: SLSA provenance, vulnerability scans after VEX, any in-toto predicate. See [`attestations.*`](#attestations) |
+| `commit` | map | The config commit's verified signature, and the agent whose workload signed it. See [`commit.*`](#commit) |
 
 ---
 
@@ -457,6 +458,7 @@ expression that reads a name is an evaluation error and the gate blocks (fail cl
 | `attestations.verified` | bool | `true` | Always; the version's ImageVerification is Verified |
 | `attestations.<name>.verified` | bool | `true` | Each policy name; every image has a verified attestation |
 | `attestations.<name>.signer` | string | `"release"` | The key authority's name or the certificate identity, when every image has the same one |
+| `attestations.<name>.agent` | string | `"builder-bot"` | The [AgentIdentity](../actors.md#signing-identities) whose `signingIdentities` match the keyless signer, when exactly one does and every image has the same one |
 | `attestations.<name>.predicateType` | string | `"https://slsa.dev/provenance/v1"` | Each policy name |
 | `attestations.<name>.slsa.buildLevel` | int | `3` | With `slsa`; 0 to 3, the lowest image's |
 | `attestations.<name>.slsa.levelSource` | string | `"builder"` | `builder` or `vsa`, when every image has the same one |
@@ -469,7 +471,7 @@ expression that reads a name is an evaluation error and the gate blocks (fail cl
 | `attestations.<name>.scannedAt` | string | `"2026-10-14T09:00:00Z"` | A scan; RFC 3339 |
 | `attestations.<name>.scanner` | string | `"trivy"` | A scan, when every image has the same one |
 | `attestations.<name>.predicate` | string | `'{"result":"PASSED"}'` | Canonical JSON, at most 64 KiB; read it with `json.unmarshal(...)`; when every image has the same one |
-| `attestations.<name>.images` | list | `[{"image": "ghcr.io/myorg/app@sha256:...", "verified": true, ...}]` | Each image's own result: `image`, `verified`, and `signer`, `authority`, `digest`, `predicate`, `slsa`, `vulns` as above, when it has them |
+| `attestations.<name>.images` | list | `[{"image": "ghcr.io/myorg/app@sha256:...", "verified": true, ...}]` | Each image's own result: `image`, `verified`, and `signer`, `agent`, `authority`, `digest`, `predicate`, `slsa`, `vulns` as above, when it has them |
 
 A version with several images folds them into one value per name: `verified` when every
 image is, the lowest build level, the summed counts and the oldest scan. A field that names one
@@ -493,4 +495,34 @@ expression: 'attestations.vulns.effective.critical == 0 && attestations.vulns.ef
 ```yaml
 # Every image's test-result attestation passed
 expression: 'attestations.tests.images.all(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")'
+```
+
+## `commit.*`
+
+The config commit's signature as the version's ImageVerification verified it
+([Signed commits](../image-verification.md#signed-commits)): its `status.commit`, read when the
+expression names `commit`. A version whose Pipeline does not check commits, or with no
+ImageVerification yet, has `commit.verified == false` and every string empty. Every field is
+always present, so an expression that reads one never fails; check `commit.verified`.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `commit.verified` | bool | `true` | Always; the commit's signature verified |
+| `commit.method` | string | `"gitsign"` | `scm` (the SCM verified it) or `gitsign` (kardinal verified a Sigstore signature against `commits.authorities`); `""` before a check |
+| `commit.signer` | string | `"https://github.com/myorg/agent/.github/workflows/fix.yml@refs/heads/main"` | The SCM's verified signer (login or email), or the certificate identity for `gitsign` |
+| `commit.issuer` | string | `"https://token.actions.githubusercontent.com"` | `gitsign`: the certificate's OIDC issuer; else `""` |
+| `commit.authority` | string | `"agents"` | `gitsign`: the `commits.authorities` entry that verified it; else `""` |
+| `commit.agent` | string | `"fixer"` | `gitsign`: the [AgentIdentity](../actors.md#signing-identities) whose `signingIdentities` match the signer, when exactly one ready, unsuspended one does; else `""` |
+
+The agent is read once, when the signature verifies. To hold a version whose agent was suspended
+since, combine it with [`agent.*`](#agent), which the registry gives at each evaluation.
+
+```yaml
+# An agent's version: its commit was signed by that agent's own workload
+expression: 'actor.kind != "agent" || (commit.verified && commit.agent == actor.agent)'
+```
+
+```yaml
+# The commit was signed with gitsign by a release workflow
+expression: 'commit.verified && commit.method == "gitsign" && commit.signer.startsWith("https://github.com/myorg/")'
 ```

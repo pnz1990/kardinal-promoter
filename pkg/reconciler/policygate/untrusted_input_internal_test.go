@@ -61,6 +61,17 @@ var gateContextStrings = []string{
 	"agent.name",
 	"agent.sponsor",
 	"agent.autonomy",
+	// The config commit's verified signature (docs/design/20-attestations.md
+	// §3.5-3.6): an enum, the signer the SCM verified (a login or email) or
+	// the Fulcio certificate identity and issuer an authority matched, the
+	// policy's authority name, and an AgentIdentity name an admin
+	// registered. The status message, which can hold an SCM error, is not
+	// in the context.
+	"commit.method",
+	"commit.signer",
+	"commit.issuer",
+	"commit.authority",
+	"commit.agent",
 }
 
 // TestGateContext_NeverReadsPRIssueOrCommitProse (#1845, the untrusted-input

@@ -700,10 +700,19 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
+	commitCtx := map[string]interface{}{"verified": false, "method": "", "signer": "", "issuer": "", "authority": "", "agent": ""}
+	if strings.Contains(gate.Spec.Expression, commitRoot) {
+		var commitErr error
+		if commitCtx, commitErr = r.buildCommitContext(ctx, gate.Namespace, bundleName); commitErr != nil {
+			return nil, version, fmt.Errorf("commit: %w", commitErr)
+		}
+	}
+
 	return map[string]interface{}{
 		"actor":        actorContext(bundle.Spec.Actor, author),
 		"agent":        agentCtx,
 		"attestations": attCtx,
+		"commit":       commitCtx,
 		"bundle":       bundleCtx,
 		"schedule": map[string]interface{}{
 			"isWeekend": now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,

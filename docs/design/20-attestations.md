@@ -196,7 +196,8 @@ With `commits.authorities` set, the reconciler verifies the commit itself:
    | (b) | Fetch the commit object with git (`fetch --depth=1 <sha>`, then the raw object) | Works on every host; the bytes are what git hashed, so the SHA can be recomputed | A clone path in a reconciler that today makes only API calls; credentials for the config repository |
    | (c) | (a) where the API returns the payload, else (b) | Cheap where possible, complete everywhere | Two paths to test |
 
-   **Choice: (c).** In both cases the reconciler recomputes the commit SHA from payload and
+   **Choice: (c).** Implemented so far: (a), for GitHub, Forgejo and Gitea; (b) is #2109,
+   until which another provider fails a commit under `commits.authorities`. In both cases the reconciler recomputes the commit SHA from payload and
    signature (`gitsign pkg/git/verify.go:129-149`, `ObjectHashFromSignature`) and refuses a
    mismatch, so a provider cannot answer for another commit.
 2. **Verify the CMS signature** over the payload against the Fulcio roots of the authority's
@@ -365,6 +366,7 @@ grpc at fixed releases, and its CI runs govulncheck).
 | cosign/v3 v3.1.3 (`pkg/cosign`) | Everything cosign does | Apache-2.0 | 16 | none of its own | v3.0.5 2026-02 to v3.1.3 2026-08 |
 | gitsign v0.17.1 (`pkg/git`, `pkg/rekor`) | gitsign commit verification | Apache-2.0 | 66 (go-git is already in kardinal; the rest is gitsign's CLI and cache stack) | go-git advisories fixed at v5.19.2, which kardinal already uses | v0.15.0 2026-05 to v0.17.1 2026-07 |
 | github/smimesign v0.2.0 (`ietf-cms`) | CMS parsing alone | MIT | 1 | none | last release 2021-10; gitsign keeps its own fork (`gitsign internal/fork/ietf-cms`) |
+| digitorus/pkcs7 (v0.0.0-20230818184609) | CMS parsing and the messageDigest check | MIT | 0 (in use: sigstore timestamp-authority verifies RFC 3161 tokens with it) | none | untagged; kept current by sigstore's use of it |
 | go-vex v0.2.9 (`pkg/vex`) | OpenVEX | Apache-2.0 | 3 | none | v0.2.5 2023-08 to v0.2.9 2026-09 |
 | slsa-verifier/v2 v2.7.1 (`verifiers`) | SLSA builder checks | Apache-2.0 | 69 | cosign/v2 GO-2026-4309, GO-2026-4529, GO-2026-5694; timestamp-authority GO-2025-4192, GO-2026-5763, GO-2026-5851 (some without a fix) | — |
 | go-containerregistry v0.22.1 (`v1/remote`) | Referrers | Apache-2.0 | 0 (in use) | none | — |
@@ -377,7 +379,7 @@ Decisions:
 | Typed predicates | in-toto/attestation bindings; hand-written structs; generic JSON | **in-toto/attestation**: already in the build, generated from the spec's protos |
 | SLSA levels | slsa-verifier; policy builder map; VSA | **Policy map + VSA** (3.3): slsa-verifier costs 69 modules and pulls open advisories |
 | VEX | go-vex; hand-written OpenVEX structs; CSAF library | **go-vex**: 3 modules, the reference implementation of OpenVEX |
-| Commit signatures | gitsign `pkg/git` + `pkg/rekor`; smimesign `ietf-cms` + sigstore-go tlog; vendor gitsign's CMS fork | **gitsign**, accepted for its size: the only maintained implementation of exactly this check, kept current with gitsign's signature changes; smimesign is unmaintained since 2021, and vendoring a fork makes kardinal its maintainer. The implementation PR is a go.mod change and goes through review as such |
+| Commit signatures | gitsign `pkg/git` + `pkg/rekor`; smimesign `ietf-cms` + sigstore-go tlog; vendor gitsign's CMS fork; **digitorus/pkcs7 + sigstore-go** (both already in kardinal's build) | **digitorus/pkcs7 + sigstore-go** (revised in #1962, was gitsign). The check is small once split: pkcs7 parses the CMS and binds it to the payload (its messageDigest attribute); the signature, certificate and embedded Rekor entry form a Sigstore bundle (a message signature over the DER signed attributes, the leaf certificate, the TransparencyLogEntry with its hashedrekord body rebuilt), which the same sigstore-go verifier as keyless images checks. Measured: 0 new modules and 0 new packages in the controller's build (`go list -deps ./cmd/kardinal-controller`, 1,593 before and after), go.mod and go.sum unchanged, 564 lines of code and 797 of tests, tested against signatures made the way gitsign makes them (VirtualSigstore Fulcio and Rekor). gitsign would have added 66 modules for the same check; the cost of this choice is following gitsign's signature format ourselves (the OID and the hashedrekord shape are both stable since gitsign v0.8) |
 
 ## 10. Upgrade from v0.12
 
@@ -398,7 +400,7 @@ Decisions:
 | C5 | Commit payload | SCM API; git object fetch; both | **Both**, the API first (3.5), SHA recomputed |
 | C6 | Signer to agent | AgentIdentity `signingIdentities`; per-Pipeline map; asserted string | **AgentIdentity** (3.6) |
 | C7 | How the predicate reaches CEL | bounded status + gate CEL; CEL in the IV reconciler; gate fetches; one CR per attestation | **Bounded status, CEL in the gate** (4) |
-| C8 | Libraries | section 9 | **sigstore-go, in-toto/attestation, go-vex, gitsign** |
+| C8 | Libraries | section 9 | **sigstore-go, in-toto/attestation, go-vex; digitorus/pkcs7 for commit CMS** (gitsign not taken, #1962) |
 
 ## 12. Test plan
 
