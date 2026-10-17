@@ -446,6 +446,19 @@ The controller checks that first. The rollback's images, and its chart, must be 
 
 When the images are pinned by tag only, or an upstream environment has no such verification (the artifacts were never verified there, the version that verified them was rejected or is past the history limit, or the rollback [puts back images the target does not name](#images-the-target-does-not-name) and no single version deployed that mix), or when a verify gate on the target reads the verdicts of an upstream environment, the rollback is promoted through every upstream environment first, as before. Its `UpstreamEvidence` condition is `False` and says why. Environments that are not upstream of the target are never touched.
 
+The rollback of one target of a fleet (`--env prod-eu`) carries the verification of the
+environments before the fleet; the fleet's other targets are not upstream of it, even when
+`maxConcurrent` promotes them one after another. A rollback promoted through the upstream
+environments is the newest version there, so it supersedes a newer version in flight in them
+(for example in `test`): pin images by digest to change the target alone. `kardinal rollback` says
+so when it creates a rollback whose images or chart are pinned by tag only, and names the verify
+gate instead when one on the target reads an upstream environment's verdicts (pinning does not
+help then):
+
+```
+Note: ghcr.io/org/app:1.4.2 not pinned by digest, so the rollback is promoted through test, uat first: a tag can be pushed again with other bytes. To change only prod, roll back to a version whose images are pinned (repo:tag@sha256:...).
+```
+
 For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` fails:
 - The rollback promotes the old version to `prod-us` only. `dev` and `staging` keep what they run.
 - `prod-eu` is not upstream of `prod-us`. It is not rolled back.

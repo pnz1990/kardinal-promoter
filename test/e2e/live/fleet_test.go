@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -495,9 +496,11 @@ func TestGraph_FleetSurvivesKroRestart(t *testing.T) {
 // pushes to that target first, so B's step there does not push over it: it
 // ends Superseded. It is settled: the targets after it start (maxConcurrent
 // 1), post starts once the other targets are Verified, B ends Verified, and
-// the target keeps the rollback's version.
+// the target keeps the rollback's version. The version R restores is pinned
+// by digest and was Verified in test, so R carries that verification and
+// changes prod-t02 alone: it has no step in test, where B promotes (#2163).
 //
-// Covers FLEET-09.
+// Covers FLEET-09, RB-MULTI-05.
 func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -512,8 +515,9 @@ func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 	a := &app{e: e, ns: ns, envs: []string{"test", "prod", "post"}, repo: repo}
 	a.apply(t, fleetPromotion(ns, repo, &v1alpha1.FleetSpec{MaxConcurrent: 1, Targets: targets}, "auto"))
 
-	// Two releases everywhere, so prod-t02 has one to roll back to.
-	for _, img := range []string{imageV2, imageV3} {
+	// Two releases everywhere, so prod-t02 has one to roll back to: the
+	// first pinned by digest, so its rollback promotes prod-t02 only.
+	for _, img := range []string{imageV2 + "@" + fixtures.V2Digest, imageV3} {
 		b := e.CreateBundle(t, ns, pipelineName, "--image", img)
 		e.WaitBundlePhase(t, ns, b, "Verified", 2*promoteTimeout)
 	}
@@ -525,8 +529,17 @@ func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 	e.CreateGate(t, framework.Gate(ns, "hold-t02", "prod-t02", holdExpr, recheck))
 	b := e.CreateBundle(t, ns, pipelineName, "--image", imageV1)
 	e.WaitGateReady(t, ns, b, "prod-t02", "hold-t02", false, holdExpr+" = false", gateTimeout)
-	_, rb := rbRollback(t, a, "prod-t02")
+	out, rb := rbRollback(t, a, "prod-t02")
+	assert.NotContains(t, out, "not pinned by digest", out)
 	rbStep := e.WaitStepState(t, ns, pipelineName, rb, "prod-t02", "Verified", promoteTimeout)
+	rbBundle := e.WaitBundle(t, ns, rb, time.Minute, "UpstreamEvidence decided", func(b *v1alpha1.Bundle) (bool, string) {
+		return meta.FindStatusCondition(b.Status.Conditions, "UpstreamEvidence") != nil, fmt.Sprintf("%v", b.Status.Conditions)
+	})
+	carried := meta.FindStatusCondition(rbBundle.Status.Conditions, "UpstreamEvidence")
+	assert.Equal(t, "Carried", carried.Reason, carried.Message)
+	_, inTest, err := e.Step(context.Background(), ns, pipelineName, rb, "test")
+	require.NoError(t, err)
+	assert.False(t, inTest, "the rollback of prod-t02 has no step in test")
 	e.MustKardinal(t, ns, "override", pipelineName, "--stage", "prod-t02", "--gate", "hold-t02",
 		"--reason", "the rollback of prod-t02 has pushed", "--expires-in", "1h")
 

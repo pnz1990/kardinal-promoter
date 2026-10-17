@@ -32,6 +32,7 @@ import (
 	actorpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
 func newRollbackCmd() *cobra.Command {
@@ -172,7 +173,10 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 		from = "(unknown)"
 	}
 	if plan.Fleet != nil {
-		return writeFleetRollback(w, c, ns, pipeline, envFilter, plan)
+		if err := writeFleetRollback(w, c, ns, pipeline, envFilter, plan); err != nil {
+			return err
+		}
+		return writeRollbackPath(w, c, ns, plan.Bundle)
 	}
 	if _, err := fmt.Fprintf(w,
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal explain %s --env %s\n",
@@ -181,8 +185,44 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
+	return writeRollbackPath(w, c, ns, plan.Bundle)
+}
 
-	return nil
+// writeRollbackPath says when the rollback Bundle b will be promoted through
+// the environments upstream of its target, not to the target alone, and why,
+// in the order the controller decides it (#2122, #2163): a verify gate on the
+// target reads an upstream environment's verdicts, or its images or chart
+// are not pinned by digest (a tag can be pushed again with other bytes, so
+// no verification upstream counts for it). The controller records its
+// decision in the Bundle's UpstreamEvidence condition; this is the reason
+// known before it decides.
+func writeRollbackPath(w io.Writer, c sigs_client.Client, ns string, b *v1alpha1.Bundle) error {
+	if b.Spec.Intent == nil || !b.Spec.Intent.TargetOnly {
+		return nil
+	}
+	ctx := context.Background()
+	var p v1alpha1.Pipeline
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: b.Spec.Pipeline}, &p); err != nil {
+		return nil // the controller's condition says it
+	}
+	upstream, err := lifecycle.UpstreamOfTarget(&p, b)
+	if err != nil || len(upstream) == 0 {
+		return nil
+	}
+	target := b.Spec.Intent.TargetEnvironment
+	if gates, err := translator.CollectGates(ctx, c, nil, &p); err == nil {
+		if gate := lifecycle.VerifyGateOn(&p, b, gates); gate != "" {
+			return writef(w, "Note: verify gate %s on %s reads the verdicts of an upstream environment, so the rollback is "+
+				"promoted through %s first.\n", gate, target, strings.Join(upstream, ", "))
+		}
+	}
+	loose := lifecycle.UnpinnedArtifacts(b)
+	if len(loose) == 0 {
+		return nil
+	}
+	return writef(w, "Note: %s not pinned by digest, so the rollback is promoted through %s first: a tag can be pushed "+
+		"again with other bytes. To change only %s, roll back to a version whose images are pinned (repo:tag@sha256:...).\n",
+		strings.Join(loose, ", "), strings.Join(upstream, ", "), target)
 }
 
 // fleetRollbackNamed is how many changing targets the rollback of a fleet
@@ -290,7 +330,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 			return fmt.Errorf("write output: %w", err)
 		}
 	}
-	return nil
+	return writeRollbackPath(w, c, ns, plan.Bundle)
 }
 
 func newReleaseHoldCmd() *cobra.Command {

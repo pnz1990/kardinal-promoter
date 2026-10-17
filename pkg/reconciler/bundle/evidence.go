@@ -6,7 +6,6 @@ package bundle
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -45,7 +44,7 @@ func (r *Reconciler) decideUpstreamEvidence(ctx context.Context, log zerolog.Log
 		return nil
 	}
 	target := b.Spec.Intent.TargetEnvironment
-	upstream, err := upstreamOfTarget(pipeline, b)
+	upstream, err := lifecycle.UpstreamOfTarget(pipeline, b)
 	if err != nil {
 		return err
 	}
@@ -62,7 +61,7 @@ func (r *Reconciler) decideUpstreamEvidence(ctx context.Context, log zerolog.Log
 				gate, target, strings.Join(upstream, ", ")))
 		return nil
 	}
-	if loose := unpinned(b); len(loose) > 0 {
+	if loose := lifecycle.UnpinnedArtifacts(b); len(loose) > 0 {
 		setBundleCondition(b, condUpstreamEvidence, metav1.ConditionFalse, "NotPinned",
 			fmt.Sprintf("%s not pinned by digest, so a verification upstream may have been of other bytes under the same tag; "+
 				"this version is promoted through %s first", strings.Join(loose, ", "), strings.Join(upstream, ", ")))
@@ -106,24 +105,6 @@ func (r *Reconciler) decideUpstreamEvidence(ctx context.Context, log zerolog.Log
 	return nil
 }
 
-// upstreamOfTarget lists, in promotion order, the environments b's Graph
-// would promote before its target without the evidence: the path to
-// intent.targetEnvironment, without the target (for a fleet, its targets).
-func upstreamOfTarget(pipeline *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) ([]string, error) {
-	full := b.DeepCopy()
-	full.Status.UpstreamEvidence = nil
-	path, err := graph.PromotedEnvironments(pipeline, full)
-	if err != nil {
-		return nil, fmt.Errorf("upstream evidence: %w", err)
-	}
-	target := b.Spec.Intent.TargetEnvironment
-	targets := []string{target}
-	if byFleet, err := graph.FleetTargetEnvironments(pipeline); err == nil && len(byFleet[target]) > 0 {
-		targets = byFleet[target]
-	}
-	return slices.DeleteFunc(path, func(e string) bool { return slices.Contains(targets, e) }), nil
-}
-
 // verifyGateOn returns the name of a verify gate (spec.verify) that applies
 // to b's target, or "". Its verified environment is an upstream one, whose
 // verdicts a Bundle that does not promote it never gets.
@@ -132,28 +113,7 @@ func (r *Reconciler) verifyGateOn(ctx context.Context, pipeline *kardinalv1alpha
 	if err != nil {
 		return "", fmt.Errorf("upstream evidence: %w", err)
 	}
-	// A gate names an environment, or a fleet for all of its targets.
-	target := b.Spec.Intent.TargetEnvironment
-	targets := map[string]bool{target: true}
-	if f := graph.FleetOf(pipeline, target); f != "" {
-		targets[f] = true
-	}
-	if byFleet, err := graph.FleetTargetEnvironments(pipeline); err == nil {
-		for _, t := range byFleet[target] {
-			targets[t] = true
-		}
-	}
-	for _, g := range gates {
-		if g.Spec.Verify == nil {
-			continue
-		}
-		for _, env := range strings.Split(g.Labels["kardinal.io/applies-to"], ",") {
-			if targets[strings.TrimSpace(env)] {
-				return g.Namespace + "/" + g.Name, nil
-			}
-		}
-	}
-	return "", nil
+	return lifecycle.VerifyGateOn(pipeline, b, gates), nil
 }
 
 // newestVerification is the newest verification in env of b's artifacts by
@@ -191,23 +151,6 @@ func newestVerification(siblings []kardinalv1alpha1.Bundle, b *kardinalv1alpha1.
 		}
 	}
 	return best, found
-}
-
-// unpinned lists b's artifacts that are not pinned by content: images
-// without a digest, and a chart without one. A tag can be pushed again with
-// other bytes, so a verification of the same tag may not be of these
-// artifacts. A config commit is content-addressed.
-func unpinned(b *kardinalv1alpha1.Bundle) []string {
-	var out []string
-	for _, img := range b.Spec.Images {
-		if img.Digest == "" {
-			out = append(out, img.Repository+":"+img.Tag)
-		}
-	}
-	if c := b.Spec.Chart; c != nil && c.Version != "" && c.Digest == "" {
-		out = append(out, "chart "+c.Name+" "+c.Version)
-	}
-	return out
 }
 
 // stepStarts lists, by environment, when each PromotionStep of b's Pipeline

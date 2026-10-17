@@ -342,3 +342,49 @@ func TestEvidence_RetiredReplacerBoundsTheSoak(t *testing.T) {
 	assert.True(t, at.Equal(uat.ReplacedAt))
 	assert.Equal(t, int64(40), uat.SoakMinutes, "verified at T0+1h, replaced at T0+1h40m")
 }
+
+// #2163: the rollback of one fleet target (maxConcurrent 1, so the targets
+// go one after another) carries the verification of the environments before
+// the fleet and promotes only that target: the fleet's other targets are not
+// upstream of it. With images pinned by tag only it is promoted through test
+// first, and the condition says why.
+//
+// Covers RB-MULTI-04.
+func TestEvidence_FleetTargetRollback(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pinned   bool
+		reason   string
+		promoted []string
+	}{
+		{name: "pinned", pinned: true, reason: "Carried", promoted: []string{"prod-t02"}},
+		{name: "tag only", reason: "NotPinned", promoted: []string{"test", "prod-t02"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := lcPipeline("app", lcEnvs("test", "prod", "post")...)
+			var targets []kardinalv1alpha1.FleetTarget
+			for _, n := range []string{"t00", "t01", "t02", "t03", "t04"} {
+				targets = append(targets, kardinalv1alpha1.FleetTarget{Name: n})
+			}
+			p.Spec.Environments[1].Fleet = &kardinalv1alpha1.FleetSpec{MaxConcurrent: 1, Targets: targets}
+			old := evidenceBundle("app-v2", "2.0", "Superseded", "test", "prod-t00", "prod-t01", "prod-t02", "prod-t03", "prod-t04", "post")
+			rb := rollbackTo("2.0")
+			rb.Spec.Intent.TargetEnvironment = "prod-t02"
+			if !tc.pinned {
+				old.Spec.Images[0].Digest, rb.Spec.Images[0].Digest = "", ""
+			}
+			c := lcClient(p, old, rb)
+			tr := &promotedTranslator{pipeline: p}
+			r := &bundle.Reconciler{Client: c, Translator: tr}
+			lcReconcile(t, r, rb.Name)
+			got := lcGet(t, c, rb.Name)
+			cond := meta.FindStatusCondition(got.Status.Conditions, "UpstreamEvidence")
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.reason, cond.Reason, cond.Message)
+			assert.Equal(t, [][]string{tc.promoted}, tr.promoted)
+			if tc.pinned {
+				assert.Equal(t, "promotes only prod-t02; these artifacts were verified in test by app-v2", cond.Message)
+			}
+		})
+	}
+}
