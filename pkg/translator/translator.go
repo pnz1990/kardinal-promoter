@@ -463,7 +463,7 @@ func healthConfigured(env kardinalv1alpha1.EnvironmentSpec) bool {
 // scanned, so a Pipeline cannot opt out of org policy by listing other
 // namespaces.
 func (t *Translator) collectGates(ctx context.Context,
-	pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, error) {
+	pipeline *kardinalv1alpha1.Pipeline, opts ...client.ListOption) ([]kardinalv1alpha1.PolicyGate, error) {
 	seen := make(map[string]bool)
 	var gates []kardinalv1alpha1.PolicyGate
 
@@ -480,17 +480,13 @@ func (t *Translator) collectGates(ctx context.Context,
 
 	for _, ns := range namespaces {
 		var list kardinalv1alpha1.PolicyGateList
-		if err := t.k8s.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		if err := t.k8s.List(ctx, &list, append([]client.ListOption{client.InNamespace(ns)}, opts...)...); err != nil {
 			return nil, fmt.Errorf("list policy gates in %s: %w", ns, err)
 		}
 		for _, g := range list.Items {
-			// Skip gate instances a Graph stamped from a template. They live in
-			// the pipeline namespace and would otherwise be re-stamped as
-			// templates for the next Bundle. Skip every gate with
-			// spec.generated too (instances, freeze gates): only such a gate may
-			// have a name too long for the gate-template label, so it must never
-			// be a template, whoever set the field.
-			if _, isInstance := g.Labels["kardinal.io/gate-template"]; isInstance || g.Spec.Generated {
+			// Gate instances live in the pipeline namespace too and would
+			// otherwise be re-stamped as templates for the next Bundle.
+			if !IsTemplate(&g) {
 				continue
 			}
 			key := g.Namespace + "/" + g.Name
@@ -516,8 +512,21 @@ func (t *Translator) collectGates(ctx context.Context,
 // CollectGates returns the PolicyGate templates Translate passes to the Graph
 // builder for pipeline. policyNS is the controller's --policy-namespaces list
 // (nil means the controller default). The CLI uses it so `kardinal policy
-// simulate` selects exactly the gates the controller would.
+// simulate` selects exactly the gates the controller would. opts narrow each
+// namespace's List, for example to a cache index of templates (IsTemplate);
+// the result is the same, as the templates are selected again.
 func CollectGates(ctx context.Context, k8s client.Reader, policyNS []string,
-	pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, error) {
-	return New(nil, nil, k8s, policyNS, zerolog.Nop()).collectGates(ctx, pipeline)
+	pipeline *kardinalv1alpha1.Pipeline, opts ...client.ListOption) ([]kardinalv1alpha1.PolicyGate, error) {
+	return New(nil, nil, k8s, policyNS, zerolog.Nop()).collectGates(ctx, pipeline, opts...)
+}
+
+// IsTemplate reports whether g is a PolicyGate template: one a person or a
+// policy repository wrote, which the Translator copies into each Bundle's
+// Graph. A gate instance (it has kardinal.io/gate-template) and every gate
+// with spec.generated (instances, freeze gates) is not: only such a gate may
+// have a name too long for the gate-template label, so it must never be a
+// template, whoever set the field.
+func IsTemplate(g *kardinalv1alpha1.PolicyGate) bool {
+	_, isInstance := g.Labels["kardinal.io/gate-template"]
+	return !isInstance && !g.Spec.Generated
 }

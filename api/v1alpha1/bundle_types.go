@@ -293,10 +293,11 @@ type BundleStatus struct {
 	PipelineSpecHash string `json:"pipelineSpecHash,omitempty"`
 
 	// PolicyGatesHash is the SHA-256 hash of the PolicyGate templates that
-	// apply to the Pipeline's environments, recorded when the Graph could not
-	// be built (InvalidSpec, reason GraphBuildFailed). A change to those
-	// templates retries the Bundle, as a Pipeline change does. Empty
-	// otherwise.
+	// apply to the Pipeline's environments, recorded when the Graph is built
+	// and when it could not be built (InvalidSpec, reason GraphBuildFailed).
+	// A change to those templates re-translates the Graph of a Promoting
+	// Bundle in place, and retries one that could not be built, as a
+	// Pipeline change does.
 	// +optional
 	PolicyGatesHash string `json:"policyGatesHash,omitempty"`
 

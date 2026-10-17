@@ -187,6 +187,11 @@ type Reconciler struct {
 	// PolicyGate templates hashed for a GraphBuildFailed retry (#1312) are
 	// the ones the Translator reads. Nil means the controller default.
 	PolicyNamespaces []string
+	// templateIndex is whether the PolicyGate field index indexGateTemplate
+	// is registered (SetupWithManager): the templates hashed on every
+	// reconcile of a Promoting Bundle are then read from it, not from a List
+	// of every gate in the namespace.
+	templateIndex bool
 	// Retire says when the Graph of a finished Bundle is retired (#1492).
 	// The zero value keeps every Graph.
 	Retire RetirePolicy
@@ -452,6 +457,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			log.Info().Str("graph", name).Msg("graph of a failed bundle deleted — not recreating")
 			return errGraphDeletedAfterFailure
 		}
+		gatesHash := r.gatesHashFor(ctx, log, pipeline)
 		graphName, tErr := r.translate(ctx, log, pipeline, b)
 		if skipTranslate(tErr) {
 			return nil
@@ -460,6 +466,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return fmt.Errorf("recreate graph %s: %w", name, tErr)
 		}
 		b.Status.GraphRef = graphName
+		b.Status.PolicyGatesHash = gatesHash
 		meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
 		log.Info().Str("graph", graphName).Msg("graph recreated after external deletion")
 		return nil
@@ -532,27 +539,44 @@ func graphRejected(b *kardinalv1alpha1.Bundle) *metav1.Condition {
 	return nil
 }
 
-// ensurePipelineSpecCurrent detects when a Pipeline spec has changed since the
-// Graph was last built, and re-translates the Graph in place.
+// ensurePipelineSpecCurrent detects when a Pipeline spec, or the PolicyGate
+// templates of a Promoting Bundle, changed since the Graph was last built,
+// and re-translates the Graph in place.
 //
 // This fixes issue #626: Pipeline spec changes (new environments, changed
 // policyNamespaces, updated git config) were invisible to in-flight Bundles
-// because the Graph spec is set when it is created.
+// because the Graph spec is set when it is created. And #1360: so were edits
+// to the PolicyGate templates the Graph copies its gate instances from.
 //
 // Mechanism:
 //  1. Hash the current Pipeline spec (spec.paused excluded, see pipelineSpecHashFor).
 //  2. Compare to Bundle.status.pipelineSpecHash (set when the Graph was created).
-//  3. If different: re-run the translator, which updates the existing Graph's
-//     spec (create-or-update). kro applies the new nodes and prunes only the
-//     removed ones, so environments that are already Verified are not promoted
-//     again. Deleting the Graph instead would delete every PromotionStep with
-//     it (ledger G6).
-//  4. Store the new hash in b (the caller patches it).
+//  3. For a Promoting Bundle, hash the templates that apply to its
+//     environments (translator.GatesHash) and compare to
+//     status.policyGatesHash (set when the Graph was built). A gate created,
+//     edited or deleted since then changes it; a gate of other environments
+//     does not.
+//  4. If either differs: re-run the translator, which updates the existing
+//     Graph's spec (create-or-update). kro applies the new nodes and prunes
+//     only the removed ones, so environments that are already Verified are
+//     not promoted again. Deleting the Graph instead would delete every
+//     PromotionStep with it (ledger G6). kro re-applies only the fields it
+//     renders, so an override on a gate instance stays.
+//  5. Store the new hashes in b (the caller patches it).
 //
-// On a transient translate error the stored hash is kept, so the update is
-// retried. On a graph.ErrInvalid error handleSyncEvidence stores the new hash
-// with the Bundle Failed, so only the next Pipeline change, or for
-// GraphBuildFailed a change to its PolicyGates (gatesChanged), retries.
+// On a transient translate error the stored hashes are kept, so the update
+// is retried. On a graph.ErrInvalid error after a Pipeline change
+// handleSyncEvidence stores the new hash with the Bundle Failed, so only the
+// next Pipeline change, or for GraphBuildFailed a change to its PolicyGates
+// (gatesChanged), retries. When only the gates changed, a Graph that cannot be
+// built with them does not fail the Bundle: one bad edit to an org gate would
+// fail every version in flight. The Graph keeps the gates it has, and the
+// error (errGatesNotApplied) is retried like a transient one.
+//
+// Verified, Superseded and Rejected Bundles are not synced at all; a Failed
+// one is re-translated for a Pipeline change, or for a gate change only when
+// the gates failed its build (InvalidSpec), and gets the gates as they are
+// when it recovers into Promoting.
 func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline) error {
 	currentHash := pipelineSpecHashFor(pipeline)
@@ -565,25 +589,53 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		b.Status.PipelineSpecHash = currentHash
 		return nil
 	}
-	if currentHash == b.Status.PipelineSpecHash && !r.gatesChanged(ctx, log, b, pipeline) {
+	pipelineChanged := currentHash != b.Status.PipelineSpecHash
+	gatesHash, gatesChanged := r.gatesChanged(ctx, log, b, pipeline)
+	if !pipelineChanged && !gatesChanged {
+		if b.Status.PolicyGatesHash == "" && gatesHash != "" {
+			// Not initialised (Graph built before #1360): an empty stored
+			// hash means "unknown", not "changed". Record the current one.
+			b.Status.PolicyGatesHash = gatesHash
+		}
 		return nil
+	}
+	what := "pipeline spec changed"
+	if !pipelineChanged {
+		what = "policy gates changed"
 	}
 	log.Info().
 		Str("graph", b.Status.GraphRef).
 		Str("oldHash", b.Status.PipelineSpecHash).
 		Str("newHash", currentHash).
-		Msg("pipeline spec changed — updating Graph in place")
+		Str("oldGatesHash", b.Status.PolicyGatesHash).
+		Msg(what + " — updating Graph in place")
 	if err := r.keepRemovedFleetTargets(ctx, log, b, pipeline); err != nil {
 		return err
 	}
+	// Hashed before Translate reads the gates: a gate edited in between
+	// re-translates once more, rather than being missed.
+	builtGatesHash := gatesHash
+	if builtGatesHash == "" {
+		builtGatesHash = r.gatesHashFor(ctx, log, pipeline)
+	}
 	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
+		if !pipelineChanged && errors.Is(err, graph.ErrInvalid) &&
+			!meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
+			return fmt.Errorf("%w: %v", errGatesNotApplied, err)
+		}
 		return fmt.Errorf("update graph for changed pipeline spec: %w", err)
 	}
 	b.Status.PipelineSpecHash = currentHash
-	b.Status.PolicyGatesHash = ""
+	b.Status.PolicyGatesHash = builtGatesHash
 	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
 	return nil
 }
+
+// errGatesNotApplied is the error of a re-translate for changed PolicyGate
+// templates that cannot be built (graph.ErrInvalid). It does not wrap
+// ErrInvalid: the Bundle is not failed, its Graph keeps the gates it has, and
+// the re-translate is retried (ensurePipelineSpecCurrent).
+var errGatesNotApplied = errors.New("the changed PolicyGates cannot be applied to this bundle; it keeps the gates it has")
 
 // gatesHashFor returns the hash of the PolicyGate templates that apply to
 // pipeline's environments as they are now, read as the Translator reads them
@@ -593,9 +645,13 @@ func (r *Reconciler) gatesHashFor(ctx context.Context, log zerolog.Logger, pipel
 	if pipeline == nil {
 		return ""
 	}
-	gates, err := translator.CollectGates(ctx, r.Client, r.PolicyNamespaces, pipeline)
+	var opts []client.ListOption
+	if r.templateIndex {
+		opts = append(opts, client.MatchingFields{indexGateTemplate: "true"})
+	}
+	gates, err := translator.CollectGates(ctx, r.Client, r.PolicyNamespaces, pipeline, opts...)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to read policy gates for the retry hash (non-fatal)")
+		log.Warn().Err(err).Msg("failed to read policy gates for the change hash (non-fatal)")
 		return ""
 	}
 	return translator.GatesHash(pipeline, gates)
@@ -612,15 +668,19 @@ func usedGatesHash(pipeline *kardinalv1alpha1.Pipeline, cause error) string {
 	return translator.GatesHash(pipeline, be.Gates)
 }
 
-// gatesChanged reports whether b failed with GraphBuildFailed and the
-// PolicyGate templates of pipeline differ from the ones it failed with.
+// gatesChanged reports whether the PolicyGate templates of pipeline differ
+// from the ones b's Graph was built with (a Promoting Bundle) or failed to be
+// built with (InvalidSpec, reason GraphBuildFailed), and returns their
+// current hash. An empty stored hash (a Graph built before #1360) is not a
+// change. Other Bundles report false and read no gates.
 func (r *Reconciler) gatesChanged(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
-	pipeline *kardinalv1alpha1.Pipeline) bool {
-	if b.Status.PolicyGatesHash == "" || !meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
-		return false
+	pipeline *kardinalv1alpha1.Pipeline) (string, bool) {
+	invalid := meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec)
+	if invalid && b.Status.PolicyGatesHash == "" || !invalid && b.Status.Phase != phasePromoting {
+		return "", false
 	}
 	h := r.gatesHashFor(ctx, log, pipeline)
-	return h != "" && h != b.Status.PolicyGatesHash
+	return h, h != "" && b.Status.PolicyGatesHash != "" && h != b.Status.PolicyGatesHash
 }
 
 // defaultHistoryLimit is the number of completed Bundle promotions to retain
@@ -1226,6 +1286,8 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Pausing is enforced by the PromotionStep reconciler, which holds steps
 	// while the Pipeline's freeze gate exists (see pkg/lifecycle/pause.go), so
 	// a paused Pipeline still gets its Graph and resumes where it stopped.
+	// The gates are hashed before Translate reads them (builtGatesHash).
+	gatesHash := r.gatesHashFor(ctx, log, &pipeline)
 	graphName, err := r.translate(ctx, log, &pipeline, b)
 	if skipTranslate(err) {
 		return ctrl.Result{}, nil
@@ -1270,6 +1332,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	setPhase(b, phasePromoting, r.now())
 	b.Status.GraphRef = graphName                              // for recreation detection (#490)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // for change detection (#626)
+	b.Status.PolicyGatesHash = gatesHash                       // for change detection (#1360)
 	setBundleCondition(b, condReady, metav1.ConditionFalse, "Promoting", "promotion in progress")
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -1491,11 +1554,11 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 		return ctrl.Result{}, nil
 	}
 	pipelineChanged := hash != b.Status.PipelineSpecHash
-	if !pipelineChanged && !r.gatesChanged(ctx, log, b, pipeline) {
-		return ctrl.Result{}, nil
-	}
 	what := "pipeline " + b.Spec.Pipeline
 	if !pipelineChanged {
+		if _, changed := r.gatesChanged(ctx, log, b, pipeline); !changed {
+			return ctrl.Result{}, nil
+		}
 		what = "the PolicyGates of pipeline " + b.Spec.Pipeline
 	}
 	newer, err := r.hasNewerSibling(ctx, b, true)
@@ -2158,6 +2221,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := lifecycle.IndexBundlesByPipeline(context.Background(), mgr.GetFieldIndexer()); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kardinalv1alpha1.PolicyGate{},
+		indexGateTemplate, gateTemplateKey); err != nil {
+		return fmt.Errorf("index policy gate templates: %w", err)
+	}
+	r.templateIndex = true
 
 	// Unstructured, so kardinal does not import the kro module.
 	graphObject := &unstructured.Unstructured{}
@@ -2255,15 +2323,11 @@ func (r *Reconciler) waitingSiblings(ctx context.Context, obj client.Object) []r
 	return reqs
 }
 
-// isGateTemplate reports whether obj is a PolicyGate template: not an
-// instance a Graph stamped (kardinal.io/gate-template) and not generated.
+// isGateTemplate reports whether obj is a PolicyGate template
+// (translator.IsTemplate).
 func isGateTemplate(obj client.Object) bool {
 	g, ok := obj.(*kardinalv1alpha1.PolicyGate)
-	if !ok || g.Spec.Generated {
-		return false
-	}
-	_, instance := g.Labels["kardinal.io/gate-template"]
-	return !instance
+	return ok && translator.IsTemplate(g)
 }
 
 // gateTemplateChanged passes PolicyGate template creates and deletes, and
@@ -2281,25 +2345,43 @@ var gateTemplateChanged = predicate.Funcs{
 	},
 }
 
-// gateBundles maps a PolicyGate template event to every Bundle whose Graph
-// could not be built (InvalidSpec True). A template in an org policy
-// namespace applies to Pipelines in any namespace, so all namespaces are
-// listed; such Bundles are few, and each compares its stored gates hash
-// before it retries.
+// gateBundles maps a PolicyGate template event to every Bundle a template
+// change can reach: the Promoting ones (#1360), and the ones whose Graph
+// could not be built with the gates (InvalidSpec True with a stored gates
+// hash, #1312). A template in an org policy namespace applies to Pipelines
+// in any namespace, so all namespaces are listed. Each Bundle compares its
+// stored gates hash first, so only the ones whose gates changed
+// re-translate.
 func (r *Reconciler) gateBundles(ctx context.Context, _ client.Object) []reconcile.Request {
 	var list kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &list); err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("gateBundles: list bundles failed — a gate change may not retry a failed bundle")
+	// Read only: the cached objects are not copied.
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("gateBundles: list bundles failed — a gate change may not reach a bundle")
 		return nil
 	}
 	var reqs []reconcile.Request
 	for i := range list.Items {
 		b := &list.Items[i]
-		if b.Status.PolicyGatesHash != "" && meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
+		if b.Status.Phase == phasePromoting ||
+			b.Status.PolicyGatesHash != "" && meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(b)})
 		}
 	}
 	return reqs
+}
+
+// indexGateTemplate is the PolicyGate field index of the templates
+// (translator.IsTemplate): "true" for each. A namespace holds a gate
+// instance per Bundle and environment, so the templates hashed on each
+// reconcile of a Promoting Bundle (gatesHashFor) are read from it.
+const indexGateTemplate = "kardinal.io/policygate-template"
+
+// gateTemplateKey is the indexGateTemplate value of obj.
+func gateTemplateKey(obj client.Object) []string {
+	if isGateTemplate(obj) {
+		return []string{"true"}
+	}
+	return nil
 }
 
 // capped reports whether b's Pipeline, read from the cache, sets

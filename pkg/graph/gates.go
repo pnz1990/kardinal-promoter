@@ -4,7 +4,11 @@
 package graph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +42,15 @@ const (
 
 	iterGate = "Gate"
 	iterPR   = "PR"
+)
+
+// The annotations that stamp a gate instance with the template it was copied
+// from (#1360), as evidence of the rule a Bundle was held to: the template's
+// metadata.generation and the digest of its rule (TemplateDigest). They
+// change when the template is edited and the Bundle's Graph is re-translated.
+const (
+	AnnotationGateTemplateGeneration = "kardinal.io/gate-template-generation"
+	AnnotationGateTemplateDigest     = "kardinal.io/gate-template-digest"
 )
 
 // gateCollections collects a Graph's PolicyGate instances as data for the
@@ -176,12 +189,30 @@ func gateTemplateData(gate kardinalv1alpha1.PolicyGate) map[string]interface{} {
 	}
 	return map[string]interface{}{
 		"spec":              spec,
+		"generation":        strconv.FormatInt(gate.Generation, 10),
+		"digest":            TemplateDigest(gate),
 		"template":          gate.Name,
 		"templateNamespace": gate.Namespace,
 		"gateName":          gateName,
 		"scope":             scope,
 		"appliesTo":         gate.Labels["kardinal.io/applies-to"],
 	}
+}
+
+// TemplateDigest is the AnnotationGateTemplateDigest of gate's instances:
+// "sha256:" and the hex SHA-256 of the JSON of the template's spec without
+// the fields that are not the rule: spec.overrides (recorded on each
+// instance, never copied) and the instance-only approvals and verdicts. An
+// edit to the template's overrides or labels keeps the digest.
+func TemplateDigest(gate kardinalv1alpha1.PolicyGate) string {
+	spec := gate.Spec
+	spec.Overrides, spec.Approvals, spec.Verdicts = nil, nil, nil
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // instanceLabels are the labels of a gate instance, as the collection
@@ -228,8 +259,12 @@ func (c *gateCollections) instance(tmpl, item map[string]interface{}, skip bool)
 	if p, ok := spec["approval"].(map[string]interface{}); ok {
 		g.Spec.Approval = approvalPolicyFromData(p)
 	}
+	g.Annotations = map[string]string{
+		AnnotationGateTemplateGeneration: tmpl["generation"].(string),
+		AnnotationGateTemplateDigest:     tmpl["digest"].(string),
+	}
 	if skip {
-		g.Annotations = map[string]string{AnnotationSkippedEnvironments: item["skipped"].(string)}
+		g.Annotations[AnnotationSkippedEnvironments] = item["skipped"].(string)
 	}
 	return g
 }
@@ -333,15 +368,18 @@ func (c *gateCollections) collectionNode(id, field string, skip bool) GraphNode 
 		"kardinal.io/scope":         tmpl("scope"),
 		"kardinal.io/applies-to":    tmpl("appliesTo"),
 	}
+	annotations := map[string]interface{}{
+		AnnotationGateTemplateGeneration: tmpl("generation"),
+		AnnotationGateTemplateDigest:     tmpl("digest"),
+	}
 	metadata := map[string]interface{}{
-		"name":   "${" + iterGate + ".name}",
-		"labels": labels,
+		"name":        "${" + iterGate + ".name}",
+		"labels":      labels,
+		"annotations": annotations,
 	}
 	if skip {
 		labels[LabelGateType] = GateTypeSkipPermission
-		metadata["annotations"] = map[string]interface{}{
-			AnnotationSkippedEnvironments: "${" + iterGate + ".skipped}",
-		}
+		annotations[AnnotationSkippedEnvironments] = "${" + iterGate + ".skipped}"
 	}
 	return GraphNode{
 		ID:      id,

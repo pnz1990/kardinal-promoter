@@ -45,17 +45,37 @@ After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, p
 ## When a new or edited gate takes effect
 
 A version gets its gates when it starts promoting: kardinal copies every gate that applies to its
-environments into the version then. So:
+environments into the version then. When you create, edit or delete a gate later, kardinal copies
+the gates again into every version that is still promoting, so:
 
-- **A new gate** applies to the versions shipped after you create it. A version that is already
-  promoting or waiting keeps the gates it started with, and `kardinal why` shows only those.
-- **An edited gate** (its expression, message or recheck interval) applies to the versions shipped
-  after the edit. A version already in flight keeps its copy of the old gate.
+- **A new gate** holds the environments of those versions that have not started yet.
+- **An edited gate** (its expression, message, recheck interval or approval policy) is evaluated
+  with the new rule at once: a gate that passed can block again, and one that blocked can pass.
+- **A deleted gate** no longer holds them.
 
-To act on a version already in flight: `kardinal pause <pipeline>` stops new steps at once (see
+An environment that has already started is not affected: a gate only decides whether an
+environment may start. A version that is verified, superseded or rejected keeps the gates it had,
+and so does a failed one until it recovers and promotes again. An [override](overrides.md) on a
+version's gate stays in force: kardinal never copies a gate's overrides.
+
+If a version cannot be built with the changed gates (for example, a skip-permission gate that was
+given an approval policy), it keeps the gates it has and goes on promoting. Its `GraphSynced`
+condition is `False` with the reason, and kardinal tries again every 30 seconds and at each change
+to the gates.
+
+Each copy of a gate records the gate it came from in two annotations:
+`kardinal.io/gate-template-generation` is the gate's `metadata.generation`, and
+`kardinal.io/gate-template-digest` is `sha256:` and the SHA-256 of the gate's `spec` without
+`spec.overrides`. To see which revision of each gate holds a version:
+
+```bash
+kubectl get policygate -n <pipeline-namespace> -l kardinal.io/bundle=<bundle> \
+  -o custom-columns='GATE:.metadata.labels.kardinal\.io/gate-name,ENV:.metadata.labels.kardinal\.io/environment,GENERATION:.metadata.annotations.kardinal\.io/gate-template-generation'
+```
+
+To act on a version in flight at once: `kardinal pause <pipeline>` stops new steps (see
 [Pause and Resume](pause.md)), `kardinal hold <pipeline> <env>` keeps an environment on what it
-runs, and [`kardinal override`](overrides.md) releases a version that an old gate holds. Or ship
-a new version, which gets the gates as they are now.
+runs, and [`kardinal override`](overrides.md) releases a version that a gate holds.
 
 ## How gates work
 

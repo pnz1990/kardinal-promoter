@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -940,6 +941,86 @@ func TestGate_FinishedBundlesNotEvaluated(t *testing.T) {
 	e.SetBundleLabel(t, a.ns, latest, openLabel, "true")
 	e.WaitStepState(t, a.ns, pipelineName, latest, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
+}
+
+// editGate sets the expression of the PolicyGate template ns/name and
+// returns its new generation.
+func editGate(t *testing.T, e *framework.Env, ns, name, expression string) int64 {
+	t.Helper()
+	var g v1alpha1.PolicyGate
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := e.Client.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &g); err != nil {
+			return err
+		}
+		g.Spec.Expression = expression
+		return e.Client.Update(context.Background(), &g)
+	})
+	require.NoError(t, err, "edit PolicyGate %s/%s", ns, name)
+	return g.Generation
+}
+
+// TestGate_EditReachesInFlight checks that gate changes reach the versions
+// already promoting (#1360): a gate created while a version waits holds it,
+// an edited expression is evaluated at once on the version's instance, which
+// is stamped with the template's new generation and digest, and an override
+// on an instance survives the edit. A Verified version keeps the gates it had.
+//
+// Covers GATE-EDIT-01.
+func TestGate_EditReachesInFlight(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "edit-hold", "prod", openExpr, recheck))
+	a.apply(t, a.pipeline(nil))
+
+	verified := e.CreateBundleObject(t, &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Labels: map[string]string{openLabel: "true"}},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}},
+	})
+	e.WaitStepState(t, a.ns, pipelineName, verified, "prod", "Verified", promoteTimeout)
+	e.WaitBundlePhase(t, a.ns, verified, "Verified", time.Minute)
+
+	latest := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	e.WaitGateReady(t, a.ns, latest, "prod", "edit-hold", false, "= false", gateTimeout)
+
+	// A gate created now holds the version in flight; overriding it on the
+	// version releases that gate only.
+	e.CreateGate(t, framework.Gate(a.ns, "late", "prod", "false", recheck))
+	e.WaitGateReady(t, a.ns, latest, "prod", "late", false, "false = false", gateTimeout)
+	_, ok, err := e.GateInstance(ctx, a.ns, verified, "prod", "late")
+	require.NoError(t, err)
+	assert.False(t, ok, "a Verified version does not get the new gate")
+	e.MustKardinal(t, a.ns, "override", pipelineName, "--stage", "prod", "--gate", "late",
+		"--reason", "INC-1360", "--expires-in", "30m")
+	e.WaitGateReady(t, a.ns, latest, "prod", "late", true, "OVERRIDDEN", gateTimeout)
+	e.NoStep(t, a.ns, pipelineName, latest, "prod", holdFor)
+
+	// Both gates are edited: edit-hold opens; late gets another rule, and
+	// its override stays.
+	holdGen := editGate(t, e, a.ns, "edit-hold", "true")
+	lateGen := editGate(t, e, a.ns, "late", "1 == 2")
+	open := e.WaitGateReady(t, a.ns, latest, "prod", "edit-hold", true, "true = true", gateTimeout)
+	assert.Equal(t, "true", open.Spec.Expression)
+	assert.Equal(t, fmt.Sprint(holdGen), open.Annotations["kardinal.io/gate-template-generation"])
+	assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, open.Annotations["kardinal.io/gate-template-digest"])
+	late := e.WaitGate(t, a.ns, latest, "prod", "late", gateTimeout, "the edited rule with the override kept",
+		func(g *v1alpha1.PolicyGate) bool {
+			return g.Spec.Expression == "1 == 2" && g.Annotations["kardinal.io/gate-template-generation"] == fmt.Sprint(lateGen)
+		})
+	require.Len(t, late.Spec.Overrides, 1, "the override survives the edit")
+	assert.Equal(t, "INC-1360", late.Spec.Overrides[0].Reason)
+	e.WaitGateReady(t, a.ns, latest, "prod", "late", true, "OVERRIDDEN", gateTimeout)
+
+	e.WaitStepState(t, a.ns, pipelineName, latest, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V3)
+
+	kept, ok, err := e.GateInstance(ctx, a.ns, verified, "prod", "edit-hold")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, openExpr, kept.Spec.Expression, "a Verified version keeps the gate it was held to")
+	assert.NotEqual(t, open.Annotations["kardinal.io/gate-template-digest"], kept.Annotations["kardinal.io/gate-template-digest"])
 }
 
 // createdByRE reads the user kardinal override records the override under.

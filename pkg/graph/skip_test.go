@@ -141,7 +141,9 @@ func TestBuild_SkipPermissionHoldsNextEnvironment(t *testing.T) {
 	assert.Equal(t, "allow-staging-skip-for-hotfix", labels["kardinal.io/gate-template"])
 	assert.Equal(t, "platform-policies", labels[graph.LabelGateTemplateNamespace])
 	assert.Equal(t, "app-x7k2m", labels["kardinal.io/bundle"], "an instance, not a template")
-	assert.Equal(t, map[string]interface{}{graph.AnnotationSkippedEnvironments: "staging"}, meta["annotations"])
+	annotations := meta["annotations"].(map[string]interface{})
+	assert.Equal(t, "staging", annotations[graph.AnnotationSkippedEnvironments])
+	assert.Contains(t, annotations, graph.AnnotationGateTemplateDigest, "skip instances are stamped too")
 	assert.Equal(t, `bundle.version.startsWith("hotfix-")`, inst["spec"].(map[string]interface{})["expression"])
 
 	prodSpec := nodeByID(res.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})

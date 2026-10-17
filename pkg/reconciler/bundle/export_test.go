@@ -67,3 +67,16 @@ func (r *Reconciler) OlderVerified(ctx context.Context, obj client.Object) []rec
 func (r *Reconciler) FinishedBundles(ctx context.Context, obj client.Object) []reconcile.Request {
 	return r.finishedBundles(ctx, obj)
 }
+
+// GateTemplateIndex and GateTemplateKey are the PolicyGate template index.
+var (
+	GateTemplateIndex = indexGateTemplate
+	GateTemplateKey   = gateTemplateKey
+)
+
+// UseTemplateIndex makes r read the templates from GateTemplateIndex, as
+// SetupWithManager does.
+func (r *Reconciler) UseTemplateIndex() { r.templateIndex = true }
+
+// PipelineSpecHashFor is the Pipeline spec hash a Bundle records.
+var PipelineSpecHashFor = pipelineSpecHashFor
