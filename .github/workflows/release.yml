@@ -19,6 +19,13 @@ on:
 permissions:
   contents: read
 
+# Two releases never run at once, so they cannot race the latest image tags
+# and the latest GitHub release; one waits for the other. A dry run publishes
+# nothing and queues only behind another dry run of the same ref.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'release-publish' || format('release-dry-run-{0}', github.ref) }}
+  cancel-in-progress: false
+
 env:
   # "true" on a dispatch: every step that publishes is skipped.
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
@@ -75,6 +82,16 @@ jobs:
           MINOR="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
           PATCH="${BASH_REMATCH[3]}"
           BRANCH="release/${MINOR}"
+          # A patch of vX.Y never contains vX.(Y+1).0: that is main merged
+          # into the maintenance branch, or an old line's patch tagged on
+          # main. It would ship the next minor's work as a patch.
+          NEXT="v${BASH_REMATCH[1]}.$((BASH_REMATCH[2] + 1)).0"
+          if [ "$PATCH" != 0 ] &&
+             git fetch --no-tags origin "+refs/tags/${NEXT}:refs/tags/${NEXT}" 2>/dev/null &&
+             git merge-base --is-ancestor "$NEXT" "$GITHUB_SHA"; then
+            echo "::error::${VERSION} (${GITHUB_SHA}) contains ${NEXT}: a ${MINOR} patch must not carry the next minor's work. Tag it on ${BRANCH}, made from ${MINOR}.0, with only cherry-picked fixes."
+            exit 1
+          fi
           if [ "${DRY_RUN:-false}" != true ]; then
             # Fetch main explicitly, so the check does not depend on which refs
             # actions/checkout fetched for the tag.

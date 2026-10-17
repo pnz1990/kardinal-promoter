@@ -72,7 +72,11 @@ type releaseWorkflow struct {
 			Shell string `json:"shell"`
 		} `json:"run"`
 	} `json:"defaults"`
-	Jobs map[string]releaseJob `json:"jobs"`
+	Jobs        map[string]releaseJob `json:"jobs"`
+	Concurrency struct {
+		Group            string `json:"group"`
+		CancelInProgress bool   `json:"cancel-in-progress"`
+	} `json:"concurrency"`
 }
 
 func readReleaseWorkflow(t *testing.T) releaseWorkflow {
@@ -223,7 +227,8 @@ func TestReleaseRefusesTagsOffMain(t *testing.T) {
 				return
 			}
 			require.Error(t, err, "%s must fail: %s", tt.comment, out)
-			assert.Contains(t, out, "which is not on main")
+			// v0.8.1's merge commit also carries v0.9.0, the next minor.
+			assert.True(t, strings.Contains(out, "which is not on main") || strings.Contains(out, "contains v0.9.0"), out)
 		})
 	}
 }
@@ -243,6 +248,10 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v0.12")
 	runGit(t, origin, "tag", "v0.12.0")
 	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v0.13 work")
+	runGit(t, origin, "tag", "v0.13.0")
+	// An old line's patch tagged on main, after v0.13.0.
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "a v0.12 fix on main")
+	runGit(t, origin, "tag", "v0.12.6")
 	// release/v0.12 from v0.12.0, with a cherry-picked fix.
 	runGit(t, origin, "checkout", "-q", "-b", "release/v0.12", "v0.12.0")
 	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "fix")
@@ -271,6 +280,10 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 	// the branch, but does not descend from v0.12.0.
 	runGit(t, origin, "merge", "-q", "--no-ff", "--no-edit", "release/v0.12-wrong")
 	runGit(t, origin, "tag", "v0.12.0-again")
+	// main (with v0.13.0) merged into release/v0.12, then tagged as a patch.
+	runGit(t, origin, "checkout", "-q", "-b", "release/v0.12-merged", "release/v0.12")
+	runGit(t, origin, "merge", "-q", "--no-ff", "--no-edit", "v0.13.0")
+	runGit(t, origin, "tag", "v0.12.7")
 	runGit(t, origin, "checkout", "-q", "main")
 
 	work := func(t *testing.T, ref string) (string, string) {
@@ -288,9 +301,13 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 	}{
 		{tag: "v0.12.1", ok: true, want: "is on the maintenance branch release/v0.12, which descends from v0.12.0"},
 		{tag: "v0.12.2-rc.1", ok: true, want: "maintenance branch release/v0.12"},
-		{tag: "v0.10.1", want: "does not descend from v0.10.0"},
+		// Cut from v0.11.0, it carries the next minor: refused before its
+		// missing v0.10.0 is looked for.
+		{tag: "v0.10.1", want: "contains v0.11.0"},
 		{tag: "v0.12.4", want: "nor on its maintenance branch release/v0.12"},
 		{tag: "v0.12.5", want: "does not descend from v0.12.0"},
+		{tag: "v0.12.6", want: "contains v0.13.0: a v0.12 patch must not carry the next minor's work"},
+		{tag: "v0.12.7", want: "contains v0.13.0"},
 	} {
 		t.Run(tt.tag, func(t *testing.T) {
 			w, sha := work(t, "refs/tags/"+tt.tag)
@@ -318,7 +335,7 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 		{ref: "release/v0.12", version: "v0.12.1-dryrun.1", ok: true, want: "descends from v0.12.0"},
 		{ref: "release/v0.12", version: "v0.13.1-dryrun.1", want: "runs from release/v0.13"},
 		{ref: "release/v0.12", version: "v0.12.0-dryrun.1", want: "A .0 release is tagged on main"},
-		{ref: "release/v0.10", version: "v0.10.1-dryrun.1", want: "does not descend from v0.10.0"},
+		{ref: "release/v0.10", version: "v0.10.1-dryrun.1", want: "contains v0.11.0"},
 		{ref: "main", version: "v0.13.0-dryrun.1", ok: true, want: "the tag check runs at the real release"},
 	} {
 		t.Run("dry run "+tt.ref+" "+tt.version, func(t *testing.T) {
@@ -862,6 +879,13 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 		}, preflight.Outputs, "the notes go as an artifact, not a job output")
 		assert.Equal(t, map[string]string{"VERSION": "${{ steps.version.outputs.version }}"},
 			preflight.step(t, "notes").Env)
+	})
+
+	t.Run("releases do not run at once", func(t *testing.T) {
+		wf := readReleaseWorkflow(t)
+		assert.Equal(t, "${{ github.event_name == 'push' && 'release-publish' || format('release-dry-run-{0}', github.ref) }}", wf.Concurrency.Group,
+			"every tag push shares one group, so two releases cannot race latest; dry runs queue per ref")
+		assert.False(t, wf.Concurrency.CancelInProgress, "a release is never cancelled by the next one")
 	})
 
 	t.Run("preflight runs first, read-only", func(t *testing.T) {
