@@ -28,6 +28,45 @@ example a daily `kardinal audit export -A --since 25h` into your SIEM, deduplica
 ([SIEM integration](guides/security.md#siem-integration)). The SIEM is then the archive of
 record.
 
+## Produce an evidence pack
+
+`kardinal audit evidence-pack` writes every record of a period into one gzipped tar for the
+auditor:
+
+```bash
+kardinal audit evidence-pack -A --since 2026-07-01 --until 2026-10-01 -o q3.tar.gz
+# sha256:4f1c...  q3.tar.gz (14 files, 18342 records)
+```
+
+The period is the versions created in `[--since, --until)` and the AuditEvents timestamped in
+it. Each version brings its Approvals, gate instances (with their overrides and results) and
+Verdicts. The Pipelines, gate templates, ChangeWindows, AgentIdentities and the chart's
+admission policies are the ones in force at export. `controls.json` maps each control below
+to the pack's files, and `manifest.json` records the exporter, the period, the filters
+(`-n`, `--pipeline`, `--environment`) and each file's record count and SHA-256
+([kardinal audit evidence-pack](reference/cli/kardinal-audit-evidence-pack.md)).
+
+Check the files against their checksums after extracting:
+
+```bash
+tar -xzf q3.tar.gz && cd evidence-pack && sha256sum -c SHA256SUMS
+```
+
+The checksums show that no file changed after export; they are not a signature. Sign the pack
+under your own identity before you hand it over.
+
+`manifest.json`'s `coverage` says what the pack cannot hold:
+
+- `oldest`: the oldest record of each kind the cluster still holds. When the period starts
+  before the oldest AuditEvent, the command warns that retention may have deleted records of
+  the period; when the period ends before it, the command fails: use your SIEM's archive.
+- `missing`: kinds the cluster does not serve (an older chart).
+- `forbidden`: kinds you may not read. Their files are left out, not written empty. A reader
+  limited to some namespaces exports each with `-n <namespace>`.
+
+Set `--until` for a pack you can produce again: two exports of the same records are the same
+bytes.
+
 ## What kardinal cannot show
 
 - **Changes that bypass it.** A direct push to the GitOps branch or a `kubectl apply` on the
@@ -67,7 +106,7 @@ record.
 
 | Element | kardinal record |
 |---|---|
-| The procedure is enforced, not advisory | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged |
+| The procedure is enforced, not advisory | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged (`admission.yaml` in the evidence pack) |
 | Changes are planned and recorded | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
 | Changes are approved | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
 | Rollback | rollback versions (`spec.provenance.rollbackOf`) and their promotions; holds that keep an environment on a version (`Pipeline.spec.holds[]`) |
@@ -96,9 +135,9 @@ record.
 
 | Element | kardinal record |
 |---|---|
-| Controlled changes are defined and implemented as approved | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged |
+| Controlled changes are defined and implemented as approved | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged (`admission.yaml` in the evidence pack) |
 | Decisions are reviewed, approved and documented | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
-| Records are retained and change activity is reviewed | AuditEvents, kept as `--audit-retention-max-age` and `--audit-retention-max-per-pipeline` allow; `kardinal audit summary` and `kardinal audit export` |
+| Records are retained and change activity is reviewed | AuditEvents, kept as `--audit-retention-max-age` and `--audit-retention-max-per-pipeline` allow; `kardinal audit summary`, `kardinal audit export` and `kardinal audit evidence-pack` |
 
 **Your part:** The configuration management plan, the change control board's charter, and the system's other components.
 

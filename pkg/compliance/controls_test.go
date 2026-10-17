@@ -54,6 +54,7 @@ func TestFrameworks_NameRealRecords(t *testing.T) {
 					assert.NotEmpty(t, e.Kinds, "%s: a shipped row names the kinds that hold its evidence", where)
 				}
 				for _, k := range e.Kinds {
+					assert.NotEmpty(t, compliance.PackFiles[k], "%s: kind %s has a file in the evidence pack", where, k)
 					gvk := schema.GroupVersionKind{Group: v1alpha1.GroupVersion.Group, Version: v1alpha1.GroupVersion.Version, Kind: k}
 					assert.True(t, scheme.Recognizes(gvk), "%s: kind %s is in the scheme", where, k)
 				}
@@ -131,4 +132,23 @@ func TestCompliancePage(t *testing.T) {
 	}
 	require.Equal(t, want, page,
 		"%s is stale: run KARDINAL_UPDATE_COMPLIANCE=1 go test ./pkg/compliance -run TestCompliancePage", compliancePage)
+}
+
+// TestForPack: controls.json keeps every row, planned ones with their
+// status, and names the pack files of each row's kinds.
+func TestForPack(t *testing.T) {
+	got := compliance.ForPack([]compliance.Framework{{ID: "f", Name: "F", Controls: []compliance.Control{{
+		ID: "C", Title: "T", Requirement: "R", Customer: "Y",
+		Evidence: []compliance.Evidence{
+			{Element: "e", Record: "r", Kinds: []string{"AuditEvent", "Bundle"}, Status: compliance.Shipped},
+			{Element: "p", Record: "later", Status: compliance.Planned},
+		},
+	}}}})
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Controls, 1)
+	ev := got[0].Controls[0].Evidence
+	require.Len(t, ev, 2)
+	assert.Equal(t, []string{"auditevents.ndjson", "bundles.ndjson"}, ev[0].Files)
+	assert.Equal(t, compliance.Planned, ev[1].Status)
+	assert.Empty(t, ev[1].Files)
 }
