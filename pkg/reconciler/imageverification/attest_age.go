@@ -250,7 +250,7 @@ func (r *Reconciler) refetchStale(ctx context.Context, log zerolog.Logger, iv *v
 		for _, i := range idx {
 			old := iv.Status.Attestations[i]
 			p := policies[old.Name]
-			fresh := evaluateAttestation(img, p, sigs.Attestations, auths)
+			fresh := evaluateAttestation(img, p, sigs.Attestations, auths, freshest(p, &old, now))
 			dateAttestation(&fresh, &old, now)
 			setAge(&fresh, policyMaxAge(p), now)
 			if fresh.Verified && !fresh.Stale {
@@ -262,6 +262,52 @@ func (r *Reconciler) refetchStale(ctx context.Context, log zerolog.Logger, iv *v
 				p.MaxAge, old.StaleAt.UTC().Format(time.RFC3339)))
 		}
 	}
+}
+
+// maxAgeCandidates bounds how many verified attestations of one policy
+// freshest dates, newest first.
+const maxAgeCandidates = 32
+
+// freshest picks, for a policy with a maxAge, the attestation that stays
+// fresh longest at now: the latest staleAt, as setAge would write it with
+// prev's datedAt for the same digest and now for any other; on a tie, the
+// newer. Without a maxAge it picks the newest. Picking by age, not by
+// place, matters when attestations have no verified signing time (a key
+// with no transparency log or timestamp authority): a registry lists
+// referrers in no defined order, so the newest by place can be any of
+// them, and a stale scan would hide a fresh one.
+func freshest(p v1alpha1.AttestationPolicy, prev *v1alpha1.AttestationResult, now time.Time) func([]verifiedStatement) int {
+	d := policyMaxAge(p)
+	if d == 0 {
+		return nil
+	}
+	return func(found []verifiedStatement) int {
+		best, bestAt := len(found)-1, time.Time{}
+		for i := len(found) - 1; i >= 0 && i >= len(found)-maxAgeCandidates; i-- {
+			at := candidateStaleAt(found[i], p, prev, d, now)
+			if at.After(bestAt) {
+				best, bestAt = i, at
+			}
+		}
+		return best
+	}
+}
+
+// candidateStaleAt is when vs would go stale under a maxAge of d.
+func candidateStaleAt(vs verifiedStatement, p v1alpha1.AttestationPolicy, prev *v1alpha1.AttestationResult, d time.Duration, now time.Time) time.Time {
+	res := v1alpha1.AttestationResult{Verified: true, Digest: vs.payloadDigest}
+	if !vs.at.IsZero() {
+		t := metav1.NewTime(vs.at.UTC())
+		res.VerifiedAt = &t
+	}
+	if p.PredicateType == PredicateCosignVuln || p.PredicateType == PredicateInTotoVulns {
+		if _, meta, err := parseScan(p.PredicateType, vs.predicate); err == nil {
+			res.Vulns = &v1alpha1.VulnsResult{ScannedAt: meta.scannedAt}
+		}
+	}
+	dateAttestation(&res, prev, now)
+	setAge(&res, d, now)
+	return res.StaleAt.Time
 }
 
 func firstErr(errs ...error) error {

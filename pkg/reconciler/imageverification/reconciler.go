@@ -400,17 +400,18 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 		for _, p := range policies {
 			key := attestationKey(p.Name, ref)
 			res, ok := prev[key]
+			var before *v1alpha1.AttestationResult
+			if ok {
+				pr := res
+				before = &pr
+			}
 			switch {
 			case ok && attestationDone(res, p) && !ageStale(res, p, now):
 			case fetchErr != nil:
 				res = v1alpha1.AttestationResult{Name: p.Name, Image: ref, PredicateType: p.PredicateType,
 					Message: clip("registry: " + fetchErr.Error())}
 			default:
-				res = evaluateAttestation(img, p, sigs.Attestations, authorities)
-			}
-			var before *v1alpha1.AttestationResult
-			if pr, ok := prev[key]; ok {
-				before = &pr
+				res = evaluateAttestation(img, p, sigs.Attestations, authorities, freshest(p, before, now))
 			}
 			if before == nil || before.DatedAt == nil || res.DatedAt == nil {
 				dateAttestation(&res, before, now)

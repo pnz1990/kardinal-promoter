@@ -207,7 +207,8 @@ cosign attest --new-bundle-format --key security.key --type openvex --predicate 
 **What is checked.** An attestation counts when its bundle verifies against one of its
 `authorities` (key, keyless, private trusted root, as for signatures), its in-toto statement's
 subject is the image's digest, and its predicate type is the policy's. Of several, the newest by
-its verified timestamp (else the last referrer) is used, and `count` says how many verified. A
+its verified timestamp (else the last referrer) is used, and `count` says how many verified; with
+a `maxAge`, the one that stays fresh longest is used (see [Attestation age](#attestation-age)). A
 bundle that does not verify is never used; its reason is in `message`.
 
 **SLSA build level.** A build level is a property of the builder, not a field of the provenance:
@@ -275,8 +276,10 @@ expression: '!attestations.vulns.stale && attestations.vulns.effective.critical 
   gate reads [`attestations.<name>.stale`](reference/cel-context.md#attestations), true when any
   image's result is stale.
 - **A newer attestation.** While a result is stale, the image's referrers are read again every
-  quarter of `maxAge`, at least every hour and at most every 5 minutes. The newest attestation that
-  verifies and is not stale replaces the result, and the gates that read it are evaluated again.
+  quarter of `maxAge`, at least every hour and at most every 5 minutes. The attestation that
+  verifies and stays fresh longest (the latest `staleAt`) replaces the result, and the gates that
+  read it are evaluated again. It is picked by age, not by its place in the referrers: a registry
+  lists referrers in no defined order, and key-signed scans have no signing time to sort by.
   For a 1h `maxAge` that is at most 4 registry reads per hour per stale version; nothing is read
   before a result goes stale.
 - **Required.** A required attestation that is already stale when the version is checked is

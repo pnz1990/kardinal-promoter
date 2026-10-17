@@ -150,9 +150,11 @@ func namedAuthorities(auths []authority, names []string) []authority {
 }
 
 // evaluateAttestation is the result of policy p for image img, from the
-// bundles its referrers hold: the newest verified attestation of the type,
-// with its SLSA level and vulnerability counts when the policy asks.
-func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolicy, bundles [][]byte, auths []authority) v1alpha1.AttestationResult {
+// bundles its referrers hold: the verified attestation of the type that
+// choose picks from them (newest last; nil picks the newest), with its SLSA
+// level and vulnerability counts when the policy asks.
+func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolicy, bundles [][]byte, auths []authority,
+	choose func([]verifiedStatement) int) v1alpha1.AttestationResult {
 	res := v1alpha1.AttestationResult{Name: p.Name, Image: img.Repository + "@" + img.Digest, PredicateType: p.PredicateType}
 	pa := namedAuthorities(auths, p.Authorities)
 	found, reasons := verifyStatements(img.Digest, bundles, p.PredicateType, pa)
@@ -160,7 +162,11 @@ func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolic
 		res.Message = clip("no verified attestation of " + p.PredicateType + reasonSuffix(reasons))
 		return res
 	}
-	newest := found[len(found)-1]
+	pick := len(found) - 1
+	if choose != nil {
+		pick = choose(found)
+	}
+	newest := found[pick]
 	res.Verified, res.Authority, res.Signer, res.Digest, res.Count = true, newest.authority, clip(newest.signer), newest.payloadDigest, len(found)
 	if !newest.at.IsZero() {
 		t := metav1.NewTime(newest.at.UTC())

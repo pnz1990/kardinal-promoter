@@ -243,3 +243,52 @@ func TestAttestations_MaxAgeFutureScannedAt(t *testing.T) {
 	assert.True(t, r.Stale, "the same scan, read again, does not get a new date")
 	assert.Equal(t, first.UTC().Truncate(time.Second), r.DatedAt.UTC())
 }
+
+// TestAttestations_MaxAgeReferrerOrder (live run on #2121): key-signed
+// scans have no verified signing time, and a registry lists referrers in no
+// defined order. Whichever place the fresh scan has, it replaces the stale
+// one at the re-fetch, and it is the one picked at first verification.
+func TestAttestations_MaxAgeReferrerOrder(t *testing.T) {
+	t0 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	policy := v1alpha1.AttestationPolicy{Name: "vulns", PredicateType: iv.PredicateCosignVuln, Authorities: []string{"release"}, MaxAge: "5m"}
+	for _, freshFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fresh listed first %v", freshFirst), func(t *testing.T) {
+			k := newKeys(t)
+			secrets := k.secrets(t)
+			order := func(old, fresh []byte) [][]byte {
+				if freshFirst {
+					return [][]byte{fresh, old}
+				}
+				return [][]byte{old, fresh}
+			}
+			old := attest(t, k.release, iv.PredicateCosignVuln, scanAt(t0.Add(-10*time.Minute), [2]string{"CVE-2026-1", "CRITICAL"}))
+
+			// The re-fetch: the stale scan is recorded, then a fresh one is listed.
+			h := newHarness(t, nil, attestIV("", policy), secrets[0], secrets[1])
+			h.reg.sigs[digestA] = iv.Signatures{Bundles: [][]byte{sign(t, k.release)}, Attestations: [][]byte{old}}
+			h.now = t0
+			got, _ := h.reconcile()
+			require.Equal(t, v1alpha1.ImageVerificationVerified, got.Status.Phase, got.Status.Message)
+			require.True(t, resultOf(t, got, "vulns").Stale)
+			fresh := attest(t, k.release, iv.PredicateCosignVuln, scanAt(t0.Add(time.Minute)))
+			h.reg.sigs[digestA] = iv.Signatures{Bundles: [][]byte{sign(t, k.release)}, Attestations: order(old, fresh)}
+			h.now = t0.Add(5*time.Minute + 30*time.Second)
+			got, _ = h.reconcile()
+			r := resultOf(t, got, "vulns")
+			assert.False(t, r.Stale, r.Message)
+			require.NotNil(t, r.Vulns)
+			assert.Equal(t, 0, r.Vulns.Effective.Critical, "the fresh scan's findings")
+
+			// First verification with both listed: the fresh one is picked.
+			h2 := newHarness(t, nil, attestIV("", policy), secrets[0], secrets[1])
+			h2.reg.sigs[digestA] = iv.Signatures{Bundles: [][]byte{sign(t, k.release)}, Attestations: order(old, fresh)}
+			h2.now = t0.Add(2 * time.Minute)
+			got, _ = h2.reconcile()
+			require.Equal(t, v1alpha1.ImageVerificationVerified, got.Status.Phase, got.Status.Message)
+			r = resultOf(t, got, "vulns")
+			assert.False(t, r.Stale, r.Message)
+			assert.Equal(t, 2, r.Count)
+			assert.Equal(t, 0, r.Vulns.Effective.Critical)
+		})
+	}
+}
