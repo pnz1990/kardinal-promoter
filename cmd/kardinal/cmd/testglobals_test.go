@@ -57,18 +57,22 @@ func keepStyle(t testing.TB) {
 // assignment to the variable (or to a field, element or pointee of it), ++
 // or --, or running the root command (Execute sets errOut and sty). It is
 // put back by setForTest or keepStyle, or by a cleanup (the Cleanup of a
-// *testing.T, B, F or testing.TB, or a defer) that assigns it the copy
-// saved from it (prev := v, while prev still holds it), its initializer, or
-// the zero value when it has none; any other value is a change. A cleanup
-// may be a function literal, a local bound to one, a function by name, or
-// what a helper returns (t.Cleanup(stub())), whose other changes count. Names
-// are resolved by type: a local of the same name is not the package's, and
-// the functions followed are every function and method of the package, test
-// files or not, called directly, through a local (f := stub; f()) or passed
-// by name (t.Run("s", sub), taken to be called). TestMain is exempt: it sets
-// up the whole run. Not seen: writes through a pointer or a method of
-// another package (other than Execute), and a function value passed through
-// a struct field or a parameter.
+// *testing.T, B, F or testing.TB, or the test's own defer) that assigns it
+// the copy saved from it (prev := v, if prev still holds it when the
+// function ends), its initializer, or the zero value when it has none; any
+// other value is a change. A cleanup may be a function literal, a local
+// bound to one, a function by name (whose other changes count), or what a
+// helper returns (t.Cleanup(stub())), whose other changes count too. A
+// helper's own defers put back only its own changes, when it returns, never
+// the caller's. Names are resolved by type: a local of the same name is not
+// the package's, and the functions followed are every function and method
+// of the package, test files or not, called directly, through a local (f :=
+// stub; f()) or passed by name (t.Run("s", sub), taken to be called). A
+// function literal stored in a value or a field (cobra.Command{RunE: ...})
+// is not run where it is built. TestMain is exempt: it sets up the whole
+// run. Not seen: writes through a pointer or a method of another package
+// (other than Execute), and a function value called through a struct field
+// or a parameter.
 func TestPackageVariablesAreRestored(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
@@ -149,6 +153,30 @@ func TestA(t *testing.T) { stub(t) }`, nil, ""},
 			"var z = mk(1)\nfunc mk(int) *int { return nil }\n"},
 		{"a cleanup to another call", `func TestA(t *testing.T) { t.Cleanup(func() { z = mk(2) }); z = nil }`,
 			[]string{"TestA changes z"}, "var z = mk(1)\nfunc mk(int) *int { return nil }\n"},
+		// QA on #2186.
+		{"a helper's defer does not put back the caller's change", `func stub() { prev := x; defer func() { x = prev }(); x = "a" }
+func TestA(t *testing.T) { stub(); x = "b" }`, []string{"TestA changes x"}, ""},
+		{"a helper that puts back with its defer", `func stub() { prev := x; defer func() { x = prev }(); x = "a" }
+func TestA(t *testing.T) { stub() }`, nil, ""},
+		{"a saved copy changed after the cleanup", `func TestA(t *testing.T) { prev := x; t.Cleanup(func() { x = prev }); prev = "b"; x = "a" }`,
+			[]string{"TestA changes x"}, ""},
+		{"a saved copy changed after the defer", `func TestA(t *testing.T) { prev := x; defer func() { x = prev }(); prev = "b"; x = "a" }`,
+			[]string{"TestA changes x"}, ""},
+		{"a deferred reset by name", `func reset() { x = "" }
+func TestA(t *testing.T) { defer reset(); x = "a" }`, nil, ""},
+		{"a cleanup by name with another change", `func reset() { x = ""; y = "zz" }
+func TestA(t *testing.T) { t.Cleanup(reset); x = "a" }`, []string{"TestA changes y"}, ""},
+		{"a deferred reset by name with another change", `func reset() { x = ""; y = "zz" }
+func TestA(t *testing.T) { defer reset(); x = "a" }`, []string{"TestA changes y"}, ""},
+		{"a function stored in a value is not run", `type c struct{ f func() }
+func mk() c { return c{f: func() { x = "a" }} }
+func TestA(t *testing.T) { _ = mk() }`, nil, ""},
+		{"a function assigned to a field is not run", `type c struct{ f func() }
+func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; _ = v }`, nil, ""},
+		{"Execute stands for what cobra runs", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }
+func NewRootCmd() *c { return &c{f: func() { y = "a" }} }
+type c struct{ f func() }
+func (*c) Execute() error { return nil }`, []string{"TestA changes errOut", "TestA changes sty"}, ""},
 		{"a Benchmark", `func BenchmarkA(b *testing.B) { x = "a" }`, []string{"BenchmarkA changes x"}, ""},
 		{"a Fuzz test that restores", `func FuzzA(f *testing.F) { prev := x; f.Cleanup(func() { x = prev }); x = "a" }`, nil, ""},
 	}
@@ -256,7 +284,7 @@ func restoreLeaks(srcs map[string]string) ([]string, error) {
 	for _, fn := range tests {
 		sum := a.summary(fn)
 		for v, pos := range sum.writes {
-			if !sum.restored[v] {
+			if !sum.restored[v] && !sum.deferred[v] {
 				leaks = append(leaks, fmt.Sprintf("%s: %s changes %s", fset.Position(pos), fn.Name.Name, v))
 			}
 		}
@@ -289,7 +317,8 @@ type restoreCheck struct {
 // restoreSummary is what a function changes and puts back.
 type restoreSummary struct {
 	writes   map[string]token.Pos // changed, where first
-	restored map[string]bool      // put back by a cleanup it registers
+	restored map[string]bool      // put back by a cleanup it registers (at the end of the test)
+	deferred map[string]bool      // put back by its own defers (when it returns)
 	returns  map[string]bool      // put back by a function it returns
 }
 
@@ -413,11 +442,22 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 	if s, ok := a.done[fn]; ok {
 		return s
 	}
-	s := &restoreSummary{writes: map[string]token.Pos{}, restored: map[string]bool{}, returns: map[string]bool{}}
+	s := &restoreSummary{writes: map[string]token.Pos{}, restored: map[string]bool{}, deferred: map[string]bool{},
+		returns: map[string]bool{}}
 	a.done[fn] = s                              // a recursive call sees what is known so far
 	saved := map[types.Object]string{}          // prev := v
 	locals := map[types.Object]*ast.FuncLit{}   // restore := func() { ... }
 	aliases := map[types.Object]*ast.FuncDecl{} // f := stub
+	// A closure reads its saved copies when it runs, at the end: what it
+	// puts back is judged against saved once the whole body is read.
+	var pending []func()
+	later := func(into map[string]bool, body ast.Node) {
+		pending = append(pending, func() {
+			for v := range a.restores(body, saved) {
+				into[v] = true
+			}
+		})
+	}
 	write := func(v string, pos token.Pos) {
 		if _, ok := s.writes[v]; !ok && v != "" {
 			s.writes[v] = pos
@@ -429,44 +469,92 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 		}
 	}
 	// call is a call of helper h at pos: what it changes and does not put
-	// back is changed here; what it registers a cleanup for is put back.
+	// back (with a cleanup, or its own defers) is changed here; what it
+	// registers a cleanup for is put back at the end of the test. Its
+	// defers have run when it returns: they put back nothing of the caller's.
 	call := func(h *ast.FuncDecl, pos token.Pos) {
 		if h == fn {
 			return
 		}
 		hs := a.summary(h)
 		for v := range hs.writes {
-			if !hs.restored[v] {
+			if !hs.restored[v] && !hs.deferred[v] {
 				write(v, pos)
 			}
 		}
 		merge(s.restored, hs.restored)
 	}
-	// cleanup is what cleanup function e puts back: a function literal, a
-	// local bound to one, a function by name, or a helper's call that
-	// returns one (whose own changes are changes here).
-	cleanup := func(e ast.Expr) map[string]bool {
+	// named is function d registered as a cleanup or deferred by name: what
+	// it assigns as a restore (initializer or zero value) is put back into
+	// into; its other changes are changes here.
+	named := func(d *ast.FuncDecl, into map[string]bool, pos token.Pos) {
+		rest := a.restores(d.Body, nil)
+		merge(into, rest)
+		hs := a.summary(d)
+		for v := range hs.writes {
+			if !rest[v] && !hs.restored[v] && !hs.deferred[v] {
+				write(v, pos)
+			}
+		}
+		merge(s.restored, hs.restored)
+	}
+	// cleanup is what cleanup function e puts back, into into: a function
+	// literal, a local bound to one, a function by name, or a helper's call
+	// that returns one (whose own changes are changes here).
+	cleanup := func(e ast.Expr, into map[string]bool) {
 		switch x := e.(type) {
 		case *ast.FuncLit:
-			return a.restores(x, saved)
+			later(into, x)
 		case *ast.Ident:
 			if lit := locals[a.object(x)]; lit != nil {
-				return a.restores(lit, saved)
-			}
-			if d := a.callee(x, aliases); d != nil {
-				return a.restores(d.Body, nil)
+				later(into, lit)
+			} else if d := a.callee(x, aliases); d != nil {
+				named(d, into, x.Pos())
 			}
 		case *ast.CallExpr:
 			if h := a.callee(x.Fun, aliases); h != nil {
 				call(h, x.Pos())
-				return a.summary(h).returns
+				merge(into, a.summary(h).returns)
 			}
 		}
-		return nil
 	}
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
+	var visit func(n ast.Node) bool
+	visit = func(n ast.Node) bool {
 		switch n := n.(type) {
+		case *ast.CompositeLit:
+			// A function stored in a value (cobra.Command{RunE: func...})
+			// runs when something calls it later, not here; Execute stands
+			// for cobra's.
+			for _, e := range n.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if _, isLit := kv.Value.(*ast.FuncLit); isLit {
+						continue
+					}
+				}
+				ast.Inspect(e, visit)
+			}
+			return false
 		case *ast.AssignStmt:
+			// So is one assigned to a field (cmd.RunE = func...).
+			stored := false
+			for i, l := range n.Lhs {
+				if _, isSel := l.(*ast.SelectorExpr); isSel && len(n.Rhs) == len(n.Lhs) {
+					if _, isLit := n.Rhs[i].(*ast.FuncLit); isLit {
+						stored = true
+					}
+				}
+			}
+			if stored {
+				for i, l := range n.Lhs {
+					if _, isLit := n.Rhs[i].(*ast.FuncLit); !isLit {
+						ast.Inspect(n.Rhs[i], visit)
+					}
+					if v := a.rootVar(l); v != "" {
+						write(v, l.Pos())
+					}
+				}
+				return false
+			}
 			for i, l := range n.Lhs {
 				var r ast.Expr
 				if len(n.Rhs) == len(n.Lhs) {
@@ -503,19 +591,19 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			write(a.rootVar(n.X), n.Pos())
 		case *ast.DeferStmt:
 			if h := a.callee(n.Call.Fun, aliases); h != nil {
-				call(h, n.Pos()) // defer helper(): it runs, at the end
+				named(h, s.deferred, n.Pos()) // defer reset(): it runs when fn returns
 			} else {
-				merge(s.restored, cleanup(n.Call.Fun))
+				cleanup(n.Call.Fun, s.deferred)
 			}
 			return false
 		case *ast.ReturnStmt:
 			for _, r := range n.Results {
 				switch x := r.(type) {
 				case *ast.FuncLit:
-					merge(s.returns, a.restores(x, saved))
+					later(s.returns, x)
 				case *ast.Ident:
 					if lit := locals[a.object(x)]; lit != nil {
-						merge(s.returns, a.restores(lit, saved))
+						later(s.returns, lit)
 					}
 				case *ast.CallExpr:
 					if h := a.callee(x.Fun, aliases); h != nil {
@@ -526,7 +614,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 		case *ast.CallExpr:
 			if sel, ok := n.Fun.(*ast.SelectorExpr); ok {
 				if x, ok := sel.X.(*ast.Ident); ok && sel.Sel.Name == "Cleanup" && a.testing[a.object(x)] && len(n.Args) == 1 {
-					merge(s.restored, cleanup(n.Args[0]))
+					cleanup(n.Args[0], s.restored)
 					return false
 				}
 				switch sel.Sel.Name {
@@ -553,6 +641,10 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			}
 		}
 		return true
-	})
+	}
+	ast.Inspect(fn.Body, visit)
+	for _, f := range pending {
+		f()
+	}
 	return s
 }
