@@ -11,14 +11,22 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // kmsLoader loads the signing key of a KMS key reference. transport carries
 // the KMS API calls (the controller's egress transport); a provider that
 // does not speak HTTP applies the same guard to its own connections. timeout
-// bounds each API call.
-type kmsLoader func(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (crypto.Signer, error)
+// bounds each API call. close releases the key's client (its connections).
+type kmsLoader func(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (signer crypto.Signer, close func(), err error)
+
+// kmsChecks check a key reference of their prefix before any call (a GCP
+// key must pin its version, an AWS endpoint must not be a credential
+// address): a reference that fails one is refused at start and at signing.
+var kmsChecks = map[string]func(ref string) error{}
+
+func registerKMSCheck(prefix string, check func(string) error) { kmsChecks[prefix] = check }
 
 // kmsProviders are the KMS providers this binary was built with, by
 // reference prefix (awskms://, gcpkms://). Each registers from a file behind
@@ -56,6 +64,11 @@ func KMSSupported(ref string) error {
 		return errors.New("kms receipt signing needs a key reference")
 	}
 	if _, ok := kmsLoaderFor(ref); ok {
+		for p, check := range kmsChecks {
+			if strings.HasPrefix(ref, p) {
+				return check(ref)
+			}
+		}
 		return nil
 	}
 	scheme, _, _ := strings.Cut(ref, "://")
@@ -66,11 +79,60 @@ func KMSSupported(ref string) error {
 	return fmt.Errorf("the controller was not built with the %s KMS provider (key reference %s; built in: %s)", scheme, ref, built)
 }
 
-// kmsSigner is the signing key of ref.
+// kmsKey is a cached KMS key: its reference and call timeout.
+type kmsKey struct {
+	ref     string
+	timeout time.Duration
+}
+
+type kmsEntry struct {
+	signer crypto.Signer
+	close  func()
+}
+
+// kmsCache holds each KMS key loaded, once per reference: a key's client
+// (a Cloud KMS gRPC connection and its goroutines, the AWS SDK's key cache)
+// is built at the first signature and reused by every later one and every
+// retry, instead of one per receipt. A load that fails is not cached, so
+// the next signature tries again. CloseKMS releases them at shutdown.
+var kmsCache = struct {
+	sync.Mutex
+	m map[kmsKey]kmsEntry
+}{m: map[kmsKey]kmsEntry{}}
+
+// kmsSigner is the signing key of ref, loaded once.
 func kmsSigner(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (crypto.Signer, error) {
 	l, ok := kmsLoaderFor(ref)
 	if !ok {
 		return nil, KMSSupported(ref)
 	}
-	return l(ctx, ref, transport, timeout)
+	if err := KMSSupported(ref); err != nil {
+		return nil, err
+	}
+	k := kmsKey{ref: ref, timeout: timeout}
+	kmsCache.Lock()
+	defer kmsCache.Unlock()
+	if e, ok := kmsCache.m[k]; ok {
+		return e.signer, nil
+	}
+	signer, closeFn, err := l(ctx, ref, transport, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if closeFn == nil {
+		closeFn = func() {}
+	}
+	kmsCache.m[k] = kmsEntry{signer: signer, close: closeFn}
+	return signer, nil
+}
+
+// CloseKMS releases every KMS key loaded (the controller's shutdown); a
+// later signature loads its key again.
+func CloseKMS() {
+	kmsCache.Lock()
+	defer kmsCache.Unlock()
+	for k, e := range kmsCache.m {
+		e.close()
+		delete(kmsCache.m, k)
+	}
 }

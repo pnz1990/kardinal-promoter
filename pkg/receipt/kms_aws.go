@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -23,7 +24,10 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 )
 
-func init() { registerKMS(awskms.ReferenceScheme, loadAWSKMS) }
+func init() {
+	registerKMS(awskms.ReferenceScheme, loadAWSKMS)
+	registerKMSCheck(awskms.ReferenceScheme, checkAWSRef)
+}
 
 // awsCredentialEndpoints are where the AWS SDK's default credential chain
 // asks for credentials: instance metadata, the ECS task role and the EKS
@@ -54,7 +58,7 @@ func (t awsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // loadAWSKMS loads an awskms:// key with the SDK's default configuration
 // (region, credentials: IRSA, Pod Identity, instance role or the
 // environment).
-func loadAWSKMS(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (crypto.Signer, error) {
+func loadAWSKMS(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (crypto.Signer, func(), error) {
 	if transport == nil {
 		transport = egress.NewTransport(http.ProxyFromEnvironment)
 	}
@@ -67,11 +71,6 @@ func loadAWSKMS(ctx context.Context, ref string, transport http.RoundTripper, ti
 			return http.ErrUseLastResponse
 		},
 	}
-	// sigstore replaces the HTTP client with one that skips TLS verification
-	// when this is set: no egress guard, no certificate check.
-	if os.Getenv("AWS_TLS_INSECURE_SKIP_VERIFY") == "1" {
-		return nil, errors.New("AWS_TLS_INSECURE_SKIP_VERIFY=1 would skip TLS verification and the egress guard for the KMS calls: unset it")
-	}
 	opts := []func(*config.LoadOptions) error{config.WithHTTPClient(client)}
 	// The region of an ARN reference; otherwise the SDK's (AWS_REGION, which
 	// IRSA and Pod Identity set, or the profile).
@@ -82,11 +81,41 @@ func loadAWSKMS(ctx context.Context, ref string, transport http.RoundTripper, ti
 	}
 	sv, err := awskms.LoadSignerVerifier(ctx, ref, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("load the AWS KMS key: %w", err)
+		return nil, nil, fmt.Errorf("load the AWS KMS key: %w", err)
 	}
 	cs, _, err := sv.CryptoSigner(ctx, func(error) {})
 	if err != nil {
-		return nil, fmt.Errorf("the AWS KMS signer: %w", err)
+		return nil, nil, fmt.Errorf("the AWS KMS signer: %w", err)
 	}
-	return cs, nil
+	return cs, client.CloseIdleConnections, nil
+}
+
+// checkAWSRef refuses AWS_TLS_INSECURE_SKIP_VERIFY, and a reference whose
+// endpoint is a credential address
+// (instance metadata, the ECS or Pod Identity agent): requests there go
+// directly, without the egress guard, so a KMS request must never be sent
+// there, even by a reference the operator wrote.
+func checkAWSRef(ref string) error {
+	// sigstore replaces the HTTP client with one that skips TLS verification
+	// when this is set: no egress guard, no certificate check. Checked at
+	// every signature, as the key is loaded once.
+	if os.Getenv("AWS_TLS_INSECURE_SKIP_VERIFY") == "1" {
+		return errors.New("AWS_TLS_INSECURE_SKIP_VERIFY=1 would skip TLS verification and the egress guard for the KMS calls: unset it")
+	}
+	rest, ok := strings.CutPrefix(ref, awskms.ReferenceScheme)
+	if !ok {
+		return nil
+	}
+	endpoint, _, found := strings.Cut(rest, "/")
+	if !found || endpoint == "" {
+		return nil
+	}
+	host := endpoint
+	if h, _, err := net.SplitHostPort(endpoint); err == nil {
+		host = h
+	}
+	if ip, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil && awsCredentialEndpoints[ip.Unmap()] {
+		return fmt.Errorf("AWS KMS key reference %s: the endpoint %s is a credential address, not a KMS endpoint", ref, endpoint)
+	}
+	return nil
 }
