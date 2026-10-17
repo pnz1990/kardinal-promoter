@@ -11,14 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package bases holds the kardinal.io CustomResourceDefinitions that make
-// manifests generates (and copies into the chart's crds/), embedded so the
-// CLI can check documents against them offline (kardinal validate).
-package bases
+// Package crd holds the kardinal.io CustomResourceDefinitions that make
+// manifests generates in bases/ (and copies into the chart's crds/),
+// embedded so the CLI can check documents against them offline (kardinal
+// validate). This file sits outside bases/, which holds the generated YAML
+// only.
+package crd
 
-import "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
-// FS holds every generated CRD file.
-//
-//go:embed *.yaml
-var FS embed.FS
+//go:embed bases/*.yaml
+var files embed.FS
+
+// Bases returns the generated CRD files, bases/*.yaml, at its root.
+func Bases() fs.FS {
+	sub, err := fs.Sub(files, "bases")
+	if err != nil {
+		panic(err) // a constant, valid directory name
+	}
+	return sub
+}

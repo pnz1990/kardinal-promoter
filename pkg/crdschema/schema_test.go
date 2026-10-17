@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
-	crdbases "github.com/kardinal-promoter/kardinal-promoter/config/crd/bases"
+	crdfiles "github.com/kardinal-promoter/kardinal-promoter/config/crd"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/crdschema"
 )
 
@@ -35,23 +35,23 @@ import (
 func TestLoad_EmbedsEveryCRD(t *testing.T) {
 	onDisk, err := filepath.Glob(filepath.Join("..", "..", "config", "crd", "bases", "*.yaml"))
 	require.NoError(t, err)
-	embedded, err := fs.Glob(crdbases.FS, "*.yaml")
+	embedded, err := fs.Glob(crdfiles.Bases(), "*.yaml")
 	require.NoError(t, err)
 	require.Len(t, embedded, len(onDisk))
 	for _, f := range onDisk {
 		want, err := os.ReadFile(f)
 		require.NoError(t, err)
-		got, err := fs.ReadFile(crdbases.FS, filepath.Base(f))
+		got, err := fs.ReadFile(crdfiles.Bases(), filepath.Base(f))
 		require.NoError(t, err)
 		assert.Equal(t, string(want), string(got), f)
 	}
-	schemas, err := crdschema.Load(crdbases.FS, "v1alpha1")
+	schemas, err := crdschema.Load(crdfiles.Bases(), "v1alpha1")
 	require.NoError(t, err)
 	assert.Len(t, schemas, len(onDisk), "one kind per CRD")
 	for _, kind := range []string{"Pipeline", "PolicyGate", "Bundle", "Subscription", "ScmProvider"} {
 		assert.Contains(t, schemas, kind)
 	}
-	none, err := crdschema.Load(crdbases.FS, "v9")
+	none, err := crdschema.Load(crdfiles.Bases(), "v9")
 	require.NoError(t, err)
 	assert.Empty(t, none, "only the version asked for")
 }
@@ -61,7 +61,7 @@ func TestLoad_EmbedsEveryCRD(t *testing.T) {
 //
 // Covers CLI-VALIDATE-SCHEMA-01.
 func TestSchema_Check(t *testing.T) {
-	schemas, err := crdschema.Load(crdbases.FS, "v1alpha1")
+	schemas, err := crdschema.Load(crdfiles.Bases(), "v1alpha1")
 	require.NoError(t, err)
 	var obj map[string]any
 	require.NoError(t, yaml.Unmarshal([]byte(`apiVersion: kardinal.io/v1alpha1
