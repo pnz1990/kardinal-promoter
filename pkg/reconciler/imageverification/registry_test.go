@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	iv "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
 )
@@ -256,4 +257,48 @@ func TestOCIRegistry_ReferrersIndexIsBounded(t *testing.T) {
 			assert.Contains(t, err.Error(), "over 4 MiB")
 		})
 	}
+}
+
+// TestOCIRegistry_SkipsPushedReceipts: a promotion receipt as the receipts
+// controller pushes it (receipt.Registry.PushReferrer, a signed VSA bundle)
+// is not read as the builder's VSA, so a gate on attestations cannot be
+// satisfied by kardinal's own receipt of an earlier environment.
+func TestOCIRegistry_SkipsPushedReceipts(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(srv.Close)
+	host := mustHost(t, srv.URL)
+	ctx := context.Background()
+	img, err := random.Image(256, 1)
+	require.NoError(t, err)
+	d, err := img.Digest()
+	require.NoError(t, err)
+	repo := host + "/app"
+	ref, err := name.NewDigest(repo+"@"+d.String(), name.Insecure)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ref, img))
+	key, err := signtest.NewKey()
+	require.NoError(t, err)
+
+	const vsa = "https://slsa.dev/verification_summary/v1"
+	rcpt, err := key.BundleWithPredicate(repo, d.String(), vsa)
+	require.NoError(t, err)
+	pushed, err := (&receipt.Registry{Insecure: true}).PushReferrer(ctx, repo, repo, d.String(), rcpt)
+	require.NoError(t, err)
+	require.NotEmpty(t, pushed)
+
+	r := &iv.OCIRegistry{Transport: http.DefaultTransport}
+	opts := iv.RegistryOptions{Insecure: []string{host}, AttestationTypes: []string{vsa}}
+	got, err := r.Signatures(ctx, repo, d.String(), opts)
+	require.NoError(t, err)
+	assert.Empty(t, got.Attestations, "the receipt is not the builder's VSA")
+	assert.Empty(t, got.Bundles, "nor a signature")
+
+	builderVSA, err := key.BundleWithPredicate(repo, d.String(), vsa)
+	require.NoError(t, err)
+	require.NoError(t, signtest.PushBundleAnnotated(ctx, repo, d.String(), builderVSA,
+		map[string]string{"dev.sigstore.bundle.predicateType": vsa}, []name.Option{name.Insecure}))
+	got, err = r.Signatures(ctx, repo, d.String(), opts)
+	require.NoError(t, err)
+	require.Len(t, got.Attestations, 1, "the builder's VSA; no receipt")
+	assert.Equal(t, string(builderVSA), string(got.Attestations[0]))
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 )
 
 // Media types and annotations of cosign and Sigstore signatures.
@@ -36,11 +37,12 @@ const (
 	// before it is counted. One that names none is read and checked.
 	predicateTypeAnnotation = "dev.sigstore.bundle.predicateType"
 	// receiptAnnotation marks kardinal's own promotion receipts
-	// (docs/receipts.md). They are VSAs, the predicate type a policy may
-	// name to raise a build level, and an image gets one per environment it
-	// reaches: they are skipped before they are counted, so they never
-	// crowd out the builder's attestations or a signature.
-	receiptAnnotation = "kardinal.io/receipt"
+	// (docs/receipts.md), as receipt.PushReferrer sets it. They are VSAs,
+	// the predicate type a policy may name to raise a build level, and an
+	// image gets one per environment it reaches: they are skipped before
+	// they are counted, so they never crowd out the builder's attestations
+	// or a signature.
+	receiptAnnotation = receipt.ReceiptAnnotation
 	// cosignSignatureAnnotation holds a legacy signature, base64.
 	cosignSignatureAnnotation = "dev.cosignproject.cosign/signature"
 	// cosignCertificateAnnotation holds a legacy keyless certificate.
