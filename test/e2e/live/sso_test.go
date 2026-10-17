@@ -148,10 +148,11 @@ func TestSSO_OIDCProxy(t *testing.T) {
 	// ── alice signs in, loads the UI and approves ───────────────────────
 	alice := newSSOBrowser(t, routes, caPEM)
 	index := signIn(t, alice, base, issuer, "alice", password)
-	assets := regexp.MustCompile(`(?:src|href)="(/ui/[^"]+\.(?:js|css))"`).FindAllStringSubmatch(index, -1)
+	// The index names its assets relative to /ui/ (#1933).
+	assets := regexp.MustCompile(`(?:src|href)="\./([^"]+\.(?:js|css))"`).FindAllStringSubmatch(index, -1)
 	require.NotEmpty(t, assets, "the UI's index names its assets:\n%s", index)
 	for _, m := range assets {
-		r := browse(t, alice, http.MethodGet, base+m[1], nil)
+		r := browse(t, alice, http.MethodGet, base+"/ui/"+m[1], nil)
 		assert.Equal(t, http.StatusOK, r.status, "asset %s through the proxy", m[1])
 	}
 	aliceUI := framework.UIClient{BaseURL: base, HTTP: alice}.With("Origin", base)

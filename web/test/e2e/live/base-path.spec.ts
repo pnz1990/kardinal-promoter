@@ -21,8 +21,11 @@ test('under the base path the app loads, signs in and calls its API there', asyn
   const paths: string[] = []
   const failed: string[] = []
   page.on('request', r => { if (r.url().startsWith(origin)) paths.push(new URL(r.url()).pathname) })
+  // The app's own files must all load. (API answers are the API's: kui-token
+  // is browsed by its node IP, which is not in its ui.allowedHosts, so its
+  // writes get 403 with or without the prefix.)
   page.on('response', r => {
-    if (r.url().startsWith(origin) && r.status() >= 400 && !(r.status() === 401 && r.url().includes('/api/v1/ui/'))) failed.push(`${r.status()} ${r.url()}`)
+    if (r.url().startsWith(`${origin}${base}/ui/`) && r.status() >= 400) failed.push(`${r.status()} ${r.url()}`)
   })
 
   const refused = page.waitForResponse(r => r.url() === `${origin}${base}/api/v1/ui/pipelines`)
@@ -40,6 +43,6 @@ test('under the base path the app loads, signs in and calls its API there', asyn
   await expect(page.getByAltText('Kardinal')).toBeVisible()
 
   expect(failed).toEqual([])
-  expect(paths.filter(p => !p.startsWith(`${base}/`))).toEqual([])
+  expect(paths.filter(p => p !== base && !p.startsWith(`${base}/`))).toEqual([])
   expect(paths.some(p => p.startsWith(`${base}/ui/assets/`))).toBe(true)
 })

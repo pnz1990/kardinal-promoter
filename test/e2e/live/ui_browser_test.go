@@ -365,7 +365,8 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 
 	index := c.Get(t, "/ui/")
 	require.Equal(t, http.StatusOK, index.Status, "GET /ui/: %s", index)
-	scripts := regexp.MustCompile(`<script[^>]*\ssrc="(/ui/[^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
+	// index.html names its files relative to /ui/ (#1933).
+	scripts := regexp.MustCompile(`<script[^>]*\ssrc="\./([^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
 	require.NotEmpty(t, scripts, "index.html names no script: %s", index.Body)
 	// The entry script and every chunk it loads (the lazy views are their own chunks):
 	// none calls the per-gate approve endpoint.
@@ -374,7 +375,7 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 	chunk := regexp.MustCompile(`assets/([A-Za-z0-9_.-]+\.js)|(?:from|import\()\s*["'\x60]\./([A-Za-z0-9_.-]+\.js)`)
 	queue := []string{}
 	for _, m := range scripts {
-		queue = append(queue, m[1])
+		queue = append(queue, "/ui/"+m[1])
 	}
 	seen := map[string]bool{}
 	for len(queue) > 0 {
@@ -777,8 +778,10 @@ func TestUI_BrowserStatic(t *testing.T) {
 	types := map[string]string{".js": "javascript", ".css": "text/css", ".png": "image/png", ".woff2": "font/woff2"}
 	named := map[string]int{}
 	seen := map[string]bool{}
-	for _, m := range regexp.MustCompile(`(?:src|href)="(/ui/[^"]+)"`).FindAllStringSubmatch(index.Body, -1) {
-		p := m[1]
+	// index.html names its files relative to /ui/, so they load under
+	// --ui-base-path too (#1933).
+	for _, m := range regexp.MustCompile(`(?:src|href)="\./([^"]+)"`).FindAllStringSubmatch(index.Body, -1) {
+		p := "/ui/" + m[1]
 		if seen[p] {
 			continue
 		}
