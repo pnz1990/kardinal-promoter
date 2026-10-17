@@ -9,7 +9,9 @@
 # kind's default), whose discovery document and keys the API server serves
 # to unauthenticated callers here (system:service-account-issuer-discovery).
 # The services are reachable in the cluster only, at
-# http://<service>.<service>-system.svc.cluster.local. Writes the Sigstore
+# http://<service>.<service>-system.svc.cluster.local, and the controller
+# reaches Fulcio, Rekor and the TSA through hack/e2e/faultproxy (namespace
+# sigstore-faults), which the outage tests switch. Writes the Sigstore
 # trusted root (trusted_root.json, from the TUF repository) to
 # $E2E_OUT/sigstore/trusted_root.json and the URLs to the env file.
 # Idempotent: keys are generated once per cluster and kept in $SECRETS_DIR.
@@ -156,9 +158,60 @@ echo "$hash  $DIR/trusted_root.json" | sha512sum -c --status || die "trusted_roo
 python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); assert t.get("tlogs") and t.get("certificateAuthorities"), "no trusted root"' \
   "$DIR/trusted_root.json" || die "no trusted_root.json from the TUF repository"
 
-env_set KARDINAL_E2E_FULCIO_URL "$FULCIO_URL"
-env_set KARDINAL_E2E_REKOR_URL "$REKOR_URL"
-env_set KARDINAL_E2E_TSA_URL "$TSA_URL"
+# The controller reaches Fulcio, Rekor and the TSA through hack/e2e/faultproxy,
+# which the outage tests switch to down, slow or an error status, and which
+# counts each route's answers.
+FAULTS=sigstore-faults
+FAULT_IMAGE="kardinal-e2e/faultproxy:$KIND_CLUSTER"
+ctx=$(mktemp -d)
+(cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -ldflags="-s -w" \
+  -o "$ctx/faultproxy" ./hack/e2e/faultproxy)
+chmod 0755 "$ctx" "$ctx/faultproxy"
+printf 'FROM scratch\nCOPY faultproxy /faultproxy\nUSER 65532:65532\nENTRYPOINT ["/faultproxy"]\n' >"$ctx/Dockerfile"
+docker build -q -t "$FAULT_IMAGE" "$ctx" >/dev/null
+load_image "$FAULT_IMAGE"
+"${KUBECTL[@]}" apply -f - >/dev/null <<YAML
+apiVersion: v1
+kind: Namespace
+metadata: {name: $FAULTS}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: faultproxy, namespace: $FAULTS}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: faultproxy}}
+  template:
+    metadata: {labels: {app: faultproxy}}
+    spec:
+      containers:
+        - name: faultproxy
+          image: $FAULT_IMAGE
+          imagePullPolicy: Never
+          args: [-admin=:9000, -route=fulcio=:8081=$FULCIO_URL, -route=rekor=:8082=$REKOR_URL,
+            "-route=tsa=:8083=$(url tsa-system tsa)"]
+          securityContext: {allowPrivilegeEscalation: false, runAsNonRoot: true, capabilities: {drop: [ALL]}}
+          readinessProbe: {httpGet: {path: /routes, port: 9000}, periodSeconds: 2}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: faultproxy, namespace: $FAULTS}
+spec:
+  selector: {app: faultproxy}
+  ports:
+    - {name: admin, port: 9000}
+    - {name: fulcio, port: 8081}
+    - {name: rekor, port: 8082}
+    - {name: tsa, port: 8083}
+YAML
+"${KUBECTL[@]}" -n "$FAULTS" rollout restart deploy/faultproxy >/dev/null
+"${KUBECTL[@]}" -n "$FAULTS" rollout status deploy/faultproxy --timeout=120s >/dev/null
+proxy="http://faultproxy.$FAULTS.svc.cluster.local"
+
+env_set KARDINAL_E2E_FULCIO_URL "$proxy:8081"
+env_set KARDINAL_E2E_REKOR_URL "$proxy:8082"
+env_set KARDINAL_E2E_TSA_URL "$proxy:8083/api/v1/timestamp"
+env_set KARDINAL_E2E_SIGSTORE_FAULTS "$FAULTS"
 env_set KARDINAL_E2E_TUF_URL "$TUF_URL"
 env_set KARDINAL_E2E_TRUSTED_ROOT "$DIR/trusted_root.json"
-log "sigstore ready: fulcio $FULCIO_URL, rekor $REKOR_URL, tsa $TSA_URL"
+log "sigstore ready: fulcio $FULCIO_URL, rekor $REKOR_URL, tsa $TSA_URL, through $proxy"
