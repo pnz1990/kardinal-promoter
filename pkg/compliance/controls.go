@@ -147,7 +147,7 @@ func enforced(element string) Evidence {
 	return Evidence{
 		Element: element,
 		Record: "a change reaches an environment only through a PromotionStep its Pipeline and gates allow; " +
-			"the identity ValidatingAdmissionPolicies keep the names in the records from being forged",
+			"the identity ValidatingAdmissionPolicies keep the names in the records from being forged (`admission.yaml` in the evidence pack)",
 		Kinds:  []string{"Pipeline", "PolicyGate"},
 		Status: Shipped,
 	}
@@ -264,7 +264,7 @@ func nist80053() Framework {
 				{
 					Element: "Records are retained and change activity is reviewed",
 					Record: "AuditEvents, kept as `--audit-retention-max-age` and `--audit-retention-max-per-pipeline` allow; " +
-						"`kardinal audit summary` and `kardinal audit export`",
+						"`kardinal audit summary`, `kardinal audit export` and `kardinal audit evidence-pack`",
 					Kinds:   []string{"AuditEvent"},
 					Actions: promotion,
 					Status:  Shipped,

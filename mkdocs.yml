@@ -184,6 +184,7 @@ nav:
       - kardinal approve: reference/cli/kardinal-approve.md
       - kardinal audit:
         - kardinal audit: reference/cli/kardinal-audit.md
+        - kardinal audit evidence-pack: reference/cli/kardinal-audit-evidence-pack.md
         - kardinal audit export: reference/cli/kardinal-audit-export.md
         - kardinal audit summary: reference/cli/kardinal-audit-summary.md
       - kardinal completion: reference/cli/kardinal-completion.md

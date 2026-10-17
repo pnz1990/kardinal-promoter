@@ -9,7 +9,7 @@ import (
 )
 
 // Markdown renders the shipped rows of frameworks as the tables of
-// docs/compliance.md: one section per framework, one table per control. A
+// docs/compliance.md (TestCompliancePage writes and checks them): one section per framework, one table per control. A
 // planned row is left out, not marked as coming, and so is a control with
 // no shipped row (spec 22, decision C7).
 func Markdown(frameworks []Framework) string {
