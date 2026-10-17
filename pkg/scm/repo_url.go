@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/urlsecret"
 )
 
 // scpLikeURL matches the scp-like git remote syntax "user@host:path".
@@ -45,18 +47,6 @@ var quotedURL = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 
 // urlScheme matches the start of a URL.
 var urlScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
-
-// secretParams are the URL parameter names (compared lower-cased, after
-// percent-decoding) whose values are credentials.
-var secretParams = map[string]bool{
-	"access_token": true, "token": true, "private_token": true, "password": true,
-	"api_key": true, "client_secret": true, "x-amz-signature": true, "x-amz-credential": true,
-	"x-amz-security-token": true, "sig": true, "refresh_token": true, "apikey": true, "key": true,
-}
-
-// urlParam matches one key=value pair of a query or fragment, after "?",
-// "&", ";" or "#".
-var urlParam = regexp.MustCompile(`([?&;#])([^=&;#\s"']+)=([^&;#\s"']*)`)
 
 // splitRemoteURL returns the host and the path (without a leading slash) of a
 // git remote URL. It accepts https://, http://, ssh://, git:// and the
@@ -264,22 +254,9 @@ func RedactURL(raw string) string {
 	return RedactText(raw)
 }
 
-// redactParams replaces the value of every secretParams pair in s, in a
-// query or a fragment, "&"- or ";"-separated, with its key percent-encoded
-// or not.
-func redactParams(s string) string {
-	return urlParam.ReplaceAllStringFunc(s, func(m string) string {
-		sub := urlParam.FindStringSubmatch(m)
-		key, err := url.QueryUnescape(sub[2])
-		if err != nil {
-			key = sub[2]
-		}
-		if !secretParams[strings.ToLower(key)] {
-			return m
-		}
-		return sub[1] + sub[2] + "=REDACTED"
-	})
-}
+// redactParams replaces the value of every credential parameter in s
+// (urlsecret.Redact).
+func redactParams(s string) string { return urlsecret.Redact(s) }
 
 // RedactErr is err with RedactText applied to its message. errors.Is and
 // errors.As still see err, so a timeout or a context error is still one.

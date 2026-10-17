@@ -426,16 +426,37 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
 | `commitTime` | When the commit was made (RFC 3339); the lead time metrics start at it, else at the version's creation, which leaves out the build. The Bundle API and `kardinal create bundle` refuse a zero time, one more than 5 minutes in the future, and one more than a year old; a commit time after the version's creation or more than a year before it (set with kubectl) is ignored | `2026-04-09T09:52:13Z` |
 
-The PR body and the UI link `ciRunURL`, so it is checked when a version is created. It must be
-empty or an absolute `http://` or `https://` URL with a host, without user info
-(`https://user@host/...`), spaces or control characters.
+The PR body and the UI link `ciRunURL`, and a [promotion receipt](receipts.md) signs it, so it is
+checked when a version is created. It must be empty or an absolute `http://` or `https://` URL
+with a host, without user info (an `@` anywhere before the first `/` after `://`), without spaces
+or control characters, and without a credential query or fragment parameter. A parameter is a
+credential when its name is normalized (percent-decoded, a trailing array index such as `[]` or
+`[0]` removed, lower-cased, `-` and `_` removed) and then either:
+
+- is `sig`, `auth`, `authorization`, `jwt`, `code`, `pass`, `pwd` or `sid`; or
+- ends in `token`, `secret`, `signature`, `password`, `passwd`, `passphrase`, `credential`,
+  `credentials`, `key`, `accesskeyid`, `session`, `sessionid`, `assertion`, `ticket` or `bearer`,
+  and is not one of the harmless names that end in `key`: `monkey`, `donkey`, `turkey`, `jockey`,
+  `hockey`, `whiskey`, `hotkey`, `sortkey`, `primarykey`, `foreignkey`, `partitionkey`,
+  `groupkey`, `cachekey`, `lookupkey`, and the CI identifiers `buildKey`, `planKey`, `jobKey`,
+  `resultKey`, `buildResultKey`, `chainKey`, `stageKey` (Bamboo), `projectKey` and `issueKey`
+  (SonarQube, Jira) and `branchKey`.
+
+The run URLs of GitHub Actions, GitLab, Jenkins, CircleCI, Bamboo, TeamCity, Azure Pipelines,
+Buildkite, Tekton, Google Cloud Build, Argo Workflows and Drone pass (each has a test vector).
+
+So `circle-token`, `job_token`, `X-Goog-Signature`, `AWSAccessKeyId`, `subscription-key`,
+`;jsessionid`, `client_assertion` and `token[]` are refused. `tokens`, `keyboard` and `sort_key`
+are not, because a name only counts when it ends in the word.
 
 - The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value, and
   `kardinal create bundle --ci-run-url` returns an error.
-- Versions created directly (`kubectl apply`, your own client) and existing versions are not
-  checked. Where such a version's `ciRunURL` fails the check, the PR body and the UI show `—`
-  instead of a link, and promote and rollback (CLI, UI and automatic) leave it out of the
-  version they create.
+- The Bundle CRD applies the same rule to a version created directly (`kubectl apply`, your own
+  client). It cannot decode a parameter name, so it refuses any percent-encoded name instead. A
+  version stored before the rule keeps its URL while the URL is unchanged.
+- The other checks do not apply to a version created directly or to an existing one. Where such
+  a version's `ciRunURL` fails the check, the PR body and the UI show `—` instead of a link, and
+  promote and rollback (CLI, UI and automatic) leave it out of the version they create.
 
 kardinal records provenance as the caller gives it, whichever way the version is created (version
 API, `kardinal create bundle`, kubectl): it does not check `commitSHA`, `author` or `ciRunURL`

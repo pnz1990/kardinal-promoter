@@ -80,6 +80,35 @@ A receipt is at most 256 KiB. Past that, the approvals and Verdicts that did not
 first (counted in `approvalsOmitted` and `verdictsOmitted`), then long gate texts are cut, then the gates after the first
 and the metrics. `truncated: true` says so. The levels are those of the full record.
 
+### Credentials are redacted
+
+A receipt is signed, and the Rekor sink publishes it for good: a signed record cannot be redacted
+afterwards without breaking its signature. So before the statement is signed, every string of
+`kardinalPromotion` and every subject name is redacted:
+
+- the user info of a URL: everything up to the last `@` before the first `/` after `://`, so a
+  password with a raw `#`, `?` or space goes too;
+- the value of a credential query or fragment parameter, up to the next `&`, `;`, `#` or space,
+  which becomes `REDACTED`. A credential parameter is one the [Provenance](ci-integration.md#provenance)
+  check refuses: its normalized name ends in `token`, `secret`, `key`, `signature`, `password`,
+  `passphrase`, `session`, `ticket`, `bearer`, ... (except harmless names such as `monkey` or
+  `sortkey`), or is `sig`, `auth`, `authorization`, `jwt`, `code`, `pass`, `pwd` or `sid`. A
+  percent-encoded name and an array name (`token[]`) count too;
+- a token known by its shape, wherever it is: GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
+  `github_pat_`), GitLab (`glpat-`) and Slack (`xox?-`) tokens, and AWS access key IDs (`AKIA`,
+  `ASIA`).
+
+The JSON paths of the strings that changed are listed in `kardinalPromotion.redacted`, for example
+`kardinalPromotion.version.provenance.ciRunURL`. The Bundle is not changed.
+
+What is not detected: a credential of another shape outside a URL parameter, for example a bare
+password in `provenance.author` or in a gate's reason. Don't put credentials in a version's
+provenance or in gate texts.
+
+The Bundle API, `kardinal create bundle` and the Bundle CRD refuse a credential in `ciRunURL` in the
+first place. Redaction covers what gets past them: a version stored before the check, and text
+elsewhere in the record.
+
 ## Turn receipts on
 
 ```yaml

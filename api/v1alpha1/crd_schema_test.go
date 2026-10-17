@@ -121,7 +121,7 @@ func celRuleErrors(t *testing.T, s *structuralschema.Structural, obj interface{}
 		if strings.Contains(r.Rule, "oldSelf") {
 			continue
 		}
-		env, err := cel.NewEnv(cel.Variable("self", cel.DynType))
+		env, err := serverCELEnv(cel.Variable("self", cel.DynType))
 		require.NoError(t, err)
 		ast, iss := env.Compile(r.Rule)
 		require.NoError(t, iss.Err(), "rule at %q does not compile: %s", path, r.Rule)
@@ -398,7 +398,7 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rule, "AuditEvent spec needs a transition rule")
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	env, err := serverCELEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
 	require.NoError(t, err)
 	ast, iss := env.Compile(rule)
 	require.NoError(t, iss.Err())
@@ -433,7 +433,7 @@ func TestCRDHookRunPhaseLatched(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rule, "HookRun status.phase needs a transition rule")
-	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	env, err := serverCELEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
 	require.NoError(t, err)
 	ast, iss := env.Compile(rule)
 	require.NoError(t, iss.Err())
@@ -470,7 +470,7 @@ func TestCRDImageVerificationPhaseLatched(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rule)
-	env, err := cel.NewEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
+	env, err := serverCELEnv(cel.Variable("self", cel.StringType), cel.Variable("oldSelf", cel.StringType))
 	require.NoError(t, err)
 	ast, iss := env.Compile(rule)
 	require.NoError(t, iss.Err())
@@ -491,7 +491,7 @@ func TestCRDImageVerificationPhaseLatched(t *testing.T) {
 // keep the old verdict).
 func TestCRDImageVerificationSpecImmutable(t *testing.T) {
 	spec := loadCRDs(t)["ImageVerification"].structural.Properties["spec"]
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	env, err := serverCELEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
 	require.NoError(t, err)
 	var prgs []cel.Program
 	for _, r := range spec.XValidations {
@@ -547,7 +547,7 @@ func TestCRDImageVerificationSpecImmutable(t *testing.T) {
 // mutable.
 func TestCRDBundleArtifactImmutable(t *testing.T) {
 	spec := loadCRDs(t)["Bundle"].structural.Properties["spec"]
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	env, err := serverCELEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
 	require.NoError(t, err)
 	var prgs []cel.Program
 	for _, r := range spec.XValidations {
@@ -1085,7 +1085,7 @@ func TestCRDBundleRetiredAtSticky(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rule, "Bundle status needs the retiredAt transition rule")
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	env, err := serverCELEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
 	require.NoError(t, err)
 	ast, iss := env.Compile(rule)
 	require.NoError(t, iss.Err())

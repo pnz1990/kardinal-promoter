@@ -4,6 +4,9 @@
 package graph_test
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -496,7 +499,8 @@ func TestValidateSecretRef(t *testing.T) {
 }
 
 // TestValidateCIRunURL: a new Bundle's ciRunURL is empty or an absolute
-// http(s) URL without user info, whitespace or control characters. Errors do
+// http(s) URL without user info, a credential parameter, whitespace or
+// control characters. Errors do
 // not echo the URL or any part of it (url.Parse errors quote the "port" of
 // https://user:token/x).
 func TestValidateCIRunURL(t *testing.T) {
@@ -528,6 +532,16 @@ func TestValidateCIRunURL(t *testing.T) {
 		{name: "bad escape", url: "https://ci.example.com/%zz", wantErr: "not a valid URL"},
 		{name: "bad host", url: "https://[::1/runs", wantErr: "not a valid URL"},
 		{name: "credential parsed as a port", url: "https://user:s3cret/x", wantErr: "not a valid URL"},
+		// A credential parameter (#2158): a receipt signs the URL, and its
+		// Rekor sink publishes it for good.
+		{name: "token query parameter", url: "https://ci.example.com/run/1?token=s3cret", wantErr: "credential parameter"},
+		{name: "second parameter", url: "https://ci.example.com/run/1?a=1&access_token=s3cret", wantErr: "credential parameter"},
+		{name: "upper-case key", url: "https://ci.example.com/run/1?X-Amz-Signature=s3cret", wantErr: "credential parameter"},
+		{name: "percent-encoded key", url: "https://ci.example.com/run/1?%74oken=s3cret", wantErr: "credential parameter"},
+		{name: "in the fragment", url: "https://ci.example.com/run/1#sig=s3cret", wantErr: "credential parameter"},
+		{name: "semicolon-separated", url: "https://ci.example.com/run/1?a=1;key=s3cret", wantErr: "credential parameter"},
+		{name: "empty value", url: "https://ci.example.com/run/1?token=", wantErr: "credential parameter"},
+		{name: "a parameter that only contains a credential name", url: "https://ci.example.com/run/1?tokens=3&monkey=1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -693,5 +707,26 @@ func TestBuild_ChartBundleNeedsHelm(t *testing.T) {
 			assert.ErrorIs(t, err, graph.ErrInvalid)
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
+	}
+}
+
+// TestValidateCIRunURL_Vectors (#2158): the Bundle API refuses exactly the
+// URLs of pkg/urlsecret's table that every layer refuses.
+func TestValidateCIRunURL_Vectors(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "urlsecret", "testdata", "vectors.json"))
+	require.NoError(t, err)
+	var vectors []struct {
+		URL     string `json:"url"`
+		Refused bool   `json:"refused"`
+		Why     string `json:"why"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &vectors))
+	require.NotEmpty(t, vectors)
+	for _, v := range vectors {
+		err := graph.ValidateCIRunURL(v.URL)
+		assert.Equal(t, v.Refused, err != nil, "%s: %s (%v)", v.Why, v.URL, err)
+		if err != nil {
+			assert.NotContains(t, err.Error(), "S3CRET", "the error does not echo the URL")
+		}
 	}
 }

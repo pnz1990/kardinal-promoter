@@ -326,6 +326,8 @@ func TestCIAPI_Validate(t *testing.T) {
 			"request body too large or unreadable", nil},
 		{"ciRunURL with user info", ciBody(t, a.ns, fixtures.V2, withRunURL("https://ci-bot:"+secret+"@ci.example.com/run/1")),
 			"provenance.ciRunURL must not contain user info", []string{secret, "ci.example.com", "ci-bot"}},
+		{"ciRunURL with a token parameter", ciBody(t, a.ns, fixtures.V2, withRunURL("https://ci.example.com/run/1?%74oken="+secret)),
+			"provenance.ciRunURL must not contain a credential parameter", []string{secret, "ci.example.com"}},
 		{"ciRunURL that does not parse", ciBody(t, a.ns, fixtures.V2, withRunURL("https://ci-bot:"+secret+"/run/1")),
 			"provenance.ciRunURL is not a valid URL", []string{secret, "ci-bot"}},
 		{"relative ciRunURL", ciBody(t, a.ns, fixtures.V2, withRunURL("ci.example.com/run/1")),
