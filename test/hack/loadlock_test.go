@@ -5,6 +5,7 @@ package hack
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,5 +95,85 @@ func TestLoadLock(t *testing.T) {
 		cmd.Env = append(os.Environ(), "LOADLOCK=")
 		_, err := cmd.CombinedOutput()
 		assert.Equal(t, 2, exitCode(err))
+	})
+}
+
+// tickets is how many waiters queue for lock.
+func tickets(lock string) int {
+	entries, _ := os.ReadDir(lock + ".queue")
+	n := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			n++
+		}
+	}
+	return n
+}
+
+// served starts each waiter (name, then hack/loadlock.sh flags) while
+// another holder, without a pid, holds lock, each queued before the next
+// starts; it then frees the lock and returns the order they ran in.
+func served(t *testing.T, lock string, waiters ...[]string) []string {
+	t.Helper()
+	require.NoError(t, os.Mkdir(lock, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
+	ran := filepath.Join(t.TempDir(), "ran")
+	var cmds []*exec.Cmd
+	for i, w := range waiters {
+		args := append(append([]string{filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", w[0], "-r", "0.05"},
+			w[1:]...), "--", "bash", "-c", `echo "$0" >> "$1"; sleep 0.1`, w[0], ran)
+		cmd := exec.Command("bash", args...)
+		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		require.NoError(t, cmd.Start())
+		cmds = append(cmds, cmd)
+		require.Eventually(t, func() bool { return tickets(lock) == i+1 }, 10*time.Second, 10*time.Millisecond, "%s queued", w[0])
+	}
+	require.NoError(t, os.RemoveAll(lock))
+	for _, cmd := range cmds {
+		require.NoError(t, cmd.Wait())
+	}
+	out, err := os.ReadFile(ran)
+	require.NoError(t, err)
+	assert.NoDirExists(t, lock)
+	assert.Zero(t, tickets(lock), "every ticket is gone")
+	return strings.Fields(string(out))
+}
+
+// TestLoadLock_Fair: waiters are served in the order they queued, a release
+// gate's ticket (-p release) before the normal ones queued ahead of it, and
+// a lock or ticket of a process that is gone is removed (the lock was a
+// mutex with pollers: the release gate lost the race to later pollers).
+func TestLoadLock_Fair(t *testing.T) {
+	t.Run("first come, first served", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		assert.Equal(t, []string{"w1", "w2", "w3"}, served(t, lock, []string{"w1"}, []string{"w2"}, []string{"w3"}))
+	})
+	t.Run("a release ticket jumps the queue", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		assert.Equal(t, []string{"gate", "w1", "w2"},
+			served(t, lock, []string{"w1"}, []string{"w2", "-p", "normal"}, []string{"gate", "-p", "release"}))
+	})
+	t.Run("a dead holder and a dead waiter are reclaimed", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		dead := gone.Process.Pid
+		require.NoError(t, os.Mkdir(lock, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte(fmt.Sprintf("killed run pid %d 2026-10-17T00:00:00Z\n", dead)), 0o644))
+		require.NoError(t, os.Mkdir(lock+".queue", 0o755))
+		ghost := filepath.Join(lock+".queue", fmt.Sprintf("0-%019d-%d", 1, dead))
+		require.NoError(t, os.WriteFile(ghost, []byte("ghost\n"), 0o644))
+		out, err := loadlock(t, lock, "bash", "-c", `cat "$0/owner"`, lock).CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Contains(t, string(out), "removed "+lock+" of a holder that is gone")
+		assert.Contains(t, string(out), "test pid ", "it took the lock")
+		assert.NoFileExists(t, ghost)
+	})
+	t.Run("an unknown priority is refused", func(t *testing.T) {
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", filepath.Join(t.TempDir(), "LOADLOCK"),
+			"-p", "urgent", "--", "true")
+		out, err := cmd.CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), "usage:")
 	})
 }
