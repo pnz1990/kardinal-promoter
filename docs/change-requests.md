@@ -264,6 +264,10 @@ A wrong token, a template without `webhook`, and a template that does not exist 
 provider's Retry-After (`status.retryAt`). The receiver answers `429` past a coarse limit of 50
 requests a second across all templates, checked before anything is read, and past five valid
 triggers a second per template; requests with a wrong token never use up a template's budget.
+The coarse limit comes before the token check on purpose: it keeps unauthenticated requests from
+turning into ChangeRequest and Secret reads on the API server. A flood of such requests can
+therefore make your valid triggers wait their turn (`429`), but it cannot change any state, and
+polling still reads every ticket each `pollInterval`, so the only cost is latency.
 
 - **ServiceNow**: a business rule on `change_request` (after update, when `approval` or `state`
   changes) that sends an outbound REST message to the URL with the `X-Kardinal-Token` header. Restrict it to the changes kardinal
