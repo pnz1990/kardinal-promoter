@@ -454,6 +454,21 @@ export interface GateApproval {
   /** A counted reject blocks the gate. */
   rejected?: boolean
   decisions?: GateDecision[]
+  /** Structured values an approve must carry (spec.approval.fields): one form input each. */
+  fields?: ApprovalFieldDecl[]
+}
+
+/** One structured value an approval gate asks for (spec.approval.fields). */
+export interface ApprovalFieldDecl {
+  name: string
+  type: 'string' | 'bool' | 'int' | 'url' | 'enum' | string
+  required?: boolean
+  pattern?: string
+  /** The one value accepted ("true" for an acknowledgement). */
+  mustBe?: string
+  /** An enum field's choices. */
+  values?: string[]
+  description?: string
 }
 
 /** One approve or reject decision as the gate counted it. */
@@ -466,6 +481,8 @@ export interface GateDecision {
   comment?: string
   /** RFC 3339: when the gate first saw it. */
   firstSeenAt?: string
+  /** The decision's values of the declared fields. */
+  fields?: Record<string, string>
 }
 
 /** #502: A time-limited emergency override record (K-09 audit record). */

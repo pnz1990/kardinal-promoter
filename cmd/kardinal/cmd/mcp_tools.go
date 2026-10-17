@@ -21,6 +21,7 @@ import (
 	"io"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -729,12 +730,16 @@ func mcpReject(ctx context.Context, k *mcpServer, in mcpRejectIn) (*mcp.CallTool
 
 type mcpApproveIn struct {
 	mcpPipelineTarget
-	Version  string `json:"version" jsonschema:"The version waiting for the environment (image tag, config commit or chart version); nothing is recorded when another one waits"`
-	Decision string `json:"decision,omitempty" jsonschema:"approve (default) or reject"`
-	Comment  string `json:"comment,omitempty" jsonschema:"Note shown with the decision"`
+	Version  string            `json:"version" jsonschema:"The version waiting for the environment (image tag, config commit or chart version); nothing is recorded when another one waits"`
+	Decision string            `json:"decision,omitempty" jsonschema:"approve (default) or reject"`
+	Comment  string            `json:"comment,omitempty" jsonschema:"Note shown with the decision"`
+	Fields   map[string]string `json:"fields,omitempty" jsonschema:"The values the gate's approval asks for (its approval.fields), by name; kardinal why lists them"`
 }
 
 func (in mcpApproveIn) check() error {
+	if len(in.Fields) > lifecycle.MaxApprovalFields {
+		return fmt.Errorf("fields: at most %d, not %d", lifecycle.MaxApprovalFields, len(in.Fields))
+	}
 	if err := checkVersion("version", in.Version, true); err != nil {
 		return fmt.Errorf("%w: name the version you reviewed", err)
 	}
@@ -748,6 +753,14 @@ func (in mcpApproveIn) check() error {
 
 func mcpApprove(ctx context.Context, k *mcpServer, in mcpApproveIn) (*mcp.CallToolResult, error) {
 	o := approveOptions{env: in.Environment, version: in.Version, decision: in.Decision, comment: in.Comment}
+	names := make([]string, 0, len(in.Fields))
+	for n := range in.Fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		o.fields = append(o.fields, n+"="+in.Fields[n])
+	}
 	if o.decision == "" {
 		o.decision = "approve"
 	}
@@ -756,7 +769,7 @@ func mcpApprove(ctx context.Context, k *mcpServer, in mcpApproveIn) (*mcp.CallTo
 		if err != nil {
 			return nil, err
 		}
-		return nil, approveChecked(ctx, w, c, ns, bundle, o, nil)
+		return nil, approveChecked(ctx, w, c, ns, bundle, o, nil, nil)
 	})
 }
 

@@ -562,3 +562,66 @@ func RequireStamp(t *testing.T) {
 		})
 	}
 }
+
+// ApprovalFields: structured approval fields through the Graph, on the
+// scenario World (spec 23 §8; QA on #2119). The prod gate's approval.fields
+// reach its instance (the Graph copies them; the bug the live run found was
+// that it did not), so kardinal approve without them is refused before it
+// writes; an Approval written another way without them is recorded, not
+// counted, and says why; the approve with them counts, the expression reads
+// the counted ticket, and prod promotes.
+func ApprovalFields(t *testing.T) {
+	t.Parallel()
+	pol := v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{alice.Username, carol.Username},
+		Fields: []v1alpha1.ApprovalField{
+			{Name: "ticketID", Required: true, Pattern: `^CHG[0-9]{7}$`},
+			{Name: "riskAcknowledged", Type: "bool", Required: true, MustBe: "true"},
+		}}
+	pw := startPolicy(t, func(p *scenario.Plan) {
+		g := approvalGate(p.NS, "change", pol)
+		g.Spec.Expression = `approvals.fields.ticketID.exists(id, id.startsWith("CHG"))`
+		p.Extra = append(p.Extra, g)
+	})
+	b := pw.shipToProdGate(t, "human", "1.1.0")
+	inst := pw.gate(t, b.Name, "change")
+	require.NotNil(t, inst.Spec.Approval)
+	require.Len(t, inst.Spec.Approval.Fields, 2, "the Graph copies approval.fields into the instance")
+
+	err := pw.approve(alice, b.Name, "prod")
+	require.Error(t, err, "kardinal approve without the fields is refused")
+	assert.Contains(t, err.Error(), "ticketID")
+
+	// Carol writes her Approval by hand, without the fields.
+	stamp, err := pw.StampFor(carol, actor.Where{Namespace: pw.p.NS, Environment: "prod"})
+	require.NoError(t, err)
+	require.NoError(t, pw.Client.Create(pw.CtxOf(carol), &v1alpha1.Approval{
+		ObjectMeta: metav1.ObjectMeta{Namespace: pw.p.NS, Name: "carol-by-hand",
+			Labels: map[string]string{"kardinal.io/bundle": b.Name, "kardinal.io/environment": "prod"}},
+		Spec: v1alpha1.ApprovalSpec{Bundle: b.Name, BundleUID: string(b.UID), Environment: "prod", User: carol.Username,
+			Groups: carol.Groups, Decision: lifecycle.DecisionApprove, Actor: stamp}}))
+	pw.Round()
+	pw.Round()
+	found, ok, why := counted(pw.gate(t, b.Name, "change"), carol.Username)
+	require.True(t, found, "carol's Approval is recorded\n%s", pw.Describe(pw.p.NS))
+	assert.False(t, ok)
+	assert.Equal(t, "approval.fields: riskAcknowledged is required; ticketID is required", why)
+	pw.expectHeld(t, b, "prod")
+
+	stamp, err = pw.StampFor(alice, actor.Where{Namespace: pw.p.NS, Environment: "prod"})
+	require.NoError(t, err)
+	_, _, err = lifecycle.RecordApproval(pw.CtxOf(alice), pw.Client, lifecycle.ApprovalRequest{Namespace: pw.p.NS, Bundle: b.Name,
+		Environment: "prod", User: alice.Username, Groups: alice.Groups, Decision: lifecycle.DecisionApprove, Actor: stamp,
+		Fields: map[string]string{"ticketID": "CHG0031337", "riskAcknowledged": "true"}})
+	require.NoError(t, err)
+	pw.Round()
+	pw.Round()
+	g := pw.gate(t, b.Name, "change")
+	_, ok, why = counted(g, alice.Username)
+	assert.True(t, ok, why)
+	for _, rec := range g.Status.Approvals {
+		if rec.User == alice.Username {
+			assert.Equal(t, map[string]string{"ticketID": "CHG0031337", "riskAcknowledged": "true"}, rec.Fields)
+		}
+	}
+	pw.expectVerified(t, b)
+}

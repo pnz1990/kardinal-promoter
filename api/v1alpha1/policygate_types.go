@@ -159,6 +159,74 @@ type GateApprovalPolicy struct {
 	// +kubebuilder:validation:items:MaxLength=253
 	// +optional
 	AllowedAgents []string `json:"allowedAgents,omitempty"`
+
+	// Fields are the structured values an approve must carry (Approval
+	// spec.fields): an approve that does not satisfy them does not count,
+	// and status.approvals says why. A reject needs none. The values of the
+	// counted approvals are approvals.fields.<name> in the expression.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Fields []ApprovalField `json:"fields,omitempty"`
+}
+
+// Approval field types.
+const (
+	ApprovalFieldString = "string"
+	ApprovalFieldBool   = "bool"
+	ApprovalFieldInt    = "int"
+	ApprovalFieldURL    = "url"
+	ApprovalFieldEnum   = "enum"
+)
+
+// ApprovalField is one structured value an approval gate asks for.
+// +kubebuilder:validation:XValidation:rule="self.type != 'enum' || (has(self.values) && size(self.values) > 0)",message="an enum field lists its values"
+// +kubebuilder:validation:XValidation:rule="!has(self.values) || size(self.values) == 0 || self.type == 'enum'",message="values are for an enum field"
+// +kubebuilder:validation:XValidation:rule="!has(self.pattern) || self.type == 'string' || self.type == 'url'",message="a pattern is for a string or url field"
+// +kubebuilder:validation:XValidation:rule="!has(self.mustBe) || self.type != 'bool' || self.mustBe in ['true', 'false']",message="a bool field's mustBe is true or false"
+// +kubebuilder:validation:XValidation:rule="!has(self.mustBe) || self.type != 'enum' || !has(self.values) || self.mustBe in self.values",message="an enum field's mustBe is one of its values"
+type ApprovalField struct {
+	// Name is the field's name in Approval spec.fields and in
+	// approvals.fields.<name>.
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z][a-zA-Z0-9_]{0,62}$`
+	Name string `json:"name"`
+
+	// Type is how the value is read: string, bool (true or false), int, url
+	// (https or http, with a host) or enum (one of values).
+	// +kubebuilder:validation:Enum=string;bool;int;url;enum
+	// +kubebuilder:default=string
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// Required means an approve without the field does not count.
+	// +optional
+	Required bool `json:"required,omitempty"`
+
+	// Pattern is a regular expression (RE2, as CEL's matches) a string or
+	// url value must match. A pattern that does not compile makes the field
+	// impossible to satisfy, and the gate says so.
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Pattern string `json:"pattern,omitempty"`
+
+	// MustBe is the one value accepted: for a bool, "true" for an
+	// acknowledgement the approver must give.
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	MustBe string `json:"mustBe,omitempty"`
+
+	// Values are an enum field's choices.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=253
+	// +optional
+	Values []string `json:"values,omitempty"`
+
+	// Description is what the field asks, shown by kardinal approve and the
+	// UI's approval form.
+	// +kubebuilder:validation:MaxLength=512
+	// +optional
+	Description string `json:"description,omitempty"`
 }
 
 // Verify onInconclusive and onTimeout values.
@@ -377,6 +445,10 @@ type GateApproval struct {
 	// Actor is the Approval's verified actor stamp (docs/actors.md).
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
+	// Fields are the Approval's structured values (spec.fields).
+	// +kubebuilder:validation:MaxProperties=16
+	// +optional
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // GateApprovalStatus records how the gate counted one approval.
@@ -399,6 +471,10 @@ type GateApprovalStatus struct {
 	// Actor is who decided: the Approval's actor stamp (docs/actors.md).
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
+	// Fields are the decision's values of the fields the gate declares,
+	// each cut to 256 bytes (the Approval holds them whole).
+	// +optional
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // PolicyGateOverride is a time-limited emergency override record.

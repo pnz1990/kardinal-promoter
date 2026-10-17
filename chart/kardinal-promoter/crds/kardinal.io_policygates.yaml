@@ -123,6 +123,88 @@ spec:
                       agent of that sponsor, and a person's version not by the person's own
                       agents.
                     type: boolean
+                  fields:
+                    description: |-
+                      Fields are the structured values an approve must carry (Approval
+                      spec.fields): an approve that does not satisfy them does not count,
+                      and status.approvals says why. A reject needs none. The values of the
+                      counted approvals are approvals.fields.<name> in the expression.
+                    items:
+                      description: ApprovalField is one structured value an approval
+                        gate asks for.
+                      properties:
+                        description:
+                          description: |-
+                            Description is what the field asks, shown by kardinal approve and the
+                            UI's approval form.
+                          maxLength: 512
+                          type: string
+                        mustBe:
+                          description: |-
+                            MustBe is the one value accepted: for a bool, "true" for an
+                            acknowledgement the approver must give.
+                          maxLength: 1024
+                          type: string
+                        name:
+                          description: |-
+                            Name is the field's name in Approval spec.fields and in
+                            approvals.fields.<name>.
+                          pattern: ^[a-zA-Z][a-zA-Z0-9_]{0,62}$
+                          type: string
+                        pattern:
+                          description: |-
+                            Pattern is a regular expression (RE2, as CEL's matches) a string or
+                            url value must match. A pattern that does not compile makes the field
+                            impossible to satisfy, and the gate says so.
+                          maxLength: 1024
+                          type: string
+                        required:
+                          description: Required means an approve without the field
+                            does not count.
+                          type: boolean
+                        type:
+                          default: string
+                          description: |-
+                            Type is how the value is read: string, bool (true or false), int, url
+                            (https or http, with a host) or enum (one of values).
+                          enum:
+                          - string
+                          - bool
+                          - int
+                          - url
+                          - enum
+                          type: string
+                        values:
+                          description: Values are an enum field's choices.
+                          items:
+                            maxLength: 253
+                            type: string
+                          maxItems: 64
+                          type: array
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: an enum field lists its values
+                        rule: self.type != 'enum' || (has(self.values) && size(self.values)
+                          > 0)
+                      - message: values are for an enum field
+                        rule: '!has(self.values) || size(self.values) == 0 || self.type
+                          == ''enum'''
+                      - message: a pattern is for a string or url field
+                        rule: '!has(self.pattern) || self.type == ''string'' || self.type
+                          == ''url'''
+                      - message: a bool field's mustBe is true or false
+                        rule: '!has(self.mustBe) || self.type != ''bool'' || self.mustBe
+                          in [''true'', ''false'']'
+                      - message: an enum field's mustBe is one of its values
+                        rule: '!has(self.mustBe) || self.type != ''enum'' || !has(self.values)
+                          || self.mustBe in self.values'
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   required:
                     default: 1
                     description: |-
@@ -253,6 +335,12 @@ spec:
                       description: Environment is the environment the decision is
                         for.
                       type: string
+                    fields:
+                      additionalProperties:
+                        type: string
+                      description: Fields are the Approval's structured values (spec.fields).
+                      maxProperties: 16
+                      type: object
                     groups:
                       description: Groups are the approver's groups that count for
                         allowedGroups.
@@ -852,6 +940,13 @@ spec:
                     decision:
                       description: Decision is approve or reject.
                       type: string
+                    fields:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Fields are the decision's values of the fields the gate declares,
+                        each cut to 256 bytes (the Approval holds them whole).
+                      type: object
                     firstSeenAt:
                       description: FirstSeenAt is when the gate first saw the decision.
                       format: date-time
@@ -1181,6 +1276,14 @@ spec:
                             event occurred.
                           minLength: 1
                           type: string
+                        fields:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Fields are an ApprovalRecorded or ApprovalRevoked decision's
+                            structured values (Approval spec.fields) the gate declares, whole.
+                          maxProperties: 16
+                          type: object
                         message:
                           description: Message is a human-readable description of
                             the event.

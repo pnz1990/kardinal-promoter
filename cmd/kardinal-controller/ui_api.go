@@ -636,6 +636,20 @@ type uiGateApproval struct {
 	Rejected bool `json:"rejected,omitempty"`
 	// Decisions are status.approvals, in the order the gate recorded them.
 	Decisions []uiGateDecision `json:"decisions,omitempty"`
+	// Fields are the structured values an approve must carry
+	// (spec.approval.fields): the approval form renders one input each.
+	Fields []uiApprovalField `json:"fields,omitempty"`
+}
+
+// uiApprovalField is one declared approval field (spec.approval.fields).
+type uiApprovalField struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required,omitempty"`
+	Pattern     string   `json:"pattern,omitempty"`
+	MustBe      string   `json:"mustBe,omitempty"`
+	Values      []string `json:"values,omitempty"`
+	Description string   `json:"description,omitempty"`
 }
 
 // uiGateDecision is one approve or reject decision as the gate counted it.
@@ -646,6 +660,8 @@ type uiGateDecision struct {
 	Reason      string `json:"reason,omitempty"`
 	Comment     string `json:"comment,omitempty"`
 	FirstSeenAt string `json:"firstSeenAt,omitempty"`
+	// Fields are the decision's values of the declared fields.
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // gateApproval is the uiGateApproval of g, or nil without spec.approval.
@@ -656,8 +672,16 @@ func gateApproval(g *v1alpha1.PolicyGate) *uiGateApproval {
 	}
 	out := &uiGateApproval{Required: max(pol.Required, 1), AllowedUsers: pol.AllowedUsers,
 		AllowedGroups: pol.AllowedGroups, ExcludeAuthor: pol.ExcludeAuthor}
+	for _, f := range pol.Fields {
+		t := f.Type
+		if t == "" {
+			t = v1alpha1.ApprovalFieldString
+		}
+		out.Fields = append(out.Fields, uiApprovalField{Name: f.Name, Type: t, Required: f.Required, Pattern: f.Pattern,
+			MustBe: f.MustBe, Values: f.Values, Description: f.Description})
+	}
 	for _, a := range g.Status.Approvals {
-		d := uiGateDecision{User: a.User, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason, Comment: a.Comment}
+		d := uiGateDecision{User: a.User, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason, Comment: a.Comment, Fields: a.Fields}
 		if a.FirstSeenAt != nil {
 			d.FirstSeenAt = a.FirstSeenAt.UTC().Format(time.RFC3339)
 		}

@@ -415,12 +415,39 @@ func approvalPolicyData(gate kardinalv1alpha1.PolicyGate) map[string]interface{}
 		// types the PolicyGateData node from its data, and a field no entry
 		// has is an undefined field at compile time, optional or not.
 		"allowAgents": p.AllowAgents, "allowedAgents": toInterfaces(p.AllowedAgents)}
-	// requiredWhen only when set: the collection copies the policy whole and
-	// reads no field of it.
+	// requiredWhen and fields only when set: the collection copies the
+	// policy whole and reads no field of it.
 	if p.RequiredWhen != "" {
 		policy["requiredWhen"] = p.RequiredWhen
 	}
+	if len(p.Fields) > 0 {
+		policy["fields"] = approvalFieldsData(p.Fields)
+	}
 	return policy
+}
+
+// approvalFieldsData is approval.fields as Graph data. An optional key is
+// left out when empty: the instance's CRD rules refuse, for example, an
+// empty pattern on a bool field.
+func approvalFieldsData(fields []kardinalv1alpha1.ApprovalField) []interface{} {
+	out := make([]interface{}, len(fields))
+	for i, f := range fields {
+		typ := f.Type
+		if typ == "" {
+			typ = kardinalv1alpha1.ApprovalFieldString
+		}
+		m := map[string]interface{}{"name": f.Name, "type": typ, "required": f.Required}
+		for k, v := range map[string]string{"pattern": f.Pattern, "mustBe": f.MustBe, "description": f.Description} {
+			if v != "" {
+				m[k] = v
+			}
+		}
+		if len(f.Values) > 0 {
+			m["values"] = toInterfaces(f.Values)
+		}
+		out[i] = m
+	}
+	return out
 }
 
 // approvalPolicyFromData is the inverse of approvalPolicyData.
@@ -443,6 +470,24 @@ func approvalPolicyFromData(p map[string]interface{}) *kardinalv1alpha1.GateAppr
 		}
 	}
 	out.RequiredWhen, _ = p["requiredWhen"].(string)
+	fields, _ := p["fields"].([]interface{})
+	for _, raw := range fields {
+		m, _ := raw.(map[string]interface{})
+		f := kardinalv1alpha1.ApprovalField{}
+		f.Name, _ = m["name"].(string)
+		f.Type, _ = m["type"].(string)
+		f.Required, _ = m["required"].(bool)
+		f.Pattern, _ = m["pattern"].(string)
+		f.MustBe, _ = m["mustBe"].(string)
+		f.Description, _ = m["description"].(string)
+		values, _ := m["values"].([]interface{})
+		for _, v := range values {
+			if s, ok := v.(string); ok {
+				f.Values = append(f.Values, s)
+			}
+		}
+		out.Fields = append(out.Fields, f)
+	}
 	return out
 }
 

@@ -80,6 +80,12 @@ type AuditEventSpec struct {
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
 
+	// Fields are an ApprovalRecorded or ApprovalRevoked decision's
+	// structured values (Approval spec.fields) the gate declares, whole.
+	// +kubebuilder:validation:MaxProperties=16
+	// +optional
+	Fields map[string]string `json:"fields,omitempty"`
+
 	// Request is the API request of an APIWrite event. It records no body
 	// and no token.
 	// +optional

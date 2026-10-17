@@ -326,6 +326,7 @@ The decisions `kardinal approve` recorded for the gate instance's Bundle and env
 | `approvals.users` | list | `["alice@example.com"]` | Always; the users whose approval counts, sorted |
 | `approvals.rejected` | bool | `false` | Always; `true` when a counted user rejected |
 | `approvals.met` | bool | `false` | Always; `true` when the gate has no policy, its policy is met, or `approval.requiredWhen` is false now |
+| `approvals.fields.<name>` | list of strings | `["CHG0031337"]` | For each field the gate declares in `approval.fields`: the values the counted approvals gave, in the order of `approvals.users` (empty when none did). A name the gate does not declare is an evaluation error, so the gate fails closed ([Approval fields](../approvals.md#approval-fields)) |
 
 Decisions count per party: a person, or an agent together with its sponsor, is one vote, and
 `approvals.count` and `approvals.users` count and list parties. An agent's approval counts only on

@@ -24,12 +24,16 @@ Approving before the Bundle reaches the gate is fine.
 
   --decision reject   records a rejection: it blocks the gate.
   --revoke            deletes your Approval for the Bundle and environment.
+  --field name=value  a value the gate's approval.fields asks for (repeatable).
+                      A required one you leave out is asked for at a terminal
+                      and refused otherwise; a value the gate does not accept
+                      is refused with its reason, before anything is written.
 
 Running approve again with the same decision does nothing; with another
 decision it replaces yours. Your Approval is found by its labels and
 spec.user, not by its name; if the name it would get is taken, the API
 server generates one. An Approval belongs to its Bundle and is deleted
-with it. See docs/approvals.md.
+with it. See docs/approvals.md (Approval fields for --field).
 
 ```
 kardinal approve <pipeline> <env> [flags]
@@ -48,18 +52,22 @@ kardinal approve <pipeline> <env> [flags]
 
   # take your decision back
   kardinal approve my-app prod --revoke
+
+  # a gate that asks for a change ticket and an acknowledgement (kardinal why lists them)
+  kardinal approve my-app prod --field ticketID=CHG0031337 --field riskAcknowledged=true
 ```
 
 ### Options
 
 ```
-      --comment string    Note shown with the decision
-      --decision string   approve or reject (default "approve")
-  -e, --env string        Environment the approval is for (or give it after the pipeline)
-  -h, --help              help for approve
-      --revoke            Delete your Approval instead of recording one
-      --version string    Approve only if this is the version waiting (the image tag, config commit or chart version)
-      --yes               Do not ask for confirmation on a terminal
+      --comment string      Note shown with the decision
+      --decision string     approve or reject (default "approve")
+  -e, --env string          Environment the approval is for (or give it after the pipeline)
+      --field stringArray   A value the gate's approval asks for, as name=value (repeatable): kardinal why lists them
+  -h, --help                help for approve
+      --revoke              Delete your Approval instead of recording one
+      --version string      Approve only if this is the version waiting (the image tag, config commit or chart version)
+      --yes                 Do not ask for confirmation on a terminal
 ```
 
 ### Options inherited from parent commands

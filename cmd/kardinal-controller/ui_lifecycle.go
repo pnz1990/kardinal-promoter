@@ -382,9 +382,11 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 //
 // Request body (JSON):
 //
-//	{"bundle": "app-v2", "environment": "prod", "namespace": "default", "decision": "approve", "comment": "LGTM"}
+//	{"bundle": "app-v2", "environment": "prod", "namespace": "default", "decision": "approve", "comment": "LGTM",
+//	 "fields": {"ticketID": "CHG0031337"}}
 //
-// 400 bad decision or unknown environment; 403 no verified identity or not
+// 400 bad decision, unknown environment or fields the gate's approval.fields
+// does not accept; 403 no verified identity or not
 // allowed; 404 unknown Bundle or nothing to revoke; 409 a halted Bundle.
 func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -418,7 +420,7 @@ func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	outcome, a, err := lifecycle.RecordApproval(r.Context(), s.client, lifecycle.ApprovalRequest{
 		Namespace: ns, Bundle: req.Bundle, Environment: req.Environment, User: user.Username, Groups: user.Groups,
-		Decision: req.Decision, Comment: req.Comment, Revoke: req.Revoke, Via: "ui", Actor: stamp,
+		Decision: req.Decision, Comment: req.Comment, Revoke: req.Revoke, Via: "ui", Actor: stamp, Fields: req.Fields,
 	})
 	if err != nil {
 		s.writeLifecycleError(w, "approval", err)

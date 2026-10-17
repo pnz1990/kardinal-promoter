@@ -24,3 +24,6 @@ func TestScenarioFreeze(t *testing.T) { policycases.Freeze(t) }
 
 // TestScenarioRequireStamp runs policycases.RequireStamp. Covers SCEN-POLICY-STAMP-01.
 func TestScenarioRequireStamp(t *testing.T) { policycases.RequireStamp(t) }
+
+// TestScenarioApprovalFields runs policycases.ApprovalFields. Covers SCEN-POLICY-FIELDS-01.
+func TestScenarioApprovalFields(t *testing.T) { policycases.ApprovalFields(t) }

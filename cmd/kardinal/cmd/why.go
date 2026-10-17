@@ -496,11 +496,15 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 			}
 			break
 		}
-		by, next := approvalBy(st, me != nil && !creatorHeld, fmt.Sprintf("kardinal approve %s %s%s", p.Name, env, nsArg(p.Namespace)))
+		by, next := approvalBy(st, me != nil && !creatorHeld, fmt.Sprintf("kardinal approve %s %s%s%s", p.Name, env,
+			fieldFlags(g.Spec.Approval.Fields), nsArg(p.Namespace)))
 		a.sentence = fmt.Sprintf("%s is waiting for %s.", env, by)
 		a.lines = []whyLine{version,
-			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, st.Approved, st.Required)},
-			{"Next", next}}
+			{"Gate", fmt.Sprintf("%s · %d of %d approvals", name, st.Approved, st.Required)}}
+		if fields := fieldsNeeded(g.Spec.Approval.Fields); fields != "" {
+			a.lines = append(a.lines, whyLine{"Fields", fields})
+		}
+		a.lines = append(a.lines, whyLine{"Next", next})
 		// Rejected; or, the version not read (so whether excludeAuthor holds
 		// it is unknown), a known rejection is what to say.
 		if st.Block == lifecycle.ApprovalRejected || (creatorHeld && !known && len(st.RejectedBy) > 0) {
@@ -511,7 +515,7 @@ func whyGate(p *v1alpha1.Pipeline, env string, version whyLine, gates []v1alpha1
 				who = strings.Join(by[:len(by)-1], ", ") + " and " + who
 			}
 			a.sentence = fmt.Sprintf("%s was rejected by %s.", env, who)
-			a.lines[2].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>%s", p.Name, nsArg(p.Namespace))
+			a.lines[len(a.lines)-1].value = fmt.Sprintf("ship a fixed version: kardinal ship %s --image <ref>%s", p.Name, nsArg(p.Namespace))
 			a.lines = append(a.lines, whyLine{"Or", fmt.Sprintf("kardinal override %s %s --gate %s --reason <why>%s", p.Name, env, name, nsArg(p.Namespace))})
 		}
 	default:
@@ -751,4 +755,44 @@ func nsArg(ns string) string {
 		return ""
 	}
 	return " -n " + ns
+}
+
+// fieldsNeeded is what an approve must carry for an approval gate's
+// declared fields (approval.fields): "ticketID (ServiceNow change number),
+// riskAcknowledged true"; optional fields in brackets.
+func fieldsNeeded(fields []v1alpha1.ApprovalField) string {
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		part := f.Name
+		switch {
+		case f.MustBe != "":
+			part += " " + f.MustBe
+		case f.Type == v1alpha1.ApprovalFieldEnum:
+			part += " (" + strings.Join(f.Values, " | ") + ")"
+		case f.Description != "":
+			part += " (" + f.Description + ")"
+		}
+		if !f.Required {
+			part = "[" + part + "]"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// fieldFlags is the --field flags kardinal approve needs for the required
+// declared fields: " --field ticketID=<value> --field riskAcknowledged=true".
+func fieldFlags(fields []v1alpha1.ApprovalField) string {
+	out := ""
+	for _, f := range fields {
+		if !f.Required {
+			continue
+		}
+		v := "<" + f.Name + ">"
+		if f.MustBe != "" {
+			v = f.MustBe
+		}
+		out += " --field " + f.Name + "=" + v
+	}
+	return out
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,12 +36,23 @@ func tallyApprovals(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.A
 }
 
 // context is the approvals CEL variable: approvals.count (counted parties),
-// approvals.required, approvals.users, approvals.rejected and approvals.met
-// (the policy is met, or approval.requiredWhen waives it).
+// approvals.required, approvals.users, approvals.rejected, approvals.met
+// (the policy is met, or approval.requiredWhen waives it) and
+// approvals.fields.<name>, the values the counted approvals give for each
+// declared approval field (a list, empty when none gave it; a name the gate
+// does not declare is an error, so the gate fails closed).
 func (t approvalTally) context(met bool) map[string]interface{} {
 	users := make([]interface{}, len(t.Approvers))
 	for i, u := range t.Approvers {
 		users[i] = u
+	}
+	fields := map[string]interface{}{}
+	for name, values := range t.Fields {
+		list := make([]interface{}, len(values))
+		for i, v := range values {
+			list[i] = v
+		}
+		fields[name] = list
 	}
 	return map[string]interface{}{
 		"count":    int64(len(t.Approvers)),
@@ -48,6 +60,7 @@ func (t approvalTally) context(met bool) map[string]interface{} {
 		"users":    users,
 		"rejected": len(t.Rejecters) > 0,
 		"met":      met,
+		"fields":   fields,
 	}
 }
 
@@ -99,7 +112,7 @@ func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1
 	for i, rec := range t.Records {
 		rec.FirstSeenAt = &now
 		for _, old := range gate.Status.Approvals {
-			if old.User == rec.User && old.Decision == rec.Decision && old.FirstSeenAt != nil {
+			if sameDecision(old, rec) && old.FirstSeenAt != nil {
 				rec.FirstSeenAt = old.FirstSeenAt
 				break
 			}
@@ -155,11 +168,18 @@ const (
 
 func hasDecision(list []kardinalv1alpha1.GateApprovalStatus, rec kardinalv1alpha1.GateApprovalStatus) bool {
 	for _, o := range list {
-		if o.User == rec.User && o.Decision == rec.Decision {
+		if sameDecision(o, rec) {
 			return true
 		}
 	}
 	return false
+}
+
+// sameDecision reports whether a and b record one decision: the same user,
+// decision and fields. An Approval replaced with other fields is a new
+// decision, recorded and audited anew.
+func sameDecision(a, b kardinalv1alpha1.GateApprovalStatus) bool {
+	return a.User == b.User && a.Decision == b.Decision && equality.Semantic.DeepEqual(a.Fields, b.Fields)
 }
 
 // approvalAuditEntry is the outbox entry recording that rec appeared in
@@ -176,7 +196,9 @@ func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	if rec.FirstSeenAt != nil {
 		seen = rec.FirstSeenAt.UTC().Format(time.RFC3339)
 	}
-	sum := sha256.Sum256([]byte(action + "\x00" + rec.User + "\x00" + rec.Decision + "\x00" + seen))
+	// The fields are part of the decision: an Approval replaced with other
+	// fields within the same second is another record.
+	sum := sha256.Sum256([]byte(action + "\x00" + rec.User + "\x00" + rec.Decision + "\x00" + seen + fieldsKey(rec.Fields)))
 	suffix := "-approval-" + hex.EncodeToString(sum[:])[:12]
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
@@ -191,8 +213,63 @@ func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	if rec.Comment != "" {
 		msg += ": " + rec.Comment
 	}
+	if s := fieldsSummary(rec.Fields); s != "" {
+		msg += "; fields: " + s
+	}
 	return audit.Entry(sanitizeGateName(base+suffix), gateAuditLabels(labels, action), kardinalv1alpha1.AuditEventSpec{
 		BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
 		Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: msg, Actor: rec.Actor,
+		Fields: wholeFields(gate, rec),
 	}, metav1.NewTime(r.now())), true
+}
+
+// fieldsSummary is fields as "a=x, b=y", sorted by name (values as
+// status.approvals keeps them, cut to MaxRecordedFieldValue).
+func fieldsSummary(fields map[string]string) string {
+	names := make([]string, 0, len(fields))
+	for n := range fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = n + "=" + fields[n]
+	}
+	return strings.Join(parts, ", ")
+}
+
+// wholeFields is rec's declared fields as the decision gave them, whole,
+// for the AuditEvent's structured field: from the gate's spec.approvals
+// (status.approvals keeps them cut).
+func wholeFields(gate *kardinalv1alpha1.PolicyGate, rec kardinalv1alpha1.GateApprovalStatus) map[string]string {
+	if len(rec.Fields) == 0 {
+		return nil
+	}
+	for _, a := range gate.Spec.Approvals {
+		if a.User == rec.User && a.Decision == rec.Decision &&
+			equality.Semantic.DeepEqual(lifecycle.DeclaredFields(gate.Spec.Approval, a.Fields, lifecycle.MaxRecordedFieldValue), rec.Fields) {
+			if whole := lifecycle.DeclaredFields(gate.Spec.Approval, a.Fields, 0); whole != nil {
+				return whole
+			}
+		}
+	}
+	return rec.Fields
+}
+
+// fieldsKey is fields in a stable form for a record's name: "" without any,
+// so records without fields keep the names they had before fields existed.
+func fieldsKey(fields map[string]string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(fields))
+	for n := range fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, n := range names {
+		b.WriteString("\x00" + n + "=" + fields[n])
+	}
+	return b.String()
 }
