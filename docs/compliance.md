@@ -46,6 +46,21 @@ to the pack's files, and `manifest.json` records the exporter, the period, the f
 (`-n`, `--pipeline`, `--environment`) and each file's record count and SHA-256
 ([kardinal audit evidence-pack](reference/cli/kardinal-audit-evidence-pack.md)).
 
+Producing a pack needs read on every kind it holds, and the chart has two ClusterRoles that grant
+exactly that and no write ([User roles](guides/security.md#user-roles)):
+`<release>-auditor` reads the namespaced records (AuditEvents, versions, Approvals, gates,
+Verdicts, Pipelines), and `<release>-auditor-cluster` the cluster-scoped ones (ChangeWindows,
+AgentIdentities) and the admission policies. An auditor of some namespaces gets the first in each
+of them with a RoleBinding, and the second cluster-wide; they then export each namespace with
+`-n`:
+
+```bash
+kubectl create rolebinding auditors -n payments --clusterrole=kardinal-promoter-auditor --group=auditors
+kubectl create clusterrolebinding auditors --clusterrole=kardinal-promoter-auditor-cluster --group=auditors
+```
+
+An auditor of the whole cluster gets both with ClusterRoleBindings and exports with `-A`.
+
 Check the files against their checksums after extracting:
 
 ```bash
