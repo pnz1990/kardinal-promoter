@@ -147,7 +147,7 @@ func TestInitCmd_Flags(t *testing.T) {
 // side is TestCLI_Init, CLI-INIT-03).
 func TestInitCmd_InsecureHTTP(t *testing.T) {
 	keepStyle(t)
-	const warning = "Warning: --repo is http://"
+	const warning = "warning: --repo is http://"
 	cases := []struct {
 		name    string
 		args    []string
