@@ -2873,6 +2873,11 @@ func (in *ImageVerificationStatus) DeepCopy() *ImageVerificationStatus {
 func (in *JiraChangeRequest) DeepCopyInto(out *JiraChangeRequest) {
 	*out = *in
 	out.ChangeRequestAuth = in.ChangeRequestAuth
+	if in.LinkProjects != nil {
+		in, out := &in.LinkProjects, &out.LinkProjects
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Template != nil {
 		in, out := &in.Template, &out.Template
 		*out = make(map[string]string, len(*in))
@@ -2887,6 +2892,11 @@ func (in *JiraChangeRequest) DeepCopyInto(out *JiraChangeRequest) {
 	}
 	if in.RejectedStatuses != nil {
 		in, out := &in.RejectedStatuses, &out.RejectedStatuses
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.ApprovedResolutions != nil {
+		in, out := &in.ApprovedResolutions, &out.ApprovedResolutions
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

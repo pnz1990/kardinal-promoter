@@ -80,11 +80,34 @@ spec:
               jira:
                 description: Jira configures provider jira.
                 properties:
+                  apiVersion:
+                    default: "3"
+                    description: |-
+                      APIVersion is the REST API version: 3 for Jira Cloud (a description is
+                      sent as an Atlassian Document Format paragraph), 2 for Jira Data Center.
+                    enum:
+                    - "2"
+                    - "3"
+                    type: string
+                  approvedResolutions:
+                    description: |-
+                      ApprovedResolutions are the resolution names that count as approved:
+                      with ApprovedStatuses unset, an issue in ApprovedStatusCategory is
+                      approved only with one of them (many workflows move an issue to a
+                      done status such as Declined without a resolution); with
+                      ApprovedStatuses set, an issue in one of them is approved unresolved
+                      or with one of them. Any other resolution (Duplicate, Declined, one
+                      nobody configured) is closed, never approved.
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
                   approvedStatusCategory:
                     default: done
                     description: |-
                       ApprovedStatusCategory is the status category (new, indeterminate,
-                      done) that means approved when ApprovedStatuses is unset.
+                      done) that, with ApprovedStatuses unset, approves an issue resolved in
+                      ApprovedResolutions (an unresolved one never).
                     enum:
                     - new
                     - indeterminate
@@ -137,10 +160,20 @@ spec:
                       ...).
                     maxLength: 64
                     type: string
+                  linkProjects:
+                    description: LinkProjects are further project keys a linked issue
+                      may be in.
+                    items:
+                      pattern: ^[A-Z][A-Z0-9_]{0,63}$
+                      type: string
+                    maxItems: 16
+                    type: array
                   project:
-                    description: Project is the key of the project issues are opened
-                      in.
-                    maxLength: 64
+                    description: |-
+                      Project is the key of the project issues are opened in, searched and
+                      linked from (with LinkProjects). An issue of any other project is
+                      refused.
+                    pattern: ^[A-Z][A-Z0-9_]{0,63}$
                     type: string
                   rejectedStatuses:
                     description: RejectedStatuses are the status names that mean rejected.
@@ -168,6 +201,7 @@ spec:
                 required:
                 - baseURL
                 - credentialsSecretRef
+                - project
                 type: object
               link:
                 description: Link says where mode link reads the ticket key.

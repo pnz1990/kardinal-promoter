@@ -167,7 +167,8 @@ func (s *ServiceNow) Find(ctx context.Context, req Request) (Reading, bool, erro
 	if err != nil || !ok {
 		return Reading{}, false, err
 	}
-	if by, _ := rec.field("sys_created_by"); by != user {
+	// user_name compares case-insensitively in ServiceNow.
+	if by, _ := rec.field("sys_created_by"); !strings.EqualFold(by, user) {
 		return Reading{}, false, nil // the instance ignored the filter: not ours
 	}
 	r, err := s.reading(base, sn, req, rec, nil)

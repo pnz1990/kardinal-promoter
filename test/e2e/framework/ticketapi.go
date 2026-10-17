@@ -151,3 +151,32 @@ func (e *Env) FakeTicketRequests(ctx context.Context, match string) ([]FakeTicke
 	}
 	return out, nil
 }
+
+// FakeJiraIssue is an issue of the fake Jira.
+type FakeJiraIssue struct {
+	ID         string                 `json:"id"`
+	Key        string                 `json:"key"`
+	Project    string                 `json:"project"`
+	Status     string                 `json:"status"`
+	Category   string                 `json:"category"`
+	Resolution string                 `json:"resolution"`
+	Labels     []string               `json:"labels"`
+	Fields     map[string]interface{} `json:"fields"`
+}
+
+// FakeJiraIssues returns the fake Jira's issues.
+func (e *Env) FakeJiraIssues(ctx context.Context) ([]FakeJiraIssue, error) {
+	var out []FakeJiraIssue
+	return out, e.ticketControl(ctx, "GET", nil, &out, "jira")
+}
+
+// SetFakeJiraIssue changes the fake Jira issue key: its status, status
+// category, resolution and fields where set.
+func (e *Env) SetFakeJiraIssue(t *testing.T, key string, change map[string]interface{}) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := e.ticketControl(ctx, "PUT", change, nil, "jira", key); err != nil {
+		t.Fatal(err)
+	}
+}

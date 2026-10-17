@@ -167,10 +167,24 @@ type JiraChangeRequest struct {
 
 	ChangeRequestAuth `json:",inline"`
 
-	// Project is the key of the project issues are opened in.
-	// +kubebuilder:validation:MaxLength=64
+	// APIVersion is the REST API version: 3 for Jira Cloud (a description is
+	// sent as an Atlassian Document Format paragraph), 2 for Jira Data Center.
+	// +kubebuilder:validation:Enum="2";"3"
+	// +kubebuilder:default="3"
 	// +optional
-	Project string `json:"project,omitempty"`
+	APIVersion string `json:"apiVersion,omitempty"`
+
+	// Project is the key of the project issues are opened in, searched and
+	// linked from (with LinkProjects). An issue of any other project is
+	// refused.
+	// +kubebuilder:validation:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
+	Project string `json:"project"`
+
+	// LinkProjects are further project keys a linked issue may be in.
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
+	// +optional
+	LinkProjects []string `json:"linkProjects,omitempty"`
 
 	// IssueType is the issue type opened (Change, Task, ...).
 	// +kubebuilder:validation:MaxLength=64
@@ -191,7 +205,8 @@ type JiraChangeRequest struct {
 	ApprovedStatuses []string `json:"approvedStatuses,omitempty"`
 
 	// ApprovedStatusCategory is the status category (new, indeterminate,
-	// done) that means approved when ApprovedStatuses is unset.
+	// done) that, with ApprovedStatuses unset, approves an issue resolved in
+	// ApprovedResolutions (an unresolved one never).
 	// +kubebuilder:validation:Enum=new;indeterminate;done
 	// +kubebuilder:default=done
 	// +optional
@@ -201,6 +216,17 @@ type JiraChangeRequest struct {
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	RejectedStatuses []string `json:"rejectedStatuses,omitempty"`
+
+	// ApprovedResolutions are the resolution names that count as approved:
+	// with ApprovedStatuses unset, an issue in ApprovedStatusCategory is
+	// approved only with one of them (many workflows move an issue to a
+	// done status such as Declined without a resolution); with
+	// ApprovedStatuses set, an issue in one of them is approved unresolved
+	// or with one of them. Any other resolution (Duplicate, Declined, one
+	// nobody configured) is closed, never approved.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	ApprovedResolutions []string `json:"approvedResolutions,omitempty"`
 
 	// CancelledResolutions are the resolution names that mean cancelled
 	// (default: Won't Do).

@@ -3,10 +3,11 @@
 
 // hack/e2e/ticketapi is the live e2e suites' stand-in for the ticketing
 // systems ChangeRequests call (hack/e2e/components/ticketapi.sh): the
-// ServiceNow Table API subset kardinal uses, over HTTPS with a certificate
-// from the suite's own CA (the controller trusts it through
-// changeRequest.caBundle), with basic auth. Tests drive the tickets through
-// a plain-HTTP control port reached through the API server's service proxy.
+// ServiceNow Table API and Jira REST API subsets kardinal uses, over HTTPS
+// with a certificate from the suite's own CA (the controller trusts it
+// through changeRequest.caBundle), with basic auth (Jira also takes the
+// password as a bearer token). Tests drive the tickets through a plain-HTTP
+// control port reached through the API server's service proxy.
 //
 // HTTPS (-listen-tls), basic auth -user / -password:
 //
@@ -18,6 +19,10 @@
 // Every answer uses sysparm_display_value=all: each field is
 // {"display_value", "value"}.
 //
+//	POST /rest/api/{2,3}/issue                   create (status To Do, category new)
+//	POST /rest/api/3/search/jql, /rest/api/2/search  {"jql": "labels = \"<l>\" ...", "maxResults": 1}
+//	GET  /rest/api/{2,3}/issue/<id or key>
+//
 // HTTP control (-listen):
 //
 //	GET  /_healthz
@@ -25,6 +30,9 @@
 //	POST /_control/servicenow                   {"number"?, "correlation_id"?, "fields"?} adds a ticket (one
 //	                                            someone else opened); answers it
 //	PUT  /_control/servicenow/<number>          {"state"?, "approval"?, "approvers"?, "fields"?} changes it
+//	GET  /_control/jira                         the issues, as JSON
+//	POST /_control/jira                         {"project", "fields"?, "labels"?, "creator"?, "reporter"?} adds an issue
+//	PUT  /_control/jira/<key>                   {"status"?, "category"?, "resolution"?, "fields"?} changes it
 //	PUT  /_control/fail                         {"status":429,"retryAfter":"5","count":2,"match":"..."}: the next
 //	                                            count API requests whose path?query contains match fail so
 //	                                            ("count":0 clears)
@@ -104,10 +112,30 @@ type failure struct {
 	Match string `json:"match"`
 }
 
+// issue is one Jira issue.
+type issue struct {
+	ID         string   `json:"id"`
+	Key        string   `json:"key"`
+	Project    string   `json:"project"`
+	Status     string   `json:"status"`
+	Category   string   `json:"category"`
+	Resolution string   `json:"resolution"`
+	Labels     []string `json:"labels"`
+	// Creator is who created it (Jira sets it; nobody edits it): the
+	// authenticated user for a create, someone.else unless given for an
+	// issue the control port adds. Reporter is editable and defaults to the
+	// creator.
+	Creator  string                 `json:"creator"`
+	Reporter string                 `json:"reporter"`
+	Fields   map[string]interface{} `json:"fields"`
+	Created  time.Time              `json:"created"`
+}
+
 type server struct {
 	user, password string
 	mu             sync.Mutex
 	tickets        []*ticket
+	issues         []*issue
 	records        []record
 	fail           failure
 }
@@ -188,6 +216,44 @@ func (s *server) control(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, s.add(&t))
+	case path == "_control/jira" && r.Method == http.MethodGet:
+		writeJSON(w, http.StatusOK, s.issues)
+	case path == "_control/jira" && r.Method == http.MethodPost:
+		var in issue
+		if json.Unmarshal(body, &in) != nil || in.Project == "" {
+			http.Error(w, `POST {"project":"CHG"}`, http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, s.addIssue(&in))
+	case strings.HasPrefix(path, "_control/jira/") && r.Method == http.MethodPut:
+		is := s.issueByRef(strings.TrimPrefix(path, "_control/jira/"))
+		if is == nil {
+			http.NotFound(w, r)
+			return
+		}
+		var in struct {
+			Status     *string                `json:"status"`
+			Category   *string                `json:"category"`
+			Resolution *string                `json:"resolution"`
+			Fields     map[string]interface{} `json:"fields"`
+		}
+		if json.Unmarshal(body, &in) != nil {
+			http.Error(w, "PUT a change", http.StatusBadRequest)
+			return
+		}
+		if in.Status != nil {
+			is.Status = *in.Status
+		}
+		if in.Category != nil {
+			is.Category = *in.Category
+		}
+		if in.Resolution != nil {
+			is.Resolution = *in.Resolution
+		}
+		for k, v := range in.Fields {
+			is.Fields[k] = v
+		}
+		writeJSON(w, http.StatusOK, is)
 	case strings.HasPrefix(path, "_control/servicenow/") && r.Method == http.MethodPut:
 		t := s.byNumber(strings.TrimPrefix(path, "_control/servicenow/"))
 		if t == nil {
@@ -256,6 +322,10 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 // serve answers one API request and returns its status; the caller holds s.mu.
 func (s *server) serve(w http.ResponseWriter, r *http.Request, body []byte, rec *record) int {
 	user, pass, ok := r.BasicAuth()
+	if bearer, isBearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); isBearer &&
+		strings.HasPrefix(r.URL.Path, "/rest/api/") {
+		user, pass, ok = s.user, bearer, true // a Data Center personal access token
+	}
 	switch {
 	case !ok:
 		rec.Auth = "no basic credentials"
@@ -344,8 +414,153 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, body []byte, rec 
 		writeJSON(w, http.StatusOK, map[string]interface{}{"result": out})
 		return http.StatusOK
 	}
+	if strings.HasPrefix(r.URL.Path, "/rest/api/") {
+		return s.jira(w, r, body, user)
+	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"status": "failure"})
 	return http.StatusNotFound
+}
+
+// addIssue makes an issue; the caller holds s.mu.
+func (s *server) addIssue(is *issue) *issue {
+	n := len(s.issues) + 1
+	is.ID = fmt.Sprintf("%d", 10000+n)
+	is.Key = fmt.Sprintf("%s-%d", is.Project, n)
+	if is.Status == "" {
+		is.Status, is.Category = "To Do", "new"
+	}
+	if is.Fields == nil {
+		is.Fields = map[string]interface{}{}
+	}
+	if is.Creator == "" {
+		is.Creator = "someone.else"
+	}
+	if is.Reporter == "" {
+		is.Reporter = is.Creator
+	}
+	is.Created = time.Now().UTC()
+	s.issues = append(s.issues, is)
+	return is
+}
+
+func (s *server) issueByRef(ref string) *issue {
+	for _, is := range s.issues {
+		if is.ID == ref || is.Key == ref {
+			return is
+		}
+	}
+	return nil
+}
+
+// jira answers the Jira REST API; the caller holds s.mu.
+func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte, user string) int {
+	rest := strings.TrimPrefix(r.URL.Path, "/rest/api/")
+	version, rest, _ := strings.Cut(rest, "/")
+	if version != "2" && version != "3" {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{"errorMessages": []string{"no such API"}})
+		return http.StatusNotFound
+	}
+	notFound := func() int {
+		writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"errorMessages": []string{"Issue does not exist or you do not have permission to see it."}, "errors": map[string]string{}})
+		return http.StatusNotFound
+	}
+	switch {
+	case r.Method == http.MethodPost && rest == "issue":
+		var in struct {
+			Fields map[string]interface{} `json:"fields"`
+		}
+		if json.Unmarshal(body, &in) != nil || in.Fields == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"errorMessages": []string{"bad request"}})
+			return http.StatusBadRequest
+		}
+		project, _ := in.Fields["project"].(map[string]interface{})
+		key, _ := project["key"].(string)
+		if key == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"errors": map[string]string{"project": "project is required"}})
+			return http.StatusBadRequest
+		}
+		is := &issue{Project: key, Creator: user, Fields: map[string]interface{}{}}
+		for k, v := range in.Fields {
+			switch k {
+			case "project":
+			case "labels":
+				for _, l := range v.([]interface{}) {
+					if ls, ok := l.(string); ok {
+						is.Labels = append(is.Labels, ls)
+					}
+				}
+			default:
+				is.Fields[k] = v
+			}
+		}
+		is = s.addIssue(is)
+		writeJSON(w, http.StatusCreated, map[string]string{"id": is.ID, "key": is.Key,
+			"self": "https://" + r.Host + "/rest/api/" + version + "/issue/" + is.ID})
+		return http.StatusCreated
+	case r.Method == http.MethodPost && ((version == "3" && rest == "search/jql") || (version == "2" && rest == "search")):
+		var in struct {
+			JQL        string `json:"jql"`
+			MaxResults int    `json:"maxResults"`
+		}
+		_ = json.Unmarshal(body, &in)
+		quoted := func(field string) string {
+			_, rest, ok := strings.Cut(in.JQL, field+` = "`)
+			if !ok {
+				return ""
+			}
+			v, _, _ := strings.Cut(rest, `"`)
+			return v
+		}
+		label, project := quoted("labels"), quoted("project")
+		mine := strings.Contains(in.JQL, "creator = currentUser()")
+		list := append([]*issue(nil), s.issues...)
+		sort.SliceStable(list, func(i, j int) bool { return list[i].Created.Before(list[j].Created) })
+		out := []map[string]interface{}{}
+		for _, is := range list {
+			for _, l := range is.Labels {
+				if l == label && (project == "" || is.Project == project) && (!mine || is.Creator == user) &&
+					(in.MaxResults == 0 || len(out) < in.MaxResults) {
+					out = append(out, jiraJSON(is, r.Host, version))
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"issues": out})
+		return http.StatusOK
+	case r.Method == http.MethodGet && rest == "myself":
+		writeJSON(w, http.StatusOK, map[string]string{"accountId": user, "name": user})
+		return http.StatusOK
+	case r.Method == http.MethodGet && strings.HasPrefix(rest, "issue/"):
+		is := s.issueByRef(strings.TrimPrefix(rest, "issue/"))
+		if is == nil {
+			return notFound()
+		}
+		writeJSON(w, http.StatusOK, jiraJSON(is, r.Host, version))
+		return http.StatusOK
+	}
+	return notFound()
+}
+
+// jiraJSON is is as the REST API answers it.
+func jiraJSON(is *issue, host, version string) map[string]interface{} {
+	fields := map[string]interface{}{
+		"status":   map[string]interface{}{"name": is.Status, "statusCategory": map[string]string{"key": is.Category}},
+		"labels":   is.Labels,
+		"project":  map[string]string{"key": is.Project},
+		"creator":  map[string]string{"accountId": is.Creator, "name": is.Creator},
+		"reporter": map[string]string{"accountId": is.Reporter, "name": is.Reporter},
+		"created":  is.Created.UTC().Format("2006-01-02T15:04:05.000-0700"),
+	}
+	if is.Resolution != "" {
+		fields["resolution"] = map[string]string{"name": is.Resolution}
+	} else {
+		fields["resolution"] = nil
+	}
+	for k, v := range is.Fields {
+		fields[k] = v
+	}
+	return map[string]interface{}{"id": is.ID, "key": is.Key, "self": "https://" + host + "/rest/api/" + version + "/issue/" + is.ID,
+		"fields": fields}
 }
 
 // display is t as the Table API answers with sysparm_display_value=all,

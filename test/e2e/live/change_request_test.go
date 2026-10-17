@@ -276,6 +276,72 @@ func TestGate_ChangeRequestLinkServiceNow(t *testing.T) {
 	}
 }
 
+// TestGate_ChangeRequestJira (spec 23 §5.2): a prod gate waits for a Jira
+// issue (REST API 3, basic auth with email:API token). Once test is Verified
+// the controller opens one issue in the project with the correlation label
+// and the rendered summary. Resolved Won't Do it is cancelled and the gate
+// says so; moved to Approved (category done) the gate opens and prod
+// promotes, with one issue in all.
+//
+// Covers CHANGE-REQUEST-07.
+func TestGate_ChangeRequestJira(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	// The fake ticketing API takes the same credential for ServiceNow and Jira.
+	e.CreateSecretData(t, a.ns, "jira", true, map[string]string{"token": framework.SnowCredentials(t)})
+	require.NoError(t, e.Client.Create(ctx, &v1alpha1.ChangeRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-change", Namespace: a.ns},
+		Spec: v1alpha1.ChangeRequestSpec{PerPromotion: true, AppliesTo: []string{"prod"}, Provider: "jira", PollInterval: "30s",
+			Jira: &v1alpha1.JiraChangeRequest{BaseURL: framework.TicketAPIURL(t), Project: "CHG", IssueType: "Change", ApprovedStatuses: []string{"Approved"},
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}},
+				Template: map[string]string{"summary": "Promote {{ pipeline.name }} {{ bundle.version }} to {{ environment.name }}",
+					"description": "Opened by kardinal for {{ namespace }}"}}},
+	}))
+	e.CreateGate(t, framework.Gate(a.ns, "cab", "prod", `changeRequests["prod-change"].state == "approved"`, recheck))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	name := "prod-change-prod--" + bundle
+	inst := waitChangeRequest(t, e, a.ns, name, "the instance opened its issue", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		return cr.Status.Ticket != nil && cr.Status.State == "pending" && cr.Status.ProviderState == "To Do",
+			fmt.Sprintf("ticket %v state %q %q conditions %v", cr.Status.Ticket, cr.Status.State, cr.Status.ProviderState, cr.Status.Conditions)
+	})
+	b := getBundle(t, e, a.ns, bundle)
+	label := changerequest.CorrelationKey(fmt.Sprintf("kardinal:%s/%s/prod/%s", a.ns, bundle, b.UID))
+	issuesOf := func() []framework.FakeJiraIssue {
+		all, err := e.FakeJiraIssues(ctx)
+		require.NoError(t, err)
+		var out []framework.FakeJiraIssue
+		for _, is := range all {
+			for _, l := range is.Labels {
+				if l == label {
+					out = append(out, is)
+				}
+			}
+		}
+		return out
+	}
+	issues := issuesOf()
+	require.Len(t, issues, 1)
+	is := issues[0]
+	assert.Equal(t, is.Key, inst.Status.Ticket.Key)
+	assert.True(t, strings.HasSuffix(inst.Status.Ticket.URL, "/browse/"+is.Key), inst.Status.Ticket.URL)
+	assert.Equal(t, fmt.Sprintf("Promote %s %s to prod", pipelineName, fixtures.V2), is.Fields["summary"])
+	assert.Equal(t, map[string]interface{}{"name": "Change"}, is.Fields["issuetype"])
+	assert.Contains(t, fmt.Sprint(is.Fields["description"]), "Opened by kardinal for "+a.ns, "an ADF paragraph")
+
+	e.SetFakeJiraIssue(t, is.Key, map[string]interface{}{"status": "Done", "category": "done", "resolution": "Won't Do"})
+	e.WaitGateReady(t, a.ns, bundle, "prod", "cab", false,
+		fmt.Sprintf("change request prod-change: ticket %s is cancelled (Done / Won't Do)", is.Key), promoteTimeout)
+	a.noStep(t, bundle, "prod", 10*time.Second)
+	e.SetFakeJiraIssue(t, is.Key, map[string]interface{}{"status": "Approved", "category": "done", "resolution": ""})
+	e.WaitGateReady(t, a.ns, bundle, "prod", "cab", true, "", promoteTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assert.Len(t, issuesOf(), 1, "one issue in all")
+}
+
 // changeRequestLabels is labels without the ones kro adds to the objects it
 // applies.
 func changeRequestLabels(labels map[string]string) map[string]string {

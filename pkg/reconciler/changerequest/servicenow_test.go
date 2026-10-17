@@ -361,15 +361,23 @@ func TestServiceNow_AuthAndApprovers(t *testing.T) {
 	assert.Equal(t, "pending", r.State)
 }
 
-// TestServiceNow_EgressGuard: the controller's client refuses a loopback
-// instance (the egress guard), and the reconciler reports it as Refused.
-func TestServiceNow_EgressGuard(t *testing.T) {
-	srv := newSNServer(t, "k")
+// TestProviders_EgressGuard: the controller serves servicenow and jira, and
+// their client refuses a loopback instance (the egress guard), which the
+// reconciler reports as Refused.
+func TestProviders_EgressGuard(t *testing.T) {
 	providers := changerequest.DefaultProviders(changerequest.ProviderOptions{})
-	_, err := providers["servicenow"].Create(context.Background(), snRequestFor(srv.URL))
+	assert.Len(t, providers, 2)
+	sn := newSNServer(t, "k")
+	_, err := providers["servicenow"].Create(context.Background(), snRequestFor(sn.URL))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, egress.ErrBlockedAddress)
-	assert.Empty(t, srv.requests())
+	assert.Empty(t, sn.requests())
+	jira := newJiraServer(t, "k")
+	require.Contains(t, providers, "jira")
+	_, err = providers["jira"].Create(context.Background(), jiraRequestFor(jira.URL))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Empty(t, jira.requests())
 }
 
 // TestLoadRootCAs: the CA file adds to the system roots; a file without a
@@ -438,6 +446,21 @@ func TestServiceNow_PrePlanting(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, found)
 	assert.Contains(t, srv.requests()[len(srv.requests())-1].Query["sysparm_query"], "^sys_created_by=kardinal^")
+
+	// user_name compares case-insensitively in ServiceNow: Kardinal is kardinal.
+	srv.answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/now/table/change_request" {
+			_, _ = w.Write([]byte(strings.Replace(string(fixture(t, "changes.json", key)),
+				`"sys_created_by": {"display_value": "kardinal", "value": "kardinal"}`,
+				`"sys_created_by": {"display_value": "Kardinal", "value": "Kardinal"}`, 1)))
+			return true
+		}
+		return false
+	}
+	_, found, err = sn.Find(context.Background(), snRequestFor(srv.URL))
+	require.NoError(t, err)
+	assert.True(t, found, "the same user in another case")
+	srv.answer = nil
 
 	injected := snRequestFor(srv.URL, func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.IntegrationUser = "x^ORsys_created_byISNOTEMPTY" })
 	_, _, err = sn.Find(context.Background(), injected)
