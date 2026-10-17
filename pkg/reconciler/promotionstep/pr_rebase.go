@@ -157,13 +157,13 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 // has not landed, and the check waits.
 func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
 	env v1alpha1.EnvironmentSpec, want string, landed time.Time) string {
-	if landed.IsZero() {
-		return "commit " + short(want) + " has not landed yet: no step of this promotion has completed"
-	}
 	rh, ok := r.GitClient.(scm.RemoteHeadReader)
 	gr, gok := r.GitClient.(scm.BranchGraphReader)
 	if !ok || !gok || pipeline == nil {
 		return ""
+	}
+	if landed.IsZero() {
+		return "commit " + short(want) + " has not landed yet: no step of this promotion has completed"
 	}
 	unreadable := func(why string) string {
 		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + why
