@@ -30,13 +30,19 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
 
-// auditorRole is the chart's auditor ClusterRole of the e2e release.
-const auditorRole = framework.ControllerDeployment + "-auditor"
+// auditorRole and auditorClusterRole are the chart's auditor ClusterRoles of
+// the e2e release: the namespaced kinds of the pack, and the cluster-scoped
+// ones with the admission policies.
+const (
+	auditorRole        = framework.ControllerDeployment + "-auditor"
+	auditorClusterRole = framework.ControllerDeployment + "-auditor-cluster"
+)
 
 // auditorKubeconfig writes a kubeconfig that reaches the cluster as user
-// (impersonation) and binds user to the auditor role and nothing else: in
-// ns with a RoleBinding, or cluster-wide with a ClusterRoleBinding when ns
-// is "".
+// (impersonation) and binds user to the auditor roles and nothing else, as
+// docs/compliance.md says: auditorRole in ns with a RoleBinding, or
+// cluster-wide with a ClusterRoleBinding when ns is "", and
+// auditorClusterRole with a ClusterRoleBinding.
 func auditorKubeconfig(t *testing.T, e *framework.Env, ns, user string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -49,21 +55,29 @@ func auditorKubeconfig(t *testing.T, e *framework.Env, ns, user string) string {
 		ai.Impersonate = user
 	}
 	require.NoError(t, clientcmd.WriteToFile(*cfg, path))
-	ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: auditorRole}
 	subjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: user}}
-	name := "auditor-" + slug
-	if ns != "" {
-		_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, RoleRef: ref, Subjects: subjects}, metav1.CreateOptions{})
-	} else {
-		_, err = e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: name}, RoleRef: ref, Subjects: subjects}, metav1.CreateOptions{})
+	clusterBinding := func(name, role string) {
+		_, err := e.Kube.RbacV1().ClusterRoleBindings().Create(ctx, &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}, Subjects: subjects}, metav1.CreateOptions{})
+		require.NoError(t, err)
 		t.Cleanup(func() {
 			_ = e.Kube.RbacV1().ClusterRoleBindings().Delete(context.Background(), name, metav1.DeleteOptions{})
 		})
+		waitBoundNamed(t, e, "", name)
 	}
-	require.NoError(t, err)
-	waitBoundNamed(t, e, ns, name)
+	name := "auditor-" + slug
+	if ns != "" {
+		_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: auditorRole}, Subjects: subjects},
+			metav1.CreateOptions{})
+		require.NoError(t, err)
+		waitBoundNamed(t, e, ns, name)
+	} else {
+		clusterBinding(name, auditorRole)
+	}
+	clusterBinding(name+"-cluster", auditorClusterRole)
 	return path
 }
 
@@ -103,10 +117,10 @@ func ndjson(t *testing.T, dir, name string) []map[string]interface{} {
 // the extracted pack and fails once a file changes; the pack holds the
 // version, its Approval, its overridden gate instance and the AuditEvents
 // of the approval, the override and the promotion, the chart's admission
-// policies, and names the auditor; nothing is forbidden or missing. The
-// same role bound in one namespace reads that namespace's records, and the
-// cluster-scoped kinds it cannot read (ChangeWindows, admission policies;
-// the agent directory is public) are listed in coverage.forbidden.
+// policies, and names the auditor; nothing is forbidden or missing. A
+// namespace auditor (the auditor role bound in the namespace, the
+// auditor-cluster role cluster-wide) gets a full pack of its namespace and no
+// record of another, and with -A is refused every namespaced kind.
 //
 // Covers EVIDENCE-PACK-LIVE-01.
 func TestAudit_EvidencePack(t *testing.T) {
@@ -195,22 +209,36 @@ func TestAudit_EvidencePack(t *testing.T) {
 	require.Error(t, err, "sha256sum -c fails once a file changed:\n%s", out)
 	assert.Contains(t, string(out), "bundles.ndjson: FAILED")
 
-	// The role bound in one namespace: that namespace's records, and the
-	// cluster-scoped kinds forbidden, not silently missing.
+	// A namespace auditor (auditorRole bound in the namespace,
+	// auditorClusterRole cluster-wide): a full pack of that namespace, and
+	// not one record of another, though other tests' namespaces hold some.
 	pack = filepath.Join(t.TempDir(), "ns.tar.gz")
-	r = c.Exec(framework.CLIOptions{Kubeconfig: auditorKubeconfig(t, e, a.ns, "ns-auditor@example.com")},
-		c.Args(a.ns, "audit", "evidence-pack", "--since", "1h", "-o", pack)...)
+	nsAuditor := auditorKubeconfig(t, e, a.ns, "ns-auditor@example.com")
+	r = c.Exec(framework.CLIOptions{Kubeconfig: nsAuditor}, c.Args(a.ns, "audit", "evidence-pack", "--since", "1h", "-o", pack)...)
 	require.Zero(t, r.Code, r.Output())
 	dir, m = packOf(t, pack)
-	// AgentIdentities stay readable: the chart's agent directory binding
-	// lets every authenticated user read them (actors.directory.public).
-	assert.ElementsMatch(t, []interface{}{"ChangeWindow", "ValidatingAdmissionPolicy"},
-		m["coverage"].(map[string]interface{})["forbidden"])
+	assert.Empty(t, m["coverage"].(map[string]interface{})["forbidden"], "the namespace auditor reads its whole pack")
 	assert.Equal(t, []string{a.ns + "/" + bundle}, names(ndjson(t, dir, "bundles.ndjson")))
+	for _, f := range []string{"bundles.ndjson", "approvals.ndjson", "policygates.ndjson", "verdicts.ndjson",
+		"pipelines.ndjson", "policygate-templates.ndjson"} {
+		for _, n := range names(ndjson(t, dir, f)) {
+			assert.True(t, strings.HasPrefix(n, a.ns+"/"), "%s: %s is from another namespace", f, n)
+		}
+	}
+	for _, ev := range ndjson(t, dir, "auditevents.ndjson") {
+		assert.Equal(t, a.ns, ev["namespace"], "an AuditEvent from another namespace")
+	}
 	_, err = os.Stat(filepath.Join(dir, "changewindows.ndjson"))
-	assert.True(t, os.IsNotExist(err), "a forbidden kind's file is left out")
-	_, err = os.Stat(filepath.Join(dir, "agentidentities.ndjson"))
-	assert.NoError(t, err, "the public agent directory is in the pack")
+	assert.NoError(t, err, "the cluster role reads the ChangeWindows")
+
+	// Asked for every namespace, the same auditor is refused the namespaced
+	// kinds: the namespace role grants them in its namespace only.
+	pack = filepath.Join(t.TempDir(), "all.tar.gz")
+	r = c.Exec(framework.CLIOptions{Kubeconfig: nsAuditor}, c.Args("", "audit", "evidence-pack", "-A", "--since", "1h", "-o", pack)...)
+	require.Zero(t, r.Code, r.Output())
+	_, m = packOf(t, pack)
+	assert.ElementsMatch(t, []interface{}{"AuditEvent", "Approval", "Bundle", "Pipeline", "PolicyGate", "PolicyGateTemplate", "Verdict"},
+		m["coverage"].(map[string]interface{})["forbidden"])
 }
 
 // names are the namespace/name of each record.

@@ -458,7 +458,7 @@ rbac:
   argocdApplicationsWrite: false
   userRoles:
     # -- ClusterRoles for users and automation: <fullname>-viewer, -promoter,
-    # -approver, -verifier, -freezer, -auditor and -admin (templates/user-roles.yaml). Bind them per namespace
+    # -approver, -verifier, -freezer, -auditor, -auditor-cluster and -admin (templates/user-roles.yaml). Bind them per namespace
     # with RoleBindings. See docs/guides/security.md#user-roles.
     enabled: true
     # -- Also aggregate them into the built-in view (viewer), edit (promoter,

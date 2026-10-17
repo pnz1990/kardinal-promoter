@@ -29,13 +29,18 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-freezer   create, update and delete freezes (cluster-scoped
                        ChangeWindows) and changewindows/freeze; for incident
                        commanders, with a ClusterRoleBinding
-  <fullname>-auditor   get and list on exactly what kardinal audit
-                       evidence-pack reads: the record kinds of the pack and
-                       the chart's ValidatingAdmissionPolicies and bindings
-                       (listed by label, so list as well as get). No write.
-                       Bind it with a ClusterRoleBinding: ChangeWindows,
-                       AgentIdentities and the policies are cluster-scoped.
-                       Not aggregated into admin (docs/compliance.md)
+  <fullname>-auditor   get and list on the namespaced kinds kardinal audit
+                       evidence-pack reads (AuditEvents, Approvals,
+                       PolicyGates, Bundles, Pipelines, Verdicts). Bind it
+                       with a RoleBinding in each namespace an auditor may
+                       read, or a ClusterRoleBinding for all. No write
+  <fullname>-auditor-cluster  get and list on the cluster-scoped kinds of
+                       the pack (ChangeWindows, AgentIdentities) and on the
+                       chart's ValidatingAdmissionPolicies and bindings
+                       (listed by label, so list as well as get). Always a
+                       ClusterRoleBinding; it reads no namespace's records.
+                       Neither auditor role is aggregated into admin
+                       (docs/compliance.md)
 
 pipelines/pause, pipelines/hold, pipelines/edit, policygates/override,
 policygates/edit and bundles/reject are virtual subresources: the API server serves no such
@@ -212,7 +217,18 @@ metadata:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["kardinal.io"]
-  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "changewindows", "agentidentities", "verdicts"]
+  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "verdicts"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-auditor-cluster
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["kardinal.io"]
+  resources: ["changewindows", "agentidentities"]
   verbs: ["get", "list"]
 - apiGroups: ["admissionregistration.k8s.io"]
   resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]

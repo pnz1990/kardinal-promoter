@@ -710,53 +710,80 @@ func kroWatchRules(t *testing.T, rendered string) string {
 	return rest
 }
 
-// TestHelmTemplateAuditorRole (spec 22 section 4.7, #2051): <release>-auditor
-// grants get and list on exactly the kinds kardinal audit evidence-pack
-// reads (compliance.PackFiles) and on the admission policies and bindings
-// it lists by label, and nothing else: no write, no watch, no other kind,
-// and it is not aggregated into the admin role.
+// TestHelmTemplateAuditorRole (spec 22 section 4.7, #2051, QA): the auditor
+// reads are split so a namespace auditor cannot read other namespaces.
+// <release>-auditor grants get and list on exactly the namespaced kinds of
+// kardinal audit evidence-pack (compliance.PackFiles; each one Namespaced in
+// its CRD) and <release>-auditor-cluster on exactly the cluster-scoped ones
+// (Cluster in their CRDs) and the admission policies and bindings the pack
+// lists by label; together they are the pack's reads. No write, no watch,
+// no other kind, neither aggregated into admin.
 //
 // Covers EVIDENCE-PACK-AUDITOR-01.
 func TestHelmTemplateAuditorRole(t *testing.T) {
-	var auditor map[string]interface{}
+	roles := map[string]map[string]interface{}{}
 	for _, d := range renderChart(t, "kardinal-promoter") {
-		if d["kind"] == "ClusterRole" && dig(d, "metadata", "name") == "kardinal-promoter-auditor" {
-			auditor = d
+		if name, _ := dig(d, "metadata", "name").(string); d["kind"] == "ClusterRole" &&
+			(name == "kardinal-promoter-auditor" || name == "kardinal-promoter-auditor-cluster") {
+			roles[name] = d
 		}
 	}
-	require.NotNil(t, auditor, "the chart renders kardinal-promoter-auditor")
+	require.Len(t, roles, 2, "the chart renders kardinal-promoter-auditor and -auditor-cluster")
 	resources := map[string]string{
 		"AuditEvent": "auditevents", "Approval": "approvals", "PolicyGate": "policygates", "Bundle": "bundles",
 		"Pipeline": "pipelines", "ChangeWindow": "changewindows", "AgentIdentity": "agentidentities", "Verdict": "verdicts",
 	}
-	var kinds []string
+	// Each kind's scope, from its CRD.
+	var namespaced, cluster []string
 	for kind := range compliance.PackFiles {
-		require.Contains(t, resources, kind, "a kind of the pack has a resource here")
-		kinds = append(kinds, resources[kind])
+		res, ok := resources[kind]
+		require.True(t, ok, "a kind of the pack has a resource here: %s", kind)
+		b, err := os.ReadFile(filepath.Join(repoRoot(t), "config", "crd", "bases", "kardinal.io_"+res+".yaml"))
+		require.NoError(t, err)
+		var crd map[string]interface{}
+		require.NoError(t, sigyaml.Unmarshal(b, &crd))
+		switch dig(crd, "spec", "scope") {
+		case "Namespaced":
+			namespaced = append(namespaced, res)
+		case "Cluster":
+			cluster = append(cluster, res)
+		default:
+			t.Fatalf("%s: unknown scope %v", res, dig(crd, "spec", "scope"))
+		}
 	}
-	sort.Strings(kinds)
+	sort.Strings(namespaced)
+	sort.Strings(cluster)
 	type rule struct {
 		Groups, Resources, Verbs []string
 	}
-	var got []rule
-	for _, r := range auditor["rules"].([]interface{}) {
-		strs := func(key string) []string {
-			var out []string
-			for _, v := range dig(r, key).([]interface{}) {
-				out = append(out, v.(string))
+	rulesOf := func(d map[string]interface{}) []rule {
+		var got []rule
+		for _, r := range d["rules"].([]interface{}) {
+			strs := func(key string) []string {
+				var out []string
+				for _, v := range dig(r, key).([]interface{}) {
+					out = append(out, v.(string))
+				}
+				sort.Strings(out)
+				return out
 			}
-			sort.Strings(out)
-			return out
+			got = append(got, rule{strs("apiGroups"), strs("resources"), strs("verbs")})
 		}
-		got = append(got, rule{strs("apiGroups"), strs("resources"), strs("verbs")})
+		return got
 	}
+	read := []string{"get", "list"}
+	assert.Equal(t, []rule{{[]string{"kardinal.io"}, namespaced, read}}, rulesOf(roles["kardinal-promoter-auditor"]),
+		"the namespace role reads only namespaced kinds")
 	assert.Equal(t, []rule{
-		{[]string{"kardinal.io"}, kinds, []string{"get", "list"}},
-		{[]string{"admissionregistration.k8s.io"}, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings"}, []string{"get", "list"}},
-	}, got)
-	labels, _ := dig(auditor, "metadata", "labels").(map[string]interface{})
-	assert.NotContains(t, labels, "kardinal.io/aggregate-to-admin", "the auditor is not part of admin")
+		{[]string{"kardinal.io"}, cluster, read},
+		{[]string{"admissionregistration.k8s.io"}, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings"}, read},
+	}, rulesOf(roles["kardinal-promoter-auditor-cluster"]), "the cluster role reads only cluster-scoped kinds")
+	for name, r := range roles {
+		labels, _ := dig(r, "metadata", "labels").(map[string]interface{})
+		assert.NotContains(t, labels, "kardinal.io/aggregate-to-admin", "%s is not part of admin", name)
+	}
 	for _, d := range renderChart(t, "kardinal-promoter", "--set", "rbac.userRoles.enabled=false") {
-		assert.NotEqual(t, "kardinal-promoter-auditor", dig(d, "metadata", "name"), "rbac.userRoles.enabled=false renders no auditor")
+		name, _ := dig(d, "metadata", "name").(string)
+		assert.NotContains(t, name, "-auditor", "rbac.userRoles.enabled=false renders no auditor role")
 	}
 }
