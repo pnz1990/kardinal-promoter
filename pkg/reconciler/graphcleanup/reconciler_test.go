@@ -421,11 +421,21 @@ type fakeGraphs struct {
 	namespaces []string
 	failing    []int
 	always     bool
+	// listErrors is how many first calls fail to list at all; gauge, when
+	// set, records the pending gauge at each of them.
+	listErrors int
+	gauge      *[]float64
 }
 
 func (f *fakeGraphs) RemoveAllHealthRefs(_ context.Context, ns string) (int, int, error) {
 	f.namespaces = append(f.namespaces, ns)
 	n := len(f.namespaces) - 1
+	if n < f.listErrors {
+		if f.gauge != nil {
+			*f.gauge = append(*f.gauge, testutil.ToFloat64(observability.HealthRefCleanupPending))
+		}
+		return 0, 0, errors.New("list graphs: the server is unavailable")
+	}
 	if f.always || n < len(f.failing) {
 		failed := 1
 		if n < len(f.failing) {
@@ -529,4 +539,22 @@ func TestHealthRefCleanup_CustomRoleNames(t *testing.T) {
 	cl = &graphcleanup.HealthRefCleanup{Client: c, APIReader: c, Identity: &graph.IdentityProvisioner{ApplierClusterRole: "graph-writer"}}
 	require.NoError(t, cl.Start(ctx))
 	assert.Len(t, readerBindingKeys(t, c), 1, "left alone")
+}
+
+// QA on #2124: a pass that cannot even list the Graphs is not done: the
+// gauge says unknown (-1) and the pass is retried, so one list failure at
+// startup does not end the migration with health refs left in Graphs.
+//
+// Covers GRAPH-HEALTHREF-CLEANUP-02.
+func TestHealthRefCleanup_ListFailureIsNotDone(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	var seen []float64
+	graphs := &fakeGraphs{listErrors: 2, gauge: &seen}
+	cl := &graphcleanup.HealthRefCleanup{Graphs: graphs, Client: c, APIReader: c,
+		Identity: &graph.IdentityProvisioner{}, Backoff: time.Millisecond}
+	require.NoError(t, cl.Start(context.Background()))
+	assert.Len(t, graphs.namespaces, 3, "two failed lists, then a pass that lists and cleans")
+	require.Len(t, seen, 2)
+	assert.Equal(t, -1.0, seen[1], "after a failed list the gauge says unknown, not done")
+	assert.Zero(t, testutil.ToFloat64(observability.HealthRefCleanupPending))
 }

@@ -345,8 +345,10 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "create", Group: "kardinal.io", Resource: "hookruns", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "metricchecks", Namespace: a.ns},
 		{Verb: "get", Group: "kardinal.io", Resource: "bundles", Namespace: a.ns},
-		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
 	}, []framework.Access{
+		// No reader role since #1283: the Graph reads nothing outside its namespace.
+		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
+		{Verb: "get", Group: "apps", Resource: "deployments", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "promotionsteps", Namespace: other},
 		{Verb: "update", Group: "kardinal.io", Resource: "bundles", Namespace: a.ns},
 		{Verb: "get", Resource: "secrets", Namespace: a.ns},
