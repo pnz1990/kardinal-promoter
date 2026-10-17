@@ -233,6 +233,28 @@ Send the token in the `X-Kardinal-Token` header. A sender that cannot set header
 last path segment instead (`.../<template>/<token>`), but proxies and access logs record paths, so
 prefer the header.
 
+**Generate the token** with a random source and put it in the Secret the template names. It must be
+at least 16 characters; 32 random bytes as hex is a good default:
+
+```bash
+kubectl -n checkout create secret generic cr-hook \
+  --from-literal=token="$(openssl rand -hex 32)"
+kubectl -n checkout label secret cr-hook kardinal.io/referenceable=true
+```
+
+Give the same value to ServiceNow or Jira and to no one else: whoever has it can make kardinal
+re-read the template's tickets (never approve them).
+
+**Rotate it** by writing a new value into the Secret and then updating the sender. The receiver reads
+the Secret on every request, so the new token works at once and the old one stops at once. Until
+the sender has the new value its triggers get `401`, and polling still reads the tickets, so a
+rotation delays a promotion by at most one `pollInterval`:
+
+```bash
+kubectl -n checkout create secret generic cr-hook \
+  --from-literal=token="$(openssl rand -hex 32)" --dry-run=client -o yaml | kubectl apply -f -
+```
+
 The request makes every instance of the template read its ticket at once (the
 `kardinal.io/refresh` annotation; `status.observedRefresh` records the trigger it answered). Its
 body is never read for state: the state always comes from the ticketing system's API, so a forged
