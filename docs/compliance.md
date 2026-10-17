@@ -1,0 +1,241 @@
+# Map kardinal's records to compliance controls
+
+An auditor asks a team that promotes with kardinal two things: show that every production
+change was authorised, reviewed by someone other than its author, and recorded; and show the
+records. This page says which kardinal record answers which control of SOC 2, ISO/IEC 27001,
+NIST SP 800-53, DORA, the EU AI Act and ISO/IEC 42001, and what you still have to do yourself.
+
+kardinal is not a GRC tool and does not certify anything. It produces evidence for the change
+part of these controls; your policies, reviews and other systems cover the rest. Each control
+below ends with **Your part**.
+
+## Keep the records
+
+The records live in the cluster: AuditEvents, Approvals, gate instances with their overrides,
+versions (Bundles) with their verified creator and provenance, Pipelines, ChangeWindows and
+freezes, AgentIdentities and Verdicts. The cluster is a working store, not an archive:
+
+- AuditEvents are deleted by retention, after 90 days or past the newest 1,000 of a Pipeline
+  by default (`--audit-retention-max-age`, `--audit-retention-max-per-pipeline`;
+  [Retention](guides/security.md#retention)).
+- A version is deleted with its Approvals and gate instances once its Pipeline keeps more
+  than `spec.historyLimit` (50 by default) finished versions. Its AuditEvents stay.
+- Anyone a role grants `delete` on `auditevents` can remove a record
+  ([RBAC: read-only access to audit records](guides/security.md#rbac-read-only-access-to-audit-records)).
+
+So archive the AuditEvents outside the cluster, more often than retention deletes them: for
+example a daily `kardinal audit export -A --since 25h` into your SIEM, deduplicated by `uid`
+([SIEM integration](guides/security.md#siem-integration)). The SIEM is then the archive of
+record.
+
+## What kardinal cannot show
+
+- **Changes that bypass it.** A direct push to the GitOps branch or a `kubectl apply` on the
+  workload is invisible to kardinal. Protect the branches and require the `kardinal/gates`
+  commit status.
+- **That a record was not deleted** before you exported it, by someone allowed to delete it.
+  Export continuously, and keep `delete` on `kardinal.io` resources to the cluster's
+  administrators.
+- **The AI Act and ISO/IEC 42001 rows are analogies.** They apply the records those texts ask
+  of AI systems to the changes your agents make; they do not make an agent compliant.
+
+## The controls
+
+<!-- BEGIN GENERATED from pkg/compliance: KARDINAL_UPDATE_COMPLIANCE=1 go test ./pkg/compliance -run TestCompliancePage -->
+
+### SOC 2 (2017 Trust Services Criteria)
+
+#### CC8.1: Change management
+
+*Requirement:* Changes to infrastructure and software are authorised, designed, tested, approved and implemented under control; points of focus include tracking changes, approving them, segregating the duties of developers and approvers, and handling emergency changes.
+
+| Element | kardinal record |
+|---|---|
+| Changes are tracked | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
+| Changes are approved before production | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Developer and approver are different people | `approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as one party; `status.approvals[].reason` says why an approval did not count |
+| Emergency changes are controlled | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
+| Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+
+**Your part:** The change policy itself, the review of the evidence, changes that bypass kardinal (direct pushes to the GitOps branch: protect it and require the `kardinal/gates` status), and access reviews of who holds the approver role.
+
+### ISO/IEC 27001:2022 Annex A
+
+#### A.8.32: Change management
+
+*Requirement:* Changes to information processing facilities and information systems are subject to change management procedures.
+
+| Element | kardinal record |
+|---|---|
+| The procedure is enforced, not advisory | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged |
+| Changes are planned and recorded | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
+| Changes are approved | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Rollback | rollback versions (`spec.provenance.rollbackOf`) and their promotions; holds that keep an environment on a version (`Pipeline.spec.holds[]`) |
+| Change windows | `ChangeWindow` blackout and recurring windows, and freezes (who froze, who lifted, the exemptions) |
+
+**Your part:** The documented procedure, the risk assessment of a change, and communication to affected parties.
+
+#### A.5.3: Segregation of duties
+
+*Requirement:* Conflicting duties and areas of responsibility are segregated.
+
+| Element | kardinal record |
+|---|---|
+| The author is not the approver | `approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as one party; `status.approvals[].reason` says why an approval did not count |
+| An agent and the person accountable for it count as one | each agent's sponsor (`AgentIdentity.spec.sponsor`) and the approver's verified actor (`Approval.spec.actor`) |
+| Distinct roles | the chart's user roles (`<release>-viewer`, `-promoter`, `-approver`, `-admin`); approvers named by `approval.allowedUsers` and `allowedGroups` |
+| Quorum | `approval.required: N` distinct parties |
+
+**Your part:** Who is granted which role, and the access review.
+
+### NIST SP 800-53 Rev. 5
+
+#### CM-3: Configuration change control
+
+*Requirement:* Determine the types of controlled changes; review and approve them with their security impact in mind; document the decisions; implement approved changes; retain the records; monitor and review change activity.
+
+| Element | kardinal record |
+|---|---|
+| Controlled changes are defined and implemented as approved | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged |
+| Decisions are reviewed, approved and documented | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Records are retained and change activity is reviewed | AuditEvents, kept as `--audit-retention-max-age` and `--audit-retention-max-per-pipeline` allow; `kardinal audit summary` and `kardinal audit export` |
+
+**Your part:** The configuration management plan, the change control board's charter, and the system's other components.
+
+#### CM-3(2): Testing, validation and documentation of changes
+
+*Requirement:* Test, validate and document changes before implementing them.
+
+| Element | kardinal record |
+|---|---|
+| Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+
+**Your part:** The test plans themselves, and the tests that run outside kardinal (CI).
+
+#### CM-5: Access restrictions for change
+
+*Requirement:* Define, document, approve and enforce access restrictions associated with changes.
+
+| Element | kardinal record |
+|---|---|
+| Who may change what | Kubernetes RBAC with the chart's roles (`<release>-viewer`, `-promoter`, `-approver`, `-freezer`, `-verifier`, `-admin`) and virtual subresources (`pipelines/pause`, `pipelines/hold`, `policygates/override`, `bundles/reject`, `changewindows/freeze`); the `<release>-scoped-writes` and `-graph-objects` policies; each agent's scope (`AgentIdentity.spec.namespaces`, `environments`) |
+
+**Your part:** Who is bound to which role, and the access review.
+
+#### CM-5(1): Automated access enforcement and audit records
+
+*Requirement:* Enforce access restrictions automatically and keep audit records of the enforcement actions.
+
+| Element | kardinal record |
+|---|---|
+| Enforcement and its records | ValidatingAdmissionPolicies that deny, not warn; `APIWrite` AuditEvents for the UI's and the Bundle API's writes, refusals included |
+
+**Your part:** The Kubernetes API server's own audit log, for writes made with kubectl.
+
+#### AC-5: Separation of duties
+
+*Requirement:* Identify the duties that need separation and define access authorisations to support it.
+
+| Element | kardinal record |
+|---|---|
+| Duties are separated | `approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as one party; `status.approvals[].reason` says why an approval did not count |
+
+**Your part:** Which duties need separating in the organisation, and who holds each role.
+
+### DORA, Regulation (EU) 2022/2554
+
+Change management is Article 9(4)(e) of the Regulation, detailed in the RTS on the ICT risk management framework (Commission Delegated Regulation (EU) 2024/1774). Article 17 is the ICT-related incident management process, which kardinal contributes records to but does not run.
+
+#### Art. 9(4)(e): ICT change management
+
+*Requirement:* Documented policies, procedures and controls for ICT change management: changes are recorded, tested, assessed and approved in a controlled way, and emergency changes are handled and documented.
+
+| Element | kardinal record |
+|---|---|
+| Changes are recorded | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
+| Changes are tested | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+| Changes are approved | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Emergency changes are handled and documented | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
+
+**Your part:** The ICT risk management framework and the change policy it requires.
+
+#### Art. 17: ICT-related incident management process
+
+*Requirement:* Incidents are detected, managed, logged, classified and followed up.
+
+| Element | kardinal record |
+|---|---|
+| The change record an investigation needs | what changed where, by whom and when (the promotion AuditEvents and the version's actor), and the rollback that restored it |
+| Stopping changes during an incident | `kardinal freeze --everyone` (who froze, why, who lifted it) |
+
+**Your part:** Incident detection, classification and reporting to the authority (Articles 18 and 19).
+
+### EU AI Act, Regulation (EU) 2024/1689
+
+These articles bind the providers and deployers of the AI systems the Act names (Articles 12 and 14: high-risk systems; Article 50: systems that interact with people or generate content). A coding agent that changes software is usually none of these. kardinal does not make anyone compliant with the AI Act: it gives an organisation that runs agents the records these articles ask of AI systems, applied to the agents' changes.
+
+#### Art. 12: Record-keeping
+
+*Requirement:* The system allows the automatic recording of events (logs) over its lifetime, to identify risks and support monitoring.
+
+| Element | kardinal record |
+|---|---|
+| Every change an agent makes is logged | AuditEvents with `actor.kind: agent`, the agent's sponsor and what it asserted about itself (model, session, client); `kardinal audit export` |
+
+**Your part:** Deciding whether the Act applies to your systems, and their own documentation.
+
+#### Art. 14: Human oversight
+
+*Requirement:* People can oversee, understand, override and stop the system (Article 14(4)(e): a stop button or a similar procedure).
+
+| Element | kardinal record |
+|---|---|
+| A person approves, overrides or stops | `agents: approve` environments (a person approves an agent's change), each agent's autonomy, suspending an AgentIdentity, `kardinal freeze --agents`, and stop-the-line (`--everyone`) |
+
+**Your part:** Who is trained and assigned to oversee the agents.
+
+#### Art. 50: Transparency
+
+*Requirement:* People are told when they interact with AI, and AI-generated content is marked in a machine-readable way.
+
+| Element | kardinal record |
+|---|---|
+| Agent-made changes are marked | the actor stamp marks each version and decision an agent made (`spec.actor.kind: agent`), shown in the PR evidence and the UI |
+
+**Your part:** Telling the people who read the agents' output.
+
+### ISO/IEC 42001:2023 (AI management system), Annex A
+
+Listed by the Annex A control's title; check the clause numbers against your copy of the standard. As for the AI Act, these records apply to the agents' changes, not to the agents themselves.
+
+#### AI roles and responsibilities
+
+*Requirement:* Roles and responsibilities for AI are defined and allocated.
+
+| Element | kardinal record |
+|---|---|
+| An accountable person per agent | `AgentIdentity.spec.sponsor`, and the agent's scope |
+
+**Your part:** The AI management system itself: policy, objectives, and risk and impact assessments.
+
+#### AI system recording of event logs
+
+*Requirement:* The organisation determines at which phases of the AI system life cycle event logs are recorded.
+
+| Element | kardinal record |
+|---|---|
+| The agents' changes are logged | AuditEvents with the agent's verified actor and sponsor |
+
+**Your part:** Logging of the AI systems themselves, outside kardinal.
+
+#### Use of AI systems
+
+*Requirement:* AI systems are used responsibly, as intended, with human oversight in operation.
+
+| Element | kardinal record |
+|---|---|
+| Oversight in operation | autonomy per environment (`agents: auto \| approve \| deny`), opt-in agent approvals, freezes and suspension |
+
+**Your part:** The intended use of each agent and the responsible-use policy.
+
+<!-- END GENERATED -->
