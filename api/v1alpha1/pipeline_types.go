@@ -626,9 +626,10 @@ type YAMLUpdate struct {
 	// element whose field has that value, for example "image.tag",
 	// "spec.template.spec.containers[0].image" or
 	// "spec.template.spec.containers[name=app].image". A digits-only key
-	// indexes a list when it reaches one. Missing mapping keys are created;
-	// list elements are not. A key that contains "." is not supported.
-	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
+	// indexes a list when it reaches one. A key that contains "." or "/" is
+	// quoted: metadata.annotations["app.oam.dev/publishVersion"]. Missing
+	// mapping keys are created; list elements are not.
+	// +kubebuilder:validation:Pattern=`^\.?([A-Za-z0-9_-]+|\["[A-Za-z0-9_./:@-]+"\])(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+|"[A-Za-z0-9_./:@-]+")\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+|"[A-Za-z0-9_./:@-]+")\])*)*$`
 	// +kubebuilder:validation:MaxLength=512
 	Path string `json:"path"`
 
@@ -677,7 +678,7 @@ type HelmUpdateConfig struct {
 	// ".spec.chart.spec.version" (Flux HelmRelease) or
 	// ".helmCharts[name=podinfo].version" (kustomize).
 	// +optional
-	// +kubebuilder:validation:Pattern=`^\.?[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+)\])*)*$`
+	// +kubebuilder:validation:Pattern=`^\.?([A-Za-z0-9_-]+|\["[A-Za-z0-9_./:@-]+"\])(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+|"[A-Za-z0-9_./:@-]+")\])*(\.[A-Za-z0-9_-]+(\[(0|[1-9][0-9]{0,8}|[A-Za-z0-9_-]+=[A-Za-z0-9_./:@-]+|"[A-Za-z0-9_./:@-]+")\])*)*$`
 	// +kubebuilder:validation:MaxLength=512
 	ChartVersionPath string `json:"chartVersionPath,omitempty"`
 }

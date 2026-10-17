@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -267,11 +268,13 @@ func TestStep_HelmValues(t *testing.T) {
 // reference at spec.template.spec.containers[name=podinfo].image (a list
 // element picked by its name) in deployment.yaml and the tag at
 // .release.version (a leading "." as in chartVersionPath) in a second file,
-// in one commit, and the new version runs. A later edit that cannot be applied (a list element that does
+// in one commit, and the new version runs; a quoted key
+// (metadata.annotations["app.oam.dev/publishVersion"], #1932) creates the
+// annotation with the tag, and the API server takes the path. A later edit that cannot be applied (a list element that does
 // not exist) fails the step for good, and nothing is pushed: both files keep
 // the previous release.
 //
-// Covers STEP-YAML-01, STEP-YAML-02, STEP-TYPE-01.
+// Covers STEP-YAML-01, STEP-YAML-02, STEP-YAML-03, STEP-TYPE-01.
 func TestStep_YAMLUpdate(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -288,6 +291,9 @@ func TestStep_YAMLUpdate(t *testing.T) {
 	updates := []v1alpha1.YAMLUpdate{
 		{File: "deployment.yaml", Path: "spec.template.spec.containers[name=podinfo].image", Value: "image"},
 		{File: "release.yaml", Path: ".release.version", Image: fixtures.Image},
+		// #1932: a quoted key, for an annotation with "." and "/" (KubeVela
+		// re-renders on publishVersion); missing, so it is created.
+		{File: "deployment.yaml", Path: `metadata.annotations["app.oam.dev/publishVersion"]`, Image: fixtures.Image},
 	}
 	p := a.pipeline(nil)
 	envSpec(t, p, "test").Update = v1alpha1.UpdateConfig{Strategy: "yaml", YAML: &v1alpha1.YAMLUpdateConfig{Updates: updates}}
@@ -302,6 +308,8 @@ func TestStep_YAMLUpdate(t *testing.T) {
 	assert.Regexp(t, `(?m)^test\s.*\sStep\s+yaml-update\s`, explained)
 	dep := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/deployment.yaml")
 	assert.Contains(t, dep, "image: "+imageV2, "deployment.yaml has the new image")
+	assert.Regexp(t, `(?m)^    app\.oam\.dev/publishVersion: "?`+regexp.QuoteMeta(fixtures.V2)+`"?$`, dep,
+		"the quoted key's annotation is created with the tag")
 	release := e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/release.yaml")
 	assert.Equal(t, "# written by kardinal\nrelease:\n  version: "+fixtures.V2+"\n", release, "release.yaml has the new tag, comment kept")
 	a.running(t, "test", imageV2, "test after the promotion")
