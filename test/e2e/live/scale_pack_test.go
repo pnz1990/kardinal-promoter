@@ -24,6 +24,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
 )
 
@@ -101,7 +102,7 @@ func TestScale_EvidencePack(t *testing.T) {
 
 	again, _, _ := export("again.tar.gz")
 	assert.True(t, bytes.Equal(pack, again), "a second export of the same period is the same bytes")
-	r.Finish()
+	r.Finish(func(o *invariants.Options) { o.AllowEmpty = true }) // the test promotes no Bundle
 }
 
 // createAuditEvents creates n AuditEvents in the test's namespace, one
@@ -123,9 +124,13 @@ func createAuditEvents(t *testing.T, r *scale.Run, n int, since time.Time) {
 				ev := &v1alpha1.AuditEvent{
 					ObjectMeta: metav1.ObjectMeta{Namespace: r.Fleet.NS, Name: fmt.Sprintf("pack-%07d", i),
 						Labels: map[string]string{"kardinal.io/pipeline": pipeline}},
+					// APIWrite records (the UI API's writes), each naming a
+					// Bundle of its own: the audit-consistent invariant
+					// then neither expects a PromotionStep for them nor sees
+					// two events of one (Bundle, environment, action).
 					Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(since.Add(time.Duration(i) * time.Second / 100)),
-						PipelineName: pipeline, BundleName: fmt.Sprintf("%s-%d", pipeline, i%20), Environment: "prod",
-						Action: "PromotionSucceeded", Outcome: "Success", Message: "promoted to prod"},
+						PipelineName: pipeline, BundleName: fmt.Sprintf("pack-%07d", i), Environment: "prod",
+						Action: "APIWrite", Outcome: "Success", Message: "POST /api/v1/ui/promote"},
 				}
 				if err := r.E.Client.Create(ctx, ev); err != nil {
 					mu.Lock()
