@@ -407,9 +407,12 @@ func TestResolveRestConfig(t *testing.T) {
 	cfg.Contexts["team-a"] = &clientcmdapi.Context{Cluster: "c", AuthInfo: "u", Namespace: "team-a"}
 	cfg.CurrentContext = "team-a"
 
-	_, ns, err := resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "")
+	rc, ns, err := resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "")
 	require.NoError(t, err)
 	assert.Equal(t, "team-a", ns)
+	// Not client-go's 5 a second (#2047): a paged export waited on it.
+	assert.EqualValues(t, cliQPS, rc.QPS)
+	assert.Equal(t, cliBurst, rc.Burst)
 
 	_, ns, err = resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "flag-ns")
 	require.NoError(t, err)

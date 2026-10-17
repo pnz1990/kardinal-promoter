@@ -246,6 +246,12 @@ func buildRestConfig() (*rest.Config, string, error) {
 		globalKubeconfig != "", globalNamespace)
 }
 
+// cliQPS and cliBurst are the CLI's client rate limit (resolveRestConfig).
+const (
+	cliQPS   = 50
+	cliBurst = 300
+)
+
 func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig bool,
 	namespace string) (*rest.Config, string, error) {
 	cfg, err := clientConfig.ClientConfig()
@@ -261,6 +267,16 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 				"cannot connect to cluster: no kubeconfig and not running in a pod; run 'kardinal doctor' to diagnose\n"+
 					"  (underlying error: %w)", err)
 		}
+	}
+
+	// client-go's default rate limit (5 requests a second, bursts of 10)
+	// throttles a paged read: kardinal audit evidence-pack of 100,000
+	// AuditEvents lists 200 pages of 500, at least 38 s at 5 a second, and
+	// took 39.6 s live (#2047). The API server's priority and fairness
+	// protects it from clients; 50 a second with bursts of 300 lets a CLI
+	// page at the server's pace.
+	if cfg.QPS == 0 && cfg.RateLimiter == nil {
+		cfg.QPS, cfg.Burst = cliQPS, cliBurst
 	}
 
 	// Namespace: the flag, else the context's namespace, else default.
