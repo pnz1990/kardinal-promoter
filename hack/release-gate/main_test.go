@@ -64,7 +64,7 @@ func TestPlan(t *testing.T) {
 	// multi-cluster too, not on its matrix.txt 1.36.
 	for _, id := range []string{"e2e-core-135", "e2e-core-137", "e2e-gitlab-135", "e2e-gitlab-137", "e2e-github-135",
 		"e2e-multi-cluster-135", "e2e-multi-cluster-137", "e2e-upgrade-v0100-135", "e2e-upgrade-v0100-137",
-		"scale-full", "scale-soak", "unit-race", "fuzz-FuzzA", "scenario-matrix", "govulncheck", "golangci-lint",
+		"scale-full-1of2", "scale-full-2of2", "scale-soak", "unit-race", "fuzz-FuzzA", "scenario-matrix", "govulncheck", "golangci-lint",
 		"hygiene", "images", "docs", "bundle-size", "chart-profiles", "chart-envtest"} {
 		assert.Contains(t, ids, id)
 	}
@@ -107,10 +107,22 @@ func TestPlan(t *testing.T) {
 	old.ToolVersions["ENVTEST_K8S_MIN"] = "1.30.3"
 	assert.Contains(t, byID(Plan(old, fakeOptions()))["chart-envtest"].Missing, "envtest runs 1.30.3 and 1.37.0")
 
-	full, soak := ids["scale-full"], ids["scale-soak"]
-	assert.True(t, full.Heavy && soak.Heavy)
-	assert.Contains(t, full.Script, "KIND_K8S=1.37")
+	full1, full2, soak := ids["scale-full-1of2"], ids["scale-full-2of2"], ids["scale-soak"]
+	assert.True(t, full1.Heavy && full2.Heavy && soak.Heavy)
+	assert.Equal(t, "scale-full", full1.HeavyGroup, "the full profile's parts run together")
+	assert.Equal(t, full1.HeavyGroup, full2.HeavyGroup)
+	assert.NotEqual(t, full1.HeavyGroup, soak.HeavyGroup)
+	for i, full := range []Step{full1, full2} {
+		assert.Contains(t, full.Script, "KIND_K8S=1.37")
+		assert.Contains(t, full.Script, fmt.Sprintf("export KIND_CLUSTER=kp-rg-scale-full-%d ", i+1), "a cluster each")
+		assert.Contains(t, full.Script, fmt.Sprintf("export SHARD=%d/2 DURATIONS=hack/e2e/durations-scale-full.txt", i+1))
+		assert.Contains(t, full.Script, "export SKIP='^TestScale_LoadSustained$'", "soak's sustained load covers full's")
+		assert.Contains(t, full.Cleanup, fmt.Sprintf("kp-rg-scale-full-%d", i+1))
+	}
 	assert.Contains(t, soak.Script, "export RUN='^TestScale_LoadSustained$'")
+	noSoak := fakeOptions()
+	noSoak.ScaleProfiles = []string{"full"}
+	assert.NotContains(t, byID(Plan(fakeRepo(), noSoak))["scale-full-1of2"].Script, "SKIP", "without soak, full runs its sustained load")
 	assert.False(t, ids["fuzz-FuzzA"].Heavy)
 	assert.True(t, byID(Plan(fakeRepo(), Options{FuzzTime: "5m", Floor: 35, Newest: 37}))["fuzz-FuzzA"].Heavy)
 	assert.Equal(t, "upgrade-v0110", upgradeSuite("v0.11.0"))
@@ -171,7 +183,7 @@ func TestPlanCI(t *testing.T) {
 	}
 	assert.NotContains(t, ids, "ci-multi-cluster-136")
 	assert.NotContains(t, ids, "e2e-core-135", "no local live suite")
-	assert.Contains(t, ids, "scale-full", "scale stays local")
+	assert.Contains(t, ids, "scale-full-1of2", "scale stays local")
 	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, ciSuitesOf(steps))
 	assert.Equal(t, "1.35 1.37", minorsInput(Options{Floor: 35, Newest: 37}))
 }
@@ -352,6 +364,24 @@ func TestGateRun_Budget(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGateRun_HeavyGroup: the heavy steps of one group run together, on
+// one heavy-load lock taken once; no other heavy step runs meanwhile.
+func TestGateRun_HeavyGroup(t *testing.T) {
+	r := &fakeRunner{}
+	steps := []Step{
+		{ID: "full-1", Clusters: 2, Heavy: true, HeavyGroup: "scale-full", Script: "x", Cleanup: "y"},
+		{ID: "full-2", Clusters: 2, Heavy: true, HeavyGroup: "scale-full", Script: "x", Cleanup: "y"},
+		{ID: "soak", Clusters: 2, Heavy: true, HeavyGroup: "scale-soak", Script: "x", Cleanup: "y"},
+		{ID: "unit-race", Heavy: true, Script: "x"},
+	}
+	results, err := newGate(t, 4, &fakeHost{}, r).Run(context.Background(), steps)
+	require.NoError(t, err)
+	for _, res := range results {
+		assert.Equal(t, statusPass, res.Status, "%s: %s (the fake host refuses a second Lock)", res.ID, res.Reason)
+	}
+	assert.Equal(t, 2, r.maxHeavy, "the group's two parts at once, nothing else heavy with them")
 }
 
 // With budget 2, a big step never overlaps another cluster step.

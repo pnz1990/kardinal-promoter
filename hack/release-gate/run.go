@@ -85,6 +85,34 @@ type Gate struct {
 	Wait     time.Duration // between checks for a free slot, a ready host
 	Log      func(format string, args ...any)
 	now      func() time.Time
+
+	// heavyHeld counts the heavy steps sharing the heavy-load lock.
+	heavyMu   sync.Mutex
+	heavyHeld int
+}
+
+// lockHeavy takes the host's heavy-load lock for a heavy step: the first
+// heavy step of a group takes it, the others of the group share it, and the
+// last to end releases it (unlockHeavy).
+func (g *Gate) lockHeavy(ctx context.Context) error {
+	g.heavyMu.Lock()
+	defer g.heavyMu.Unlock()
+	if g.heavyHeld == 0 {
+		if err := g.Host.Lock(ctx); err != nil {
+			return err
+		}
+	}
+	g.heavyHeld++
+	return nil
+}
+
+func (g *Gate) unlockHeavy() {
+	g.heavyMu.Lock()
+	defer g.heavyMu.Unlock()
+	g.heavyHeld--
+	if g.heavyHeld == 0 {
+		g.Host.Unlock()
+	}
 }
 
 func (g *Gate) dir(st Step) string { return filepath.Join(g.Out, st.ID) }
@@ -219,14 +247,16 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 	}
 
 	var mu sync.Mutex
-	usedClusters, localBusy, heavyBusy := 0, false, false
+	usedClusters, localBusy := 0, false
+	// heavyRunning heavy steps are running, of heavyGroup ("": one alone).
+	heavyRunning, heavyGroup := 0, ""
 	done := make(chan int, len(steps))
 	running := 0
 	fits := func(st Step) bool {
 		if st.CIJob != nil {
 			return true // a runner of its own
 		}
-		if st.Heavy && heavyBusy {
+		if st.Heavy && heavyRunning > 0 && (st.HeavyGroup == "" || st.HeavyGroup != heavyGroup) {
 			return false
 		}
 		if st.Clusters == 0 {
@@ -253,7 +283,8 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 		}
 		usedClusters += st.Clusters
 		if st.Heavy {
-			heavyBusy = true
+			heavyRunning++
+			heavyGroup = st.HeavyGroup
 		}
 		go func() {
 			r := g.runStep(ctx, st)
@@ -278,7 +309,7 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 		}
 		usedClusters -= st.Clusters
 		if st.Heavy {
-			heavyBusy = false
+			heavyRunning--
 		}
 	}
 
@@ -356,12 +387,12 @@ func (g *Gate) runStep(ctx context.Context, st Step) Result {
 	}
 	if st.Heavy {
 		g.Log("%s: taking the heavy-load lock", st.ID)
-		if err := g.Host.Lock(ctx); err != nil {
+		if err := g.lockHeavy(ctx); err != nil {
 			r.Status, r.Reason = statusFail, "heavy-load lock: "+err.Error()
 			_ = g.save(r)
 			return r
 		}
-		defer g.Host.Unlock()
+		defer g.unlockHeavy()
 	}
 	g.Log("%s: start (%s)", st.ID, filepath.Join(dir, "log.txt"))
 	r.Started = g.clock()
