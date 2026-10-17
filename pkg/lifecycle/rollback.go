@@ -858,19 +858,22 @@ func rolledBackFromByEnv(ctx context.Context, c client.Reader, ns, pipeline, fle
 
 // rolledBackIn reports whether rollback Bundle b says what env was rolled
 // back from (its kardinal.io/rollback-from annotation): b is a rollback the
-// controller wrote (IsControllerRollback), or b actually ran in env (it has
-// a PromotionStep there, which only a promotion Graph makes) and deploys
-// only what was Verified there (restoresVerified). Anyone who may create
+// controller wrote (IsControllerRollback), or b's change landed in env (a
+// PromotionStep there, which only a promotion Graph makes, past its gates
+// and its merge or push: stepLanded) and b deploys its rollbackOf's
+// artifacts and only what was Verified there (restoresVerified). A step
+// that exists, Pending at a gate, is not enough: the Graph creates it
+// before the gates decide. Anyone who may create
 // Bundles can write the label and the annotation, so they count only with
 // those facts (#2187); a person's kardinal rollback that ran counts.
 func rolledBackIn(ctx context.Context, c client.Reader, ns, env string, b *v1alpha1.Bundle, hist *envHistory) bool {
 	if IsControllerRollback(b) {
 		return true
 	}
-	if len(hist.byBundle[b.Name]) == 0 {
+	if !hist.landedIn(b.Name) {
 		return false
 	}
-	return restoresVerified(ctx, c, ns, env, b, hist) == ""
+	return restoresVerified(ctx, c, ns, env, b, hist, looseImage) == ""
 }
 
 // FleetTargetRollback is one target of a fleet rollback (RollbackPlan.Fleet).
@@ -1137,6 +1140,17 @@ func (h *envHistory) verifiedIn(bundle string) bool {
 		}
 	}
 	return true
+}
+
+// landedIn reports whether a step of bundle in the environment landed
+// (stepLanded): past its gates and its merge or push.
+func (h *envHistory) landedIn(bundle string) bool {
+	for i := range h.byBundle[bundle] {
+		if stepLanded(&h.byBundle[bundle][i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // inFlight reports whether bundle has a step in the environment that has not

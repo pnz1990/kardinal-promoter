@@ -109,6 +109,12 @@ func TestPolicyGateReconciler_HoldExemption(t *testing.T) {
 			f.rb.Spec.Images[0].Tag = "666"
 			f.redigest()
 		}, wantRefuse: "image ghcr.io/org/app is not at rollbackOf nginx-demo-v1's ref ghcr.io/org/app:1"},
+		// #2187: a hold exempts the exact refs Verified: a tag alone may
+		// have moved since, so it is not the digest-pinned version's image.
+		{name: "rollbackOf's image by tag alone, where it pinned a digest", env: "prod", edit: func(f *holdFixture) {
+			f.target.Spec.Images[0].Digest = "sha256:a1"
+			f.redigest()
+		}, wantRefuse: "image ghcr.io/org/app is not at rollbackOf nginx-demo-v1's ref ghcr.io/org/app:1@sha256:a1"},
 		{name: "another repository's image from a Bundle Verified there passes", env: "prod", edit: func(f *holdFixture) {
 			f.verified("nginx-demo-v0", kardinalv1alpha1.BundleSpec{Images: []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/sidecar", Tag: "7"}}})
 			f.rb.Spec.Images = append(f.rb.Spec.Images, kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/sidecar", Tag: "7"})

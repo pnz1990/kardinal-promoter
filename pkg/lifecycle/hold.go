@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -223,22 +224,49 @@ func VerifyHeldRollback(ctx context.Context, c client.Reader, p *v1alpha1.Pipeli
 	if err != nil {
 		return nil, err.Error()
 	}
-	if why := restoresVerified(ctx, c, p.Namespace, h.Environment, &b, hist); why != "" {
+	if why := restoresVerified(ctx, c, p.Namespace, h.Environment, &b, hist, exactImage); why != "" {
 		return nil, why
 	}
 	return &b, ""
 }
 
-// sameRefsAs says why b does not deploy target's ref of every repository
-// target names, or "".
-func sameRefsAs(b, target *v1alpha1.Bundle) string {
-	held := map[string]v1alpha1.ImageRef{}
-	for _, img := range b.Spec.Images {
-		held[img.Repository] = img
+// imageMatch reports whether two image refs name one artifact.
+type imageMatch func(a, b v1alpha1.ImageRef) bool
+
+// exactImage matches equal refs only: a held rollback (VerifyHeldRollback)
+// must deploy the refs that were Verified, as a tag alone can have moved.
+func exactImage(a, b v1alpha1.ImageRef) bool { return a == b }
+
+// looseImage matches refs of one repository (graph.NormalizeRepository, so
+// "nginx" is docker.io/library/nginx) at the same digest when both name one,
+// else at the same tag. Deciding whether a version is a rollback (rule (a))
+// and what a rollback left (rule (b)) uses it: a looser match there only
+// stops for a human more often, or picks an older Verified version, never
+// one not Verified (#2187).
+func looseImage(a, b v1alpha1.ImageRef) bool {
+	if canonicalRepository(a.Repository) != canonicalRepository(b.Repository) {
+		return false
 	}
+	if a.Digest != "" && b.Digest != "" {
+		return a.Digest == b.Digest
+	}
+	return a.Tag != "" && a.Tag == b.Tag
+}
+
+// canonicalRepository is graph.NormalizeRepository, or repository itself
+// when it does not parse.
+func canonicalRepository(repository string) string {
+	if r, err := graph.NormalizeRepository(repository); err == nil {
+		return r
+	}
+	return repository
+}
+
+// sameRefsAs says why b does not deploy target's ref of every repository
+// target names (as match compares refs), or "".
+func sameRefsAs(b, target *v1alpha1.Bundle, match imageMatch) string {
 	for _, img := range target.Spec.Images {
-		got, ok := held[img.Repository]
-		if !ok || got != img {
+		if !slices.ContainsFunc(b.Spec.Images, func(got v1alpha1.ImageRef) bool { return match(got, img) }) {
 			return fmt.Sprintf("image %s is not at rollbackOf %s's ref %s", img.Repository, target.Name, imageString(img))
 		}
 	}
@@ -540,7 +568,7 @@ func fleetDeployed(ctx context.Context, c client.Reader, req HoldCurrentRequest,
 // Verified there. Otherwise it says why not. These are facts the
 // controller recorded (PromotionSteps, which only the Graph writes) about
 // artifacts, not markers b's creator writes (#2187).
-func restoresVerified(ctx context.Context, c client.Reader, ns, env string, b *v1alpha1.Bundle, hist *envHistory) string {
+func restoresVerified(ctx context.Context, c client.Reader, ns, env string, b *v1alpha1.Bundle, hist *envHistory, match imageMatch) string {
 	if b.Spec.Provenance == nil || b.Spec.Provenance.RollbackOf == "" {
 		return fmt.Sprintf("bundle %s names no rollbackOf", b.Name)
 	}
@@ -557,17 +585,18 @@ func restoresVerified(ctx context.Context, c client.Reader, ns, env string, b *v
 	// rollbackOf does not name may come from other Verified Bundles
 	// (PlanRollback fills those), so no combination is restored that the
 	// rollback target did not run with.
-	if why := sameRefsAs(b, &t); why != "" {
+	if why := sameRefsAs(b, &t, match); why != "" {
 		return why
 	}
-	return onlyVerifiedArtifacts(ctx, c, ns, env, b, hist)
+	return onlyVerifiedArtifacts(ctx, c, ns, env, b, hist, match)
 }
 
 // onlyVerifiedArtifacts is "" when every image, config commit and chart b
 // deploys was deployed by a Bundle (other than b) Verified in env (hist is
-// env's history); otherwise it names the first that was not.
-func onlyVerifiedArtifacts(ctx context.Context, c client.Reader, ns, env string, b *v1alpha1.Bundle, hist *envHistory) string {
-	images := map[v1alpha1.ImageRef]bool{}
+// env's history; match compares image refs); otherwise it names the first
+// that was not.
+func onlyVerifiedArtifacts(ctx context.Context, c client.Reader, ns, env string, b *v1alpha1.Bundle, hist *envHistory, match imageMatch) string {
+	var images []v1alpha1.ImageRef
 	configs := map[v1alpha1.ConfigRef]bool{}
 	charts := map[v1alpha1.ChartRef]bool{}
 	for _, name := range hist.verifiedNewestFirst() {
@@ -578,9 +607,7 @@ func onlyVerifiedArtifacts(ctx context.Context, c client.Reader, ns, env string,
 		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &v); err != nil {
 			continue
 		}
-		for _, img := range v.Spec.Images {
-			images[img] = true
-		}
+		images = append(images, v.Spec.Images...)
 		if v.Spec.ConfigRef != nil {
 			configs[v1alpha1.ConfigRef{GitRepo: v.Spec.ConfigRef.GitRepo, CommitSHA: v.Spec.ConfigRef.CommitSHA}] = true
 		}
@@ -589,7 +616,7 @@ func onlyVerifiedArtifacts(ctx context.Context, c client.Reader, ns, env string,
 		}
 	}
 	for _, img := range b.Spec.Images {
-		if !images[img] {
+		if !slices.ContainsFunc(images, func(v v1alpha1.ImageRef) bool { return match(img, v) }) {
 			return fmt.Sprintf("image %s was not deployed by a Bundle Verified in %s", imageString(img), env)
 		}
 	}
@@ -632,5 +659,5 @@ func isRollbackIn(ctx context.Context, c client.Reader, ns, pipeline, env string
 		return true
 	}
 	return b.Labels[LabelRollback] == "true" && b.Spec.Pipeline == pipeline &&
-		onlyVerifiedArtifacts(ctx, c, ns, env, b, hist) == ""
+		onlyVerifiedArtifacts(ctx, c, ns, env, b, hist, looseImage) == ""
 }
