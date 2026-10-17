@@ -57,8 +57,9 @@ const requeueRetireWait = time.Minute
 // Bundle runs kro out of memory at a few hundred Graphs. A zero delay keeps
 // the Graphs of that kind of Bundle.
 type RetirePolicy struct {
-	// Superseded applies to a Superseded Bundle, and to a Verified one that a
-	// newer Bundle replaced in every environment it promoted.
+	// Superseded applies to a Superseded or Rejected Bundle, and to a
+	// Verified one that a newer Bundle replaced in every environment it
+	// promoted.
 	Superseded time.Duration
 	// Failed applies to a Failed Bundle that no newer Bundle replaced in
 	// every environment it touched (one that was replaced gets Superseded).
@@ -92,7 +93,10 @@ type graphDeleter interface {
 func (r *Reconciler) retireDelay(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline) (d time.Duration, finished bool, badAnnotation string, err error) {
 	switch b.Status.Phase {
-	case phaseSuperseded:
+	case phaseSuperseded, phaseRejected:
+		// A Rejected Bundle is final like a Superseded one: nothing of it is
+		// promoted again, and its Graph's per-promotion instances would keep
+		// querying (#2138).
 		d = r.Retire.Superseded
 	case phaseFailed:
 		if b.Status.GraphRef == "" {
@@ -456,7 +460,7 @@ func finishedPhase(obj client.Object) bool {
 		return false
 	}
 	switch b.Status.Phase {
-	case phaseSuperseded, phaseFailed, phaseVerified:
+	case phaseSuperseded, phaseRejected, phaseFailed, phaseVerified:
 	default:
 		// A Bundle that left a finished phase (a Failed one that recovered)
 		// may hold a GraphRetired condition to clear.

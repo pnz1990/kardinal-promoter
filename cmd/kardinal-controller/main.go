@@ -202,7 +202,7 @@ func main() {
 		"Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) "+
 			"when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact.")
 	flag.DurationVar(&retire.Superseded, "graph-retire-superseded-after", bundlereconciler.DefaultRetirePolicy.Superseded,
-		"How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
+		"How long the Graph of a Superseded or Rejected Bundle, or of a Verified one a newer Bundle replaced in every environment, "+
 			"is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it.")
 	flag.DurationVar(&retire.Failed, "graph-retire-failed-after", bundlereconciler.DefaultRetirePolicy.Failed,
 		"How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle does not recover. 0 keeps it.")

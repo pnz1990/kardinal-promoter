@@ -29,10 +29,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
@@ -117,6 +120,10 @@ const (
 		"this one queries when a slot is free"
 	// ReasonSuspended is the reason of a suspended MetricCheck.
 	ReasonSuspended = "Suspended: spec.suspend is set; the last result goes stale at validUntil"
+	// ReasonVersionFinal is the reason of a per-promotion instance whose
+	// version is Superseded or Rejected (#2138).
+	ReasonVersionFinal = "Suspended: its version is Superseded or Rejected, so nothing waits on it; " +
+		"the last result goes stale at validUntil"
 )
 
 // Reconcile processes a single MetricCheck object.
@@ -126,7 +133,10 @@ const (
 //  2. spec.perPromotion → a template: write reason ReasonTemplate (and clear
 //     any result), no query, no requeue. Its instances are evaluated instead.
 //  3. spec.suspend → write reason ReasonSuspended, no query, no requeue; the
-//     last result goes stale at validUntil.
+//     last result goes stale at validUntil. So too for a per-promotion
+//     instance whose Bundle (kardinal.io/bundle) is Superseded or Rejected
+//     (ReasonVersionFinal): its Graph holds the steps its spec.suspend reads,
+//     so kro never sets it (#2138).
 //  4. A placeholder left in a templated field → Fail without a query.
 //  5. Query the provider's backend → a number, or text for web.
 //  6. Evaluate threshold → Pass or Fail.
@@ -167,6 +177,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if mc.Spec.Suspend {
 		r.cancelSlot(req.NamespacedName)
 		return ctrl.Result{}, r.markNotQueried(ctx, &mc, ReasonSuspended, false)
+	}
+	if r.versionFinal(ctx, &mc) {
+		r.cancelSlot(req.NamespacedName)
+		return ctrl.Result{}, r.markNotQueried(ctx, &mc, ReasonVersionFinal, false)
 	}
 
 	interval := parseInterval(mc.Spec.Interval)
@@ -405,7 +419,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: workerCount(r.Limiter),
 			// Workers are shared fairly between namespaces (#1577).
-			NewQueue: fairqueue.NewFor(mgr)})
+			NewQueue: fairqueue.NewFor(mgr)}).
+		// A version that becomes Superseded or Rejected stops its instances
+		// at once (versionFinal), not at their next interval.
+		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleInstances),
+			builder.WithPredicates(becameFinal))
 	if r.Limiter != nil {
 		wake := make(chan event.GenericEvent, wakeBuffer)
 		r.Limiter.Wake = func(key types.NamespacedName) {
@@ -516,4 +534,54 @@ func workerCount(l *Limiter) int {
 		return l.Global + spareWorkers
 	}
 	return maxConcurrentReconciles
+}
+
+// versionFinal reports whether mc is a per-promotion instance (it has the
+// kardinal.io/bundle label) of a Bundle that is Superseded or Rejected, both
+// final: nothing reads its result any more. Its spec.suspend reads the
+// Bundle phase, but the Graph holds the PromotionSteps the instance's query
+// depends on once the Bundle is Superseded or Rejected (graph bundleHeld), so
+// kro does not re-apply the instance and the field stays false. As the
+// PolicyGate reconciler (bundleSettled), this reads the Bundle's phase
+// itself. A Bundle that cannot be read is not final: the instance queries as
+// before.
+func (r *Reconciler) versionFinal(ctx context.Context, mc *kardinalv1alpha1.MetricCheck) bool {
+	name := mc.Labels[lifecycle.LabelBundle]
+	if name == "" {
+		return false
+	}
+	var b kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: mc.Namespace, Name: name}, &b); err != nil {
+		return false
+	}
+	return b.Status.Phase == "Superseded" || b.Status.Phase == "Rejected"
+}
+
+// becameFinal passes a Bundle update that moved it to Superseded or Rejected.
+var becameFinal = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		final := func(o client.Object) bool {
+			b, ok := o.(*kardinalv1alpha1.Bundle)
+			return ok && (b.Status.Phase == "Superseded" || b.Status.Phase == "Rejected")
+		}
+		return final(e.ObjectNew) && !final(e.ObjectOld)
+	},
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
+// bundleInstances maps a Bundle to its MetricCheck instances.
+func (r *Reconciler) bundleInstances(ctx context.Context, o client.Object) []reconcile.Request {
+	var list kardinalv1alpha1.MetricCheckList
+	if err := r.List(ctx, &list, client.InNamespace(o.GetNamespace()),
+		client.MatchingLabels{lifecycle.LabelBundle: o.GetName()}); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("bundle", o.GetName()).Msg("list the MetricCheck instances of a finished version")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+	}
+	return reqs
 }

@@ -505,8 +505,9 @@ graph:
   # kardinal.io/graph-retire-after annotation replaces all three for its
   # Bundles. See docs/operate.md#sizing-kro.
   retire:
-    # -- A Superseded Bundle, or a Verified one that a newer Bundle replaced
-    # in every environment (--graph-retire-superseded-after, default 1m).
+    # -- A Superseded or Rejected Bundle, or a Verified one that a newer
+    # Bundle replaced in every environment (--graph-retire-superseded-after,
+    # default 1m).
     superseded: ""
     # -- A Failed Bundle (--graph-retire-failed-after, default 24h). A retired
     # Failed Bundle does not recover.

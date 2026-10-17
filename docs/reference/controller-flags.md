@@ -46,7 +46,7 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--graph-reader-clusterrole` | string |  | Removed (#1283): Graphs have no health ref nodes, so kardinal binds no reader RoleBindings. Setting it fails; remove it. |
 | `--graph-reader-namespaces` | string |  | Removed (#1283): Graphs have no health ref nodes, so kardinal binds no reader RoleBindings. Setting it fails; remove it. |
 | `--graph-retire-failed-after` | duration | `24h0m0s` | How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle does not recover. 0 keeps it. |
-| `--graph-retire-superseded-after` | duration | `1m0s` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it. |
+| `--graph-retire-superseded-after` | duration | `1m0s` | How long the Graph of a Superseded or Rejected Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it. |
 | `--graph-retire-verified-after` | duration | `1h0m0s` | How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it. |
 | `--graph-service-account` | string | `"kardinal-graph"` | ServiceAccount (created in each Pipeline namespace) that kro impersonates to apply Graphs. |
 | `--health-probe-bind-address` | string | `":8081"` | The address the probe endpoint binds to. |

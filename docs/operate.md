@@ -71,7 +71,7 @@ the CLI and the UI read. So the Graphs kro holds are:
 | Graphs | How many |
 |---|---|
 | Bundles promoting | about one per Pipeline and Bundle type (a newer Bundle supersedes an older one) |
-| Superseded Bundles, and Verified or Failed ones a newer Verified Bundle replaced in every environment they touched | those whose steps settled in the last `graph.retire.superseded` (1m), plus the ones the controller has not reached yet |
+| Superseded and Rejected Bundles, and Verified or Failed ones a newer Verified Bundle replaced in every environment they touched | those whose steps settled in the last `graph.retire.superseded` (1m), plus the ones the controller has not reached yet |
 | Verified Bundles still deployed | those verified in the last `graph.retire.verified` (1h) |
 | Failed Bundles not replaced yet (and Bundles with a step stopped by a health alarm) | those failed in the last `graph.retire.failed` (24h) |
 

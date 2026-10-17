@@ -15,7 +15,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -437,4 +439,70 @@ func TestMetric_TemplateHostIsFixed(t *testing.T) {
 	recs, err := e.FakeMetricRecords(ctx, "web", "/web/"+a.ns+"/host")
 	require.NoError(t, err)
 	assert.Empty(t, recs, "the unrendered instance sent nothing")
+}
+
+// TestMetric_FinalVersionStopsQuerying (#2138): the per-promotion MetricCheck
+// instance of a version that is Superseded, or Rejected, stops querying at
+// once (the Graph holds its steps, so it never sets spec.suspend), and a
+// Rejected version's Graph, with the instance, is retired like a Superseded
+// one's.
+//
+// Covers METRIC-TMPL-04.
+func TestMetric_FinalVersionStopsQuerying(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newFluxApp(t, e, "test", "prod")
+	e.CreateSecretData(t, a.ns, metricCredsSecret, true, goodMetricCreds)
+	tmpl := providerCheck(t, a.ns, "canary", "datadog", "avg:e2e.errors{ns:"+a.ns+",version:{{ bundle.version }}}")
+	tmpl.Spec.PerPromotion = true
+	e.CreateMetricCheck(t, tmpl)
+	e.CreateGate(t, framework.Gate(a.ns, "canary-gate", "prod", `metrics["canary"].result == "Pass"`, "5m"))
+	p := a.pipeline(nil)
+	p.Annotations = map[string]string{"kardinal.io/graph-retire-after": "5s"}
+	a.apply(t, p)
+
+	instanceOf := func(bundle string) v1alpha1.MetricCheck {
+		var inst v1alpha1.MetricCheck
+		framework.Eventually(t, 2*time.Minute, "the prod instance of "+bundle, func(ctx context.Context) (bool, string) {
+			items, err := e.ListMetricChecks(ctx, a.ns, map[string]string{"kardinal.io/metric-template": "canary",
+				"kardinal.io/bundle": bundle, "kardinal.io/environment": "prod"})
+			if err != nil || len(items) != 1 {
+				return false, fmt.Sprintf("%d instances (%v)", len(items), err)
+			}
+			inst = items[0]
+			return true, ""
+		})
+		e.WaitMetricCheck(t, a.ns, inst.Name, metricTimeout, "querying (no data yet)", framework.MetricResult("Fail", "datadog query returned no series"))
+		return inst
+	}
+	const final = "Suspended: its version is Superseded or Rejected"
+
+	// Superseded: a newer version replaces the one waiting on the gate.
+	older := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	olderInst := instanceOf(older)
+	newer := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	e.WaitBundlePhase(t, a.ns, older, "Superseded", time.Minute)
+	e.WaitMetricCheck(t, a.ns, olderInst.Name, 30*time.Second, "stopped", func(mc *v1alpha1.MetricCheck) bool {
+		return strings.HasPrefix(mc.Status.Reason, final)
+	})
+
+	// Rejected: its instance stops, and its Graph is retired.
+	newerInst := instanceOf(newer)
+	e.MustKardinal(t, a.ns, "reject", newer, "--reason", "e2e #2138")
+	e.WaitBundlePhase(t, a.ns, newer, "Rejected", time.Minute)
+	e.WaitMetricCheck(t, a.ns, newerInst.Name, 30*time.Second, "stopped", func(mc *v1alpha1.MetricCheck) bool {
+		return strings.HasPrefix(mc.Status.Reason, final)
+	})
+	framework.Eventually(t, 2*time.Minute, newer+"'s Graph retired", func(ctx context.Context) (bool, string) {
+		var b v1alpha1.Bundle
+		if err := e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: newer}, &b); err != nil {
+			return false, err.Error()
+		}
+		c := meta.FindStatusCondition(b.Status.Conditions, "GraphRetired")
+		if c == nil || c.Reason != "Retired" {
+			return false, fmt.Sprintf("GraphRetired %+v", c)
+		}
+		items, err := e.ListMetricChecks(ctx, a.ns, map[string]string{"kardinal.io/bundle": newer})
+		return err == nil && len(items) == 0, fmt.Sprintf("%d instances left (%v)", len(items), err)
+	})
 }

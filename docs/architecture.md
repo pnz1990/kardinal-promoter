@@ -327,7 +327,7 @@ that starts when the last step settles:
 
 | Bundle | Retired after (chart value, controller flag) |
 |---|---|
-| Superseded, or Verified and replaced in every environment by a newer Verified Bundle of the same type | 1m (`graph.retire.superseded`, `--graph-retire-superseded-after`) |
+| Superseded, Rejected, or Verified and replaced in every environment by a newer Verified Bundle of the same type | 1m (`graph.retire.superseded`, `--graph-retire-superseded-after`) |
 | Verified and still deployed in an environment | 1h (`graph.retire.verified`, `--graph-retire-verified-after`) |
 | Failed, unless a newer Verified Bundle replaced it in every environment it touched (then the first row); or not Superseded with a step stopped by a health alarm (`AbortedByAlarm`, which waits for a person to resume or roll back) | 24h (`graph.retire.failed`, `--graph-retire-failed-after`) |
 

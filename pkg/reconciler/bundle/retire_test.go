@@ -182,6 +182,7 @@ func TestRetire_Delays(t *testing.T) {
 		want       time.Duration // 0: no GraphRetired condition
 	}{
 		{name: "superseded", phase: "Superseded", policy: testRetire, want: 10 * time.Minute},
+		{name: "rejected, like superseded (#2138)", phase: "Rejected", policy: testRetire, want: 10 * time.Minute},
 		{name: "failed", phase: "Failed", policy: testRetire, want: time.Hour},
 		{name: "verified, deployed", phase: "Verified", policy: testRetire, want: 30 * time.Minute},
 		{name: "verified, replaced in one environment only", phase: "Verified", policy: testRetire,
@@ -285,6 +286,7 @@ func TestRetire_FinishedPhaseFilter(t *testing.T) {
 		want  bool
 	}{
 		{name: "superseded", phase: "Superseded", want: true},
+		{name: "rejected (#2138)", phase: "Rejected", want: true},
 		{name: "verified scheduled", phase: "Verified", conds: cond(metav1.ConditionFalse, "Scheduled"), want: true},
 		{name: "failed retiring", phase: "Failed", conds: cond(metav1.ConditionTrue, "Retiring"), want: true},
 		{name: "retired", phase: "Superseded", conds: cond(metav1.ConditionTrue, "Retired")},
