@@ -1,6 +1,7 @@
 # Upgrade
 
-**Upgrading from v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
+**Upgrading from v0.12.0** to the next release: follow [Upgrading from v0.12.0](#upgrading-from-v0120).
+**From v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
 **From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
@@ -55,6 +56,68 @@ A controller older than this release puts a health ref node in each Graph it bui
 `<fullname>-graph-reader` ClusterRole, which this chart no longer ships. Downgrade the chart
 along with the controller (`helm rollback`), so the ClusterRole is back. When you upgrade again,
 the controller removes those nodes and their reader RoleBindings at startup.
+
+## Upgrading from v0.12.0
+
+!!! note "v0.13.0 is not released yet"
+    These steps take a v0.12.0 installation to the next release, v0.13.0, once it is released:
+    `<version>` in the commands is that release's chart version. Until then v0.12.0 is the latest
+    release, and there is nothing to upgrade to.
+
+The upgrade suite runs these steps as written (`TestUpgradeV0120_Estate`, on the oldest and newest
+supported Kubernetes minors), on an estate of versions in flight, gates holding, agents and a freeze.
+Everything stored under v0.12.0 keeps working:
+
+- Versions in flight keep their Graphs, PromotionSteps, PRStatuses and gate instances, and
+  finish. An open promotion PR stays the same PR.
+- Gates that hold a version keep holding it. Approvals and Verdicts recorded before the upgrade
+  still count, and an AgentRun that is running when you upgrade finishes and its Verdict counts.
+- Freezes stay in force until you lift them. Registered agents stay registered, and versions they
+  shipped keep their actor.
+- The new kinds, PromotionReceipt and ChangeRequest, are only installed: receipts stay off until
+  you set `receipts.enabled`, and no change request is opened until a gate reads one.
+
+The next release targets the same kro as v0.12.0, so kro is not upgraded.
+
+**1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section
+lists every change since v0.12.0. Its "Before you upgrade" entries are the ones that can change
+something for you:
+
+- **`graph.readerNamespaces` is removed.** Remove it from your values; with
+  `--reset-then-reuse-values` a value you never set is dropped for you. At its first start the new
+  controller removes the health ref nodes from existing Graphs and deletes the reader RoleBindings
+  v0.12.0 recorded.
+- **A rollback no longer re-deploys the environments upstream of its target.** After the upgrade,
+  `kardinal rollback <pipeline> --env prod` changes prod only. A rollback created before the upgrade
+  still goes through the upstream environments.
+- **Gate changes reach the versions in flight.** A version that was promoting when you upgraded
+  keeps the gates it has until one of its gates is created, edited or deleted; then it gets the
+  new gates at once.
+
+**2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
+v0.12.0 chart installed, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
+new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**4. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check, and every Pipeline is Ready.
 
 ## Upgrading from v0.11.0
 
