@@ -15,8 +15,7 @@ only up to 1.5 MiB. Two Graph shapes keep it in bounds:
 - **compact** (above 100 environments): the promotion order is data in the Graph, and one node
   creates every PromotionStep the order allows (upstream environments Verified, gates ready, the
   version not superseded, rejected or waiting for a `maxConcurrentPromotions` slot). A step that exists is not removed when a gate later closes or
-  the version is superseded. The Graph has about a dozen nodes whatever the number of environments,
-  and no health ref nodes (health is checked by the PromotionStep as in the nodes shape).
+  the version is superseded. The Graph has about a dozen nodes whatever the number of environments.
 
 Both shapes promote the same way: the same PromotionSteps, gate instances and PRStatuses,
 with the same names. Choose one for a Pipeline with the annotation `kardinal.io/graph-shape:

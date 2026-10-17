@@ -231,21 +231,17 @@ the node itself").
   the PRStatus `status.mergeCommitSHA`) and requires Argo CD's synced revision or Flux's
   `lastAppliedRevision` to match it, and a Deployment to run the Bundle images
   (`pkg/health/adapter.go`, `pkg/reconciler/promotionstep/reconciler.go` `expectedRevision`).
-- **Still not solved in the Graph:** the ref health nodes keep a self-only `readyWhen`
-  (for Argo CD: `Healthy`, `Synced` and no running or failed sync operation), so Graph
-  readiness alone can see the previous revision.
-  Doing it in the Graph needs `app.status.sync.revision == step.status.outputs.commitSHA`,
-  which is a cross-node `readyWhen`.
-- **Planned:** #1283 (open) removes the health ref nodes and the reader RBAC (ClusterRole,
+- **Closed by removal (#1283):** the health ref nodes, which kept a self-only `readyWhen`
+  and so could see the previous revision, are gone, with the reader RBAC (ClusterRole,
   RoleBindings, `Prune`, `--graph-reader-namespaces`). Health stays in the PromotionStep
-  reconciler.
+  reconciler, and the controller removes the nodes from Graphs earlier releases built.
 
 **Reclassified to Low (2026-10-02).** A cross-node `readyWhen` would only change Graph
 readiness: on a standalone Graph `readyWhen` does not gate dependents (G1), and the Graph
 cannot write PromotionStep status, so `HealthChecking → Verified` stays in the reconciler
 either way. Graph `Ready` already includes the revision check, because the step node's
 `readyWhen` is `state == "Verified"` and the reconciler sets Verified only after the
-revision-checked adapter passes. G3 closes with #1283.
+revision-checked adapter passes. G3 is closed by #1283.
 
 **Upstream work.**
 
@@ -275,14 +271,11 @@ the kind is not served, the node stays Unresolved with a soft not-ready, and the
 SchemaWatcher re-enqueues the Graph when a CRD appears
 (`concepts/graph/02-nodes.md` §Dynamic types, `executor/dynamic_ref_test.go`).
 
-**kardinal workaround.** The translator asks the RESTMapper whether the kind is served and
-drops the health ref node if it is not (`pkg/translator/translator.go` `servedKind`,
-`WithRESTMapper`). The PromotionStep's Go health adapter still runs, so the step stays in
-HealthChecking with a "not found" reason until the kind and object exist.
-
-**Planned:** #1283 (open) removes the health ref nodes and the reader RBAC (ClusterRole,
-RoleBindings, `Prune`, `--graph-reader-namespaces`). Health stays in the PromotionStep
-reconciler.
+**kardinal workaround.** No health kind is in a Graph any more (#1283): the PromotionStep's
+Go health adapter checks it, so the step stays in HealthChecking with a "not found" reason
+until the kind and object exist. The translator still asks the RESTMapper whether a kind is
+served for the AnalysisRun nodes (`pkg/translator/translator.go` `servedKind`,
+`WithRESTMapper`).
 
 **Upstream work.**
 
@@ -304,8 +297,8 @@ GroupKind-scoped re-enqueue. Only worth asking for if #1283 is reversed.
 **Need.** kro applies a namespaced Graph by impersonating `spec.serviceAccountName`, or the
 namespace's `default` ServiceAccount if that field is unset
 (`pkg/controller/graph/impersonation.go:15-58`). The Graph needs a ServiceAccount that can
-write PromotionSteps, PolicyGates and PRStatuses in its namespace, and read health objects
-in the namespaces its ref nodes point to (`argocd`, `flux-system`, app namespaces).
+write PromotionSteps, PolicyGates and PRStatuses in its namespace, and read the Bundle,
+Approvals and Verdicts there.
 
 **kro today.** A Graph cannot create its own identity. It would have to create a
 ServiceAccount and RoleBindings while running as that same identity. kro also checks
@@ -318,34 +311,16 @@ list/watch on every kind a Graph uses.
 **kardinal workaround.**
 
 - `pkg/graph/identity.go` `IdentityProvisioner` creates the `kardinal-graph`
-  ServiceAccount, an applier RoleBinding in the Graph namespace, and reader RoleBindings
-  named `<readerRole>-<graphNamespace>` in each ref namespace. It runs before every
+  ServiceAccount and an applier RoleBinding in the Graph namespace. It runs before every
   Graph create.
-- Reader bindings go only into the Graph's own namespace and the allowlist
-  `--graph-reader-namespaces` (chart `graph.readerNamespaces`, default `argocd`,
-  `flux-system`; `*` allows every namespace; `kube-system`, `kube-public` and `kube-node-lease` are never allowed). Pipeline authors
-  choose ref namespaces, so without the allowlist any author could make the controller grant
-  read access anywhere. A health ref into another namespace, or one where the bind is
-  forbidden, is dropped from the Graph with a warning: kro treats a forbidden ref read as a
-  hard error, while health refs are only observational (G3).
-- The namespaces that hold a reader binding are recorded in the applier RoleBinding's
-  `kardinal.io/reader-namespaces` annotation. `Prune` deletes the bindings that no Graph in
-  the namespace reads through any more, after each Graph create and after each Graph delete
-  (`pkg/reconciler/graphcleanup`), so the last Graph of a namespace takes its bindings with it.
-  When the applier RoleBinding and its record are gone (the namespace was deleted), `Prune`
-  looks in the Graph namespace and the named allowlist namespaces. In cluster mode a
-  leader-only sweep runs at startup and every 10 minutes: it lists the RoleBindings labeled
-  `app.kubernetes.io/managed-by=kardinal-promoter` and prunes every Graph namespace that has a
-  reader binding, which also catches bindings from Graphs deleted while the controller was
-  down, from older versions, and, with `*`, outside the named namespaces.
-- The chart ships the applier and reader ClusterRoles, plus an aggregation ClusterRole
-  that gives kro list/watch on kardinal kinds (`chart/kardinal-promoter/templates/graph-rbac.yaml`).
-- **Planned:** #1283 (open) removes the health ref nodes and the reader RBAC (ClusterRole,
-  RoleBindings, `Prune`, `--graph-reader-namespaces`). Health stays in the PromotionStep
-  reconciler.
-
-Verified on kind: `kardinal-promoter-graph-reader-default` in `argocd`, impersonated
-applies succeed, and there are no RBAC or watch errors in the kro logs.
+- A Graph reads nothing outside its namespace. Earlier releases also bound a reader
+  ClusterRole in each namespace a health ref node read, behind an allowlist
+  (`--graph-reader-namespaces`), with a record on the applier binding, a prune after each
+  Graph create and delete, and a sweep. #1283 removed the health ref nodes (G3) and all of
+  that. At startup the controller removes the health ref nodes from existing Graphs and
+  deletes the reader bindings it recorded (`pkg/reconciler/graphcleanup` `HealthRefCleanup`).
+- The chart ships the applier ClusterRole, plus an aggregation ClusterRole that gives kro
+  list/watch on the kinds a Graph uses (`chart/kardinal-promoter/templates/graph-rbac.yaml`).
 
 **Upstream work.** kro will not create the identity: it would need RBAC `bind` and
 `escalate`, which breaks its trust model (`advanced/01-access-control.md:111-124`), and a

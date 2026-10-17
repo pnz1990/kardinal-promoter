@@ -52,10 +52,11 @@ spec:
             - --webhook-bind-address=:{{ .Values.service.webhookPort }}
             - --graph-service-account={{ .Values.graph.serviceAccountName }}
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
-            - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
             - --agentrun-writer-clusterrole={{ include "kardinal-promoter.agentRunWriterRole" . }}
             - --agentrun-reader-clusterrole={{ include "kardinal-promoter.agentRunReaderRole" . }}
-            - --graph-reader-namespaces={{ join "," .Values.graph.readerNamespaces }}
+            {{- if hasKey .Values.graph "readerNamespaces" }}
+            {{- fail "graph.readerNamespaces was removed (#1283): Graphs have no health ref nodes any more, so kardinal binds no reader RoleBindings; remove the value" }}
+            {{- end }}
             - --fleet-application-namespaces={{ join "," .Values.fleets.applicationNamespaces }}
             {{- with .Values.fleets.clusterProfileNamespaces }}
             - --fleet-clusterprofile-namespaces={{ join "," . }}

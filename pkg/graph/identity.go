@@ -7,53 +7,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"sync"
 
-	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Default ClusterRole names bound to the Graph ServiceAccount. Both ship in
-// the Helm chart (templates/graph-rbac.yaml).
-const (
-	// DefaultApplierClusterRole grants what a kardinal Graph applies in its own
-	// namespace: PromotionSteps, PolicyGates, PRStatuses, MetricChecks, and read
-	// on Bundles.
-	DefaultApplierClusterRole = "kardinal-graph-applier"
-	// DefaultReaderClusterRole grants read/watch on the health kinds a Graph
-	// references (Deployments, Argo CD Applications, Flux Kustomizations,
-	// Argo Rollouts, Flagger Canaries).
-	DefaultReaderClusterRole = "kardinal-graph-reader"
-)
+// DefaultApplierClusterRole is the ClusterRole bound to the Graph
+// ServiceAccount in its namespace. It ships in the Helm chart
+// (templates/graph-rbac.yaml) and grants what a kardinal Graph applies in its
+// own namespace: PromotionSteps, PolicyGates, PRStatuses, MetricChecks, and
+// read on Bundles, Approvals and Verdicts.
+const DefaultApplierClusterRole = "kardinal-graph-applier"
 
 // managedByLabel marks the ServiceAccount and RoleBindings the controller creates.
 var managedByLabel = map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}
-
-// AnnotationReaderNamespaces, on the applier RoleBinding in a Graph namespace,
-// lists (comma-separated) the namespaces holding a reader RoleBinding for that
-// Graph namespace. Prune reads it to find the bindings without listing
-// RoleBindings cluster-wide.
-const AnnotationReaderNamespaces = "kardinal.io/reader-namespaces"
-
-// AllNamespaces, as a ReaderNamespaces entry, allows a reader RoleBinding in
-// every namespace except the Kubernetes system namespaces. Use it only when
-// every Pipeline author may read every namespace (a single-tenant cluster).
-const AllNamespaces = "*"
-
-// DefaultReaderNamespaces are the namespaces the controller binds the reader
-// role in by default, besides the Graph's own: where the argocd and flux health
-// types look for their objects.
-var DefaultReaderNamespaces = []string{"argocd", "flux-system"}
-
-// systemNamespaces never get a reader RoleBinding, even with AllNamespaces.
-var systemNamespaces = map[string]bool{"kube-system": true, "kube-public": true, "kube-node-lease": true}
 
 // errUnmanaged means a RoleBinding with the name the controller uses exists,
 // does not carry managedByLabel, and would need a change. The controller does
@@ -65,9 +35,9 @@ var errUnmanaged = errors.New("exists and is not managed by kardinal-promoter")
 //
 // kro applies a namespaced Graph as spec.serviceAccountName in the Graph's
 // namespace and refuses to fall back to its own identity, so without this
-// every apply is forbidden. RBAC is namespace-scoped (RoleBindings only):
-// the applier role in the Graph namespace, the reader role in each allowed
-// namespace a health ref points into. See docs/design/16-graph-capability-ledger.md G5.
+// every apply is forbidden. RBAC is namespace-scoped: one RoleBinding of the
+// applier role in the Graph namespace. A Graph reads nothing outside it.
+// See docs/design/16-graph-capability-ledger.md G5.
 type IdentityProvisioner struct {
 	// Writer creates, updates and deletes ServiceAccounts and RoleBindings.
 	Writer client.Writer
@@ -77,72 +47,6 @@ type IdentityProvisioner struct {
 
 	ServiceAccountName string
 	ApplierClusterRole string
-	ReaderClusterRole  string
-
-	// ReaderNamespaces lists the namespaces, besides the Graph's own, where
-	// the reader role may be bound. Pipeline authors choose the namespaces
-	// their health refs read, so this list is what stops one tenant from
-	// granting its Graph ServiceAccount read access to another tenant's
-	// namespace. Empty allows only the Graph's own namespace; AllNamespaces
-	// allows every namespace except kube-system, kube-public and
-	// kube-node-lease, which are never allowed.
-	ReaderNamespaces []string
-
-	// OnlyNamespace, when set (namespace mode, --watch-namespace), is the only
-	// namespace the controller has RBAC in. Prune looks for reader RoleBindings
-	// there only: the controller cannot have created one anywhere else, and
-	// every read elsewhere is forbidden.
-	OnlyNamespace string
-
-	// locks are the per-namespace locks of LockNamespace.
-	locks sync.Map // namespace -> *sync.Mutex
-}
-
-// LockNamespace serializes, in one Graph namespace, the callers that bind
-// and prune its reader RoleBindings, and returns the unlock. The translator
-// holds it from Ensure until its Graph is created (and pruned); every Prune
-// caller holds it from listing the namespace's Graphs until Prune returns.
-// Without it a Prune that listed the Graphs just before a new Graph was
-// created could delete the reader binding Ensure had just made for it.
-// Everything Ensure and Prune touch is keyed by the Graph namespace (the
-// reader bindings' name, the record on its applier binding), so Graphs of
-// other namespaces are bound and pruned at the same time (#1509). A nil
-// provisioner does nothing.
-func (p *IdentityProvisioner) LockNamespace(graphNS string) (unlock func()) {
-	if p == nil {
-		return func() {}
-	}
-	v, _ := p.locks.LoadOrStore(graphNS, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
-}
-
-// MayNeedPrune reports whether a Prune of graphNS after g was created or
-// updated could delete anything: whether the reader namespaces recorded for
-// graphNS include one g does not read. When every recorded namespace is
-// still read by g, every binding is still needed, and the caller skips
-// listing the namespace's Graphs (#1509: that list, under the lock, made
-// each translation cost as much as the Graphs in its namespace). An unknown
-// record (no applier binding, or a read error) may need a prune.
-func (p *IdentityProvisioner) MayNeedPrune(ctx context.Context, graphNS string, g *Graph) bool {
-	if p == nil || g == nil {
-		return false
-	}
-	recorded, found, err := p.recorded(ctx, graphNS)
-	if err != nil || !found {
-		return true
-	}
-	reads := map[string]bool{}
-	for _, ns := range RefNamespaces(g) {
-		reads[ns] = true
-	}
-	for _, ns := range recorded {
-		if !reads[ns] {
-			return true
-		}
-	}
-	return false
 }
 
 // ApplierBindingName is the name of the applier RoleBinding in every Graph
@@ -151,20 +55,10 @@ func (p *IdentityProvisioner) ApplierBindingName() string {
 	return p.applierRole()
 }
 
-// ReaderBinding reports whether rb is a reader RoleBinding the controller
-// created, and for Graphs in which namespace: it carries the managed-by label,
-// binds the reader ClusterRole, and grants it to the Graph ServiceAccount of
-// one namespace, after which it is named.
-func (p *IdentityProvisioner) ReaderBinding(rb *rbacv1.RoleBinding) (graphNS string, ok bool) {
-	if !isManaged(rb.Labels) || rb.RoleRef.Kind != "ClusterRole" || rb.RoleRef.Name != p.readerRole() ||
-		len(rb.Subjects) != 1 {
-		return "", false
-	}
-	s := rb.Subjects[0]
-	if s.Kind != rbacv1.ServiceAccountKind || s.Name != p.saName() || rb.Name != p.readerBindingName(s.Namespace) {
-		return "", false
-	}
-	return s.Namespace, true
+// ServiceAccount is the name of the Graph ServiceAccount in every Graph
+// namespace.
+func (p *IdentityProvisioner) ServiceAccount() string {
+	return p.saName()
 }
 
 func (p *IdentityProvisioner) saName() string {
@@ -181,284 +75,18 @@ func (p *IdentityProvisioner) applierRole() string {
 	return p.ApplierClusterRole
 }
 
-func (p *IdentityProvisioner) readerRole() string {
-	if p.ReaderClusterRole == "" {
-		return DefaultReaderClusterRole
-	}
-	return p.ReaderClusterRole
-}
-
-// readerBindingName is the name of the reader RoleBinding for Graphs in graphNS.
-func (p *IdentityProvisioner) readerBindingName(graphNS string) string {
-	return p.readerRole() + "-" + graphNS
-}
-
-// MayRead reports whether a Graph in graphNS may get a reader RoleBinding in
-// ns. A nil provisioner (identity managed outside the controller) allows
-// every namespace.
-func (p *IdentityProvisioner) MayRead(graphNS, ns string) bool {
-	if p == nil || ns == graphNS {
-		return true
-	}
-	if systemNamespaces[ns] {
-		return false
-	}
-	for _, allowed := range p.ReaderNamespaces {
-		if allowed == AllNamespaces || allowed == ns {
-			return true
-		}
-	}
-	return false
-}
-
-// Ensure provisions the identity for g: the ServiceAccount and applier
-// RoleBinding in g's namespace, and a reader RoleBinding in every namespace
-// that one of g's ref nodes reads from.
-//
-// It returns the namespaces it did not bind the reader role in: MayRead
-// refuses them, the namespace does not exist yet (Argo CD often creates it on
-// first sync), the controller may not create RoleBindings there, or a
-// RoleBinding of the same name exists that the controller does not manage.
-// The caller must drop g's refs into those namespaces before creating g: kro
-// treats a forbidden ref read as a hard error and would degrade the Graph. The
-// next translation tries again. A reader binding refused because g's own
-// namespace is being deleted is an error instead: g cannot be created there
-// either.
-//
-// Reader bindings the controller created are recorded on the applier
-// RoleBinding (AnnotationReaderNamespaces) for Prune.
-func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, error) {
+// Ensure provisions the identity for g: the ServiceAccount and the applier
+// RoleBinding in g's namespace.
+func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) error {
 	if p == nil || g == nil {
-		return nil, nil
-	}
-	log := zerolog.Ctx(ctx)
-	ns := g.Namespace
-	sa := p.saName()
-
-	if err := p.ensureServiceAccount(ctx, ns, sa); err != nil {
-		return nil, err
-	}
-	if _, err := p.ensureRoleBinding(ctx, ns, p.applierRole(), p.applierRole(), ns, sa); err != nil {
-		return nil, err
-	}
-	var managed, unbound []string
-	for _, readNS := range RefNamespaces(g) {
-		if !p.MayRead(ns, readNS) {
-			log.Warn().Str("namespace", readNS).Str("graphNamespace", ns).
-				Msg("graph identity: namespace is not in --graph-reader-namespaces; not binding the reader role")
-			unbound = append(unbound, readNS)
-			continue
-		}
-		owned, err := p.ensureRoleBinding(ctx, readNS, p.readerBindingName(ns), p.readerRole(), ns, sa)
-		switch {
-		case err == nil:
-			if owned {
-				managed = append(managed, readNS)
-			}
-		case readNS == ns && apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
-			// The Graph's own namespace is being deleted, so the Graph cannot
-			// be created either: stop, rather than report the role unbound.
-			return nil, err
-		case apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || errors.Is(err, errUnmanaged):
-			log.Warn().Err(err).Str("namespace", readNS).Str("graphNamespace", ns).
-				Msg("graph identity: reader role not bound")
-			unbound = append(unbound, readNS)
-		default:
-			return nil, err
-		}
-	}
-	if err := p.updateRecord(ctx, ns, managed, nil); err != nil {
-		return nil, err
-	}
-	return unbound, nil
-}
-
-// Readers reports whether a Graph of one Graph namespace still reads
-// namespace ns (a ref node reads from it), so its reader RoleBinding there
-// must stay. GraphClient.Readers answers from the Graphs' reader labels;
-// ReadersOf from a list of Graphs.
-type Readers func(ns string) (bool, error)
-
-// ReadersOf is the Readers of graphs, which must be every Graph of the
-// namespace.
-func ReadersOf(graphs []*Graph) Readers {
-	needed := map[string]bool{}
-	for _, g := range graphs {
-		for _, ns := range RefNamespaces(g) {
-			needed[ns] = true
-		}
-	}
-	return func(ns string) (bool, error) { return needed[ns], nil }
-}
-
-// Prune deletes the reader RoleBindings for graphNS that no Graph of graphNS
-// reads through any more (reads). Only bindings recorded by Ensure and still
-// carrying managedByLabel are deleted.
-// When the applier RoleBinding, which holds the record, is gone (its
-// namespace was deleted, or someone deleted it), the bindings are looked for
-// in graphNS and every namespace ReaderNamespaces names; with AllNamespaces
-// the others are left for the sweep (PruneIn). With OnlyNamespace set, only
-// that namespace is looked in. A namespace whose binding cannot be read stays
-// in the record, so a later Prune tries again. The caller must hold
-// LockNamespace(graphNS).
-func (p *IdentityProvisioner) Prune(ctx context.Context, graphNS string, reads Readers) error {
-	return p.PruneIn(ctx, graphNS, reads, nil)
-}
-
-// PruneIn is Prune that also looks for reader bindings for graphNS in
-// namespaces, which the sweep passes when it found bindings there that the
-// record may not list. reads is asked only about the namespaces that hold
-// a binding candidate.
-func (p *IdentityProvisioner) PruneIn(ctx context.Context, graphNS string, reads Readers, namespaces []string) error {
-	if p == nil {
 		return nil
 	}
-	recorded, found, err := p.recorded(ctx, graphNS)
-	if err != nil {
+	sa := p.saName()
+	if err := p.ensureServiceAccount(ctx, g.Namespace, sa); err != nil {
 		return err
 	}
-	candidates := map[string]bool{}
-	for _, ns := range append(recorded, namespaces...) {
-		candidates[ns] = true
-	}
-	if !found {
-		candidates[graphNS] = true
-		for _, ns := range p.ReaderNamespaces {
-			if ns != AllNamespaces {
-				candidates[ns] = true
-			}
-		}
-	}
-	var removed []string
-	for _, ns := range sortedKeys(candidates) {
-		if p.OnlyNamespace != "" && ns != p.OnlyNamespace {
-			continue
-		}
-		needed, err := reads(ns)
-		if err != nil {
-			return fmt.Errorf("graph identity: does a Graph of %s read %s: %w", graphNS, ns, err)
-		}
-		if needed {
-			continue
-		}
-		pruned, err := p.deleteReaderBinding(ctx, ns, graphNS)
-		if err != nil {
-			return err
-		}
-		if pruned {
-			removed = append(removed, ns)
-		}
-	}
-	if !found {
-		return nil
-	}
-	return p.updateRecord(ctx, graphNS, nil, removed)
-}
-
-// deleteReaderBinding deletes the reader RoleBinding for graphNS in ns if it
-// is managed by the controller, and reports whether ns holds no such binding
-// any more: deleted, missing, or one the controller does not manage. A
-// binding the controller may not read (ReaderNamespaces naming a namespace the
-// chart grants nothing in) is logged and reported as not pruned, so its
-// namespace stays in the record and a later Prune tries again.
-func (p *IdentityProvisioner) deleteReaderBinding(ctx context.Context, ns, graphNS string) (bool, error) {
-	var rb rbacv1.RoleBinding
-	key := client.ObjectKey{Namespace: ns, Name: p.readerBindingName(graphNS)}
-	if err := p.Reader.Get(ctx, key, &rb); err != nil {
-		switch {
-		case apierrors.IsNotFound(err):
-			return true, nil
-		case apierrors.IsForbidden(err):
-			zerolog.Ctx(ctx).Warn().Err(err).Str("namespace", ns).Str("graphNamespace", graphNS).
-				Msg("graph identity: may not read the reader rolebinding; not pruning it")
-			return false, nil
-		}
-		return false, fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
-	}
-	if !isManaged(rb.Labels) || rb.RoleRef.Name != p.readerRole() {
-		return true, nil
-	}
-	err := p.Writer.Delete(ctx, &rb, client.Preconditions{UID: &rb.UID, ResourceVersion: &rb.ResourceVersion})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return false, fmt.Errorf("graph identity: delete rolebinding %s: %w", key, err)
-	}
-	zerolog.Ctx(ctx).Info().Str("rolebinding", key.String()).Str("graphNamespace", graphNS).
-		Msg("graph identity: deleted a reader rolebinding no Graph reads through")
-	return true, nil
-}
-
-// recorded returns the reader namespaces recorded on the applier RoleBinding,
-// and whether that binding exists.
-func (p *IdentityProvisioner) recorded(ctx context.Context, graphNS string) ([]string, bool, error) {
-	var rb rbacv1.RoleBinding
-	key := client.ObjectKey{Namespace: graphNS, Name: p.applierRole()}
-	if err := p.Reader.Get(ctx, key, &rb); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
-	}
-	return splitNamespaces(rb.Annotations[AnnotationReaderNamespaces]), true, nil
-}
-
-// updateRecord adds and removes namespaces in the applier RoleBinding's
-// AnnotationReaderNamespaces. It does nothing when the set does not change,
-// when the binding is not managed by the controller, or, when it only
-// removes, when the binding is gone.
-func (p *IdentityProvisioner) updateRecord(ctx context.Context, graphNS string, add, remove []string) error {
-	if len(add) == 0 && len(remove) == 0 {
-		return nil
-	}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		var rb rbacv1.RoleBinding
-		key := client.ObjectKey{Namespace: graphNS, Name: p.applierRole()}
-		if err := p.Reader.Get(ctx, key, &rb); err != nil {
-			if apierrors.IsNotFound(err) && len(add) == 0 {
-				return nil
-			}
-			return fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
-		}
-		if !isManaged(rb.Labels) {
-			return nil
-		}
-		old := rb.Annotations[AnnotationReaderNamespaces]
-		set := map[string]bool{}
-		for _, ns := range splitNamespaces(old) {
-			set[ns] = true
-		}
-		for _, ns := range add {
-			set[ns] = true
-		}
-		for _, ns := range remove {
-			delete(set, ns)
-		}
-		value := strings.Join(sortedKeys(set), ",")
-		if value == old {
-			return nil
-		}
-		if rb.Annotations == nil {
-			rb.Annotations = map[string]string{}
-		}
-		if value == "" {
-			delete(rb.Annotations, AnnotationReaderNamespaces)
-		} else {
-			rb.Annotations[AnnotationReaderNamespaces] = value
-		}
-		if err := p.Writer.Update(ctx, &rb); err != nil {
-			return fmt.Errorf("graph identity: update rolebinding %s: %w", key, err)
-		}
-		return nil
-	})
-}
-
-func splitNamespaces(s string) []string {
-	var out []string
-	for _, ns := range strings.Split(s, ",") {
-		if ns = strings.TrimSpace(ns); ns != "" {
-			out = append(out, ns)
-		}
-	}
-	return out
+	_, err := p.ensureRoleBinding(ctx, g.Namespace, p.applierRole(), p.applierRole(), g.Namespace, sa)
+	return err
 }
 
 func isManaged(labels map[string]string) bool {
@@ -536,53 +164,4 @@ func (p *IdentityProvisioner) ensureRoleBinding(ctx context.Context,
 		return true, fmt.Errorf("graph identity: update rolebinding %s/%s: %w", ns, name, err)
 	}
 	return true, nil
-}
-
-// RefNamespaces returns the sorted, de-duplicated namespaces that g's ref
-// nodes read from. A ref without a namespace reads from g's namespace.
-func RefNamespaces(g *Graph) []string {
-	seen := map[string]bool{}
-	for _, n := range g.Spec.Nodes {
-		if n.Ref == nil {
-			continue
-		}
-		seen[RefNamespace(g, n)] = true
-	}
-	return sortedKeys(seen)
-}
-
-// LabelReadsPrefix, followed by a namespace, is the label GraphClient.Create
-// puts on a Graph for each namespace its ref nodes read from (RefNamespaces),
-// so GraphClient.Readers asks the API server for one Graph that reads a
-// namespace instead of reading every Graph of the namespace (#1685).
-const LabelReadsPrefix = "reads.kardinal.io/"
-
-// LabelReaderLabels marks a Graph that carries a LabelReadsPrefix label for
-// every namespace it reads. A Graph without it (created before the labels,
-// or reading a namespace that is not a valid label name) makes Readers read
-// every Graph of the namespace instead.
-const LabelReaderLabels = "kardinal.io/reader-labels"
-
-// ReaderLabels returns the reader labels of g: LabelReadsPrefix+ns for each
-// namespace it reads, and LabelReaderLabels, or nil when a namespace it
-// reads is not a valid label name.
-func ReaderLabels(g *Graph) map[string]string {
-	out := map[string]string{LabelReaderLabels: "true"}
-	for _, ns := range RefNamespaces(g) {
-		if len(validation.IsDNS1123Label(ns)) > 0 {
-			return nil
-		}
-		out[LabelReadsPrefix+ns] = "true"
-	}
-	return out
-}
-
-// RefNamespace returns the namespace ref node n of g reads from.
-func RefNamespace(g *Graph, n GraphNode) string {
-	if md, ok := n.Ref["metadata"].(map[string]interface{}); ok {
-		if v, ok := md["namespace"].(string); ok && v != "" {
-			return v
-		}
-	}
-	return g.Namespace
 }

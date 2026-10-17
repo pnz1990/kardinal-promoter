@@ -51,13 +51,10 @@ Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it b
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
-A controller older than this release does not know the reader labels this release puts on
-Graphs (`reads.kardinal.io/<namespace>` and `kardinal.io/reader-labels`), and keeps them when it
-updates a Graph. If it then adds a ref node that reads another namespace, the labels no longer
-name every namespace the Graph reads, and after you upgrade again a reader RoleBinding that
-Graph needs could be pruned until its next translation binds it again. Before you upgrade again
-after a downgrade, remove the marker, so the controller reads those Graphs in full:
-`kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
+A controller older than this release puts a health ref node in each Graph it builds, read through the
+`<fullname>-graph-reader` ClusterRole, which this chart no longer ships. Downgrade the chart
+along with the controller (`helm rollback`), so the ClusterRole is back. When you upgrade again,
+the controller removes those nodes and their reader RoleBindings at startup.
 
 ## Upgrading from v0.11.0
 
@@ -437,7 +434,7 @@ Helm deletes the objects that only v0.8.1 needed:
 
 It adds:
 
-- the ClusterRoles `kardinal-promoter-graph-applier`, `-graph-reader` and `-kro-watch`;
+- the ClusterRoles `kardinal-promoter-graph-applier` and `-kro-watch`;
 - a leader-election Role and RoleBinding.
 
 **9. Check the result.**
@@ -537,12 +534,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
 - **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
-- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. In cluster mode the sweep ([RBAC requirements](guides/security.md#rbac-requirements)) deletes them once no Graph reads through them; a binding that a Graph made by v0.8.1 still reads through stays until that Graph's Bundle is replaced. To revoke such bindings at once, list them and delete any in a namespace that is not the Graph's own and not in `graph.readerNamespaces`:
-
-    ```bash
-    kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \
-      -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name | grep graph-reader-
-    ```
+- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. This release ships no reader ClusterRole, so they grant nothing, but the controller cannot find them to delete them: list them, and delete the ones you do not want, as [RBAC requirements](guides/security.md#rbac-requirements) shows.
 
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.

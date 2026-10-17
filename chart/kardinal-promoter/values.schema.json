@@ -549,6 +549,7 @@
           "minimum": 0
         },
         "readerNamespaces": {
+          "description": "Removed (#1283): setting it fails the install.",
           "type": "array",
           "items": {
             "type": "string"

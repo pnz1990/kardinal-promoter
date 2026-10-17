@@ -80,7 +80,7 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 
 This installs the kardinal CRDs (from the chart's `crds/` directory), the **kardinal-promoter
 controller** in the `kardinal-system` namespace, and the ClusterRoles bound to the Graph identity
-(`<fullname>-graph-applier`, `<fullname>-graph-reader`; see [RBAC requirements](guides/security.md#rbac-requirements)).
+(`<fullname>-graph-applier`; see [RBAC requirements](guides/security.md#rbac-requirements)).
 
 Helm installs `crds/` only on the first install and never updates or deletes it. See
 [Upgrade](upgrade.md) for how to update the CRDs.

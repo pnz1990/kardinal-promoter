@@ -134,7 +134,7 @@ The controller manager runs these reconcilers:
 | `ScmProviderReconciler` | `ScmProvider`, `ClusterScmProvider` | Checks the provider's settings and Secrets; writes its `Ready` condition ([SCM providers](scm-providers.md)) |
 | `RenderRunReconciler` | `RenderRun` | Runs a `layout: branch` environment's render in a sandboxed Job and records the rendered commit ([Rendered manifests](rendered-manifests.md)) |
 | Audit retention (`pkg/reconciler/auditretention`) | `AuditEvent` | Deletes records past `audit.retention` (on by default; `audit.retention.enabled: false` turns it off) |
-| Graph cleanup (`pkg/reconciler/graphcleanup`) | kro `Graph` | Deletes reader RoleBindings no Graph needs any more; lets a Graph in a terminating namespace go once kro can no longer tear it down |
+| Graph cleanup (`pkg/reconciler/graphcleanup`) | kro `Graph` | Lets a Graph in a terminating namespace go once kro can no longer tear it down; at startup, removes the health ref nodes and reader RoleBindings of earlier releases |
 
 ### Translator (`pkg/translator`) and Graph builder (`pkg/graph`)
 

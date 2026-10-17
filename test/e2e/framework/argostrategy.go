@@ -118,8 +118,8 @@ func (e *Env) WaitControllerCan(t *testing.T, verb, name string, timeout time.Du
 
 // ChartApplicationRules renders the repo's chart with helm template and the
 // given --set values and returns the rules on Argo CD Applications in the
-// controller's ClusterRole (the chart's manager role; its graph-reader and
-// kro-watch roles also read Applications). helm must be on PATH; it runs with
+// controller's ClusterRole (the chart's manager role; its kro-watch role
+// reads none since #1283). helm must be on PATH; it runs with
 // an empty kubeconfig and never contacts a cluster.
 func ChartApplicationRules(t *testing.T, set ...string) []rbacv1.PolicyRule {
 	t.Helper()

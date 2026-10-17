@@ -133,13 +133,13 @@ func TestHelmTemplate(t *testing.T) {
 	assert.Contains(t, rendered, `apiGroups: ["kro.run"]`, "controller must manage kro.run graphs")
 	assert.Contains(t, rendered, "--graph-service-account=kardinal-graph")
 	assert.Contains(t, rendered, "--graph-applier-clusterrole=kardinal-promoter-graph-applier")
-	assert.Contains(t, rendered, "--graph-reader-clusterrole=kardinal-promoter-graph-reader")
-	assert.Contains(t, rendered, "--graph-reader-namespaces=argocd,flux-system")
+	assert.NotContains(t, rendered, "--graph-reader-", "the reader flags are gone (#1283)")
 }
 
-// TestHelmTemplateGraphRBAC verifies the Graph ServiceAccount's ClusterRoles,
+// TestHelmTemplateGraphRBAC verifies the Graph ServiceAccount's ClusterRole,
 // the kro aggregation role, and that the controller's bind grant is limited to
-// the two Graph ClusterRoles.
+// the Graph applier ClusterRole: no reader ClusterRole is shipped (#1283).
+// Setting the removed graph.readerNamespaces fails the install, saying why.
 func TestHelmTemplateGraphRBAC(t *testing.T) {
 	helm := helmBin(t)
 	root := repoRoot(t)
@@ -149,16 +149,22 @@ func TestHelmTemplateGraphRBAC(t *testing.T) {
 	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
 	rendered := string(out)
 	assert.Contains(t, rendered, "name: kardinal-promoter-graph-applier")
-	assert.Contains(t, rendered, "name: kardinal-promoter-graph-reader")
+	assert.NotContains(t, rendered, "graph-reader")
 	assert.Contains(t, rendered, `rbac.kro.run/aggregate-to-controller: "true"`)
-	// Reader RoleBindings no Graph needs any more are pruned; the sweep lists
-	// them.
 	assert.Contains(t, rendered, `resources: ["rolebindings"]
     verbs: ["get", "list", "create", "update", "delete"]`)
 	assert.Contains(t, rendered, `verbs: ["bind"]
     resourceNames:
       - kardinal-promoter-graph-applier
-      - kardinal-promoter-graph-reader`)
+`)
+	for _, kind := range []string{"deployments", "applications", "rollouts", "kustomizations", "canaries"} {
+		assert.NotContains(t, kroWatchRules(t, rendered), kind, "kro no longer watches health kinds for Graphs")
+	}
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "graph.readerNamespaces={argocd}").CombinedOutput()
+	require.Error(t, err)
+	assert.Contains(t, string(out), "graph.readerNamespaces was removed (#1283)")
 
 	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir,
 		"--set", "graph.aggregateToKro=false").CombinedOutput()
@@ -224,7 +230,6 @@ func TestHelmTemplateGraphFlagsNameRenderedObjects(t *testing.T) {
 			}
 			flags := map[string]string{
 				"--graph-applier-clusterrole=": "ClusterRole/",
-				"--graph-reader-clusterrole=":  "ClusterRole/",
 			}
 			found := 0
 			for _, a := range args {
@@ -236,7 +241,7 @@ func TestHelmTemplateGraphFlagsNameRenderedObjects(t *testing.T) {
 					}
 				}
 			}
-			assert.Equal(t, len(flags), found, "the controller must get both --graph-*-clusterrole flags")
+			assert.Equal(t, len(flags), found, "the controller must get the --graph-applier-clusterrole flag")
 		})
 	}
 }
@@ -688,4 +693,16 @@ func TestHelmTemplateBundleAPITokenReview(t *testing.T) {
 	assert.Contains(t, string(out), "- --bundle-api-tokenreview-auth=true\n")
 	assert.Contains(t, string(out), `resources: ["tokenreviews"]`)
 	assert.Contains(t, string(out), `resources: ["subjectaccessreviews"]`)
+}
+
+// kroWatchRules is the text of the kro aggregation ClusterRole in rendered.
+func kroWatchRules(t *testing.T, rendered string) string {
+	t.Helper()
+	i := strings.Index(rendered, "-kro-watch\n")
+	require.Positive(t, i, "the kro-watch ClusterRole is rendered")
+	rest := rendered[i:]
+	if j := strings.Index(rest, "\n---"); j > 0 {
+		rest = rest[:j]
+	}
+	return rest
 }

@@ -581,10 +581,10 @@ tool there are no series, and the check reports `No data` with the series it loo
 **What (a) and (b) would have cost**, recorded so nobody has to check again:
 
 - **Grants.** Every Graph identity would need `get, list, watch` on
-  `prometheusservicelevels.sloth.slok.dev` or `servicelevelobjectives.pyrra.dev` in the
-  graph-reader role (`graph-rbac.yaml:37-53`), a reader RoleBinding in each namespace that holds
-  SLOs (the G5 IdentityProvisioner path that #1283 plans to remove), and the same kinds in the
-  `kro-watch` role aggregated to kro (`graph-rbac.yaml:55-80`).
+  `prometheusservicelevels.sloth.slok.dev` or `servicelevelobjectives.pyrra.dev` in a reader
+  role, a reader RoleBinding in each namespace that holds SLOs (the G5 reader path #1283
+  removed), and the same kinds in the `kro-watch` role aggregated to kro
+  (`chart/kardinal-promoter/templates/graph-rbac.yaml`).
 - **CRD not installed.** A literal GVK fails the compile of the whole Graph:
   `ResolveSchema` and `RESTMapping` errors are returned (`pkg/graphengine/compiler/context.go:266-279`).
   A dynamic GVK (`${}` in `apiVersion`, `context.go:243`) compiles, and at run time `mappingFor`

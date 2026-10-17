@@ -78,13 +78,10 @@ localhost, 127.0.0.1 and ::1 as well.
 {{- end }}
 
 {{/*
-ClusterRoles bound to the Graph ServiceAccount (templates/graph-rbac.yaml).
+ClusterRole bound to the Graph ServiceAccount (templates/graph-rbac.yaml).
 */}}
 {{- define "kardinal-promoter.graphApplierRole" -}}
 {{- printf "%s-graph-applier" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end }}
-{{- define "kardinal-promoter.graphReaderRole" -}}
-{{- printf "%s-graph-reader" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end }}
 
 {{/*

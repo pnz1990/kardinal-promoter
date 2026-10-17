@@ -3,8 +3,8 @@
 
 // Package graphcleanup finishes what kro cannot when kardinal's Graphs go
 // away: it lets a Graph in a namespace being deleted go once kro can no longer
-// tear it down, and it deletes the reader RoleBindings no Graph needs any
-// more.
+// tear it down. ReaderCleanup deletes, once, the reader RoleBindings earlier
+// releases created (#1283).
 package graphcleanup
 
 import (
@@ -25,9 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -55,22 +53,10 @@ const requeueConflict = time.Second
 // forbidden and kro writes nothing) is found by this requeue instead.
 const requeueNamespace = 30 * time.Second
 
-// GraphLister answers which namespaces the kardinal Graphs of a namespace
-// read (graph.GraphClient.Readers).
-type GraphLister interface {
-	Readers(ctx context.Context, namespace string) (graph.Readers, error)
-}
-
 // Reconciler watches kardinal's Graphs.
 //
-// When a Graph is gone it prunes the reader RoleBindings of its namespace
-// that no remaining Graph reads through (IdentityProvisioner.Prune). Before,
-// only a Bundle translation pruned, so the bindings of a namespace's last
-// Bundle stayed for good, granting its Graph ServiceAccount read access in
-// argocd or flux-system.
-//
-// When a Graph is deleted in a namespace being deleted it may also remove
-// kro's finalizer. kro tears a Graph down as the Graph ServiceAccount, which
+// When a Graph is deleted in a namespace being deleted it may remove kro's
+// finalizer. kro tears a Graph down as the Graph ServiceAccount, which
 // the applier RoleBinding authorizes; the namespace controller deletes that
 // RoleBinding along with everything else, in no set order. Once it is gone,
 // every delete kro makes is forbidden, kro keeps its finalizer, and the
@@ -98,9 +84,6 @@ type Reconciler struct {
 	// APIReader reads Namespaces and RoleBindings from the API server, so the
 	// controller needs neither a cache nor list/watch on them.
 	APIReader client.Reader
-	// Graphs says which namespaces the Graphs Prune must keep bindings for
-	// read.
-	Graphs GraphLister
 	// Identity provisions the Graph RoleBindings. Nil (identity managed outside
 	// the controller) turns the Reconciler off.
 	Identity *graph.IdentityProvisioner
@@ -113,21 +96,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	log := zerolog.Ctx(ctx).With().Str("graph", req.Name).Str("namespace", req.Namespace).Logger()
 
-	if req.Name == pruneRequest {
-		return ctrl.Result{}, r.prune(ctx, log, req.Namespace)
-	}
-
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
 	if err := r.Client.Get(ctx, req.NamespacedName, g); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Gone: its delete event queued the namespace's prune
-			// (pruneOnDelete). A delete missed during a restart is pruned
-			// by the startup sweep, which runs only when --watch-namespace
-			// is empty, on the default shard (cmd/kardinal-controller); in
-			// namespace mode the next prune of the namespace covers it.
-			// Pruning here as well ran one uncached prune per deleted Graph
-			// again.
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get graph %s: %w", req, err)
@@ -215,21 +187,6 @@ func (r *Reconciler) removeKroFinalizer(ctx context.Context, g *unstructured.Uns
 	return removed, err
 }
 
-// prune deletes the reader RoleBindings of namespace that no remaining Graph
-// reads through.
-func (r *Reconciler) prune(ctx context.Context, log zerolog.Logger, namespace string) error {
-	defer r.Identity.LockNamespace(namespace)()
-	reads, err := r.Graphs.Readers(ctx, namespace)
-	if err != nil {
-		return fmt.Errorf("read graphs for prune: %w", err)
-	}
-	if err := r.Identity.Prune(ctx, namespace, reads); err != nil {
-		return fmt.Errorf("prune reader rolebindings: %w", err)
-	}
-	log.Debug().Msg("graph identity: pruned reader rolebindings after a Graph delete")
-	return nil
-}
-
 // namespaceTerminating reports whether namespace is being deleted. A
 // namespace that is already gone counts.
 func (r *Reconciler) namespaceTerminating(ctx context.Context, namespace string) (bool, error) {
@@ -289,27 +246,9 @@ func IsKardinalGraph(g client.Object) bool {
 	return owner != nil && owner.Kind == "Bundle" && owner.APIVersion == v1alpha1.GroupVersion.String()
 }
 
-// pruneRequest is the request name of a namespace's prune. It is not a
-// valid object name, so no Graph has it.
-const pruneRequest = "~prune"
-
-// PruneRequest is the request that prunes namespace's reader RoleBindings.
-func PruneRequest(namespace string) reconcile.Request {
-	return reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: pruneRequest}}
-}
-
-// pruneOnDelete maps a deleted kardinal Graph to its namespace's prune. The
-// work queue holds a key once, so the Graphs deleted in a namespace while a
-// prune waits share it. One prune per deleted Graph, each listing every
-// Graph of the namespace from the API server, fell behind Graph retirement
-// at two Bundles a second (graphcleanup queue at 676).
-func pruneOnDelete(_ context.Context, o client.Object) []reconcile.Request {
-	return []reconcile.Request{PruneRequest(o.GetNamespace())}
-}
-
 // SetupWithManager registers the Reconciler for kro Graphs. It passes
 // kardinal's Graphs only: the ones being deleted, including those found at
-// startup, by name, and the deleted ones as their namespace's prune.
+// startup.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	g := &unstructured.Unstructured{}
 	g.SetGroupVersionKind(graph.GraphGVK)
@@ -321,22 +260,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			UpdateFunc:  func(e event.UpdateEvent) bool { return deleting(e.ObjectNew) },
 			DeleteFunc:  func(event.DeleteEvent) bool { return false },
 			GenericFunc: func(event.GenericEvent) bool { return false },
-		})).
-		Watches(graphObject(), handler.EnqueueRequestsFromMapFunc(pruneOnDelete),
-			builder.WithPredicates(predicate.Funcs{
-				CreateFunc:  func(event.CreateEvent) bool { return false },
-				UpdateFunc:  func(event.UpdateEvent) bool { return false },
-				DeleteFunc:  func(e event.DeleteEvent) bool { return IsKardinalGraph(e.Object) },
-				GenericFunc: func(event.GenericEvent) bool { return false },
-			}))
+		}))
 	return shard.Active().Complete(b, tracing.WrapReconciler("graphcleanup", r), graphList())
-}
-
-// graphObject is an empty kro Graph for a watch.
-func graphObject() *unstructured.Unstructured {
-	g := &unstructured.Unstructured{}
-	g.SetGroupVersionKind(graph.GraphGVK)
-	return g
 }
 
 // graphList is an empty list of kro Graphs, for the shard gate's re-enqueue.

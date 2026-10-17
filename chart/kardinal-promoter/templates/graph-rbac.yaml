@@ -6,10 +6,9 @@ Licensed under the Apache License, Version 2.0
 #
 # kro applies a Graph's children by impersonating spec.serviceAccountName
 # (graph.serviceAccountName) in the Graph's namespace. The controller creates
-# that ServiceAccount and binds it, with RoleBindings only, to:
-#   - <fullname>-graph-applier in the Graph namespace
-#   - <fullname>-graph-reader in each namespace a health ref reads from
-# See docs/design/16-graph-capability-ledger.md (G5).
+# that ServiceAccount and binds it, with one RoleBinding in the Graph
+# namespace, to <fullname>-graph-applier. A Graph reads nothing outside its
+# namespace (#1283). See docs/design/16-graph-capability-ledger.md (G5).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -33,27 +32,6 @@ rules:
   - apiGroups: ["argoproj.io"]
     resources: ["analysisruns"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ include "kardinal-promoter.graphReaderRole" . }}
-  labels:
-    {{- include "kardinal-promoter.labels" . | nindent 4 }}
-rules:
-  # Health ref nodes (pkg/health/watch_node.go).
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["argoproj.io"]
-    resources: ["applications", "rollouts"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
-    resources: ["kustomizations"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["flagger.app"]
-    resources: ["canaries"]
-    verbs: ["get", "list", "watch"]
 {{- if .Values.graph.aggregateToKro }}
 ---
 # kro's own identity watches (metadata-only informers) every kind a Graph
@@ -71,16 +49,7 @@ rules:
   - apiGroups: ["kardinal.io"]
     resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "bundles", "hookruns", "approvals", "imageverifications", "renderruns", "agentruns", "verdicts"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["argoproj.io"]
-    resources: ["applications", "rollouts", "analysisruns"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
-    resources: ["kustomizations"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["flagger.app"]
-    resources: ["canaries"]
+    resources: ["analysisruns"]
     verbs: ["get", "list", "watch"]
 {{- end }}

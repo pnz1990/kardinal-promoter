@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/rs/zerolog"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -16,7 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/util/retry"
 )
 
@@ -29,10 +27,7 @@ var ErrGraphOwnedByOther = errors.New("graph exists and is controlled by another
 // It does NOT import any kro Go module — it uses the dynamic client with GraphGVR.
 type GraphClient struct {
 	dynamic dynamic.Interface
-	// meta reads Graph metadata only (Readers); nil makes Readers list
-	// every Graph of the namespace.
-	meta metadata.Interface
-	log  zerolog.Logger
+	log     zerolog.Logger
 }
 
 // NewGraphClient creates a new GraphClient.
@@ -41,14 +36,6 @@ func NewGraphClient(dyn dynamic.Interface, log zerolog.Logger) *GraphClient {
 		dynamic: dyn,
 		log:     log,
 	}
-}
-
-// WithMetadata makes Readers ask the API server for the metadata of one
-// Graph per namespace it checks (the reader labels) instead of listing every
-// Graph of the namespace (#1685).
-func (c *GraphClient) WithMetadata(m metadata.Interface) *GraphClient {
-	c.meta = m
-	return c
 }
 
 // Create creates a Graph CR in the given namespace, or updates the spec,
@@ -67,22 +54,6 @@ func (c *GraphClient) Create(ctx context.Context, g *Graph) error {
 	if err != nil {
 		return fmt.Errorf("graph.Create: marshal: %w", err)
 	}
-	// The reader labels follow the spec: they are written with it, so a
-	// Prune never sees a Graph's new ref nodes without their labels.
-	labels := u.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	delete(labels, LabelReaderLabels)
-	for k := range labels {
-		if strings.HasPrefix(k, LabelReadsPrefix) {
-			delete(labels, k)
-		}
-	}
-	for k, v := range ReaderLabels(g) {
-		labels[k] = v
-	}
-	u.SetLabels(labels)
 	ns := g.Namespace
 	res := c.dynamic.Resource(GraphGVR).Namespace(ns)
 	_, createErr := res.Create(ctx, u, metav1.CreateOptions{})
@@ -109,16 +80,10 @@ func (c *GraphClient) Create(ctx context.Context, g *Graph) error {
 		if ownErr := checkController(existing, u); ownErr != nil {
 			return ownErr
 		}
-		// Merge labels so labels other controllers set on the Graph survive,
-		// except the reader labels, which say what this spec reads.
+		// Merge labels so labels other controllers set on the Graph survive.
 		labels := existing.GetLabels()
 		if labels == nil {
 			labels = map[string]string{}
-		}
-		for k := range labels {
-			if _, keep := u.GetLabels()[k]; !keep && (k == LabelReaderLabels || strings.HasPrefix(k, LabelReadsPrefix)) {
-				delete(labels, k)
-			}
 		}
 		for k, v := range u.GetLabels() {
 			labels[k] = v
@@ -227,77 +192,6 @@ func (c *GraphClient) List(ctx context.Context, namespace string) ([]*Graph, err
 		result = append(result, g)
 	}
 	return result, nil
-}
-
-// Readers returns whether a kardinal Graph of namespace reads a namespace,
-// for IdentityProvisioner.Prune. With WithMetadata, each answer is a metadata
-// read of at most one Graph (the LabelReadsPrefix label), instead of every
-// Graph of the namespace, each a full kro spec of up to tens of KB: in the
-// scale soak (about 178 Graphs live, 6k Graph cleanups) those lists
-// allocated 119 GB, 17% of the controller's allocations (#1685). Only when
-// no labelled Graph reads a namespace does it ask whether the namespace
-// holds a Graph without the reader labels (created by an earlier
-// controller); then, as without a metadata client, it reads every Graph of
-// the namespace, once. The reads are from the API server, not a cache: a
-// Graph created a moment ago must count (the caller holds
-// IdentityProvisioner.LockNamespace).
-func (c *GraphClient) Readers(ctx context.Context, namespace string) (Readers, error) {
-	if c.meta == nil {
-		return c.readersOfAll(ctx, namespace)
-	}
-	res := c.meta.Resource(GraphGVR).Namespace(namespace)
-	var all Readers // set once the namespace is found to hold an unlabelled Graph
-	checked := false
-	return func(ns string) (bool, error) {
-		if all != nil {
-			return all(ns)
-		}
-		found, err := anyGraph(ctx, res, "kardinal.io/bundle,"+LabelReadsPrefix+ns)
-		if err != nil || found || checked {
-			return found, err
-		}
-		unlabelled, err := anyGraph(ctx, res, "kardinal.io/bundle,!"+LabelReaderLabels)
-		if err != nil {
-			return false, err
-		}
-		checked = true
-		if !unlabelled {
-			return false, nil
-		}
-		if all, err = c.readersOfAll(ctx, namespace); err != nil {
-			return false, err
-		}
-		return all(ns)
-	}, nil
-}
-
-// readersOfAll is the Readers of every kardinal Graph of namespace.
-func (c *GraphClient) readersOfAll(ctx context.Context, namespace string) (Readers, error) {
-	graphs, err := c.List(ctx, namespace)
-	if err != nil {
-		return nil, err
-	}
-	return ReadersOf(graphs), nil
-}
-
-// anyGraph reports whether res holds a Graph that selector matches, reading
-// the metadata of at most one per request. A page can come back empty with
-// a continue token while the API server filters, so it follows the token.
-func anyGraph(ctx context.Context, res metadata.ResourceInterface, selector string) (bool, error) {
-	opts := metav1.ListOptions{LabelSelector: selector, Limit: 1}
-	for {
-		l, err := res.List(ctx, opts)
-		if err != nil {
-			return false, fmt.Errorf("graph.Readers %s: %w", selector, err)
-		}
-		if len(l.Items) > 0 {
-			return true, nil
-		}
-		if l.Continue == "" {
-			return false, nil
-		}
-		opts.Continue = l.Continue
-	}
 }
 
 // --- marshaling helpers ---
