@@ -168,6 +168,18 @@ func newEnv(t *testing.T, cr *v1alpha1.ChangeRequest, objs ...client.Object) *en
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
+	// The promotion's Bundle, Promoting, unless the test gives its own: an
+	// instance of a Bundle that is gone or final reads nothing.
+	hasBundle := false
+	for _, o := range objs {
+		_, isBundle := o.(*v1alpha1.Bundle)
+		hasBundle = hasBundle || isBundle
+	}
+	if !hasBundle && cr.Labels["kardinal.io/bundle"] != "" {
+		objs = append(objs, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: cr.Labels["kardinal.io/bundle"], Namespace: cr.Namespace,
+			UID: types.UID(cr.Labels["kardinal.io/bundle-uid"]), CreationTimestamp: metav1.NewTime(t0.Add(-time.Hour))},
+			Status: v1alpha1.BundleStatus{Phase: "Promoting"}})
+	}
 	e := &env{t: t, f: newTicketing(), now: t0, key: types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}}
 	e.c = fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.ChangeRequest{}, &v1alpha1.PolicyGate{}).
 		WithIndex(&v1alpha1.ChangeRequest{}, changerequest.IndexTicket, changerequest.TicketIndex).
@@ -662,7 +674,7 @@ func TestChangeRequest_DeletedWhileReconciled(t *testing.T) {
 	cr := instance()
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
-	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(cr).WithObjects(cr).
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(cr).WithObjects(cr, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: ns, UID: uid}}).
 		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
 	r := &changerequest.Reconciler{Client: c, Providers: map[string]changerequest.Provider{"servicenow": newTicketing()},
 		NowFn: func() time.Time { return t0 }}
@@ -675,10 +687,11 @@ func TestChangeRequest_DeletedWhileReconciled(t *testing.T) {
 // pendingCreate write requeues without a create.
 func TestChangeRequest_ConflictOnAnnounceCreatesNothing(t *testing.T) {
 	cr := instance()
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: ns, UID: uid}}
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
 	f := newTicketing()
-	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(cr).WithObjects(cr).
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(cr).WithObjects(cr, b).
 		WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(context.Context, client.Client, string, client.Object,
 			client.Patch, ...client.SubResourcePatchOption) error {
 			return apierrors.NewConflict(v1alpha1.GroupVersion.WithResource("changerequests").GroupResource(), cr.Name, errors.New("changed"))
@@ -897,9 +910,12 @@ func TestChangeRequest_LinkFailClosedChecks(t *testing.T) {
 		e2.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
 		e2.reconcile()
 		cr = e2.get()
-		require.NotNil(t, cr.Status.Verified)
-		assert.False(t, *cr.Status.Verified)
-		assert.Contains(t, cr.Status.VerifiedReason, "the Bundle of this promotion cannot be read")
+		// The instance is of the earlier Bundle: it stops before any read
+		// (versionFinal), so the ticket is never verified for the new one.
+		assert.Nil(t, cr.Status.Verified)
+		assert.Zero(t, e2.f.total())
+		assert.Equal(t, changerequest.ReasonVersionFinal, cond(cr, changerequest.CondReady).Reason)
+		assert.Contains(t, cond(cr, changerequest.CondReady).Message, "was re-created")
 	})
 	t.Run("the holder list fails", func(t *testing.T) {
 		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"))
@@ -979,4 +995,53 @@ func TestChangeRequest_WebhookRefresh(t *testing.T) {
 	e2.now = t0.Add(time.Minute)
 	e2.reconcile()
 	assert.Equal(t, "approved", e2.get().Status.State)
+}
+
+// TestChangeRequest_VersionFinal (#2138 follow-up): an instance of a
+// Superseded or Rejected version, of a Bundle that is gone, or of one
+// re-created under the same name reads nothing, and says why; the Bundle
+// watch passes only the move to a final phase.
+func TestChangeRequest_VersionFinal(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bundle func() *v1alpha1.Bundle
+		want   string
+	}{
+		{"superseded", func() *v1alpha1.Bundle { b := linkedBundle(""); b.Status.Phase = "Superseded"; return b }, "its version is Superseded"},
+		{"rejected", func() *v1alpha1.Bundle { b := linkedBundle(""); b.Status.Phase = "Rejected"; return b }, "its version is Rejected"},
+		{"re-created", func() *v1alpha1.Bundle { b := linkedBundle(""); b.UID = "uid-new"; return b }, "was re-created"},
+		{"verified still reads", func() *v1alpha1.Bundle { b := linkedBundle(""); b.Status.Phase = "Verified"; return b }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, instance(), tc.bundle())
+			e.f.add("CHG0000001", corrID, v1alpha1.ChangeRequestPending)
+			e.reconcile()
+			ready := cond(e.get(), changerequest.CondReady)
+			if tc.want == "" {
+				assert.Positive(t, e.f.total())
+				return
+			}
+			assert.Zero(t, e.f.total(), "no provider call")
+			assert.Equal(t, changerequest.ReasonVersionFinal, ready.Reason)
+			assert.Contains(t, ready.Message, tc.want)
+		})
+	}
+	t.Run("gone", func(t *testing.T) {
+		e := newEnv(t, instance(), &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: ns}})
+		e.reconcile()
+		assert.Zero(t, e.f.total())
+		assert.Contains(t, cond(e.get(), changerequest.CondReady).Message, "Bundle app-v1 is gone")
+	})
+	t.Run("a poll after the version became final stops", func(t *testing.T) {
+		e := newEnv(t, instance())
+		e.reconcile()
+		calls := e.f.total()
+		var b v1alpha1.Bundle
+		require.NoError(t, e.c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "app-v1"}, &b))
+		b.Status.Phase = "Superseded"
+		require.NoError(t, e.c.Update(context.Background(), &b))
+		e.now = t0.Add(2 * time.Minute)
+		e.reconcile()
+		assert.Equal(t, calls, e.f.total(), "no call once Superseded")
+	})
 }
