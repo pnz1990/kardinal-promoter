@@ -173,7 +173,9 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		}
 		plan.Current = cur
 	}
-	if req.Automatic && plan.Current != nil && plan.Current.Labels[LabelRollback] == "true" {
+	// Only the controller's own automatic rollback: a label the failing
+	// release's author wrote does not exempt it (#2187).
+	if req.Automatic && plan.Current != nil && IsAutoRollback(plan.Current) {
 		return nil, fmt.Errorf("rollback: %s is itself a rollback; a failing rollback is not rolled back automatically, roll back by hand with kardinal rollback: %w",
 			plan.CurrentName, ErrConflict)
 	}
@@ -817,7 +819,9 @@ func rolledBackFromByEnv(ctx context.Context, c client.Reader, ns, pipeline, fle
 	for i := range list.Items {
 		b := &list.Items[i]
 		bf := b.Annotations[AnnotationRollbackFrom]
-		if bf == "" || b.Spec.Pipeline != pipeline || b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == "" {
+		// Only a rollback the controller wrote says what it rolled back
+		// from: anyone who may create Bundles can write the annotation (#2187).
+		if bf == "" || !IsControllerRollback(b) || b.Spec.Pipeline != pipeline || b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == "" {
 			continue
 		}
 		env := b.Spec.Intent.TargetEnvironment
@@ -905,6 +909,11 @@ func oldestRunning(ctx context.Context, c client.Reader, ns string, deployedIn [
 			// followed while each Bundle exists.
 			for i := 0; i < 4 && b.Labels[LabelRollback] == "true" && b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != ""; i++ {
 				of, err := get(b.Spec.Provenance.RollbackOf)
+				if err == nil && !IsControllerRollback(b) && !SameArtifacts(b, of) {
+					// A client's own rollback markers: followed only when it
+					// deploys what it says it restored (#2187).
+					break
+				}
 				if err != nil {
 					// The restored version is gone (history cleanup): the
 					// rollback cannot be ordered, and taking its own creation
@@ -979,7 +988,7 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 
 // rolledBackFrom returns the Bundles that a rollback in the environment has
 // rolled back from: the kardinal.io/rollback-from annotation of every rollback
-// Bundle of the pipeline that targets env, or fleet (the fleet env is a
+// Bundle the controller wrote (IsControllerRollback) of the pipeline that targets env, or fleet (the fleet env is a
 // target of; "" when none). Rollback Bundles created before the
 // annotation existed are not counted.
 func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fleet string) (map[string]bool, error) {
@@ -991,7 +1000,8 @@ func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fle
 	for i := range list.Items {
 		b := &list.Items[i]
 		from := b.Annotations[AnnotationRollbackFrom]
-		if from == "" || b.Spec.Pipeline != pipeline {
+		// Only a rollback the controller wrote (#2187).
+		if from == "" || !IsControllerRollback(b) || b.Spec.Pipeline != pipeline {
 			continue
 		}
 		// A rollback of env, or of the whole fleet env is a target of.

@@ -155,3 +155,57 @@ func TestAutoRollbackName_Readable(t *testing.T) {
 	}
 	t.Logf("%d names, none shared", len(seen))
 }
+
+// QA-3 on #2187: every clause of IsAutoRollback counts. A human stamp with
+// the controller's creator (a person whose username is kardinal-controller),
+// the controller's stamp with another creator, the controller's stamp via
+// another path (subscription), or none, are not the automatic rollback.
+// IsControllerRollback also counts the controller's rollback for a UI or
+// API caller, never a client's own.
+//
+// Covers RB-AUTO-FORGED-04.
+func TestIsAutoRollback(t *testing.T) {
+	b := func(kind, via, createdBy string) *v1alpha1.Bundle {
+		out := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{lifecycle.LabelRollback: "true"},
+			Annotations: map[string]string{lifecycle.AnnotationCreatedBy: createdBy}}}
+		if kind != "" {
+			out.Spec.Actor = &v1alpha1.Actor{Kind: kind, Principal: createdBy, Via: via}
+		}
+		return out
+	}
+	const ctl = lifecycle.ControllerCreator
+	for _, tc := range []struct {
+		name             string
+		b                *v1alpha1.Bundle
+		auto, controller bool
+	}{
+		{"the controller's automatic rollback", b(v1alpha1.ActorController, v1alpha1.ViaAutoRollback, ctl), true, true},
+		{"a human named kardinal-controller", b(v1alpha1.ActorHuman, "", ctl), false, false},
+		{"a human stamp via auto-rollback", b(v1alpha1.ActorHuman, v1alpha1.ViaAutoRollback, ctl), false, false},
+		{"the controller's stamp, another creator", b(v1alpha1.ActorController, v1alpha1.ViaAutoRollback, "mallory"), false, false},
+		{"the controller via subscription", b(v1alpha1.ActorController, v1alpha1.ViaSubscription, ctl), false, false},
+		{"no stamp", b("", "", ctl), false, false},
+		{"the controller's rollback for a UI caller", b(v1alpha1.ActorHuman, v1alpha1.ViaUI, "alice"), false, true},
+		{"the controller's rollback for an API caller", b(v1alpha1.ActorHuman, v1alpha1.ViaAPI, "alice"), false, true},
+		{"a client's own rollback", b(v1alpha1.ActorHuman, "", "alice"), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.auto, lifecycle.IsAutoRollback(tc.b))
+			assert.Equal(t, tc.controller, lifecycle.IsControllerRollback(tc.b))
+		})
+	}
+}
+
+// QA-3 on #2187: a Bundle that someone created at the rollback's name after
+// it was found free (the create then meets AlreadyExists) is taken, so the
+// controller never adopts it.
+func TestRollbackTaken_ForgedAtTheName(t *testing.T) {
+	forged := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2-rollback-alarm", Namespace: "default",
+		Labels:      map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
+		Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: "app-v2", lifecycle.AnnotationCreatedBy: "mallory"}},
+		Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod"},
+			Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}}}
+	taken, err := lifecycle.RollbackTaken(context.Background(), newClient(t, forged), "default", "app-v2-rollback-alarm", "prod")
+	require.NoError(t, err)
+	assert.True(t, taken, "not the controller's: never adopted")
+}

@@ -23,6 +23,17 @@ import (
 func rollbackOf(b *v1alpha1.Bundle, of string) *v1alpha1.Bundle {
 	b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: b.Spec.Pipeline}
 	b.Spec.Provenance.RollbackOf = of
+	return stampAuto(b)
+}
+
+// stampAuto gives b the controller's automatic-rollback stamp and creator,
+// as the controller writes them (lifecycle.IsAutoRollback).
+func stampAuto(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	if b.Annotations == nil {
+		b.Annotations = map[string]string{}
+	}
+	b.Annotations[lifecycle.AnnotationCreatedBy] = lifecycle.ControllerCreator
+	b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
 	return b
 }
 
@@ -283,7 +294,7 @@ func TestPlanRollback_FleetNeverForward(t *testing.T) {
 	// goes to v0, where t00 already is, and not to v1.
 	rb := rollbackOf(bundle("app-rb", "app", "v0", 30), "app-v0")
 	rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-t00"}
-	rb.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v1"}
+	rb.Annotations[lifecycle.AnnotationRollbackFrom] = "app-v1"
 	kept := []client.Object{p, bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), rb,
 		step("app-v0", "app", "prod-t00", "Verified", 1), step("app-v0", "app", "prod-t01", "Verified", 2), step("app-v0", "app", "prod-t02", "Verified", 3),
 		step("app-v1", "app", "prod-t00", "Verified", 11), step("app-rb", "app", "prod-t00", "Verified", 31),
@@ -352,7 +363,7 @@ func TestPlanRollback_FleetPerTargetEligibility(t *testing.T) {
 func TestPlanRollback_FleetRolledBackFromInATarget(t *testing.T) {
 	rb := rollbackOf(bundle("app-rb", "app", "v0", 15), "app-v0")
 	rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-t01"}
-	rb.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v1"}
+	rb.Annotations[lifecycle.AnnotationRollbackFrom] = "app-v1"
 	objs := []client.Object{wideFleet(2), bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), rb,
 		step("app-v1", "app", "prod-t00", "Verified", 11), step("app-v2", "app", "prod-t00", "Verified", 21),
 		step("app-v1", "app", "prod-t01", "Verified", 12), step("app-rb", "app", "prod-t01", "Verified", 16), step("app-v2", "app", "prod-t01", "Verified", 22)}
@@ -363,4 +374,51 @@ func TestPlanRollback_FleetRolledBackFromInATarget(t *testing.T) {
 	_, err = lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
 		Namespace: ns, Pipeline: "app", Environment: "prod", ToBundle: "app-v1", Now: t0.Add(time.Hour)})
 	assert.NoError(t, err, "--to names it")
+}
+
+// forge strips the controller's stamp from b: a client's own Bundle that
+// only carries the rollback markers.
+func forge(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}
+	b.Annotations[lifecycle.AnnotationCreatedBy] = "mallory"
+	return b
+}
+
+// QA-3 on #2187: a forged rollback-from on a fleet target's "rollback" does
+// not mark the version it names as rolled back from there.
+func TestPlanRollback_FleetForgedRolledBackFrom(t *testing.T) {
+	rb := forge(rollbackOf(bundle("app-rb", "app", "v0", 15), "app-v0"))
+	rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-t01"}
+	rb.Annotations[lifecycle.AnnotationRollbackFrom] = "app-v1"
+	objs := []client.Object{wideFleet(2), bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), rb,
+		step("app-v1", "app", "prod-t00", "Verified", 11), step("app-v2", "app", "prod-t00", "Verified", 21),
+		step("app-v1", "app", "prod-t01", "Verified", 12), step("app-v2", "app", "prod-t01", "Verified", 22)}
+	plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.NoError(t, err, "app-v1 is not taken for rolled back from on mallory's say")
+	assert.Equal(t, "app-v1", plan.Target.Name)
+}
+
+// QA-3 on #2187: a target that runs a client's own "rollback" whose
+// artifacts are not those of the version it names counts as itself, not
+// as that version: the fleet is not sent to the version the markers name.
+func TestPlanRollback_FleetForgedRollbackChain(t *testing.T) {
+	forged := forge(rollbackOf(bundle("app-rb", "app", "v9", 30), "app-v0"))
+	objs := []client.Object{fleetPipeline(),
+		bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), forged,
+		step("app-v0", "app", "prod-eu", "Verified", 1), step("app-v0", "app", "prod-us", "Verified", 2),
+		step("app-v2", "app", "prod-eu", "Verified", 21), step("app-v2", "app", "prod-us", "Verified", 22),
+		step("app-rb", "app", "prod-eu", "Verified", 31)}
+	plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	if err == nil {
+		assert.NotEqual(t, "app-v0", plan.Target.Name, "the markers alone do not make prod-eu run app-v0")
+	}
+	// The same Bundle restoring app-v0's artifacts is followed: it does run app-v0.
+	same := forge(rollbackOf(bundle("app-rb", "app", "v0", 30), "app-v0"))
+	objs[4] = same
+	plan, err = lifecycle.PlanRollback(context.Background(), newClient(t, objs...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	assert.Equal(t, "app-v0", plan.Target.Name)
 }

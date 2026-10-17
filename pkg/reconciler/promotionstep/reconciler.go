@@ -2290,7 +2290,9 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		if getErr != nil && !apierrors.IsNotFound(getErr) {
 			return ctrl.Result{}, fmt.Errorf("get bundle %s: %w", ps.Spec.BundleName, getErr)
 		}
-		if getErr == nil && isRollbackBundle(&bundle) {
+		// Only the controller's own automatic rollback: a label the
+		// release's author wrote does not exempt it (#2187).
+		if getErr == nil && lifecycle.IsAutoRollback(&bundle) {
 			log.Info().Str("env", ps.Spec.Environment).Msg("health failure of a rollback Bundle: AbortedByAlarm")
 			return ctrl.Result{}, r.transition(ctx, base, ps, StateAbortedByAlarm, fmt.Sprintf(
 				"health alarm via %s (onHealthFailure=rollback): %s — Bundle %s is a rollback and is not rolled back again; human intervention required",

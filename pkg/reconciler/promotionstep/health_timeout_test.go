@@ -162,13 +162,20 @@ func TestHealthTimeoutAppliesOnHealthFailure(t *testing.T) {
 		{name: "a rollback Bundle is not rolled back again", onHealthFailure: "rollback",
 			bundle: func(b *v1alpha1.Bundle) { // as lifecycle.PlanRollback builds it
 				b.Labels = map[string]string{"kardinal.io/rollback": "true", "kardinal.io/pipeline": "p"}
+				b.Annotations = map[string]string{"kardinal.io/rollback-from": "b-bad", lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+				b.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "b0"}
+				b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
+			},
+			wantState: "AbortedByAlarm", wantMsg: "Bundle b1 is a rollback and is not rolled back again", wantAudit: []string{"PromotionFailed"}},
+		// #2187 (QA-3): a release whose author wrote every rollback marker on
+		// it is still rolled back: only the controller's stamp exempts one.
+		{name: "a release that marks itself a rollback is rolled back", onHealthFailure: "rollback",
+			bundle: func(b *v1alpha1.Bundle) {
+				b.Labels = map[string]string{"kardinal.io/rollback": "true", "kardinal.io/pipeline": "p"}
 				b.Annotations = map[string]string{"kardinal.io/rollback-from": "b-bad"}
 				b.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "b0"}
 			},
-			wantState: "AbortedByAlarm", wantMsg: "Bundle b1 is a rollback and is not rolled back again", wantAudit: []string{"PromotionFailed"}},
-		{name: "provenance.rollbackOf alone marks a rollback Bundle", onHealthFailure: "rollback",
-			bundle:    func(b *v1alpha1.Bundle) { b.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "b0"} },
-			wantState: "AbortedByAlarm", wantMsg: "Bundle b1 is a rollback and is not rolled back again", wantAudit: []string{"PromotionFailed"}},
+			wantState: "RollingBack", wantMsg: "rollback Bundle b1-rollback-alarm created", wantRollback: true, wantAudit: []string{"RollbackStarted"}},
 	}
 	for _, tt := range tests {
 		name := tt.name

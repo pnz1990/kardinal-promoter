@@ -39,7 +39,7 @@ func TestPlanRollback(t *testing.T) {
 		b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
 		b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: from}
 		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: env}
-		return b
+		return stampAuto(b)
 	}
 
 	// twoImages gives b the app image at tag app and a sidecar at side.
@@ -300,6 +300,36 @@ func TestPlanRollback(t *testing.T) {
 			req:     lifecycle.RollbackRequest{FromBundle: "r1", Automatic: true},
 			wantErr: lifecycle.ErrConflict,
 		},
+		// #2187 (QA-3): markers a Bundle's creator writes steer nothing.
+		{
+			name: "a release that labels itself a rollback is still rolled back automatically",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				func() *v1alpha1.Bundle {
+					b := rollbackOf("r1", "v2", "prod", "1", 30)
+					b.Spec.Actor, b.Annotations[lifecycle.AnnotationCreatedBy] = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}, "mallory"
+					return b
+				}(),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11),
+				step("v2", "app", "prod", "Verified", 21), healthFailed(step("r1", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "r1", Automatic: true},
+			wantTarget: "v2", wantTag: "2", wantFrom: "r1",
+		},
+		{
+			name: "a forged rollback-from does not make the last good version skipped",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				func() *v1alpha1.Bundle { // mallory's, never promoted
+					b := rollbackOf("forged", "v1", "prod", "9", 15)
+					b.Spec.Actor, b.Annotations[lifecycle.AnnotationCreatedBy] = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}, "mallory"
+					return b
+				}(),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v2", Automatic: true},
+			wantTarget: "v1", wantTag: "1", wantFrom: "v2",
+		},
 		{
 			name: "a manual rollback of a failing rollback is allowed",
 			objs: []client.Object{
@@ -472,7 +502,7 @@ func TestPlanRollback_RestoresEveryImageTheDeployedBundleChanged(t *testing.T) {
 		b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
 		b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: from}
 		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
-		return b
+		return stampAuto(b)
 	}
 	images := func(b *v1alpha1.Bundle) []string {
 		out := make([]string, 0, len(b.Spec.Images))

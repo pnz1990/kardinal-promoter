@@ -72,6 +72,20 @@ func AutoRollbackNameIn(ctx context.Context, c client.Reader, ns, bundle, source
 // rollback labels, kardinal.io/rollback-from and the intent are not proof:
 // anyone who may create Bundles can set them, and a Bundle adopted as the
 // automatic rollback on them would stand in for it (#2090 QA).
+// IsControllerRollback reports whether b is a rollback the controller wrote:
+// an automatic rollback (IsAutoRollback), or a rollback the controller
+// created for a UI or API caller (kardinal.io/rollback, and an actor stamp
+// via ui or api, which only the controller may write). A rollback a client
+// created itself (kubectl, kardinal rollback) carries only markers its
+// creator writes, so no decision counts it as one (#2187).
+func IsControllerRollback(b *v1alpha1.Bundle) bool {
+	if IsAutoRollback(b) {
+		return true
+	}
+	a := b.Spec.Actor
+	return b.Labels[LabelRollback] == "true" && a != nil && (a.Via == v1alpha1.ViaUI || a.Via == v1alpha1.ViaAPI)
+}
+
 func IsAutoRollback(b *v1alpha1.Bundle) bool {
 	a := b.Spec.Actor
 	return a != nil && a.Kind == v1alpha1.ActorController && a.Via == v1alpha1.ViaAutoRollback &&
