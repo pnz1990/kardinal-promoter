@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-n] [-no-lock] SUITE [MINOR]
+# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
 #
 # Runs one live e2e suite on this host as its CI job does (e2e-live.yml:
 # hack/e2e/tools.sh's pinned kind, kubectl and helm, a kind cluster on
@@ -32,6 +32,7 @@
 #   -shard i/n run only the ith of n parts of the suite (run.sh SHARD);
 #              default the whole suite
 #   -badge B   the first line of the comment, e.g. "[🔨 ENGINEER-4]"
+#   -o OWNER   who holds the lock and slot, and names the cluster (OWNER)
 #              (default $AGENT_BADGE)
 #   -reuse C   run on kind cluster C, set up for SUITE by an earlier run
 #              (KEEP) and still there; it is deleted at the end unless KEEP
@@ -44,7 +45,9 @@
 #                Go and module cache (where docker build can't download
 #                Go modules); docker builds it as CI does
 #   COUNT        go test -count (default 1)
-#   KIND_CLUSTER cluster name (default kardinal-e2e-ll-SUITE-<minor>); it
+#   KIND_CLUSTER cluster name (default kardinal-e2e-ll-<owner>-SUITE-<minor>,
+#                <owner> $AGENT_ID, else OWNER's first word, lowercased, so
+#                two agents' runs of one suite do not share a name); it
 #                must not exist: this run deletes it at the end
 #   KEEP         set to keep the cluster, its state and its slot(s), for a
 #                later -reuse
@@ -71,7 +74,7 @@ die() {
   exit 2
 }
 log() { printf '[local-live %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
-usage() { die "usage: $0 [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-n] [-no-lock] SUITE [MINOR]"; }
+usage() { die "usage: $0 [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
 
 pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse=''
 while [ $# -gt 0 ]; do
@@ -80,6 +83,7 @@ while [ $# -gt 0 ]; do
     -shard | --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
     -reuse | --reuse) [ $# -ge 2 ] || usage; reuse=$2; shift 2 ;;
     -badge | --badge) [ $# -ge 2 ] || usage; badge=$2; shift 2 ;;
+    -o) [ $# -ge 2 ] || usage; OWNER=$2; shift 2 ;;
     -n) dry=1; shift ;;
     -no-lock | --no-lock) nolock=1; shift ;;
     --) shift; break ;;
@@ -120,10 +124,15 @@ NODE_IMAGE=${!pin:-}
 [ -n "$NODE_IMAGE" ] || die "no $pin in hack/tool-versions.env: the pinned minors are $(grep -o '^KIND_NODE_1_[0-9]*' "$REPO_ROOT/hack/tool-versions.env" | sed 's/KIND_NODE_1_/1./' | tr '\n' ' ')"
 
 export KARDINAL_E2E_BUILD=${KARDINAL_E2E_BUILD:-host}
-export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$SUITE-${MINOR#1.}}
+OWNER=${OWNER:-${AGENT_ID:-${USER:-unknown}}}
+# The owner's part of the default cluster name: AGENT_ID, else OWNER's first
+# word, as a DNS label part (lowercase letters, digits and dashes, 16 at most).
+owner_part=${AGENT_ID:-${OWNER%% *}}
+owner_part=$(printf '%s' "$owner_part" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | tr -s '-' | cut -c1-16 | sed 's/^-*//; s/-*$//')
+[ -n "$owner_part" ] || owner_part=unknown
+export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$owner_part-$SUITE-${MINOR#1.}}
 case $KIND_CLUSTER in kardinal-e2e-*) ;; *) die "KIND_CLUSTER=$KIND_CLUSTER must start with kardinal-e2e-" ;; esac
 COUNT=${COUNT:-1}
-OWNER=${OWNER:-${AGENT_ID:-${USER:-unknown}}}
 RETRY=${RETRY:-30}
 SLOT_MAX=${SLOT_MAX:-4}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
