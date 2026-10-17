@@ -93,32 +93,57 @@ func TestAutoRollbackName_LongEnvironment(t *testing.T) {
 	}
 }
 
-// TestAutoRollbackNameIn (#2082): the first environment's rollback takes the
-// plain name; another environment of the same Bundle, or the same one again,
-// gets its own or its own again.
+// TestAutoRollbackNameIn (#2082, #2090): the first environment's rollback
+// takes the plain name; another environment of the same Bundle gets its
+// own; the same one again its own again. A Bundle at a name that is not the
+// rollback (no rollback label, another source Bundle, another environment)
+// is never taken; when both names hold one, the result is ErrConflict,
+// naming the Bundle in the way.
 func TestAutoRollbackNameIn(t *testing.T) {
 	ctx := context.Background()
-	rb := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2-rollback-alarm", Namespace: "default"},
-		Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}}}
-	empty := newClient(t)
-	got, err := lifecycle.AutoRollbackNameIn(ctx, empty, "default", "app-v2", "alarm", "prod-eu")
+	rollback := func(name, env string) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default",
+			Labels:      map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
+			Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: "app-v2"}},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: env}}}
+	}
+	nameIn := func(c client.Reader, env string) (string, error) {
+		return lifecycle.AutoRollbackNameIn(ctx, c, "default", "app", "app-v2", "alarm", env)
+	}
+	got, err := nameIn(newClient(t), "prod-eu")
 	require.NoError(t, err)
 	assert.Equal(t, "app-v2-rollback-alarm", got, "nothing yet: the plain name")
 
-	c := newClient(t, rb)
-	got, err = lifecycle.AutoRollbackNameIn(ctx, c, "default", "app-v2", "alarm", "prod-eu")
+	c := newClient(t, rollback("app-v2-rollback-alarm", "prod-eu"))
+	got, err = nameIn(c, "prod-eu")
 	require.NoError(t, err)
 	assert.Equal(t, "app-v2-rollback-alarm", got, "its own again")
-	got, err = lifecycle.AutoRollbackNameIn(ctx, c, "default", "app-v2", "alarm", "prod-us")
+	got, err = nameIn(c, "prod-us")
 	require.NoError(t, err)
 	assert.Equal(t, "app-v2-rollback-alarm-prod-us", got, "another environment's is taken")
 
-	taken, err := lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "prod-us")
+	taken, err := lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod-us", "app-v2")
 	require.NoError(t, err)
 	assert.True(t, taken, "prod-eu's is not prod-us's")
-	taken, err = lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "prod-eu")
+	taken, err = lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod-eu", "app-v2")
 	require.NoError(t, err)
 	assert.False(t, taken, "prod-eu's own")
+
+	// #2090: not the rollback, so never taken over.
+	notRollback := rollback("app-v2-rollback-alarm", "prod-eu")
+	notRollback.Labels = nil
+	otherSource := rollback("app-v2-rollback-alarm", "prod-eu")
+	otherSource.Annotations[lifecycle.AnnotationRollbackFrom] = "app-v9"
+	noIntent := rollback("app-v2-rollback-alarm", "prod-eu")
+	noIntent.Spec.Intent = nil
+	for name, squat := range map[string]*v1alpha1.Bundle{"no rollback label": notRollback, "another source": otherSource, "no intent": noIntent} {
+		got, err := nameIn(newClient(t, squat), "prod-eu")
+		require.NoError(t, err, name)
+		assert.Equal(t, "app-v2-rollback-alarm-prod-eu", got, name)
+		_, err = nameIn(newClient(t, squat, rollback("app-v2-rollback-alarm-prod-eu", "prod-us")), "prod-eu")
+		require.ErrorIs(t, err, lifecycle.ErrConflict, name)
+		assert.Contains(t, err.Error(), "bundle app-v2-rollback-alarm-prod-eu is at the automatic rollback's name and is not a rollback of app-v2 in prod-eu")
+	}
 }
 
 // TestAutoRollbackName_Readable: a shortened name still reads as a rollback
