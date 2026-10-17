@@ -69,6 +69,16 @@ func Frameworks() []Framework {
 	return []Framework{soc2(), iso27001(), nist80053(), dora(), aiAct(), iso42001()}
 }
 
+// requireApproval is the customer's part of every approval row: kardinal
+// records approvals only where an environment asks for one.
+const requireApproval = "Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment."
+
+// requireSeparation is the customer's part of every separation row:
+// excludeAuthor is off by default and compares the version's creator, not
+// the commit's author.
+const requireSeparation = "Setting `approval.excludeAuthor: true` on those gates; and, to keep a change's commit author from approving it, " +
+	"the SCM's branch protection (required reviewers or code owners, no self-approval), which kardinal does not check."
+
 // promotion is the promotion lifecycle every change-tracking row names.
 var promotion = []string{"PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "PromotionRejected"}
 
@@ -90,7 +100,8 @@ func approved(element string) Evidence {
 	return Evidence{
 		Element: element,
 		Record: "approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` " +
-			"(who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status",
+			"(who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit " +
+			"status; an `auto` environment records none",
 		Kinds:   []string{"PolicyGate", "Approval", "Pipeline"},
 		Actions: []string{"ApprovalRecorded", "ApprovalRevoked", "GateEvaluated", "PRMerged"},
 		Status:  Shipped,
@@ -101,8 +112,10 @@ func approved(element string) Evidence {
 func separated(element string) Evidence {
 	return Evidence{
 		Element: element,
-		Record: "`approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as " +
-			"one party; `status.approvals[].reason` says why an approval did not count",
+		Record: "`approval.excludeAuthor` (off by default) does not count an approval by the user who created the version " +
+			"(`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom " +
+			"kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. " +
+			"`status.approvals[].reason` says why an approval did not count",
 		Kinds:   []string{"PolicyGate", "Approval", "Bundle", "AgentIdentity"},
 		Actions: []string{"ApprovalRecorded"},
 		Status:  Shipped,
@@ -128,7 +141,7 @@ func tested(element string) Evidence {
 		Record: "the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), " +
 			"MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires",
 		Kinds:   []string{"PolicyGate", "Verdict", "Pipeline"},
-		Actions: []string{"PromotionSucceeded", "HealthCheckFailed", "VerdictRecorded", "VerdictRevoked"},
+		Actions: []string{"PromotionSucceeded", "PromotionFailed", "RollbackStarted", "VerdictRecorded", "VerdictRevoked"},
 		Status:  Shipped,
 	}
 }
@@ -178,15 +191,15 @@ func soc2() Framework {
 				"developers and approvers, and handling emergency changes.",
 			Evidence: []Evidence{
 				tracked("Changes are tracked"),
-				approved("Changes are approved before production"),
-				separated("Developer and approver are different people"),
+				approved("Approvals, where production requires them"),
+				separated("The version's creator does not approve it (when `excludeAuthor` is set)"),
 				emergency("Emergency changes are controlled"),
 				tested("Changes are tested before release"),
 				receipts("Evidence is tamper-evident"),
 			},
 			Customer: "The change policy itself, the review of the evidence, changes that bypass kardinal (direct pushes to " +
 				"the GitOps branch: protect it and require the `kardinal/gates` status), and access reviews of who holds the " +
-				"approver role.",
+				"approver role. " + requireApproval + " " + requireSeparation,
 		}},
 	}
 }
@@ -202,7 +215,7 @@ func iso27001() Framework {
 			Evidence: []Evidence{
 				enforced("The procedure is enforced, not advisory"),
 				tracked("Changes are planned and recorded"),
-				approved("Changes are approved"),
+				approved("Approvals, where production requires them"),
 				{
 					Element: "Rollback",
 					Record:  "rollback versions (`spec.provenance.rollbackOf`) and their promotions; holds that keep an environment on a version (`Pipeline.spec.holds[]`)",
@@ -218,13 +231,13 @@ func iso27001() Framework {
 					Status:  Shipped,
 				},
 			},
-			Customer: "The documented procedure, the risk assessment of a change, and communication to affected parties.",
+			Customer: "The documented procedure, the risk assessment of a change, and communication to affected parties. " + requireApproval,
 		}, {
 			ID:          "A.5.3",
 			Title:       "Segregation of duties",
 			Requirement: "Conflicting duties and areas of responsibility are segregated.",
 			Evidence: []Evidence{
-				separated("The author is not the approver"),
+				separated("The version's creator does not approve it (when `excludeAuthor` is set)"),
 				{
 					Element: "An agent and the person accountable for it count as one",
 					Record:  "each agent's sponsor (`AgentIdentity.spec.sponsor`) and the approver's verified actor (`Approval.spec.actor`)",
@@ -244,7 +257,7 @@ func iso27001() Framework {
 					Status:  Shipped,
 				},
 			},
-			Customer: "Who is granted which role, and the access review.",
+			Customer: "Who is granted which role, and the access review. " + requireSeparation,
 		}},
 	}
 }
@@ -260,7 +273,7 @@ func nist80053() Framework {
 				"mind; document the decisions; implement approved changes; retain the records; monitor and review change activity.",
 			Evidence: []Evidence{
 				enforced("Controlled changes are defined and implemented as approved"),
-				approved("Decisions are reviewed, approved and documented"),
+				approved("Approvals, where production requires them"),
 				{
 					Element: "Records are retained and change activity is reviewed",
 					Record: "AuditEvents, kept as `--audit-retention-max-age` and `--audit-retention-max-per-pipeline` allow; " +
@@ -270,7 +283,7 @@ func nist80053() Framework {
 					Status:  Shipped,
 				},
 			},
-			Customer: "The configuration management plan, the change control board's charter, and the system's other components.",
+			Customer: "The configuration management plan, the change control board's charter, and the system's other components. " + requireApproval,
 		}, {
 			ID:          "CM-3(2)",
 			Title:       "Testing, validation and documentation of changes",
@@ -290,7 +303,8 @@ func nist80053() Framework {
 			Evidence: []Evidence{{
 				Element: "Enforcement and its records",
 				Record: "ValidatingAdmissionPolicies that deny, not warn; `APIWrite` AuditEvents for the UI's and the Bundle " +
-					"API's writes, refusals included",
+					"API's writes, refusals included. The records are best-effort: one dropped under overload is counted in " +
+					"`kardinal_audit_events_dropped_total`",
 				Kinds:   []string{"AuditEvent"},
 				Actions: []string{"APIWrite"},
 				Status:  Shipped,
@@ -300,8 +314,8 @@ func nist80053() Framework {
 			ID:          "AC-5",
 			Title:       "Separation of duties",
 			Requirement: "Identify the duties that need separation and define access authorisations to support it.",
-			Evidence:    []Evidence{separated("Duties are separated")},
-			Customer:    "Which duties need separating in the organisation, and who holds each role.",
+			Evidence:    []Evidence{separated("The version's creator does not approve it (when `excludeAuthor` is set)")},
+			Customer:    "Which duties need separating in the organisation, and who holds each role. " + requireSeparation,
 		}},
 	}
 }
@@ -321,10 +335,10 @@ func dora() Framework {
 			Evidence: []Evidence{
 				tracked("Changes are recorded"),
 				tested("Changes are tested"),
-				approved("Changes are approved"),
+				approved("Approvals, where production requires them"),
 				emergency("Emergency changes are handled and documented"),
 			},
-			Customer: "The ICT risk management framework and the change policy it requires.",
+			Customer: "The ICT risk management framework and the change policy it requires. " + requireApproval,
 		}, {
 			ID:          "Art. 17",
 			Title:       "ICT-related incident management process",
@@ -360,14 +374,17 @@ func aiAct() Framework {
 			Title:       "Record-keeping",
 			Requirement: "The system allows the automatic recording of events (logs) over its lifetime, to identify risks and support monitoring.",
 			Evidence: []Evidence{{
-				Element: "Every change an agent makes is logged",
+				Element: "The agents' promotions, approvals, verdicts and freezes are logged",
 				Record: "AuditEvents with `actor.kind: agent`, the agent's sponsor and what it asserted about itself " +
-					"(model, session, client); `kardinal audit export`",
+					"(model, session, client), for what an agent does through kardinal: its versions and their promotions, " +
+					"approvals, verdicts, freezes and holds, and its UI and Bundle API writes (`APIWrite`); `kardinal audit export`",
 				Kinds:   []string{"AuditEvent", "AgentIdentity"},
-				Actions: []string{"APIWrite", "PromotionStarted"},
+				Actions: []string{"APIWrite", "PromotionStarted", "ApprovalRecorded", "VerdictRecorded", "FreezeStarted", "HoldCreated"},
 				Status:  Shipped,
 			}},
-			Customer: "Deciding whether the Act applies to your systems, and their own documentation.",
+			Customer: "Deciding whether the Act applies to your systems, and their own documentation. The Kubernetes API " +
+				"server's audit log, for an agent's direct writes (kubectl, or `kardinal mcp` with the agent's kubeconfig) to " +
+				"a Pipeline, a PolicyGate or a ChangeWindow, which kardinal does not record.",
 		}, {
 			ID:          "Art. 14",
 			Title:       "Human oversight",
@@ -422,13 +439,13 @@ func iso42001() Framework {
 			Title:       "AI system recording of event logs",
 			Requirement: "The organisation determines at which phases of the AI system life cycle event logs are recorded.",
 			Evidence: []Evidence{{
-				Element: "The agents' changes are logged",
-				Record:  "AuditEvents with the agent's verified actor and sponsor",
+				Element: "The agents' promotions, approvals, verdicts and freezes are logged",
+				Record:  "AuditEvents with the agent's verified actor and sponsor, for what an agent does through kardinal",
 				Kinds:   []string{"AuditEvent"},
 				Actions: []string{"APIWrite", "PromotionStarted"},
 				Status:  Shipped,
 			}},
-			Customer: "Logging of the AI systems themselves, outside kardinal.",
+			Customer: "Logging of the AI systems themselves, outside kardinal, and the Kubernetes API server's audit log for an agent's direct writes.",
 		}, {
 			ID:          "Use of AI systems",
 			Title:       "Use of AI systems",
