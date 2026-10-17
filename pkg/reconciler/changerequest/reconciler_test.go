@@ -930,3 +930,53 @@ func TestChangeRequest_LinkFailClosedChecks(t *testing.T) {
 		assert.Equal(t, first, e.get().Status.LinkedAt.UTC(), "the first link's time")
 	})
 }
+
+// TestChangeRequest_WebhookRefresh (spec 23 §7.1): a kardinal.io/refresh
+// annotation the reconciler has not answered makes the read due at once,
+// and status.observedRefresh records it, so the next reconcile waits for the
+// poll again; a refresh never overrides retryAt (a 429 is honoured); without
+// any webhook, polling alone converges.
+func TestChangeRequest_WebhookRefresh(t *testing.T) {
+	e := newEnv(t, instance())
+	e.reconcile() // t0: opened, read
+	annotate := func(v string) {
+		cr := e.get()
+		if cr.Annotations == nil {
+			cr.Annotations = map[string]string{}
+		}
+		cr.Annotations[v1alpha1.RefreshAnnotation] = v
+		require.NoError(t, e.c.Update(context.Background(), cr))
+	}
+	e.f.set("CHG0000001", v1alpha1.ChangeRequestApproved)
+	e.now = t0.Add(10 * time.Second)
+	e.reconcile()
+	assert.Equal(t, 0, e.f.count("Get"), "no trigger: the poll is not due")
+	annotate("r1")
+	e.reconcile()
+	assert.Equal(t, 1, e.f.count("Get"), "the trigger reads at once")
+	cr := e.get()
+	assert.Equal(t, "approved", cr.Status.State)
+	assert.Equal(t, "r1", cr.Status.ObservedRefresh)
+	e.now = t0.Add(20 * time.Second)
+	e.reconcile()
+	assert.Equal(t, 1, e.f.count("Get"), "an answered trigger reads nothing more")
+
+	// A 429: a trigger waits for retryAt.
+	e.f.err = &changerequest.RetryError{Status: 429, After: 5 * time.Minute, Err: errors.New("HTTP 429")}
+	annotate("r2")
+	e.reconcile()
+	require.Equal(t, 2, e.f.count("Get"))
+	annotate("r3")
+	e.now = t0.Add(time.Minute)
+	e.reconcile()
+	assert.Equal(t, 2, e.f.count("Get"), "a trigger does not override retryAt")
+	assert.Equal(t, "r2", e.get().Status.ObservedRefresh)
+
+	// No webhook at all: the poll converges.
+	e2 := newEnv(t, instance())
+	e2.reconcile()
+	e2.f.set("CHG0000001", v1alpha1.ChangeRequestApproved)
+	e2.now = t0.Add(time.Minute)
+	e2.reconcile()
+	assert.Equal(t, "approved", e2.get().Status.State)
+}

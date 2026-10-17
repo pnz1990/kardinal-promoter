@@ -211,6 +211,40 @@ have no approvers: `approvers` stays empty. For a linked issue, `link.requireFie
 (`components`, `customfield_10010`, ...): an option or user matches by its value or name, a list when
 one element matches.
 
+## Webhook trigger
+
+kardinal polls each ticket every `pollInterval`, which is correct with no inbound path at all. A
+ticketing system can also tell kardinal that a ticket changed, so the gate opens within seconds of
+the approval instead of at the next poll:
+
+```yaml
+spec:
+  perPromotion: true
+  webhook:
+    secretRef: {name: cr-hook}   # labelled kardinal.io/referenceable=true; key token, 16+ characters
+```
+
+```text
+POST https://<controller webhook address>/webhook/changerequests/<namespace>/<template>/<token>
+```
+
+The request makes every instance of the template read its ticket at once (the
+`kardinal.io/refresh` annotation; `status.observedRefresh` records the trigger it answered). Its
+body is never read for state: the state always comes from the ticketing system's API, so a forged
+or replayed body changes nothing, and a lost trigger only means the next poll reads the change.
+A wrong token, a template without `webhook`, and a template that does not exist all get the same
+`401`. A trigger never overrides a provider's Retry-After (`status.retryAt`), and the receiver
+answers `429` past five requests a second per template.
+
+- **ServiceNow**: a business rule on `change_request` (after update, when `approval` or `state`
+  changes) that sends an outbound REST message to the URL. Restrict it to the changes kardinal
+  opened with the condition `correlation_display` is `kardinal`.
+- **Jira**: a webhook (Settings, System, WebHooks) on "Issue updated" with the URL, filtered by
+  JQL to the project, for example `project = CHG AND labels ~ "kardinal-*"`.
+
+The URL carries the token, so expose the controller's webhook port only over TLS, as for
+[Subscription webhooks](subscription.md#webhooks).
+
 ## The gate
 
 `changeRequests.<name>` has `state`, `ticket`, `url`, `stale`, `timedOut`, `verified`,

@@ -140,6 +140,7 @@ func changeRequestSpec(tmpl kardinalv1alpha1.ChangeRequest, vars map[string]stri
 	spec.PerPromotion = false
 	spec.Suspend = false
 	spec.AppliesTo = nil
+	spec.Webhook = nil // the webhook is the template's
 	render := func(m map[string]string) {
 		for k, v := range m {
 			m[k] = RenderChangeRequestText(v, vars)

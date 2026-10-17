@@ -398,6 +398,9 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `spec.servicenow.type` | string |  | Type is the change model of the Change Management API: normal, standard or emergency. One of: `normal`, `standard`, `emergency`. Default: `normal`. |
 | `spec.suspend` | boolean |  | Suspend stops reading the ticket (the Graph sets it on an instance once its Bundle stops promoting). The last state stays in status and goes stale. |
 | `spec.timeout` | string |  | Timeout is how long after the instance's first read status.timedOut becomes true; the gate's expression decides what that means. Default 24h; "0" for none. Default: `24h`. |
+| `spec.webhook` | object |  | Webhook, on a template, lets the ticketing system trigger a read of its instances' tickets at once: POST /webhook/changerequests/&lt;namespace&gt;/&lt;name&gt;/&lt;token&gt;. The request only sets the instances' kardinal.io/refresh annotation; its body is never read for state. Polling stays correct without it. |
+| `spec.webhook.secretRef` | object | yes | SecretRef names a Secret in the ChangeRequest's namespace, labelled kardinal.io/referenceable=true, whose key "token" (at least 16 characters) is the last path segment of the webhook URL. |
+| `spec.webhook.secretRef.name` | string | yes | Name is the Secret name. |
 | `status` | object |  | ChangeRequestStatus is written by the ChangeRequest reconciler only. |
 | `status.approvers` | []object |  | Approvers are the ticket's approvers, when the provider exposes them. |
 | `status.approvers[].at` | string (date-time) |  |  |
@@ -414,6 +417,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `status.linkedAt` | string (date-time) |  | LinkedAt is when this instance linked its ticket key; of two ChangeRequests that link one ticket, the earlier keeps it. |
 | `status.observedAt` | string (date-time) |  | ObservedAt is the last successful read of the ticket. |
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation of the spec last acted on. |
+| `status.observedRefresh` | string |  | ObservedRefresh is the kardinal.io/refresh annotation (a webhook trigger) the reconciler last answered with a read. |
 | `status.pendingAuditEvents` | []object |  | PendingAuditEvents are ChangeRequestOpened, ChangeRequestLinked, ChangeRequestApproved and ChangeRequestRejected records not yet written (the audit outbox). |
 | `status.pendingAuditEvents[].createdAt` | string |  | CreatedAt is the transition time in RFC 3339 with nanoseconds, written to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp has one-second resolution. |
 | `status.pendingAuditEvents[].labels` | map[string]string |  | Labels are the AuditEvent's labels. |
