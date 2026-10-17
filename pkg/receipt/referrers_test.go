@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/registry"
@@ -46,7 +48,10 @@ func paginated(inner http.Handler, size int) http.Handler {
 			_, _ = w.Write(rec.Body.Bytes())
 			return
 		}
+		// The registry lists referrers in no stable order: sorted, the
+		// pages of successive requests neither repeat nor skip one.
 		all := idx.Manifests
+		sort.Slice(all, func(i, j int) bool { return all[i].Digest.String() < all[j].Digest.String() })
 		lo, hi := page*size, page*size+size
 		if lo > len(all) {
 			lo = len(all)
@@ -144,26 +149,80 @@ func TestReferrers_TagSchema(t *testing.T) {
 }
 
 // TestNextPage: a Link to the next page on the same registry is followed,
-// relative or absolute; one to another host or scheme is not (the
-// registry's credentials go to it only).
+// relative or absolute; one to another host or scheme is an error (the
+// registry's credentials go to it only, and the list is not whole without
+// it).
 func TestNextPage(t *testing.T) {
 	cur, err := url.Parse("https://registry.example/v2/a/referrers/sha256:1?artifactType=x")
 	require.NoError(t, err)
 	for link, want := range map[string]string{
-		`</v2/a/referrers/sha256:1?last=b>; rel="next"`:                     "https://registry.example/v2/a/referrers/sha256:1?last=b",
-		`<https://registry.example/v2/a/referrers/sha256:1?n=2>; rel=next`:  "https://registry.example/v2/a/referrers/sha256:1?n=2",
-		`<https://evil.example/v2/a/referrers/sha256:1?n=2>; rel="next"`:    "",
-		`<http://registry.example/v2/a/referrers/sha256:1?n=2>; rel="next"`: "",
-		`</v2/a/referrers/sha256:1?last=b>; rel="prev"`:                     "",
+		`</v2/a/referrers/sha256:1?last=b>; rel="next"`:                    "https://registry.example/v2/a/referrers/sha256:1?last=b",
+		`<https://registry.example/v2/a/referrers/sha256:1?n=2>; rel=next`: "https://registry.example/v2/a/referrers/sha256:1?n=2",
+		`</v2/a/referrers/sha256:1?last=b>; rel="prev"`:                    "",
 	} {
-		h := http.Header{"Link": {link}}
-		got := nextPage(h, cur)
+		got, err := nextPage(http.Header{"Link": {link}}, cur)
+		require.NoError(t, err, link)
 		if want == "" {
 			assert.Nil(t, got, link)
 			continue
 		}
 		require.NotNil(t, got, link)
 		assert.Equal(t, want, got.String())
+	}
+	for _, link := range []string{
+		`<https://evil.example/v2/a/referrers/sha256:1?n=2>; rel="next"`,
+		`<http://registry.example/v2/a/referrers/sha256:1?n=2>; rel="next"`,
+	} {
+		_, err := nextPage(http.Header{"Link": {link}}, cur)
+		require.ErrorIs(t, err, ErrReferrersIncomplete, link)
+		assert.Contains(t, err.Error(), "off-host next link")
+	}
+}
+
+// TestReferrers_Unbounded (QA-2 #2174): a registry whose pages never end
+// (a page linking to itself, or always a new one), or that links off-host,
+// cannot be read whole: Referrers fails, with ErrReferrersIncomplete, after
+// a bounded number of requests, never a partial list.
+func TestReferrers_Unbounded(t *testing.T) {
+	inner := registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0)))
+	var requests atomic.Int64
+	mode := "self"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/referrers/") {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		requests.Add(1)
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		switch mode {
+		case "self":
+			w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, r.URL.RequestURI()))
+		case "endless":
+			w.Header().Set("Link", fmt.Sprintf(`<%s?page=%d>; rel="next"`, r.URL.Path, page+1))
+		case "offhost":
+			w.Header().Set("Link", `<https://elsewhere.example/v2/x/referrers/sha256:1>; rel="next"`)
+		}
+		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+		_ = json.NewEncoder(w).Encode(v1.IndexManifest{SchemaVersion: 2})
+	}))
+	t.Cleanup(srv.Close)
+	repo := strings.TrimPrefix(srv.URL, "http://") + "/acme/checkout"
+	digest := "sha256:" + strings.Repeat("a", 64)
+	r := &Registry{Insecure: true}
+	for _, tc := range []struct {
+		mode, want string
+		most       int64
+	}{
+		{"self", "linked twice", 2},
+		{"endless", "more than 64 pages", maxReferrerPages},
+		{"offhost", "off-host next link", 1},
+	} {
+		mode = tc.mode
+		requests.Store(0)
+		_, err := r.Referrers(context.Background(), repo, digest, nil)
+		require.ErrorIs(t, err, ErrReferrersIncomplete, tc.mode)
+		assert.Contains(t, err.Error(), tc.want)
+		assert.LessOrEqual(t, requests.Load(), tc.most, "%s: bounded requests", tc.mode)
 	}
 }
 

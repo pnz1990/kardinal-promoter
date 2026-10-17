@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,6 +30,17 @@ const MaxReferrerEntries = 1024
 
 // maxReferrerEntries is MaxReferrerEntries (tests lower it).
 var maxReferrerEntries = MaxReferrerEntries
+
+// maxReferrerPages bounds the pages of the Referrers API read for one
+// image: 64, so a page holds 16 descriptors on average at the 1024 ceiling.
+// A registry that pages past it (or links a page back to one already read)
+// cannot be read whole: the result is an error, never a partial list.
+const maxReferrerPages = 64
+
+// ErrReferrersIncomplete is a referrers list that could not be read whole:
+// too many pages, a page linked twice, a next page on another host. A
+// receipt not found in it is unknown, so verification cannot conclude.
+var ErrReferrersIncomplete = errors.New("cannot verify: the image's referrers cannot be read whole")
 
 // maxIndexBytes bounds one page of the referrers index.
 const maxIndexBytes = 4 << 20
@@ -119,7 +131,15 @@ func (r *Registry) referrerDescriptors(ctx context.Context, subject name.Digest)
 		Path:     fmt.Sprintf("/v2/%s/referrers/%s", repo.RepositoryStr(), subject.DigestStr()),
 		RawQuery: url.Values{"artifactType": {BundleMediaType}}.Encode()}
 	var out []v1.Descriptor
+	seen := map[string]bool{}
 	for page := 0; ; page++ {
+		if page == maxReferrerPages {
+			return nil, false, fmt.Errorf("%w: more than %d pages", ErrReferrersIncomplete, maxReferrerPages)
+		}
+		if seen[u.String()] {
+			return nil, false, fmt.Errorf("%w: page %s is linked twice", ErrReferrersIncomplete, u.Redacted())
+		}
+		seen[u.String()] = true
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
 			return nil, false, err
@@ -149,7 +169,10 @@ func (r *Registry) referrerDescriptors(ctx context.Context, subject name.Digest)
 			return nil, false, fmt.Errorf("referrers page %d: %w", page+1, err)
 		}
 		out = append(out, idx.Manifests...)
-		next := nextPage(resp.Header, u)
+		next, err := nextPage(resp.Header, u)
+		if err != nil {
+			return nil, false, err
+		}
 		if len(out) > maxReferrerEntries || (len(out) == maxReferrerEntries && next != nil) {
 			return out[:maxReferrerEntries], true, nil
 		}
@@ -180,20 +203,24 @@ func (r *Registry) tagSchemaReferrers(ctx context.Context, subject name.Digest) 
 // linkNext matches one link of a Link header with rel="next".
 var linkNext = regexp.MustCompile(`<([^>]+)>\s*;[^,]*\brel="?next"?`)
 
-// nextPage is the Link header's next page, resolved against cur, or nil.
-// A next page on another host is not followed: the registry's credentials
-// go to the registry only.
-func nextPage(h http.Header, cur *url.URL) *url.URL {
+// nextPage is the Link header's next page, resolved against cur, or nil
+// for the last page. A next page on another host or scheme is an error: the
+// registry's credentials go to the registry only, and the list cannot be
+// read whole without it.
+func nextPage(h http.Header, cur *url.URL) (*url.URL, error) {
 	for _, l := range h.Values("Link") {
 		m := linkNext.FindStringSubmatch(l)
 		if m == nil {
 			continue
 		}
 		next, err := cur.Parse(m[1])
-		if err != nil || next.Host != cur.Host || next.Scheme != cur.Scheme {
-			return nil
+		if err != nil {
+			return nil, fmt.Errorf("%w: the registry returned a next link that is not a URL", ErrReferrersIncomplete)
 		}
-		return next
+		if next.Host != cur.Host || next.Scheme != cur.Scheme {
+			return nil, fmt.Errorf("%w: the registry returned an off-host next link (%s://%s)", ErrReferrersIncomplete, next.Scheme, next.Host)
+		}
+		return next, nil
 	}
-	return nil
+	return nil, nil
 }

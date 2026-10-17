@@ -23,6 +23,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	sigroot "github.com/sigstore/sigstore-go/pkg/root"
@@ -44,6 +45,7 @@ type verifyReceiptOptions struct {
 	key, identity, issuer, trRoot  string
 	require                        []string
 	insecure, anyCluster           bool
+	timeout                        time.Duration
 }
 
 func newVerifyReceiptCmd() *cobra.Command {
@@ -85,6 +87,7 @@ trusts any identity). The exit code is 0 only when every check passes.`,
 	f.StringSliceVar(&o.require, "require", nil, "Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, ...); !LEVEL must be absent")
 	f.StringVar(&o.repo, "repository", "", "Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's")
 	f.BoolVar(&o.insecure, "insecure-registry", false, "Read --image over plain HTTP")
+	f.DurationVar(&o.timeout, "timeout", time.Minute, "Give up past this (reading the cluster, the registry, the trusted root): cannot verify, a failure")
 	return withStructuredOutput(cmd)
 }
 
@@ -109,6 +112,19 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if o.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, o.timeout)
+		defer cancel()
+	}
+	err := verifyReceipt(ctx, cmd, args, o)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("verify-receipt: cannot verify: no answer within --timeout %s: %w", o.timeout, err)
+	}
+	return err
+}
+
+func verifyReceipt(ctx context.Context, cmd *cobra.Command, args []string, o verifyReceiptOptions) error {
 	sources := 0
 	for _, set := range []bool{len(args) > 0, o.image != "", o.file != ""} {
 		if set {

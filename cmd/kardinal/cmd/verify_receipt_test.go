@@ -393,3 +393,27 @@ func TestVerifyReceipt_ImageReferrers(t *testing.T) {
 	assert.Contains(t, err.Error(), "whether one exists is unknown")
 	assert.Contains(t, stderr, "more receipt referrers than are read")
 }
+
+// TestVerifyReceipt_Timeout (QA-2 #2174): a registry that does not answer
+// makes verify-receipt fail within --timeout, saying it cannot verify,
+// rather than hang or report the receipt absent.
+func TestVerifyReceipt_Timeout(t *testing.T) {
+	keepStyle(t)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	_, _, key := signedReceipt(t)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	start := time.Now()
+	_, _, err := runOutput(t, receiptClient(t), "verify-receipt", "--image", "ghcr.io/acme/checkout@"+receiptDigest, "-n", "default",
+		"--pipeline", "checkout", "--env", "prod", "--cluster", "c1", "--key", key, "--repository", host+"/acme/receipts",
+		"--insecure-registry", "--timeout", "500ms")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot verify: no answer within --timeout 500ms")
+	assert.Less(t, time.Since(start), 10*time.Second)
+}
