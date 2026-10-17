@@ -91,6 +91,31 @@ type GitOps struct {
 	// commit's files never change, and every round reads every
 	// environment's.
 	read map[string]EnvState
+
+	// renamed is the image repository an environment's workloads run
+	// instead of AppRepository, by namespace (Rename).
+	renamed map[string]string
+}
+
+// Rename makes the workloads of ns run repository instead of the Bundle's
+// AppRepository, at the tag git pins, as a kustomize newName does: the
+// health check then cannot tell which version runs from its images.
+func (g *GitOps) Rename(ns, repository string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.renamed == nil {
+		g.renamed = map[string]string{}
+	}
+	g.renamed[ns] = repository
+}
+
+func (g *GitOps) repositoryOf(ns string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if r := g.renamed[ns]; r != "" {
+		return r
+	}
+	return AppRepository
 }
 
 // Fail makes env fail its health check while it runs tag.
@@ -288,7 +313,7 @@ func (g *GitOps) Sync() error {
 func (g *GitOps) reflect(p *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, st EnvState) error {
 	opts := health.OptionsForEnv(p.Name, env)
 	failed := g.failing(p.Namespace, env.Name, st.Tag)
-	image := AppRepository + ":" + st.Tag
+	image := g.repositoryOf(p.Namespace) + ":" + st.Tag
 	switch opts.Type {
 	case "argocd":
 		return g.upsert(ApplicationGVK, opts.ArgoCD.Namespace, opts.ArgoCD.Name, nil, func(o map[string]interface{}) {
