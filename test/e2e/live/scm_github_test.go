@@ -430,8 +430,10 @@ func TestGitHub_ExampleGitHubDemo(t *testing.T) {
 	e.FailReadiness(t, ns, fixtures.Workload("prod"))
 	rb := bad + "-rollback-alarm"
 	ps := e.WaitStepState(t, ns, name, bad, "prod", "RollingBack", promoteTimeout)
+	// Past the timeout the step checks once more, and the message quotes
+	// that check: unready pods are Progressing in Argo CD (#2064).
 	assert.True(t, strings.HasPrefix(ps.Status.Message,
-		"health alarm via argocd (onHealthFailure=rollback): health check timeout after 3m0s; last result: bake: "), ps.Status.Message)
+		"health alarm via argocd (onHealthFailure=rollback): health check timeout after 3m0s; last result: waiting for argocd: health=Progressing"), ps.Status.Message)
 	assert.True(t, strings.HasSuffix(ps.Status.Message, " — rollback Bundle "+rb+" created"), ps.Status.Message)
 	e.WaitBundlePhase(t, ns, bad, "Superseded", time.Minute)
 
