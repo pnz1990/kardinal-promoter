@@ -127,7 +127,7 @@ func TestFakeAgreesWithJiraProvider(t *testing.T) {
 			req := changerequest.Request{CorrelationID: "kardinal:ns/app-v1/prod/uid",
 				Secret: func(context.Context, kardinalv1alpha1.SecretKeyRef) (string, error) { return secret, nil },
 				Spec: &kardinalv1alpha1.ChangeRequestSpec{Provider: "jira", Jira: &kardinalv1alpha1.JiraChangeRequest{
-					BaseURL: api.URL, APIVersion: version, Project: "CHG", ChangeRequestAuth: kardinalv1alpha1.ChangeRequestAuth{Scheme: scheme},
+					BaseURL: api.URL, APIVersion: version, Project: "CHG", ApprovedResolutions: []string{"Done"}, ChangeRequestAuth: kardinalv1alpha1.ChangeRequestAuth{Scheme: scheme},
 					Template: map[string]string{"summary": "Promote app v1", "description": "text"}}}}
 			ctx := context.Background()
 			// Another promotion's issue, with another label.
@@ -135,9 +135,10 @@ func TestFakeAgreesWithJiraProvider(t *testing.T) {
 				bytes.NewBufferString(`{"project":"OPS","labels":["kardinal-0123456789abcdef0123456789abcdef"]}`))
 			require.NoError(t, err)
 			_ = resp.Body.Close()
-			// An issue mallory planted with this promotion's label, approved.
+			// An issue mallory planted with this promotion's label, approved,
+			// with kardinal's account as its reporter (Modify Reporter).
 			resp, err = http.Post(ctl.URL+"/_control/jira", "application/json", bytes.NewBufferString(
-				`{"project":"CHG","reporter":"mallory","status":"Approved","category":"done","labels":["`+
+				`{"project":"CHG","creator":"mallory","reporter":"u","status":"Approved","category":"done","labels":["`+
 					changerequest.CorrelationKey(req.CorrelationID)+`"]}`))
 			require.NoError(t, err)
 			_ = resp.Body.Close()
@@ -169,7 +170,7 @@ func TestFakeAgreesWithJiraProvider(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, "cancelled", got.State)
 			assert.Equal(t, "Done / Won't Do", got.ProviderState)
-			put(`{"status":"Approved","category":"done","resolution":""}`)
+			put(`{"status":"Done","category":"done","resolution":"Done"}`)
 			got, err = j.Get(ctx, req, kardinalv1alpha1.ChangeRequestTicket{Key: "CHG-3"})
 			require.NoError(t, err)
 			assert.Equal(t, "approved", got.State)

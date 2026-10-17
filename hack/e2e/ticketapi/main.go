@@ -31,7 +31,7 @@
 //	                                            someone else opened); answers it
 //	PUT  /_control/servicenow/<number>          {"state"?, "approval"?, "approvers"?, "fields"?} changes it
 //	GET  /_control/jira                         the issues, as JSON
-//	POST /_control/jira                         {"project", "fields"?, "labels"?} adds an issue
+//	POST /_control/jira                         {"project", "fields"?, "labels"?, "creator"?, "reporter"?} adds an issue
 //	PUT  /_control/jira/<key>                   {"status"?, "category"?, "resolution"?, "fields"?} changes it
 //	PUT  /_control/fail                         {"status":429,"retryAfter":"5","count":2,"match":"..."}: the next
 //	                                            count API requests whose path?query contains match fail so
@@ -121,8 +121,11 @@ type issue struct {
 	Category   string   `json:"category"`
 	Resolution string   `json:"resolution"`
 	Labels     []string `json:"labels"`
-	// Reporter is who created it: the authenticated user for a create,
-	// someone.else unless given for an issue the control port adds.
+	// Creator is who created it (Jira sets it; nobody edits it): the
+	// authenticated user for a create, someone.else unless given for an
+	// issue the control port adds. Reporter is editable and defaults to the
+	// creator.
+	Creator  string                 `json:"creator"`
 	Reporter string                 `json:"reporter"`
 	Fields   map[string]interface{} `json:"fields"`
 	Created  time.Time              `json:"created"`
@@ -429,8 +432,11 @@ func (s *server) addIssue(is *issue) *issue {
 	if is.Fields == nil {
 		is.Fields = map[string]interface{}{}
 	}
+	if is.Creator == "" {
+		is.Creator = "someone.else"
+	}
 	if is.Reporter == "" {
-		is.Reporter = "someone.else"
+		is.Reporter = is.Creator
 	}
 	is.Created = time.Now().UTC()
 	s.issues = append(s.issues, is)
@@ -474,7 +480,7 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte, user 
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"errors": map[string]string{"project": "project is required"}})
 			return http.StatusBadRequest
 		}
-		is := &issue{Project: key, Reporter: user, Fields: map[string]interface{}{}}
+		is := &issue{Project: key, Creator: user, Fields: map[string]interface{}{}}
 		for k, v := range in.Fields {
 			switch k {
 			case "project":
@@ -507,13 +513,13 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte, user 
 			return v
 		}
 		label, project := quoted("labels"), quoted("project")
-		mine := strings.Contains(in.JQL, "reporter = currentUser()")
+		mine := strings.Contains(in.JQL, "creator = currentUser()")
 		list := append([]*issue(nil), s.issues...)
 		sort.SliceStable(list, func(i, j int) bool { return list[i].Created.Before(list[j].Created) })
 		out := []map[string]interface{}{}
 		for _, is := range list {
 			for _, l := range is.Labels {
-				if l == label && (project == "" || is.Project == project) && (!mine || is.Reporter == user) &&
+				if l == label && (project == "" || is.Project == project) && (!mine || is.Creator == user) &&
 					(in.MaxResults == 0 || len(out) < in.MaxResults) {
 					out = append(out, jiraJSON(is, r.Host, version))
 				}
@@ -541,6 +547,7 @@ func jiraJSON(is *issue, host, version string) map[string]interface{} {
 		"status":   map[string]interface{}{"name": is.Status, "statusCategory": map[string]string{"key": is.Category}},
 		"labels":   is.Labels,
 		"project":  map[string]string{"key": is.Project},
+		"creator":  map[string]string{"accountId": is.Creator, "name": is.Creator},
 		"reporter": map[string]string{"accountId": is.Reporter, "name": is.Reporter},
 		"created":  is.Created.UTC().Format("2006-01-02T15:04:05.000-0700"),
 	}

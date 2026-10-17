@@ -173,12 +173,14 @@ spec:
 | Call | Request |
 |---|---|
 | Open | `POST /rest/api/<v>/issue` with the template's fields, `project`, `issuetype` and the correlation label |
-| Find (before every create) | `POST /rest/api/3/search/jql` (v2: `/rest/api/2/search`), JQL `project = "<project>" AND labels = "<key>" AND reporter = currentUser() ORDER BY created ASC`, then `GET /rest/api/<v>/myself` to check the reporter |
+| Find (before every create) | `POST /rest/api/3/search/jql` (v2: `/rest/api/2/search`), JQL `project = "<project>" AND labels = "<key>" AND creator = currentUser() ORDER BY created ASC`, then `GET /rest/api/<v>/myself` to check the creator |
 | Read | `GET /rest/api/<v>/issue/<id>`, or by key for a linked issue |
 
 **Only kardinal's own issues are adopted.** Find returns an issue only when the integration account
-reported it (`reporter = currentUser()`, checked again against `/myself`), so someone who may create
+created it (`creator = currentUser()`, checked again against `/myself`), so someone who may create
 issues cannot plant one with the promotion's label and move it to an approved status themselves.
+The creator, not the reporter, decides: Jira sets the creator and nobody can change it, while Modify
+Reporter and Service Management's "raise on behalf of" set the reporter to any account.
 
 The template cannot set `project`, `issuetype` or `labels`. The correlation label is `kardinal-` and
 32 hex characters of the correlation id's SHA-256. On API version 3 the `description` is sent as an
@@ -192,12 +194,16 @@ status. The state is read in this order:
 |---|---|
 | status in `rejectedStatuses` | `rejected` |
 | resolution in `cancelledResolutions` (default `Won't Do`) | `cancelled` |
-| status in `approvedStatuses` (without them, status category `approvedStatusCategory`, default `done`), and unresolved or resolved in `approvedResolutions` | `approved` |
+| `approvedStatuses` set: status in it, unresolved or resolved in `approvedResolutions` | `approved` |
+| `approvedStatuses` unset: status category `approvedStatusCategory` (default `done`) and resolved in `approvedResolutions` | `approved` |
 | resolved in anything else (Duplicate, Declined, a resolution nobody configured) | `closed`: never approved |
-| anything else | `pending` |
+| anything else, an unresolved done issue included | `pending` |
 
-Only an explicitly configured resolution counts: with no `approvedResolutions`, a resolved issue
-is never approved. An issue outside `project` and `linkProjects` is refused (by its key before any
+Only what you configure approves. Without `approvedStatuses`, the status category approves only
+with a resolution listed in `approvedResolutions`: many workflows move an issue to a done status
+such as Declined or Rejected without setting a resolution, and that must never release prod. With
+no `approvedResolutions` either, nothing is approved; list the approved statuses, as in the example
+above. An issue outside `project` and `linkProjects` is refused (by its key before any
 request, and by its own project field after a read), so a link cannot point at another project's
 approved issue. A rejected or cancelled issue is often in the done category too, which is why those come first.
 `providerState` is the status, and the resolution when there is one (`Done / Won't Do`). Jira issues

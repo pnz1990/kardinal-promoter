@@ -176,14 +176,16 @@ func (j *Jira) Find(ctx context.Context, req Request) (Reading, bool, error) {
 	if jiraVersion(jc) == "3" {
 		path = api + "/search/jql"
 	}
-	// reporter = currentUser(): an issue someone else created with the
-	// label (planted, then moved to approved by its planter) is not
-	// adopted.
+	// creator = currentUser(): an issue someone else created with the label
+	// (planted, then moved to approved by its planter) is not adopted. The
+	// creator, unlike the reporter, is set by Jira and cannot be edited:
+	// Modify Reporter and Service Management's "raise on behalf of" set the
+	// reporter to any account.
 	body := map[string]interface{}{
-		"jql": fmt.Sprintf("project = %q AND labels = %q AND reporter = currentUser() ORDER BY created ASC", jc.Project,
+		"jql": fmt.Sprintf("project = %q AND labels = %q AND creator = currentUser() ORDER BY created ASC", jc.Project,
 			CorrelationKey(req.CorrelationID)),
 		"maxResults": 1,
-		"fields":     append(jiraFields(req.Spec), "reporter"),
+		"fields":     append(jiraFields(req.Spec), "creator"),
 	}
 	var out struct {
 		Issues []jiraIssue `json:"issues"`
@@ -200,9 +202,9 @@ func (j *Jira) Find(ctx context.Context, req Request) (Reading, bool, error) {
 	if err := call(ctx, j.client(), auth, http.MethodGet, base, api+"/myself", nil, nil, &me, "jira: read the current user"); err != nil {
 		return Reading{}, false, err
 	}
-	var reporter jiraUser
-	_ = json.Unmarshal(out.Issues[0].Fields["reporter"], &reporter)
-	if !me.same(reporter) {
+	var creator jiraUser
+	_ = json.Unmarshal(out.Issues[0].Fields["creator"], &creator)
+	if !me.same(creator) {
 		return Reading{}, false, nil
 	}
 	r, err := j.reading(base, jc, req, out.Issues[0])
@@ -355,15 +357,17 @@ func jiraFieldText(raw json.RawMessage, want string) string {
 //
 //	status in rejectedStatuses                          rejected
 //	resolution in cancelledResolutions (Won't Do)       cancelled
-//	status in approvedStatuses, or, without them, the
-//	status category is approvedStatusCategory (done):
-//	  unresolved, or resolved in approvedResolutions    approved
-//	  resolved otherwise (Duplicate, Declined, ...)     closed: never approved
-//	resolved, any other status                          closed
-//	otherwise                                           pending
+//	approvedStatuses set: status in it, and unresolved
+//	  or resolved in approvedResolutions                approved
+//	approvedStatuses unset: status category is
+//	  approvedStatusCategory (done) and resolved in
+//	  approvedResolutions                               approved
+//	resolved otherwise (Duplicate, Declined, ...)       closed: never approved
+//	otherwise (an unresolved done issue too)            pending
 //
-// Only an explicitly configured resolution counts: a resolution nobody
-// listed in approvedResolutions is not an approval.
+// Only what is configured approves: without approvedStatuses, the category
+// approves only with a listed resolution, since many workflows move an
+// issue to a done status (Declined, Rejected) without setting one.
 func JiraState(jc *kardinalv1alpha1.JiraChangeRequest, status, category, resolution string) string {
 	cancelled := jc.CancelledResolutions
 	if len(cancelled) == 0 {
@@ -373,14 +377,15 @@ func JiraState(jc *kardinalv1alpha1.JiraChangeRequest, status, category, resolut
 	if approvedCategory == "" {
 		approvedCategory = "done"
 	}
-	approvedStatus := (len(jc.ApprovedStatuses) > 0 && slices.Contains(jc.ApprovedStatuses, status)) ||
-		(len(jc.ApprovedStatuses) == 0 && category == approvedCategory)
+	resolvedApproved := resolution != "" && slices.Contains(jc.ApprovedResolutions, resolution)
 	switch {
 	case status != "" && slices.Contains(jc.RejectedStatuses, status):
 		return kardinalv1alpha1.ChangeRequestRejected
 	case resolution != "" && slices.Contains(cancelled, resolution):
 		return kardinalv1alpha1.ChangeRequestCancelled
-	case approvedStatus && (resolution == "" || slices.Contains(jc.ApprovedResolutions, resolution)):
+	case len(jc.ApprovedStatuses) > 0 && slices.Contains(jc.ApprovedStatuses, status) && (resolution == "" || resolvedApproved):
+		return kardinalv1alpha1.ChangeRequestApproved
+	case len(jc.ApprovedStatuses) == 0 && category == approvedCategory && resolvedApproved:
 		return kardinalv1alpha1.ChangeRequestApproved
 	case resolution != "":
 		return kardinalv1alpha1.ChangeRequestClosed

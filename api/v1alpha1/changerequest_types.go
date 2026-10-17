@@ -205,7 +205,8 @@ type JiraChangeRequest struct {
 	ApprovedStatuses []string `json:"approvedStatuses,omitempty"`
 
 	// ApprovedStatusCategory is the status category (new, indeterminate,
-	// done) that means approved when ApprovedStatuses is unset.
+	// done) that, with ApprovedStatuses unset, approves an issue resolved in
+	// ApprovedResolutions (an unresolved one never).
 	// +kubebuilder:validation:Enum=new;indeterminate;done
 	// +kubebuilder:default=done
 	// +optional
@@ -216,11 +217,13 @@ type JiraChangeRequest struct {
 	// +optional
 	RejectedStatuses []string `json:"rejectedStatuses,omitempty"`
 
-	// ApprovedResolutions are the resolution names a resolved issue in an
-	// approved status may have to count as approved (for example Done). A
-	// resolved issue whose resolution is not listed (Duplicate, Declined,
-	// one nobody configured) is closed, never approved; an unresolved issue
-	// in an approved status is approved.
+	// ApprovedResolutions are the resolution names that count as approved:
+	// with ApprovedStatuses unset, an issue in ApprovedStatusCategory is
+	// approved only with one of them (many workflows move an issue to a
+	// done status such as Declined without a resolution); with
+	// ApprovedStatuses set, an issue in one of them is approved unresolved
+	// or with one of them. Any other resolution (Duplicate, Declined, one
+	// nobody configured) is closed, never approved.
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	ApprovedResolutions []string `json:"approvedResolutions,omitempty"`

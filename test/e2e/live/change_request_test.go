@@ -294,7 +294,7 @@ func TestGate_ChangeRequestJira(t *testing.T) {
 	require.NoError(t, e.Client.Create(ctx, &v1alpha1.ChangeRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "prod-change", Namespace: a.ns},
 		Spec: v1alpha1.ChangeRequestSpec{PerPromotion: true, AppliesTo: []string{"prod"}, Provider: "jira", PollInterval: "30s",
-			Jira: &v1alpha1.JiraChangeRequest{BaseURL: framework.TicketAPIURL(t), Project: "CHG", IssueType: "Change",
+			Jira: &v1alpha1.JiraChangeRequest{BaseURL: framework.TicketAPIURL(t), Project: "CHG", IssueType: "Change", ApprovedStatuses: []string{"Approved"},
 				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}},
 				Template: map[string]string{"summary": "Promote {{ pipeline.name }} {{ bundle.version }} to {{ environment.name }}",
 					"description": "Opened by kardinal for {{ namespace }}"}}},

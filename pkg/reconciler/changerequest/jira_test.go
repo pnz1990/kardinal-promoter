@@ -33,11 +33,12 @@ const jiraToken = "ops@example.com:atl-token-123"
 
 type jiraServer struct {
 	*httptest.Server
-	// reporter is the accountId of the search fixture's reporter.
-	reporter string
-	mu       sync.Mutex
-	reqs     []jiraRequest
-	answer   func(w http.ResponseWriter, r *http.Request) bool
+	// creator is the accountId of the search fixture's creator; its
+	// reporter is always kardinal's account.
+	creator string
+	mu      sync.Mutex
+	reqs    []jiraRequest
+	answer  func(w http.ResponseWriter, r *http.Request) bool
 }
 
 type jiraRequest struct {
@@ -47,11 +48,11 @@ type jiraRequest struct {
 
 func newJiraServer(t *testing.T, corr string) *jiraServer {
 	t.Helper()
-	s := &jiraServer{reporter: "5b10a2844c20165700ede21g"}
+	s := &jiraServer{creator: "5b10a2844c20165700ede21g"}
 	fix := func(name string) []byte {
 		raw, err := os.ReadFile("testdata/jira/" + name)
 		require.NoError(t, err)
-		return []byte(strings.NewReplacer("{{CORRELATION}}", corr, "{{BASE}}", s.URL, "{{REPORTER}}", s.reporter).Replace(string(raw)))
+		return []byte(strings.NewReplacer("{{CORRELATION}}", corr, "{{BASE}}", s.URL, "{{CREATOR}}", s.creator).Replace(string(raw)))
 	}
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := jiraRequest{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Auth: r.Header.Get("Authorization")}
@@ -146,12 +147,12 @@ func TestJira_CreateFindGet(t *testing.T) {
 	found, ok, err := j.Find(ctx, req)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "approved", found.State, "Approved is in the done category")
+	assert.Equal(t, "pending", found.State, "unresolved in the done category, and approvedStatuses unset: not approved")
 	assert.Equal(t, corrID, found.CorrelationID)
 	got = srv.requests()[1]
 	assert.Equal(t, "/rest/api/3/search/jql", got.Path)
-	assert.Equal(t, `project = "CHG" AND labels = "`+key+`" AND reporter = currentUser() ORDER BY created ASC`, got.Body["jql"],
-		"searched only in the project, only issues the integration account reported")
+	assert.Equal(t, `project = "CHG" AND labels = "`+key+`" AND creator = currentUser() ORDER BY created ASC`, got.Body["jql"],
+		"searched only in the project, only issues the integration account created")
 	assert.Equal(t, "/rest/api/3/myself", srv.requests()[2].Path, "the answer is checked against the current user")
 	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), found.Created.UTC(), "Find reads the creation time")
 	assert.Equal(t, float64(1), got.Body["maxResults"])
@@ -262,6 +263,8 @@ func TestJira_RequireField(t *testing.T) {
 func TestJiraState(t *testing.T) {
 	def := &v1alpha1.JiraChangeRequest{}
 	done := &v1alpha1.JiraChangeRequest{ApprovedResolutions: []string{"Done"}}
+	docsExample := &v1alpha1.JiraChangeRequest{ApprovedStatuses: []string{"Approved"}, RejectedStatuses: []string{"Declined"},
+		ApprovedResolutions: []string{"Done"}, CancelledResolutions: []string{"Won't Do"}}
 	named := &v1alpha1.JiraChangeRequest{ApprovedStatuses: []string{"Approved"}, RejectedStatuses: []string{"Declined"},
 		CancelledResolutions: []string{"Duplicate"}, ApprovedStatusCategory: "indeterminate", ApprovedResolutions: []string{"Done"}}
 	for _, tc := range []struct {
@@ -271,7 +274,7 @@ func TestJiraState(t *testing.T) {
 	}{
 		{def, "To Do", "new", "", "pending"},
 		{def, "Awaiting approval", "indeterminate", "", "pending"},
-		{def, "Approved", "done", "", "approved"},                // unresolved, in the approved category
+		{def, "Approved", "done", "", "pending"},                 // unresolved: the category approves only with a listed resolution
 		{def, "Done", "done", "Done", "closed"},                  // no resolution configured: only an explicit set counts
 		{def, "Done", "done", "Duplicate", "closed"},             // never approved
 		{def, "Done", "done", "Declined", "closed"},              // never approved
@@ -288,7 +291,23 @@ func TestJiraState(t *testing.T) {
 		{named, "In Review", "indeterminate", "", "pending"}, // nor the configured category
 		{named, "Declined", "done", "", "rejected"},
 		{named, "Approved", "done", "Duplicate", "cancelled"},
-		{&v1alpha1.JiraChangeRequest{ApprovedStatusCategory: "indeterminate"}, "In Review", "indeterminate", "", "approved"},
+		{&v1alpha1.JiraChangeRequest{ApprovedStatusCategory: "indeterminate"}, "In Review", "indeterminate", "", "pending"},
+		{&v1alpha1.JiraChangeRequest{ApprovedStatusCategory: "indeterminate", ApprovedResolutions: []string{"Done"}}, "In Review", "indeterminate", "Done", "approved"},
+		// QA's probe on #2131, with the docs' example config without approvedStatuses:
+		// a done-category status with no resolution never approves.
+		{done, "Declined", "done", "", "pending"},
+		{done, "Rejected", "done", "", "pending"},
+		{done, "Won't Do", "done", "", "pending"},
+		{done, "Done", "done", "", "pending"},
+		{done, "Done", "done", "Duplicate", "closed"},
+		// The docs' example config itself (approvedStatuses set).
+		{docsExample, "Approved", "done", "", "approved"},
+		{docsExample, "Approved", "done", "Done", "approved"},
+		{docsExample, "Declined", "done", "", "rejected"},
+		{docsExample, "Rejected", "done", "", "pending"},
+		{docsExample, "Won't Do", "done", "", "pending"},
+		{docsExample, "Approved", "done", "Won't Do", "cancelled"},
+		{docsExample, "Approved", "done", "Duplicate", "closed"},
 	} {
 		assert.Equal(t, tc.want, changerequest.JiraState(tc.jc, tc.status, tc.category, tc.resolution),
 			"%s/%s/%s %+v", tc.status, tc.category, tc.resolution, tc.jc)
@@ -339,20 +358,20 @@ func TestJira_Errors(t *testing.T) {
 	assert.Len(t, srv.requests(), n)
 }
 
-// TestJira_PrePlanting (coordinator decision on #2131): Find adopts an
-// issue only when the integration account reported it: the JQL says
-// reporter = currentUser(), and an answer whose reporter is another account
-// (a site that ignored the clause, handing over an issue mallory planted
-// with the label and approved) is not adopted.
+// TestJira_PrePlanting (coordinator decision on #2131, QA): Find adopts an
+// issue only when the integration account created it: the JQL says
+// creator = currentUser(), and an answer whose creator is another account
+// is not adopted even when its reporter is kardinal's (Modify Reporter,
+// Service Management's "raise on behalf of" set any reporter).
 func TestJira_PrePlanting(t *testing.T) {
 	key := changerequest.CorrelationKey(corrID)
 	srv := newJiraServer(t, key)
-	srv.reporter = "mallory-account"
+	srv.creator = "mallory-account"
 	j := &changerequest.Jira{Client: srv.Client()}
 	_, found, err := j.Find(context.Background(), jiraRequestFor(srv.URL))
 	require.NoError(t, err)
-	assert.False(t, found, "an issue another account reported is never adopted")
-	srv.reporter = "5b10a2844c20165700ede21g"
+	assert.False(t, found, "an issue another account created is never adopted, though its reporter is kardinal (Modify Reporter)")
+	srv.creator = "5b10a2844c20165700ede21g"
 	_, found, err = j.Find(context.Background(), jiraRequestFor(srv.URL))
 	require.NoError(t, err)
 	assert.True(t, found)
