@@ -42,6 +42,21 @@ func TestPlanRollback(t *testing.T) {
 		return stampAuto(b)
 	}
 
+	// person turns rollback Bundle b into one a person's kardinal rollback
+	// made, restoring of: a human stamp, no via, created by alice.
+	person := func(b *v1alpha1.Bundle, of string) *v1alpha1.Bundle {
+		b.Spec.Provenance.RollbackOf = of
+		b.Annotations[lifecycle.AnnotationCreatedBy] = "alice"
+		b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "alice"}
+		return b
+	}
+	// mallory makes b someone else's, who may only create Bundles.
+	mallory := func(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+		b.Annotations[lifecycle.AnnotationCreatedBy] = "mallory"
+		b.Spec.Actor.Principal = "mallory"
+		return b
+	}
+
 	// twoImages gives b the app image at tag app and a sidecar at side.
 	twoImages := func(b *v1alpha1.Bundle, app, side string) *v1alpha1.Bundle {
 		b.Spec.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: app}, {Repository: "ghcr.io/x/sidecar", Tag: side}}
@@ -302,19 +317,88 @@ func TestPlanRollback(t *testing.T) {
 		},
 		// #2187 (QA-3): markers a Bundle's creator writes steer nothing.
 		{
-			name: "a release that labels itself a rollback is still rolled back automatically",
+			name: "a person's rollback that fails is not rolled back automatically",
 			objs: []client.Object{
-				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
-				func() *v1alpha1.Bundle {
-					b := rollbackOf("r1", "v2", "prod", "1", 30)
-					b.Spec.Actor, b.Annotations[lifecycle.AnnotationCreatedBy] = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}, "mallory"
-					return b
-				}(),
-				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11),
-				step("v2", "app", "prod", "Verified", 21), healthFailed(step("r1", "app", "prod", "Failed", 31)),
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), person(rollbackOf("r1", "v2", "prod", "1", 30), "v1"),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("r1", "app", "prod", "Failed", 31)),
 			},
-			req:        lifecycle.RollbackRequest{FromBundle: "r1", Automatic: true},
-			wantTarget: "v2", wantTag: "2", wantFrom: "r1",
+			req:     lifecycle.RollbackRequest{FromBundle: "r1", Automatic: true},
+			wantErr: lifecycle.ErrConflict,
+		},
+		{
+			name: "a person's rollback that ran marks what it left rolled back from",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), person(rollbackOf("r1", "v2", "prod", "1", 30), "v1"),
+				bundle("v3", "app", "3", 40),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("r1", "app", "prod", "Failed", 31)), healthFailed(step("v3", "app", "prod", "Failed", 41)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v3", Automatic: true},
+			wantTarget: "v1", wantTag: "1", wantFrom: "v3",
+		},
+		{
+			name: "a rollback by hand of a person's failing rollback does not go back to what it left",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), person(rollbackOf("r1", "v2", "prod", "1", 30), "v1"),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("r1", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "r1"},
+			wantTarget: "v0", wantTag: "0", wantFrom: "r1", // v1 is what fails in r1, v2 what r1 left
+		},
+		{
+			name: "a release labelled a rollback with new artifacts is rolled back automatically",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), mallory(person(rollbackOf("evil", "v2", "prod", "666", 30), "v1")),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("evil", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "evil", Automatic: true},
+			wantTarget: "v2", wantTag: "2", wantFrom: "evil",
+		},
+		{
+			name: "a labelled release of Verified artifacts that names the wrong rollbackOf stops for a human",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), person(rollbackOf("r1", "v2", "prod", "1", 30), "v0"),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("r1", "app", "prod", "Failed", 31)),
+			},
+			req:     lifecycle.RollbackRequest{FromBundle: "r1", Automatic: true},
+			wantErr: lifecycle.ErrConflict,
+		},
+		{
+			name: "a rollback that ran marks nothing when it does not deploy its rollbackOf's artifacts",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), mallory(person(rollbackOf("odd", "v2", "prod", "0", 25), "v1")),
+				bundle("v3", "app", "3", 30),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				step("odd", "app", "prod", "Failed", 26), healthFailed(step("v3", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v3", Automatic: true},
+			wantTarget: "v2", wantTag: "2", wantFrom: "v3",
+		},
+		{
+			name: "a rollback that ran marks nothing when its rollbackOf was never Verified there",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("u1", "app", "1", 15), bundle("v2", "app", "2", 20), mallory(person(rollbackOf("odd", "v2", "prod", "1", 25), "u1")),
+				bundle("v3", "app", "3", 30),
+				step("v1", "app", "prod", "Verified", 11), step("u1", "app", "uat", "Verified", 16), step("v2", "app", "prod", "Verified", 21),
+				step("odd", "app", "prod", "Failed", 26), healthFailed(step("v3", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v3", Automatic: true},
+			wantTarget: "v2", wantTag: "2", wantFrom: "v3",
+		},
+		{
+			name: "a rollback of Verified artifacts that never ran marks nothing rolled back from",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), mallory(person(rollbackOf("never-ran", "v2", "prod", "1", 25), "v1")),
+				bundle("v3", "app", "3", 30),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("v3", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v3", Automatic: true},
+			wantTarget: "v2", wantTag: "2", wantFrom: "v3",
 		},
 		{
 			name: "a forged rollback-from does not make the last good version skipped",

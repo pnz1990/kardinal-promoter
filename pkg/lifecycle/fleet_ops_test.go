@@ -422,3 +422,34 @@ func TestPlanRollback_FleetForgedRollbackChain(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "app-v0", plan.Target.Name)
 }
+
+// QA-3 on #2187: a person's rollback of one fleet target (a human stamp,
+// to app-v1's artifacts, away from app-v2) that ran there marks app-v2
+// rolled back from in that target, so the fleet is not sent back to app-v2.
+// The same Bundle that never ran there marks nothing.
+//
+// Covers RB-AUTO-FORGED-06.
+func TestPlanRollback_FleetPersonsRollbackCounts(t *testing.T) {
+	objsWith := func(ran bool) []client.Object {
+		rb := forge(rollbackOf(bundle("app-rb", "app", "v1", 30), "app-v1"))
+		rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-t01"}
+		rb.Annotations[lifecycle.AnnotationRollbackFrom] = "app-v2"
+		objs := []client.Object{wideFleet(2), bundle("app-v0", "app", "v0", 0), bundle("app-v1", "app", "v1", 10), bundle("app-v2", "app", "v2", 20), rb,
+			bundle("app-v3", "app", "v3", 40),
+			step("app-v1", "app", "prod-t00", "Verified", 11), step("app-v2", "app", "prod-t00", "Verified", 21),
+			step("app-v1", "app", "prod-t01", "Verified", 12), step("app-v2", "app", "prod-t01", "Verified", 22),
+			step("app-v3", "app", "prod-t00", "Verified", 41), step("app-v3", "app", "prod-t01", "Verified", 42)}
+		if ran {
+			objs = append(objs, step("app-rb", "app", "prod-t01", "Verified", 31))
+		}
+		return objs
+	}
+	_, err := lifecycle.PlanRollback(context.Background(), newClient(t, objsWith(true)...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.ErrorIs(t, err, lifecycle.ErrConflict, "prod-t01 was rolled back from app-v2")
+	assert.Contains(t, err.Error(), "prod-t01 (a rollback there went back from it)")
+	plan, err := lifecycle.PlanRollback(context.Background(), newClient(t, objsWith(false)...), lifecycle.RollbackRequest{
+		Namespace: ns, Pipeline: "app", Environment: "prod", Now: t0.Add(time.Hour)})
+	require.NoError(t, err)
+	assert.Equal(t, "app-v2", plan.Target.Name, "a rollback that never ran marks nothing")
+}

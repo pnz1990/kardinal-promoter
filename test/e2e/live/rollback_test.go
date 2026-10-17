@@ -853,6 +853,33 @@ func TestRollback_OnHealthFailureForgedRollbackIgnored(t *testing.T) {
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rb.Spec.Images)
 }
 
+// TestRollback_PersonsRollbackMarksWhatItLeft (QA-3 on #2187): a person's
+// kardinal rollback carries no controller stamp, and still, once it ran, it
+// marks the version it left rolled back from: it ran in the environment (a
+// PromotionStep there) and deploys its rollbackOf's artifacts. So rolling
+// back again does not bring the version it left back.
+//
+// Covers RB-AUTO-FORGED-07.
+func TestRollback_PersonsRollbackMarksWhatItLeft(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := rbAlarmPipeline(t, e, nil)
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	rbVerified(t, a, b1, "test")
+	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	rbVerified(t, a, b2, "test")
+
+	_, r1 := rbRollback(t, a, "test")
+	rb := getBundle(t, e, a.ns, r1)
+	require.False(t, lifecycle.IsControllerRollback(rb), "a person's rollback: %+v", rb.Spec.Actor)
+	rbVerified(t, a, r1, "test")
+
+	out := rbRefused(t, a, "--env", "test")
+	assert.Equal(t, "rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in test (deployed now: "+
+		r1+"); pick one with --to: conflict", out)
+	rbOnlyBundles(t, e, a.ns, b1, b2, r1)
+}
+
 var earlierReplicaSet = regexp.MustCompile(`ProgressDeadlineExceeded \(ReplicaSet "([a-z0-9.-]+)" has timed out progressing\.\) ` +
 	`is from an earlier rollout: ReplicaSet ([a-z0-9.-]+) has revision ([0-9]+), not the Deployment's revision ([0-9]+);`)
 
