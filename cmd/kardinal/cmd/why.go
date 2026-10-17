@@ -54,7 +54,7 @@ explain's entries. -w refreshes every 3 seconds.`,
   kardinal why my-app
   kardinal why my-app prod -o wide`,
 		Annotations: map[string]string{ReferenceAnnotation: whyReference, outputAnnotation: "true", wideAnnotation: "true"},
-		Args:        cobra.RangeArgs(1, 2),
+		Args:        pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, envFlag)
 			if err != nil {

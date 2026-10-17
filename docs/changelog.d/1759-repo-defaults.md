@@ -1,0 +1,5 @@
+---
+section: Added
+---
+
+- **Per-repository defaults for the pipeline and namespace** (#1759) — inside an application's repository you no longer have to repeat the pipeline name. Commands that take `<pipeline> [<env>]` (`why`, `explain`, `history`, `logs`, `ship`, `approve`, `promote`, `rollback`, `hold`, `unhold`, `pause`, `resume`, `override`, `verify`) pick the pipeline in this order: the argument, then `KARDINAL_PIPELINE`, then `pipeline:` in `.kardinal.yaml`. The namespace is resolved the same way: `-n`, then `KARDINAL_NAMESPACE`, then the file's `namespace:`, then the kubeconfig context's. The file used is the nearest `.kardinal.yaml` from the working directory up to the git repository's root. With a default pipeline, `kardinal why prod` means environment `prod` of that pipeline when it has one; otherwise the argument is a pipeline name. The file may set only `pipeline` and `namespace`. It never selects a context or cluster, and any other key is an error. With no pipeline from any source, the error lists all three ways to give one. See [kardinal](reference/cli/kardinal.md).

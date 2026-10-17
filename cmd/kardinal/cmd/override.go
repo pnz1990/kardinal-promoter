@@ -54,7 +54,7 @@ the Bundle waits. A single gate instance name is accepted too.`,
 
   # let one pipeline through an active freeze (kardinal freeze)
   kardinal override my-app prod --freeze --reason "hotfix for INC-4211"`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, stage)
 			if err != nil {
