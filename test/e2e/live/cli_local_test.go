@@ -339,8 +339,8 @@ func readFile(t *testing.T, path string) string {
 // and helm skips the Kustomize scaffold. A URL that is not https:// is asked
 // again; end of input without one fails. Before its git Secret exists the
 // applied Pipeline is Ready=False/GitCredentialMissing with the command that
-// creates it.
-// Covers CLI-INIT-01, PIPE-GITCRED-01.
+// creates it. An http:// URL needs --insecure-http, which warns.
+// Covers CLI-INIT-01, CLI-INIT-03, PIPE-GITCRED-01.
 func TestCLI_Init(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -454,6 +454,24 @@ func TestCLI_Init(t *testing.T) {
 	assert.Contains(t, r.Stderr, `kardinal init asks its questions on a terminal, and its input ended at "Git repository URL" (a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git))`)
 	assert.Contains(t, r.Stderr, "give the answers as flags: kardinal init --name my-app --repo https://github.com/myorg/gitops")
 	assert.Empty(t, r.Stdout)
+
+	// http:// (#1949): refused without --insecure-http, with a message
+	// naming it; with the flag, written as given, a warning on stderr, and
+	// the API server takes the Pipeline.
+	httpRepo := "http://forgejo-http.forgejo.svc:3000/o/r"
+	r = init(t.TempDir(), "", "--name", "web-http", "--repo", httpRepo, "--stdout")
+	assert.Equal(t, 1, r.Code)
+	assert.Contains(t, r.Stderr, `init: --repo "`+httpRepo+`" is http://, which sends the git token in clear text; `+
+		"use https:// or ssh, or pass --insecure-http for a git server without TLS (a local or in-cluster Forgejo or Gitea)\n")
+	assert.Empty(t, r.Stdout)
+	httpDir := t.TempDir()
+	r = init(httpDir, "", "-n", ns, "--name", "web-http", "--repo", httpRepo, "--insecure-http")
+	require.Equal(t, 0, r.Code, r.Stderr)
+	assert.Equal(t, "warning: --repo is http://: the controller sends the git token to it in clear text; "+
+		"use it only for a git server on a network you trust\n", r.Stderr)
+	assert.Contains(t, readFile(t, filepath.Join(httpDir, "pipeline.yaml")), "    url: "+httpRepo+"\n")
+	out, err = cli.Kubectl(httpDir, "apply", "--dry-run=server", "-f", "pipeline.yaml")
+	require.NoError(t, err, out)
 
 	// Flags, against the cluster (C6): no questions; the Argo CD Application
 	// <name>-<env> is found for the health check; the git Secret is created
