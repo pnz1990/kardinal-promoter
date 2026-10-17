@@ -67,8 +67,13 @@ type InitConfig struct {
 	// Environments is the ordered list of environment names.
 	Environments []string
 
-	// GitURL is the GitOps repository HTTPS URL.
+	// GitURL is the GitOps repository URL (https, ssh, or http with
+	// insecureHTTP).
 	GitURL string
+
+	// insecureHTTP (--insecure-http) lets GitURL be http://, for a git
+	// server without TLS (#1949).
+	insecureHTTP bool
 
 	// Branch is the base branch in the GitOps repository; main is left out
 	// (the default).
@@ -95,7 +100,7 @@ type InitConfig struct {
 type initOptions struct {
 	name, repo, envs, branch, strategy, prodApproval, secret string
 	stdout, scaffold, demo, createSecret, apply, force       bool
-	noDetect                                                 bool
+	noDetect, insecureHTTP                                   bool
 	file, gitopsDir                                          string
 }
 
@@ -133,7 +138,9 @@ Secret, --apply applies the Pipeline.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&o.name, "name", "", "Application and Pipeline name (default my-app)")
-	f.StringVar(&o.repo, "repo", "", "GitOps repository https:// URL; with it, init asks nothing")
+	f.StringVar(&o.repo, "repo", "", "GitOps repository https:// or ssh URL; with it, init asks nothing")
+	f.BoolVar(&o.insecureHTTP, "insecure-http", false,
+		"Allow an http:// repository URL, for a git server without TLS; the git token is then sent in clear text")
 	f.StringVar(&o.envs, "envs", "", "Environments in promotion order, comma-separated (default test,uat,prod)")
 	f.StringVar(&o.branch, "branch", "", "Base branch of the repository (default main)")
 	f.StringVar(&o.strategy, "strategy", "", "Update strategy: kustomize (default) or helm")
@@ -269,7 +276,7 @@ func runInit(cmd *cobra.Command, o initOptions) error {
 // answer per line when it is not a terminal).
 func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 	cfg := &InitConfig{AppName: o.name, Environments: splitTrimmed(o.envs, ","), GitURL: o.repo, Branch: o.branch,
-		UpdateStrategy: o.strategy, ProdApproval: o.prodApproval, Secret: o.secret}
+		UpdateStrategy: o.strategy, ProdApproval: o.prodApproval, Secret: o.secret, insecureHTTP: o.insecureHTTP}
 	if globalNamespace != "" {
 		cfg.Namespace = globalNamespace
 		cfg.NamespaceGiven = true
@@ -299,7 +306,9 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 		return nil, err
 	}
 	switch {
-	case !validRepoURL(cfg.GitURL):
+	case isHTTPRepo(cfg.GitURL) && !cfg.insecureHTTP:
+		return nil, fmt.Errorf("init: --repo %w", errHTTPRepo(cfg.GitURL))
+	case !validRepoURL(cfg.GitURL, cfg.insecureHTTP):
 		return nil, fmt.Errorf("init: --repo needs a git repository URL, https://host/owner/repo or ssh (ssh://git@host/owner/repo, git@host:owner/repo.git), "+
 			"with no spaces, query or fragment; got %q", cfg.GitURL)
 	case cfg.Branch != "" && !validBranch(cfg.Branch):
@@ -319,7 +328,27 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 	case cfg.ProdApproval != "" && cfg.ProdApproval != "pr-review" && cfg.ProdApproval != "auto":
 		return nil, fmt.Errorf("init: --prod-approval must be pr-review or auto, got %q", cfg.ProdApproval)
 	}
+	if isHTTPRepo(cfg.GitURL) {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --repo is http://: the controller sends the git token to it in clear text; "+
+			"use it only for a git server on a network you trust")
+	}
 	return cfg, nil
+}
+
+// isHTTPRepo reports whether v is a plain http:// URL.
+func isHTTPRepo(v string) bool {
+	u, err := url.Parse(v)
+	return err == nil && strings.EqualFold(u.Scheme, "http")
+}
+
+// errHTTPRepo is the refusal of the http:// repository URL v without
+// --insecure-http: the controller authenticates to the git server with the
+// token over the URL's scheme, so http would send it in clear text. As with
+// an ScmProvider's apiURL (scm.providersAllowInsecureHTTP), plain http is
+// an explicit choice, never inferred from the host.
+func errHTTPRepo(v string) error {
+	return fmt.Errorf("%q is http://, which sends the git token in clear text; use https:// or ssh, "+
+		"or pass --insecure-http for a git server without TLS (a local or in-cluster Forgejo or Gitea)", v)
 }
 
 // checkInitNames checks the names init writes into the Pipeline: the
@@ -378,9 +407,10 @@ func sshKeyscanArgs(v string) string {
 var scpLikeRepo = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/-]+$`)
 
 // validRepoURL reports whether v is a git remote init may write: an https or
-// ssh URL with a host and a path, no query, fragment or password, or an
-// scp-like ssh remote; never with whitespace or control characters.
-func validRepoURL(v string) bool {
+// ssh URL (or http, with allowHTTP) with a host and a path, no query,
+// fragment or password, or an scp-like ssh remote; never with whitespace or
+// control characters.
+func validRepoURL(v string, allowHTTP bool) bool {
 	if strings.IndexFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 		return false
 	}
@@ -388,7 +418,7 @@ func validRepoURL(v string) bool {
 		return true
 	}
 	u, err := url.Parse(v)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || u.Host == "" || u.Opaque != "" {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh" && (u.Scheme != "http" || !allowHTTP)) || u.Host == "" || u.Opaque != "" {
 		return false
 	}
 	if _, hasPassword := u.User.Password(); hasPassword || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(v, "#?") {
@@ -692,7 +722,10 @@ func runInitWizard(in io.Reader, out io.Writer, cfg *InitConfig, changed func(st
 		cfg.Environments = splitTrimmed(envs, ",")
 	}
 	if cfg.GitURL, err = prompt("Git repository URL", "", func(v string) error {
-		if !validRepoURL(v) {
+		if isHTTPRepo(v) && !cfg.insecureHTTP {
+			return errHTTPRepo(v)
+		}
+		if !validRepoURL(v, cfg.insecureHTTP) {
 			return fmt.Errorf("a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)")
 		}
 		return nil
@@ -843,6 +876,14 @@ finds one (--no-detect skips this). The Pipeline is checked as kardinal
 validate checks it before anything is written. Running init again with the
 same answers changes nothing ("unchanged") and succeeds; a file with
 another Pipeline is not overwritten without --force.
+
+An http:// --repo is refused unless --insecure-http is given: the controller
+authenticates to the repository with the git token, and over http the token
+crosses the network in clear text. --insecure-http is for a git server
+without TLS, such as a local or in-cluster Forgejo or Gitea; init then warns
+on stderr. The host is not considered (localhost in a Pipeline is the
+controller's own loopback, and a private name or address is no guarantee),
+and the other rules still apply.
 
 --create-secret creates the git Secret (key token) from $GITHUB_TOKEN, else
 from gh auth token, labelled kardinal.io/referenceable=true so the Pipeline

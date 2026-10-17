@@ -468,18 +468,14 @@ func walkFirstPipeline(t *testing.T, w *walkthrough) {
 	w.must(fp, "kind: ApplicationSet", fork, w.repo.CloneURL)
 	w.must(fp, "kubectl wait --for=create -n argocd")
 	w.must(fp, "--from-literal=token=<your-github-pat>", "<your-github-pat>", `"$GITHUB_TOKEN"`)
-	// kardinal init takes https and ssh URLs only, and the suite's Forgejo
-	// serves http: init gets the fork's https URL, the walkthrough checks
-	// init wrote it, then switches the scheme to the one Forgejo serves.
-	httpsFork := "https://" + strings.TrimPrefix(w.repo.CloneURL, "http://")
+	// The suite's Forgejo serves http, which init takes with
+	// --insecure-http (#1949).
 	require.True(t, strings.HasPrefix(w.repo.CloneURL, "http://"), w.repo.CloneURL)
-	out := w.must(fp, "kardinal init --name kardinal-test-app", fork, httpsFork)
+	out := w.must(fp, "kardinal init --name kardinal-test-app", fork, w.repo.CloneURL+" --insecure-http")
 	w.commentSample(fp, "kardinal init --name kardinal-test-app", out)
 	var initP v1alpha1.Pipeline
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: "default", Name: app}, &initP))
-	assert.Equal(t, httpsFork, initP.Spec.Git.URL, "init writes the fork it was given")
-	e.MustShell(t, "kubectl -n default patch pipeline kardinal-test-app --type merge -p "+
-		strconv.Quote(`{"spec":{"git":{"url":"`+w.repo.CloneURL+`"}}}`))
+	assert.Equal(t, w.repo.CloneURL, initP.Spec.Git.URL, "init writes the fork it was given")
 	out = w.must(fp, "kardinal-test-app   -         -")
 	w.commentSample(fp, "kardinal-test-app   -         -", out, app)
 
