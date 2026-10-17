@@ -68,7 +68,7 @@ jobs:
 
       - name: Create Bundle
         id: bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.0
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.1
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -86,7 +86,7 @@ jobs:
 
 ```yaml
       - name: Create Bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.0
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.1
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -333,7 +333,7 @@ kubectl create secret generic kardinal-ci-token \
   --namespace=kardinal-system \
   --from-literal=token=$(openssl rand -hex 32)
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   -n kardinal-system --reset-then-reuse-values \
   --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```
