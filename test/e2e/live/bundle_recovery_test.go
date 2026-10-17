@@ -188,7 +188,10 @@ func TestGraph_GateFixRetriesFailedBundle(t *testing.T) {
 	e.WaitStepState(t, ns, pipelineName, denied, "prod", "Verified", promoteTimeout)
 	got := e.WaitBundlePhase(t, ns, denied, "Verified", time.Minute)
 	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
-	assert.Empty(t, got.Status.PolicyGatesHash)
+	// The hash now records the gates the Graph was built with (#1360), not
+	// the ones its build failed with.
+	assert.NotEmpty(t, got.Status.PolicyGatesHash)
+	assert.NotEqual(t, b.Status.PolicyGatesHash, got.Status.PolicyGatesHash)
 	steps, err := e.Steps(ctx, ns, pipelineName, denied)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"prod", "test"}, framework.StepEnvs(steps), "the gated environment is skipped")
