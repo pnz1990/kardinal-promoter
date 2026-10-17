@@ -173,8 +173,12 @@ spec:
 | Call | Request |
 |---|---|
 | Open | `POST /rest/api/<v>/issue` with the template's fields, `project`, `issuetype` and the correlation label |
-| Find (before every create) | `POST /rest/api/3/search/jql` (v2: `/rest/api/2/search`), JQL `project = "<project>" AND labels = "<key>" ORDER BY created ASC` |
+| Find (before every create) | `POST /rest/api/3/search/jql` (v2: `/rest/api/2/search`), JQL `project = "<project>" AND labels = "<key>" AND reporter = currentUser() ORDER BY created ASC`, then `GET /rest/api/<v>/myself` to check the reporter |
 | Read | `GET /rest/api/<v>/issue/<id>`, or by key for a linked issue |
+
+**Only kardinal's own issues are adopted.** Find returns an issue only when the integration account
+reported it (`reporter = currentUser()`, checked again against `/myself`), so someone who may create
+issues cannot plant one with the promotion's label and move it to an approved status themselves.
 
 The template cannot set `project`, `issuetype` or `labels`. The correlation label is `kardinal-` and
 32 hex characters of the correlation id's SHA-256. On API version 3 the `description` is sent as an

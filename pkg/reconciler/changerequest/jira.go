@@ -176,11 +176,14 @@ func (j *Jira) Find(ctx context.Context, req Request) (Reading, bool, error) {
 	if jiraVersion(jc) == "3" {
 		path = api + "/search/jql"
 	}
+	// reporter = currentUser(): an issue someone else created with the
+	// label (planted, then moved to approved by its planter) is not
+	// adopted.
 	body := map[string]interface{}{
-		"jql": fmt.Sprintf("project = %q AND labels = %q ORDER BY created ASC", jc.Project,
+		"jql": fmt.Sprintf("project = %q AND labels = %q AND reporter = currentUser() ORDER BY created ASC", jc.Project,
 			CorrelationKey(req.CorrelationID)),
 		"maxResults": 1,
-		"fields":     jiraFields(req.Spec),
+		"fields":     append(jiraFields(req.Spec), "reporter"),
 	}
 	var out struct {
 		Issues []jiraIssue `json:"issues"`
@@ -191,8 +194,39 @@ func (j *Jira) Find(ctx context.Context, req Request) (Reading, bool, error) {
 	if len(out.Issues) == 0 {
 		return Reading{}, false, nil
 	}
+	// The answer is checked too, against the account the credential is:
+	// a site that ignored the clause must not hand over a planted issue.
+	var me jiraUser
+	if err := call(ctx, j.client(), auth, http.MethodGet, base, api+"/myself", nil, nil, &me, "jira: read the current user"); err != nil {
+		return Reading{}, false, err
+	}
+	var reporter jiraUser
+	_ = json.Unmarshal(out.Issues[0].Fields["reporter"], &reporter)
+	if !me.same(reporter) {
+		return Reading{}, false, nil
+	}
 	r, err := j.reading(base, jc, req, out.Issues[0])
 	return r, err == nil, err
+}
+
+// jiraUser is a Jira user: accountId on Cloud, name or key on Data Center.
+type jiraUser struct {
+	AccountID string `json:"accountId"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+}
+
+// same reports whether u and o are one known user.
+func (u jiraUser) same(o jiraUser) bool {
+	switch {
+	case u.AccountID != "":
+		return u.AccountID == o.AccountID
+	case u.Key != "":
+		return u.Key == o.Key
+	case u.Name != "":
+		return u.Name == o.Name
+	}
+	return false
 }
 
 // Get reads the issue by id when known, else by its key.

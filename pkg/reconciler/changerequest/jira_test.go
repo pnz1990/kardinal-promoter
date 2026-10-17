@@ -33,9 +33,11 @@ const jiraToken = "ops@example.com:atl-token-123"
 
 type jiraServer struct {
 	*httptest.Server
-	mu     sync.Mutex
-	reqs   []jiraRequest
-	answer func(w http.ResponseWriter, r *http.Request) bool
+	// reporter is the accountId of the search fixture's reporter.
+	reporter string
+	mu       sync.Mutex
+	reqs     []jiraRequest
+	answer   func(w http.ResponseWriter, r *http.Request) bool
 }
 
 type jiraRequest struct {
@@ -45,11 +47,11 @@ type jiraRequest struct {
 
 func newJiraServer(t *testing.T, corr string) *jiraServer {
 	t.Helper()
-	s := &jiraServer{}
+	s := &jiraServer{reporter: "5b10a2844c20165700ede21g"}
 	fix := func(name string) []byte {
 		raw, err := os.ReadFile("testdata/jira/" + name)
 		require.NoError(t, err)
-		return []byte(strings.NewReplacer("{{CORRELATION}}", corr, "{{BASE}}", s.URL).Replace(string(raw)))
+		return []byte(strings.NewReplacer("{{CORRELATION}}", corr, "{{BASE}}", s.URL, "{{REPORTER}}", s.reporter).Replace(string(raw)))
 	}
 	s.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := jiraRequest{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Auth: r.Header.Get("Authorization")}
@@ -73,6 +75,8 @@ func newJiraServer(t *testing.T, corr string) *jiraServer {
 			} else {
 				_, _ = w.Write(fix("empty.json"))
 			}
+		case r.URL.Path == "/rest/api/3/myself" || r.URL.Path == "/rest/api/2/myself":
+			_, _ = w.Write(fix("myself.json"))
 		case r.URL.Path == "/rest/api/3/issue/10042" || r.URL.Path == "/rest/api/3/issue/CHG-42" || r.URL.Path == "/rest/api/2/issue/CHG-42":
 			_, _ = w.Write(fix("issue.json"))
 		default:
@@ -146,7 +150,10 @@ func TestJira_CreateFindGet(t *testing.T) {
 	assert.Equal(t, corrID, found.CorrelationID)
 	got = srv.requests()[1]
 	assert.Equal(t, "/rest/api/3/search/jql", got.Path)
-	assert.Equal(t, `project = "CHG" AND labels = "`+key+`" ORDER BY created ASC`, got.Body["jql"], "searched only in the project")
+	assert.Equal(t, `project = "CHG" AND labels = "`+key+`" AND reporter = currentUser() ORDER BY created ASC`, got.Body["jql"],
+		"searched only in the project, only issues the integration account reported")
+	assert.Equal(t, "/rest/api/3/myself", srv.requests()[2].Path, "the answer is checked against the current user")
+	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), found.Created.UTC(), "Find reads the creation time")
 	assert.Equal(t, float64(1), got.Body["maxResults"])
 
 	other := jiraRequestFor(srv.URL)
@@ -157,8 +164,8 @@ func TestJira_CreateFindGet(t *testing.T) {
 
 	byID, err := j.Get(ctx, req, r.Ticket)
 	require.NoError(t, err)
-	assert.Equal(t, "/rest/api/3/issue/10042", srv.requests()[3].Path)
-	assert.Equal(t, "fields=status%2Cresolution%2Clabels%2Cproject%2Ccreated", srv.requests()[3].RawQuery)
+	assert.Equal(t, "/rest/api/3/issue/10042", srv.requests()[4].Path)
+	assert.Equal(t, "fields=status%2Cresolution%2Clabels%2Cproject%2Ccreated", srv.requests()[4].RawQuery)
 	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), byID.Created.UTC(), "created is read")
 	assert.Equal(t, "pending", byID.State, "Awaiting approval is in progress")
 	assert.Equal(t, "Awaiting approval", byID.ProviderState)
@@ -167,7 +174,7 @@ func TestJira_CreateFindGet(t *testing.T) {
 	byKey, err := j.Get(ctx, req, v1alpha1.ChangeRequestTicket{Key: "CHG-42"})
 	require.NoError(t, err)
 	assert.Equal(t, "CHG-42", byKey.Ticket.Key)
-	assert.Equal(t, "/rest/api/3/issue/CHG-42", srv.requests()[4].Path)
+	assert.Equal(t, "/rest/api/3/issue/CHG-42", srv.requests()[5].Path)
 
 	_, err = j.Get(ctx, req, v1alpha1.ChangeRequestTicket{Key: "CHG-404"})
 	assert.ErrorIs(t, err, changerequest.ErrNotFound)
@@ -330,4 +337,23 @@ func TestJira_Errors(t *testing.T) {
 		assert.ErrorContains(t, err, "baseURL must be https://", u)
 	}
 	assert.Len(t, srv.requests(), n)
+}
+
+// TestJira_PrePlanting (coordinator decision on #2131): Find adopts an
+// issue only when the integration account reported it: the JQL says
+// reporter = currentUser(), and an answer whose reporter is another account
+// (a site that ignored the clause, handing over an issue mallory planted
+// with the label and approved) is not adopted.
+func TestJira_PrePlanting(t *testing.T) {
+	key := changerequest.CorrelationKey(corrID)
+	srv := newJiraServer(t, key)
+	srv.reporter = "mallory-account"
+	j := &changerequest.Jira{Client: srv.Client()}
+	_, found, err := j.Find(context.Background(), jiraRequestFor(srv.URL))
+	require.NoError(t, err)
+	assert.False(t, found, "an issue another account reported is never adopted")
+	srv.reporter = "5b10a2844c20165700ede21g"
+	_, found, err = j.Find(context.Background(), jiraRequestFor(srv.URL))
+	require.NoError(t, err)
+	assert.True(t, found)
 }

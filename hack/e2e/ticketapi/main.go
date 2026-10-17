@@ -114,15 +114,18 @@ type failure struct {
 
 // issue is one Jira issue.
 type issue struct {
-	ID         string                 `json:"id"`
-	Key        string                 `json:"key"`
-	Project    string                 `json:"project"`
-	Status     string                 `json:"status"`
-	Category   string                 `json:"category"`
-	Resolution string                 `json:"resolution"`
-	Labels     []string               `json:"labels"`
-	Fields     map[string]interface{} `json:"fields"`
-	Created    time.Time              `json:"created"`
+	ID         string   `json:"id"`
+	Key        string   `json:"key"`
+	Project    string   `json:"project"`
+	Status     string   `json:"status"`
+	Category   string   `json:"category"`
+	Resolution string   `json:"resolution"`
+	Labels     []string `json:"labels"`
+	// Reporter is who created it: the authenticated user for a create,
+	// someone.else unless given for an issue the control port adds.
+	Reporter string                 `json:"reporter"`
+	Fields   map[string]interface{} `json:"fields"`
+	Created  time.Time              `json:"created"`
 }
 
 type server struct {
@@ -409,7 +412,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, body []byte, rec 
 		return http.StatusOK
 	}
 	if strings.HasPrefix(r.URL.Path, "/rest/api/") {
-		return s.jira(w, r, body)
+		return s.jira(w, r, body, user)
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"status": "failure"})
 	return http.StatusNotFound
@@ -426,6 +429,9 @@ func (s *server) addIssue(is *issue) *issue {
 	if is.Fields == nil {
 		is.Fields = map[string]interface{}{}
 	}
+	if is.Reporter == "" {
+		is.Reporter = "someone.else"
+	}
 	is.Created = time.Now().UTC()
 	s.issues = append(s.issues, is)
 	return is
@@ -441,7 +447,7 @@ func (s *server) issueByRef(ref string) *issue {
 }
 
 // jira answers the Jira REST API; the caller holds s.mu.
-func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte) int {
+func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte, user string) int {
 	rest := strings.TrimPrefix(r.URL.Path, "/rest/api/")
 	version, rest, _ := strings.Cut(rest, "/")
 	if version != "2" && version != "3" {
@@ -468,7 +474,7 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte) int {
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"errors": map[string]string{"project": "project is required"}})
 			return http.StatusBadRequest
 		}
-		is := &issue{Project: key, Fields: map[string]interface{}{}}
+		is := &issue{Project: key, Reporter: user, Fields: map[string]interface{}{}}
 		for k, v := range in.Fields {
 			switch k {
 			case "project":
@@ -501,17 +507,22 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte) int {
 			return v
 		}
 		label, project := quoted("labels"), quoted("project")
+		mine := strings.Contains(in.JQL, "reporter = currentUser()")
 		list := append([]*issue(nil), s.issues...)
 		sort.SliceStable(list, func(i, j int) bool { return list[i].Created.Before(list[j].Created) })
 		out := []map[string]interface{}{}
 		for _, is := range list {
 			for _, l := range is.Labels {
-				if l == label && (project == "" || is.Project == project) && (in.MaxResults == 0 || len(out) < in.MaxResults) {
+				if l == label && (project == "" || is.Project == project) && (!mine || is.Reporter == user) &&
+					(in.MaxResults == 0 || len(out) < in.MaxResults) {
 					out = append(out, jiraJSON(is, r.Host, version))
 				}
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"issues": out})
+		return http.StatusOK
+	case r.Method == http.MethodGet && rest == "myself":
+		writeJSON(w, http.StatusOK, map[string]string{"accountId": user, "name": user})
 		return http.StatusOK
 	case r.Method == http.MethodGet && strings.HasPrefix(rest, "issue/"):
 		is := s.issueByRef(strings.TrimPrefix(rest, "issue/"))
@@ -527,10 +538,11 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte) int {
 // jiraJSON is is as the REST API answers it.
 func jiraJSON(is *issue, host, version string) map[string]interface{} {
 	fields := map[string]interface{}{
-		"status":  map[string]interface{}{"name": is.Status, "statusCategory": map[string]string{"key": is.Category}},
-		"labels":  is.Labels,
-		"project": map[string]string{"key": is.Project},
-		"created": is.Created.UTC().Format("2006-01-02T15:04:05.000-0700"),
+		"status":   map[string]interface{}{"name": is.Status, "statusCategory": map[string]string{"key": is.Category}},
+		"labels":   is.Labels,
+		"project":  map[string]string{"key": is.Project},
+		"reporter": map[string]string{"accountId": is.Reporter, "name": is.Reporter},
+		"created":  is.Created.UTC().Format("2006-01-02T15:04:05.000-0700"),
 	}
 	if is.Resolution != "" {
 		fields["resolution"] = map[string]string{"name": is.Resolution}
