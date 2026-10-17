@@ -200,13 +200,17 @@ type BundleProvenance struct {
 	CommitSHA string `json:"commitSHA,omitempty"`
 
 	// CIRunURL is the URL of the CI run that built this Bundle. It must not
-	// carry credentials, user info or a credential query or fragment
-	// parameter (token, access_token, sig, ...): the PR body publishes it,
-	// and a promotion receipt signs it (its Rekor sink publishes it for
-	// good). The Bundle API also refuses a percent-encoded parameter name.
+	// carry credentials: no user info, and no credential query or fragment
+	// parameter (a name ending in token, secret, signature, password,
+	// credential, apikey, ..., or sig, key, auth, jwt, code; any case, with
+	// or without - and _), and no percent-encoded parameter name. The PR
+	// body publishes it, and a promotion receipt signs it (its Rekor sink
+	// publishes it for good). The rules are pkg/urlsecret's CRDRules.
 	// +kubebuilder:validation:MaxLength=2048
-	// +kubebuilder:validation:XValidation:rule="!self.matches('^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@')",message="provenance.ciRunURL must not contain user info"
-	// +kubebuilder:validation:XValidation:rule="!self.matches('(?i)[?&;#](access_token|api_key|apikey|client_secret|key|password|private_token|refresh_token|sig|token|x-amz-credential|x-amz-security-token|x-amz-signature)=')",message="provenance.ciRunURL must not contain a credential parameter (access_token, api_key, apikey, client_secret, key, password, private_token, refresh_token, sig, token, x-amz-credential, x-amz-security-token, x-amz-signature)"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[A-Za-z][A-Za-z0-9+.-]*://[^/]*@')",message="provenance.ciRunURL must not contain user info"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('(?i)[?&;#][^=&;#]*(t[-_]*o[-_]*k[-_]*e[-_]*n|s[-_]*e[-_]*c[-_]*r[-_]*e[-_]*t|s[-_]*i[-_]*g[-_]*n[-_]*a[-_]*t[-_]*u[-_]*r[-_]*e|p[-_]*a[-_]*s[-_]*s[-_]*w[-_]*o[-_]*r[-_]*d|p[-_]*a[-_]*s[-_]*s[-_]*w[-_]*d|c[-_]*r[-_]*e[-_]*d[-_]*e[-_]*n[-_]*t[-_]*i[-_]*a[-_]*l|c[-_]*r[-_]*e[-_]*d[-_]*e[-_]*n[-_]*t[-_]*i[-_]*a[-_]*l[-_]*s|a[-_]*p[-_]*i[-_]*k[-_]*e[-_]*y|a[-_]*c[-_]*c[-_]*e[-_]*s[-_]*s[-_]*k[-_]*e[-_]*y|s[-_]*e[-_]*c[-_]*r[-_]*e[-_]*t[-_]*k[-_]*e[-_]*y|p[-_]*r[-_]*i[-_]*v[-_]*a[-_]*t[-_]*e[-_]*k[-_]*e[-_]*y|a[-_]*c[-_]*c[-_]*e[-_]*s[-_]*s[-_]*k[-_]*e[-_]*y[-_]*i[-_]*d)[-_]*=')",message="provenance.ciRunURL must not contain a credential parameter (a name ending in token, secret, signature, password, credential, apikey, ...)"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('(?i)[?&;#][-_]*(s[-_]*i[-_]*g|k[-_]*e[-_]*y|a[-_]*u[-_]*t[-_]*h|j[-_]*w[-_]*t|c[-_]*o[-_]*d[-_]*e|p[-_]*a[-_]*s[-_]*s|p[-_]*w[-_]*d)[-_]*=')",message="provenance.ciRunURL must not contain a credential parameter (sig, key, auth, jwt, code, pass, pwd)"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('[?&;#][^=&;#]*%[0-9A-Fa-f]{2}[^=&;#]*=')",message="provenance.ciRunURL must not percent-encode a parameter name"
 	// +optional
 	CIRunURL string `json:"ciRunURL,omitempty"`
 

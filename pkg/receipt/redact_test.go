@@ -5,6 +5,9 @@ package receipt
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,3 +118,32 @@ func TestRedactValue(t *testing.T) {
 	assert.Equal(t, []string{"x.m[a]"}, mp)
 	assert.Equal(t, "https://x.example/?token=REDACTED", w.M["a"])
 }
+
+// TestBuild_RedactsVectors (#2158): every URL of pkg/urlsecret's table,
+// as a Bundle's ciRunURL (a Bundle created before the rules, or with
+// kubectl), is signed redacted as the table says, and nothing in the
+// statement is left that redaction would change.
+func TestBuild_RedactsVectors(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "urlsecret", "testdata", "vectors.json"))
+	require.NoError(t, err)
+	var vectors []struct {
+		URL, Redacted, Why string
+	}
+	require.NoError(t, json.Unmarshal(raw, &vectors))
+	for _, v := range vectors {
+		in := input("image")
+		in.Bundle.Spec.Provenance.CIRunURL = v.URL
+		b, _, err := Build(in)
+		require.NoError(t, err, v.Why)
+		assert.NotContains(t, string(b), "S3CRET", v.Why)
+		st, err := Parse(b)
+		require.NoError(t, err)
+		assert.Equal(t, v.Redacted, st.Predicate.Kardinal.Version.Provenance.CIRunURL, v.Why)
+		assert.Equal(t, v.URL != v.Redacted, len(st.Predicate.Kardinal.Redacted) > 0, v.Why)
+		assert.Equal(t, string(b), redactAll(string(b)), "%s: stable", v.Why)
+	}
+}
+
+// redactAll is scm.RedactText, as the evidence pack applies it to a whole
+// statement.
+func redactAll(s string) string { return scm.RedactText(s) }

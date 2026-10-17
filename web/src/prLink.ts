@@ -24,26 +24,38 @@ const HTTP_AUTHORITY = /^https?:\/\/([^/?#]*)/i
 // Whitespace (including a no-break space) or a control character.
 const SPACE_OR_CONTROL = /[\s\p{Cc}]/u
 
-// A credential query or fragment parameter (pkg/urlsecret's names, any
-// case, the name possibly percent-encoded).
-const CREDENTIAL_PARAM = /[?&;#]([^=&;#\s"']+)=/g
-const CREDENTIAL_NAMES = new Set([
-  'access_token', 'api_key', 'apikey', 'client_secret', 'key', 'password', 'private_token',
-  'refresh_token', 'sig', 'token', 'x-amz-credential', 'x-amz-security-token', 'x-amz-signature',
-])
+// A credential query or fragment parameter, as pkg/urlsecret decides: the
+// name, percent-decoded, lower-cased and without "-" and "_", ends in one
+// of CREDENTIAL_SUFFIXES or is one of CREDENTIAL_EXACT (a Go test pins the
+// lists to urlsecret.Suffixes and urlsecret.Exact).
+const CREDENTIAL_PARAM = /[?&;#]([^=&;#\s]+)=/g
+const CREDENTIAL_SUFFIXES = [
+  'token', 'secret', 'signature', 'password', 'passwd', 'credential', 'credentials',
+  'apikey', 'accesskey', 'secretkey', 'privatekey', 'accesskeyid',
+]
+const CREDENTIAL_EXACT = ['sig', 'key', 'auth', 'jwt', 'code', 'pass', 'pwd']
+
+function isCredentialName(raw: string): boolean {
+  let name = raw
+  try {
+    name = decodeURIComponent(raw.replace(/\+/g, ' '))
+  } catch {
+    // not percent-encoded as a whole: compare it as written
+  }
+  name = name.toLowerCase().replace(/[-_]/g, '')
+  return CREDENTIAL_EXACT.includes(name) || CREDENTIAL_SUFFIXES.some((s) => name.endsWith(s))
+}
 
 function hasCredentialParam(url: string): boolean {
   for (const m of url.matchAll(CREDENTIAL_PARAM)) {
-    let name = m[1]
-    try {
-      name = decodeURIComponent(name.replace(/\+/g, ' '))
-    } catch {
-      // not percent-encoded as a whole: compare it as written
-    }
-    if (CREDENTIAL_NAMES.has(name.toLowerCase())) return true
+    if (isCredentialName(m[1])) return true
   }
   return false
 }
+
+// The authority of an http(s) URL up to the first "/": a raw "#", "?" or
+// space in a password is still the authority, so its "@" is seen.
+const AUTHORITY_TO_PATH = /^https?:\/\/([^/]*)/i
 
 /**
  * True when a Bundle's provenance.ciRunURL may be linked. Mirrors
@@ -56,7 +68,7 @@ function hasCredentialParam(url: string): boolean {
 export function isCIRunURL(url: string | undefined): boolean {
   if (!isHttpURL(url) || SPACE_OR_CONTROL.test(url) || hasCredentialParam(url)) return false
   const authority = HTTP_AUTHORITY.exec(url)?.[1]
-  return !!authority && !authority.includes('@')
+  return !!authority && !AUTHORITY_TO_PATH.exec(url)?.[1]?.includes('@')
 }
 
 // GitHub /pull/N, Forgejo and Gitea /pulls/N, GitLab /-/merge_requests/N,

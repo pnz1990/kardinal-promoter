@@ -11,11 +11,12 @@ import (
 	"strings"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/urlsecret"
 )
 
-// redactRecord is rec with scm.RedactText applied to every string in it
-// (the userinfo of a URL, and the value of a credential parameter: token,
-// access_token, sig, ...), and the JSON paths of the strings it changed. A
+// redactRecord is rec with redact applied to every string in it (the user
+// info of a URL, the value of a credential parameter, a token known by its
+// shape), and the JSON paths of the strings it changed. A
 // receipt is signed, and its Rekor sink publishes it for good: a token a
 // Bundle carries (in provenance.ciRunURL, which the Bundle API refuses but
 // a Bundle created with kubectl may hold) must never reach it, and a
@@ -36,8 +37,13 @@ func redactRecord(rec Record) (Record, []string, error) {
 	return out, paths, nil
 }
 
-// redactValue applies scm.RedactText to every settable string under v,
-// recording the path of each it changed.
+// redact is s without credentials: scm.RedactText (a text's URLs) and
+// urlsecret.RedactString (one string's), so what it returns is also
+// unchanged by scm.RedactText.
+func redact(s string) string { return urlsecret.RedactString(scm.RedactText(s)) }
+
+// redactValue applies redact to every settable string under v, recording
+// the path of each it changed.
 func redactValue(v reflect.Value, path string, paths *[]string) {
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Interface:
@@ -76,14 +82,14 @@ func redactValue(v reflect.Value, path string, paths *[]string) {
 			return
 		}
 		for _, k := range v.MapKeys() {
-			if s := v.MapIndex(k).String(); scm.RedactText(s) != s {
-				v.SetMapIndex(k, reflect.ValueOf(scm.RedactText(s)).Convert(v.Type().Elem()))
+			if s := v.MapIndex(k).String(); redact(s) != s {
+				v.SetMapIndex(k, reflect.ValueOf(redact(s)).Convert(v.Type().Elem()))
 				*paths = append(*paths, fmt.Sprintf("%s[%v]", path, k))
 			}
 		}
 	case reflect.String:
-		if s := v.String(); v.CanSet() && scm.RedactText(s) != s {
-			v.SetString(scm.RedactText(s))
+		if s := v.String(); v.CanSet() && redact(s) != s {
+			v.SetString(redact(s))
 			*paths = append(*paths, path)
 		}
 	}

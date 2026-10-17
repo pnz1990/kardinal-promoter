@@ -4,6 +4,9 @@
 package graph_test
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -704,5 +707,26 @@ func TestBuild_ChartBundleNeedsHelm(t *testing.T) {
 			assert.ErrorIs(t, err, graph.ErrInvalid)
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
+	}
+}
+
+// TestValidateCIRunURL_Vectors (#2158): the Bundle API refuses exactly the
+// URLs of pkg/urlsecret's table that every layer refuses.
+func TestValidateCIRunURL_Vectors(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "urlsecret", "testdata", "vectors.json"))
+	require.NoError(t, err)
+	var vectors []struct {
+		URL     string `json:"url"`
+		Refused bool   `json:"refused"`
+		Why     string `json:"why"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &vectors))
+	require.NotEmpty(t, vectors)
+	for _, v := range vectors {
+		err := graph.ValidateCIRunURL(v.URL)
+		assert.Equal(t, v.Refused, err != nil, "%s: %s (%v)", v.Why, v.URL, err)
+		if err != nil {
+			assert.NotContains(t, err.Error(), "S3CRET", "the error does not echo the URL")
+		}
 	}
 }

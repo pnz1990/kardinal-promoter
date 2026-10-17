@@ -24,6 +24,7 @@
 package receipt
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,7 +35,6 @@ import (
 	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // The statement's fixed values.
@@ -386,7 +386,7 @@ func statement(in Input) (Statement, error) {
 	rec = redacted
 	subj := subjects(in)
 	for i := range subj {
-		if r := scm.RedactText(subj[i].Name); r != subj[i].Name {
+		if r := redact(subj[i].Name); r != subj[i].Name {
 			subj[i].Name = r
 			paths = append(paths, fmt.Sprintf("subject[%d].name", i))
 		}
@@ -652,7 +652,7 @@ func fit(st *Statement) ([]byte, error) {
 		},
 	}
 	for i := 0; ; i++ {
-		b, err := json.Marshal(st)
+		b, err := marshalStatement(st)
 		if err != nil {
 			return nil, fmt.Errorf("marshal receipt statement: %w", err)
 		}
@@ -691,4 +691,18 @@ func Parse(b []byte) (*Statement, error) {
 		return nil, fmt.Errorf("not a kardinal receipt: _type %q, predicateType %q", st.Type, st.PredicateType)
 	}
 	return &st, nil
+}
+
+// marshalStatement is st as JSON without HTML escaping: an "&" in a URL
+// stays "&", not "\u0026", so a redaction that reads the statement as
+// text (scm.RedactText, as the evidence pack applies it) sees each
+// parameter on its own and changes nothing a receipt already redacted.
+func marshalStatement(st *Statement) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(st); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }

@@ -7,8 +7,10 @@ package helm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -43,9 +45,10 @@ func withoutCIRunURLRules(t *testing.T) *apiextensionsv1.CustomResourceDefinitio
 }
 
 // TestBundleCIRunURLCredentialsOnAPIServer (#2158): a Bundle written to the
-// API server directly (kubectl apply, not the Bundle API) is refused when
-// provenance.ciRunURL holds user info or a credential parameter in its
-// query or fragment, whatever its case; a URL without one is stored. A
+// API server directly (kubectl apply, not the Bundle API) is refused
+// exactly for the URLs pkg/urlsecret's table refuses (user info, a raw "#"
+// or "?" in a password, a credential parameter however it is written, a
+// percent-encoded name); the others are stored. A
 // Bundle stored before the rule stays writable while the URL is unchanged
 // (CRD validation ratcheting), so the controller is never stuck on it, and
 // its receipt redacts the URL (TestReceiptJourney_TokenInProvenance). CI
@@ -94,32 +97,25 @@ func TestBundleCIRunURLCredentialsOnAPIServer(t *testing.T) {
 		return apierrors.IsInvalid(err)
 	}, 30*time.Second, 200*time.Millisecond, "the new CRD refuses a token in ciRunURL")
 
-	n := 0
-	for name, tc := range map[string]struct {
-		url  string
-		want string
-	}{
-		"token":            {"https://ci.example.com/run/1?token=s3cret", "credential parameter"},
-		"second parameter": {"https://ci.example.com/run/1?attempt=2&access_token=s3cret", "credential parameter"},
-		"upper case":       {"https://ci.example.com/run/1?X-Amz-Signature=s3cret", "credential parameter"},
-		"fragment":         {"https://ci.example.com/run/1#sig=s3cret", "credential parameter"},
-		"semicolon":        {"https://ci.example.com/run/1?a=1;private_token=s3cret", "credential parameter"},
-		"user info":        {"https://bot:s3cret@ci.example.com/run/1", "user info"},
-		"host as user":     {"https://github.com@evil.example/run/1", "user info"},
-		"plain":            {"https://github.com/acme/app/actions/runs/7?check_suite_focus=true", ""},
-		"a longer name":    {"https://ci.example.com/run/1?tokens=3&monkey=1", ""},
-	} {
-		n++
-		t.Run(name, func(t *testing.T) {
-			_, err := bundles.Create(ctx, bundle(fmt.Sprintf("b-%d", n), tc.url), metav1.CreateOptions{})
-			if tc.want == "" {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			assert.True(t, apierrors.IsInvalid(err), "%v", err)
-			assert.Contains(t, err.Error(), tc.want)
-		})
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "pkg", "urlsecret", "testdata", "vectors.json"))
+	require.NoError(t, err)
+	var vectors []struct {
+		URL     string `json:"url"`
+		Refused bool   `json:"refused"`
+		Why     string `json:"why"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &vectors))
+	require.NotEmpty(t, vectors)
+	for i, v := range vectors {
+		_, err := bundles.Create(ctx, bundle(fmt.Sprintf("v-%d", i), v.URL), metav1.CreateOptions{})
+		if !v.Refused {
+			assert.NoError(t, err, "%s: %s", v.Why, v.URL)
+			continue
+		}
+		if assert.Error(t, err, "%s: %s", v.Why, v.URL) {
+			assert.True(t, apierrors.IsInvalid(err), "%s: %v", v.Why, err)
+			assert.Contains(t, err.Error(), "provenance.ciRunURL must not", v.Why)
+		}
 	}
 
 	// The Bundle stored before the rule stays writable while the URL is

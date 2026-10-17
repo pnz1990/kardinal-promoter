@@ -1,0 +1,278 @@
+[
+ {
+  "url": "https://github.com/acme/app/actions/runs/7",
+  "refused": false,
+  "redacted": "https://github.com/acme/app/actions/runs/7",
+  "why": "a GitHub Actions run"
+ },
+ {
+  "url": "https://github.com/acme/app/actions/runs/7?check_suite_focus=true#step:2:1",
+  "refused": false,
+  "redacted": "https://github.com/acme/app/actions/runs/7?check_suite_focus=true#step:2:1",
+  "why": "a query and a fragment without credentials"
+ },
+ {
+  "url": "https://ci.example.com/run/7?tokens=3&monkey=1&keyboard=us",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?tokens=3&monkey=1&keyboard=us",
+  "why": "names that only contain a credential word"
+ },
+ {
+  "url": "http://jenkins.local:8080/job/app/7/",
+  "refused": false,
+  "redacted": "http://jenkins.local:8080/job/app/7/",
+  "why": "a port"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token=REDACTED&attempt=1",
+  "why": "credential parameter token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?TOKEN=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?TOKEN=REDACTED&attempt=1",
+  "why": "credential parameter TOKEN"
+ },
+ {
+  "url": "https://ci.example.com/run/7?access_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?access_token=REDACTED&attempt=1",
+  "why": "credential parameter access_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?access-token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?access-token=REDACTED&attempt=1",
+  "why": "credential parameter access-token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?accessToken=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?accessToken=REDACTED&attempt=1",
+  "why": "credential parameter accessToken"
+ },
+ {
+  "url": "https://ci.example.com/run/7?private_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?private_token=REDACTED&attempt=1",
+  "why": "credential parameter private_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?refresh_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?refresh_token=REDACTED&attempt=1",
+  "why": "credential parameter refresh_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?id_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?id_token=REDACTED&attempt=1",
+  "why": "credential parameter id_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?session_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?session_token=REDACTED&attempt=1",
+  "why": "credential parameter session_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?job_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?job_token=REDACTED&attempt=1",
+  "why": "credential parameter job_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?circle-token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?circle-token=REDACTED&attempt=1",
+  "why": "credential parameter circle-token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?x-amz-security-token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?x-amz-security-token=REDACTED&attempt=1",
+  "why": "credential parameter x-amz-security-token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?secret=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?secret=REDACTED&attempt=1",
+  "why": "credential parameter secret"
+ },
+ {
+  "url": "https://ci.example.com/run/7?client_secret=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?client_secret=REDACTED&attempt=1",
+  "why": "credential parameter client_secret"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Signature=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Signature=REDACTED&attempt=1",
+  "why": "credential parameter Signature"
+ },
+ {
+  "url": "https://ci.example.com/run/7?X-Amz-Signature=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?X-Amz-Signature=REDACTED&attempt=1",
+  "why": "credential parameter X-Amz-Signature"
+ },
+ {
+  "url": "https://ci.example.com/run/7?X-Goog-Signature=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?X-Goog-Signature=REDACTED&attempt=1",
+  "why": "credential parameter X-Goog-Signature"
+ },
+ {
+  "url": "https://ci.example.com/run/7?X-Goog-Credential=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?X-Goog-Credential=REDACTED&attempt=1",
+  "why": "credential parameter X-Goog-Credential"
+ },
+ {
+  "url": "https://ci.example.com/run/7?x-amz-credential=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?x-amz-credential=REDACTED&attempt=1",
+  "why": "credential parameter x-amz-credential"
+ },
+ {
+  "url": "https://ci.example.com/run/7?password=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?password=REDACTED&attempt=1",
+  "why": "credential parameter password"
+ },
+ {
+  "url": "https://ci.example.com/run/7?passwd=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?passwd=REDACTED&attempt=1",
+  "why": "credential parameter passwd"
+ },
+ {
+  "url": "https://ci.example.com/run/7?api_key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?api_key=REDACTED&attempt=1",
+  "why": "credential parameter api_key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?apikey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?apikey=REDACTED&attempt=1",
+  "why": "credential parameter apikey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?AWSAccessKeyId=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?AWSAccessKeyId=REDACTED&attempt=1",
+  "why": "credential parameter AWSAccessKeyId"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sig=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?sig=REDACTED&attempt=1",
+  "why": "credential parameter sig"
+ },
+ {
+  "url": "https://ci.example.com/run/7?key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?key=REDACTED&attempt=1",
+  "why": "credential parameter key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?auth=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?auth=REDACTED&attempt=1",
+  "why": "credential parameter auth"
+ },
+ {
+  "url": "https://ci.example.com/run/7?jwt=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?jwt=REDACTED&attempt=1",
+  "why": "credential parameter jwt"
+ },
+ {
+  "url": "https://ci.example.com/run/7?code=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?code=REDACTED&attempt=1",
+  "why": "credential parameter code"
+ },
+ {
+  "url": "https://ci.example.com/run/7?a=1&&token=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?a=1&&token=REDACTED",
+  "why": "an empty pair before it"
+ },
+ {
+  "url": "https://ci.example.com/run/7?a=1;key=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?a=1;key=REDACTED",
+  "why": "a ; separator"
+ },
+ {
+  "url": "https://ci.example.com/run/7#sig=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7#sig=REDACTED",
+  "why": "in the fragment"
+ },
+ {
+  "url": "https://ci.example.com/run/7?%74oken=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?%74oken=REDACTED",
+  "why": "a percent-encoded name"
+ },
+ {
+  "url": "https://ci.example.com/run/7?to%6Ben=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?to%6Ben=REDACTED",
+  "why": "a name percent-encoded in the middle"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token=",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token=REDACTED",
+  "why": "an empty value"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token=S3'CRET&x=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token=REDACTED&x=1",
+  "why": "a quote in the value"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Signature=S3CRET&AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Signature=REDACTED&AWSAccessKeyId=REDACTED&Expires=1",
+  "why": "an S3 signed URL"
+ },
+ {
+  "url": "https://bot:S3CRET@ci.example.com/run/7",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7",
+  "why": "user info"
+ },
+ {
+  "url": "https://bot:pa#ss@ci.example.com/run/7",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7",
+  "why": "a raw # in the password"
+ },
+ {
+  "url": "https://bot:pa?ss@ci.example.com/run/7",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7",
+  "why": "a raw ? in the password"
+ },
+ {
+  "url": "https://github.com@evil.example/run/7",
+  "refused": true,
+  "redacted": "https://evil.example/run/7",
+  "why": "a host disguised as user info"
+ },
+ {
+  "url": "https://ci.example.com?run=7@example.org/x",
+  "refused": true,
+  "redacted": "https://example.org/x",
+  "why": "an @ before the first / is read as user info"
+ }
+]

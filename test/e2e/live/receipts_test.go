@@ -250,10 +250,11 @@ func TestReceipts_TamperedReceiptFails(t *testing.T) {
 }
 
 // TestReceipts_TokenInProvenanceRedacted (#2158): the API server refuses a
-// Bundle whose provenance.ciRunURL carries a credential parameter, however
-// it is created; one that slips past the CRD's rule (a percent-encoded
-// parameter name, applied with kubectl) is promoted, and its receipt holds
-// no token: the signed statement has %74oken=REDACTED and records the
+// Bundle whose provenance.ciRunURL carries a credential parameter however
+// it is written (?token=, a percent-encoded ?%74oken=), with kubectl too.
+// A token in a parameter the rule cannot know (?ref=ghp_...) is admitted,
+// and the Bundle applied with kubectl is promoted, but its receipt holds
+// no token: the signed statement has it REDACTED and records the
 // redaction, and kardinal verify-receipt passes from the cluster and from
 // the registry copy.
 //
@@ -264,23 +265,25 @@ func TestReceipts_TokenInProvenanceRedacted(t *testing.T) {
 	a := newArgoApp(t, e, "test")
 	a.apply(t, a.pipeline(nil))
 	pub := receiptPublicKey(t, e)
-	const secret = "ghp_e2es3cretvalue"
+	const secret = "ghp_e2es3cretvalue0123456789abcdefgh"
 	byDigest := fixtures.Image + "@" + fixtures.V2Digest
 	repo, digest, _ := strings.Cut(byDigest, "@")
 
-	refused := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "with-token", Namespace: a.ns},
-		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
-			Images:     []v1alpha1.ImageRef{{Repository: repo, Digest: digest}},
-			Provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run/7?token=" + secret}}}
-	err := e.Client.Create(ctx, refused)
-	require.Error(t, err, "the CRD refuses a token in ciRunURL")
-	assert.True(t, apierrors.IsInvalid(err), "%v", err)
-	assert.Contains(t, err.Error(), "credential parameter")
+	for _, url := range []string{"https://ci.example.com/run/7?token=" + secret, "https://ci.example.com/run/7?%74oken=" + secret} {
+		refused := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "with-token", Namespace: a.ns},
+			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+				Images:     []v1alpha1.ImageRef{{Repository: repo, Digest: digest}},
+				Provenance: &v1alpha1.BundleProvenance{CIRunURL: url}}}
+		err := e.Client.Create(ctx, refused)
+		require.Error(t, err, "the CRD refuses %s", url)
+		assert.True(t, apierrors.IsInvalid(err), "%v", err)
+		assert.Contains(t, err.Error(), "provenance.ciRunURL must not")
+	}
 
 	e.Kubectl(t, a.ns, fmt.Sprintf(`apiVersion: kardinal.io/v1alpha1
 kind: Bundle
 metadata:
-  name: encoded-token
+  name: token-in-ref
 spec:
   type: image
   pipeline: %s
@@ -289,14 +292,14 @@ spec:
     digest: %s
   provenance:
     author: ci
-    ciRunURL: "https://ci.example.com/run/7?%%74oken=%s&attempt=1"
+    ciRunURL: "https://ci.example.com/run/7?ref=%s&attempt=1"
 `, pipelineName, repo, digest, secret), "apply", "-f", "-")
-	e.WaitStepState(t, a.ns, pipelineName, "encoded-token", "test", "Verified", promoteTimeout)
-	rc := promotionReceipt(t, e, a.ns, "encoded-token", "test", v1alpha1.ReceiptStored)
+	e.WaitStepState(t, a.ns, pipelineName, "token-in-ref", "test", "Verified", promoteTimeout)
+	rc := promotionReceipt(t, e, a.ns, "token-in-ref", "test", v1alpha1.ReceiptStored)
 	assert.NotContains(t, rc.Spec.Statement, secret)
 	st, err := receipt.Parse([]byte(rc.Spec.Statement))
 	require.NoError(t, err)
-	assert.Equal(t, "https://ci.example.com/run/7?%74oken=REDACTED&attempt=1", st.Predicate.Kardinal.Version.Provenance.CIRunURL)
+	assert.Equal(t, "https://ci.example.com/run/7?ref=REDACTED&attempt=1", st.Predicate.Kardinal.Version.Provenance.CIRunURL)
 	assert.Equal(t, []string{"kardinalPromotion.version.provenance.ciRunURL"}, st.Predicate.Kardinal.Redacted)
 
 	verified := func(out string) *receipt.Statement {
@@ -313,12 +316,12 @@ spec:
 		require.NotNil(t, res.Statement)
 		return res.Statement
 	}
-	got := verified(e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "test", "--bundle", "encoded-token", "--key", pub, "-o", "json"))
+	got := verified(e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "test", "--bundle", "token-in-ref", "--key", pub, "-o", "json"))
 	assert.Equal(t, st.Predicate.Kardinal.Redacted, got.Predicate.Kardinal.Redacted, "the signed statement records the redaction")
 	reg := framework.NewRegistry(t)
 	got = verified(e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--pipeline", pipelineName, "--env", "test",
 		"--cluster", clusterIdentity(t, e), "--key", pub,
 		"--repository", reg.HostRepository(receiptsRepository), "--insecure-registry", "-o", "json"))
-	assert.Equal(t, "https://ci.example.com/run/7?%74oken=REDACTED&attempt=1", got.Predicate.Kardinal.Version.Provenance.CIRunURL,
+	assert.Equal(t, "https://ci.example.com/run/7?ref=REDACTED&attempt=1", got.Predicate.Kardinal.Version.Provenance.CIRunURL,
 		"the registry copy has no token either")
 }

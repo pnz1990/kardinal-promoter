@@ -496,9 +496,9 @@ func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardina
 // and the PR body and the UI render as a link. It must be empty or an absolute
 // http or https URL with a host, without user info (credentials would be
 // published in every PR body), without a credential query or fragment
-// parameter (urlsecret: token, access_token, sig, ...; a receipt signs the
-// URL, and its Rekor sink publishes it for good) and without whitespace or
-// control characters.
+// parameter (urlsecret.IsParam: a name ending in token, secret, signature,
+// ...; a receipt signs the URL, and its Rekor sink publishes it for good)
+// and without whitespace or control characters.
 // The bundle API refuses to create a Bundle that fails it. Bundles created
 // another way, or before this check, can still hold such a URL: promote and
 // rollback drop it when they copy provenance, and the PR body and the UI do
@@ -519,12 +519,13 @@ func ValidateCIRunURL(raw string) error {
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("provenance.ciRunURL must be an absolute http or https URL")
 	}
-	if u.User != nil {
+	if u.User != nil || urlsecret.HasUserInfo(raw) {
 		return fmt.Errorf("provenance.ciRunURL must not contain user info")
 	}
 	if urlsecret.Has(raw) {
-		return fmt.Errorf("provenance.ciRunURL must not contain a credential parameter (%s): "+
-			"it is published in PR bodies and signed into promotion receipts", strings.Join(urlsecret.Params(), ", "))
+		return fmt.Errorf("provenance.ciRunURL must not contain a credential parameter (a name ending in %s, or %s, "+
+			"in any case, with or without - and _): it is published in PR bodies and signed into promotion receipts",
+			strings.Join(urlsecret.Suffixes, ", "), strings.Join(urlsecret.Exact, ", "))
 	}
 	return nil
 }
