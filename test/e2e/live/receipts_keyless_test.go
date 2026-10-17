@@ -21,9 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -65,7 +66,7 @@ func TestReceiptsKeyless_SignedPromotion(t *testing.T) {
 	a.apply(t, a.pipeline(nil))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	rc := waitReceipt(t, e, a.ns, bundle+"-test", v1alpha1.ReceiptStored)
+	rc := promotionReceipt(t, e, a.ns, bundle, "test", v1alpha1.ReceiptStored)
 
 	require.NotNil(t, rc.Status.SignedBy)
 	assert.Equal(t, v1alpha1.ReceiptSigningKeyless, rc.Status.SignedBy.Mode)
@@ -97,20 +98,23 @@ func TestReceiptsKeyless_SignedPromotion(t *testing.T) {
 
 	ok := []string{"--identity", keylessIdentity, "--issuer", keylessIssuer, "--trusted-root", root}
 	out := e.MustKardinal(t, a.ns, append([]string{"verify-receipt", pipelineName, "test"}, ok...)...)
-	assert.Contains(t, out, "VERIFIED receipt "+bundle+"-test")
+	assert.Contains(t, out, "VERIFIED receipt "+rc.Name)
 
+	// From the file alone: pinned to its namespace, Pipeline, environment,
+	// subject and cluster (#1961).
+	pins := filePins(t, e, a.ns, rc)
 	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
 	require.NoError(t, os.WriteFile(file, []byte(rc.Status.Bundle), 0o600))
-	out = e.MustKardinal(t, "", append([]string{"verify-receipt", "--file", file, "--env", "test"}, ok...)...)
-	assert.Contains(t, out, "VERIFIED receipt "+bundle+"-test")
-	signedEarly = rc.Status.Bundle
+	out = e.MustKardinal(t, a.ns, append(append([]string{"verify-receipt", "--file", file}, pins...), ok...)...)
+	assert.Contains(t, out, "VERIFIED receipt "+rc.Name)
+	signedEarly, signedEarlyPins = rc.Status.Bundle, pins
 
 	for name, args := range map[string][]string{
 		"another identity": {"--identity", "https://kubernetes.io/namespaces/default/serviceaccounts/default",
 			"--issuer", keylessIssuer, "--trusted-root", root},
 		"another issuer": {"--identity", keylessIdentity, "--issuer", "https://accounts.google.com", "--trusted-root", root},
 	} {
-		_, err := e.Kardinal(t, "", append([]string{"verify-receipt", "--file", file}, args...)...)
+		_, err := e.Kardinal(t, a.ns, append(append([]string{"verify-receipt", "--file", file}, pins...), args...)...)
 		assert.Error(t, err, name)
 	}
 }
@@ -198,7 +202,7 @@ func TestReceiptsKeyless_Outages(t *testing.T) {
 	a.apply(t, a.pipeline(nil))
 	first := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
 	e.WaitStepState(t, a.ns, pipelineName, first, "test", "Verified", promoteTimeout)
-	last := rekorIndex(t, waitReceipt(t, e, a.ns, first+"-test", v1alpha1.ReceiptStored))
+	last := rekorIndex(t, promotionReceipt(t, e, a.ns, first, "test", v1alpha1.ReceiptStored))
 	images := []string{fixtures.V3, fixtures.V1, fixtures.V2, fixtures.V3}
 	for i, sc := range []struct {
 		name, route, mode string
@@ -218,9 +222,15 @@ func TestReceiptsKeyless_Outages(t *testing.T) {
 			e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 			var rc v1alpha1.PromotionReceipt
 			framework.Eventually(t, 3*time.Minute, "the receipt waits for "+sc.route, func(ctx context.Context) (bool, string) {
-				if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle + "-test"}, &rc); err != nil {
+				var list v1alpha1.PromotionReceiptList
+				if err := e.Client.List(ctx, &list, client.InNamespace(a.ns),
+					client.MatchingLabels{"kardinal.io/bundle": bundle, "kardinal.io/environment": "test"}); err != nil {
 					return false, err.Error()
 				}
+				if len(list.Items) != 1 {
+					return false, fmt.Sprintf("%d receipts", len(list.Items))
+				}
+				rc = list.Items[0]
 				c := meta.FindStatusCondition(rc.Status.Conditions, "Signed")
 				return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "SignFailed" && rc.Status.Attempts >= 1,
 					fmt.Sprintf("phase=%q attempts=%d conditions=%v", rc.Status.Phase, rc.Status.Attempts, rc.Status.Conditions)
@@ -230,7 +240,7 @@ func TestReceiptsKeyless_Outages(t *testing.T) {
 			assert.Zero(t, successes(faultCounts(t, e, sc.route)), "no success from %s during the outage", sc.route)
 
 			setFault(t, e, sc.route, "pass")
-			got := waitReceipt(t, e, a.ns, bundle+"-test", v1alpha1.ReceiptStored)
+			got := promotionReceipt(t, e, a.ns, bundle, "test", v1alpha1.ReceiptStored)
 			assert.Equal(t, 1, successes(faultCounts(t, e, sc.route)), "%s answered one success: %v", sc.route,
 				faultCounts(t, e, sc.route))
 			idx := rekorIndex(t, got)
@@ -238,8 +248,8 @@ func TestReceiptsKeyless_Outages(t *testing.T) {
 			last = idx
 			file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
 			require.NoError(t, os.WriteFile(file, []byte(got.Status.Bundle), 0o600))
-			e.MustKardinal(t, "", "verify-receipt", "--file", file, "--identity", keylessIdentity, "--issuer", keylessIssuer,
-				"--trusted-root", root)
+			e.MustKardinal(t, a.ns, append(append([]string{"verify-receipt", "--file", file}, filePins(t, e, a.ns, got)...),
+				"--identity", keylessIdentity, "--issuer", keylessIssuer, "--trusted-root", root)...)
 		})
 	}
 }
@@ -256,6 +266,9 @@ func signingFailures(t *testing.T, e *framework.Env) float64 {
 // TestReceiptsKeyless_VerifiesAfterCertificateExpiry: the suite's other
 // tests run while its certificate's ten minutes pass.
 var signedEarly string
+
+// signedEarlyPins are signedEarly's verify-receipt --file pins.
+var signedEarlyPins []string
 
 // certificateNotAfter is the end of the validity of bundle's certificate.
 func certificateNotAfter(t *testing.T, bundle string) time.Time {
@@ -310,13 +323,14 @@ func offline(t *testing.T, cli string, args ...string) (string, error) {
 func TestReceiptsKeyless_VerifiesAfterCertificateExpiry(t *testing.T) {
 	root := keylessTrustedRoot(t)
 	e := framework.New(t)
-	bundle := signedEarly
+	bundle, pins := signedEarly, signedEarlyPins
 	if bundle == "" {
 		a := newArgoApp(t, e, "test")
 		a.apply(t, a.pipeline(nil))
 		b := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+"@"+fixtures.V2Digest)
 		e.WaitStepState(t, a.ns, pipelineName, b, "test", "Verified", promoteTimeout)
-		bundle = waitReceipt(t, e, a.ns, b+"-test", v1alpha1.ReceiptStored).Status.Bundle
+		rc := promotionReceipt(t, e, a.ns, b, "test", v1alpha1.ReceiptStored)
+		bundle, pins = rc.Status.Bundle, filePins(t, e, a.ns, rc)
 	}
 	notAfter := certificateNotAfter(t, bundle)
 	require.Less(t, time.Until(notAfter), 15*time.Minute, "a short-lived certificate")
@@ -326,7 +340,8 @@ func TestReceiptsKeyless_VerifiesAfterCertificateExpiry(t *testing.T) {
 	}
 	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
 	require.NoError(t, os.WriteFile(file, []byte(bundle), 0o600))
-	args := []string{"verify-receipt", "--file", file, "--identity", keylessIdentity, "--issuer", keylessIssuer}
+	// -n is in the pins: the offline verifier has no cluster to default it.
+	args := append(append([]string{"verify-receipt", "--file", file}, pins...), "--identity", keylessIdentity, "--issuer", keylessIssuer)
 	out := e.MustKardinal(t, "", append(args, "--trusted-root", root)...)
 	assert.Contains(t, out, "VERIFIED receipt", "verified after the certificate expired")
 
@@ -336,4 +351,16 @@ func TestReceiptsKeyless_VerifiesAfterCertificateExpiry(t *testing.T) {
 	out, err = offline(t, os.Getenv(framework.EnvCLI), args...)
 	require.Error(t, err, "the public-good root cannot be fetched offline")
 	assert.NotEmpty(t, strings.TrimSpace(out), "it says why")
+}
+
+// filePins are the verify-receipt --file pins of rc: its namespace, Pipeline,
+// environment, subject (from its signed statement: an image digest, or the
+// Bundle spec's for a version by tag) and cluster.
+func filePins(t *testing.T, e *framework.Env, ns string, rc *v1alpha1.PromotionReceipt) []string {
+	t.Helper()
+	st, err := receipt.Parse([]byte(rc.Spec.Statement))
+	require.NoError(t, err)
+	require.NotEmpty(t, st.Subject)
+	return []string{"-n", ns, "--pipeline", st.Predicate.Kardinal.Pipeline, "--env", st.Predicate.Kardinal.Change.Environment,
+		"--subject", "sha256:" + st.Subject[0].Digest["sha256"], "--cluster", clusterIdentity(t, e)}
 }
