@@ -686,7 +686,11 @@ receipts:
       secretRef:
         name: ""
         key: cosign.key
-    # -- KMS key reference (mode kms), for example awskms:///alias/receipts.
+    # -- KMS key reference (mode kms): awskms:///alias/receipts,
+    # awskms:///arn:aws:kms:<region>:<account>:key/<id>, or
+    # gcpkms://projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<v>.
+    # Credentials come from the cloud's default chain (IRSA or Pod Identity:
+    # serviceAccount.annotations; GKE Workload Identity).
     kmsKey: ""
     # -- RFC 3161 timestamp authority URL. Keyless signing needs a timestamp
     # or a Rekor entry to prove the signing time.

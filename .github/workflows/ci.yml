@@ -178,6 +178,10 @@ jobs:
         env:
           KARDINAL_REQUIRE_COSIGN: "1"
         run: go test ./cmd/kardinal/cmd/ -run '^TestEvidencePack_Cosign$' -count=1 -timeout 120s
+      - name: go test the KMS receipt signers (kms_aws, kms_gcp, as the image is built)
+        run: |
+          go vet -tags kms_aws,kms_gcp ./pkg/receipt/ ./cmd/kardinal-controller/
+          go test -race -tags kms_aws,kms_gcp ./pkg/receipt/ -count=1 -timeout 120s
       - name: go build
         run: go build ./...
       - name: Check Apache 2.0 headers

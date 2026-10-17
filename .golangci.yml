@@ -1,9 +1,12 @@
 version: "2"
 
 run:
-  # Lint the live e2e suites (test/e2e, build tag e2e) too.
+  # Lint the live e2e suites (test/e2e, build tag e2e) and the KMS receipt
+  # signers (kms_aws, kms_gcp, which the image is built with) too.
   build-tags:
     - e2e
+    - kms_aws
+    - kms_gcp
 
 linters:
   # Start from the default set and add/remove specific linters

@@ -42,10 +42,13 @@ COPY . .
 COPY --from=ui-builder /src/web/dist ./web/dist
 
 # CGO disabled for a fully static binary. .dockerignore excludes .git, so there
-# is no VCS information to stamp; VERSION carries the version instead.
+# is no VCS information to stamp; VERSION carries the version instead. The
+# kms_aws and kms_gcp tags build in the AWS KMS and Cloud KMS receipt signers
+# (docs/receipts.md, Signing modes).
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build \
       -buildvcs=false \
+      -tags kms_aws,kms_gcp \
       -ldflags="-s -w -X main.ControllerVersion=${VERSION}" \
       -o /out/kardinal-controller \
       ./cmd/kardinal-controller
