@@ -165,12 +165,13 @@ func TestForPack(t *testing.T) {
 var writerDirs = []string{"pkg/reconciler", "cmd/kardinal-controller"}
 
 // writtenActions returns the AuditEvent actions the non-test Go code of
-// writerDirs writes: a string literal of the action in an expression, or in
-// the value of a const or var whose name is used elsewhere in writerDirs. A
-// constant left behind when its only writer is removed does not count, so
-// the mapping cannot cite an action nothing writes (#2126: HealthCheckFailed
-// is accepted by the CRD but never written). A use is any reference to the
-// name, so a constant that is still read for another purpose still counts.
+// writerDirs writes. An action is written where it, as a string literal or
+// as a const or var whose value is that literal, is a call argument, a
+// value (not a key) of a composite literal (Action: x in an AuditEventSpec,
+// a map from a state to an action), or assigned to an Action field. A
+// comparison (action == x), a switch case or a declaration is not a write,
+// so the mapping cannot cite an action whose only writer was removed
+// (#2126: HealthCheckFailed is accepted by the CRD but never written).
 func writtenActions(t *testing.T) map[string]bool {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
@@ -193,49 +194,93 @@ func writtenActions(t *testing.T) map[string]bool {
 			return err
 		}))
 	}
-	// How often each name is referenced, declarations included.
-	refs := map[string]int{}
+	// The consts and vars whose value is an action, by name.
+	named := map[string]string{}
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok {
-				refs[id.Name]++
-			}
-			return true
-		})
-	}
-	written := map[string]bool{}
-	literals := func(n ast.Node) {
-		ast.Inspect(n, func(n ast.Node) bool {
-			if lit, ok := n.(*ast.BasicLit); ok && actions[lit.Value] {
-				written[lit.Value[1:len(lit.Value)-1]] = true
-			}
-			return true
-		})
-	}
-	for _, f := range files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			spec, ok := n.(*ast.ValueSpec)
-			if !ok {
-				if lit, ok := n.(*ast.BasicLit); ok && actions[lit.Value] {
-					written[lit.Value[1:len(lit.Value)-1]] = true
-				}
-				return true
-			}
-			for i, name := range spec.Names {
-				if refs[name.Name] < 2 || name.Name == "_" { // declared, never used
-					continue
-				}
-				if len(spec.Values) == len(spec.Names) {
-					literals(spec.Values[i])
-				} else {
-					for _, v := range spec.Values {
-						literals(v)
+			if spec, ok := n.(*ast.ValueSpec); ok && len(spec.Values) == len(spec.Names) {
+				for i, v := range spec.Values {
+					if lit, ok := v.(*ast.BasicLit); ok && actions[lit.Value] {
+						named[spec.Names[i].Name] = lit.Value[1 : len(lit.Value)-1]
 					}
 				}
 			}
-			return false
+			return true
 		})
+	}
+	// action is the action e names: a literal, a name (a local of the
+	// function first: action := "GateEvaluated"), or pkg.Name.
+	action := func(e ast.Expr, locals map[string]string) (string, bool) {
+		switch e := e.(type) {
+		case *ast.BasicLit:
+			if actions[e.Value] {
+				return e.Value[1 : len(e.Value)-1], true
+			}
+		case *ast.Ident:
+			if a, ok := locals[e.Name]; ok {
+				return a, true
+			}
+			a, ok := named[e.Name]
+			return a, ok
+		case *ast.SelectorExpr:
+			a, ok := named[e.Sel.Name]
+			return a, ok
+		}
+		return "", false
+	}
+	written := map[string]bool{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			// The function's locals defined as an action, then its writes.
+			locals := map[string]string{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.DEFINE && len(as.Lhs) == len(as.Rhs) {
+					for i, lhs := range as.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							if lit, ok := as.Rhs[i].(*ast.BasicLit); ok && actions[lit.Value] {
+								locals[id.Name] = lit.Value[1 : len(lit.Value)-1]
+							}
+						}
+					}
+				}
+				return true
+			})
+			inspectWrites(decl, func(e ast.Expr) {
+				if a, ok := action(e, locals); ok {
+					written[a] = true
+				}
+			})
+		}
 	}
 	require.NotEmpty(t, written, "no action found in %v", writerDirs)
 	return written
+}
+
+// inspectWrites calls write with every expression of n that is written: a
+// call argument, a value of a composite literal, or the value assigned to
+// an Action field.
+func inspectWrites(n ast.Node, write func(ast.Expr)) {
+	ast.Inspect(n, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			for _, arg := range n.Args {
+				write(arg)
+			}
+		case *ast.CompositeLit:
+			for _, el := range n.Elts {
+				if kv, ok := el.(*ast.KeyValueExpr); ok {
+					write(kv.Value)
+				} else {
+					write(el)
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range n.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Action" && i < len(n.Rhs) {
+					write(n.Rhs[i])
+				}
+			}
+		}
+		return true
+	})
 }
