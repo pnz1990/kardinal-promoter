@@ -105,8 +105,71 @@ How it works:
 - Group membership is checked when the Approval is created: an approval stays valid after its approver leaves the group. Revoke it by deleting the Approval (its approver) or with a new version. Revoking only matters while the gate waits: once the gate passed and the environment's promotion started, a revoked approval does not stop or undo that promotion (reject the version, or roll back, for that).
 - `excludeAuthor` uses the version's actor stamp when it has one ([One party, one vote](#one-party-one-vote)); without one, it compares approvers with the version's `kardinal.io/created-by` annotation, its verified creator. `kardinal create bundle`, `kardinal promote` and `kardinal rollback` set it to your Kubernetes username, and the chart's `<release>-bundle-creator` policy admits it only in the requester's name and never lets it change. The UI sets the authenticated UI user (`kardinal-ui` without per-user authentication), a Subscription `subscription:<name>`, the Bundle API's static token `bundle-api`, an automatic rollback `kardinal-controller`; only this release's controller ServiceAccount (and the exact usernames in Helm `admission.controllerUsernames`) may name a creator other than itself. A version without the annotation (created with `kubectl` or a GitOps tool without it) blocks a gate with `excludeAuthor`: `excludeAuthor cannot be enforced: the Bundle has no verified creator`. So does a version created by a kardinal component (`subscription:*`, `bundle-api`, `kardinal-ui`, `kardinal-controller`): no person is known to exclude. For CI, create the version as the CI identity: `kardinal create bundle` (or `kubectl create`) with the CI ServiceAccount's kubeconfig records that ServiceAccount, which the policy verifies; with the Bundle API, send the ServiceAccount's own token rather than the shared static token once TokenReview authentication of the Bundle API is enabled, so the controller records the authenticated caller.
 - While it waits, the gate reason is `waiting for approvals: 1 of 2 (alice@example.com)` or `rejected by bob@example.com (wait for INC-42)`; once met, the expression's reason ends with `approved by alice@example.com, bob@example.com (2 of 2)`, which `kardinal explain`, the UI and the PR evidence show. `status.approvals` lists every decision, whether it counts, why not, and when the gate first saw it.
-- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users`, `approvals.rejected` and `approvals.met` ([CEL context](reference/cel-context.md#approvals)).
+- The expression can read the count: `approvals.count`, `approvals.required`, `approvals.users`, `approvals.rejected` and `approvals.met`, and the values of the counted approvals' [fields](#approval-fields), `approvals.fields.<name>` ([CEL context](reference/cel-context.md#approvals)).
 - `kardinal override` by a person still force-passes an approval gate, with its own audit record. An override by an agent never opens a gate ([Actor-aware policy](agentic/policy.md#break-glass-is-for-people)).
+
+## Approval fields
+
+A change process often asks more of an approval than "approve": a change ticket, an
+acknowledgement, a link to the rollback plan. Declare what an approve must carry in
+`approval.fields`; an approve that does not give it does not count.
+
+```yaml
+spec:
+  expression: 'approvals.fields.ticketID.exists(t, t.startsWith("CHG"))'
+  approval:
+    required: 1
+    excludeAuthor: true
+    fields:
+      - name: ticketID
+        type: string            # string (default), bool, int, url or enum
+        required: true
+        pattern: '^CHG[0-9]{7}$'
+        description: "ServiceNow change number"
+      - name: riskAcknowledged
+        type: bool
+        required: true
+        mustBe: "true"          # the one value accepted
+        description: "I have read the migration notes"
+      - name: rollbackPlan
+        type: url               # http or https, with a host
+      - name: tier
+        type: enum
+        values: [low, high]
+```
+
+```bash
+kardinal approve my-app prod --field ticketID=CHG0031337 --field riskAcknowledged=true
+```
+
+- **Where the values go.** `--field name=value` (repeatable) writes them to the Approval's
+  `spec.fields`. In the UI, the approval form shows one input per declared field: a text box, a
+  checkbox for a bool, a URL box, a select for an enum. Over MCP, the `approve` tool takes `fields`.
+- **What is checked, and where.** One rule decides: the gate's tally, `kardinal approve` and the UI
+  API apply the same function. `kardinal approve` and the UI refuse, before they write anything, an
+  approve that does not satisfy every approval gate of the environment. At a terminal,
+  `kardinal approve` asks for a missing required field, with its description. Without a terminal,
+  or with `--yes`, it refuses and names the `--field` to give. An Approval written another way (with
+  `kubectl`) is admitted if it is well formed, then not counted, and `status.approvals` says which
+  fields are missing or wrong: `approval.fields: ticketID is required (ServiceNow change number)`.
+  A reject needs no fields: stopping a promotion is never harder than letting it through.
+- **What the API server checks.** Only the shape: at most 16 fields, names of a letter then
+  letters, digits or underscores (at most 63), values of at most 1024 bytes. On the gate, at most
+  16 declarations, an `enum` with its `values`, a `pattern` only on a `string` or `url`, and a
+  `bool`'s `mustBe` of `true` or `false`.
+- **Fields the gate does not declare** are kept in the Approval, but are not counted, recorded or
+  readable in the expression.
+- **In the expression**, `approvals.fields.<name>` lists the values the **counted** approvals gave.
+  An approval that does not count is not a policy input. So a gate can require a particular value,
+  such as a ticket in a list, or the ticket of a change request.
+- **In the records.** `status.approvals[].fields` records each decision's declared fields, each value
+  cut to 256 bytes. The `ApprovalRecorded` AuditEvent names them in its message (cut the same way)
+  and holds them whole in `spec.fields`. An Approval replaced with other fields is a new decision:
+  it is recorded and audited again.
+- **What a field proves.** It is a statement by the approver, verified as theirs (the Approval's
+  identity admission), not as true. `riskAcknowledged: true` is evidence that the approver said so.
+- `kardinal why` lists the fields a waiting gate asks for, and gives the `kardinal approve` command
+  with them.
 
 ## One party, one vote
 

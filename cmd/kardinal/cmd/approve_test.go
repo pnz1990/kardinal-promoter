@@ -255,3 +255,102 @@ func TestApproveTarget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "app-v2", bundle)
 }
+
+// TestApprove_Fields (spec 23 §8.4): --field values go with an approve; a
+// required field missing is asked for at a terminal, with its description,
+// and refused without one, naming the --field to give, before anything is
+// written; a reject needs none; the values themselves are checked with the
+// gate's own rule (lifecycle.RecordApproval).
+func TestApprove_Fields(t *testing.T) {
+	stubIdentity(t, Identity{Username: "alice"})
+	ctx := context.Background()
+	fixture := func(t *testing.T) sigs_client.Client {
+		c := approveFixture(t, "Promoting")
+		gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "change--app-v1-prod", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod", "kardinal.io/gate-name": "change"}},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "true", Approval: &v1alpha1.GateApprovalPolicy{Required: 1, Fields: []v1alpha1.ApprovalField{
+				{Name: "ticketID", Required: true, Pattern: `^CHG[0-9]{7}$`, Description: "ServiceNow change number"},
+				{Name: "riskAcknowledged", Type: "bool", Required: true, MustBe: "true"},
+				{Name: "rollbackPlan", Type: "url"}}}}}
+		require.NoError(t, c.Create(ctx, gate))
+		return c
+	}
+
+	t.Run("given with --field", func(t *testing.T) {
+		c := fixture(t)
+		o := approveOptions{env: "prod", decision: "approve", fields: []string{"ticketID=CHG0031337", "riskAcknowledged=true"}}
+		require.NoError(t, approveChecked(ctx, &bytes.Buffer{}, c, "default", "app-v1", o, nil, nil))
+		list := approvals(t, c)
+		require.Len(t, list, 1)
+		assert.Equal(t, map[string]string{"ticketID": "CHG0031337", "riskAcknowledged": "true"}, list[0].Spec.Fields)
+	})
+	t.Run("missing without a terminal: refused, naming the --field", func(t *testing.T) {
+		c := fixture(t)
+		o := approveOptions{env: "prod", decision: "approve", fields: []string{"ticketID=CHG0031337"}}
+		err := approveChecked(ctx, &bytes.Buffer{}, c, "default", "app-v1", o, nil, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "gate change asks for field riskAcknowledged: give it with --field riskAcknowledged=true; nothing recorded")
+		assert.Empty(t, approvals(t, c))
+	})
+	t.Run("missing at a terminal: asked for, with the description", func(t *testing.T) {
+		c := fixture(t)
+		var asked []string
+		prompt := func(q string) (string, error) {
+			asked = append(asked, q)
+			if strings.HasPrefix(q, "ticketID") {
+				return "CHG0000042", nil
+			}
+			return "true", nil
+		}
+		o := approveOptions{env: "prod", decision: "approve"}
+		require.NoError(t, approveChecked(ctx, &bytes.Buffer{}, c, "default", "app-v1", o, nil, prompt))
+		assert.Equal(t, []string{"ticketID (ServiceNow change number)", "riskAcknowledged, must be true"}, asked,
+			"the required fields only, once each")
+		assert.Equal(t, map[string]string{"ticketID": "CHG0000042", "riskAcknowledged": "true"}, approvals(t, c)[0].Spec.Fields)
+	})
+	t.Run("a value the gate does not accept", func(t *testing.T) {
+		c := fixture(t)
+		o := approveOptions{env: "prod", decision: "approve", fields: []string{"ticketID=CHG1", "riskAcknowledged=true", "rollbackPlan=notaurl"}}
+		err := approveChecked(ctx, &bytes.Buffer{}, c, "default", "app-v1", o, nil, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "gate change: approval.fields: rollbackPlan must be an http or https URL with a host")
+		assert.Contains(t, err.Error(), "ticketID must match ^CHG[0-9]{7}$")
+		assert.Empty(t, approvals(t, c))
+	})
+	t.Run("a reject needs none", func(t *testing.T) {
+		c := fixture(t)
+		require.NoError(t, approveChecked(ctx, &bytes.Buffer{}, c, "default", "app-v1", approveOptions{env: "prod", decision: "reject"}, nil, nil))
+		assert.Len(t, approvals(t, c), 1)
+	})
+	t.Run("malformed --field", func(t *testing.T) {
+		for _, tc := range []struct {
+			flags []string
+			want  string
+		}{
+			{[]string{"ticketID"}, `--field "ticketID": give it as name=value`},
+			{[]string{"=x"}, `--field "=x": give it as name=value`},
+			{[]string{"a=1", "a=2"}, "--field a given twice"},
+		} {
+			_, err := parseFields(tc.flags)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		}
+		got, err := parseFields([]string{"a=b=c", "empty="})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"a": "b=c", "empty": ""}, got, "the first = splits")
+	})
+}
+
+// TestWhy_ApprovalFields: kardinal why lists the fields an approval still
+// needs and gives the approve command with their --field flags.
+func TestWhy_ApprovalFields(t *testing.T) {
+	fields := []v1alpha1.ApprovalField{
+		{Name: "ticketID", Required: true, Description: "ServiceNow change number"},
+		{Name: "riskAcknowledged", Type: "bool", Required: true, MustBe: "true"},
+		{Name: "tier", Type: "enum", Values: []string{"low", "high"}},
+	}
+	assert.Equal(t, "ticketID (ServiceNow change number), riskAcknowledged true, [tier (low | high)]", fieldsNeeded(fields))
+	assert.Equal(t, " --field ticketID=<ticketID> --field riskAcknowledged=true", fieldFlags(fields))
+	assert.Empty(t, fieldsNeeded(nil))
+	assert.Empty(t, fieldFlags(nil))
+}

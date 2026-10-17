@@ -48,6 +48,7 @@ var Manifest = map[string][]Block{
 		{Match: "kardinal inbox"},
 		{Match: "kardinal approve my-app prod --comment"},
 		{Match: "kardinal approve my-app-v1-29-0", Skip: "names a Bundle the page invents (my-app-v1-29-0)"},
+		{Match: "kardinal approve my-app prod --field", Skip: "needs a gate with approval.fields; TestGate_ApprovalFields runs it"},
 	},
 	"rollback.md": {
 		{Match: "kardinal rollback my-app prod\n", Exact: true},

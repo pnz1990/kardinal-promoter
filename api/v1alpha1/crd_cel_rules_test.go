@@ -345,3 +345,50 @@ func TestPipelineCRDRefreshTarget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, failingRules(t, node, tc.self)) })
 	}
 }
+
+// TestApprovalFieldsCRDRules (spec 23 §8.1): the Approval's fields are a map
+// of field names to values of at most 1024 bytes, at most 16 entries; a
+// gate's declared field is an enum with values, values only on an enum, a
+// pattern only on a string or url, a bool's mustBe true or false, an enum's
+// mustBe one of its values.
+func TestApprovalFieldsCRDRules(t *testing.T) {
+	fields := crdSchema(t, "kardinal.io_approvals.yaml", "spec", "fields")
+	assert.EqualValues(t, 16, fields["maxProperties"])
+	for _, tc := range []struct {
+		name string
+		self map[string]interface{}
+		want []string
+	}{
+		{"fine", map[string]interface{}{"ticketID": "CHG0031337", "a_1": "x"}, nil},
+		{"a name with a dash", map[string]interface{}{"ticket-id": "x"}, []string{"a field name is a letter then letters, digits or underscores, at most 63 characters"}},
+		{"a name starting with a digit", map[string]interface{}{"1x": "x"}, []string{"a field name is a letter then letters, digits or underscores, at most 63 characters"}},
+		{"a long value", map[string]interface{}{"x": strings.Repeat("v", 1025)}, []string{"a field value is at most 1024 bytes"}},
+	} {
+		t.Run("Approval "+tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, failingRules(t, fields, tc.self))
+		})
+	}
+	decl := crdSchema(t, "kardinal.io_policygates.yaml", "spec", "approval", "fields", "[]")
+	assert.Equal(t, "^[a-zA-Z][a-zA-Z0-9_]{0,62}$", decl["properties"].(map[string]interface{})["name"].(map[string]interface{})["pattern"])
+	list := crdSchema(t, "kardinal.io_policygates.yaml", "spec", "approval", "fields")
+	assert.EqualValues(t, 16, list["maxItems"])
+	assert.Equal(t, "map", list["x-kubernetes-list-type"], "one declaration per name")
+	for _, tc := range []struct {
+		name string
+		self map[string]interface{}
+		want []string
+	}{
+		{"a string", map[string]interface{}{"name": "t", "type": "string", "pattern": "^CHG"}, nil},
+		{"an enum", map[string]interface{}{"name": "t", "type": "enum", "values": []interface{}{"a", "b"}, "mustBe": "a"}, nil},
+		{"a bool", map[string]interface{}{"name": "t", "type": "bool", "mustBe": "true"}, nil},
+		{"an enum without values", map[string]interface{}{"name": "t", "type": "enum"}, []string{"an enum field lists its values"}},
+		{"values on a string", map[string]interface{}{"name": "t", "type": "string", "values": []interface{}{"a"}}, []string{"values are for an enum field"}},
+		{"a pattern on a bool", map[string]interface{}{"name": "t", "type": "bool", "pattern": "x"}, []string{"a pattern is for a string or url field"}},
+		{"a bool's mustBe", map[string]interface{}{"name": "t", "type": "bool", "mustBe": "yes"}, []string{"a bool field's mustBe is true or false"}},
+		{"an enum's mustBe", map[string]interface{}{"name": "t", "type": "enum", "values": []interface{}{"a"}, "mustBe": "b"}, []string{"an enum field's mustBe is one of its values"}},
+	} {
+		t.Run("ApprovalField "+tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, failingRules(t, decl, tc.self))
+		})
+	}
+}

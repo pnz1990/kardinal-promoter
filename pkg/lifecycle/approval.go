@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -52,6 +54,10 @@ type ApprovalRequest struct {
 	Via string
 	// Actor is the decision's actor stamp (docs/actors.md), or nil.
 	Actor *v1alpha1.Actor
+	// Fields are the decision's structured values (Approval spec.fields).
+	// An approve is checked against the approval.fields of the Bundle's
+	// approval gates in the environment before it is written.
+	Fields map[string]string
 }
 
 // ApprovalOutcome is what RecordApproval did.
@@ -117,6 +123,11 @@ func RecordApproval(ctx context.Context, c client.Client, req ApprovalRequest) (
 		return "", nil, fmt.Errorf("bundle %s is %s and never promotes again; approve a newer Bundle: %w",
 			req.Bundle, b.Status.Phase, ErrConflict)
 	}
+	if !req.Revoke && req.Decision == DecisionApprove {
+		if err := checkApprovalFields(ctx, c, req); err != nil {
+			return "", nil, err
+		}
+	}
 	var list v1alpha1.ApprovalList
 	if err := c.List(ctx, &list, client.InNamespace(req.Namespace),
 		client.MatchingLabels{"kardinal.io/bundle": req.Bundle, "kardinal.io/environment": req.Environment}); err != nil {
@@ -147,7 +158,8 @@ func RecordApproval(ctx context.Context, c client.Client, req ApprovalRequest) (
 			}
 		}
 		return ApprovalRevoked, &mine[0], nil
-	case len(mine) == 1 && mine[0].Spec.Decision == req.Decision && mine[0].Spec.Comment == req.Comment:
+	case len(mine) == 1 && mine[0].Spec.Decision == req.Decision && mine[0].Spec.Comment == req.Comment &&
+		sameFields(mine[0].Spec.Fields, req.Fields):
 		return ApprovalUnchanged, &mine[0], nil
 	}
 	for i := range mine {
@@ -176,7 +188,7 @@ func RecordApproval(ctx context.Context, c client.Client, req ApprovalRequest) (
 		},
 		Spec: v1alpha1.ApprovalSpec{
 			Bundle: req.Bundle, BundleUID: string(b.UID), Environment: req.Environment, User: req.User, Groups: groups,
-			Decision: req.Decision, Comment: req.Comment, Actor: req.Actor,
+			Decision: req.Decision, Comment: req.Comment, Actor: req.Actor, Fields: nonEmpty(req.Fields),
 		},
 	}
 	if req.Via != "" {
@@ -194,4 +206,90 @@ func RecordApproval(ctx context.Context, c client.Client, req ApprovalRequest) (
 		return "", nil, fmt.Errorf("create approval for %s: %w", req.Bundle, err)
 	}
 	return ApprovalRecorded, a, nil
+}
+
+// checkApprovalFields refuses, before anything is written, an approve whose
+// fields do not satisfy the approval.fields of the Bundle's approval gates
+// in the environment (ApprovalFieldProblems, the tally's own rule): an
+// ErrInvalid naming each gate and field. Gates the Graph has not created yet
+// are not checked; their tally applies the rule when they are.
+func checkApprovalFields(ctx context.Context, c client.Client, req ApprovalRequest) error {
+	if len(req.Fields) > MaxApprovalFields {
+		return fmt.Errorf("an approval carries at most %d fields, not %d: %w", MaxApprovalFields, len(req.Fields), ErrInvalid)
+	}
+	for k, v := range req.Fields {
+		if !approvalFieldName.MatchString(k) {
+			return fmt.Errorf("field name %q: a letter, then letters, digits or underscores, at most 63 characters: %w", k, ErrInvalid)
+		}
+		if len(v) > MaxApprovalFieldValue {
+			return fmt.Errorf("field %s is longer than %d bytes: %w", k, MaxApprovalFieldValue, ErrInvalid)
+		}
+	}
+	gates, err := ApprovalGatesOf(ctx, c, req.Namespace, req.Bundle, req.Environment)
+	if apierrors.IsForbidden(errors.Unwrap(err)) {
+		// An approver who may not read gates: the tally applies the rule.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var problems []string
+	for i := range gates {
+		if ok, why := ApprovalFieldsValid(gates[i].Spec.Approval, req.Fields); !ok {
+			problems = append(problems, fmt.Sprintf("gate %s: %s", gateTemplateName(&gates[i]), why))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s: %w", strings.Join(problems, "; "), ErrInvalid)
+	}
+	return nil
+}
+
+// approvalFieldName is an Approval field name (the CRD's rule).
+var approvalFieldName = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,62}$`)
+
+// ApprovalGatesOf are the approval gate instances of bundle in env (the
+// gates with spec.approval), sorted by name.
+func ApprovalGatesOf(ctx context.Context, c client.Reader, ns, bundle, env string) ([]v1alpha1.PolicyGate, error) {
+	var gates v1alpha1.PolicyGateList
+	if err := c.List(ctx, &gates, client.InNamespace(ns),
+		client.MatchingLabels{"kardinal.io/bundle": bundle, "kardinal.io/environment": env}); err != nil {
+		return nil, fmt.Errorf("list the gates of %s in %s: %w", bundle, env, err)
+	}
+	var out []v1alpha1.PolicyGate
+	for _, g := range gates.Items {
+		if g.Spec.Approval != nil {
+			out = append(out, g)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// gateTemplateName is the template a gate instance was made from, or its
+// own name.
+func gateTemplateName(g *v1alpha1.PolicyGate) string {
+	if n := g.Labels["kardinal.io/gate-name"]; n != "" {
+		return n
+	}
+	return g.Name
+}
+
+func sameFields(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
+}
+
+func nonEmpty(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }

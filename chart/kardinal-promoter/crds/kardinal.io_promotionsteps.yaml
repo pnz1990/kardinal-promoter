@@ -1162,6 +1162,14 @@ spec:
                             event occurred.
                           minLength: 1
                           type: string
+                        fields:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Fields are an ApprovalRecorded or ApprovalRevoked decision's
+                            structured values (Approval spec.fields) the gate declares, whole.
+                          maxProperties: 16
+                          type: object
                         message:
                           description: Message is a human-readable description of
                             the event.

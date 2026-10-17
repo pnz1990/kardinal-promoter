@@ -425,3 +425,123 @@ func hasPending(pending []kardinalv1alpha1.PendingAuditEvent, action string) boo
 	}
 	return false
 }
+
+// TestPolicyGateReconciler_ApprovalFields (spec 23 §8): an approve without
+// the declared fields does not count and status.approvals says why;
+// approvals.fields.<name> in the expression holds the counted approvals'
+// values, so a gate can require a particular value; a name the gate does not
+// declare is an evaluation error (fail closed); status.approvals and the
+// ApprovalRecorded AuditEvent carry the fields (the message cut, the
+// structured field whole).
+func TestPolicyGateReconciler_ApprovalFields(t *testing.T) {
+	policy := func() *kardinalv1alpha1.GateApprovalPolicy {
+		return &kardinalv1alpha1.GateApprovalPolicy{Required: 1, Fields: []kardinalv1alpha1.ApprovalField{
+			{Name: "ticketID", Required: true, Pattern: `^CHG[0-9]{7}$`},
+			{Name: "notes"}}}
+	}
+	long := strings.Repeat("n", 600)
+	with := func(user string, fields map[string]string) kardinalv1alpha1.GateApproval {
+		d := decision(user, "approve")
+		d.Fields = fields
+		return d
+	}
+	cases := []struct {
+		name       string
+		expr       string
+		approvals  []kardinalv1alpha1.GateApproval
+		wantReady  bool
+		wantReason string
+	}{
+		{name: "an approve without the field does not count", expr: "true",
+			approvals:  []kardinalv1alpha1.GateApproval{decision("alice", "approve")},
+			wantReason: "waiting for approvals: 0 of 1"},
+		{name: "with it, it counts", expr: "true",
+			approvals: []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0031337"})},
+			wantReady: true, wantReason: "approved by alice (1 of 1)"},
+		{name: "the expression reads the counted values", expr: `approvals.fields.ticketID.exists(t, t == "CHG0031337")`,
+			approvals: []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0031337"})},
+			wantReady: true},
+		{name: "a value the expression does not want", expr: `approvals.fields.ticketID.exists(t, t == "CHG0000001")`,
+			approvals:  []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0031337"})},
+			wantReason: "= false"},
+		{name: "a field nobody gave is an empty list", expr: `size(approvals.fields.notes) == 0`,
+			approvals: []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0031337"})},
+			wantReady: true},
+		{name: "an undeclared name fails closed", expr: `approvals.fields.other.exists(t, t == "x")`,
+			approvals: []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0031337", "other": "x"})}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := makeGateInstance("change", "default", "nginx-demo-v1", tc.expr, "5m")
+			gate.Spec.Approval = policy()
+			gate.Spec.Approvals = tc.approvals
+			bundle := makeBundle("nginx-demo-v1", "default")
+			bundle.Status.Phase = "Promoting"
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "change", Namespace: "default"}}
+			_, _ = r.Reconcile(context.Background(), req)
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tc.wantReady, got.Status.Ready, got.Status.Reason)
+			assert.Contains(t, got.Status.Reason, tc.wantReason)
+			if tc.name == "an approve without the field does not count" {
+				require.Len(t, got.Status.Approvals, 1)
+				assert.False(t, got.Status.Approvals[0].Counted)
+				assert.Equal(t, "approval.fields: ticketID is required", got.Status.Approvals[0].Reason)
+			}
+		})
+	}
+
+	t.Run("status and the AuditEvent carry the fields", func(t *testing.T) {
+		gate := makeGateInstance("change", "default", "nginx-demo-v1", "true", "5m")
+		gate.Spec.Approval = policy()
+		gate.Spec.Approvals = []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0031337", "notes": long, "other": "x"})}
+		bundle := makeBundle("nginx-demo-v1", "default")
+		bundle.Status.Phase = "Promoting"
+		c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+		r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "change", Namespace: "default"}}
+		for range 2 {
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+		}
+		var got kardinalv1alpha1.PolicyGate
+		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+		require.Len(t, got.Status.Approvals, 1)
+		rec := got.Status.Approvals[0]
+		assert.Equal(t, "CHG0031337", rec.Fields["ticketID"])
+		assert.Equal(t, strings.Repeat("n", 256)+"…", rec.Fields["notes"], "status keeps 256 bytes")
+		assert.NotContains(t, rec.Fields, "other", "undeclared fields are not recorded")
+		var list kardinalv1alpha1.AuditEventList
+		require.NoError(t, c.List(context.Background(), &list))
+		var recorded []kardinalv1alpha1.AuditEvent
+		for _, e := range list.Items {
+			if e.Spec.Action == "ApprovalRecorded" {
+				recorded = append(recorded, e)
+			}
+		}
+		require.Len(t, recorded, 1, "recorded once")
+		assert.Contains(t, recorded[0].Spec.Message, "fields: notes="+strings.Repeat("n", 256)+"…, ticketID=CHG0031337")
+		assert.Equal(t, map[string]string{"ticketID": "CHG0031337", "notes": long}, recorded[0].Spec.Fields, "whole in the structured field")
+
+		// The same user's approve with other fields is a new decision: recorded and audited anew.
+		got.Spec.Approvals = []kardinalv1alpha1.GateApproval{with("alice", map[string]string{"ticketID": "CHG0000042"})}
+		require.NoError(t, c.Update(context.Background(), &got))
+		for range 2 {
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+		}
+		require.NoError(t, c.List(context.Background(), &list))
+		var msgs []string
+		for _, e := range list.Items {
+			if strings.HasPrefix(e.Spec.Action, "Approval") {
+				msgs = append(msgs, e.Spec.Action+" "+fmt.Sprint(e.Spec.Fields["ticketID"]))
+			}
+		}
+		sort.Strings(msgs)
+		assert.Equal(t, []string{"ApprovalRecorded CHG0000042", "ApprovalRecorded CHG0031337", "ApprovalRevoked CHG0031337"}, msgs)
+	})
+}

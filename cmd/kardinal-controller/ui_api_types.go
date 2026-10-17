@@ -42,6 +42,11 @@ type uiApprovalRequest struct {
 	Comment string `json:"comment,omitempty"`
 	// Revoke deletes the user's decision instead of recording one.
 	Revoke bool `json:"revoke,omitempty"`
+	// Fields are the decision's structured values, by name: the ones the
+	// gate's approval.fields asks for (Approval spec.fields). An approve
+	// that does not satisfy them is refused with 400 before anything is
+	// written (lifecycle.RecordApproval, the gate's own rule).
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // uiApprovalResponse is the response of POST /api/v1/ui/approvals.

@@ -157,6 +157,7 @@ Approval records that a person approved, or rejected, a Bundle for an environmen
 | `spec.comment` | string |  | Comment is a free-form note shown with the decision. Default: ``. |
 | `spec.decision` | string | yes | Decision is approve, or reject: a reject from an allowed approver blocks the gate whatever the other approvals. One of: `approve`, `reject`. Default: `approve`. |
 | `spec.environment` | string | yes | Environment is the Pipeline environment the decision is for. |
+| `spec.fields` | map[string]string |  | Fields are the structured values the decision carries: the ones the gate's approval.fields declares (a ticket ID, an acknowledgement, a rollback plan URL). An approve that does not satisfy a declared field does not count, and the gate says why (docs/design/23-change-requests.md section 8). They are the approver's statements, verified as theirs, not as true. |
 | `spec.groups` | []string |  | Groups are the approver's Kubernetes groups that count for the gate's approval.allowedGroups. Each must be one of the requester's groups. Default: `[]`. |
 | `spec.user` | string | yes | User is the Kubernetes username of the approver, as the API server authenticates them (kubectl auth whoami). |
 
@@ -182,6 +183,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string |  | Environment is the environment name where the event occurred. |
+| `spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
 | `spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -285,6 +287,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
+| `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -1134,6 +1137,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
+| `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -1159,6 +1163,14 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.approval.allowedGroups` | []string |  | AllowedGroups are Kubernetes groups: an approval counts when one of the approval's groups is listed. With neither allowedUsers nor allowedGroups, every approval counts; who may approve is then decided by RBAC on approvals. |
 | `spec.approval.allowedUsers` | []string |  | AllowedUsers are Kubernetes usernames whose approvals count. |
 | `spec.approval.excludeAuthor` | boolean |  | ExcludeAuthor does not count an approval whose user created the Bundle (no self-approval): the kardinal.io/created-by annotation, which the chart's admission policy pins to the creating user (kardinal create bundle, the Bundle API and the UI set it). A Bundle without it blocks the gate: the rule cannot be enforced. It applies the one-party rule: with an actor stamp on the Bundle, an agent's version cannot be approved by the agent, its sponsor or another agent of that sponsor, and a person's version not by the person's own agents. |
+| `spec.approval.fields` | []object |  | Fields are the structured values an approve must carry (Approval spec.fields): an approve that does not satisfy them does not count, and status.approvals says why. A reject needs none. The values of the counted approvals are approvals.fields.&lt;name&gt; in the expression. |
+| `spec.approval.fields[].description` | string |  | Description is what the field asks, shown by kardinal approve and the UI's approval form. |
+| `spec.approval.fields[].mustBe` | string |  | MustBe is the one value accepted: for a bool, "true" for an acknowledgement the approver must give. |
+| `spec.approval.fields[].name` | string | yes | Name is the field's name in Approval spec.fields and in approvals.fields.&lt;name&gt;. |
+| `spec.approval.fields[].pattern` | string |  | Pattern is a regular expression (RE2, as CEL's matches) a string or url value must match. A pattern that does not compile makes the field impossible to satisfy, and the gate says so. |
+| `spec.approval.fields[].required` | boolean |  | Required means an approve without the field does not count. |
+| `spec.approval.fields[].type` | string |  | Type is how the value is read: string, bool (true or false), int, url (https or http, with a host) or enum (one of values). One of: `string`, `bool`, `int`, `url`, `enum`. Default: `string`. |
+| `spec.approval.fields[].values` | []string |  | Values are an enum field's choices. |
 | `spec.approval.required` | integer |  | Required is how many distinct allowed parties must approve. A party is a person, or an agent together with its sponsor (docs/design/18-actor-policy.md): alice and her agent count once. Default: `1`. |
 | `spec.approval.requiredWhen` | string |  | RequiredWhen is a CEL expression, in the gate's own context: the policy holds the gate only while it is true. Unset means always. While it is false approvals are still recorded, approvals.met is true and status.approvalRequired is false. An evaluation error blocks the gate. Example: "actor.kind == 'agent'" (people ship on their own, agents need an approval). |
 | `spec.approvals` | []object |  | Approvals is written by the promotion Graph on gate instances: the Approvals of the instance's Bundle and environment, copied from the Approval objects, at most 101 (more than 100 blocks the gate). Do not set it; on a template it is ignored. |
@@ -1177,6 +1189,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.approvals[].comment` | string |  | Comment is the approver's note. |
 | `spec.approvals[].decision` | string | yes | Decision is approve or reject. |
 | `spec.approvals[].environment` | string | yes | Environment is the environment the decision is for. |
+| `spec.approvals[].fields` | map[string]string |  | Fields are the Approval's structured values (spec.fields). |
 | `spec.approvals[].groups` | []string |  | Groups are the approver's groups that count for allowedGroups. |
 | `spec.approvals[].user` | string | yes | User is the approver's Kubernetes username. |
 | `spec.expression` | string | yes | Expression is the CEL expression evaluated to determine if promotion is allowed. Must evaluate to a boolean. |
@@ -1262,6 +1275,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.approvals[].comment` | string |  | Comment is the approver's comment. |
 | `status.approvals[].counted` | boolean | yes | Counted reports whether the decision counts for the gate. |
 | `status.approvals[].decision` | string | yes | Decision is approve or reject. |
+| `status.approvals[].fields` | map[string]string |  | Fields are the decision's values of the fields the gate declares, each cut to 256 bytes (the Approval holds them whole). |
 | `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
 | `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
 | `status.approvals[].user` | string | yes | User is the approver. |
@@ -1298,6 +1312,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
+| `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -1550,6 +1565,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
+| `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |

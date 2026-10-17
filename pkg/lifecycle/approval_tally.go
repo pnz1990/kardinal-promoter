@@ -51,6 +51,11 @@ type ApprovalTally struct {
 	// excludeAuthor on a Bundle with no verified creator or one a kardinal
 	// component created.
 	Held string
+	// Fields are the values of the declared approval fields (approval.fields)
+	// that the counted approvals carry, by field name, in Approvers' order:
+	// approvals.fields.<name> in the gate's expression. Only votes that count
+	// are policy inputs (docs/design/23-change-requests.md section 8.3).
+	Fields map[string][]string
 	// countedKeys maps the party key of each of Approvers to its name.
 	countedKeys map[string]string
 }
@@ -261,15 +266,25 @@ func TallyApprovals(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.A
 	decisions := slices.Clone(gate.Spec.Approvals)
 	sort.SliceStable(decisions, func(i, j int) bool { return decisions[i].User < decisions[j].User })
 	approved, rejected := map[string]string{}, map[string]string{}
+	approvedFields := map[string]map[string]string{}
 	for _, a := range decisions {
-		rec := kardinalv1alpha1.GateApprovalStatus{User: a.User, Decision: a.Decision, Comment: a.Comment, Actor: a.Actor}
+		rec := kardinalv1alpha1.GateApprovalStatus{User: a.User, Decision: a.Decision, Comment: a.Comment, Actor: a.Actor,
+			Fields: DeclaredFields(p, a.Fields, MaxRecordedFieldValue)}
 		who := Approver{User: a.User, Groups: a.Groups, Actor: a.Actor}
 		counts, why := ApprovalDecisionCounts(p, who, author)
+		fieldsOK, fieldsWhy := true, ""
+		if a.Decision != DecisionReject {
+			// A reject needs no fields: stopping a promotion is never harder
+			// than letting it through.
+			fieldsOK, fieldsWhy = ApprovalFieldsValid(p, a.Fields)
+		}
 		switch {
 		case a.Bundle != bundle || a.Environment != env:
 			rec.Reason = fmt.Sprintf("for bundle %s in %s, not this gate's", a.Bundle, a.Environment)
 		case !counts:
 			rec.Reason = why
+		case !fieldsOK:
+			rec.Reason = fieldsWhy
 		default:
 			rec.Counted = true
 			key := actor.PartyKey(who.actorOf())
@@ -282,6 +297,7 @@ func TallyApprovals(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.A
 				}
 			} else if _, ok := approved[key]; !ok {
 				approved[key] = a.User
+				approvedFields[key] = a.Fields
 			} else if approved[key] != a.User {
 				rec.Counted = false
 				rec.Reason = fmt.Sprintf("already counted for %s (one vote per party)", approved[key])
@@ -300,6 +316,23 @@ func TallyApprovals(gate *kardinalv1alpha1.PolicyGate, author kardinalv1alpha1.A
 	}
 	sort.Strings(t.Rejecters)
 	sort.Strings(t.Approvers)
+	if p != nil && len(p.Fields) > 0 {
+		t.Fields = map[string][]string{}
+		for _, f := range p.Fields {
+			t.Fields[f.Name] = []string{}
+		}
+		byUser := map[string]string{}
+		for key, u := range t.countedKeys {
+			byUser[u] = key
+		}
+		for _, u := range t.Approvers {
+			for name, v := range approvedFields[byUser[u]] {
+				if _, declared := t.Fields[name]; declared && v != "" {
+					t.Fields[name] = append(t.Fields[name], v)
+				}
+			}
+		}
+	}
 	return t
 }
 

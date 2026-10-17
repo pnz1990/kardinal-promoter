@@ -203,6 +203,10 @@ func docsCELFixture(t *testing.T) (*Reconciler, *kardinalv1alpha1.PolicyGate) {
 				"kardinal.io/bundle": "app-v1",
 			},
 		},
+		// The approval fields docs/approvals.md declares, so its
+		// approvals.fields.<name> examples evaluate.
+		Spec: kardinalv1alpha1.PolicyGateSpec{Approval: &kardinalv1alpha1.GateApprovalPolicy{Required: 1,
+			Fields: []kardinalv1alpha1.ApprovalField{{Name: "ticketID"}, {Name: "riskAcknowledged", Type: "bool"}}}},
 	}
 	return r, gate
 }

@@ -232,7 +232,7 @@ export const api = {
   releaseHold: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ message: string }>('/release-hold', { pipeline, environment, namespace }),
   /** Approve, reject or revoke a Bundle for an environment as the UI user (kardinal approve; TokenReview mode). */
-  recordApproval: (req: { bundle: string; environment: string; namespace?: string; decision?: 'approve' | 'reject'; comment?: string; revoke?: boolean }) =>
+  recordApproval: (req: { bundle: string; environment: string; namespace?: string; decision?: 'approve' | 'reject'; comment?: string; revoke?: boolean; fields?: Record<string, string> }) =>
     post<{ outcome: string; approval: string; user: string; message: string }>('/approvals', req),
   /** Reject a Bundle: it is never promoted again (kardinal reject). Needs bundles/reject. */
   rejectBundle: (bundle: string, reason: string, namespace = 'default') =>

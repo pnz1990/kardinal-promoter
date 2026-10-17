@@ -753,3 +753,37 @@ func TestUIHandler_HoldNeedsBundleCreateFirst(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &p))
 	assert.Empty(t, p.Spec.Holds)
 }
+
+// TestUIHandler_ApprovalFields (spec 23 §8.4): the UI's approve carries the
+// fields of the gate's approval.fields; one the gate does not accept is 400,
+// with the gate's own reason, and nothing is written.
+func TestUIHandler_ApprovalFields(t *testing.T) {
+	ctx := context.Background()
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "team-a", UID: "uid-v2"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app"}, Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
+	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "change--app-v2-prod", Namespace: "team-a",
+		Labels: map[string]string{"kardinal.io/bundle": "app-v2", "kardinal.io/environment": "prod", "kardinal.io/gate-name": "change"}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true", Approval: &v1alpha1.GateApprovalPolicy{Fields: []v1alpha1.ApprovalField{
+			{Name: "ticketID", Required: true, Pattern: `^CHG[0-9]{7}$`}}}}}
+	tokens := groupTokens{"alice": {Username: "alice@example.com"}}
+	access := &uiTestAccess{rules: map[string]map[string][]string{"alice@example.com": {"team-a": {"get", "list", "create", "delete", "update"}}}}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(p, b, gate).Build()
+	h := newUIHandler(c, nil, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+	post := func(body string) *httptest.ResponseRecorder {
+		return uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/approvals", "Bearer alice", body)
+	}
+	rec := post(`{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve","fields":{"ticketID":"CHG1"}}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "gate change: approval.fields: ticketID must match")
+	var l v1alpha1.ApprovalList
+	require.NoError(t, c.List(ctx, &l))
+	assert.Empty(t, l.Items)
+
+	rec = post(`{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve","fields":{"ticketID":"CHG0031337"}}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, c.List(ctx, &l))
+	require.Len(t, l.Items, 1)
+	assert.Equal(t, map[string]string{"ticketID": "CHG0031337"}, l.Items[0].Spec.Fields)
+}

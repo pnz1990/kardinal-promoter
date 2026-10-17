@@ -269,9 +269,12 @@ func TestUIAPI_Gates_Approval(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "prod-approval", Namespace: "default",
 			Labels: map[string]string{"kardinal.io/bundle": "app-1", "kardinal.io/environment": "prod", "kardinal.io/pipeline": "app"}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "true",
-			Approval: &v1alpha1.GateApprovalPolicy{AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true}},
+			Approval: &v1alpha1.GateApprovalPolicy{AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true,
+				Fields: []v1alpha1.ApprovalField{{Name: "ticketID", Required: true, Pattern: "^CHG", Description: "change"},
+					{Name: "tier", Type: "enum", Values: []string{"low", "high"}}}}},
 		Status: v1alpha1.PolicyGateStatus{Approvals: []v1alpha1.GateApprovalStatus{
-			{User: "alice", Decision: "approve", Counted: true, Comment: "looks good", FirstSeenAt: &seen},
+			{User: "alice", Decision: "approve", Counted: true, Comment: "looks good", FirstSeenAt: &seen,
+				Fields: map[string]string{"ticketID": "CHG0031337"}},
 			{User: "mallory", Decision: "approve", Counted: false, Reason: "not in allowedUsers or allowedGroups"},
 			{User: "bob", Decision: "reject", Counted: true, Comment: "wait for the freeze"},
 		}},
@@ -289,8 +292,11 @@ func TestUIAPI_Gates_Approval(t *testing.T) {
 	assert.Equal(t, &uiGateApproval{
 		Required: 1, AllowedGroups: []string{"release-managers"}, ExcludeAuthor: true,
 		Approved: 1, Rejected: true,
+		Fields: []uiApprovalField{{Name: "ticketID", Type: "string", Required: true, Pattern: "^CHG", Description: "change"},
+			{Name: "tier", Type: "enum", Values: []string{"low", "high"}}},
 		Decisions: []uiGateDecision{
-			{User: "alice", Decision: "approve", Counted: true, Comment: "looks good", FirstSeenAt: "2026-10-09T08:00:00Z"},
+			{User: "alice", Decision: "approve", Counted: true, Comment: "looks good", FirstSeenAt: "2026-10-09T08:00:00Z",
+				Fields: map[string]string{"ticketID": "CHG0031337"}},
 			{User: "mallory", Decision: "approve", Reason: "not in allowedUsers or allowedGroups"},
 			{User: "bob", Decision: "reject", Counted: true, Comment: "wait for the freeze"},
 		},

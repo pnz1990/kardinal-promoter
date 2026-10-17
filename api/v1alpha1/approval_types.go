@@ -53,6 +53,18 @@ type ApprovalSpec struct {
 	// +kubebuilder:default=approve
 	Decision string `json:"decision"`
 
+	// Fields are the structured values the decision carries: the ones the
+	// gate's approval.fields declares (a ticket ID, an acknowledgement, a
+	// rollback plan URL). An approve that does not satisfy a declared field
+	// does not count, and the gate says why (docs/design/23-change-requests.md
+	// section 8). They are the approver's statements, verified as theirs,
+	// not as true.
+	// +kubebuilder:validation:MaxProperties=16
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-zA-Z][a-zA-Z0-9_]{0,62}$'))",message="a field name is a letter then letters, digits or underscores, at most 63 characters"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 1024)",message="a field value is at most 1024 bytes"
+	// +optional
+	Fields map[string]string `json:"fields,omitempty"`
+
 	// Actor is who decided (docs/actors.md): the verified kardinal.io/actor
 	// stamp. Its principal equals spec.user.
 	// +optional

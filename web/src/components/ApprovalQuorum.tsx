@@ -121,7 +121,7 @@ export function ApprovalQuorum({ approval: a, pipeline, bundle, environment, nam
         <div className="approval-quorum__none">No decisions yet.</div>
       )}
       {bundle && environment && namespace && (
-        <ApprovalActions bundle={bundle} environment={environment} namespace={namespace} onDone={onDecided} reasonFor={reasonFor} />
+        <ApprovalActions bundle={bundle} environment={environment} namespace={namespace} onDone={onDecided} reasonFor={reasonFor} fields={a.fields} />
       )}
       {signIn && bundle && environment && namespace && commandFor(noteDecision) &&
         <SignInNote command={commandFor(noteDecision)} decision={noteDecision} />}

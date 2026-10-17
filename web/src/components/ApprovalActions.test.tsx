@@ -27,6 +27,45 @@ describe('ApprovalActions (E6)', () => {
     expect(onDone).toHaveBeenCalledOnce()
   })
 
+  it('asks for the gate\'s approval fields: a missing required one is refused before anything is sent; the values go with the approve', async () => {
+    const user = userEvent.setup()
+    api.recordApproval.mockResolvedValue({ outcome: 'Recorded', approval: 'a1', user: 'alice', message: 'Recorded' })
+    const fields = [
+      { name: 'ticketID', type: 'string', required: true, pattern: '^CHG[0-9]{7}$', description: 'ServiceNow change number' },
+      { name: 'riskAcknowledged', type: 'bool', required: true, mustBe: 'true', description: 'I have read the migration notes' },
+      { name: 'tier', type: 'enum', values: ['low', 'high'] },
+    ]
+    render(<ApprovalActions bundle="app-v2" environment="prod" namespace="team-a" fields={fields} />)
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('ticketID is required; riskAcknowledged is required')
+    expect(api.recordApproval).not.toHaveBeenCalled()
+
+    await user.type(screen.getByLabelText('ticketID'), 'CHG12')
+    await user.click(screen.getByLabelText('I have read the migration notes'))
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('ticketID must match ^CHG[0-9]{7}$')
+    expect(api.recordApproval).not.toHaveBeenCalled()
+
+    await user.clear(screen.getByLabelText('ticketID'))
+    await user.type(screen.getByLabelText('ticketID'), 'CHG0031337')
+    await user.selectOptions(screen.getByLabelText('tier (optional)'), 'high')
+    await user.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(api.recordApproval).toHaveBeenCalledWith({
+      bundle: 'app-v2', environment: 'prod', namespace: 'team-a', decision: 'approve',
+      fields: { ticketID: 'CHG0031337', riskAcknowledged: 'true', tier: 'high' },
+    })
+  })
+
+  it('a reject needs no fields', async () => {
+    const user = userEvent.setup()
+    api.recordApproval.mockResolvedValue({ outcome: 'Recorded', approval: 'a1', user: 'alice', message: 'Recorded' })
+    render(<ApprovalActions bundle="app-v2" environment="prod" namespace="team-a"
+      fields={[{ name: 'ticketID', type: 'string', required: true }]} />)
+    await user.click(screen.getByRole('button', { name: 'Reject' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reject' }))
+    expect(api.recordApproval).toHaveBeenCalledWith({ bundle: 'app-v2', environment: 'prod', namespace: 'team-a', decision: 'reject' })
+  })
+
   it('restricted: every button stays in place but inert, its reason the description; nothing is sent', async () => {
     const user = userEvent.setup()
     const why = { approve: 'Approving needs sign-in.', reject: 'Declining needs sign-in.', revoke: 'Revoking needs sign-in.' }
