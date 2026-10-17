@@ -123,7 +123,8 @@ func (f *ticketing) Find(_ context.Context, req changerequest.Request) (changere
 	return changerequest.Reading{}, false, nil
 }
 
-func (f *ticketing) Get(_ context.Context, _ changerequest.Request, key string) (changerequest.Reading, error) {
+func (f *ticketing) Get(_ context.Context, _ changerequest.Request, tk v1alpha1.ChangeRequestTicket) (changerequest.Reading, error) {
+	key := tk.Key
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["Get"]++

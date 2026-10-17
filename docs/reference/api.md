@@ -368,8 +368,9 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `spec.servicenow.credentialsSecretRef.key` | string | yes | Key is the key in the Secret's data. |
 | `spec.servicenow.credentialsSecretRef.name` | string | yes | Name is the Secret name. |
 | `spec.servicenow.instanceURL` | string | yes | InstanceURL is the ServiceNow instance, https://&lt;instance&gt;.service-now.com. |
+| `spec.servicenow.integrationUser` | string |  | IntegrationUser is the ServiceNow user_name the credential acts as. kardinal adopts an existing change (a create whose answer it lost) only when that user created it (sys_created_by), so nobody can plant a labelled change and approve it. With scheme basic it defaults to the credential's user; scheme bearer needs it. |
 | `spec.servicenow.scheme` | string |  | Scheme is basic (the key holds user:password, or Jira Cloud's email:api-token) or bearer (an OAuth token, or a Jira Data Center PAT). One of: `basic`, `bearer`. Default: `basic`. |
-| `spec.servicenow.states` | map[string]string |  | States maps raw state values (the change_request state field) to kardinal states, over the default Change Management state model. |
+| `spec.servicenow.states` | map[string]string |  | States maps state values of the change_request state field (the raw value, -2, or its display name, Scheduled) to kardinal states, before the default Change Management state model (docs/change-requests.md). |
 | `spec.servicenow.template` | map[string]string |  | Template are the fields the change request is created with (short_description, assignment_group, ...): string values, with the placeholders of a per-promotion MetricCheck ({{ bundle.version }}, {{ pipeline.name }}, {{ environment.name }}, ...). |
 | `spec.servicenow.type` | string |  | Type is the change model of the Change Management API: normal, standard or emergency. One of: `normal`, `standard`, `emergency`. Default: `normal`. |
 | `spec.suspend` | boolean |  | Suspend stops reading the ticket (the Graph sets it on an instance once its Bundle stops promoting). The last state stays in status and goes stale. |

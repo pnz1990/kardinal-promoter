@@ -65,8 +65,10 @@ type Provider interface {
 	Create(ctx context.Context, req Request) (Reading, error)
 	// Find returns the ticket that carries req.CorrelationID, if any.
 	Find(ctx context.Context, req Request) (Reading, bool, error)
-	// Get reads the ticket with key (a ServiceNow number or a Jira issue key).
-	Get(ctx context.Context, req Request, key string) (Reading, error)
+	// Get reads ticket t: by t.ID when set (a ServiceNow sys_id, a Jira
+	// issue id), else by t.Key (a ServiceNow number, a Jira issue key; a
+	// linked ticket has only its key).
+	Get(ctx context.Context, req Request, t kardinalv1alpha1.ChangeRequestTicket) (Reading, error)
 }
 
 // ErrCredentials is a provider's refusal of the credential (HTTP 401 or 403).
@@ -129,8 +131,11 @@ func secretReader(c client.Reader, ns string) func(context.Context, kardinalv1al
 }
 
 // DefaultProviders returns the ticketing systems this controller serves,
-// by spec.provider. A ChangeRequest of a provider not listed gets condition
-// ProviderError.
-func DefaultProviders() map[string]Provider {
-	return map[string]Provider{}
+// by spec.provider, with egress-guarded HTTP clients. A ChangeRequest of a
+// provider not listed gets condition ProviderError.
+func DefaultProviders(o ProviderOptions) map[string]Provider {
+	hc := newHTTPClient(o)
+	return map[string]Provider{
+		kardinalv1alpha1.ChangeRequestServiceNow: &ServiceNow{Client: hc},
+	}
 }

@@ -1638,6 +1638,56 @@ func TestChartMetricCheckQuerySlots(t *testing.T) {
 	}
 }
 
+// TestChartChangeRequestValues: changeRequest.maxInflight and
+// .maxInflightPerNamespace set the ChangeRequest call caps (8 and 1 by
+// default, 0 refused); changeRequest.caBundle.configMap mounts the CA
+// ConfigMap's key read-only and passes it as --change-request-ca-file, and
+// nothing is mounted without it.
+func TestChartChangeRequestValues(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter"))
+	args := argValues(c)
+	assert.Equal(t, "8", args["change-request-max-inflight"])
+	assert.Equal(t, "1", args["change-request-max-inflight-per-namespace"])
+	assert.NotContains(t, args, "change-request-ca-file")
+	for _, m := range c.VolumeMounts {
+		assert.NotEqual(t, "change-request-ca", m.Name)
+	}
+
+	docs := render(t, "kardinal-promoter", "--set", "changeRequest.caBundle.configMap=snow-ca",
+		"--set", "changeRequest.caBundle.key=bundle.pem", "--set", "changeRequest.maxInflight=20")
+	c = controllerContainer(t, docs)
+	args = argValues(c)
+	assert.Equal(t, "20", args["change-request-max-inflight"])
+	assert.Equal(t, "/etc/kardinal/change-request-ca/bundle.pem", args["change-request-ca-file"])
+	var mounted bool
+	for _, m := range c.VolumeMounts {
+		if m.Name == "change-request-ca" {
+			mounted = true
+			assert.Equal(t, "/etc/kardinal/change-request-ca", m.MountPath)
+			assert.True(t, m.ReadOnly)
+		}
+	}
+	assert.True(t, mounted)
+	var dep appsv1.Deployment
+	decodeStrict(t, docsOfKind(docs, "Deployment")[0], &dep)
+	var vol *corev1.Volume
+	for i := range dep.Spec.Template.Spec.Volumes {
+		if dep.Spec.Template.Spec.Volumes[i].Name == "change-request-ca" {
+			vol = &dep.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	require.NotNil(t, vol)
+	require.NotNil(t, vol.ConfigMap)
+	assert.Equal(t, "snow-ca", vol.ConfigMap.Name)
+	assert.Equal(t, []corev1.KeyToPath{{Key: "bundle.pem", Path: "bundle.pem"}}, vol.ConfigMap.Items)
+
+	for _, bad := range []string{"changeRequest.maxInflight=0", "changeRequest.maxInflightPerNamespace=0", "changeRequest.caBundle.key=../x"} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", bad)
+		require.Error(t, err, bad)
+		assert.Contains(t, out, "/changeRequest/", bad)
+	}
+}
+
 // TestChartControllerMemoryDefaults (#1553): the default memory request and
 // limit fit the loads the scale suite measured (peak 409 MiB), so a default
 // install is not OOMKilled at 200 Pipelines as the old 128Mi limit was.

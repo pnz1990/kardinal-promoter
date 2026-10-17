@@ -277,11 +277,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			if st.Ticket == nil || st.Ticket.Key != key {
 				action = AuditActionLinked
 			}
-			reading, err = p.Get(ctx, preq, key)
+			t := kardinalv1alpha1.ChangeRequestTicket{Key: key}
+			if st.Ticket != nil && st.Ticket.Key == key {
+				t = *st.Ticket
+			}
+			reading, err = p.Get(ctx, preq, t)
 		}
 	default:
 		if st.Ticket != nil && st.PendingCreate == nil {
-			reading, err = p.Get(ctx, preq, st.Ticket.Key)
+			reading, err = p.Get(ctx, preq, *st.Ticket)
 			break
 		}
 		var found bool

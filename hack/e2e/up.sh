@@ -97,7 +97,7 @@ case "$SUITE" in
   # the area (test/e2e/README.md). The core, gitea, gitlab and github suites
   # each run the TestCore_ promotion tests and the provider-agnostic TestSCM_
   # tests against their git server, plus the tests named after it.
-  core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh webhook-receiver.sh registry.sh ciapi.sh test-agent.sh)
+  core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh webhook-receiver.sh registry.sh ciapi.sh test-agent.sh ticketapi.sh)
     RUN='^Test(Core|SCM|Forgejo|GiteaFamily|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_'
     # A short grace for holds naming a missing Bundle (TestRollback_HoldBundleMissing).
     HELM_ARGS='--set controller.extraArgs={--hold-bundle-grace=30s}' ;;
