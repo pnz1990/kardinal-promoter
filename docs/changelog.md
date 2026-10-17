@@ -10,6 +10,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- changelog.d: the unreleased entries are the files in docs/changelog.d (CONTRIBUTING.md, Changelog) -->
 
+## [v0.12.1] — 2026-10-17
+
+A patch release of v0.12.0 with one fix: a version could be recorded Verified in an
+environment a newer version had already replaced (#2132). It changes no CRD, value or admission
+policy. Upgrade the chart in place with `--version 0.12.1` (and the CLI with it); from v0.11.0,
+follow [Upgrading from v0.11.0](upgrade.md#upgrading-from-v0110) with `--version 0.12.1`.
+
+### Fixed
+
+- **A version is no longer recorded Verified in an environment a newer version has already replaced** (#2132). Seen in the scale suite under API-server throttling, and present in v0.12.0.
+  - **What went wrong:** an older version's step still health-checking an environment could pass after a newer version pushed there and was Verified. It was then recorded Verified with a `PromotionSucceeded` AuditEvent, for a version the environment no longer ran. This happened when health was checked on the Deployment (`resource`) and its images could not name the version (kustomize `newName`, or a config version).
+  - **Superseded, not Verified:** a step still health-checking when a newer version's step has pushed to the same environment ends `Superseded`, with a `PromotionSuperseded` record. It is decided from the newer step's recorded push, even when the Bundle's supersession is written late.
+  - **The branch must still hold the commit:** when the images cannot name the version, the `resource` check requires that the environment's branch still holds the promotion's commit with the files it wrote, as `argocd` and `flux` already do (#1575).
+  - See [Health adapters](health-adapters.md).
+
 ## [v0.12.0] — 2026-10-17
 
 **Agents now open, approve and ship changes. kardinal-promoter v0.12.0 records who made each change, holds agents to what they may do, and lets them take part in governance without being able to get around it.** The controller and the API server enforce it at the target, not inside the agent.
@@ -1013,7 +1028,8 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ---
 
-[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.1...HEAD
+[v0.12.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...v0.12.1
 [v0.12.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.11.0...v0.12.0
 [v0.11.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.10.0...v0.11.0
 [v0.10.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.9.0...v0.10.0
