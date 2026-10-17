@@ -623,3 +623,42 @@ func TestReceiptJourney_FreezeExemptedUnknown(t *testing.T) {
 	assert.True(t, st.Predicate.Kardinal.FreezeExemptionsUnknown)
 	assert.Contains(t, st.Predicate.VerifiedLevels, receipt.LevelFreezeExempted)
 }
+
+// TestReceiptJourney_SLSABuildLevel (#2061): the receipt claims the SLSA
+// build level of the version's newest Verified ImageVerification: an older
+// one at level 3 and a newer Pending one at level 3 do not count, the
+// newest Verified one at level 1 does.
+//
+// Covers RECEIPT-JOURNEY-11.
+func TestReceiptJourney_SLSABuildLevel(t *testing.T) {
+	f := newReceiptFixture(t, true, nil)
+	ctx := context.Background()
+	at := time.Date(2026, 10, 14, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		created time.Time
+		phase   string
+		level   int
+	}{
+		{"old-policy", at, v1alpha1.ImageVerificationVerified, 3},
+		{"new-policy", at.Add(time.Hour), v1alpha1.ImageVerificationVerified, 1},
+		{"pending-policy", at.Add(2 * time.Hour), v1alpha1.ImageVerificationPending, 3},
+	} {
+		v := &v1alpha1.ImageVerification{ObjectMeta: metav1.ObjectMeta{Name: tc.name, Namespace: "default",
+			CreationTimestamp: metav1.NewTime(tc.created),
+			Labels:            map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1"}}}
+		require.NoError(t, f.c.Create(ctx, v))
+		v.Status.Phase = tc.phase
+		v.Status.Images = []v1alpha1.ImageVerificationResult{{Image: "nginx", Verified: true, Signer: tc.name}}
+		v.Status.Attestations = []v1alpha1.AttestationResult{{Name: "provenance", Image: "nginx",
+			PredicateType: "https://slsa.dev/provenance/v1", Verified: true,
+			SLSA: &v1alpha1.SLSAResult{BuildLevel: tc.level, LevelSource: "builder"}}}
+		require.NoError(t, f.c.Update(ctx, v)) // the fixture has no status subresource for it
+	}
+	f.toVerified(t)
+	_, st := f.receipt(t)
+	require.NotNil(t, st.Predicate.Kardinal.Checks.SLSA)
+	assert.Equal(t, receipt.SLSA{BuildLevel: 1, LevelSource: "builder", Images: 1}, *st.Predicate.Kardinal.Checks.SLSA)
+	assert.Contains(t, st.Predicate.VerifiedLevels, "SLSA_BUILD_LEVEL_1")
+	assert.NotContains(t, st.Predicate.VerifiedLevels, "SLSA_BUILD_LEVEL_3")
+}

@@ -59,7 +59,7 @@ kardinal verify-receipt [<pipeline> <env>] [flags]
       --key string            Public key file (PEM) of a key or KMS receipt
       --pipeline string       The Pipeline the receipt must be for (required with --image and --file, with -n)
       --repository string     Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's
-      --require strings       Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, ...); !LEVEL must be absent
+      --require strings       Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, SLSA_BUILD_LEVEL_3, ...); !LEVEL must be absent
       --subject string        The image digest (sha256:...) or commit the receipt must be about (required with --file)
       --trusted-root string   Sigstore trusted_root.json (default: the public-good root, fetched with TUF)
 ```

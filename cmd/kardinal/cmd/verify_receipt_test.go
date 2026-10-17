@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,13 @@ func signedReceipt(t *testing.T) (*v1alpha1.PromotionReceipt, *v1alpha1.Bundle, 
 // labels for checkout.
 func signedReceiptFor(t *testing.T, pipeline string) (*v1alpha1.PromotionReceipt, *v1alpha1.Bundle, string) {
 	t.Helper()
+	return signedReceiptWith(t, pipeline, nil)
+}
+
+// signedReceiptWith is signedReceiptFor with the version's
+// ImageVerification iv (nil for none).
+func signedReceiptWith(t *testing.T, pipeline string, iv *v1alpha1.ImageVerification) (*v1alpha1.PromotionReceipt, *v1alpha1.Bundle, string) {
+	t.Helper()
 	priv, pub, err := receipttest.Key()
 	require.NoError(t, err)
 	b := &v1alpha1.Bundle{
@@ -70,7 +78,7 @@ func signedReceiptFor(t *testing.T, pipeline string) (*v1alpha1.PromotionReceipt
 		VerifyRequired: true, Verdicts: []v1alpha1.GateVerdictStatus{{Name: "v1", Verifier: "agent qa for alice", Result: "pass", Counted: true}}}}
 	stmt, digest, err := receipt.Build(receipt.Input{Name: "checkout-1-5-0-prod", ClusterID: "c1", Now: time.Now(),
 		Bundle: b, Step: ps, Snapshot: true, Decision: &v1alpha1.PromotionDecision{Gates: gates, PolicyDigest: receipt.PolicyDigest(1, "h", gates)},
-		PR: &receipt.PR{URL: "https://github.com/acme/deploy/pull/412", Number: 412}})
+		PR: &receipt.PR{URL: "https://github.com/acme/deploy/pull/412", Number: 412}, ImageVerification: iv})
 	require.NoError(t, err)
 	s := &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(context.Context) (crypto.Signer, string, error) {
 		k, err := receipt.ParsePrivateKey(priv)
@@ -319,4 +327,41 @@ func TestVerifyReceipt_ClusterBindsPipeline(t *testing.T) {
 	_, _, err := runOutput(t, receiptClient(t, rc, b), "verify-receipt", "checkout", "prod", "--key", key)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not pipeline checkout")
+}
+
+// TestVerifyReceipt_RequireSLSABuildLevel (#2061): --require
+// SLSA_BUILD_LEVEL_3 admits a receipt of a version whose images are at
+// SLSA build level 3 and shows the level; one at level 1 is refused, and
+// --require SLSA_BUILD_LEVEL_1 admits both (a VSA lists the highest level).
+func TestVerifyReceipt_RequireSLSABuildLevel(t *testing.T) {
+	ivAt := func(level int) *v1alpha1.ImageVerification {
+		img := "ghcr.io/acme/checkout@" + receiptDigest
+		return &v1alpha1.ImageVerification{Status: v1alpha1.ImageVerificationStatus{Phase: v1alpha1.ImageVerificationVerified,
+			Images: []v1alpha1.ImageVerificationResult{{Image: img, Verified: true, Signer: "ci"}},
+			Attestations: []v1alpha1.AttestationResult{{Name: "provenance", Image: img, PredicateType: "https://slsa.dev/provenance/v1",
+				Verified: true, SLSA: &v1alpha1.SLSAResult{BuildLevel: level, LevelSource: "builder"}}}}}
+	}
+	for _, tc := range []struct {
+		level   int
+		require string
+		refused string
+	}{
+		{3, "SLSA_BUILD_LEVEL_3", ""},
+		{3, "SLSA_BUILD_LEVEL_1", ""},
+		{1, "SLSA_BUILD_LEVEL_1", ""},
+		{1, "SLSA_BUILD_LEVEL_3", "level SLSA_BUILD_LEVEL_3 is required and not verified"},
+	} {
+		t.Run(fmt.Sprintf("level %d require %s", tc.level, tc.require), func(t *testing.T) {
+			rc, b, key := signedReceiptWith(t, "checkout", ivAt(tc.level))
+			c := receiptClient(t, rc, b)
+			out, _, err := runOutput(t, c, "verify-receipt", "checkout", "prod", "--key", key, "--require", tc.require)
+			if tc.refused != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.refused)
+				return
+			}
+			require.NoError(t, err)
+			assert.Contains(t, out, fmt.Sprintf("SLSA_BUILD_LEVEL_%d", tc.level))
+		})
+	}
 }
