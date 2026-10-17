@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -353,10 +354,14 @@ func (r *Reconciler) record(ctx context.Context, st *kardinalv1alpha1.ChangeRequ
 	st.ObservedAt, st.ValidUntil = &at, &until
 	st.Ready, st.RetryAt, st.PendingCreate = true, nil, nil
 	st.ObservedGeneration = cr.Generation
-	st.Verified = nil
+	st.Verified, st.VerifiedReason = nil, ""
 	if cr.Spec.Mode == kardinalv1alpha1.ChangeRequestModeLink {
-		v := linkVerified(cr.Spec.Link, reading, st.CorrelationID)
-		st.Verified = &v
+		if action == AuditActionLinked || st.LinkedAt == nil {
+			at := metav1.NewTime(now)
+			st.LinkedAt = &at
+		}
+		v, why := r.linkVerified(ctx, cr, st, reading)
+		st.Verified, st.VerifiedReason = &v, why
 	}
 	setCondition(st, cr.Generation, CondReady, true, ReasonRead, fmt.Sprintf("ticket %s is %s", ticket.Key, st.State), now)
 	setCondition(st, cr.Generation, CondStale, false, "Read", "read at "+now.UTC().Format(time.RFC3339), now)
@@ -375,17 +380,115 @@ func (r *Reconciler) record(ctx context.Context, st *kardinalv1alpha1.ChangeRequ
 	}
 }
 
-// linkVerified reports whether a linked ticket carries the promotion's
-// correlation id, or satisfies link.requireField.
-func linkVerified(link *kardinalv1alpha1.ChangeRequestLink, reading Reading, correlationID string) bool {
-	if reading.CorrelationID != "" && reading.CorrelationID == correlationID {
-		return true
+// linkVerified reports whether a linked ticket is this promotion's, and
+// why or why not (docs/change-requests.md, Open or link):
+//
+//   - it carries the promotion's correlation id; or
+//   - it satisfies link.requireField, was created after the Bundle (an
+//     older ticket cannot be this version's), and no other ChangeRequest
+//     holds it since earlier (one ticket, one promotion).
+//
+// Anything it cannot establish (no creation time, the Bundle unreadable or
+// re-created, the index unreadable) is not verified.
+func (r *Reconciler) linkVerified(ctx context.Context, cr *kardinalv1alpha1.ChangeRequest,
+	st *kardinalv1alpha1.ChangeRequestStatus, reading Reading) (bool, string) {
+	if reading.CorrelationID != "" && reading.CorrelationID == st.CorrelationID {
+		return true, "the ticket carries this promotion's correlation id"
 	}
+	link := cr.Spec.Link
 	if link == nil || link.RequireField == nil {
-		return false
+		return false, "the ticket carries neither this promotion's correlation id nor a link.requireField match"
 	}
-	v, ok := reading.Fields[link.RequireField.Name]
-	return ok && v == link.RequireField.Value
+	want := link.RequireField
+	if v, ok := reading.Fields[want.Name]; !ok || v != want.Value {
+		return false, fmt.Sprintf("field %s is %q, not %q", want.Name, cut(v, 64), cut(want.Value, 64))
+	}
+	if reading.Created.IsZero() {
+		return false, "the provider gave no creation time, so the ticket cannot be shown to be newer than the promotion"
+	}
+	var b kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: cr.Labels[labelBundle]}, &b); err != nil ||
+		string(b.UID) != cr.Labels[graph.LabelBundleUID] {
+		return false, "the Bundle of this promotion cannot be read"
+	}
+	if reading.Created.Before(b.CreationTimestamp.Time) {
+		return false, fmt.Sprintf("the ticket was created %s, before Bundle %s (%s): an older ticket is not this promotion's",
+			reading.Created.UTC().Format(time.RFC3339), b.Name, b.CreationTimestamp.UTC().Format(time.RFC3339))
+	}
+	holder, err := r.earlierHolder(ctx, cr, st)
+	if err != nil {
+		return false, "the other ChangeRequests holding this ticket cannot be listed"
+	}
+	if holder != "" {
+		return false, fmt.Sprintf("the ticket is already linked to %s", holder)
+	}
+	return true, fmt.Sprintf("field %s matches, the ticket is newer than the Bundle and linked to no other promotion", want.Name)
+}
+
+// IndexTicket indexes ChangeRequests by the ticket in their status
+// (TicketIndexKey): one ticket, one promotion.
+const IndexTicket = "kardinal.io/changerequest-ticket"
+
+// TicketIndexKey is a ChangeRequest's ticket as "<provider>/<host>/<key>",
+// or "" without one.
+func TicketIndexKey(cr *kardinalv1alpha1.ChangeRequest) string {
+	if cr.Status.Ticket == nil || cr.Status.Ticket.Key == "" {
+		return ""
+	}
+	host := ""
+	switch {
+	case cr.Spec.ServiceNow != nil:
+		host = cr.Spec.ServiceNow.InstanceURL
+	case cr.Spec.Jira != nil:
+		host = cr.Spec.Jira.BaseURL
+	}
+	if u, err := url.Parse(host); err == nil {
+		host = strings.ToLower(u.Host)
+	}
+	return cr.Spec.Provider + "/" + host + "/" + cr.Status.Ticket.Key
+}
+
+// TicketIndex is the IndexTicket index function.
+func TicketIndex(o client.Object) []string {
+	cr, ok := o.(*kardinalv1alpha1.ChangeRequest)
+	if !ok {
+		return nil
+	}
+	if k := TicketIndexKey(cr); k != "" {
+		return []string{k}
+	}
+	return nil
+}
+
+// earlierHolder names another ChangeRequest that holds the same ticket and
+// was there first: one that opened it, or linked it earlier (by linkedAt,
+// then name). "" when there is none.
+func (r *Reconciler) earlierHolder(ctx context.Context, cr *kardinalv1alpha1.ChangeRequest,
+	st *kardinalv1alpha1.ChangeRequestStatus) (string, error) {
+	me := cr.DeepCopy()
+	me.Status = *st
+	key := TicketIndexKey(me)
+	var list kardinalv1alpha1.ChangeRequestList
+	if err := r.List(ctx, &list, client.MatchingFields{IndexTicket: key}); err != nil {
+		return "", fmt.Errorf("list changerequests by ticket: %w", err)
+	}
+	for i := range list.Items {
+		o := &list.Items[i]
+		if (o.Namespace == cr.Namespace && o.Name == cr.Name) || TicketIndexKey(o) != key {
+			continue
+		}
+		if o.Spec.Mode != kardinalv1alpha1.ChangeRequestModeLink { // it opened the ticket
+			return o.Namespace + "/" + o.Name, nil
+		}
+		if o.Status.LinkedAt == nil || st.LinkedAt == nil {
+			continue
+		}
+		if o.Status.LinkedAt.Before(st.LinkedAt) ||
+			(o.Status.LinkedAt.Equal(st.LinkedAt) && o.Namespace+"/"+o.Name < cr.Namespace+"/"+cr.Name) {
+			return o.Namespace + "/" + o.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // fail writes a failed call to st: a condition and retryAt. The last
@@ -528,7 +631,7 @@ func auditMessage(action string, cr *kardinalv1alpha1.ChangeRequest, st *kardina
 	case AuditActionLinked:
 		what = "linked"
 		if st.Verified != nil && !*st.Verified {
-			what = "linked (not verified: the ticket carries neither the promotion's correlation id nor link.requireField)"
+			what = "linked (not verified: " + st.VerifiedReason + ")"
 		}
 	case AuditActionApproved:
 		what = "approved"
@@ -624,6 +727,10 @@ func (r *Reconciler) linkKey(ctx context.Context, cr *kardinalv1alpha1.ChangeReq
 // changes and new audit outbox entries trigger a reconcile; the poll is
 // RequeueAfter. The Limiter's wake-ups come in through a channel source.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kardinalv1alpha1.ChangeRequest{}, IndexTicket,
+		TicketIndex); err != nil {
+		return fmt.Errorf("index changerequests by ticket: %w", err)
+	}
 	n := workers
 	if r.Limiter != nil && r.Limiter.Global+4 > n {
 		n = r.Limiter.Global + 4

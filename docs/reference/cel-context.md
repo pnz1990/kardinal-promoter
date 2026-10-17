@@ -354,7 +354,8 @@ writes all of it to the instance's status; the gate never calls the ticketing sy
 | `changeRequests["prod-change"].url` | string | `"https://example.service-now.com/..."` | The ticket's page |
 | `changeRequests["prod-change"].stale` | bool | `false` | `true` before the first reading, and when the gate's evaluation time is at or after the instance's `status.validUntil` (two poll intervals after its last reading) |
 | `changeRequests["prod-change"].timedOut` | bool | `false` | `true` once `spec.timeout` has passed since the instance started |
-| `changeRequests["prod-change"].verified` | bool | `true` | `true` for a ticket kardinal opened, and for a linked ticket that carries the promotion's correlation id or matches `link.requireField`; `false` otherwise |
+| `changeRequests["prod-change"].verified` | bool | `true` | `true` for a ticket kardinal opened, and for a linked ticket that carries the promotion's correlation id, or that matches `link.requireField`, was created after the Bundle and is linked to no other promotion; `false` otherwise |
+| `changeRequests["prod-change"].verifiedReason` | string | `"the ticket was created ..., before Bundle ..."` | Why a linked ticket is or is not verified; `""` for a ticket kardinal opened |
 | `changeRequests["prod-change"].approvers` | list | `["jane@example.com"]` | The ticket's approvers, when the provider reports them |
 | `changeRequests["prod-change"].providerState` | string | `"Scheduled / approved"` | The ticketing system's own state, for people |
 

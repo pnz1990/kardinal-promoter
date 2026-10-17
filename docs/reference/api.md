@@ -356,7 +356,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `spec.link` | object |  | Link says where mode link reads the ticket key. |
 | `spec.link.from` | string | yes | From is approvalField (a structured approval field of the environment's counted approvals), bundleLabel or bundleAnnotation. One of: `approvalField`, `bundleLabel`, `bundleAnnotation`. |
 | `spec.link.name` | string | yes | Name is the approval field, label or annotation. |
-| `spec.link.requireField` | object |  | RequireField, when set, verifies the linked ticket: its field Name must equal Value (for example cmdb_ci). Without it, a ticket is verified only when it carries the promotion's correlation id; otherwise status.verified is false. |
+| `spec.link.requireField` | object |  | RequireField, when set, verifies a linked ticket that does not carry the promotion's correlation id: its field Name must equal Value (for example cmdb_ci), it must have been created after the Bundle, and no other ChangeRequest may hold it since earlier. Without it, a ticket is verified only when it carries the correlation id; otherwise status.verified is false. |
 | `spec.link.requireField.name` | string | yes |  |
 | `spec.link.requireField.value` | string | yes |  |
 | `spec.mode` | string |  | Mode is open (kardinal creates the ticket) or link (kardinal reads its key from spec.link and tracks it, never creating one). One of: `open`, `link`. Default: `open`. |
@@ -387,6 +387,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.correlationID` | string |  | CorrelationID is the promotion's id written into the ticket (kardinal:&lt;namespace&gt;/&lt;bundle&gt;/&lt;environment&gt;/&lt;bundle UID&gt;). |
+| `status.linkedAt` | string (date-time) |  | LinkedAt is when this instance linked its ticket key; of two ChangeRequests that link one ticket, the earlier keeps it. |
 | `status.observedAt` | string (date-time) |  | ObservedAt is the last successful read of the ticket. |
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation of the spec last acted on. |
 | `status.pendingAuditEvents` | []object |  | PendingAuditEvents are ChangeRequestOpened, ChangeRequestLinked, ChangeRequestApproved and ChangeRequestRejected records not yet written (the audit outbox). |
@@ -429,7 +430,8 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `status.ticket.url` | string |  | URL is the ticket's page. |
 | `status.timedOut` | boolean |  | TimedOut is true once spec.timeout has passed since StartedAt. |
 | `status.validUntil` | string (date-time) |  | ValidUntil is ObservedAt plus twice pollInterval: a gate evaluated after it reads changeRequests.&lt;name&gt;.stale as true. |
-| `status.verified` | boolean |  | Verified, for a linked ticket, reports whether it carries the correlation id or satisfies link.requireField. An unverified link is tracked but says so. |
+| `status.verified` | boolean |  | Verified, for a linked ticket, reports whether it is this promotion's: it carries the correlation id, or it satisfies link.requireField, was created after the Bundle, and no other ChangeRequest holds it since earlier. An unverified link is tracked but says so (VerifiedReason). |
+| `status.verifiedReason` | string |  | VerifiedReason says why a linked ticket is, or is not, verified. |
 
 ## ChangeWindow
 

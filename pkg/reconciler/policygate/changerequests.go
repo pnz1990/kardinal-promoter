@@ -66,7 +66,7 @@ func (r *Reconciler) buildChangeRequestContext(ctx context.Context, ns string, n
 // changeRequestEntry is one changeRequests.<name> value.
 func changeRequestEntry(cr *kardinalv1alpha1.ChangeRequest, now time.Time) map[string]interface{} {
 	e := map[string]interface{}{"state": "", "ticket": "", "url": "", "stale": true, "timedOut": false,
-		"approvers": []interface{}{}, "verified": false, "providerState": ""}
+		"approvers": []interface{}{}, "verified": false, "verifiedReason": "", "providerState": ""}
 	if cr == nil {
 		return e
 	}
@@ -78,6 +78,7 @@ func changeRequestEntry(cr *kardinalv1alpha1.ChangeRequest, now time.Time) map[s
 	e["providerState"] = st.ProviderState
 	// Open mode created the ticket with the correlation id; a link says.
 	e["verified"] = st.Ticket != nil && (st.Verified == nil || *st.Verified)
+	e["verifiedReason"] = st.VerifiedReason
 	approvers := make([]interface{}, 0, len(st.Approvers))
 	for _, a := range st.Approvers {
 		approvers = append(approvers, a.Name)
@@ -123,6 +124,9 @@ func changeRequestNotes(expr string, celCtx map[string]interface{}) string {
 		}
 		if verified, _ := e["verified"].(bool); ticket != "" && !verified {
 			note += ", not verified"
+			if why, _ := e["verifiedReason"].(string); why != "" {
+				note += " (" + why + ")"
+			}
 		}
 		notes = append(notes, note)
 	}

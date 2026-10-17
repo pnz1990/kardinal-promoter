@@ -65,7 +65,7 @@ func newTicketing() *ticketing {
 func (f *ticketing) add(key, corr, state string) {
 	f.tickets[key] = &changerequest.Reading{Ticket: v1alpha1.ChangeRequestTicket{Key: key, ID: "id-" + key,
 		URL: "https://example.service-now.com/" + key}, State: state, ProviderState: "raw " + state, CorrelationID: corr,
-		Fields: map[string]string{"cmdb_ci": "checkout"}}
+		Fields: map[string]string{"cmdb_ci": "checkout"}, Created: t0}
 	f.order = append(f.order, key)
 }
 
@@ -169,6 +169,7 @@ func newEnv(t *testing.T, cr *v1alpha1.ChangeRequest, objs ...client.Object) *en
 	require.NoError(t, v1alpha1.AddToScheme(s))
 	e := &env{t: t, f: newTicketing(), now: t0, key: types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}}
 	e.c = fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&v1alpha1.ChangeRequest{}, &v1alpha1.PolicyGate{}).
+		WithIndex(&v1alpha1.ChangeRequest{}, changerequest.IndexTicket, changerequest.TicketIndex).
 		WithObjects(append([]client.Object{cr}, objs...)...).
 		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object,
 			opts ...client.CreateOption) error {
@@ -522,7 +523,7 @@ func TestChangeRequest_NoCalls(t *testing.T) {
 func TestChangeRequest_LinkFromBundle(t *testing.T) {
 	bundle := func(labels, annotations map[string]string) *v1alpha1.Bundle {
 		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: ns, UID: uid,
-			Labels: labels, Annotations: annotations}}
+			Labels: labels, Annotations: annotations, CreationTimestamp: metav1.NewTime(t0.Add(-time.Hour))}}
 	}
 	link := func(from string, require *v1alpha1.ChangeRequestFieldMatch) func(*v1alpha1.ChangeRequest) {
 		return func(cr *v1alpha1.ChangeRequest) {
@@ -718,4 +719,148 @@ func TestChangeRequest_ReadingIsNormalised(t *testing.T) {
 	assert.Equal(t, "unknown", cr.Status.State)
 	assert.Equal(t, "raw Scheduled", cr.Status.ProviderState)
 	assert.Len(t, cr.Status.Approvers, 32)
+}
+
+// linkedBundle is Bundle app-v1, created an hour before t0, with the ticket
+// key in its label change.
+func linkedBundle(key string) *v1alpha1.Bundle {
+	return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: ns, UID: uid,
+		Labels: map[string]string{"change": key}, CreationTimestamp: metav1.NewTime(t0.Add(-time.Hour))}}
+}
+
+func requireFieldLink(cr *v1alpha1.ChangeRequest) {
+	cr.Spec.Mode = "link"
+	cr.Spec.Link = &v1alpha1.ChangeRequestLink{From: "bundleLabel", Name: "change",
+		RequireField: &v1alpha1.ChangeRequestFieldMatch{Name: "cmdb_ci", Value: "checkout"}}
+}
+
+// TestChangeRequest_LinkBoundToThePromotion (coordinator decision on #2123):
+// a ticket linked by link.requireField is verified only when it was created
+// after the Bundle and no other ChangeRequest holds it since earlier. An old
+// approved ticket, one another promotion opened, and one another promotion
+// linked first are all unverified, with the reason; the first link keeps it;
+// a ticket without a creation time is unverified.
+func TestChangeRequest_LinkBoundToThePromotion(t *testing.T) {
+	verified := func(e *env) (bool, string) {
+		cr := e.get()
+		require.NotNil(t, cr.Status.Verified)
+		return *cr.Status.Verified, cr.Status.VerifiedReason
+	}
+	t.Run("a ticket newer than the Bundle", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		ok, why := verified(e)
+		assert.True(t, ok, why)
+		assert.NotNil(t, e.get().Status.LinkedAt)
+	})
+	t.Run("an old ticket is reused", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.f.tickets["CHG0000009"].Created = t0.Add(-2 * time.Hour) // before the Bundle
+		e.reconcile()
+		ok, why := verified(e)
+		assert.False(t, ok)
+		assert.Contains(t, why, "before Bundle app-v1")
+		var l v1alpha1.AuditEventList
+		require.NoError(t, e.c.List(context.Background(), &l))
+		var linked string
+		for _, a := range l.Items {
+			if a.Spec.Action == changerequest.AuditActionLinked {
+				linked = a.Spec.Message
+			}
+		}
+		assert.Contains(t, linked, "not verified: the ticket was created")
+	})
+	t.Run("no creation time", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.f.tickets["CHG0000009"].Created = time.Time{}
+		e.reconcile()
+		ok, why := verified(e)
+		assert.False(t, ok)
+		assert.Contains(t, why, "no creation time")
+	})
+	other := func(name, mode string, linkedAt *metav1.Time) *v1alpha1.ChangeRequest {
+		o := instance(func(cr *v1alpha1.ChangeRequest) {
+			cr.Name = name
+			cr.Labels["kardinal.io/bundle"], cr.Labels["kardinal.io/bundle-uid"] = "app-v0", "uid-0"
+			if mode == "link" {
+				requireFieldLink(cr)
+			}
+		})
+		o.Status = v1alpha1.ChangeRequestStatus{Ticket: &v1alpha1.ChangeRequestTicket{Key: "CHG0000009"}, LinkedAt: linkedAt}
+		return o
+	}
+	earlier, later := metav1.NewTime(t0.Add(-time.Minute)), metav1.NewTime(t0.Add(time.Minute))
+	t.Run("another promotion opened it", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"), other("prod-change-prod--app-v0", "open", nil))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		ok, why := verified(e)
+		assert.False(t, ok)
+		assert.Contains(t, why, "already linked to checkout/prod-change-prod--app-v0")
+	})
+	t.Run("another promotion linked it first", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"), other("prod-change-prod--app-v0", "link", &earlier))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		ok, why := verified(e)
+		assert.False(t, ok)
+		assert.Contains(t, why, "already linked to checkout/prod-change-prod--app-v0")
+	})
+	t.Run("this one linked it first", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"), other("prod-change-prod--app-v0", "link", &later))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		ok, why := verified(e)
+		assert.True(t, ok, why)
+	})
+	t.Run("another system's ticket of the same number", func(t *testing.T) {
+		o := other("prod-change-prod--app-v0", "open", nil)
+		o.Spec.ServiceNow.InstanceURL = "https://other.service-now.com"
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"), o)
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		ok, why := verified(e)
+		assert.True(t, ok, why)
+	})
+	t.Run("the correlation id needs nothing else", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"), other("prod-change-prod--app-v0", "link", &earlier))
+		e.f.add("CHG0000009", corrID, v1alpha1.ChangeRequestApproved)
+		e.f.tickets["CHG0000009"].Created = t0.Add(-2 * time.Hour)
+		e.reconcile()
+		ok, why := verified(e)
+		assert.True(t, ok, why)
+	})
+}
+
+// TestChangeRequest_RelinkRestartsLinkedAt: switching to another key starts
+// a new link: its time is the switch, so a ChangeRequest that linked the new
+// key in between keeps it.
+func TestChangeRequest_RelinkRestartsLinkedAt(t *testing.T) {
+	holder := instance(func(cr *v1alpha1.ChangeRequest) {
+		cr.Name = "prod-change-prod--app-v0"
+		cr.Labels["kardinal.io/bundle"], cr.Labels["kardinal.io/bundle-uid"] = "app-v0", "uid-0"
+		requireFieldLink(cr)
+	})
+	between := metav1.NewTime(t0.Add(time.Minute))
+	holder.Status = v1alpha1.ChangeRequestStatus{Ticket: &v1alpha1.ChangeRequestTicket{Key: "CHG0000002"}, LinkedAt: &between}
+	e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000001"), holder)
+	e.f.add("CHG0000001", "", v1alpha1.ChangeRequestApproved)
+	e.f.add("CHG0000002", "", v1alpha1.ChangeRequestApproved)
+	e.reconcile()
+	require.True(t, *e.get().Status.Verified, e.get().Status.VerifiedReason)
+
+	var b v1alpha1.Bundle
+	require.NoError(t, e.c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "app-v1"}, &b))
+	b.Labels["change"] = "CHG0000002"
+	require.NoError(t, e.c.Update(context.Background(), &b))
+	e.now = t0.Add(2 * time.Minute)
+	e.reconcile()
+	cr := e.get()
+	assert.Equal(t, "CHG0000002", cr.Status.Ticket.Key)
+	assert.Equal(t, t0.Add(2*time.Minute), cr.Status.LinkedAt.UTC())
+	assert.False(t, *cr.Status.Verified)
+	assert.Contains(t, cr.Status.VerifiedReason, "already linked to checkout/prod-change-prod--app-v0")
 }

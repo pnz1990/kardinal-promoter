@@ -47,6 +47,9 @@ type Reading struct {
 	CorrelationID string
 	// Fields are the ticket fields link.requireField may name.
 	Fields map[string]string
+	// Created is when the ticket was created; zero when the provider does
+	// not say (a link is then not verified by link.requireField).
+	Created time.Time
 }
 
 // Provider is one ticketing system. Only the ChangeRequest reconciler calls

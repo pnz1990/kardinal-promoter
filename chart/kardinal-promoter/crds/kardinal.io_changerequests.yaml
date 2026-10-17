@@ -188,10 +188,12 @@ spec:
                     type: string
                   requireField:
                     description: |-
-                      RequireField, when set, verifies the linked ticket: its field Name
-                      must equal Value (for example cmdb_ci). Without it, a ticket is
-                      verified only when it carries the promotion's correlation id;
-                      otherwise status.verified is false.
+                      RequireField, when set, verifies a linked ticket that does not carry
+                      the promotion's correlation id: its field Name must equal Value (for
+                      example cmdb_ci), it must have been created after the Bundle, and no
+                      other ChangeRequest may hold it since earlier. Without it, a ticket is
+                      verified only when it carries the correlation id; otherwise
+                      status.verified is false.
                     properties:
                       name:
                         maxLength: 128
@@ -421,6 +423,12 @@ spec:
                 description: |-
                   CorrelationID is the promotion's id written into the ticket
                   (kardinal:<namespace>/<bundle>/<environment>/<bundle UID>).
+                type: string
+              linkedAt:
+                description: |-
+                  LinkedAt is when this instance linked its ticket key; of two
+                  ChangeRequests that link one ticket, the earlier keeps it.
+                format: date-time
                 type: string
               observedAt:
                 description: ObservedAt is the last successful read of the ticket.
@@ -753,10 +761,16 @@ spec:
                 type: string
               verified:
                 description: |-
-                  Verified, for a linked ticket, reports whether it carries the
-                  correlation id or satisfies link.requireField. An unverified link is
-                  tracked but says so.
+                  Verified, for a linked ticket, reports whether it is this
+                  promotion's: it carries the correlation id, or it satisfies
+                  link.requireField, was created after the Bundle, and no other
+                  ChangeRequest holds it since earlier. An unverified link is tracked but
+                  says so (VerifiedReason).
                 type: boolean
+              verifiedReason:
+                description: VerifiedReason says why a linked ticket is, or is not,
+                  verified.
+                type: string
             type: object
         type: object
     served: true

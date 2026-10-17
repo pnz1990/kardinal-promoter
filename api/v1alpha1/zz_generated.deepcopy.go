@@ -1245,6 +1245,10 @@ func (in *ChangeRequestStatus) DeepCopyInto(out *ChangeRequestStatus) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.LinkedAt != nil {
+		in, out := &in.LinkedAt, &out.LinkedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.PendingCreate != nil {
 		in, out := &in.PendingCreate, &out.PendingCreate
 		*out = new(ChangeRequestPendingCreate)

@@ -217,10 +217,12 @@ type ChangeRequestLink struct {
 	// +kubebuilder:validation:MaxLength=317
 	Name string `json:"name"`
 
-	// RequireField, when set, verifies the linked ticket: its field Name
-	// must equal Value (for example cmdb_ci). Without it, a ticket is
-	// verified only when it carries the promotion's correlation id;
-	// otherwise status.verified is false.
+	// RequireField, when set, verifies a linked ticket that does not carry
+	// the promotion's correlation id: its field Name must equal Value (for
+	// example cmdb_ci), it must have been created after the Bundle, and no
+	// other ChangeRequest may hold it since earlier. Without it, a ticket is
+	// verified only when it carries the correlation id; otherwise
+	// status.verified is false.
 	// +optional
 	RequireField *ChangeRequestFieldMatch `json:"requireField,omitempty"`
 }
@@ -302,11 +304,22 @@ type ChangeRequestStatus struct {
 	// +optional
 	CorrelationID string `json:"correlationID,omitempty"`
 
-	// Verified, for a linked ticket, reports whether it carries the
-	// correlation id or satisfies link.requireField. An unverified link is
-	// tracked but says so.
+	// Verified, for a linked ticket, reports whether it is this
+	// promotion's: it carries the correlation id, or it satisfies
+	// link.requireField, was created after the Bundle, and no other
+	// ChangeRequest holds it since earlier. An unverified link is tracked but
+	// says so (VerifiedReason).
 	// +optional
 	Verified *bool `json:"verified,omitempty"`
+
+	// VerifiedReason says why a linked ticket is, or is not, verified.
+	// +optional
+	VerifiedReason string `json:"verifiedReason,omitempty"`
+
+	// LinkedAt is when this instance linked its ticket key; of two
+	// ChangeRequests that link one ticket, the earlier keeps it.
+	// +optional
+	LinkedAt *metav1.Time `json:"linkedAt,omitempty"`
 
 	// PendingCreate is a create in flight (the outbox, see
 	// ChangeRequestPendingCreate).

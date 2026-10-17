@@ -152,10 +152,18 @@ Approvals that do not count give no key, and two counted approvals with differen
 refused (condition `ProviderError`). `bundleLabel` and `bundleAnnotation` read the Bundle CI
 created.
 
-A linked ticket is **verified** when it carries the promotion's correlation id or, with
-`requireField`, when its field has that value. Otherwise `status.verified` and
-`changeRequests.<name>.verified` are false, and the `ChangeRequestLinked` record says so: an
-approver could have linked an unrelated approved ticket. Require it in the gate:
+A linked ticket is **verified** when it carries the promotion's correlation id, or when all of
+these hold:
+
+- its `link.requireField` field has that value;
+- it was created after the Bundle: an older ticket, approved for an earlier version, cannot be this
+  version's;
+- no other ChangeRequest holds it from earlier: one that opened it, or one that linked it first
+  (`status.linkedAt`). One ticket approves one promotion.
+
+Otherwise `status.verified` and `changeRequests.<name>.verified` are false, `verifiedReason` says
+which rule failed, and the `ChangeRequestLinked` record says so: an approver could have linked an
+unrelated, old or already used approved ticket. Require it in the gate:
 
 ```yaml
 expression: 'changeRequests["prod-change"].state == "approved" && changeRequests["prod-change"].verified'
