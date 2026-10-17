@@ -166,3 +166,39 @@ func TestNextPage(t *testing.T) {
 		assert.Equal(t, want, got.String())
 	}
 }
+
+// TestReferrers_SeventyOthers (#2133): an image with 70 receipts of other
+// environments (fleet members, rollbacks, or referrers anyone who may push
+// planted) and prod's: prod's is read, past the old 64-receipt cap that
+// counted every environment's.
+//
+// Covers RECEIPT-OCI-03.
+func TestReferrers_SeventyOthers(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(srv.Close)
+	repo := strings.TrimPrefix(srv.URL, "http://") + "/acme/checkout"
+	img, err := random.Image(128, 1)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(mustRef(t, repo+":1"), img))
+	d, err := img.Digest()
+	require.NoError(t, err)
+	s, _ := keySigner(t)
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	signed, err := s.Sign(context.Background(), raw)
+	require.NoError(t, err)
+	r := &Registry{Insecure: true}
+	for i := 0; i < 70; i++ {
+		_, err := r.PushReferrer(context.Background(), repo, repo, d.String(),
+			fmt.Sprintf("kardinal://c1/namespaces/payments/pipelines/checkout/environments/eu-%02d", i), signed.Bundle)
+		require.NoError(t, err)
+	}
+	const prod = "kardinal://c1/namespaces/payments/pipelines/checkout/environments/prod"
+	_, err = r.PushReferrer(context.Background(), repo, repo, d.String(), prod, signed.Bundle)
+	require.NoError(t, err)
+	got, err := r.Referrers(context.Background(), repo, d.String(), func(res string) bool { return res == prod })
+	require.NoError(t, err)
+	assert.Equal(t, 71, got.Entries)
+	require.Len(t, got.Bundles, 1, "prod's receipt, whatever the others")
+	assert.False(t, got.Truncated)
+}

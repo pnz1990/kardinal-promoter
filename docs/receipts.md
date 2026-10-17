@@ -92,7 +92,8 @@ How much receipts take: each PromotionReceipt has its size in `status.bytes`, ea
 environment its receipts' count and total size in `status.environments[].receipts`
 (`{count, bytes}`), and the controller counts the receipts it signs, `kardinal_receipts_total{mode}`,
 and their bytes, `kardinal_receipt_bytes_total`. Receipts past `receipts.retention.maxAge` are
-deleted.
+deleted; without it every receipt is kept, and `kardinal doctor` warns once they pass 1 GiB (they
+share etcd's quota, 8 GB by default, with every other object).
 
 ### Credentials are redacted
 
@@ -299,11 +300,12 @@ read, verify-receipt fails: whether one exists is unknown, which is never a pass
   `write:repository` and `write:issue` scopes, a Bitbucket token without `account`) is not
   searched: the comment is posted, and a crash between the post and its status write can post
   it twice. Add `read:user` (Forgejo/Gitea) or `account` (Bitbucket) to search.
-- **`kardinal history`** adds a RECEIPT column once a promotion has one: "verified" when it is
-  signed.
+- **`kardinal history`** adds a RECEIPT column once a promotion has one: "signed" once the
+  controller signed it. "Verified" is only what `kardinal verify-receipt` says of a receipt it
+  checked.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to
   verify it.
-- **The UI**: the stage drawer's History says "Receipt <name>: verified ✓" with the command to
+- **The UI**: the stage drawer's History says "Receipt <name>: signed ✓" with the command to
   verify it once the step's receipt is signed.
 
 Environments with `approval: auto` have no PR: their receipts show in `history`, `why` and the UI.

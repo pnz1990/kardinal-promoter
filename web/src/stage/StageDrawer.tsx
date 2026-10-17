@@ -237,15 +237,15 @@ function ShippedByLine({ bundle }: { bundle?: Bundle }) {
   return <p className="stage-muted" data-testid="shipped-by">{bundle.version ?? bundle.name} shipped by <ActorBadge actor={by} />.</p>
 }
 
-/** The step's signed promotion receipt (docs/receipts.md): verified once
+/** The step's signed promotion receipt (docs/receipts.md): signed once
  *  signed, with the command that checks it; nothing without one. */
 function ReceiptLine({ step, pipeline }: { step?: PromotionStep; pipeline: string }) {
   const r = step?.receipt
   if (!step || !r) return null
   return (
     <p className="stage-muted" data-testid="receipt">
-      Receipt {r.name}: {r.verified ? 'verified ✓' : r.phase.toLowerCase()}
-      {r.verified && <> · <code>kardinal verify-receipt {pipeline} {step.environment} --bundle {step.bundle}</code></>}
+      Receipt {r.name}: {r.signed ? 'signed ✓' : r.phase.toLowerCase()}
+      {r.signed && <> · <code>kardinal verify-receipt {pipeline} {step.environment} --bundle {step.bundle}</code></>}
     </p>
   )
 }
