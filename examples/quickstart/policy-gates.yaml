@@ -1,7 +1,7 @@
 # Org-level PolicyGates
 # kardinal.io/applies-to: prod attaches each gate to every Pipeline's prod.
-# They live in platform-policies, the controller's org policy namespace;
-# kardinal.io/scope: org is what kardinal policy list shows as SCOPE.
+# They live in platform-policies, the controller's org policy namespace, which
+# makes them org gates: kardinal policy list shows SCOPE org.
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,7 +14,6 @@ metadata:
   name: no-weekend-deploys
   namespace: platform-policies
   labels:
-    kardinal.io/scope: org
     kardinal.io/applies-to: prod
 spec:
   expression: "!schedule.isWeekend"
@@ -27,7 +26,6 @@ metadata:
   name: require-uat-soak
   namespace: platform-policies
   labels:
-    kardinal.io/scope: org
     kardinal.io/applies-to: prod
 spec:
   expression: "bundle.upstreamSoakMinutes >= 30"

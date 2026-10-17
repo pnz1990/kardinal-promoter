@@ -50,8 +50,11 @@ const (
 // gap G10).
 type gateCollections struct {
 	pipeline, bundle string
-	templates        []interface{}
-	index            map[string]int
+	// orgNS are the org policy namespaces: a template there is an org gate
+	// (scopeOf).
+	orgNS     map[string]bool
+	templates []interface{}
+	index     map[string]int
 	// gates, skipGates, approvalGates and verifyGates hold the items of
 	// each collection node, in chunks of at most MaxCollectionItems (kro's
 	// default forEach limit).
@@ -75,8 +78,8 @@ type gateCollections struct {
 	approvalPolicies bool
 }
 
-func newGateCollections(pipeline, bundle string) *gateCollections {
-	return &gateCollections{pipeline: pipeline, bundle: bundle,
+func newGateCollections(pipeline, bundle string, policyNamespaces []string) *gateCollections {
+	return &gateCollections{pipeline: pipeline, bundle: bundle, orgNS: policyNamespaceSet(policyNamespaces),
 		index: map[string]int{}, collection: map[string]string{}, what: map[string]string{},
 		items: map[string]map[string]interface{}{}, position: map[string]int{}}
 }
@@ -93,7 +96,7 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 
 	key := gate.Namespace + "/" + gate.Name
 	t, ok := c.index[key]
-	tmpl := gateTemplateData(gate)
+	tmpl := gateTemplateData(gate, c.orgNS)
 	if !ok {
 		t = len(c.templates)
 		c.index[key] = t
@@ -146,14 +149,12 @@ func (c *gateCollections) setVerify(name string, data map[string]interface{}) {
 // template with force and re-applies it on drift, so a template-owned
 // overrides list would revert every `kardinal override` patch on the live
 // instance. The CLI records overrides on the instances instead.
-func gateTemplateData(gate kardinalv1alpha1.PolicyGate) map[string]interface{} {
+func gateTemplateData(gate kardinalv1alpha1.PolicyGate, orgNS map[string]bool) map[string]interface{} {
 	// Propagate scope and applies-to from the gate template so that
 	// `kardinal policy list` can show the correct scope (org/team) and
-	// applies-to value on the instantiated PolicyGate CRs (#249).
-	scope := gate.Labels["kardinal.io/scope"]
-	if scope == "" {
-		scope = "team"
-	}
+	// applies-to value on the instantiated PolicyGate CRs (#249). The scope
+	// is the one the gate behaves with (GateScope, #1720).
+	scope := scopeOf(gate, orgNS)
 	// kardinal.io/gate-name holds the user-defined gate name from the
 	// original PolicyGate template (e.g. "no-weekend-deploys"), so the UI can
 	// deduplicate by the human-readable name. A gate that already carries the

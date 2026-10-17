@@ -929,6 +929,48 @@ func TestPolicyList_LastEvaluated(t *testing.T) {
 	}, lastEval(t, "demo"))
 }
 
+// TestPolicyList_ScopeFromNamespace (#1720): SCOPE is the scope a gate
+// behaves with. A gate in an org policy namespace is org with or without the
+// kardinal.io/scope label, a gate labelled org is org anywhere, and any other
+// gate is its label, team by default. --policy-namespaces says which
+// namespaces are org. An instance the builder labels with its template's
+// namespace matches its template whatever scope it carries.
+func TestPolicyList_ScopeFromNamespace(t *testing.T) {
+	inst := policyGate("plain-platform-policies-test--demo-b", "default", "test", "true",
+		"kardinal.io/gate-template", "plain", "kardinal.io/gate-template-namespace", "platform-policies",
+		"kardinal.io/scope", "org", "kardinal.io/pipeline", "demo", "kardinal.io/bundle", "demo-b")
+	inst.Spec.Generated = true
+	at := metav1.NewTime(time.Now().Add(-150 * time.Second))
+	inst.Status.LastEvaluatedAt = &at
+	c := policyClient(t, policyPipeline("demo", "test"), inst,
+		policyGate("plain", "platform-policies", "test", "true"),
+		policyGate("labelled-team", "platform-policies", "test", "true", "kardinal.io/scope", "team"),
+		policyGate("org-elsewhere", "default", "test", "true", "kardinal.io/scope", "org"),
+		policyGate("local", "default", "test", "true"))
+
+	rows := func(t *testing.T, policyNS []string) map[string][]string {
+		t.Helper()
+		var out bytes.Buffer
+		require.NoError(t, policyListFn(&out, c, "default", "", policyNS))
+		got := map[string][]string{}
+		for _, l := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")[1:] {
+			f := strings.Fields(l)
+			got[f[0]] = []string{f[2], strings.Join(f[6:], " ")}
+		}
+		return got
+	}
+	assert.Equal(t, map[string][]string{
+		"plain":         {"org", "2m ago"},
+		"labelled-team": {"org", "-"},
+		"org-elsewhere": {"org", "-"},
+		"local":         {"team", "-"},
+	}, rows(t, nil))
+	got := rows(t, []string{"corp-policies"})
+	assert.Equal(t, "team", got["plain"][0], "platform-policies is not an org namespace here")
+	assert.Equal(t, "team", got["labelled-team"][0])
+	assert.Equal(t, "org", got["org-elsewhere"][0])
+}
+
 // ─── validate CEL (C09b-cli-16) ─────────────────────────────────────────────
 
 func TestValidateCELExpression(t *testing.T) {

@@ -51,13 +51,35 @@ func IsPolicyNamespace(ns string, policyNamespaces []string) bool {
 }
 
 // isOrgGate reports whether g is an ordinary (not skip-permission) gate owned
-// by the platform: it lives in an org policy namespace, or it is labelled
-// kardinal.io/scope=org.
+// by the platform (GateScope "org").
 func isOrgGate(g kardinalv1alpha1.PolicyGate, orgNS map[string]bool) bool {
-	if isSkipPermissionGate(g) {
-		return false
+	return !isSkipPermissionGate(g) && scopeOf(g, orgNS) == ScopeOrg
+}
+
+// The gate scopes GateScope returns.
+const (
+	ScopeOrg  = "org"
+	ScopeTeam = "team"
+)
+
+// GateScope is the scope of PolicyGate template g, as the Graph builder
+// stamps it on g's instances (kardinal.io/scope) and as `kardinal policy
+// list` shows it: "org" when g lives in one of the org policy namespaces
+// policyNamespaces (DefaultPolicyNamespace when empty) or is labelled
+// kardinal.io/scope=org, otherwise its kardinal.io/scope label, "team" when
+// it has none (#1720).
+func GateScope(g kardinalv1alpha1.PolicyGate, policyNamespaces []string) string {
+	return scopeOf(g, policyNamespaceSet(policyNamespaces))
+}
+
+func scopeOf(g kardinalv1alpha1.PolicyGate, orgNS map[string]bool) string {
+	switch s := g.Labels["kardinal.io/scope"]; {
+	case orgNS[g.Namespace] || s == ScopeOrg:
+		return ScopeOrg
+	case s != "":
+		return s
 	}
-	return orgNS[g.Namespace] || g.Labels["kardinal.io/scope"] == "org"
+	return ScopeTeam
 }
 
 // isSkipPermissionFor reports whether g may grant a skip of envName: it is a

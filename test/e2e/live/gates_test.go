@@ -589,8 +589,10 @@ func orgEnv(t *testing.T) string {
 	return "org-" + hex.EncodeToString(b)
 }
 
-// TestGate_OrgGatesMandatory checks that an org gate in platform-policies is
-// injected into a Pipeline with its environment, and only that environment,
+// TestGate_OrgGatesMandatory checks that a gate in platform-policies is an
+// org gate without the kardinal.io/scope label: `kardinal policy list` and
+// its instance show scope org. It is injected into a Pipeline with its
+// environment, and only that environment,
 // and that the team cannot remove or weaken it: not with a passing team gate
 // of the same name, not with a spec.policyNamespaces list that leaves
 // platform-policies out, and not by deleting the instance (the Graph
@@ -603,9 +605,12 @@ func TestGate_OrgGatesMandatory(t *testing.T) {
 	ctx := context.Background()
 	env := orgEnv(t)
 	e.EnsureNamespace(t, framework.PolicyNamespace)
+	// No kardinal.io/scope label: platform-policies makes it an org gate (#1720).
 	org := framework.Gate(framework.PolicyNamespace, env+"-open", env, openExpr, recheck)
-	org.Labels["kardinal.io/scope"] = "org"
+	delete(org.Labels, "kardinal.io/scope")
 	e.CreateGate(t, org)
+	assert.Regexp(t, `(?m)^`+regexp.QuoteMeta(org.Name)+` +`+framework.PolicyNamespace+` +org +`,
+		e.MustKardinal(t, framework.PolicyNamespace, "policy", "list"), "policy list shows it as org")
 
 	a := newArgoApp(t, e, "test", env)
 	e.CreateGate(t, framework.Gate(a.ns, org.Name, env, "true", recheck))
