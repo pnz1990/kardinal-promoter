@@ -39,6 +39,7 @@ multi-cluster 1.36        -
 flux          1.37        -
 shard         1.37        -
 receipts      1.37        -
+evidence-airgap 1.37      -
 # 1.35: the oldest minor kardinal supports.
 # all.sh and CI run the upgrade test once whatever COUNT is: it upgrades its
 # cluster.

@@ -174,17 +174,17 @@ func TestLiveReport(t *testing.T) {
 	}{
 		{
 			name: "sample job fails",
-			// sample-ui-136 is 2026-11-14's minor job (hack/e2e/sample.sh
+			// sample-gitlab-135 is 2026-11-14's minor job (hack/e2e/sample.sh
 			// 2026-11-10); a suite added to matrix.txt shifts the rotation.
 			jobs: "controller image\tsuccess\nui on Kubernetes 1.37\tsuccess\n" +
-				"sample-ui-136: ui on Kubernetes 1.36\tfailure\n" +
+				"sample-gitlab-135: gitlab on Kubernetes 1.35\tfailure\n" +
 				"sample-core-137-5of9x3: core 5/9 on Kubernetes 1.37 (COUNT=3)\tsuccess\ne2e live\tfailure\n",
 			e2eLive: "failure",
-			// ui-136 opens its own issue; core 5/9 passed, so its issue
+			// gitlab-135 opens its own issue; core 5/9 passed, so its issue
 			// closes; gitlab-136 did not run, so its issue stays; the shared
 			// issue closes: no matrix.txt job failed.
-			want:    []string{"create e2e live sample failed: sample-ui-136", "issue close 9", "issue close 8"},
-			created: "e2e live sample failed: sample-ui-136",
+			want:    []string{"create e2e live sample failed: sample-gitlab-135", "issue close 9", "issue close 8"},
+			created: "e2e live sample failed: sample-gitlab-135",
 		},
 		{
 			name: "sample job fails again and a matrix job fails",
@@ -224,8 +224,8 @@ func TestLiveReport(t *testing.T) {
 					return '_'
 				}, tc.created)+"_.md"))
 				require.NoError(t, err)
-				assert.Contains(t, string(body), "SAMPLE=2026-11-14 SAMPLE_ONLY=1 SUITES=ui make e2e-all")
-				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=ui -f sample=2026-11-14")
+				assert.Contains(t, string(body), "SAMPLE=2026-11-14 SAMPLE_ONLY=1 SUITES=gitlab make e2e-all")
+				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=gitlab -f sample=2026-11-14")
 				assert.Contains(t, string(body), "https://example.com/run/1")
 			}
 		})
