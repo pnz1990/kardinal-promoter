@@ -75,6 +75,16 @@ type ciRunner struct {
 	mu         sync.Mutex
 	run        *ciRun
 	imagesDone bool
+
+	// The shared look at the run (view): one gh call per poll interval for
+	// every CI step, not one per step (#2096).
+	viewMu  sync.Mutex
+	viewAt  time.Time
+	viewRun int64
+	last    runView
+
+	// wait sleeps between retries; tests make it instant.
+	wait func(ctx context.Context, d time.Duration) error
 }
 
 const workflow = "e2e-live.yml"
@@ -96,7 +106,7 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 			return c.run, nil
 		}
 	}
-	head, err := c.gh(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", c.repo, c.ref), "--jq", ".sha")
+	head, err := c.call(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", c.repo, c.ref), "--jq", ".sha")
 	if err != nil {
 		return nil, fmt.Errorf("read %s on GitHub: %w", c.ref, err)
 	}
@@ -110,7 +120,7 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 	}
 	c.log("dispatched %s on %s (suites: %s)", workflow, c.ref, suites)
 	for {
-		out, err := c.gh(ctx, "run", "list", "--repo", c.repo, "--workflow", workflow, "--branch", c.ref,
+		out, err := c.call(ctx, "run", "list", "--repo", c.repo, "--workflow", workflow, "--branch", c.ref,
 			"--event", "workflow_dispatch", "--limit", "10", "--json", "databaseId,headSha,createdAt")
 		if err != nil {
 			return nil, fmt.Errorf("list %s runs: %w", workflow, err)
@@ -151,41 +161,130 @@ type ghJob struct {
 	URL        string `json:"url"`
 }
 
-// runDone says whether every job of the run has finished.
-func (c *ciRunner) runDone(ctx context.Context, run int64) (bool, error) {
-	out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--json", "status")
-	if err != nil {
-		return false, fmt.Errorf("view run %d: %w", run, err)
-	}
-	var v struct{ Status string }
-	if err := json.Unmarshal(out, &v); err != nil {
-		return false, fmt.Errorf("parse run %d: %w", run, err)
-	}
-	return v.Status == "completed", nil
+// runView is one look at the run: its status, its latest attempt and its
+// jobs.
+type runView struct {
+	Status  string  `json:"status"`
+	Attempt int     `json:"attempt"`
+	Jobs    []ghJob `json:"jobs"`
 }
 
-func (c *ciRunner) job(ctx context.Context, run int64, name string) (ghJob, int, error) {
-	out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--json", "jobs,attempt")
-	if err != nil {
-		return ghJob{}, 0, fmt.Errorf("view run %d: %w", run, err)
-	}
-	var v struct {
-		Attempt int     `json:"attempt"`
-		Jobs    []ghJob `json:"jobs"`
-	}
-	if err := json.Unmarshal(out, &v); err != nil {
-		return ghJob{}, 0, fmt.Errorf("parse run %d: %w", run, err)
-	}
+func (v runView) job(name string) ghJob {
 	for _, j := range v.Jobs {
 		if j.Name == name {
-			return j, v.Attempt, nil
+			return j
 		}
 	}
-	return ghJob{}, v.Attempt, nil
+	return ghJob{}
 }
 
-// Run waits for the step's job; a job that already failed (an earlier gate's
-// result) is re-run first.
+// view returns the run as one gh call shared by every CI step saw it: a
+// call at most every poll interval, whatever the number of steps waiting
+// (32 steps polling on their own made 1,900 calls an hour, and the account's
+// limit of 5,000 is shared by every agent: #2096). A call that fails is
+// retried (poll errors never fail a step), honouring GitHub's rate limits.
+func (c *ciRunner) view(ctx context.Context, run int64) (runView, error) {
+	c.viewMu.Lock()
+	defer c.viewMu.Unlock()
+	if c.viewRun == run && !c.viewAt.IsZero() && time.Since(c.viewAt) < c.poll {
+		return c.last, nil
+	}
+	for attempt := 1; ; attempt++ {
+		out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--json", "status,attempt,jobs")
+		var v runView
+		if err == nil {
+			if err = json.Unmarshal(out, &v); err == nil {
+				c.last, c.viewAt, c.viewRun = v, time.Now(), run
+				return v, nil
+			}
+			err = fmt.Errorf("parse run %d: %w", run, err)
+		}
+		d := c.backoff(ctx, err, attempt)
+		c.log("view CI run %d: %v; retrying in %s", run, err, d)
+		if werr := c.sleepFor(ctx, d); werr != nil {
+			return runView{}, werr
+		}
+	}
+}
+
+// forget makes the next view call GitHub (after a re-run).
+func (c *ciRunner) forget() {
+	c.viewMu.Lock()
+	c.viewAt = time.Time{}
+	c.viewMu.Unlock()
+}
+
+// call is a gh call retried, up to callAttempts times, while it fails with
+// a transient error (a rate limit, a 5xx, a dropped connection).
+func (c *ciRunner) call(ctx context.Context, args ...string) ([]byte, error) {
+	for attempt := 1; ; attempt++ {
+		out, err := c.gh(ctx, args...)
+		if err == nil || !transient(err) || attempt >= callAttempts {
+			return out, err
+		}
+		d := c.backoff(ctx, err, attempt)
+		c.log("gh %s: %v; retrying in %s", strings.Join(args[:min(len(args), 3)], " "), err, d)
+		if werr := c.sleepFor(ctx, d); werr != nil {
+			return nil, werr
+		}
+	}
+}
+
+// callAttempts bounds the retries of a call that is not a poll.
+const callAttempts = 8
+
+// transient says whether a gh error is worth retrying: GitHub's primary and
+// secondary rate limits (403, 429), its 5xx, and dropped connections.
+func transient(err error) bool {
+	m := strings.ToLower(err.Error())
+	for _, s := range []string{"rate limit", "http 429", "http 500", "http 502", "http 503", "http 504",
+		"timeout", "connection reset", "eof", "tls handshake"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// backoff is how long to wait before retrying after err, the attempt-th
+// failure: until the primary rate limit resets (gh api rate_limit, which does
+// not count against it), a minute and more for a secondary limit, else
+// exponential from 15 seconds; at most maxBackoff.
+func (c *ciRunner) backoff(ctx context.Context, err error, attempt int) time.Duration {
+	m := strings.ToLower(err.Error())
+	exp := func(base time.Duration) time.Duration {
+		return min(base<<min(attempt-1, 6), maxBackoff)
+	}
+	switch {
+	case strings.Contains(m, "secondary rate limit"):
+		return exp(time.Minute)
+	case strings.Contains(m, "rate limit"):
+		if out, rerr := c.gh(ctx, "api", "rate_limit", "--jq", ".resources.core.reset"); rerr == nil {
+			var reset int64
+			if _, serr := fmt.Sscan(strings.TrimSpace(string(out)), &reset); serr == nil && reset > 0 {
+				if d := time.Until(time.Unix(reset, 0)) + 5*time.Second; d > 0 {
+					return min(d, maxBackoff)
+				}
+			}
+		}
+		return exp(time.Minute)
+	}
+	return exp(15 * time.Second)
+}
+
+// maxBackoff bounds one wait: GitHub's primary limit resets within the hour.
+const maxBackoff = time.Hour
+
+func (c *ciRunner) sleepFor(ctx context.Context, d time.Duration) error {
+	if c.wait != nil {
+		return c.wait(ctx, d)
+	}
+	return sleep(ctx, d)
+}
+
+// Run waits for the step's job, from the shared view of the run; a job that
+// already failed (an earlier gate's result) is re-run first. Only the job's
+// conclusion fails the step: a poll error is retried (#2096).
 func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 	run, err := c.ensureRun(ctx)
 	if err != nil {
@@ -194,21 +293,18 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 	rerun := st.ciRetry
 	missingSince := time.Time{}
 	for {
-		j, attempt, err := c.job(ctx, run.ID, st.CIJob.Name())
+		v, err := c.view(ctx, run.ID)
 		if err != nil {
-			return err
+			return err // the context ended
 		}
+		j := v.job(st.CIJob.Name())
 		if j.Name == "" {
 			// A job the run does not have (renamed, or a matrix that lists
 			// other minors) would be waited for for ever.
-			done, err := c.runDone(ctx, run.ID)
-			if err != nil {
-				return err
-			}
 			if missingSince.IsZero() {
 				missingSince = time.Now()
 			}
-			if done || time.Since(missingSince) > c.jobWait {
+			if v.Status == "completed" || time.Since(missingSince) > c.jobWait {
 				return fmt.Errorf("the CI run has no job %q", st.CIJob.Name())
 			}
 			if err := sleep(ctx, c.poll); err != nil {
@@ -218,9 +314,7 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 		}
 		if j.Status == "completed" && j.Conclusion != "success" && rerun {
 			// GitHub re-runs a job only once its whole run has finished.
-			if done, err := c.runDone(ctx, run.ID); err != nil {
-				return err
-			} else if !done {
+			if v.Status != "completed" {
 				if err := sleep(ctx, c.poll); err != nil {
 					return err
 				}
@@ -228,9 +322,10 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 			}
 			rerun = false
 			c.log("%s: re-running the failed CI job %s", st.ID, j.URL)
-			if _, err := c.gh(ctx, "run", "rerun", fmt.Sprint(run.ID), "--repo", c.repo, "--job", fmt.Sprint(j.DatabaseID)); err != nil {
+			if _, err := c.call(ctx, "run", "rerun", fmt.Sprint(run.ID), "--repo", c.repo, "--job", fmt.Sprint(j.DatabaseID)); err != nil {
 				return fmt.Errorf("re-run job %d: %w", j.DatabaseID, err)
 			}
+			c.forget()
 			// The re-run shows as queued once GitHub takes it.
 			if err := sleep(ctx, c.poll); err != nil {
 				return err
@@ -247,7 +342,7 @@ func (c *ciRunner) Run(ctx context.Context, st Step, dir string) error {
 				return fmt.Errorf("CI job %s: %s", j.URL, j.Conclusion)
 			}
 			// A green job proves nothing without its results.
-			return c.fetchResults(ctx, run.ID, attempt, st, dir)
+			return c.fetchResults(ctx, run.ID, v.Attempt, st, dir)
 		}
 		if err := sleep(ctx, c.poll); err != nil {
 			return err
@@ -268,7 +363,7 @@ func sleep(ctx context.Context, d time.Duration) error {
 // dir/log.txt.
 func (c *ciRunner) saveLog(ctx context.Context, run int64, j ghJob, dir string) {
 	head := fmt.Sprintf("CI job %s: %s\n", j.URL, j.Conclusion)
-	out, err := c.gh(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--job", fmt.Sprint(j.DatabaseID), "--log")
+	out, err := c.call(ctx, "run", "view", fmt.Sprint(run), "--repo", c.repo, "--job", fmt.Sprint(j.DatabaseID), "--log")
 	if err != nil {
 		out = []byte(fmt.Sprintf("(the job log could not be read: %v)\n", err))
 	}
@@ -284,7 +379,7 @@ func (c *ciRunner) fetchImages(ctx context.Context, run int64) {
 		return
 	}
 	dir := filepath.Join(c.out, "ci-images")
-	if _, err := c.gh(ctx, "run", "download", fmt.Sprint(run), "--repo", c.repo, "-n", "e2e-images", "-D", dir); err != nil {
+	if _, err := c.call(ctx, "run", "download", fmt.Sprint(run), "--repo", c.repo, "-n", "e2e-images", "-D", dir); err != nil {
 		c.log("the CI run left no e2e-images artifact: %v", err)
 		return
 	}
@@ -301,7 +396,7 @@ func (c *ciRunner) fetchResults(ctx context.Context, run int64, attempt int, st 
 	found := false
 	for a := attempt; a >= 1 && !found; a-- {
 		name := fmt.Sprintf("e2e-live-%s-attempt-%d", st.CIJob.ID, a)
-		_, err := c.gh(ctx, "run", "download", fmt.Sprint(run), "--repo", c.repo, "-n", name, "-D", art)
+		_, err := c.call(ctx, "run", "download", fmt.Sprint(run), "--repo", c.repo, "-n", name, "-D", art)
 		found = err == nil
 	}
 	if !found {
