@@ -56,6 +56,8 @@ type ticketing struct {
 	err error
 	// searchLags hides tickets from Find (a search index behind).
 	searchLags bool
+	// findErr, when set, is returned by Find.
+	findErr error
 }
 
 func newTicketing() *ticketing {
@@ -111,6 +113,9 @@ func (f *ticketing) Find(_ context.Context, req changerequest.Request) (changere
 	f.calls["Find"]++
 	if f.err != nil {
 		return changerequest.Reading{}, false, f.err
+	}
+	if f.findErr != nil {
+		return changerequest.Reading{}, false, f.findErr
 	}
 	if f.searchLags {
 		return changerequest.Reading{}, false, nil
@@ -444,6 +449,36 @@ func TestChangeRequest_ProviderErrors(t *testing.T) {
 			assert.Equal(t, metav1.ConditionFalse, cond(cr, tc.cond).Status, "cleared by a call that works")
 		})
 	}
+}
+
+// TestChangeRequest_IgnoredFilterCreatesNothing (#2140 QA): a search answer
+// another promotion's ticket (the provider ignored part of the filter) is
+// neither adopted nor followed by a create, which could duplicate this
+// promotion's ticket: condition ProviderError, reason ProviderIgnoredFilter,
+// and the next call waits the refused-call backoff.
+func TestChangeRequest_IgnoredFilterCreatesNothing(t *testing.T) {
+	e := newEnv(t, instance())
+	e.f.findErr = fmt.Errorf("servicenow: find change: the answer, CHG0000009, does not carry this promotion's correlation id: %w",
+		changerequest.ErrIgnoredFilter)
+	e.reconcile()
+	cr := e.get()
+	assert.Zero(t, e.f.count("Create"), "nothing is created")
+	assert.Nil(t, cr.Status.Ticket)
+	c := cond(cr, changerequest.CondProviderError)
+	require.NotNil(t, c)
+	assert.Equal(t, metav1.ConditionTrue, c.Status)
+	assert.Equal(t, changerequest.ReasonIgnoredFilter, c.Reason)
+	assert.Contains(t, c.Message, "does not carry this promotion's correlation id")
+	require.NotNil(t, cr.Status.RetryAt)
+	assert.Equal(t, t0.Add(5*time.Minute), cr.Status.RetryAt.UTC(), "the refused-call backoff")
+	finds := e.f.count("Find")
+	e.now = t0.Add(4 * time.Minute)
+	e.reconcile()
+	assert.Equal(t, finds, e.f.count("Find"), "nothing before retryAt")
+	e.f.findErr = nil
+	e.now = t0.Add(5 * time.Minute)
+	e.reconcile()
+	assert.Equal(t, 1, e.f.count("Create"), "a search that works lets the create go")
 }
 
 // TestChangeRequest_StaleCondition: past validUntil without a reading the

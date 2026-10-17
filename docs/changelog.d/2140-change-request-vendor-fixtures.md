@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **A change request search adopts only this promotion's ticket** (#2140). Find adopted the first ServiceNow change or Jira issue the search returned that kardinal's own account had created, without checking it carried the promotion's correlation id or label. An instance that ignored part of the query (ServiceNow skips a condition it cannot apply) could therefore hand a promotion another promotion's ticket, and gate it on that ticket's approval. Such an answer is now an error, neither adopted nor followed by a create (which could duplicate the promotion's ticket): condition `ProviderError`, reason `ProviderIgnoredFilter`, retried after five minutes. A ServiceNow reference returned without a display value (the Table API's default `{"link", "value"}` shape) now reads as its value, so its approvers are no longer dropped. The providers are now also tested against the Jira Cloud OpenAPI document's own examples and schema property names (Apache 2.0), and against a hand-written record in the documented ServiceNow Table API GET shape. They are still not recorded from a real instance.

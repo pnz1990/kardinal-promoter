@@ -30,7 +30,8 @@ import (
 // The fixtures in testdata/servicenow are Table API responses read with
 // sysparm_display_value=all, in the shape of the ServiceNow REST API
 // reference. They are written from the vendor documentation, not recorded
-// from an instance (spec 23 section 5.4: the recording from a Personal
+// from an instance; a record in the reference's documented GET shape is read in
+// published_fixtures_test.go (spec 23 section 5.4: the recording from a Personal
 // Developer Instance is an open contract item). {{CORRELATION}} becomes the
 // request's correlation key.
 
