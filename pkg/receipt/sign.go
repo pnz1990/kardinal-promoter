@@ -42,7 +42,6 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 	"github.com/sigstore/sigstore-go/pkg/sign"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
-	sigkms "github.com/sigstore/sigstore/pkg/signature/kms"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -121,22 +120,6 @@ func (s *Signer) Validate() error {
 	return nil
 }
 
-// KMSSupported reports whether the controller was built with the provider
-// of ref. A reference no built-in provider matches is refused here, before
-// kms.Get could hand it to its CLI-plugin fallback, a subprocess.
-func KMSSupported(ref string) error {
-	if ref == "" {
-		return errors.New("kms receipt signing needs a key reference")
-	}
-	for _, p := range sigkms.SupportedProviders() {
-		if strings.HasPrefix(ref, p) {
-			return nil
-		}
-	}
-	scheme, _, _ := strings.Cut(ref, "://")
-	return fmt.Errorf("the controller was not built with the %s KMS provider (key reference %s)", scheme, ref)
-}
-
 func (s *Signer) timeout() time.Duration {
 	if s.Timeout > 0 {
 		return s.Timeout
@@ -178,11 +161,7 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 		}
 		keypair, signedBy.Identity, signedBy.KeyHint = kp, identity, string(kp.hint)
 	case v1alpha1.ReceiptSigningKMS:
-		sv, err := sigkms.Get(ctx, s.KMSRef, crypto.SHA256)
-		if err != nil {
-			return nil, fmt.Errorf("kms key %s: %w", s.KMSRef, err)
-		}
-		cs, _, err := sv.CryptoSigner(ctx, func(error) {})
+		cs, err := kmsSigner(ctx, s.KMSRef, s.Transport, s.timeout())
 		if err != nil {
 			return nil, fmt.Errorf("kms key %s: %w", s.KMSRef, err)
 		}

@@ -147,9 +147,35 @@ records it, and `kardinal_receipts_failed_total{sink="build"}` counts it once.
 |---|---|---|
 | `keyless` (default) | The certificate identity `https://kubernetes.io/namespaces/<ns>/serviceaccounts/<sa>` **and** the cluster's OIDC issuer | EKS, GKE and AKS, whose issuers the public-good Fulcio accepts. No key to keep. The controller gets a short-lived certificate from Fulcio with a projected ServiceAccount token of audience `sigstore`, separate from its API server token. kind and on-prem clusters need a private Fulcio that trusts their issuer (`receipts.signing.keyless.fulcioURL`). Keyless needs proof of the signing time: set `receipts.sinks.rekor.url` or `receipts.signing.tsaURL`. |
 | `key` | The public key | Air-gapped clusters. Anyone who can read the Secret can sign receipts; rotate it by replacing the Secret (the next receipt uses the new key). |
-| `kms` | The public key | Key custody outside the cluster. The controller signs only with KMS providers its image was built with; v0.13's image has none yet (#1952), so a `kms` key reference is refused at start with the provider named. The sigstore CLI-plugin fallback, which runs a subprocess, is never used. |
+| `kms` | The public key | Key custody outside the cluster: AWS KMS or Google Cloud KMS (`receipts.signing.kmsKey`, below). The private key never leaves the KMS. |
 
 The keyless certificate names the ServiceAccount, not the cluster: always pin the issuer too.
+
+#### KMS keys
+
+The controller image is built with two KMS providers (Go build tags `kms_aws` and `kms_gcp`). A
+key reference for any other provider is refused at start, naming the provider and the ones built
+in. kardinal calls the provider itself and never sigstore's CLI-plugin fallback, which runs a
+subprocess.
+
+| Provider | `receipts.signing.kmsKey` | Key | Credentials |
+|---|---|---|---|
+| AWS KMS | `awskms:///alias/kardinal-receipts`, `awskms:///arn:aws:kms:<region>:<account>:key/<id>`, or with an endpoint, `awskms://<host>:<port>/<id>` | Asymmetric, `SIGN_VERIFY`, `ECC_NIST_P256` | The SDK's default chain: IRSA (`serviceAccount.annotations`, `eks.amazonaws.com/role-arn`), EKS Pod Identity, or the node's instance role. The role needs `kms:Sign`, `kms:GetPublicKey` and `kms:DescribeKey` on the key. The region comes from the ARN, or `AWS_REGION`. |
+| Google Cloud KMS | `gcpkms://projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<v>` | Asymmetric sign, `EC_SIGN_P256_SHA256` | Application Default Credentials: GKE Workload Identity, or `GOOGLE_APPLICATION_CREDENTIALS`. The identity needs `roles/cloudkms.signerVerifier` on the key. |
+
+- **Egress.** The KMS API calls (and AWS STS) go through the controller's egress guard and
+  allowlist like every sink: with `egress.allowlist` set, add `kms.<region>.amazonaws.com` and
+  `sts.<region>.amazonaws.com`, or `cloudkms.googleapis.com`. The credential requests to the
+  instance metadata, ECS and Pod Identity endpoints (and Google's metadata server) are the
+  cloud SDK's own, not user input, and are not guarded.
+- **Rotation.** A receipt records the key reference it was signed with (`status.signedBy`); a
+  verifier pins the public key. Pin a Cloud KMS key version in the reference: without one the
+  provider uses the newest enabled version, and a verifier must then know every version's
+  public key. A key disabled in the KMS fails signing (`Signed=False`, `SignFailed`), retried
+  with backoff and counted in `kardinal_receipts_failed_total{sink="signing"}`; promotions are
+  not held.
+- **Timeouts.** Each KMS call is bounded by the signer's timeout (30 s); an endpoint the egress
+  guard refuses fails at once, naming the address.
 
 ### Where receipts are stored
 
