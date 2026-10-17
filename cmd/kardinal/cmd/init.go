@@ -329,7 +329,7 @@ func initConfig(cmd *cobra.Command, o initOptions) (*InitConfig, error) {
 		return nil, fmt.Errorf("init: --prod-approval must be pr-review or auto, got %q", cfg.ProdApproval)
 	}
 	if isHTTPRepo(cfg.GitURL) {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Warning: --repo is http://: the controller sends the git token to it in clear text; "+
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: --repo is http://: the controller sends the git token to it in clear text; "+
 			"use it only for a git server on a network you trust")
 	}
 	return cfg, nil

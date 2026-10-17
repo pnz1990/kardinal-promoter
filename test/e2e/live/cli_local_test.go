@@ -467,7 +467,7 @@ func TestCLI_Init(t *testing.T) {
 	httpDir := t.TempDir()
 	r = init(httpDir, "", "-n", ns, "--name", "web-http", "--repo", httpRepo, "--insecure-http")
 	require.Equal(t, 0, r.Code, r.Stderr)
-	assert.Equal(t, "Warning: --repo is http://: the controller sends the git token to it in clear text; "+
+	assert.Equal(t, "warning: --repo is http://: the controller sends the git token to it in clear text; "+
 		"use it only for a git server on a network you trust\n", r.Stderr)
 	assert.Contains(t, readFile(t, filepath.Join(httpDir, "pipeline.yaml")), "    url: "+httpRepo+"\n")
 	out, err = cli.Kubectl(httpDir, "apply", "--dry-run=server", "-f", "pipeline.yaml")
