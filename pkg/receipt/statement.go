@@ -242,11 +242,15 @@ type PR struct {
 }
 
 // AdoptedPR is what is known of an adopted PR: its head commit, the SCM
-// account that opened it, and its commits kardinal did not push.
+// account that opened it, and its commits kardinal did not push (the first
+// 20; UnpushedCount is how many there are). SHAs are hex or "(invalid)";
+// names are the SCM's free text, without e-mail addresses, at most 128
+// bytes.
 type AdoptedPR struct {
-	HeadSHA  string     `json:"headSHA,omitempty"`
-	OpenedBy string     `json:"openedBy,omitempty"`
-	Unpushed []PRCommit `json:"unpushedCommits,omitempty"`
+	HeadSHA       string     `json:"headSHA,omitempty"`
+	OpenedBy      string     `json:"openedBy,omitempty"`
+	Unpushed      []PRCommit `json:"unpushedCommits,omitempty"`
+	UnpushedCount int        `json:"unpushedCount,omitempty"`
 }
 
 // PRCommit is one commit of a pull request and its author.

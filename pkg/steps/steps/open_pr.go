@@ -14,7 +14,6 @@
 package steps
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -409,72 +408,15 @@ func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch str
 	}
 	zerolog.Ctx(ctx).Info().Int("pr", pr.Number).Str("branch", branch).
 		Msg("nothing to commit: this promotion's PR was merged before the step recorded it; adopting it")
-	outputs := map[string]string{
-		"prURL":             pr.URL,
-		"prNumber":          fmt.Sprintf("%d", pr.Number),
-		outputNoChanges:     "false",
-		OutputPRAdoptedHead: pr.HeadSHA,
-		OutputPROpenedBy:    pr.Author,
-	}
-	if len(pr.Unpushed) > 0 {
-		b, err := json.Marshal(pr.Unpushed)
-		if err != nil {
-			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
-		}
-		outputs[OutputPRUnpushedCommits] = string(b)
+	outputs, err := adoptedOutputs(pr)
+	if err != nil {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
 		Message: fmt.Sprintf("adopted PR #%d (%s): %s, already merged", pr.Number, AdoptedPRDetail(outputs), pr.URL),
 		Outputs: outputs,
 	}, nil
-}
-
-// The outputs of a PR adoptMergedPR adopted (#2092): its head commit, the
-// SCM account that opened it, and, as JSON, its commits kardinal did not
-// push ([]scm.PRCommit). They are absent for a PR kardinal opened.
-const (
-	OutputPRAdoptedHead     = "prAdoptedHead"
-	OutputPROpenedBy        = "prOpenedBy"
-	OutputPRUnpushedCommits = "prUnpushedCommits"
-)
-
-// AdoptedPRUnpushed is the commits of the adopted PR kardinal did not push
-// (OutputPRUnpushedCommits); nil for none, or for a PR kardinal opened.
-func AdoptedPRUnpushed(outputs map[string]string) []scm.PRCommit {
-	var out []scm.PRCommit
-	if raw := outputs[OutputPRUnpushedCommits]; raw != "" {
-		if err := json.Unmarshal([]byte(raw), &out); err != nil {
-			// Not written by adoptMergedPR: say so rather than nothing.
-			return []scm.PRCommit{{SHA: "(unreadable: " + raw + ")"}}
-		}
-	}
-	return out
-}
-
-// AdoptedPRDetail describes a PR adoptMergedPR adopted, from the step's
-// outputs: "head <sha>, opened by <account>" and, when it has commits
-// kardinal did not push, ", N commits not pushed by kardinal: <sha> by
-// <author>, ...". "" for a PR kardinal opened.
-func AdoptedPRDetail(outputs map[string]string) string {
-	head, ok := outputs[OutputPRAdoptedHead]
-	if !ok {
-		return ""
-	}
-	d := "head " + cmp.Or(head, "(unknown)") + ", opened by " + cmp.Or(outputs[OutputPROpenedBy], "(unknown)")
-	unpushed := AdoptedPRUnpushed(outputs)
-	if len(unpushed) == 0 {
-		return d
-	}
-	parts := make([]string, 0, len(unpushed))
-	for _, c := range unpushed {
-		parts = append(parts, c.SHA+" by "+cmp.Or(c.Author, "(unknown)"))
-	}
-	noun := "commits"
-	if len(unpushed) == 1 {
-		noun = "commit"
-	}
-	return fmt.Sprintf("%s, %d %s not pushed by kardinal: %s", d, len(unpushed), noun, strings.Join(parts, ", "))
 }
 
 // buildPRBodyUpstreamEnvs converts []v1alpha1.EnvironmentStatus to []scm.PRBodyUpstreamEnv,

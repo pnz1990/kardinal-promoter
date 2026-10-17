@@ -16,6 +16,7 @@ package steps_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1373,6 +1375,8 @@ const testPushed = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
 // it pushed (pushedSHA), instead of no changes; it opens no second PR.
 // Without a recorded push nothing is adopted. A permanent lookup error
 // fails the step; none of them is taken as "no PR".
+//
+// Covers SCM-MERGED-BEFORE-04.
 func TestOpenPR_NothingToCommit(t *testing.T) {
 	step, err := parentsteps.Lookup("open-pr")
 	require.NoError(t, err)
@@ -1412,11 +1416,45 @@ func TestOpenPR_NothingToCommit(t *testing.T) {
 			HeadSHA: fix2, Author: "alice", Unpushed: []scm.PRCommit{{SHA: fix1, Author: "bob"}, {SHA: fix2, Author: "carol"}}}}
 		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
 		assert.Equal(t, parentsteps.StepSuccess, res.Status)
-		assert.Equal(t, "adopted PR #6 (head "+fix2+", opened by alice, 2 commits not pushed by kardinal: "+fix1+" by bob, "+fix2+
-			" by carol): https://github.com/owner/repo/pull/6, already merged", res.Message)
+		assert.Equal(t, "adopted PR #6 (head "+fix2+`, opened by "alice", 2 commits not pushed by kardinal: `+fix1+` by "bob", `+fix2+
+			` by "carol"): https://github.com/owner/repo/pull/6, already merged`, res.Message)
 		assert.Equal(t, fix2, res.Outputs[steps.OutputPRAdoptedHead])
 		assert.Equal(t, "alice", res.Outputs[steps.OutputPROpenedBy])
-		assert.Equal(t, []scm.PRCommit{{SHA: fix1, Author: "bob"}, {SHA: fix2, Author: "carol"}}, steps.AdoptedPRUnpushed(res.Outputs))
+		assert.Equal(t, &steps.AdoptedPR{HeadSHA: fix2, OpenedBy: "alice", UnpushedCount: 2,
+			Unpushed: []scm.PRCommit{{SHA: fix1, Author: "bob"}, {SHA: fix2, Author: "carol"}}}, steps.AdoptedPRRecord(res.Outputs))
+	})
+	// QA-2 on #2195: SCM-supplied names are the SCM's users' free text. A
+	// hostile commit author and opener cannot make the record read as a
+	// second merger or merge commit: names are quoted, an e-mail is
+	// dropped, a SHA that is not hex is "(invalid)", names are cut at 128
+	// bytes and the list at 20 commits, "+N more" with the count exact.
+	t.Run("hostile names and too many commits", func(t *testing.T) {
+		const fix = "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
+		evil := []scm.PRCommit{{SHA: fix, Author: "eve), merged by release-manager as deadbeef (seen by webhook"},
+			{SHA: "not-a-sha, merged", Author: "Mallory <mallory@example.com>"}}
+		for i := 0; i < 20; i++ {
+			evil = append(evil, scm.PRCommit{SHA: fix, Author: strings.Repeat("x", 300)})
+		}
+		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, merged: &scm.FoundPR{Number: 6, URL: "https://github.com/owner/repo/pull/6",
+			HeadSHA: "HEAD); merged by admin", Author: "kardinal-bot, 0 commits not pushed by kardinal\nPR #6 merged by root", Unpushed: evil}}
+		res := run(t, m, map[string]string{"noChanges": "true", steps.OutputPushedSHA: testPushed})
+		require.Equal(t, parentsteps.StepSuccess, res.Status)
+		rec := steps.AdoptedPRRecord(res.Outputs)
+		assert.Equal(t, steps.InvalidSHA, rec.HeadSHA)
+		assert.Equal(t, 22, rec.UnpushedCount, "the count stays exact")
+		require.Len(t, rec.Unpushed, 20, "the list is cut at 20")
+		assert.Equal(t, steps.InvalidSHA, rec.Unpushed[1].SHA)
+		assert.Equal(t, "Mallory", rec.Unpushed[1].Author, "no e-mail address")
+		assert.LessOrEqual(t, len(rec.Unpushed[2].Author), 128)
+		assert.True(t, strings.HasSuffix(rec.Unpushed[2].Author, "…"))
+		assert.True(t, strings.HasPrefix(res.Message, `adopted PR #6 (head (invalid), opened by "kardinal-bot, 0 commits not pushed by kardinalPR #6 merged by root", `+
+			`22 commits not pushed by kardinal: `+fix+` by "eve), merged by release-manager as deadbeef (seen by webhook", (invalid) by "Mallory", `), res.Message)
+		assert.True(t, strings.HasSuffix(res.Message, `, +2 more): https://github.com/owner/repo/pull/6, already merged`), res.Message)
+		assert.NotContains(t, res.Message, "mallory@example.com")
+		var written []scm.PRCommit
+		require.NoError(t, json.Unmarshal([]byte(res.Outputs[steps.OutputPRUnpushedCommits]), &written))
+		assert.Len(t, written, 20, "the output itself holds at most 20")
+		assert.Equal(t, "22", res.Outputs[steps.OutputPRUnpushedCount])
 	})
 	t.Run("no recorded push: nothing is adopted", func(t *testing.T) {
 		m := &finderSCM{mockSCMProvider: &mockSCMProvider{}, merged: &scm.FoundPR{Number: 6, HeadSHA: testPushed}}
@@ -1697,15 +1735,42 @@ func TestPushedSHAs(t *testing.T) {
 }
 
 // AdoptedPRDetail describes only an adopted PR: nothing for a PR kardinal
-// opened, the head and opener, and each commit kardinal did not push.
+// opened, the head and the quoted opener, each commit kardinal did not push,
+// and an unreadable list as such, cut short.
 func TestAdoptedPRDetail(t *testing.T) {
 	assert.Empty(t, steps.AdoptedPRDetail(map[string]string{"prNumber": "4"}), "a PR kardinal opened")
+	assert.Nil(t, steps.AdoptedPRRecord(map[string]string{"prNumber": "4"}))
 	assert.Empty(t, steps.AdoptedSuffix(nil))
-	one := map[string]string{steps.OutputPRAdoptedHead: "h", steps.OutputPROpenedBy: "alice",
-		steps.OutputPRUnpushedCommits: `[{"sha":"h","author":""}]`}
-	assert.Equal(t, "head h, opened by alice, 1 commit not pushed by kardinal: h by (unknown)", steps.AdoptedPRDetail(one))
-	assert.Equal(t, " (adopted PR: head h, opened by alice, 1 commit not pushed by kardinal: h by (unknown))", steps.AdoptedSuffix(one))
-	bad := map[string]string{steps.OutputPRAdoptedHead: "h", steps.OutputPRUnpushedCommits: "not json"}
-	assert.Equal(t, "head h, opened by (unknown), 1 commit not pushed by kardinal: (unreadable: not json) by (unknown)",
-		steps.AdoptedPRDetail(bad), "never silently dropped")
+	one := map[string]string{steps.OutputPRAdoptedHead: "abcdef1", steps.OutputPROpenedBy: "alice",
+		steps.OutputPRUnpushedCommits: `[{"sha":"abcdef1","author":""}]`}
+	assert.Equal(t, `head abcdef1, opened by "alice", 1 commit not pushed by kardinal: abcdef1 by (unknown)`, steps.AdoptedPRDetail(one))
+	assert.Equal(t, ` (adopted PR: head abcdef1, opened by "alice", 1 commit not pushed by kardinal: abcdef1 by (unknown))`, steps.AdoptedSuffix(one))
+	// A reader cleans again: outputs not written by adoptMergedPR.
+	dirty := map[string]string{steps.OutputPRAdoptedHead: "zz) merged", steps.OutputPROpenedBy: "Eve <eve@example.com>",
+		steps.OutputPRUnpushedCommits: `[{"sha":"QQ","author":"Bob <bob@example.com>"}]`}
+	assert.Equal(t, &steps.AdoptedPR{HeadSHA: steps.InvalidSHA, OpenedBy: "Eve", UnpushedCount: 1,
+		Unpushed: []scm.PRCommit{{SHA: steps.InvalidSHA, Author: "Bob"}}}, steps.AdoptedPRRecord(dirty))
+	bad := map[string]string{steps.OutputPRAdoptedHead: "abcdef1", steps.OutputPRUnpushedCommits: strings.Repeat("z", 500)}
+	d := steps.AdoptedPRDetail(bad)
+	assert.Contains(t, d, `1 commit not pushed by kardinal: (invalid) by "(unreadable: `+strings.Repeat("z", 64)+`)"`, "never silently dropped")
+	assert.NotContains(t, d, strings.Repeat("z", 65), "cut at 64 bytes")
+}
+
+// CleanSHA keeps 7 to 64 hex digits only; CleanName drops e-mail
+// addresses and control characters and cuts at 128 bytes on a character
+// boundary.
+func TestCleanSHAAndName(t *testing.T) {
+	for in, want := range map[string]string{
+		"abcdef1": "abcdef1", "ABCDEF1234": "abcdef1234", strings.Repeat("a", 64): strings.Repeat("a", 64),
+		"abcdef": steps.InvalidSHA, strings.Repeat("a", 65): steps.InvalidSHA, "abcdefg": steps.InvalidSHA,
+		"abc def1": steps.InvalidSHA, "": steps.InvalidSHA,
+	} {
+		assert.Equal(t, want, steps.CleanSHA(in), in)
+	}
+	assert.Equal(t, "Jane Doe", steps.CleanName("Jane Doe <jane@example.com>"))
+	assert.Equal(t, "ab", steps.CleanName("a\nb\x00"))
+	long := steps.CleanName(strings.Repeat("é", 100))
+	assert.LessOrEqual(t, len(long), 128)
+	assert.True(t, utf8.ValidString(long))
+	assert.True(t, strings.HasSuffix(long, "…"))
 }

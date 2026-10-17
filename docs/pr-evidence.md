@@ -405,8 +405,11 @@ help, because the branch still carries the other commit.
   opened it from kardinal's branch, and it may carry commits kardinal did not push. The step's
   message, the `PRMerged` AuditEvent and the receipt (`change.pr.adopted`) name its head, the SCM
   account that opened it, and each commit kardinal did not push with its author, for example
-  `adopted PR #7 (head 5555…, opened by bob, 1 commit not pushed by kardinal: 5555… by bob)`.
-  The step's outputs keep them as `prAdoptedHead`, `prOpenedBy` and `prUnpushedCommits`. An SCM
+  `adopted PR #7 (head 5555…, opened by "bob", 1 commit not pushed by kardinal: 5555… by "bob")`.
+  The names are the SCM's free text, so they are quoted, without e-mail addresses or control
+  characters, and cut at 128 bytes; a commit ID that is not 7 to 64 hex digits is recorded as
+  `(invalid)`; at most 20 commits are listed, then `+N more`, with the count exact. The step's
+  outputs keep them as `prAdoptedHead`, `prOpenedBy`, `prUnpushedCommits` and `prUnpushedCount`. An SCM
   that has no commit list for a PR (HTTP 404), or a token that may list PRs but not their
   commits (HTTP 403), adopts nothing by its commits.
 - **Neither, or no recorded commit:** the step records `noChanges`, as before.

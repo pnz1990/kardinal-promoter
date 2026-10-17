@@ -349,14 +349,15 @@ func (r *Reconciler) readGates(ctx context.Context, ps *v1alpha1.PromotionStep) 
 
 // receiptPR is the step's PR, nil for a step that opened none.
 // adoptedPR is the receipt's record of a PR the step adopted (#2092), from
-// its outputs; nil for a PR kardinal opened.
+// its outputs, cleaned (builtinsteps.AdoptedPRRecord); nil for a PR kardinal
+// opened, so its receipt has no adopted key.
 func adoptedPR(outputs map[string]string) *receipt.AdoptedPR {
-	head, ok := outputs[builtinsteps.OutputPRAdoptedHead]
-	if !ok {
+	rec := builtinsteps.AdoptedPRRecord(outputs)
+	if rec == nil {
 		return nil
 	}
-	a := &receipt.AdoptedPR{HeadSHA: head, OpenedBy: outputs[builtinsteps.OutputPROpenedBy]}
-	for _, c := range builtinsteps.AdoptedPRUnpushed(outputs) {
+	a := &receipt.AdoptedPR{HeadSHA: rec.HeadSHA, OpenedBy: rec.OpenedBy, UnpushedCount: rec.UnpushedCount}
+	for _, c := range rec.Unpushed {
 		a.Unpushed = append(a.Unpushed, receipt.PRCommit{SHA: c.SHA, Author: c.Author})
 	}
 	return a
