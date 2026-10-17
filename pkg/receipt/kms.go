@@ -15,11 +15,19 @@ import (
 	"time"
 )
 
-// kmsLoader loads the signing key of a KMS key reference. transport carries
-// the KMS API calls (the controller's egress transport); a provider that
-// does not speak HTTP applies the same guard to its own connections. timeout
-// bounds each API call. close releases the key's client (its connections).
-type kmsLoader func(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (signer crypto.Signer, close func(), err error)
+// kmsLoader loads the KMS key of a reference with root, a context that
+// lives as long as the cached key (kmsRoot): transport carries the KMS API
+// calls (the controller's egress transport); a provider that does not speak
+// HTTP applies the same guard to its own connections. timeout bounds each
+// API call. It returns the key's signer for one signature, given that
+// signature's context (a crypto.Signer keeps the context it was made with,
+// so one is made per signature), and close, which releases the key's client
+// (its connections).
+type kmsLoader func(root context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (signer kmsSignerFor, close func(), err error)
+
+// kmsSignerFor is a KMS key's crypto.Signer for one signature, whose calls
+// use ctx.
+type kmsSignerFor func(ctx context.Context) (crypto.Signer, error)
 
 // kmsChecks check a key reference of their prefix before any call (a GCP
 // key must pin its version, an AWS endpoint must not be a credential
@@ -86,7 +94,7 @@ type kmsKey struct {
 }
 
 type kmsEntry struct {
-	signer crypto.Signer
+	signer kmsSignerFor
 	close  func()
 }
 
@@ -99,6 +107,11 @@ var kmsCache = struct {
 	sync.Mutex
 	m map[kmsKey]kmsEntry
 }{m: map[kmsKey]kmsEntry{}}
+
+// kmsRoot is the context the cached keys' clients are built with: it lives
+// until CloseKMS (the controller's shutdown), never as short as one
+// signature's, whose cancellation would otherwise break every later one.
+var kmsRoot, kmsRootCancel = context.WithCancel(context.Background())
 
 // kmsSigner is the signing key of ref, loaded once.
 func kmsSigner(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (crypto.Signer, error) {
@@ -113,17 +126,25 @@ func kmsSigner(ctx context.Context, ref string, transport http.RoundTripper, tim
 	kmsCache.Lock()
 	defer kmsCache.Unlock()
 	if e, ok := kmsCache.m[k]; ok {
-		return e.signer, nil
+		return e.signer(ctx)
 	}
-	signer, closeFn, err := l(ctx, ref, transport, timeout)
+	signer, closeFn, err := l(kmsRoot, ref, transport, timeout)
 	if err != nil {
 		return nil, err
 	}
 	if closeFn == nil {
 		closeFn = func() {}
 	}
+	// Cached once it has made a signer: a client whose first use fails (an
+	// address the egress guard refuses, a key it may not read) is closed and
+	// loaded again at the next signature.
+	cs, err := signer(ctx)
+	if err != nil {
+		closeFn()
+		return nil, err
+	}
 	kmsCache.m[k] = kmsEntry{signer: signer, close: closeFn}
-	return signer, nil
+	return cs, nil
 }
 
 // CloseKMS releases every KMS key loaded (the controller's shutdown); a
@@ -135,4 +156,6 @@ func CloseKMS() {
 		e.close()
 		delete(kmsCache.m, k)
 	}
+	kmsRootCancel()
+	kmsRoot, kmsRootCancel = context.WithCancel(context.Background())
 }

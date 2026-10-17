@@ -185,3 +185,21 @@ func TestKMS_GCPVersionPinned(t *testing.T) {
 		assert.Contains(t, err.Error(), "must pin a key version", "refused at signing too")
 	}
 }
+
+// TestKMS_GCPCancelledContextNotKept (QA-3 #2111): the cached key outlives
+// the context of the signature that loaded it: once that context is
+// cancelled (the receipt reconciler's per-receipt context), the next
+// signature still signs.
+func TestKMS_GCPCancelledContextNotKept(t *testing.T) {
+	fake := fakeGCP(t)
+	s := &Signer{Mode: v1alpha1.ReceiptSigningKMS, KMSRef: "gcpkms://" + gcpKey + "/cryptoKeyVersions/1", Timeout: 2 * time.Second}
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	first, cancel := context.WithCancel(context.Background())
+	_, err = s.Sign(first, raw)
+	require.NoError(t, err)
+	cancel()
+	_, err = s.Sign(context.Background(), raw)
+	require.NoError(t, err, "a cancelled earlier context does not break later signatures")
+	assert.EqualValues(t, 2, fake.signs.Load())
+}

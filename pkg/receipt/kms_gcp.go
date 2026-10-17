@@ -60,7 +60,7 @@ var gcpTestOptions []option.ClientOption
 
 // loadGCPKMS loads a gcpkms:// key. Cloud KMS speaks gRPC, so the HTTP
 // transport is not used: its connections go through gcpDial.
-func loadGCPKMS(ctx context.Context, ref string, _ http.RoundTripper, timeout time.Duration) (crypto.Signer, func(), error) {
+func loadGCPKMS(root context.Context, ref string, _ http.RoundTripper, timeout time.Duration) (kmsSignerFor, func(), error) {
 	// The last dial error: gRPC retries a refused dial until the call's
 	// deadline and reports only that, so a guard refusal is added back.
 	var dialErr atomic.Value
@@ -109,15 +109,17 @@ func loadGCPKMS(ctx context.Context, ref string, _ http.RoundTripper, timeout ti
 		}
 		return err
 	}
-	sv, err := gcpkms.LoadSignerVerifier(ctx, ref, opts...)
+	sv, err := gcpkms.LoadSignerVerifier(root, ref, opts...)
 	if err != nil {
 		closeConns()
 		return nil, nil, fmt.Errorf("load the Cloud KMS key: %w", withDial(err))
 	}
-	cs, _, err := sv.CryptoSigner(ctx, func(error) {})
-	if err != nil {
-		closeConns()
-		return nil, nil, fmt.Errorf("the Cloud KMS signer: %w", withDial(err))
+	signer := func(ctx context.Context) (crypto.Signer, error) {
+		cs, _, err := sv.CryptoSigner(ctx, func(error) {})
+		if err != nil {
+			return nil, fmt.Errorf("the Cloud KMS signer: %w", withDial(err))
+		}
+		return cs, nil
 	}
-	return cs, closeConns, nil
+	return signer, closeConns, nil
 }

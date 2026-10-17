@@ -58,7 +58,7 @@ func (t awsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // loadAWSKMS loads an awskms:// key with the SDK's default configuration
 // (region, credentials: IRSA, Pod Identity, instance role or the
 // environment).
-func loadAWSKMS(ctx context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (crypto.Signer, func(), error) {
+func loadAWSKMS(root context.Context, ref string, transport http.RoundTripper, timeout time.Duration) (kmsSignerFor, func(), error) {
 	if transport == nil {
 		transport = egress.NewTransport(http.ProxyFromEnvironment)
 	}
@@ -79,15 +79,18 @@ func loadAWSKMS(ctx context.Context, ref string, transport http.RoundTripper, ti
 			opts = append(opts, config.WithRegion(a.Region))
 		}
 	}
-	sv, err := awskms.LoadSignerVerifier(ctx, ref, opts...)
+	sv, err := awskms.LoadSignerVerifier(root, ref, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load the AWS KMS key: %w", err)
 	}
-	cs, _, err := sv.CryptoSigner(ctx, func(error) {})
-	if err != nil {
-		return nil, nil, fmt.Errorf("the AWS KMS signer: %w", err)
+	signer := func(ctx context.Context) (crypto.Signer, error) {
+		cs, _, err := sv.CryptoSigner(ctx, func(error) {})
+		if err != nil {
+			return nil, fmt.Errorf("the AWS KMS signer: %w", err)
+		}
+		return cs, nil
 	}
-	return cs, client.CloseIdleConnections, nil
+	return signer, client.CloseIdleConnections, nil
 }
 
 // checkAWSRef refuses AWS_TLS_INSECURE_SKIP_VERIFY, and a reference whose

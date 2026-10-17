@@ -214,3 +214,22 @@ func TestKMS_AWSKeyReused(t *testing.T) {
 	assert.EqualValues(t, 5, signs.Load())
 	assert.Len(t, kmsCache.m, 1, "one key loaded")
 }
+
+// TestKMS_AWSCancelledContextNotKept (QA-3 #2111): the cached AWS key does
+// not keep the first signature's context: after it is cancelled, the next
+// signature signs.
+func TestKMS_AWSCancelledContextNotKept(t *testing.T) {
+	awsTestEnv(t)
+	srv, _, signs := fakeAWSKMS(t)
+	ref := "awskms://" + strings.TrimPrefix(srv.URL, "https://") + "/1234abcd-12ab-34cd-56ef-1234567890ab"
+	s := &Signer{Mode: v1alpha1.ReceiptSigningKMS, KMSRef: ref, Transport: srv.Client().Transport}
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	first, cancel := context.WithCancel(context.Background())
+	_, err = s.Sign(first, raw)
+	require.NoError(t, err)
+	cancel()
+	_, err = s.Sign(context.Background(), raw)
+	require.NoError(t, err, "a cancelled earlier context does not break later signatures")
+	assert.EqualValues(t, 2, signs.Load())
+}
