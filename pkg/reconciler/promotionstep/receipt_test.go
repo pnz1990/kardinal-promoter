@@ -275,7 +275,7 @@ func TestReceiptJourney_TemplateAsTranslated(t *testing.T) {
 	var tmpl, g v1alpha1.PolicyGate
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "agents-approve"}, &tmpl))
 	require.NoError(t, f.c.Get(ctx, f.gate, &g))
-	translated := graph.GateTemplateDigest(tmpl.Spec)
+	translated := graph.TemplateDigest(tmpl)
 	g.Annotations = map[string]string{graph.AnnotationGateTemplateUID: "tmpl-uid",
 		graph.AnnotationGateTemplateGeneration: "3", graph.AnnotationGateTemplateDigest: translated}
 	require.NoError(t, f.c.Update(ctx, &g))
@@ -291,7 +291,7 @@ func TestReceiptJourney_TemplateAsTranslated(t *testing.T) {
 	assert.Equal(t, "approvals.count >= 1", gate.Expression, "the instance's expression")
 	assert.Equal(t, int64(3), gate.TemplateGeneration, "the generation evaluated, not the template's current 4")
 	assert.Equal(t, strings.TrimPrefix(translated, "sha256:"), gate.TemplateDigest["sha256"])
-	assert.NotEqual(t, strings.TrimPrefix(graph.GateTemplateDigest(tmpl.Spec), "sha256:"), gate.TemplateDigest["sha256"])
+	assert.NotEqual(t, strings.TrimPrefix(graph.TemplateDigest(tmpl), "sha256:"), gate.TemplateDigest["sha256"])
 }
 
 // TestReceiptJourney_NewestImageVerification (#1951 finding 7): after a

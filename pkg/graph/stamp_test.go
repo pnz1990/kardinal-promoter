@@ -19,9 +19,9 @@ import (
 // fields only.
 func TestBuild_GateInstancesStampTheirTemplate(t *testing.T) {
 	plain := makePolicyGate("soak", "default", "prod", "upstream.test.soakMinutes >= 30")
-	plain.Generation = 7
+	plain.Generation, plain.UID = 7, "uid-soak"
 	approval := makePolicyGate("sign-off", "default", "prod", "true")
-	approval.Generation = 3
+	approval.Generation, approval.UID = 3, "uid-sign-off"
 	approval.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
 	res, err := graph.NewBuilder().Build(graph.BuildInput{
 		Pipeline:    makeLinearPipeline("app", "test", "prod"),
@@ -32,8 +32,10 @@ func TestBuild_GateInstancesStampTheirTemplate(t *testing.T) {
 	assertKroValid(t, res.Graph)
 
 	want := map[string]map[string]string{
-		"soak":     {graph.AnnotationGateTemplateGeneration: "7", graph.AnnotationGateTemplateDigest: graph.TemplateDigest(plain)},
-		"sign-off": {graph.AnnotationGateTemplateGeneration: "3", graph.AnnotationGateTemplateDigest: graph.TemplateDigest(approval)},
+		"soak": {graph.AnnotationGateTemplateGeneration: "7", graph.AnnotationGateTemplateDigest: graph.TemplateDigest(plain),
+			graph.AnnotationGateTemplateUID: "uid-soak"},
+		"sign-off": {graph.AnnotationGateTemplateGeneration: "3", graph.AnnotationGateTemplateDigest: graph.TemplateDigest(approval),
+			graph.AnnotationGateTemplateUID: "uid-sign-off"},
 	}
 	rendered := gateInstances(t, res.Graph)["prod"]
 	require.Len(t, rendered, 2)

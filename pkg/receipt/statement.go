@@ -296,16 +296,6 @@ func ResourceURI(clusterID, namespace, pipeline, env string) string {
 	return fmt.Sprintf("kardinal://%s/namespaces/%s/pipelines/%s/environments/%s", clusterID, namespace, pipeline, env)
 }
 
-// TemplateDigest is sha256:<hex> of a gate template's spec as JSON. Its
-// status is not part of it, so a status write does not change it.
-func TemplateDigest(spec v1alpha1.PolicyGateSpec) (string, error) {
-	b, err := json.Marshal(spec)
-	if err != nil {
-		return "", fmt.Errorf("marshal gate spec: %w", err)
-	}
-	return Digest(b), nil
-}
-
 // PolicyDigest is sha256:<hex> of the canonical policy set: the Pipeline
 // generation and spec hash, and each gate template (namespace/name, UID,
 // generation, spec digest), sorted by template.

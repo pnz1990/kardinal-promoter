@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt/receipttest"
 )
 
@@ -289,12 +290,10 @@ func TestBuild_SizeCap(t *testing.T) {
 // Covers RECEIPT-STATEMENT-02.
 func TestPolicyDigest(t *testing.T) {
 	spec := v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"}
-	d1, err := TemplateDigest(spec)
-	require.NoError(t, err)
 	tmpl := v1alpha1.PolicyGate{Spec: spec, Status: v1alpha1.PolicyGateStatus{Ready: true, Reason: "a"}}
+	d1 := graph.TemplateDigest(tmpl)
 	tmpl.Status.Reason = "b" // a status write
-	d2, err := TemplateDigest(tmpl.Spec)
-	require.NoError(t, err)
+	d2 := graph.TemplateDigest(tmpl)
 	assert.Equal(t, d1, d2)
 
 	a := v1alpha1.DecisionGate{Template: "ns/a", TemplateUID: "u1", TemplateGeneration: 1, TemplateDigest: d1}
@@ -302,8 +301,7 @@ func TestPolicyDigest(t *testing.T) {
 	assert.Equal(t, PolicyDigest(1, "h", []v1alpha1.DecisionGate{a, b}), PolicyDigest(1, "h", []v1alpha1.DecisionGate{b, a}))
 	assert.NotEqual(t, PolicyDigest(1, "h", []v1alpha1.DecisionGate{a}), PolicyDigest(2, "h", []v1alpha1.DecisionGate{a}))
 	spec.Expression = "true"
-	d3, err := TemplateDigest(spec)
-	require.NoError(t, err)
+	d3 := graph.TemplateDigest(v1alpha1.PolicyGate{Spec: spec})
 	a3 := a
 	a3.TemplateDigest = d3
 	assert.NotEqual(t, PolicyDigest(1, "h", []v1alpha1.DecisionGate{a}), PolicyDigest(1, "h", []v1alpha1.DecisionGate{a3}))

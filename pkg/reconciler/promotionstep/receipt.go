@@ -209,9 +209,7 @@ func (r *Reconciler) decisionGate(ctx context.Context, ps *v1alpha1.PromotionSte
 		return out
 	}
 	out.TemplateUID, out.TemplateGeneration = string(tmpl.UID), tmpl.Generation
-	if dg, err := receipt.TemplateDigest(tmpl.Spec); err == nil {
-		out.TemplateDigest = dg
-	}
+	out.TemplateDigest = graph.TemplateDigest(tmpl)
 	return out
 }
 
