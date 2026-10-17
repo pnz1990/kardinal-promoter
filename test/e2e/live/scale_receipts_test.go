@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"strconv"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +30,6 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
-	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
 )
 
@@ -65,26 +64,7 @@ func scaleReceiptStatement(ns, name, pipeline string, size int) (string, string)
 // own /metrics.
 func leaderRSS(t *testing.T, e *framework.Env) float64 {
 	t.Helper()
-	ctx := context.Background()
-	pod, err := scale.Leader(ctx, e)
-	require.NoError(t, err)
-	var p corev1.Pod
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: framework.ControllerNamespace, Name: pod}, &p))
-	port := 0
-	for _, c := range p.Spec.Containers {
-		for _, cp := range c.Ports {
-			if cp.Name == "metrics" {
-				port = int(cp.ContainerPort)
-			}
-		}
-	}
-	require.NotZero(t, port, "the leader Pod has a metrics port")
-	raw, err := e.Kube.CoreV1().RESTClient().Get().
-		AbsPath("/api/v1/namespaces/" + framework.ControllerNamespace + "/pods/http:" + pod + ":" + strconv.Itoa(port) + "/proxy/metrics").DoRaw(ctx)
-	require.NoError(t, err)
-	m, err := framework.ParseMetrics(string(raw))
-	require.NoError(t, err)
-	return m.Sum("process_resident_memory_bytes", nil) / (1 << 20)
+	return leaderMetrics(t, e).Sum("process_resident_memory_bytes", nil) / (1 << 20)
 }
 
 // storageBytes is the API server's view of its etcd database size.
@@ -215,6 +195,46 @@ func TestScale_Receipts(t *testing.T) {
 		assert.Equal(t, v1alpha1.ReceiptSigningKey, rc.Status.SignedBy.Mode)
 	}
 
+	// The UI steps API with ReceiptSteps Verified steps, each with its
+	// receipt, while the bulk receipts are in the cache.
+	pipelines := r.Fleet.Pipelines(t, "rcpt", max(1, r.P.ReceiptSteps/3), scale.Chain(3))
+	var bundles []string
+	for _, p := range pipelines {
+		bundles = append(bundles, r.Fleet.MustCreateBundle(t, p, scale.Tag(p, 1)).Name)
+	}
+	require.True(t, r.Fleet.WaitSettled(t, r.P.Settle), "the receipt Pipelines' versions settle")
+	ui := mainUI(t, e)
+	var lat []time.Duration
+	for round := range 3 {
+		for _, b := range bundles {
+			began := time.Now()
+			res := ui.Get(t, uiAPI+"/bundles/"+b+"/steps?namespace="+ns)
+			lat = append(lat, time.Since(began))
+			require.Equal(t, 200, res.Status, res.String())
+			if round > 0 {
+				continue
+			}
+			var steps []struct {
+				Environment string `json:"environment"`
+				State       string `json:"state"`
+				Receipt     *struct {
+					Name     string `json:"name"`
+					Verified bool   `json:"verified"`
+				} `json:"receipt"`
+			}
+			res.JSON(t, &steps)
+			for _, st := range steps {
+				if assert.NotNil(t, st.Receipt, "%s/%s shows its receipt", b, st.Environment) {
+					assert.True(t, st.Receipt.Verified, "%s/%s receipt %s verified", b, st.Environment, st.Receipt.Name)
+				}
+			}
+		}
+	}
+	slices.Sort(lat)
+	p95 := lat[len(lat)*95/100]
+	r.Note("receiptStepsAPIp95Ms", p95.Milliseconds())
+	assert.LessOrEqual(t, p95, r.P.ReceiptStepsP95, "UI steps API p95 over %d Bundles with receipts (ReceiptStepsP95)", len(bundles))
+
 	// Every controller Pod restarted: the new leader resyncs n receipts and
 	// signs a new one within ReceiptResync.
 	pods := rel.Pods(t)
@@ -236,6 +256,8 @@ func TestScale_Receipts(t *testing.T) {
 	// Retention: receipts older than a minute go, at most 2,000 a run, and
 	// a receipt created meanwhile is still signed promptly.
 	time.Sleep(time.Minute)
+	total, err := countReceipts(ctx, e, ns, "")
+	require.NoError(t, err)
 	upgrade(`--set receipts.retention.maxAge=1m`)
 	prune := time.Now()
 	require.NoError(t, create(n+1))
@@ -246,7 +268,8 @@ func TestScale_Receipts(t *testing.T) {
 		}
 		return rc.Status.Phase == v1alpha1.ReceiptStored, "phase " + rc.Status.Phase
 	})
-	want := n + 2 - min(n+1, 2000)
+	// Every receipt but the new one is older than maxAge.
+	want := total - min(total, 2000) + 1
 	framework.Eventually(t, 10*time.Minute, "retention deleted its first run's receipts", func(ctx context.Context) (bool, string) {
 		left, err := countReceipts(ctx, e, ns, "")
 		if err != nil {
@@ -256,5 +279,5 @@ func TestScale_Receipts(t *testing.T) {
 	})
 	r.Note("receiptsRetentionSeconds", int(time.Since(prune).Seconds()))
 
-	r.Finish(func(o *invariants.Options) { o.AllowEmpty = true }) // the test promotes no Bundle
+	r.Finish(scale.AllVerified)
 }

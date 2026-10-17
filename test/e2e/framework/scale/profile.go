@@ -89,6 +89,24 @@ type Profile struct {
 	ReceiptDrain      time.Duration
 	ReceiptRSSMiB     int
 	ReceiptResync     time.Duration
+	// ReceiptSteps Verified steps (three-environment Pipelines, one
+	// Bundle each) with their receipts are read through the UI steps API,
+	// whose p95 must stay within ReceiptStepsP95: it reads one receipt per
+	// Verified step.
+	ReceiptSteps    int
+	ReceiptStepsP95 time.Duration
+
+	// AttestBundles versions of three images, each image with
+	// AttestReferrers referrers (a signature, a scan and filler
+	// attestations), arrive spread over AttestWithin in
+	// TestScale_Attestations; the ImageVerification reconcile p95 stays
+	// within AttestReconcileP95 and the registry sees at most
+	// AttestReadsPerImage requests per image (#2062).
+	AttestBundles       int
+	AttestReferrers     int
+	AttestWithin        time.Duration
+	AttestReconcileP95  time.Duration
+	AttestReadsPerImage int
 
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
@@ -139,6 +157,8 @@ var profiles = map[string]Profile{
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
 		Receipts: 1_000, ReceiptLargeEvery: 100, ReceiptDrain: 5 * time.Minute, ReceiptRSSMiB: 300, ReceiptResync: 2 * time.Minute,
+		ReceiptSteps: 150, ReceiptStepsP95: 2 * time.Second,
+		AttestBundles: 30, AttestReferrers: 10, AttestWithin: time.Minute, AttestReconcileP95: 10 * time.Second, AttestReadsPerImage: 40,
 		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle: 10 * time.Minute,
 		// Twice the stage time measured on a GitHub runner with the -race
@@ -159,6 +179,8 @@ var profiles = map[string]Profile{
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
 		Receipts: 10_000, ReceiptLargeEvery: 100, ReceiptDrain: 20 * time.Minute, ReceiptRSSMiB: 300, ReceiptResync: 2 * time.Minute,
+		ReceiptSteps: 500, ReceiptStepsP95: time.Second,
+		AttestBundles: 500, AttestReferrers: 30, AttestWithin: 5 * time.Minute, AttestReconcileP95: 5 * time.Second, AttestReadsPerImage: 80,
 		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
 		SerialStep:   12 * time.Second,
