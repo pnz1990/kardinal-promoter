@@ -78,6 +78,18 @@ type Profile struct {
 	ChaosFor       time.Duration
 	ChaosPipelines int
 
+	// Receipts PromotionReceipts TestScale_Receipts creates (one in
+	// ReceiptLargeEvery near the 256 KiB statement cap, the others about
+	// 4 KiB) for the controller to sign and store within ReceiptDrain, its
+	// leader's resident memory growing by at most ReceiptRSSMiB; after a
+	// restart of every controller Pod a new receipt is Stored within
+	// ReceiptResync (#2062).
+	Receipts          int
+	ReceiptLargeEvery int
+	ReceiptDrain      time.Duration
+	ReceiptRSSMiB     int
+	ReceiptResync     time.Duration
+
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
 	Settle time.Duration
@@ -126,6 +138,7 @@ var profiles = map[string]Profile{
 		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
+		Receipts: 1_000, ReceiptLargeEvery: 100, ReceiptDrain: 5 * time.Minute, ReceiptRSSMiB: 300, ReceiptResync: 2 * time.Minute,
 		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle: 10 * time.Minute,
 		// Twice the stage time measured on a GitHub runner with the -race
@@ -145,6 +158,7 @@ var profiles = map[string]Profile{
 		Pipelines: 200, PipelineEnvs: 3, BurstBundles: 1000, BurstPipelines: 100,
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
+		Receipts: 10_000, ReceiptLargeEvery: 100, ReceiptDrain: 20 * time.Minute, ReceiptRSSMiB: 300, ReceiptResync: 2 * time.Minute,
 		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
 		SerialStep:   12 * time.Second,
