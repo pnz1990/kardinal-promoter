@@ -140,6 +140,12 @@ func TestPRBody_ChangeRequestTextInert(t *testing.T) {
 		{"link", `[approve](https://phish.example)`, `\[approve\](https:` + zw + `//phish.example)`},
 		{"bare URL", `https://phish.example/approve`, `https:` + zw + `//phish.example/approve`},
 		{"entity", `&lt;img&gt;`, `&amp;lt;img&amp;gt;`},
+		{"issue ref", `#1`, `#` + zw + `1`},
+		{"cross-repo ref", `pnz1990/kardinal-promoter#1`, `pnz1990/kardinal-promoter#` + zw + `1`},
+		{"GH ref", `GH-1 gh-2`, `GH` + zw + `-1 gh` + zw + `-2`},
+		{"entity that shows #60", `&#60;b&#62;`, `&amp;#` + zw + `60;b&amp;#` + zw + `62;`},
+		{"www autolink", `www.phish.example/approve WWW.x.example`, `www` + zw + `.phish.example/approve WWW` + zw + `.x.example`},
+		{"bidi controls", "alice\u202eevil\u2066x\u2069\u200e\u200f\u061c", "aliceevilx"},
 		{"escape cancelling", `\[x\](https://e)`, `\\\[x\\\](https:` + zw + `//e)`},
 		{"code and emphasis", "`x` *b* _i_ ~s~", "\\`x\\` \\*b\\* \\_i\\_ \\~s\\~"},
 	} {
@@ -151,7 +157,8 @@ func TestPRBody_ChangeRequestTextInert(t *testing.T) {
 			require.NoError(t, err)
 			section := body[strings.Index(body, "### Change Requests"):strings.Index(body, "### Upstream Verification")]
 			assert.Contains(t, section, "\n| c | "+tc.out+" | — | approved ("+tc.out+") | no: "+tc.out+" | "+tc.out+" | — |\n")
-			for _, raw := range []string{"<a", "<img", "](", "@pnz1990", "https://", "`x`", "*b*"} {
+			for _, raw := range []string{"<a", "<img", "](", "@pnz1990", "https://", "`x`", "*b*", "#1", "#60", "GH-1", "gh-2", "www.", "WWW.",
+				"\u202e", "\u2066", "\u2069", "\u200e", "\u200f", "\u061c"} {
 				assert.NotContains(t, strings.ReplaceAll(section, `\](`, ""), raw, "%s reaches the PR", raw)
 			}
 		})

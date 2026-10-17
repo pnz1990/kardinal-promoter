@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -155,17 +156,41 @@ var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r"
 // mdTextReplacer is mdCellReplacer for text from outside the cluster (a
 // ticketing system's approver names, states and keys): it also makes the
 // text inert in GitHub, GitLab and Forgejo markdown, so a display name
-// cannot put an image, a link, HTML or a team mention into a prod PR. HTML
-// is entity-escaped (& first, so an entity in the text shows as written),
-// the characters that open links, images and code are backslash-escaped
-// (the backslash too, so an escape in the text cannot cancel one), and a
-// zero-width space after "@" and inside "://" stops mentions and autolinks.
+// cannot put an image, a link, HTML, a mention or a cross-reference into a
+// prod PR. HTML is entity-escaped (& first, so an entity in the text shows
+// as written), the characters that open links, images and code are
+// backslash-escaped (the backslash too, so an escape in the text cannot
+// cancel one), and a zero-width space after "@" and "#" and inside "://"
+// stops mentions, issue and PR references (#1, owner/repo#1, and the #60 an
+// escaped &#60; would show) and autolinks.
 var mdTextReplacer = strings.NewReplacer(
 	"|", `\|`, "\r\n", " ", "\n", " ", "\r", " ",
 	"&", "&amp;", "<", "&lt;", ">", "&gt;",
 	`\`, `\\`, "[", `\[`, "]", `\]`, "!", `\!`, "`", "\\`", "*", `\*`, "_", `\_`, "~", `\~`,
-	"@", "@\u200b", "://", ":\u200b//",
+	"@", "@\u200b", "#", "#\u200b", "://", ":\u200b//",
 )
+
+// mdRefRE matches the case-insensitive words GitHub links without a "#" or
+// a scheme: a GH-<n> reference and a www. autolink.
+var mdRefRE = regexp.MustCompile(`(?i)\b(gh)-|\b(www)\.`)
+
+// bidiControls are the directional formatting characters, which reorder
+// how the text around them displays (an approver name that reads as
+// another): removed.
+var bidiControls = strings.NewReplacer(
+	"\u200e", "", "\u200f", "", "\u061c", "",
+	"\u202a", "", "\u202b", "", "\u202c", "", "\u202d", "", "\u202e", "",
+	"\u2066", "", "\u2067", "", "\u2068", "", "\u2069", "",
+)
+
+// mdText is text from outside the cluster as inert table-cell markdown
+// (mdTextReplacer, mdRefRE, bidiControls).
+func mdText(s string) string {
+	s = mdRefRE.ReplaceAllStringFunc(bidiControls.Replace(s), func(m string) string {
+		return m[:len(m)-1] + "\u200b" + m[len(m)-1:]
+	})
+	return mdTextReplacer.Replace(s)
+}
 
 // ciRunLink renders the CI Run cell of the provenance table: a link when raw
 // passes graph.ValidateCIRunURL (an absolute http(s) URL), "—" otherwise. The
@@ -190,7 +215,7 @@ func ticketLink(key, raw string) string {
 	if key == "" {
 		return "—"
 	}
-	text := mdTextReplacer.Replace(key)
+	text := mdText(key)
 	if raw == "" || graph.ValidateCIRunURL(raw) != nil {
 		return text
 	}
@@ -216,7 +241,7 @@ func linkTarget(raw string) string {
 // prBodyFuncs are the functions of the default PR body template.
 var prBodyFuncs = template.FuncMap{
 	"mdcell": mdCellReplacer.Replace,
-	"mdtext": mdTextReplacer.Replace,
+	"mdtext": mdText,
 	"cirun":  ciRunLink,
 	"ticket": ticketLink,
 	"join":   strings.Join,

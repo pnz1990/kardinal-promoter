@@ -386,7 +386,8 @@ the ticket is read so, `ChangeRequestApproved` and `ChangeRequestRejected`
   promotion's (`yes`, or `no:` and the reason a link was not verified), the approvers and when the
   ticket was last read. The rows are read when the PR is opened, like the gate table. Text from
   the ticketing system (approver names, states, keys, reasons) is shown as plain text: HTML,
-  images, links and `@` mentions in it do not render. A custom PR
+  images, links, `@` mentions and issue references in it do not render, and directional
+  formatting characters are removed. A custom PR
   body gets the section with `{{ changeRequestsTable }}`
   ([Customising the PR](pr-evidence.md#customising-the-pr)).
 - **The receipt.** `kardinalPromotion.changeRequests` records each ticket as the step read it

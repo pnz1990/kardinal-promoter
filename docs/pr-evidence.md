@@ -78,7 +78,9 @@ When the version has [change request](change-requests.md) tickets in the environ
 `Verified` is `yes` for a ticket kardinal opened or a linked ticket it verified, and `no:` with
 the reason otherwise. The ticket URL is linked only when it is an absolute `http` or `https` URL.
 The ticketing system's text (approver names, states, keys, reasons) is escaped as plain text:
-HTML, images, links and `@` mentions in a display name do not render or notify anyone.
+HTML, images, links (`www.` ones too), `@` mentions and issue or PR references (`#1`, `owner/repo#1`,
+`GH-1`) in a display name do not render, notify anyone or cross-reference an issue, and
+directional formatting characters, which could make one name read as another, are removed.
 
 When the environment has a verify gate, a `### Verification: <check> in <environment>` section
 follows the gate table: the gate's reason line and one row per verdict, with its verifier, result,
