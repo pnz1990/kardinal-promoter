@@ -343,6 +343,7 @@ func display(t *ticket, fields string) map[string]interface{} {
 		"state":          dv(t.State, snStateNames[t.State]),
 		"approval":       dv(t.Approval, snApprovalNames[t.Approval]),
 		"correlation_id": dv(t.CorrelationID, t.CorrelationID),
+		"sys_created_on": dv(t.Created.UTC().Format("2006-01-02 15:04:05"), t.Created.UTC().Format("2006-01-02 15:04:05")),
 	}
 	for k, v := range t.Fields {
 		if _, set := all[k]; !set {

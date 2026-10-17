@@ -34,7 +34,7 @@ const (
 	snTable     = "api/now/table/change_request"
 	snApprovals = "api/now/table/sysapproval_approver"
 	// snFields are the fields read from a change_request.
-	snFields = "sys_id,number,state,approval,correlation_id"
+	snFields = "sys_id,number,state,approval,correlation_id,sys_created_on"
 )
 
 // snKeyRE is a change number a link may name; anything else would be part
@@ -252,6 +252,11 @@ func (s *ServiceNow) reading(base *url.URL, sn *kardinalv1alpha1.ServiceNowChang
 		Approvers:     approvers,
 		CorrelationID: corr,
 	}
+	if created, _ := rec.field("sys_created_on"); created != "" {
+		if t, err := time.ParseInLocation("2006-01-02 15:04:05", created, time.UTC); err == nil {
+			r.Created = t
+		}
+	}
 	if req.Spec.Link != nil && req.Spec.Link.RequireField != nil {
 		name := req.Spec.Link.RequireField.Name
 		v, d := rec.field(name)
@@ -264,23 +269,29 @@ func (s *ServiceNow) reading(base *url.URL, sn *kardinalv1alpha1.ServiceNowChang
 }
 
 // ServiceNowState maps a change's state and approval to the normalised
-// state (spec 23 section 5.1), after the template's states map (by raw value
-// or display name):
+// state (spec 23 section 5.1):
 //
-//	approval rejected                              rejected
+//	approval rejected                              rejected, always: no states map overrides it
+//	the template's states map (raw value or display name), where a mapping
+//	to approved counts only with approval approved (else pending)
 //	state Canceled (4)                             cancelled
 //	state Closed (3) or Review (0)                 closed
 //	approval approved, state Scheduled (-2) or Implement (-1)   approved
 //	otherwise                                      pending
 func ServiceNowState(state, stateName, approval string, custom map[string]string) string {
+	if approval == "rejected" {
+		return kardinalv1alpha1.ChangeRequestRejected
+	}
 	for _, k := range []string{state, stateName} {
 		if v, ok := custom[k]; ok && k != "" {
-			return normalState(v)
+			v = normalState(v)
+			if v == kardinalv1alpha1.ChangeRequestApproved && approval != "approved" {
+				return kardinalv1alpha1.ChangeRequestPending
+			}
+			return v
 		}
 	}
 	switch {
-	case approval == "rejected":
-		return kardinalv1alpha1.ChangeRequestRejected
 	case state == "4":
 		return kardinalv1alpha1.ChangeRequestCancelled
 	case snClosedStates[state]:

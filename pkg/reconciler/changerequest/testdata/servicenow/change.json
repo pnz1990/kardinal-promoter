@@ -5,6 +5,7 @@
     "state": {"display_value": "New", "value": "-5"},
     "approval": {"display_value": "Not Yet Requested", "value": "not requested"},
     "correlation_id": {"display_value": "{{CORRELATION}}", "value": "{{CORRELATION}}"},
+    "sys_created_on": {"display_value": "2026-10-01 11:00:00", "value": "2026-10-01 09:00:00"},
     "cmdb_ci": {"display_value": "checkout", "value": "b0c4030ac0a800090152e7a4564ca36c"}
   }
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,7 @@ func TestFakeAgreesWithServiceNowProvider(t *testing.T) {
 	assert.Equal(t, "pending", created.State)
 	assert.Equal(t, "New / Not Yet Requested", created.ProviderState)
 	assert.Equal(t, req.CorrelationID, created.CorrelationID)
+	assert.WithinDuration(t, s.tickets[0].Created, created.Created, time.Second, "sys_created_on is read")
 	assert.Equal(t, "Promote app v1", s.tickets[0].Fields["short_description"])
 	assert.Equal(t, "normal", s.tickets[0].Fields["type"])
 

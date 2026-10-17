@@ -151,7 +151,8 @@ func TestServiceNow_CreateFindGet(t *testing.T) {
 	assert.Equal(t, http.MethodPost, got.Method)
 	assert.Equal(t, "/api/now/table/change_request", got.Path)
 	assert.Equal(t, "all", got.Query["sysparm_display_value"])
-	assert.Equal(t, "sys_id,number,state,approval,correlation_id", got.Query["sysparm_fields"])
+	assert.Equal(t, "sys_id,number,state,approval,correlation_id,sys_created_on", got.Query["sysparm_fields"])
+	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), r.Created, "sys_created_on is read as UTC")
 	assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte(snSecret)), got.Auth)
 	assert.Equal(t, map[string]string{"short_description": "Promote app v1 to prod", "assignment_group": "payments-cab",
 		"correlation_id": key, "correlation_display": "kardinal", "type": "normal"}, got.Body,
@@ -233,10 +234,15 @@ func TestServiceNowState(t *testing.T) {
 		{"4", "Canceled", "approved", nil, "cancelled"},
 		{"3", "Closed", "approved", nil, "closed"},
 		{"0", "Review", "approved", nil, "closed"},
-		{"-3", "Authorize", "requested", custom, "approved"}, // by raw value
-		{"-1", "Implement", "approved", custom, "closed"},    // by display name
-		{"9", "Custom", "approved", custom, "unknown"},       // a mapping to no state
-		{"-2", "Scheduled", "approved", custom, "approved"},  // not in the map: the default
+		{"-3", "Authorize", "approved", custom, "approved"}, // by raw value, approval approved
+		{"-3", "Authorize", "requested", custom, "pending"}, // a map cannot approve what the approval did not
+		{"-3", "Authorize", "not requested", custom, "pending"},
+		{"-3", "Authorize", "rejected", custom, "rejected"}, // rejection always wins over the map
+		{"-1", "Implement", "approved", custom, "closed"},   // by display name
+		{"-1", "Implement", "rejected", custom, "rejected"},
+		{"9", "Custom", "approved", custom, "unknown"},      // a mapping to no state
+		{"-2", "Scheduled", "approved", custom, "approved"}, // not in the map: the default
+		{"-2", "Scheduled", "rejected", map[string]string{"-2": "approved", "Scheduled": "approved"}, "rejected"},
 	} {
 		assert.Equal(t, tc.want, changerequest.ServiceNowState(tc.state, tc.name, tc.approval, tc.custom),
 			"%s/%s/%s %v", tc.state, tc.name, tc.approval, tc.custom)

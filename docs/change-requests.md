@@ -118,19 +118,21 @@ model:
 
 | ServiceNow | `state` |
 |---|---|
-| `approval` is `rejected` | `rejected` |
+| `approval` is `rejected` | `rejected`, always: no `states` map overrides it |
 | `state` Canceled (`4`) | `cancelled` |
 | `state` Closed (`3`) or Review (`0`) | `closed` |
 | `approval` is `approved` and `state` Scheduled (`-2`) or Implement (`-1`) | `approved` |
 | anything else (New, Assess, Authorize, approval requested) | `pending` |
 
 An instance with its own state model maps its values in `spec.servicenow.states`, by raw value or
-display name, before the defaults:
+display name, before the defaults (and after a rejected `approval`, which always wins). A value
+mapped to `approved` counts only when `approval` is `approved`; otherwise it reads `pending`, so a
+map can never approve what nobody approved:
 
 ```yaml
 servicenow:
   states:
-    "-3": approved        # this instance approves at Authorize
+    "-3": approved        # this instance's approved changes wait at Authorize
     "Implement": closed
 ```
 

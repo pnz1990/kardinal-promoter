@@ -195,8 +195,9 @@ func TestGate_ChangeRequestServiceNow(t *testing.T) {
 // change approved and verified. The ChangeRequest links the ticket the
 // counted approval names and never opens one. An unrelated approved change
 // (another configuration item) is tracked but not verified, and the gate
-// says so; the approver's new approval with the right change verifies it,
-// and prod promotes.
+// says so; so is an approved change of the right item opened before the
+// version existed; the approver's new approval with a change opened for this
+// version verifies it, and prod promotes.
 //
 // Covers CHANGE-REQUEST-05.
 func TestGate_ChangeRequestLinkServiceNow(t *testing.T) {
@@ -210,17 +211,23 @@ func TestGate_ChangeRequestLinkServiceNow(t *testing.T) {
 		s.Link = &v1alpha1.ChangeRequestLink{From: "approvalField", Name: "ticketID",
 			RequireField: &v1alpha1.ChangeRequestFieldMatch{Name: "cmdb_ci", Value: "checkout-" + a.ns}}
 	})
-	right := e.AddFakeSnowTicket(t, framework.FakeSnowTicket{State: "-2", Approval: "approved",
-		Fields: map[string]string{"cmdb_ci": "checkout-" + a.ns}})
-	unrelated := e.AddFakeSnowTicket(t, framework.FakeSnowTicket{State: "-2", Approval: "approved",
-		Fields: map[string]string{"cmdb_ci": "payroll"}})
 	g := framework.Gate(a.ns, "cab", "prod",
 		`changeRequests["prod-change"].state == "approved" && changeRequests["prod-change"].verified`, recheck)
 	g.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, Fields: []v1alpha1.ApprovalField{
 		{Name: "ticketID", Required: true, Pattern: `^CHG[0-9]{7}$`, Description: "ServiceNow change number"}}}
 	e.CreateGate(t, g)
 	a.apply(t, a.pipeline(nil))
+	// An approved change of this configuration item opened before the
+	// version existed: an old ticket, not this promotion's.
+	old := e.AddFakeSnowTicket(t, framework.FakeSnowTicket{State: "-2", Approval: "approved",
+		Fields: map[string]string{"cmdb_ci": "checkout-" + a.ns}})
+	time.Sleep(1100 * time.Millisecond) // sys_created_on has one-second resolution
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	time.Sleep(1100 * time.Millisecond)
+	right := e.AddFakeSnowTicket(t, framework.FakeSnowTicket{State: "-2", Approval: "approved",
+		Fields: map[string]string{"cmdb_ci": "checkout-" + a.ns}})
+	unrelated := e.AddFakeSnowTicket(t, framework.FakeSnowTicket{State: "-2", Approval: "approved",
+		Fields: map[string]string{"cmdb_ci": "payroll"}})
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	name := "prod-change-prod--" + bundle
 	waitChangeRequest(t, e, a.ns, name, "waiting for the approval's ticket", func(cr *v1alpha1.ChangeRequest) (bool, string) {
@@ -240,6 +247,16 @@ func TestGate_ChangeRequestLinkServiceNow(t *testing.T) {
 	})
 	assert.Equal(t, "approved", inst.Status.State)
 	e.WaitGateReady(t, a.ns, bundle, "prod", "cab", false, fmt.Sprintf("ticket %s is approved (Scheduled / Approved), not verified", unrelated.Number), gateTimeout)
+	a.noStep(t, bundle, "prod", 10*time.Second)
+
+	// The old change of the right configuration item: tracked, not verified.
+	r = as("approve", pipelineName, "prod", "--field", "ticketID="+old.Number)
+	require.Equal(t, 0, r.Code, r.Output())
+	waitChangeRequest(t, e, a.ns, name, "the old change is linked, not verified", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		return cr.Status.Ticket != nil && cr.Status.Ticket.Key == old.Number && cr.Status.Verified != nil && !*cr.Status.Verified &&
+				strings.Contains(cr.Status.VerifiedReason, "an older ticket is not this promotion's"),
+			fmt.Sprintf("ticket %v verified %v %q", cr.Status.Ticket, cr.Status.Verified, cr.Status.VerifiedReason)
+	})
 	a.noStep(t, bundle, "prod", 10*time.Second)
 
 	r = as("approve", pipelineName, "prod", "--field", "ticketID="+right.Number)
