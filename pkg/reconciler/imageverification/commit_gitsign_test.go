@@ -62,6 +62,14 @@ func agentIdentity(name string, ready, suspended bool, ids ...v1alpha1.AgentSign
 	}
 }
 
+// editedAgent is a ready AgentIdentity whose status describes generation 1
+// of a spec now at generation 2.
+func editedAgent(name string, ids ...v1alpha1.AgentSigningIdentity) *v1alpha1.AgentIdentity {
+	a := agentIdentity(name, true, false, ids...)
+	a.Generation = 2
+	return a
+}
+
 func gitsignIV(sha string) *v1alpha1.ImageVerification {
 	return &v1alpha1.ImageVerification{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-v1-verify", Namespace: "team"},
@@ -128,6 +136,10 @@ func TestImageVerification_GitsignCommit(t *testing.T) {
 		{name: "a suspended agent", scm: &payloadSCM{p: signed}, objs: []client.Object{agentIdentity("fixer", true, true, exact)},
 			phase: v1alpha1.ImageVerificationVerified, verified: true},
 		{name: "an agent not ready", scm: &payloadSCM{p: signed}, objs: []client.Object{agentIdentity("fixer", false, false, exact)},
+			phase: v1alpha1.ImageVerificationVerified, verified: true},
+		// Ready for generation 1, its spec since edited (generation 2): the
+		// status is stale, so the new identities do not map yet.
+		{name: "an agent whose status is for an older spec", scm: &payloadSCM{p: signed}, objs: []client.Object{editedAgent("fixer", exact)},
 			phase: v1alpha1.ImageVerificationVerified, verified: true},
 		{name: "an issuer that differs", scm: &payloadSCM{p: signed},
 			objs:  []client.Object{agentIdentity("fixer", true, false, v1alpha1.AgentSigningIdentity{Issuer: "https://accounts.google.com", Subject: gitsignIdentity})},
