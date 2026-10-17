@@ -64,10 +64,17 @@ var (
 		Name: "kardinal_audit_events_dropped_total",
 		Help: "Audit records never written: the outbox was full (reason overflow) or the record was invalid (reason invalid); for kind APIWrite, over the per-second budget (rate), the queue was full (queue) or the create failed (error).",
 	}, []string{"kind", "reason"})
+
+	// Coalesced counts the outbox entries merged into another of the same
+	// kind when the outbox was full (RegisterCoalescer).
+	Coalesced = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardinal_audit_events_coalesced_total",
+		Help: "Unwritten audit records merged into another record of the same action because the outbox was full (spec.mergedRecords on the merged record).",
+	}, []string{"kind"})
 )
 
 func init() {
-	ctrlmetrics.Registry.MustRegister(WriteFailures, Dropped)
+	ctrlmetrics.Registry.MustRegister(WriteFailures, Dropped, Coalesced)
 }
 
 // MaxMessageBytes bounds an entry's spec.message: the outbox lives in the
@@ -89,8 +96,9 @@ func Entry(name string, labels map[string]string, spec v1alpha1.AuditEventSpec, 
 }
 
 // Enqueue appends e to pending unless an entry with its name is already
-// there. When the outbox is full, the oldest entry is dropped, logged and
-// counted: the outbox is bounded so a long API outage cannot grow the
+// there. When the outbox is full, entries of an action with a registered
+// Coalesce are merged first, oldest pair first (RegisterCoalescer); only
+// when none merge is the oldest entry dropped, logged and counted: the outbox is bounded so a long API outage cannot grow the
 // writer's status without limit. kind labels the metric.
 //
 // An entry the CRD would refuse (Validate) is dropped, logged and counted
@@ -111,12 +119,68 @@ func Enqueue(ctx context.Context, kind string, pending []v1alpha1.PendingAuditEv
 	}
 	pending = append(pending, e)
 	for len(pending) > v1alpha1.MaxPendingAuditEvents {
+		if merged, ok := coalesceOldest(pending); ok {
+			pending = merged
+			Coalesced.WithLabelValues(kind).Inc()
+			zerolog.Ctx(ctx).Warn().Str("kind", kind).
+				Msg("audit outbox full; two unwritten AuditEvents of the same kind merged into one")
+			continue
+		}
 		zerolog.Ctx(ctx).Error().Str("auditEvent", pending[0].Name).Str("kind", kind).
 			Msg("audit outbox full; oldest unwritten AuditEvent dropped")
 		Dropped.WithLabelValues(kind, "overflow").Inc()
 		pending = pending[1:]
 	}
 	return pending
+}
+
+// Coalesce merges two outbox entries of the same action, older first, into
+// one record that says what both said, and reports false when they cannot
+// be merged (for example, they are about different versions).
+type Coalesce func(older, newer v1alpha1.PendingAuditEvent) (v1alpha1.PendingAuditEvent, bool)
+
+// coalescers are the registered Coalesce functions, by action.
+var coalescers = map[string]Coalesce{}
+
+// RegisterCoalescer lets a full outbox merge entries of action with fn
+// before it drops any entry: a burst of one kind (a policy sync changing
+// gates again and again during a write outage) then takes one slot, not the
+// slots of the records around it. Call it from an init function.
+func RegisterCoalescer(action string, fn Coalesce) {
+	coalescers[action] = fn
+}
+
+// mergedCount is how many recorded entries e stands for.
+func mergedCount(e v1alpha1.PendingAuditEvent) int32 {
+	return max(e.Spec.MergedRecords, 1)
+}
+
+// coalesceOldest merges the oldest pair of entries that a registered
+// Coalesce accepts, in place: the merged entry takes the newer one's place
+// and the older is removed. It reports false when no pair merges.
+func coalesceOldest(pending []v1alpha1.PendingAuditEvent) ([]v1alpha1.PendingAuditEvent, bool) {
+	for i := range pending {
+		fn := coalescers[pending[i].Spec.Action]
+		if fn == nil {
+			continue
+		}
+		for j := i + 1; j < len(pending); j++ {
+			if pending[j].Spec.Action != pending[i].Spec.Action {
+				continue
+			}
+			merged, ok := fn(pending[i], pending[j])
+			if !ok {
+				continue
+			}
+			merged.Spec.MergedRecords = mergedCount(pending[i]) + mergedCount(pending[j])
+			if Validate(merged) != nil {
+				continue
+			}
+			pending[j] = merged
+			return slices.Delete(pending, i, i+1), true
+		}
+	}
+	return pending, false
 }
 
 // Validate checks e against what the CRD accepts for an outbox entry and an

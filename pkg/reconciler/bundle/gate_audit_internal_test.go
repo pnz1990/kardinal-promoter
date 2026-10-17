@@ -177,3 +177,138 @@ func TestGateChangeEntry_UnstampedCopiesAreTheBaseline(t *testing.T) {
 	require.Len(t, e.Spec.Gates, 1)
 	assert.Equal(t, graph.TemplateDigest(edited), e.Spec.Gates[0].OldDigest)
 }
+
+// QA's residual risk on #2146: during a long write outage, repeated gate
+// edits fill a version's outbox with GateChanged records. A full outbox
+// merges them, oldest pair first, before it drops anything: the
+// PromotionStarted record stays, and the merged record says how each
+// template went from its first recorded stamp to its last.
+//
+// Covers AUDIT-OUTBOX-02.
+func TestGateChanged_FullOutboxMergesBeforeDropping(t *testing.T) {
+	ctx := context.Background()
+	p, b := gateAuditFixture()
+	at := metav1.NewTime(time.Unix(300, 0))
+	started := audit.Entry("app-v1-started", map[string]string{"kardinal.io/bundle": "app-v1"}, kardinalv1alpha1.AuditEventSpec{
+		BundleName: "app-v1", PipelineName: "app", Environment: "test", Action: "PromotionStarted", Outcome: "Success"}, at)
+	pending := []kardinalv1alpha1.PendingAuditEvent{started}
+
+	// Edit "hold" again and again: generation g to g+1 each time, and one
+	// other template per edit.
+	digest := func(gen int64) string {
+		return graph.TemplateDigest(gateAuditGate("hold", "prod", fmt.Sprintf("x == %d", gen), gen))
+	}
+	edit := func(gen int64) kardinalv1alpha1.PendingAuditEvent {
+		hold := gateAuditGate("hold", "prod", fmt.Sprintf("x == %d", gen+1), gen+1)
+		other := gateAuditGate(fmt.Sprintf("other-%02d", gen), "prod", "true", 1)
+		before := map[string]graph.TemplateStamp{"platform-policies/hold": {Digest: digest(gen), Generation: gen}}
+		e, ok := gateChangeEntry(b, p, before, []kardinalv1alpha1.PolicyGate{hold, other}, time.Unix(300+gen, 0))
+		require.True(t, ok)
+		return e
+	}
+	for gen := int64(1); gen <= int64(kardinalv1alpha1.MaxPendingAuditEvents)+5; gen++ {
+		pending = audit.Enqueue(ctx, auditKind, pending, edit(gen))
+	}
+	require.Len(t, pending, kardinalv1alpha1.MaxPendingAuditEvents)
+	assert.Equal(t, "app-v1-started", pending[0].Name, "PromotionStarted is not pushed out")
+	var gateChanged int
+	for _, e := range pending {
+		if e.Spec.Action == AuditActionGateChanged {
+			gateChanged++
+		}
+	}
+	assert.Equal(t, kardinalv1alpha1.MaxPendingAuditEvents-1, gateChanged)
+
+	// The oldest GateChanged is the merge of the first edits: hold from its
+	// first stamp to the stamp of the last edit merged into it.
+	merged := pending[1].Spec
+	var hold *kardinalv1alpha1.AuditGateChange
+	for i, gc := range merged.Gates {
+		if gc.Template == "hold" {
+			hold = &merged.Gates[i]
+		}
+	}
+	require.NotNil(t, hold)
+	assert.Equal(t, digest(1), hold.OldDigest)
+	assert.Equal(t, int64(1), hold.OldGeneration)
+	assert.Greater(t, hold.NewGeneration, int64(2), "later edits merged in")
+	assert.Greater(t, len(merged.Gates), 2, "the other templates of the merged edits are listed")
+	assert.Greater(t, merged.MergedRecords, int32(2), "the merged record counts the records it replaces")
+	assert.Contains(t, merged.Message, "records merged, left unwritten during an audit write outage")
+}
+
+// Records of different versions are not merged.
+func TestCoalesceGateChanges_SameVersionOnly(t *testing.T) {
+	p, b := gateAuditFixture()
+	added := gateAuditGate("added", "uat", "true", 1)
+	e1, ok := gateChangeEntry(b, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, time.Unix(300, 0))
+	require.True(t, ok)
+	other := *b
+	other.Name = "app-v2"
+	e2, ok := gateChangeEntry(&other, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, time.Unix(301, 0))
+	require.True(t, ok)
+	_, ok = coalesceGateChanges(e1, e2)
+	assert.False(t, ok)
+
+	// The same version: deleted, then added again, is one change from the
+	// deleted stamp to the new one.
+	gone := map[string]graph.TemplateStamp{"platform-policies/added": {Digest: "sha256:old", Generation: 3}}
+	d, ok := gateChangeEntry(b, p, gone, nil, time.Unix(302, 0))
+	require.True(t, ok)
+	m, ok := coalesceGateChanges(d, e1)
+	require.True(t, ok)
+	require.Len(t, m.Spec.Gates, 1)
+	assert.Equal(t, "sha256:old", m.Spec.Gates[0].OldDigest)
+	assert.Equal(t, graph.TemplateDigest(added), m.Spec.Gates[0].NewDigest)
+	assert.Equal(t, "*", m.Spec.Environment, "the deletion names every environment")
+}
+
+// QA-2 on #2160: a merge is deterministic (the gates sorted, whatever order
+// the newer record lists them in, and the same name), adds both records'
+// omitted counts, merges test and prod into "*", and says how many
+// records it replaces.
+func TestCoalesceGateChanges_Properties(t *testing.T) {
+	change := func(name string, gen int64) kardinalv1alpha1.AuditGateChange {
+		return kardinalv1alpha1.AuditGateChange{Template: name, Namespace: "platform-policies",
+			OldDigest: fmt.Sprintf("sha256:%s-%d", name, gen), OldGeneration: gen,
+			NewDigest: fmt.Sprintf("sha256:%s-%d", name, gen+1), NewGeneration: gen + 1}
+	}
+	record := func(env string, omitted int, gates ...kardinalv1alpha1.AuditGateChange) kardinalv1alpha1.PendingAuditEvent {
+		return gateChangeRecord("app-v1", "app", env, gates, omitted, 0, metav1.NewTime(time.Unix(300, 0)))
+	}
+	older := record("test", 2, change("charlie", 1), change("alpha", 1))
+	newer := record("prod", 3, change("delta", 4), change("bravo", 2), change("echo", 7))
+	shuffled := newer
+	shuffled.Spec.Gates = []kardinalv1alpha1.AuditGateChange{change("echo", 7), change("delta", 4), change("bravo", 2)}
+
+	a, ok := coalesceGateChanges(older, newer)
+	require.True(t, ok)
+	b, ok := coalesceGateChanges(older, shuffled)
+	require.True(t, ok)
+	again, ok := coalesceGateChanges(older, newer)
+	require.True(t, ok)
+	var names []string
+	for _, gc := range a.Spec.Gates {
+		names = append(names, gc.Template)
+	}
+	assert.Equal(t, []string{"alpha", "bravo", "charlie", "delta", "echo"}, names, "sorted by template")
+	assert.Equal(t, a.Spec.Gates, b.Spec.Gates, "the newer record's order does not matter")
+	assert.Equal(t, a.Name, b.Name)
+	assert.Equal(t, a.Name, again.Name, "the same merge, the same name")
+
+	assert.Equal(t, int32(5), a.Spec.GatesOmitted, "both records' omitted counts")
+	assert.Contains(t, a.Spec.Message, "10 PolicyGate templates changed")
+	assert.Contains(t, a.Spec.Message, "; and 5 more")
+
+	assert.Equal(t, "*", a.Spec.Environment, "test and prod merge into every environment")
+	same, ok := coalesceGateChanges(record("prod", 0, change("alpha", 1)), record("prod", 0, change("bravo", 1)))
+	require.True(t, ok)
+	assert.Equal(t, "prod", same.Spec.Environment, "one environment stays")
+
+	assert.Equal(t, int32(2), a.Spec.MergedRecords)
+	assert.Contains(t, a.Spec.Message, "(2 records merged, left unwritten during an audit write outage)")
+	three, ok := coalesceGateChanges(a, record("prod", 0, change("foxtrot", 1)))
+	require.True(t, ok)
+	assert.Equal(t, int32(3), three.Spec.MergedRecords, "a merged record counts what it replaced")
+	assert.Zero(t, record("prod", 0, change("alpha", 1)).Spec.MergedRecords, "a record as recorded has none")
+}

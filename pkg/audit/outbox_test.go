@@ -154,3 +154,43 @@ func TestEnqueue_Validates(t *testing.T) {
 	assert.True(t, strings.HasSuffix(long.Spec.Message, "…"))
 	require.Len(t, audit.Enqueue(ctx, "Test", nil, long), 1)
 }
+
+// TestEnqueue_InvalidMergeIsNotUsed: a Coalesce whose merged entry the CRD
+// would refuse is not used; the full outbox drops its oldest entry instead.
+// A valid merge is counted, and the merged entry says how many it replaces.
+func TestEnqueue_InvalidMergeIsNotUsed(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	verdict := func(name string) v1alpha1.PendingAuditEvent {
+		return audit.Entry(name, nil, v1alpha1.AuditEventSpec{BundleName: "b", PipelineName: "p", Environment: "prod",
+			Action: "VerdictRevoked", Outcome: "Success"}, metav1.NewTime(at))
+	}
+	valid := true
+	audit.RegisterCoalescer("VerdictRevoked", func(older, newer v1alpha1.PendingAuditEvent) (v1alpha1.PendingAuditEvent, bool) {
+		if !valid {
+			newer.Spec.Outcome = "Maybe"
+		}
+		return newer, true
+	})
+	t.Cleanup(func() { audit.RegisterCoalescer("VerdictRevoked", nil) })
+
+	fill := func() []v1alpha1.PendingAuditEvent {
+		pending := []v1alpha1.PendingAuditEvent{entry("first", at)}
+		for i := 1; i < v1alpha1.MaxPendingAuditEvents; i++ {
+			pending = append(pending, verdict(fmt.Sprintf("v%d", i)))
+		}
+		return pending
+	}
+	valid = false
+	pending := audit.Enqueue(ctx, "Test", fill(), verdict("last"))
+	require.Len(t, pending, v1alpha1.MaxPendingAuditEvents)
+	assert.Equal(t, "v1", pending[0].Name, "the invalid merge is not used: the oldest is dropped")
+
+	valid = true
+	before := testutil.ToFloat64(audit.Coalesced.WithLabelValues("Test"))
+	pending = audit.Enqueue(ctx, "Test", fill(), verdict("last"))
+	require.Len(t, pending, v1alpha1.MaxPendingAuditEvents)
+	assert.Equal(t, "first", pending[0].Name, "the merge keeps the other record")
+	assert.Equal(t, int32(2), pending[1].Spec.MergedRecords)
+	assert.InDelta(t, before+1, testutil.ToFloat64(audit.Coalesced.WithLabelValues("Test")), 0)
+}

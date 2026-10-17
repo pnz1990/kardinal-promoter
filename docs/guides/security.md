@@ -638,8 +638,12 @@ Graph is not retired while one of its steps or gates still holds unwritten
 records, since retiring deletes them (the `GraphRetired` condition names the
 object). A record the CRD would refuse is not stored at all, so it cannot fail the
 status write, and messages are cut to 1 KiB. The outbox holds at
-most 32 entries. When it is full, the oldest entry is dropped and counted in
-`kardinal_audit_events_dropped_total`. A record the API server rejects as invalid
+most 32 entries. When it is full, the version's unwritten `GateChanged` records are merged first,
+oldest pair first, into one that says how each template went from its first recorded digest to
+its last. The merged record's `spec.mergedRecords` and its message say how many records it
+replaces, and `kardinal_audit_events_coalesced_total` counts the merges. Only when nothing merges is the oldest entry dropped and counted in
+`kardinal_audit_events_dropped_total`. So repeated gate edits during a long write outage do not
+push out a version's `PromotionStarted` or `GateOverridden` record. A record the API server rejects as invalid
 is dropped too. `kardinal_audit_write_failures_total` counts the creates being
 retried ([Monitoring](../reference/metrics.md#kardinal-metrics)). To see records not yet
 written:
