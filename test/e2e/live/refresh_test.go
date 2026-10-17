@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -150,14 +151,14 @@ func TestHealth_ArgoCDRefreshOtherTenant(t *testing.T) {
 		"see --health-refresh-namespaces); waiting for Argo CD to poll git", framework.ArgoCDNamespace, other.argoApp("test"), other.ns, a.ns),
 		ps.Status.RefreshMessage)
 	assert.Zero(t, ps.Status.ConsecutiveHealthFailures, "a skipped refresh is not a health failure")
-	evs, err := e.Events(context.Background(), ps.Namespace, "PromotionStep", ps.Name)
-	require.NoError(t, err)
-	var skipped bool
+	// The Event is recorded after the status write: wait for it (#2188).
+	evs := e.WaitEvents(t, ps.Namespace, "PromotionStep", ps.Name, 30*time.Second, "a GitOpsRefreshSkipped Warning Event",
+		func(ev eventsv1.Event) bool {
+			return ev.Reason == "GitOpsRefreshSkipped" && ev.Type == corev1.EventTypeWarning
+		})
 	for _, ev := range evs {
 		assert.NotEqual(t, "GitOpsRefreshRequested", ev.Reason)
-		skipped = skipped || (ev.Reason == "GitOpsRefreshSkipped" && ev.Type == corev1.EventTypeWarning)
 	}
-	assert.True(t, skipped, "a GitOpsRefreshSkipped Warning Event")
 }
 
 // TestFlux_RefreshOnPromotion runs Flux with a one-hour GitRepository and
