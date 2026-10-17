@@ -202,7 +202,7 @@ func TestDocumentedFieldPathsExist(t *testing.T) {
 				checked++
 				found := false
 				for _, s := range schemas {
-					if schemaHas(s.structural, strings.Split(path, ".")) {
+					if schemaHas(s.Structural(), strings.Split(path, ".")) {
 						found = true
 						break
 					}
@@ -218,7 +218,7 @@ func TestDocumentedFieldPathsExist(t *testing.T) {
 }
 
 func TestSchemaHas(t *testing.T) {
-	s := loadCRDSchemas(t)["Pipeline"].structural
+	s := loadCRDSchemas(t)["Pipeline"].Structural()
 	for path, want := range map[string]bool{
 		"spec.environments.bake.minutes": true,
 		"spec.git.secretRef.name":        true,

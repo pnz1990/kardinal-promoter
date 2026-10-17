@@ -359,3 +359,70 @@ spec:
 	require.Error(t, err)
 	assert.Contains(t, out, `environment name "prod-eu" is already used`)
 }
+
+// TestValidate_Schema (#1287): every kardinal.io document is checked against
+// its CRD's OpenAPI schema, embedded in the CLI, offline, as the API server
+// checks it before CEL rules: wrong types, enums, patterns, required fields,
+// and fields it would drop. A problem a semantic check already reports is
+// reported once. Other API groups are still skipped.
+//
+// Covers CLI-VALIDATE-SCHEMA-01.
+func TestValidate_Schema(t *testing.T) {
+	keepStyle(t)
+	t.Setenv("LANG", "C")
+	const sub = "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: s\nspec:\n"
+	cases := []struct {
+		name    string
+		content string
+		want    []string
+		notWant []string
+		wantErr bool
+	}{
+		{name: "an enum", wantErr: true,
+			content: strings.Replace(validPipelineDoc, "- name: prod\n", "- name: prod\n    approval: manual\n", 1),
+			want:    []string{"f.yaml is invalid:\n", `  - spec.environments[1].approval: Unsupported value: "manual": supported values: "auto", "pr-review"`}},
+		{name: "a pattern", wantErr: true,
+			content: strings.Replace(validPipelineDoc, "- name: prod\n", "- name: Prod\n", 1),
+			want:    []string{`  - spec.environments[1].name: Invalid value: "Prod": spec.environments[1].name in body should match`}},
+		{name: "a type", wantErr: true,
+			content: strings.Replace(validPipelineDoc, "- name: prod\n", "- name: prod\n    dependsOn: test\n", 1),
+			want:    []string{`  - spec.environments[1].dependsOn: Invalid value: "string": spec.environments[1].dependsOn in body must be of type array`}},
+		{name: "another kind: required fields", wantErr: true, content: sub + "  image: {registry: ghcr.io/o/app}\n",
+			want: []string{"f.yaml is invalid:\n", "  - spec.pipeline: Required value", "  - spec.type: Required value"}},
+		{name: "another kind: a field it would drop", wantErr: true,
+			content: sub + "  pipeline: web\n  type: image\n  image: {registry: ghcr.io/o/app}\n  intervl: 5m\n",
+			want:    []string{`  - unknown field "spec.intervl": the API server refuses a field the CRD does not define; remove it`}},
+		{name: "another kind: valid", content: sub + "  pipeline: web\n  type: image\n  image: {registry: ghcr.io/o/app}\n",
+			want: []string{"f.yaml is valid\n"}},
+		{name: "reported once: an empty git url", wantErr: true,
+			content: strings.Replace(validPipelineDoc, "url: https://github.com/o/r", `url: ""`, 1),
+			want:    []string{"  - spec.git.url is required\n"}, notWant: []string{"spec.git.url: Invalid value", "spec.git.url: Required value"}},
+		{name: "reported once: no expression", wantErr: true,
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\nspec: {}\n",
+			want:    []string{"  - spec.expression is required\n"}, notWant: []string{"spec.expression: Required value"}},
+		{name: "another group is skipped",
+			content: "apiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: t\nspec:\n  tasks: oops\n---\n" + validPipelineDoc,
+			want:    []string{"- skipped Pipeline/t: validate checks only kardinal.io objects\n", "f.yaml is valid\n"}},
+		{name: "a kind with no CRD", wantErr: true,
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: Pipelin\nmetadata:\n  name: x\n",
+			want:    []string{`  - kind "Pipelin" is not a kardinal.io kind`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.WriteFile("f.yaml", []byte(tc.content), 0o600))
+			out, err := executeRoot(t, "validate", "-f", "f.yaml")
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err, out)
+			}
+			for _, s := range tc.want {
+				assert.Contains(t, out, s)
+			}
+			for _, s := range tc.notWant {
+				assert.NotContains(t, out, s)
+			}
+		})
+	}
+}
