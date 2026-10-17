@@ -94,3 +94,87 @@ func TestGitPushStep_NeverOverAForeignCommit(t *testing.T) {
 		})
 	}
 }
+
+// sameContentGit is a leaseGit that compares the branch's head with the
+// commit to push (scm.HeadContentComparer): same says the head has its tree
+// and parents. events logs the comparison and the leased push in order.
+type sameContentGit struct {
+	leaseGit
+	same   bool
+	cmpErr error
+	events *[]string
+}
+
+func (g *sameContentGit) SameContentAsHead(_ context.Context, _, _, _ string, _ scm.GitAuth, sha string) (bool, error) {
+	*g.events = append(*g.events, "compare "+sha)
+	return g.same, g.cmpErr
+}
+
+func (g *sameContentGit) PushLeased(ctx context.Context, dir, remote, branch string, auth scm.GitAuth, expect string) error {
+	*g.events = append(*g.events, "push leased on "+expect)
+	return g.leaseGit.PushLeased(ctx, dir, remote, branch, auth, expect)
+}
+
+// #2095, STEP-DELETE-PR-04: a head of kardinal's PR branch the step did not
+// push, whose commit has the tree and the parents of the commit about to be
+// pushed (the deleted step's own push, found by the step kro created again),
+// holds exactly this promotion's change: the step records it in its push
+// history first, then force-pushes leased on that exact head. A head with
+// other content, or with no way to record it, is refused as before.
+//
+// Covers GIT-PUSH-FOREIGN-03.
+func TestGitPushStep_AdoptsAHeadWithTheSameContent(t *testing.T) {
+	const prev, push = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "2222222222222222222222222222222222222222"
+	for _, tc := range []struct {
+		name               string
+		same, noRecorder   bool
+		cmpErr, recordErr  error
+		wantAdopt, wantErr bool
+	}{
+		{name: "same tree and parents: adopted", same: true, wantAdopt: true},
+		{name: "other content: refused", same: false},
+		{name: "same content but nothing records it: refused", same: true, noRecorder: true},
+		{name: "recording it fails: nothing pushed", same: true, recordErr: errors.New("conflict"), wantErr: true},
+		{name: "the head cannot be read: nothing pushed", cmpErr: errors.New("fetch failed"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []string
+			git := &sameContentGit{leaseGit: leaseGit{headGitClient: headGitClient{sha: push}, remote: prev},
+				same: tc.same, cmpErr: tc.cmpErr, events: &events}
+			state := makeState(t, &git.mockGitClient, nil)
+			state.GitClient = git
+			state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+			state.Environment.Approval = "pr-review"
+			state.Outputs = map[string]string{}
+			var recorded []string
+			if !tc.noRecorder {
+				state.RecordPushed = func(_ context.Context, out map[string]string) error {
+					events = append(events, "record "+out[steps.OutputPushedSHAs])
+					recorded = append(recorded, out[steps.OutputPushedSHAs])
+					return tc.recordErr
+				}
+			}
+			res, err := runStep(t, "git-push", state)
+			assert.Zero(t, git.plain, "never a plain force-push of the PR branch")
+			if !tc.wantAdopt {
+				require.Error(t, err)
+				assert.Equal(t, parentsteps.StepFailed, res.Status)
+				assert.Empty(t, git.leases, "nothing pushed")
+				assert.Equal(t, prev, git.remote, "the head is kept")
+				if !tc.wantErr {
+					var fe *parentsteps.ForeignPRHeadError
+					require.True(t, errors.As(err, &fe), "%v", err)
+					assert.Equal(t, prev, fe.Head)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{"compare " + prev, "record " + prev, "record " + prev + "," + push,
+				"push leased on " + prev, "record " + prev + "," + push}, events,
+				"the adopted head is recorded before anything else, and the push is leased on it")
+			assert.Equal(t, push, git.remote)
+			assert.Equal(t, push, res.Outputs[steps.OutputPushedSHA])
+			assert.Equal(t, prev+","+push, res.Outputs[steps.OutputPushedSHAs])
+		})
+	}
+}

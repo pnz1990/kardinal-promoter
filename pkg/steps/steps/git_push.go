@@ -209,10 +209,48 @@ func prBranchLease(ctx context.Context, state *parentsteps.StepState, branch str
 			Message: fmt.Sprintf("read the head of kardinal's branch %s before the push: %v", branch, err)}, fmt.Errorf("read the head of %s: %w", branch, err)
 	}
 	if head != "" && !OwnPush(state.Outputs, head) {
-		res, err := foreignHead(state, branch, head)
-		return "", false, res, err
+		adopted, res, err := adoptSameContent(ctx, state, branch, head)
+		if err != nil || !adopted {
+			if err == nil {
+				res, err = foreignHead(state, branch, head)
+			}
+			return "", false, res, err
+		}
 	}
 	return head, true, res, nil
+}
+
+// adoptSameContent adopts head, a commit of kardinal's PR branch the step
+// did not push, when it has the tree and the parents of the commit about
+// to be pushed (scm.HeadContentComparer): the branch already holds exactly
+// what kardinal would push, as when a deleted PromotionStep's own push is
+// found by the step kro created again (STEP-DELETE-PR-04), so pushing over
+// it loses nothing. head joins the step's push history (RecordPushed)
+// before anything else, and the push is then leased on it. Without a
+// comparer or a recorder nothing is adopted (#2095).
+func adoptSameContent(ctx context.Context, state *parentsteps.StepState, branch, head string) (bool, parentsteps.StepResult, error) {
+	cmp, ok := state.GitClient.(scm.HeadContentComparer)
+	if !ok || state.RecordPushed == nil {
+		return false, parentsteps.StepResult{}, nil
+	}
+	same, err := cmp.SameContentAsHead(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), head)
+	if err != nil {
+		return false, parentsteps.StepResult{Status: parentsteps.StepFailed,
+			Message: fmt.Sprintf("read the head %s of kardinal's branch %s: %v", head, branch, err)}, fmt.Errorf("read the head of %s: %w", branch, err)
+	}
+	if !same {
+		return false, parentsteps.StepResult{}, nil
+	}
+	history := strings.Join(appendPushed(PushedSHAs(state.Outputs), head), ",")
+	if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHAs: history}); err != nil {
+		return false, parentsteps.StepResult{Status: parentsteps.StepFailed,
+			Message: fmt.Sprintf("recording the head %s of %s, which holds this promotion's change, failed: %v", head, branch, err)}, err
+	}
+	if state.Outputs == nil {
+		state.Outputs = map[string]string{}
+	}
+	state.Outputs[OutputPushedSHAs] = history
+	return true, parentsteps.StepResult{}, nil
 }
 
 // OwnPush reports whether commit sha is one the step pushed (PushedSHAs):
