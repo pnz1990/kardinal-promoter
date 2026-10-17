@@ -179,7 +179,7 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 		return writeRollbackPath(w, c, ns, plan.Bundle)
 	}
 	if _, err := fmt.Fprintf(w,
-		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal explain %s --env %s\n",
+		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal why %s %s\n",
 		pipeline, envFilter, from, plan.Target.Name, artifactSummary(plan.Bundle),
 		plan.Bundle.Name, plan.Target.Name, pipeline, envFilter,
 	); err != nil {
@@ -319,7 +319,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\n"+
 			"Environment %s held on %s: no other version promotes there until: kardinal unhold %s %s\n"+
 			"Gates of %s that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.\n"+
-			"Track with: kardinal explain %s --env %s\n",
+			"Track with: kardinal why %s %s\n",
 		pipeline, env, from, plan.Target.Name, artifactSummary(plan.Bundle),
 		plan.Bundle.Name, plan.Target.Name, env, hold.Bundle, pipeline, env, env, pipeline, env,
 	); err != nil {

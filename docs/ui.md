@@ -164,7 +164,7 @@ as a sheet over it on a narrow one:
     <source media="(prefers-color-scheme: dark)" srcset="../assets/demos/why-waiting-dark.webp">
     <img src="../assets/demos/why-waiting.webp" alt="An environment's details open at Why it's waiting: a gate blocks prod on the weekend" width="1280" height="800" loading="lazy">
   </picture>
-  <figcaption>Why it's waiting · <code>kardinal explain my-app prod</code></figcaption>
+  <figcaption>Why it's waiting · <code>kardinal why my-app prod -o wide</code></figcaption>
 </figure>
 
 - **Actions** for that environment. Each one asks before it acts, and the button, the question

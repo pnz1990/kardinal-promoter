@@ -97,6 +97,7 @@ plugins:
         multi-cluster.md: health-adapters.md#remote-clusters
         faq.md: troubleshooting.md
         subscription-webhooks.md: subscription.md
+        reference/cli/kardinal-explain.md: reference/cli/kardinal-why.md
 
 markdown_extensions:
   - admonition
@@ -199,7 +200,6 @@ nav:
         - kardinal delete bundle: reference/cli/kardinal-delete-bundle.md
       - kardinal diff: reference/cli/kardinal-diff.md
       - kardinal doctor: reference/cli/kardinal-doctor.md
-      - kardinal explain: reference/cli/kardinal-explain.md
       - kardinal freeze: reference/cli/kardinal-freeze.md
       - kardinal get:
         - kardinal get: reference/cli/kardinal-get.md

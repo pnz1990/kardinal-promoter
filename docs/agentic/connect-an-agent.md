@@ -33,7 +33,7 @@ Remote MCP (a server in the controller, with OAuth) is not part of kardinal.
 | `inbox` | Approvals, holds and failures waiting for the identity | `kardinal inbox -o json` |
 | `history` | Promotions and rollbacks, newest first | `kardinal history -o json` |
 | `diff` | Two versions' images and provenance, and what changed | `kardinal diff` |
-| `explain` | Every step and gate of the current version, with each gate's CEL | `kardinal explain -o json` |
+| `explain` | Every step and gate of the current version, with each gate's CEL | `kardinal why <pipeline> -o json` |
 | `gates` | The PolicyGate templates, or those of a pipeline | `kardinal policy list` |
 | `simulate` | Pre-flight: would a version be allowed into an environment now, and what would let it in | `kardinal policy simulate` |
 | `verdicts` | The verdicts on a version, and whether a verify gate counted each | `kardinal verify list` |

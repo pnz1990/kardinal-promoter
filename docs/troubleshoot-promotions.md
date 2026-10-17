@@ -1,7 +1,7 @@
 # Promotion stuck or failed
 
 A version that does not move, a step that waits, a gate that never passes, or an object that
-does not delete. Start with [`kardinal doctor` and `kardinal explain`](troubleshooting.md#start-here-kardinal-doctor).
+does not delete. Start with [`kardinal doctor` and `kardinal why -o wide`](troubleshooting.md#start-here-kardinal-doctor).
 
 ## Promotion is stuck
 
@@ -29,7 +29,7 @@ prod is held by gate no-weekend-deploys.
 ```
 
 `kardinal why` names the gate, its rule and last evaluation, when it opens and the command that
-gets past it ([`kardinal why`](reference/cli/kardinal-why.md) lists every case). For every step and gate of the version in one table, run `kardinal explain my-app prod`.
+gets past it ([`kardinal why`](reference/cli/kardinal-why.md) lists every case). For every step and gate of the version in one table, run `kardinal why my-app prod -o wide`.
 
 If a gate holds it, its Rule is not satisfied, and Now shows what it evaluated to. Common causes:
 - `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](overrides.md)).
@@ -283,7 +283,7 @@ reports the run.
 kubectl get policygates -A -l kardinal.io/gate-template=my-gate -o custom-columns=NAME:.metadata.name,READY:.status.ready,REASON:.status.reason
 
 # Show the expression and current evaluation
-kardinal explain my-app --env prod
+kardinal why my-app prod -o wide
 ```
 
 **Unknown attribute:** `kardinal policy test my-gate.yaml` names the attribute that is missing. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's metrics namespace (the org policy namespace for an org gate, the Pipeline namespace otherwise), and `upstream.<env>` only when that environment appears in the version's status or recent history.

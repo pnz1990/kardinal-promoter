@@ -246,7 +246,7 @@ environment reads its health from its cluster through a kubeconfig Secret
 A **gate** holds a version out of an environment until its expression is true. The expression
 is written in [CEL](https://cel.dev) (Common Expression Language), and reads the version, the
 time, metrics and the history of the pipeline. A gate is a Kubernetes object of kind
-`PolicyGate`. Gates show on the UI's map and in `kardinal explain`.
+`PolicyGate`. Gates show on the UI's map and in `kardinal why -o wide`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -282,7 +282,7 @@ Referencing an attribute that does not exist blocks the gate. See the
 
 ```bash
 # See which gates are blocking a promotion
-kardinal explain my-app --env prod
+kardinal why my-app prod -o wide
 
 # Output:
 # ENVIRONMENT   VERSION                 TYPE         NAME                 STATE      EXPRESSION                         REASON

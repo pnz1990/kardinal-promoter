@@ -552,7 +552,7 @@ func walkFirstPipeline(t *testing.T, w *walkthrough) {
 	r := e.Shell(t, commandLine(t, pg, "kardinal policy list"))
 	require.Zero(t, r.Code, r.Output)
 	assert.Contains(t, r.Output, "no-weekend-deploys", "policy list names the org gate")
-	r = e.Shell(t, framework.Fill(t, commandLine(t, pg, "kardinal explain my-app"), "my-app", app))
+	r = e.Shell(t, framework.Fill(t, commandLine(t, pg, "kardinal why my-app"), "my-app", app))
 	require.Zero(t, r.Code, r.Output)
 	assert.Regexp(t, `(?m)^prod\s+main \(`+next+`\)\s+PolicyGate\s+no-weekend-deploys\s`, r.Output)
 	r = e.Shell(t, framework.Fill(t, commandLine(t, pg, "kardinal policy simulate"), "my-app", app))

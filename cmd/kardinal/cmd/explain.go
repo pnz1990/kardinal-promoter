@@ -47,20 +47,24 @@ func newExplainCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "explain <pipeline> [<env>]",
-		Short: "Explain the current state of a promotion pipeline",
+		Short: "Deprecated: kardinal why <pipeline> [<env>] -o wide prints the same table",
+		// Deprecated (#1758): kardinal why -o wide prints the same. It keeps
+		// working, with a notice, and is left out of kardinal --help.
+		Hidden: true,
 		Long: `For each environment of <pipeline> (or just <env>), show the current
 Bundle's step and the gates it waits on, gates that are not ready first, with
 each gate's expression, state and reason, and what is deployed there now when
 the change has not landed yet. -w refreshes every 3 seconds.`,
 		Example: `  kardinal explain my-app
   kardinal explain my-app prod -w`,
-		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true"},
+		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true", wideAnnotation: "true"},
 		Args:        cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, envFlag)
 			if err != nil {
 				return err
 			}
+			_, _ = fmt.Fprintln(errOut, explainDeprecation(pipeline, env, watchFlag))
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("explain: %w", err)
@@ -78,6 +82,25 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 	cmd.Flags().BoolVar(&colorFlag, "color", false, "Force ANSI color output (auto-detected when TTY)")
 
 	return cmd
+}
+
+// explainDeprecation is the notice kardinal explain prints on stderr: the
+// kardinal why command that prints the same (-o wide, or the -o format
+// given, and -w).
+func explainDeprecation(pipeline, env string, watch bool) string {
+	use := "kardinal why " + pipeline
+	if env != "" {
+		use += " " + env
+	}
+	if structured() {
+		use += " -o " + OutputFormat()
+	} else {
+		use += " -o wide"
+	}
+	if watch {
+		use += " -w"
+	}
+	return "warning: kardinal explain is deprecated and will be removed in a later release: use " + use + " (the same output)"
 }
 
 // explainWatch re-renders explain every interval until ctx is done or the

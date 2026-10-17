@@ -147,7 +147,7 @@ Lists every other environment recorded in the Bundle's `status.environments`, an
 ## PR Body Updates
 
 The PR body is written once, when the PR is opened. kardinal does not rewrite it when gates or
-upstream environments change, so it is a snapshot. The UI and `kardinal explain` show live state.
+upstream environments change, so it is a snapshot. The UI and `kardinal why -o wide` show live state.
 
 ## Customising the PR
 

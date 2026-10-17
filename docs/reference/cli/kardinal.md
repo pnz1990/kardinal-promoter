@@ -87,7 +87,7 @@ names the new Bundle.
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO
@@ -100,7 +100,6 @@ names the new Bundle.
 * [kardinal delete](kardinal-delete.md)	 - Delete kardinal resources
 * [kardinal diff](kardinal-diff.md)	 - Show what changes between two versions (Bundles)
 * [kardinal doctor](kardinal-doctor.md)	 - Run pre-flight checks to verify the cluster is correctly configured
-* [kardinal explain](kardinal-explain.md)	 - Explain the current state of a promotion pipeline
 * [kardinal freeze](kardinal-freeze.md)	 - Freeze agents, or stop the line for everyone; with no flags, list the freezes
 * [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 * [kardinal history](kardinal-history.md)	 - Show a pipeline's promotion history, newest first

@@ -20,7 +20,6 @@ Get started:
 Ship and observe:
   create         Create kardinal resources
   diff           Show what changes between two versions (Bundles)
-  explain        Explain the current state of a promotion pipeline
   get            Display one or more kardinal resources
   history        Show a pipeline's promotion history, newest first
   logs           Show promotion step execution logs for a pipeline
@@ -62,6 +61,6 @@ Flags:
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 
 Use "kardinal [command] --help" for more information about a command.

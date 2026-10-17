@@ -54,7 +54,7 @@ spec:
       count: 3                 # AgentRuns per version (default: required)
 ```
 
-The gate's reason says where it stands, everywhere the gate is shown (`kardinal explain`, the
+The gate's reason says where it stands, everywhere the gate is shown (`kardinal why -o wide`, the
 UI, the PR and notifications):
 
 | State | Reason |
