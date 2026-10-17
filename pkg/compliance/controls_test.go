@@ -165,21 +165,13 @@ func TestForPack(t *testing.T) {
 var writerDirs = []string{"pkg/reconciler", "cmd/kardinal-controller"}
 
 // writtenActions returns the AuditEvent actions the non-test Go code of
-// writerDirs writes. An action is written where it, as a string literal or
-// as a const or var whose value is that literal, is a call argument, a
-// value (not a key) of a composite literal (Action: x in an AuditEventSpec,
-// a map from a state to an action), or assigned to an Action field. A
-// comparison (action == x), a switch case or a declaration is not a write,
-// so the mapping cannot cite an action whose only writer was removed
-// (#2126: HealthCheckFailed is accepted by the CRD but never written).
+// writerDirs writes (scanWrites). An action built at run time ("Freeze" +
+// "Started", fmt.Sprintf) is not seen and is reported as not written: a
+// false failure, the safe direction.
 func writtenActions(t *testing.T) map[string]bool {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..")
-	actions := map[string]bool{}
-	for _, a := range v1alpha1.AuditActions {
-		actions[strconv.Quote(a)] = true
-	}
 	fset := token.NewFileSet()
 	var files []*ast.File
 	for _, dir := range writerDirs {
@@ -193,6 +185,24 @@ func writtenActions(t *testing.T) map[string]bool {
 			}
 			return err
 		}))
+	}
+	written := scanWrites(files)
+	require.NotEmpty(t, written, "no action found in %v", writerDirs)
+	return written
+}
+
+// scanWrites returns the AuditEvent actions files write. An action is
+// written where it, as a string literal or as a const or var whose value is
+// that literal, is passed to a parameter named action (actionParams), is a
+// value (not a key) of a composite literal (Action: x in an AuditEventSpec,
+// a map from a state to an action), or is assigned to an Action field. A
+// comparison, a switch case, a log field or a declaration is not a write,
+// so the mapping cannot cite an action whose only writer was removed
+// (#2126: HealthCheckFailed is accepted by the CRD but never written).
+func scanWrites(files []*ast.File) map[string]bool {
+	actions := map[string]bool{}
+	for _, a := range v1alpha1.AuditActions {
+		actions[strconv.Quote(a)] = true
 	}
 	// The consts and vars whose value is an action, by name.
 	named := map[string]string{}
@@ -228,6 +238,7 @@ func writtenActions(t *testing.T) map[string]bool {
 		}
 		return "", false
 	}
+	takers := actionParams(files)
 	written := map[string]bool{}
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -245,26 +256,121 @@ func writtenActions(t *testing.T) map[string]bool {
 				}
 				return true
 			})
-			inspectWrites(decl, func(e ast.Expr) {
+			inspectWrites(decl, takers, func(e ast.Expr) {
 				if a, ok := action(e, locals); ok {
 					written[a] = true
 				}
 			})
 		}
 	}
-	require.NotEmpty(t, written, "no action found in %v", writerDirs)
 	return written
 }
 
-// inspectWrites calls write with every expression of n that is written: a
-// call argument, a value of a composite literal, or the value assigned to
-// an Action field.
-func inspectWrites(n ast.Node, write func(ast.Expr)) {
+// TestScanWrites (#2154, QA-2): only a write counts. Passing an action to a
+// parameter named action, an Action field of a composite literal and an
+// assignment to .Action write it; a log field, strings.EqualFold,
+// fmt.Sprintf or a comparison naming it does not, so none of them can keep
+// an action "written" after its writer is gone.
+func TestScanWrites(t *testing.T) {
+	src := func(body string) *ast.File {
+		f, err := parser.ParseFile(token.NewFileSet(), "x.go", `package x
+const AuditActionFreezeStarted = "FreezeStarted"
+func writeAudit(ctx any, action string) {}
+`+body, 0)
+		require.NoError(t, err)
+		return f
+	}
+	for _, tc := range []struct {
+		name, body string
+		written    bool
+	}{
+		{"a parameter named action", `func f() { writeAudit(nil, AuditActionFreezeStarted) }`, true},
+		{"a function literal's parameter named action", `func f() { enqueue := func(r int, action string) {}; enqueue(1, AuditActionFreezeStarted) }`, true},
+		{"an Action field", `type S struct{ Action string }; func f() { _ = S{Action: AuditActionFreezeStarted} }`, true},
+		{"an assignment to .Action", `type S struct{ Action string }; func f() { var s S; s.Action = AuditActionFreezeStarted }`, true},
+		{"a log field (QA-2's f)", `func f(log any) { log.Debug().Str("action", AuditActionFreezeStarted) }`, false},
+		{"strings.EqualFold (QA-2's f2)", `func f(x string) { _ = strings.EqualFold(x, AuditActionFreezeStarted) }`, false},
+		{"fmt.Sprintf", `func f() { _ = fmt.Sprintf("%s", AuditActionFreezeStarted) }`, false},
+		{"another parameter of a taker", `func f() { writeAudit(AuditActionFreezeStarted, "") }`, false},
+		{"a comparison", `func f(a string) bool { return a == AuditActionFreezeStarted }`, false},
+	} {
+		got := scanWrites([]*ast.File{src(tc.body)})["FreezeStarted"]
+		assert.Equal(t, tc.written, got, tc.name)
+	}
+}
+
+// actionParams indexes the functions of files that take an action: for
+// each function, method or function literal assigned to a name (enqueue :=
+// func(..., action string)), the positions of its parameters named action.
+// A call passes an action to be written only at those positions; a log
+// field, strings.EqualFold or fmt.Sprintf naming an action does not write
+// it (#2154). Functions are matched by name, so two functions of one name
+// share their positions: an over-count, never a missed writer.
+func actionParams(files []*ast.File) map[string]map[int]bool {
+	takers := map[string]map[int]bool{}
+	add := func(name string, ft *ast.FuncType) {
+		i := 0
+		for _, field := range ft.Params.List {
+			names := field.Names
+			if len(names) == 0 {
+				i++
+				continue
+			}
+			for _, n := range names {
+				if n.Name == "action" {
+					if takers[name] == nil {
+						takers[name] = map[int]bool{}
+					}
+					takers[name][i] = true
+				}
+				i++
+			}
+		}
+	}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncDecl:
+				add(n.Name.Name, n.Type)
+			case *ast.AssignStmt:
+				for i, lhs := range n.Lhs {
+					id, ok := lhs.(*ast.Ident)
+					if !ok || i >= len(n.Rhs) {
+						continue
+					}
+					if fl, ok := n.Rhs[i].(*ast.FuncLit); ok {
+						add(id.Name, fl.Type)
+					}
+				}
+			}
+			return true
+		})
+	}
+	return takers
+}
+
+// calleeName is the name a call calls: f(...) or x.f(...).
+func calleeName(call *ast.CallExpr) string {
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	}
+	return ""
+}
+
+// inspectWrites calls write with every expression of n that is written: an
+// argument passed to a parameter named action (takers), a value of a
+// composite literal, or the value assigned to an Action field.
+func inspectWrites(n ast.Node, takers map[string]map[int]bool, write func(ast.Expr)) {
 	ast.Inspect(n, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr:
-			for _, arg := range n.Args {
-				write(arg)
+			for i, arg := range n.Args {
+				if takers[calleeName(n)][i] {
+					write(arg)
+				}
 			}
 		case *ast.CompositeLit:
 			for _, el := range n.Elts {

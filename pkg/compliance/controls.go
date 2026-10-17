@@ -112,7 +112,8 @@ func approved(element string) Evidence {
 func separated(element string) Evidence {
 	return Evidence{
 		Element: element,
-		Record: "`approval.excludeAuthor` (off by default) does not count an approval by the user who created the version " +
+		Record: "`approval.excludeAuthor` (off by default, except on the approval gates kardinal adds for agents' versions in " +
+			"`agents: approve` environments) does not count an approval by the user who created the version " +
 			"(`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom " +
 			"kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. " +
 			"`status.approvals[].reason` says why an approval did not count",
