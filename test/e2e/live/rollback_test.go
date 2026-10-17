@@ -875,9 +875,11 @@ func TestRollback_OnHealthFailureRefused(t *testing.T) {
 }
 
 // TestRollback_MultiEnvironment checks a rollback of one of two environments
-// that both follow test: the rollback Bundle goes through test first, then
-// the target, and leaves the other environment, not upstream of the target,
-// on the new version.
+// that both follow test (#1311): the restored version was verified in test
+// before, so the rollback carries that verification and promotes only the
+// target, although a gate now closed holds test. test keeps what it runs,
+// with no step of the rollback, and the other environment, not upstream of
+// the target, stays on the new version.
 //
 // Covers RB-MULTI-01.
 func TestRollback_MultiEnvironment(t *testing.T) {
@@ -894,19 +896,28 @@ func TestRollback_MultiEnvironment(t *testing.T) {
 	rbVerified(t, a, b1, all...)
 	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	rbVerified(t, a, b2, all...)
+	// A gate that would hold anything promoted to test now.
+	e.CreateGate(t, framework.Gate(a.ns, "test-closed", "test", "false", recheck))
 
 	out, rb := rbRollback(t, a, "prod-us")
 	assert.Equal(t, rbOutput("prod-us", b2, b1, imageV2, rb), out)
 	rbAssertBundle(t, e, a.ns, rb, "prod-us", b2, b1, cliUser(t), "")
-	test := e.WaitStepState(t, a.ns, pipelineName, rb, "test", "Verified", promoteTimeout)
-	prodUS := e.WaitStepState(t, a.ns, pipelineName, rb, "prod-us", "Verified", promoteTimeout)
-	at, _ := verifiedCondition(t, test)
-	assert.False(t, prodUS.CreationTimestamp.Time.Before(at.Truncate(time.Second)),
-		"prod-us starts after test is Verified (test %s, prod-us created %s)", at, prodUS.CreationTimestamp)
+	e.WaitStepState(t, a.ns, pipelineName, rb, "prod-us", "Verified", promoteTimeout)
 	e.WaitBundlePhase(t, a.ns, rb, "Verified", time.Minute)
-	assertEnvAt(t, a, "test", fixtures.V2)
 	assertEnvAt(t, a, "prod-us", fixtures.V2)
 
-	e.NoStep(t, a.ns, pipelineName, rb, "prod-eu", holdFor)
+	var got v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(context.Background(), client.ObjectKey{Namespace: a.ns, Name: rb}, &got))
+	require.True(t, got.Spec.Intent.TargetOnly)
+	require.Len(t, got.Status.UpstreamEvidence, 1, "the test verification it carries")
+	assert.Equal(t, "test", got.Status.UpstreamEvidence[0].Environment)
+	assert.Equal(t, b1, got.Status.UpstreamEvidence[0].Bundle)
+	cond := meta.FindStatusCondition(got.Status.Conditions, "UpstreamEvidence")
+	require.NotNil(t, cond)
+	assert.Equal(t, "Carried", cond.Reason, cond.Message)
+
+	e.NoStep(t, a.ns, pipelineName, rb, "test", holdFor)
+	assertEnvAt(t, a, "test", fixtures.V3)
+	e.NoStep(t, a.ns, pipelineName, rb, "prod-eu", 5*time.Second)
 	assertEnvAt(t, a, "prod-eu", fixtures.V3)
 }

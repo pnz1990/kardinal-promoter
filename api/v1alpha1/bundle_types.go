@@ -230,6 +230,8 @@ type BundleProvenance struct {
 }
 
 // BundleIntent declares optional promotion targeting and skip overrides.
+// +kubebuilder:validation:XValidation:rule="!has(self.targetOnly) || !self.targetOnly || (has(self.targetEnvironment) && size(self.targetEnvironment) > 0)",message="intent.targetOnly needs intent.targetEnvironment"
+// +kubebuilder:validation:XValidation:rule="!has(self.targetOnly) || !self.targetOnly || !has(self.skipEnvironments) || size(self.skipEnvironments) == 0",message="intent.targetOnly cannot be combined with intent.skipEnvironments"
 type BundleIntent struct {
 	// TargetEnvironment restricts this Bundle to promoting only up to and
 	// including this environment. Empty means promote through all environments.
@@ -240,6 +242,17 @@ type BundleIntent struct {
 	// subject to the PolicyGate SkipPermission check.
 	// +optional
 	SkipEnvironments []string `json:"skipEnvironments,omitempty"`
+
+	// TargetOnly promotes only TargetEnvironment (for a fleet, its targets)
+	// when every environment upstream of it has verified this Bundle's
+	// artifacts in another Bundle of the Pipeline: the BundleReconciler
+	// records that verification in status.upstreamEvidence when it first
+	// builds the Graph, and the Graph has no upstream environment. When one
+	// has not, the Bundle promotes through them, as without TargetOnly, and
+	// its UpstreamEvidence condition says why. kardinal rollback, kardinal
+	// promote and the automatic rollback set it (#1311).
+	// +optional
+	TargetOnly bool `json:"targetOnly,omitempty"`
 }
 
 // BundleStatus defines the observed state of a Bundle.
@@ -269,6 +282,17 @@ type BundleStatus struct {
 	// Environments holds per-environment promotion evidence.
 	// +optional
 	Environments []EnvironmentStatus `json:"environments,omitempty"`
+
+	// UpstreamEvidence is, for a Bundle with spec.intent.targetOnly, the
+	// verification of its artifacts in each environment upstream of its
+	// target by another Bundle of the Pipeline. This Bundle does not promote
+	// those environments, so they are not in environments; gates read their
+	// soak from here. Recorded once, when the Graph is first built; empty
+	// when the Bundle promotes through them.
+	// +optional
+	// +listType=map
+	// +listMapKey=environment
+	UpstreamEvidence []UpstreamEvidence `json:"upstreamEvidence,omitempty"`
 
 	// Metrics holds deployment efficiency metrics for this Bundle.
 	// Populated by the BundleReconciler when all environments reach Verified.
@@ -444,6 +468,26 @@ type EnvironmentStatus struct {
 	// The PolicyGate reconciler reads this field from Bundle.status.environments
 	// to populate bundle.upstreamSoakMinutes in the CEL context, so the gate
 	// does not read the clock.
+	// +optional
+	SoakMinutes int64 `json:"soakMinutes,omitempty"`
+}
+
+// UpstreamEvidence is another Bundle's verification of the same artifacts in
+// one environment upstream of a targetOnly Bundle's target.
+type UpstreamEvidence struct {
+	// Environment is the upstream environment.
+	Environment string `json:"environment"`
+
+	// Bundle is the Bundle of the same Pipeline, with the same artifacts,
+	// whose promotion was Verified in Environment.
+	Bundle string `json:"bundle"`
+
+	// VerifiedAt is when that promotion's health check completed (its
+	// status.environments healthCheckedAt).
+	VerifiedAt metav1.Time `json:"verifiedAt"`
+
+	// SoakMinutes is the number of minutes since VerifiedAt, written by the
+	// BundleReconciler like EnvironmentStatus.SoakMinutes.
 	// +optional
 	SoakMinutes int64 `json:"soakMinutes,omitempty"`
 }

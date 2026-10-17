@@ -130,11 +130,12 @@ type RollbackPlan struct {
 //     versions, and to an image Bundle only when its config commit is the
 //     newest earlier one. Without ToBundle a target whose restored set
 //     deploys nothing new is skipped.
-//   - It sets intent.targetEnvironment to this environment, and records the
-//     target in spec.provenance.rollbackOf and the deployed Bundle in the
-//     kardinal.io/rollback-from annotation. The Graph of a targetEnvironment
-//     Bundle keeps every environment upstream of the target (graph
-//     filterByIntent), so the rollback promotes the target's artifacts through
+//   - It sets intent.targetEnvironment to this environment with
+//     intent.targetOnly, and records the target in spec.provenance.rollbackOf
+//     and the deployed Bundle in the kardinal.io/rollback-from annotation. When
+//     another Bundle verified the restored artifacts in every environment
+//     upstream of the target, the rollback carries that verification and
+//     promotes only the target (#1311); otherwise it promotes them through
 //     those environments first, with their gates, soak and health checks.
 //
 // Errors wrap ErrNotFound, ErrInvalid or ErrConflict.
@@ -743,7 +744,7 @@ func planFleetRollback(ctx context.Context, c client.Reader, req RollbackRequest
 			lastErr = fmt.Errorf("rollback of fleet %s (planned from target %s): %w", req.Environment, t, pErr)
 			continue
 		}
-		plan.Bundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: req.Environment}
+		plan.Bundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: req.Environment, TargetOnly: true}
 		plan.Fleet = fleetRollbackTargets(targets, runs, effective, plan.Target.Name)
 		if err := fleetEligible(ctx, c, req, steps, plan); err != nil {
 			return nil, err
@@ -942,7 +943,7 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 		},
 		Spec: v1alpha1.BundleSpec{
 			Pipeline: req.Pipeline,
-			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: req.Environment},
+			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: req.Environment, TargetOnly: true},
 			Actor:    req.Stamp,
 		},
 	}

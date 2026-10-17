@@ -69,7 +69,7 @@ type bundleCreateRequest struct {
 	Chart *v1alpha1.ChartRef `json:"chart,omitempty"`
 	// Provenance carries build metadata.
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
-	// Intent limits or shapes the promotion (targetEnvironment, skipEnvironments).
+	// Intent limits or shapes the promotion (targetEnvironment, skipEnvironments, targetOnly).
 	Intent *v1alpha1.BundleIntent `json:"intent,omitempty"`
 }
 

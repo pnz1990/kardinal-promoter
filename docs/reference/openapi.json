@@ -286,6 +286,10 @@
           "targetEnvironment": {
             "description": "TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments.",
             "type": "string"
+          },
+          "targetOnly": {
+            "description": "TargetOnly promotes only TargetEnvironment (for a fleet, its targets) when every environment upstream of it has verified this Bundle's artifacts in another Bundle of the Pipeline: the BundleReconciler records that verification in status.upstreamEvidence when it first builds the Graph, and the Graph has no upstream environment. When one has not, the Bundle promotes through them, as without TargetOnly, and its UpstreamEvidence condition says why. kardinal rollback, kardinal promote and the automatic rollback set it.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -433,7 +437,7 @@
                 "$ref": "#/components/schemas/BundleIntent"
               }
             ],
-            "description": "Intent limits or shapes the promotion (targetEnvironment, skipEnvironments)."
+            "description": "Intent limits or shapes the promotion (targetEnvironment, skipEnvironments, targetOnly)."
           },
           "namespace": {
             "description": "Namespace is the target namespace. Defaults to the server's default namespace.",

@@ -174,6 +174,7 @@ func TestPlanPromote(t *testing.T) {
 			assert.Equal(t, tc.wantTag, b.Spec.Images[0].Tag)
 			assert.Equal(t, "image", b.Spec.Type)
 			assert.Equal(t, tc.env, b.Spec.Intent.TargetEnvironment)
+			assert.True(t, b.Spec.Intent.TargetOnly, "upstream verified it: only the target is promoted (#1311)")
 			assert.Equal(t, tc.wantSrc, b.Annotations[lifecycle.AnnotationPromotedFrom])
 			assert.Equal(t, "alice", b.Annotations[lifecycle.AnnotationRequestedBy])
 			assert.Equal(t, "sha-"+tc.wantTag, b.Spec.Provenance.CommitSHA)

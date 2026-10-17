@@ -223,6 +223,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.intent` | object |  | Intent declares optional targeting and skip overrides for this Bundle. |
 | `spec.intent.skipEnvironments` | []string |  | SkipEnvironments lists environment names to exclude from this promotion, subject to the PolicyGate SkipPermission check. |
 | `spec.intent.targetEnvironment` | string |  | TargetEnvironment restricts this Bundle to promoting only up to and including this environment. Empty means promote through all environments. |
+| `spec.intent.targetOnly` | boolean |  | TargetOnly promotes only TargetEnvironment (for a fleet, its targets) when every environment upstream of it has verified this Bundle's artifacts in another Bundle of the Pipeline: the BundleReconciler records that verification in status.upstreamEvidence when it first builds the Graph, and the Graph has no upstream environment. When one has not, the Bundle promotes through them, as without TargetOnly, and its UpstreamEvidence condition says why. kardinal rollback, kardinal promote and the automatic rollback set it (#1311). |
 | `spec.pipeline` | string | yes | Pipeline is the name of the Pipeline this Bundle targets. |
 | `spec.provenance` | object |  | Provenance carries build metadata for audit and rollback. |
 | `spec.provenance.author` | string |  | Author is the committer or triggering actor for this build. |
@@ -316,6 +317,11 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.retiredSteps[].state` | string |  | State is the PromotionStep's final status.state. |
 | `status.retiredSteps[].stepType` | string |  | StepType is the PromotionStep's spec.stepType. |
 | `status.retiredSteps[].verifiedAt` | string (date-time) |  | VerifiedAt is when the PromotionStep became Verified. |
+| `status.upstreamEvidence` | []object |  | UpstreamEvidence is, for a Bundle with spec.intent.targetOnly, the verification of its artifacts in each environment upstream of its target by another Bundle of the Pipeline. This Bundle does not promote those environments, so they are not in environments; gates read their soak from here. Recorded once, when the Graph is first built; empty when the Bundle promotes through them. |
+| `status.upstreamEvidence[].bundle` | string | yes | Bundle is the Bundle of the same Pipeline, with the same artifacts, whose promotion was Verified in Environment. |
+| `status.upstreamEvidence[].environment` | string | yes | Environment is the upstream environment. |
+| `status.upstreamEvidence[].soakMinutes` | integer (int64) |  | SoakMinutes is the number of minutes since VerifiedAt, written by the BundleReconciler like EnvironmentStatus.SoakMinutes. |
+| `status.upstreamEvidence[].verifiedAt` | string (date-time) | yes | VerifiedAt is when that promotion's health check completed (its status.environments healthCheckedAt). |
 | `status.version` | string |  | Version is what the Bundle ships, for display: the image tag (the images, when several), "config &lt;sha&gt;", or the chart name and version. Written by the BundleReconciler from spec. |
 
 ## ChangeWindow

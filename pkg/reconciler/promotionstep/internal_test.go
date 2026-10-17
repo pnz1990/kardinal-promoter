@@ -499,6 +499,24 @@ func TestUpstreamEnvironments(t *testing.T) {
 	assert.Equal(t, "test", got[0].Name)
 	assert.Equal(t, "uat", got[1].Name)
 	assert.Nil(t, upstreamEnvironments(nil, "prod"))
+
+	// #1311: a targetOnly Bundle lists the verifications it carries, with
+	// their time; evidence on a Bundle without targetOnly is not listed.
+	at := metav1.NewTime(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC))
+	rb := &v1alpha1.Bundle{
+		Spec: v1alpha1.BundleSpec{Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true}},
+		Status: v1alpha1.BundleStatus{
+			Environments:     []v1alpha1.EnvironmentStatus{{Name: "prod", Phase: "Promoting"}},
+			UpstreamEvidence: []v1alpha1.UpstreamEvidence{{Environment: "uat", Bundle: "app-v1", VerifiedAt: at, SoakMinutes: 90}},
+		},
+	}
+	got = upstreamEnvironments(rb, "prod")
+	require.Len(t, got, 1)
+	assert.Equal(t, "uat", got[0].Name)
+	assert.Equal(t, "Verified", got[0].Phase)
+	assert.True(t, at.Equal(got[0].HealthCheckedAt))
+	rb.Spec.Intent.TargetOnly = false
+	assert.Empty(t, upstreamEnvironments(rb, "prod"))
 }
 
 // TestSetRollbackState checks what the open-pr step learns about a rollback

@@ -541,9 +541,42 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes(t *testing.T) {
 		pipeline   *kardinalv1alpha1.Pipeline
 		envs       []kardinalv1alpha1.EnvironmentStatus
 		intent     *kardinalv1alpha1.BundleIntent
+		evidence   []kardinalv1alpha1.UpstreamEvidence
+		expr       string
 		wantReady  bool
 		wantReason string
 	}{
+		{
+			name:     "targetOnly reads the soak of the uat verification it carries (#1311)",
+			pipeline: sequential,
+			intent:   &kardinalv1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true},
+			evidence: []kardinalv1alpha1.UpstreamEvidence{
+				{Environment: "test", Bundle: "nginx-demo-v0", SoakMinutes: 1},
+				{Environment: "uat", Bundle: "nginx-demo-v0", SoakMinutes: 45},
+			},
+			wantReady: true,
+		},
+		{
+			name:     "targetOnly blocks while the carried uat verification soaked 10m",
+			pipeline: sequential,
+			intent:   &kardinalv1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true},
+			evidence: []kardinalv1alpha1.UpstreamEvidence{
+				{Environment: "test", Bundle: "nginx-demo-v0", SoakMinutes: 100},
+				{Environment: "uat", Bundle: "nginx-demo-v0", SoakMinutes: 10},
+			},
+			wantReady: false,
+		},
+		{
+			name:     "upstream.<env>.soakMinutes reads a carried verification",
+			pipeline: sequential,
+			intent:   &kardinalv1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true},
+			evidence: []kardinalv1alpha1.UpstreamEvidence{
+				{Environment: "test", Bundle: "nginx-demo-v0", SoakMinutes: 100},
+				{Environment: "uat", Bundle: "nginx-demo-v0", SoakMinutes: 10},
+			},
+			expr:      "upstream.test.soakMinutes >= 30",
+			wantReady: true,
+		},
 		{
 			name:     "passes when direct upstream uat soaked long enough",
 			pipeline: sequential,
@@ -603,8 +636,12 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes(t *testing.T) {
 			now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
 			bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", tt.envs)
 			bundle.Spec.Intent = tt.intent
-			gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
-				`bundle.upstreamSoakMinutes >= 30`, "1m")
+			bundle.Status.UpstreamEvidence = tt.evidence
+			expr := `bundle.upstreamSoakMinutes >= 30`
+			if tt.expr != "" {
+				expr = tt.expr
+			}
+			gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1", expr, "1m")
 			objs := []client.Object{gate, bundle}
 			if tt.pipeline != nil {
 				objs = append(objs, tt.pipeline.DeepCopy())

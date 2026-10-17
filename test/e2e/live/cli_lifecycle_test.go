@@ -109,8 +109,9 @@ func waitBundleGone(t *testing.T, e *framework.Env, ns, name string) {
 // and one never Verified in prod. Without --to it restores the newest other
 // Bundle Verified in prod: it prints what it rolls back from and to and the
 // new Bundle, which records the Bundle it rolls back from, who asked for it
-// and the target's provenance, goes through test again and redeploys the old
-// version in both environments. history marks its rows as rollbacks. A
+// and the target's provenance, and redeploys the old version in prod only:
+// test verified it before, so test keeps what it runs (#1311). history marks
+// its rows as rollbacks. A
 // second rollback has nothing older to restore, and --to restores a newer
 // Bundle.
 // Covers CLI-ROLLBACK-01, RB-PREV-01, RB-TO-01.
@@ -177,18 +178,17 @@ func TestCLI_Rollback(t *testing.T) {
 	assert.NotEmpty(t, rb.Annotations["kardinal.io/created-at"])
 	assert.Equal(t, "image", rb.Spec.Type)
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rb.Spec.Images)
-	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod"}, rb.Spec.Intent)
+	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true}, rb.Spec.Intent)
 	require.NotNil(t, rb.Spec.Provenance)
 	assert.Equal(t, v1alpha1.BundleProvenance{CommitSHA: "0a1b2c3", Author: "e2e-bot", CIRunURL: "https://ci.example/run/7", RollbackOf: bA},
 		*rb.Spec.Provenance, "the rollback Bundle carries the target's provenance")
 
-	// The rollback goes through test again, then prod.
-	e.WaitStepState(t, a.ns, pipelineName, bR, "test", "Verified", promoteTimeout)
+	// The rollback promotes prod only; test keeps C's version.
 	e.WaitStepState(t, a.ns, pipelineName, bR, "prod", "Verified", promoteTimeout)
-	for _, env := range []string{"test", "prod"} {
-		assertEnvAt(t, a, env, fixtures.V2)
-		assert.Equal(t, fixtures.V2, kustomizeTag(t, a, env))
-	}
+	assertEnvAt(t, a, "prod", fixtures.V2)
+	assert.Equal(t, fixtures.V2, kustomizeTag(t, a, "prod"))
+	e.NoStep(t, a.ns, pipelineName, bR, "test", 5*time.Second)
+	assertEnvAt(t, a, "test", fixtures.V1)
 	hist := framework.ParseTable(c.Must(a.ns, "history", pipelineName))
 	actions := map[string]string{}
 	for _, row := range hist {
@@ -228,7 +228,7 @@ func TestCLI_Rollback(t *testing.T) {
 // in test, for an unknown environment or Pipeline, and while a newer Bundle
 // is still promoting. Otherwise it creates a Bundle for prod from the newest
 // Bundle Verified in test, with the same images and provenance, prints both
-// names and goes through test (a no-op there) and prod's PR review. While
+// names and promotes prod only, through its PR review (#1311). While
 // that Bundle promotes, and once it is Verified in prod, promote refuses
 // again.
 // Covers CLI-PROMOTE-01.
@@ -291,14 +291,14 @@ func TestCLI_Promote(t *testing.T) {
 	assert.NotEmpty(t, p.Annotations["kardinal.io/created-at"])
 	assert.Equal(t, "image", p.Spec.Type)
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, p.Spec.Images)
-	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod"}, p.Spec.Intent)
+	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true}, p.Spec.Intent)
 	require.NotNil(t, p.Spec.Provenance)
 	assert.Equal(t, v1alpha1.BundleProvenance{CommitSHA: "4d5e6f7", Author: "e2e-bot", CIRunURL: "https://ci.example/run/9"}, *p.Spec.Provenance)
 
-	// test already runs A's version, so P's test step changes nothing.
-	e.WaitStepState(t, a.ns, pipelineName, bP, "test", "Verified", promoteTimeout)
-	assert.Equal(t, head, e.BranchHead(t, a.repo), "P's test step pushes no commit")
+	// A verified test, so P has no test step and pushes nothing there.
 	e.WaitStepState(t, a.ns, pipelineName, bP, "prod", "WaitingForMerge", promoteTimeout)
+	e.NoStep(t, a.ns, pipelineName, bP, "test", 5*time.Second)
+	assert.Equal(t, head, e.BranchHead(t, a.repo), "P pushes nothing to test")
 	refuses(t, c, a.ns, "promote: bundle "+bP+" is already being promoted to prod: conflict", "promote", pipelineName, "-e", "prod")
 	pr := openPR(t, e, a.repo, fixtures.V2)
 	assertEnvAt(t, a, "prod", fixtures.V1)

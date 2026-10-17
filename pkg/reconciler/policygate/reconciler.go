@@ -697,8 +697,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 // upstream must have soaked long enough. An upstream that is not Verified counts
 // as 0. A root environment (no upstream) returns 0.
 //
-// It reads only CRD state: the Pipeline spec and Bundle.status.environments[].soakMinutes,
-// which the BundleReconciler writes.
+// It reads only CRD state: the Pipeline spec and Bundle.status.environments[].soakMinutes
+// (status.upstreamEvidence[].soakMinutes for a targetOnly Bundle's carried
+// environments), which the BundleReconciler writes.
 func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
 	bundle *kardinalv1alpha1.Bundle) (int64, error) {
 	envName := gate.Labels[labelEnvironment]
@@ -713,23 +714,18 @@ func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardin
 	if err := r.Get(ctx, types.NamespacedName{Name: pipelineName, Namespace: gate.Namespace}, &pipeline); err != nil {
 		return 0, fmt.Errorf("load pipeline %s: %w", pipelineName, err)
 	}
-	upstreams, err := graph.DirectUpstreams(&pipeline, bundle, envName)
+	// A targetOnly Bundle's carried upstreams count, with the soak of the
+	// verification it carries (graph.SoakUpstreams, graph.UpstreamSoak).
+	upstreams, err := graph.SoakUpstreams(&pipeline, bundle, envName)
 	if err != nil {
 		return 0, err
 	}
 	if len(upstreams) == 0 {
 		return 0, nil
 	}
-	byName := make(map[string]kardinalv1alpha1.EnvironmentStatus, len(bundle.Status.Environments))
-	for _, env := range bundle.Status.Environments {
-		byName[env.Name] = env
-	}
 	var minSoak int64 = -1
 	for _, up := range upstreams {
-		var soak int64
-		if env, ok := byName[up]; ok && env.Phase == "Verified" {
-			soak = env.SoakMinutes
-		}
+		soak, _ := graph.UpstreamSoak(bundle, up)
 		if minSoak < 0 || soak < minSoak {
 			minSoak = soak
 		}
@@ -851,11 +847,20 @@ func exprRefersToMetric(expr, name string) bool {
 // soakMinutes is read from Bundle.status.environments[*].soakMinutes which is
 // written by the BundleReconciler as a CRD status field (PG-3 fix: eliminates
 // time.Since() from PolicyGate reconciler hot path).
+//
+// A targetOnly Bundle's carried environments (status.upstreamEvidence) have
+// the soak of the verification it carries.
 func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle) map[string]interface{} {
-	result := make(map[string]interface{}, len(bundle.Status.Environments))
+	result := make(map[string]interface{}, len(bundle.Status.Environments)+len(bundle.Status.UpstreamEvidence))
 	for _, env := range bundle.Status.Environments {
 		result[env.Name] = map[string]interface{}{
 			"soakMinutes": env.SoakMinutes,
+		}
+	}
+	for env := range graph.CarriedEnvironments(bundle) {
+		if _, own := result[env]; !own {
+			soak, _ := graph.UpstreamSoak(bundle, env)
+			result[env] = map[string]interface{}{"soakMinutes": soak}
 		}
 	}
 	return result
