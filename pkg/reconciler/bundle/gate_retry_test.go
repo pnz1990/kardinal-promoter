@@ -167,7 +167,10 @@ func TestLifecycle_GateChangeRetranslatesInFlightGraph(t *testing.T) {
 	got = lcGet(t, c, "app-v1")
 	assert.Equal(t, 2, tr.calls, "the gate change re-translates the Graph")
 	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
-	assert.Empty(t, got.Status.PolicyGatesHash)
+	gates, err := translator.CollectGates(ctx, c, nil, lcPipeline("app", lcEnvs("test", "uat")...))
+	require.NoError(t, err)
+	assert.Equal(t, translator.GatesHash(lcPipeline("app", lcEnvs("test", "uat")...), gates), got.Status.PolicyGatesHash,
+		"the hash now records the gates the Graph was built with (#1360)")
 	assert.Equal(t, "Promoting", got.Status.Phase, "nothing is failing any more")
 }
 

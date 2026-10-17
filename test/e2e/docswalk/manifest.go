@@ -65,6 +65,7 @@ var Manifest = map[string][]Block{
 	"policy-gates.md": {
 		{Match: "name: uat-soak", Skip: "a 5-minute soak; the walkthrough's gates are first-pipeline's"},
 		{Match: "kubectl get scheduleclock kardinal-clock"},
+		{Match: "gate-template-generation", Skip: "names a version by placeholder; TestGate_EditReachesInFlight reads the annotations"},
 		// policy list, explain and simulate run; policy test needs a file the
 		// page does not write.
 		{Match: "# List all PolicyGates"},
