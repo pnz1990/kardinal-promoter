@@ -31,6 +31,7 @@ decides what it may do.
 | Actor-aware policy | Per-environment autonomy for agents' versions (`agents`: auto, approve or deny), the one-party rule in `excludeAuthor` (an agent's sponsor cannot approve its work), opt-in agent approvers, and `actor.*` and `agent.*` in gate expressions | [Actor-aware policy](policy.md) |
 | Freezes | `kardinal freeze --agents` holds every agent's version; `--everyone` stops the line. Enforced by the controller on every in-flight promotion; break-glass exemptions are verified and audited | [Freeze agents, stop the line](freezes.md) |
 | Audit trail | Append-only `AuditEvent` records of promotions, rollbacks, supersession, gate results, approvals, overrides, rejections and every UI API and Bundle API write, each naming its verified actor; `kardinal audit export` writes them as JSON lines or OCSF events | [Audit logging](../guides/security.md#audit-logging) |
+| Compliance mapping | Which of these records evidences which control of SOC 2, ISO/IEC 27001, NIST SP 800-53, DORA, the EU AI Act and ISO/IEC 42001, and what remains yours to do | [Map to compliance controls](../compliance.md) |
 
 ## A starting point for an agent
 

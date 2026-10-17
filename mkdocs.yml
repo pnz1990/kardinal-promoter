@@ -157,7 +157,9 @@ nav:
     - Read PR evidence: pr-evidence.md
     - Connect your SCM: scm-providers.md
     - Notify: notifications.md
-    - Secure: guides/security.md
+    - Secure:
+      - Secure: guides/security.md
+      - Map to compliance controls: compliance.md
     - Monitor: guides/monitoring.md
     - Operate at scale:
       - Operate at scale: operate.md

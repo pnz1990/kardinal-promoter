@@ -29,3 +29,4 @@ test/hack
 !hack/changelog its tests write docs/changelog.d fixtures (fragments.Dir) into temp directories
 !hack/release-gate "docs" is the id of its docs build step; its tests read no docs
 !test/e2e/docswalk its tests write docs/p.md fixtures into temp directories; test/examples runs its check on the repository's docs
+pkg/compliance
