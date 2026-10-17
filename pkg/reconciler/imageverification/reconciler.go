@@ -165,6 +165,10 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{}, fmt.Errorf("get imageverification %s: %w", req.Name, err)
 	}
+	if iv.Status.Phase == v1alpha1.ImageVerificationVerified && iv.DeletionTimestamp.IsZero() && hasMaxAge(&iv) {
+		// Verified stays Verified; its attestations' ages are kept current.
+		return r.refreshAges(ctx, log, &iv)
+	}
 	if terminal(iv.Status.Phase) || !iv.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
@@ -208,7 +212,8 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case o.waiting == "":
 		iv.Status.Phase, iv.Status.Message, iv.Status.Reason, iv.Status.Attempts = v1alpha1.ImageVerificationVerified, verifiedMessage(&iv), "", 0
 		log.Info().Msg("images verified")
-		return ctrl.Result{}, r.patch(ctx, base, &iv)
+		// With a maxAge, come back when the first attestation goes stale.
+		return ctrl.Result{RequeueAfter: nextAgeCheck(&iv, r.now())}, r.patch(ctx, base, &iv)
 	case iv.Status.Deadline != nil && !r.now().Before(iv.Status.Deadline.Time):
 		reason := o.reason
 		if reason == "" {
@@ -360,6 +365,7 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 	for _, res := range iv.Status.Attestations {
 		prev[attestationKey(res.Name, res.Image)] = res
 	}
+	now := r.now()
 	var results []v1alpha1.AttestationResult
 	var authorities []authority
 	var loadErr error
@@ -367,7 +373,7 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 		ref := img.Repository + "@" + img.Digest
 		pending := false
 		for _, p := range policies {
-			if res, ok := prev[attestationKey(p.Name, ref)]; !ok || !attestationDone(res, p) {
+			if res, ok := prev[attestationKey(p.Name, ref)]; !ok || !attestationDone(res, p) || ageStale(res, p, now) {
 				pending = true
 			}
 		}
@@ -394,17 +400,29 @@ func (r *Reconciler) checkAttestations(ctx context.Context, log zerolog.Logger, 
 		for _, p := range policies {
 			key := attestationKey(p.Name, ref)
 			res, ok := prev[key]
+			var before *v1alpha1.AttestationResult
+			if ok {
+				pr := res
+				before = &pr
+			}
 			switch {
-			case ok && attestationDone(res, p):
+			case ok && attestationDone(res, p) && !ageStale(res, p, now):
 			case fetchErr != nil:
 				res = v1alpha1.AttestationResult{Name: p.Name, Image: ref, PredicateType: p.PredicateType,
 					Message: clip("registry: " + fetchErr.Error())}
 			default:
-				res = evaluateAttestation(img, p, sigs.Attestations, authorities)
+				res = evaluateAttestation(img, p, sigs.Attestations, authorities, freshest(p, before, now))
 			}
+			if before == nil || before.DatedAt == nil || res.DatedAt == nil {
+				dateAttestation(&res, before, now)
+			}
+			setAge(&res, policyMaxAge(p), now)
 			switch {
 			case !res.Verified && p.Required:
 				wait(fmt.Sprintf("%s: attestation %s: %s", ref, p.Name, res.Message), ReasonAttestationNotVerified)
+			case res.Stale && p.Required:
+				wait(fmt.Sprintf("%s: attestation %s is older than maxAge %s (stale since %s); waiting for a newer one",
+					ref, p.Name, p.MaxAge, res.StaleAt.UTC().Format(time.RFC3339)), ReasonAttestationStale)
 			case res.Verified && !attestationDone(res, p):
 				level := 0
 				if res.SLSA != nil {

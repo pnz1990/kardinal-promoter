@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -80,16 +83,25 @@ func (r *Reconciler) buildAttestationContext(ctx context.Context, ns, bundle str
 // image only. images lists each image's own value for expressions that
 // check them one by one (attestations.<name>.images.all(i, ...)).
 func foldAttestation(results []kardinalv1alpha1.AttestationResult) map[string]interface{} {
-	verified := true
+	verified, stale := true, false
+	var staleAt *metav1.Time
 	images := make([]interface{}, 0, len(results))
 	for i := range results {
 		verified = verified && results[i].Verified
+		stale = stale || results[i].Stale
+		if at := results[i].StaleAt; at != nil && (staleAt == nil || at.Before(staleAt)) {
+			staleAt = at
+		}
 		images = append(images, imageAttestation(&results[i]))
 	}
 	v := map[string]interface{}{
 		"verified":      verified,
+		"stale":         stale,
 		"predicateType": results[0].PredicateType,
 		"images":        images,
+	}
+	if staleAt != nil {
+		v["staleAt"] = staleAt.UTC().Format(time.RFC3339)
 	}
 	same(v, "signer", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Signer })
 	same(v, "authority", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Authority })
@@ -195,7 +207,10 @@ func same(m map[string]interface{}, key string, results []kardinalv1alpha1.Attes
 // attestations.<name>.images. Fields the result does not have are left
 // out, as for the folded value.
 func imageAttestation(r *kardinalv1alpha1.AttestationResult) map[string]interface{} {
-	v := map[string]interface{}{"image": r.Image, "verified": r.Verified}
+	v := map[string]interface{}{"image": r.Image, "verified": r.Verified, "stale": r.Stale}
+	if r.StaleAt != nil {
+		v["staleAt"] = r.StaleAt.UTC().Format(time.RFC3339)
+	}
 	for k, val := range map[string]string{"signer": r.Signer, "authority": r.Authority, "digest": r.Digest, "predicate": r.Predicate} {
 		if val != "" {
 			v[k] = val

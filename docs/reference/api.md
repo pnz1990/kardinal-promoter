@@ -670,6 +670,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `spec.policy` | object | yes | Policy is the Pipeline's policy (its images selector already applied). |
 | `spec.policy.attestations` | []object |  | Attestations are the in-toto attestations each verified image must (or may) carry, as Sigstore bundles in its OCI referrers: SLSA provenance, vulnerability scans with VEX, and any other predicate. Each result is recorded in status.attestations; PolicyGate CEL reads it as attestations.&lt;name&gt; (docs/image-verification.md#attestations). |
 | `spec.policy.attestations[].authorities` | []string | yes | Authorities name the spec.imageVerification.authorities that may sign the attestation. |
+| `spec.policy.attestations[].maxAge` | string |  | MaxAge, when set, is how old the attestation may be (a Go duration, for example 24h): a scan from its scannedAt, any other attestation from its verified signing time. Past it the result is stale (status.attestations[].stale, attestations.&lt;name&gt;.stale in a gate), also after the ImageVerification is Verified, and kardinal looks for a newer attestation in the image's referrers until one replaces it. A required attestation that is already stale is waited for like a missing one. An attestation with no verified time (a key signature without a transparency log entry) is stale at once. See docs/image-verification.md#attestation-age. |
 | `spec.policy.attestations[].name` | string | yes | Name names the result: a gate reads attestations.&lt;name&gt;. |
 | `spec.policy.attestations[].predicateType` | string | yes | PredicateType is the in-toto predicate type, exactly ("https://slsa.dev/provenance/v1"). |
 | `spec.policy.attestations[].required` | boolean |  | Required holds the version until every image carries a verified attestation of this type, and fails it at the timeout. False records the attestation when it is there. |
@@ -709,6 +710,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status.attestations` | []object |  | Attestations has one result per attestation policy and image. |
 | `status.attestations[].authority` | string |  | Authority is the authority that verified it. |
 | `status.attestations[].count` | integer |  | Count is how many attestations of the type verified; the newest is used. |
+| `status.attestations[].datedAt` | string (date-time) |  | DatedAt is when kardinal first recorded this attestation (its digest): the age base never counts from later than this, so a scan that claims a future scannedAt ages from when it was first seen. |
 | `status.attestations[].digest` | string |  | Digest is the sha256 of the verified DSSE payload. |
 | `status.attestations[].image` | string | yes | Image is "repository@digest". |
 | `status.attestations[].message` | string |  | Message says why it is not verified, or what was dropped. |
@@ -723,7 +725,10 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status.attestations[].slsa.levelSource` | string |  | LevelSource is builder or vsa. |
 | `status.attestations[].slsa.sourceCommit` | string |  | SourceCommit is the gitCommit digest of the first resolved dependency that has one. |
 | `status.attestations[].slsa.sourceURI` | string |  | SourceURI is that dependency's URI. |
+| `status.attestations[].stale` | boolean |  | Stale is true once StaleAt has passed, until a newer attestation replaces it. |
+| `status.attestations[].staleAt` | string (date-time) |  | StaleAt is when the attestation passes the policy's maxAge. |
 | `status.attestations[].verified` | boolean | yes | Verified is true when an attestation of the type, for the image, verified against one of the policy's authorities. |
+| `status.attestations[].verifiedAt` | string (date-time) |  | VerifiedAt is the verified signing time of the attestation: its transparency log or timestamp authority time. |
 | `status.attestations[].vulns` | object |  | Vulns is the scan summary, for a vulnerability scan predicate. |
 | `status.attestations[].vulns.before` | object | yes | Before counts every finding. |
 | `status.attestations[].vulns.before.critical` | integer | yes |  |
@@ -1095,6 +1100,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.imageVerification` | object |  | ImageVerification requires the signatures of the Bundle's images (and of a config Bundle's commit) to verify before the Bundle is promoted into its first environments. Selected images must be pinned by digest. See docs/image-verification.md. |
 | `spec.imageVerification.attestations` | []object |  | Attestations are the in-toto attestations each verified image must (or may) carry, as Sigstore bundles in its OCI referrers: SLSA provenance, vulnerability scans with VEX, and any other predicate. Each result is recorded in status.attestations; PolicyGate CEL reads it as attestations.&lt;name&gt; (docs/image-verification.md#attestations). |
 | `spec.imageVerification.attestations[].authorities` | []string | yes | Authorities name the spec.imageVerification.authorities that may sign the attestation. |
+| `spec.imageVerification.attestations[].maxAge` | string |  | MaxAge, when set, is how old the attestation may be (a Go duration, for example 24h): a scan from its scannedAt, any other attestation from its verified signing time. Past it the result is stale (status.attestations[].stale, attestations.&lt;name&gt;.stale in a gate), also after the ImageVerification is Verified, and kardinal looks for a newer attestation in the image's referrers until one replaces it. A required attestation that is already stale is waited for like a missing one. An attestation with no verified time (a key signature without a transparency log entry) is stale at once. See docs/image-verification.md#attestation-age. |
 | `spec.imageVerification.attestations[].name` | string | yes | Name names the result: a gate reads attestations.&lt;name&gt;. |
 | `spec.imageVerification.attestations[].predicateType` | string | yes | PredicateType is the in-toto predicate type, exactly ("https://slsa.dev/provenance/v1"). |
 | `spec.imageVerification.attestations[].required` | boolean |  | Required holds the version until every image carries a verified attestation of this type, and fails it at the timeout. False records the attestation when it is there. |
