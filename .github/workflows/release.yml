@@ -52,19 +52,56 @@ jobs:
           persist-credentials: false
 
       # v0.6.0 and v0.8.1 were tagged on merge commits outside main. A release
-      # is built only from a commit on main.
-      - name: Check that the tagged commit is on main
-        # A dry run builds a branch; the tag check runs at the real release.
-        if: env.DRY_RUN != 'true'
+      # is built from a commit on main, or, for a patch (vX.Y.Z, Z > 0), from
+      # its maintenance branch release/vX.Y when that branch descends from
+      # vX.Y.0: a fix for a released minor ships without main's next-minor
+      # work. A .0 always comes from main. A dry run from release/vX.Y checks
+      # the same ancestry and that its version is in that line.
+      - name: Check that the tagged commit is on main or its maintenance branch
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
-          # Fetch main explicitly, so the check does not depend on which refs
-          # actions/checkout fetched for the tag.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::tag ${GITHUB_REF_NAME} points to ${GITHUB_SHA}, which is not on main. Tag a commit on main."
+          VERSION="${GITHUB_REF_NAME}"
+          if [ "${DRY_RUN:-false}" = true ]; then
+            case "$GITHUB_REF_NAME" in
+              release/v*) VERSION="${DISPATCH_VERSION:-}" ;;
+              *) echo "dry run of ${GITHUB_REF_NAME}: the tag check runs at the real release"; exit 0 ;;
+            esac
+          fi
+          if ! [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-.*)?$ ]]; then
+            echo "::error::${VERSION} is not a vX.Y.Z version"
             exit 1
           fi
-          echo "${GITHUB_REF_NAME} (${GITHUB_SHA}) is on main"
+          MINOR="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+          BRANCH="release/${MINOR}"
+          if [ "${DRY_RUN:-false}" != true ]; then
+            # Fetch main explicitly, so the check does not depend on which refs
+            # actions/checkout fetched for the tag.
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "${GITHUB_REF_NAME} (${GITHUB_SHA}) is on main"
+              exit 0
+            fi
+          elif [ "$GITHUB_REF_NAME" != "$BRANCH" ]; then
+            echo "::error::a dry run of ${VERSION} runs from ${BRANCH} (or from main), not from ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          if [ "$PATCH" = 0 ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} points to ${GITHUB_SHA}, which is not on main. A .0 release is tagged on main."
+            exit 1
+          fi
+          if ! git fetch --no-tags origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null ||
+             ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/${BRANCH}"; then
+            echo "::error::tag ${GITHUB_REF_NAME} points to ${GITHUB_SHA}, which is not on main, nor on its maintenance branch ${BRANCH}. Tag a commit on main or on ${BRANCH}."
+            exit 1
+          fi
+          if ! git fetch --no-tags origin "+refs/tags/${MINOR}.0:refs/tags/${MINOR}.0" 2>/dev/null ||
+             ! git merge-base --is-ancestor "${MINOR}.0" "$GITHUB_SHA"; then
+            echo "::error::${GITHUB_SHA} on ${BRANCH} does not descend from ${MINOR}.0: a maintenance branch starts at its minor's release (git branch ${BRANCH} ${MINOR}.0), and its fixes are cherry-picked onto it."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} (${GITHUB_SHA}) is on the maintenance branch ${BRANCH}, which descends from ${MINOR}.0"
 
       # A version with a "-" (v0.9.0-rc.1) is a prerelease: the image gets no
       # latest tag, and the GitHub release is marked prerelease and not latest.
@@ -100,20 +137,31 @@ jobs:
           fi
           IMAGE=ghcr.io/pnz1990/kardinal-promoter/controller
           RENDER=ghcr.io/pnz1990/kardinal-promoter/render
+          # Only the highest final release is latest: a patch of an older
+          # minor (v0.12.1 after v0.13.0) gets neither the latest image tags
+          # nor the latest GitHub release.
+          NEWER=$( { git tag -l 'v*.*.*' 2>/dev/null || true; } | { grep -vE -- '-|dryrun' || true; } |
+            { cat; echo "$VERSION"; } | sort -V | tail -n 1)
+          LATEST=true
+          if [[ "$VERSION" == *-* ]] || [ "$NEWER" != "$VERSION" ]; then
+            LATEST=false
+          fi
           if [[ "$VERSION" == *-* ]]; then
             PRERELEASE=true
-            TAGS="${IMAGE}:${VERSION}"
-            RENDER_TAGS="${RENDER}:${VERSION}"
           else
             PRERELEASE=false
-            TAGS="${IMAGE}:${VERSION}"$'\n'"${IMAGE}:latest"
-            RENDER_TAGS="${RENDER}:${VERSION}"$'\n'"${RENDER}:latest"
+          fi
+          TAGS="${IMAGE}:${VERSION}"
+          RENDER_TAGS="${RENDER}:${VERSION}"
+          if [ "$LATEST" = true ]; then
+            TAGS+=$'\n'"${IMAGE}:latest"
+            RENDER_TAGS+=$'\n'"${RENDER}:latest"
           fi
           {
             echo "version=${VERSION}"
             echo "chart-version=${VERSION#v}"
             echo "prerelease=${PRERELEASE}"
-            if [ "$PRERELEASE" = true ]; then echo "make-latest=false"; else echo "make-latest=true"; fi
+            echo "make-latest=${LATEST}"
             echo "image-tags<<IMAGE_TAGS_EOF"
             echo "$TAGS"
             echo "IMAGE_TAGS_EOF"
@@ -121,7 +169,7 @@ jobs:
             echo "$RENDER_TAGS"
             echo "RENDER_TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "${VERSION}: prerelease=${PRERELEASE}, image tags:"
+          echo "${VERSION}: prerelease=${PRERELEASE}, latest=${LATEST} (highest release ${NEWER}), image tags:"
           echo "$TAGS"
 
       # The release notes are the "## [<version>]" section of
