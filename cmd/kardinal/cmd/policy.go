@@ -116,7 +116,7 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 			}
 			templates = append(templates, g)
 		}
-		return formatPolicyGateTable(w, templates, instances)
+		return formatPolicyGateTable(w, templates, instances, policyNS)
 	}
 
 	pipe, err := getPipeline(ctx, c, ns, pipelineFilter)
@@ -150,33 +150,37 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 		sigs_client.HasLabels{"kardinal.io/gate-template"}); err != nil {
 		return fmt.Errorf("list policy gate instances: %w", err)
 	}
-	return formatPolicyGateTable(w, shown, instances.Items)
+	return formatPolicyGateTable(w, shown, instances.Items, policyNS)
 }
 
-// gateScope is g's kardinal.io/scope label, "team" when it has none, as the
-// Graph builder copies it from a template to its instances
-// (pkg/graph buildPolicyGateNode).
-func gateScope(g v1alpha1.PolicyGate) string {
+// labelScope is g's kardinal.io/scope label, "team" when it has none: the
+// scope a controller before #1720 stamped on an instance, from its template's
+// label only.
+func labelScope(g v1alpha1.PolicyGate) string {
 	if s := g.Labels["kardinal.io/scope"]; s != "" {
 		return s
 	}
-	return "team"
+	return graph.ScopeTeam
 }
 
 // instanceOf reports whether inst was created from template tmpl. The Graph
-// builder labels an instance with its template's name, scope and namespace,
-// and creates it in the Pipeline's namespace. An instance from an older
+// builder labels an instance with its template's name and namespace, and
+// creates it in the Pipeline's namespace. An instance from an older
 // controller has no namespace label: then an org template matches the org
 // instances of that name in every namespace, and any other template the
-// instances of that name and scope in its own namespace.
+// instances of that name and scope in its own namespace, by the scope label
+// that controller copied (labelScope).
 func instanceOf(inst, tmpl v1alpha1.PolicyGate) bool {
-	if inst.Labels["kardinal.io/gate-template"] != tmpl.Name || gateScope(inst) != gateScope(tmpl) {
+	if inst.Labels["kardinal.io/gate-template"] != tmpl.Name {
 		return false
 	}
 	if ns := inst.Labels["kardinal.io/gate-template-namespace"]; ns != "" {
 		return ns == tmpl.Namespace
 	}
-	return gateScope(tmpl) == "org" || inst.Namespace == tmpl.Namespace
+	if labelScope(inst) != labelScope(tmpl) {
+		return false
+	}
+	return labelScope(tmpl) == graph.ScopeOrg || inst.Namespace == tmpl.Namespace
 }
 
 // lastEvaluated is the newest status.lastEvaluatedAt of g and of its
@@ -203,8 +207,9 @@ func isGateInstance(g v1alpha1.PolicyGate) bool {
 }
 
 // formatPolicyGateTable writes the policy list table of the templates gates;
-// instances are the gate instances their LAST-EVALUATED is read from.
-func formatPolicyGateTable(w io.Writer, gates, instances []v1alpha1.PolicyGate) error {
+// instances are the gate instances their LAST-EVALUATED is read from. SCOPE
+// is graph.GateScope with the org policy namespaces policyNS.
+func formatPolicyGateTable(w io.Writer, gates, instances []v1alpha1.PolicyGate, policyNS []string) error {
 	tw := style.NewTable(w, 3)
 	if _, err := fmt.Fprintln(tw, "NAME\tNAMESPACE\tSCOPE\tAPPLIES-TO\tRECHECK\tCEL\tLAST-EVALUATED"); err != nil {
 		return fmt.Errorf("write policy list header: %w", err)
@@ -218,7 +223,7 @@ func formatPolicyGateTable(w io.Writer, gates, instances []v1alpha1.PolicyGate) 
 	})
 
 	for _, g := range gates {
-		scope := gateScope(g)
+		scope := graph.GateScope(g, policyNS)
 		appliesTo := g.Labels["kardinal.io/applies-to"]
 		if appliesTo == "" {
 			appliesTo = "-"

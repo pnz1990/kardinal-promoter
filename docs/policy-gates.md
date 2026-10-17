@@ -74,7 +74,7 @@ metadata:
   name: <string>                        # at most 63 characters
   namespace: <string>                   # platform-policies (org) or team namespace
   labels:
-    kardinal.io/scope: <string>         # "org" or "team"
+    kardinal.io/scope: <string>         # optional; "org" makes a gate outside the org policy namespaces an org gate
     kardinal.io/applies-to: <string>    # one environment name
     kardinal.io/type: <string>          # "gate" (default) or "skip-permission"
 spec:
@@ -169,7 +169,7 @@ spec:
 
 ### Org-level gates
 
-Created in the `platform-policies` namespace (configurable via `--policy-namespaces` controller flag). Org gates are mandatory: they are injected into every Pipeline that targets the matching environment. Teams cannot remove them.
+Created in the `platform-policies` namespace (configurable via `--policy-namespaces` controller flag). Org gates are mandatory: they are injected into every Pipeline that targets the matching environment. Teams cannot remove them. A gate in an org policy namespace is an org gate without the `kardinal.io/scope` label: `kardinal policy list` and its instances show `SCOPE org`. The label `kardinal.io/scope: org` makes a gate in another namespace an org gate too. `kardinal policy list` reads the org policy namespaces from its own `--policy-namespaces` flag: pass the controller's value when it is not the default.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -178,7 +178,6 @@ metadata:
   name: no-weekend-deploys
   namespace: platform-policies
   labels:
-    kardinal.io/scope: org
     kardinal.io/applies-to: prod
     kardinal.io/type: gate
 spec:

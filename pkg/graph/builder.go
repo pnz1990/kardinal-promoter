@@ -699,7 +699,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		nodes = append(nodes, verdictsRefNode(bundle)) // verify gates (verify.go)
 	}
 
-	gates := newGateCollections(pipelineName, bundle.Name)
+	gates := newGateCollections(pipelineName, bundle.Name, policyNamespaces)
 	gates.approvals = anyNeedsApprovals(gatesByEnv)
 	agentRuns := newAgentRunPlan()
 	var prItems []interface{}
