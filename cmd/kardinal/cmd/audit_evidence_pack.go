@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/compliance"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // packFormat names the evidence pack's layout, in manifest.json.
@@ -411,6 +412,13 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 	}); err != nil {
 		return nil, err
 	}
+	if err := p.kind(ctx, c, "PromotionReceipt", &v1alpha1.PromotionReceiptList{}, nsOpts, func(o runtime.Object) bool {
+		rc := o.(*v1alpha1.PromotionReceipt)
+		b, ok := rc.Labels["kardinal.io/bundle"]
+		return ok && ofBundle(rc.Namespace, b) && envOK(rc.Labels["kardinal.io/environment"])
+	}); err != nil {
+		return nil, err
+	}
 	// The procedure and policy in force at export.
 	if err := p.kind(ctx, c, "Pipeline", &v1alpha1.PipelineList{}, nsOpts, func(o runtime.Object) bool {
 		return pipeOK(o.(*v1alpha1.Pipeline).Name)
@@ -578,8 +586,37 @@ func (p *evidence) record(obj sigs_client.Object, kind string) sigs_client.Objec
 	o := obj.DeepCopyObject().(sigs_client.Object)
 	o.SetManagedFields(nil)
 	o.GetObjectKind().SetGroupVersionKind(v1alpha1.GroupVersion.WithKind(kind))
+	if rc, ok := o.(*v1alpha1.PromotionReceipt); ok {
+		p.receipt(rc)
+		return rc
+	}
 	p.red.object(o)
 	return o
+}
+
+// withheldAnnotation marks a receipt whose signed statement the pack left
+// out, and says why.
+const withheldAnnotation = "kardinal.io/evidence-pack-withheld"
+
+// receipt redacts a PromotionReceipt but its signed record: the statement
+// and its Sigstore bundle are exported as signed, or they would not verify
+// (kardinal verify-receipt --file). A statement that holds a credential
+// (scm.RedactText would change it, a token in provenance.ciRunURL for
+// example, #2158) cannot be redacted without breaking its signature, so the
+// statement and the bundle are withheld and the receipt says so.
+func (p *evidence) receipt(rc *v1alpha1.PromotionReceipt) {
+	statement, bundle := rc.Spec.Statement, rc.Status.Bundle
+	rc.Spec.Statement, rc.Status.Bundle = "", ""
+	p.red.object(rc)
+	if scm.RedactText(statement) != statement {
+		if rc.Annotations == nil {
+			rc.Annotations = map[string]string{}
+		}
+		rc.Annotations[withheldAnnotation] = "the signed statement holds a credential; verify it from the cluster or its sinks"
+		p.red.counts.ReceiptsWithheld++
+		return
+	}
+	rc.Spec.Statement, rc.Status.Bundle = statement, bundle
 }
 
 // admission writes admission.yaml: the chart's ValidatingAdmissionPolicies
@@ -750,6 +787,9 @@ and admission policies are the ones in force at export.
     approvals.ndjson             their Approvals
     policygates.ndjson           their gate instances (overrides, results)
     verdicts.ndjson              their Verdicts
+    receipts.ndjson              their PromotionReceipts, statement and
+                                 Sigstore bundle as signed (verify one
+                                 with kardinal verify-receipt --file)
     pipelines.ndjson             the Pipelines
     policygate-templates.ndjson  the gate templates
     changewindows.ndjson         windows and freezes, with exemptions

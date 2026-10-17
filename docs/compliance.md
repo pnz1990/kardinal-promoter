@@ -39,8 +39,8 @@ kardinal audit evidence-pack -A --since 2026-07-01 --until 2026-10-01 -o q3.tar.
 ```
 
 The period is the versions created in `[--since, --until)` and the AuditEvents timestamped in
-it. Each version brings its Approvals, gate instances (with their overrides and results) and
-Verdicts. The Pipelines, gate templates, ChangeWindows, AgentIdentities and the chart's
+it. Each version brings its Approvals, gate instances (with their overrides and results),
+Verdicts and signed [promotion receipts](receipts.md) (`receipts.ndjson`, with receipts on). The Pipelines, gate templates, ChangeWindows, AgentIdentities and the chart's
 admission policies are the ones in force at export. `controls.json` maps each control below
 to the pack's files, and `manifest.json` records the exporter, the period, the filters
 (`-n`, `--pipeline`, `--environment`) and each file's record count and SHA-256
@@ -100,8 +100,43 @@ Check the files against their checksums after extracting:
 tar -xzf q3.tar.gz && cd evidence-pack && sha256sum -c SHA256SUMS
 ```
 
-The checksums show that no file changed after export; they are not a signature. Sign the pack
-under your own identity before you hand it over.
+The checksums show that no file changed after export; they are not a signature.
+
+### Sign the pack
+
+Sign the pack under your own identity before you hand it over: kardinal holds no signing key for
+packs, and the signature then names who exported it. With a key pair:
+
+```bash
+cosign generate-key-pair                     # once; keep cosign.key safe
+cosign sign-blob --yes --key cosign.key --bundle q3.tar.gz.sigstore.json q3.tar.gz
+# the auditor, with cosign.pub:
+cosign verify-blob --key cosign.pub --bundle q3.tar.gz.sigstore.json q3.tar.gz
+```
+
+Signing records the pack's digest in the public Rekor log. Without network access, sign with
+`--tlog-upload=false` and verify with `--insecure-ignore-tlog`. Keyless (Sigstore's OIDC sign-in),
+sign without `--key`, and the auditor verifies with `--certificate-identity <your email>` and
+`--certificate-oidc-issuer <your identity provider>`. These are cosign 2.4's flags; see
+[cosign's blob signing](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/).
+
+### Verify a receipt from the pack
+
+Each receipt in `receipts.ndjson` keeps its signed statement and Sigstore bundle as the
+controller signed them when the promotion reached Verified, so it verifies offline from the pack,
+with the receipts' public key, the image digest the receipt is about and the cluster's ID
+([Verify a receipt](receipts.md#verify-a-receipt)):
+
+```bash
+jq -r 'select(.metadata.name == "checkout-1-5-0-prod") | .status.bundle' receipts.ndjson > receipt.sigstore.json
+kardinal verify-receipt --file receipt.sigstore.json --key receipt.pub \
+  -n payments --pipeline checkout --env prod --subject "$IMAGE_DIGEST" --cluster "$CLUSTER_ID"
+```
+
+A receipt whose signed statement holds a credential (a token in a CI run URL, for example) cannot
+be redacted without breaking its signature, so the pack leaves its statement and bundle out and
+annotates it `kardinal.io/evidence-pack-withheld`; `redactions.receiptsWithheld` counts them.
+Verify such a receipt from the cluster or its OCI or Rekor sink.
 
 `manifest.json`'s `coverage` says what the pack cannot hold:
 
@@ -130,7 +165,8 @@ bytes.
   Kubernetes API server's audit log only.
 - **That a record was not deleted** before you exported it, by someone allowed to delete it.
   Export continuously, and keep `delete` on `kardinal.io` resources to the cluster's
-  administrators.
+  administrators. With receipts stored in an OCI registry or a Rekor log, each promotion also
+  has a signed record outside the cluster ([Where receipts are stored](receipts.md#where-receipts-are-stored)).
 - **The AI Act and ISO/IEC 42001 rows are analogies.** They apply the records those texts ask
   of AI systems to the changes your agents make; they do not make an agent compliant.
 
@@ -151,6 +187,7 @@ bytes.
 | The version's creator does not approve it (when `excludeAuthor` is set) | `approval.excludeAuthor` (off by default) does not count an approval by the user who created the version (`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. `status.approvals[].reason` says why an approval did not count |
 | Emergency changes are controlled | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
 | Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+| Evidence is tamper-evident | a signed `PromotionReceipt` per promotion per environment (v0.13, off by default: `receipts.enabled`), written when the step reaches Verified and verifiable offline with `kardinal verify-receipt`; `receipts.ndjson` in the evidence pack keeps each one with its signed envelope |
 
 **Your part:** The change policy itself, the review of the evidence, changes that bypass kardinal (direct pushes to the GitOps branch: protect it and require the `kardinal/gates` status), and access reviews of who holds the approver role. Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment. Setting `approval.excludeAuthor: true` on those gates; and, to keep a change's commit author from approving it, the SCM's branch protection (required reviewers or code owners, no self-approval), which kardinal does not check.
 

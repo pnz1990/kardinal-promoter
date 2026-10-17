@@ -46,6 +46,9 @@ type packRedactions struct {
 	// FlagValues counts credential values redacted in command and args
 	// (--include-commands).
 	FlagValues int `json:"flagValues"`
+	// ReceiptsWithheld counts receipts whose signed statement held a
+	// credential, so the pack left the statement and its bundle out.
+	ReceiptsWithheld int `json:"receiptsWithheld"`
 }
 
 const (
@@ -58,6 +61,8 @@ var commonRules = []string{
 	"every string: the userinfo (user name, token, password) of each URL and the value of secret query parameters are removed, as kardinal does for status, CLI output and logs",
 	"every container environment variable (env[]), in typed specs and in hook Job specs: a literal value is replaced by " + redactedValue + "; its name and valueFrom are kept",
 	"the " + lastAppliedAnnotation + " annotation is removed: it repeats the spec unredacted",
+	"a PromotionReceipt's signed statement and Sigstore bundle are exported as signed, so they verify; a receipt whose statement holds a " +
+		"credential has both withheld and the annotation " + withheldAnnotation,
 }
 
 // digestRule and redactedRules describe how command and args were exported.

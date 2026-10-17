@@ -757,6 +757,7 @@ func TestHelmTemplateAuditorRole(t *testing.T) {
 	resources := map[string]string{
 		"AuditEvent": "auditevents", "Approval": "approvals", "PolicyGate": "policygates", "Bundle": "bundles",
 		"Pipeline": "pipelines", "ChangeWindow": "changewindows", "AgentIdentity": "agentidentities", "Verdict": "verdicts",
+		"PromotionReceipt": "promotionreceipts",
 	}
 	// Each kind's scope, from its CRD.
 	var namespaced, cluster []string

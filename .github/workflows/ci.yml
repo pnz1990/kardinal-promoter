@@ -168,6 +168,16 @@ jobs:
         # and asserts some lose a reconcile and retry it; pkg/scm's slow-push
         # test is !race (git_transport_norace_test.go).
         run: go test ./pkg/steps/steps/sharedbranch/ ./pkg/scm/ -count=1 -timeout 120s
+      - name: Install cosign
+        # TestEvidencePack_Cosign runs the evidence pack's cosign commands
+        # (docs/compliance.md) in key mode; the release signs with the same.
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: v2.4.3
+      - name: go test (evidence pack, cosign)
+        env:
+          KARDINAL_REQUIRE_COSIGN: "1"
+        run: go test ./cmd/kardinal/cmd/ -run '^TestEvidencePack_Cosign$' -count=1 -timeout 120s
       - name: go build
         run: go build ./...
       - name: Check Apache 2.0 headers

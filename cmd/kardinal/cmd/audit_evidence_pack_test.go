@@ -10,11 +10,13 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -258,14 +260,14 @@ func TestEvidencePack(t *testing.T) {
 	b, stderr, err := buildPack(t, objs, pg, packPeriodOpts)
 	require.NoError(t, err)
 	assert.Equal(t, auditExportPage, pg.maxPage, "every kind is read in pages of %d", auditExportPage)
-	assert.Regexp(t, `^sha256:[0-9a-f]{64}  .*pack\.tar\.gz \(14 files, \d+ records\)\n$`, stderr)
+	assert.Regexp(t, `^sha256:[0-9a-f]{64}  .*pack\.tar\.gz \(15 files, \d+ records\)\n$`, stderr)
 	sum := sha256.Sum256(b)
 	assert.Contains(t, stderr, hex.EncodeToString(sum[:]), "the printed digest is the pack's")
 
 	files, order := readPack(t, b)
 	assert.Equal(t, []string{"manifest.json", "SHA256SUMS", "admission.yaml", "agentidentities.ndjson", "approvals.ndjson",
 		"auditevents.ndjson", "auditevents.ocsf.ndjson", "bundles.ndjson", "changewindows.ndjson", "controls.json",
-		"pipelines.ndjson", "policygate-templates.ndjson", "policygates.ndjson", "verdicts.ndjson"}, order)
+		"pipelines.ndjson", "policygate-templates.ndjson", "policygates.ndjson", "receipts.ndjson", "verdicts.ndjson"}, order)
 
 	var m packManifest
 	require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
@@ -369,7 +371,7 @@ func TestEvidencePack_Coverage(t *testing.T) {
 		assert.Equal(t, []string{"ValidatingAdmissionPolicy", "Verdict"}, m.Coverage.Forbidden)
 		assert.NotContains(t, files, "verdicts.ndjson")
 		assert.NotContains(t, files, "admission.yaml")
-		assert.Contains(t, stderr, "(12 files,")
+		assert.Contains(t, stderr, "(13 files,")
 		assert.Contains(t, stderr, "warning: you may not read some kinds in every namespace (-A)")
 	})
 	t.Run("an export that fails part way leaves no pack", func(t *testing.T) {
@@ -724,4 +726,120 @@ func TestEvidencePackCmd_IncludeCommands(t *testing.T) {
 		assert.Equal(t, tc.mode, m.Redactions.Commands)
 		assert.Equal(t, "auditor", m.ExportedBy)
 	}
+}
+
+// TestEvidencePack_Receipts (#2052, spec 22 section 4.3): the pack holds
+// the period's PromotionReceipts with their signed envelopes, exported as
+// signed. Each one verifies offline from the pack with kardinal
+// verify-receipt --file; a receipt changed in the pack does not. A receipt
+// whose signed statement holds a credential has its statement and envelope
+// withheld (they cannot be redacted without breaking the signature), and
+// the manifest counts it.
+//
+// Covers EVIDENCE-PACK-RECEIPTS-01.
+func TestEvidencePack_Receipts(t *testing.T) {
+	keepStyle(t)
+	rc, bundle, key := signedReceipt(t)
+	in := packPeriodOpts.Since.Add(24 * time.Hour)
+	bundle.CreationTimestamp = metav1.NewTime(in)
+	rc.CreationTimestamp = metav1.NewTime(in)
+	leaky := rc.DeepCopy()
+	leaky.Name = "checkout-1-5-0-uat"
+	leaky.Labels = map[string]string{"kardinal.io/pipeline": "checkout", "kardinal.io/bundle": bundle.Name, "kardinal.io/environment": "uat"}
+	leaky.Spec.Statement = strings.Replace(leaky.Spec.Statement, `"kardinalPromotion"`,
+		`"ciRunURL":"https://ci.example.com/run/1?token=SECRETCI","kardinalPromotion"`, 1)
+	other := rc.DeepCopy()
+	other.Name, other.Labels = "old-prod", map[string]string{"kardinal.io/bundle": "older-version", "kardinal.io/environment": "prod"}
+	event := &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "ev"},
+		Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(packPeriodOpts.Since.Add(-time.Hour)), Action: "PromotionSucceeded", Outcome: "Success"}}
+
+	opts := packPeriodOpts
+	opts.Namespace = "default"
+	b, _, err := buildPack(t, []sigs_client.Object{bundle, rc, leaky, other, event}, &pager{}, opts)
+	require.NoError(t, err)
+	files, _ := readPack(t, b)
+	recs := packLines(files["receipts.ndjson"])
+	require.Equal(t, []string{"default/checkout-1-5-0-prod", "default/checkout-1-5-0-uat"}, names(recs),
+		"the receipts of the period's version, not another version's")
+	assert.NotContains(t, string(files["receipts.ndjson"]), "SECRETCI")
+
+	// Verify the receipt offline, as docs/compliance.md shows: its envelope
+	// written to a file, kardinal verify-receipt --file with the public key.
+	envelope := func(r map[string]interface{}) string { return r["status"].(map[string]interface{})["bundle"].(string) }
+	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
+	require.NoError(t, os.WriteFile(file, []byte(envelope(recs[0])), 0o600))
+	verify := []string{"verify-receipt", "--file", file, "--key", key, "-n", "default", "--pipeline", "checkout", "--env", "prod",
+		"--subject", receiptDigest, "--cluster", "c1"}
+	out, _, err := runOutput(t, receiptClient(t), verify...)
+	require.NoError(t, err)
+	assert.Contains(t, out, "VERIFIED receipt checkout-1-5-0-prod")
+	assert.Equal(t, rc.Spec.Statement, recs[0]["spec"].(map[string]interface{})["statement"], "the statement is exported as signed")
+
+	// A receipt changed in the pack does not verify.
+	var sb map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(envelope(recs[0])), &sb))
+	dsse := sb["dsseEnvelope"].(map[string]interface{})
+	payload, err := base64.StdEncoding.DecodeString(dsse["payload"].(string))
+	require.NoError(t, err)
+	dsse["payload"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(payload), "carol@example.com", "mallory@example.com", 1)))
+	tampered, err := json.Marshal(sb)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(file, tampered, 0o600))
+	_, _, err = runOutput(t, receiptClient(t), verify...)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NOT VERIFIED")
+
+	// The receipt whose statement holds a credential.
+	withheld := recs[1]
+	assert.Empty(t, withheld["spec"].(map[string]interface{})["statement"])
+	assert.Empty(t, withheld["status"].(map[string]interface{})["bundle"])
+	assert.Contains(t, withheld["metadata"].(map[string]interface{})["annotations"], withheldAnnotation)
+	var m packManifest
+	require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
+	assert.Equal(t, 1, m.Redactions.ReceiptsWithheld)
+}
+
+// TestEvidencePack_Cosign (#2052, spec 22 section 4.3): the exporter signs
+// the pack with cosign, as docs/compliance.md shows, in key mode: the
+// signature verifies, and a changed pack does not. It runs where cosign is
+// installed; CI installs it and sets KARDINAL_REQUIRE_COSIGN=1, so the test
+// cannot be skipped there. Offline: no transparency log (--tlog-upload=false
+// when signing, --insecure-ignore-tlog when verifying).
+//
+// Covers EVIDENCE-PACK-COSIGN-01.
+func TestEvidencePack_Cosign(t *testing.T) {
+	cosign, err := exec.LookPath("cosign")
+	if err != nil {
+		if os.Getenv("KARDINAL_REQUIRE_COSIGN") == "1" {
+			t.Fatalf("cosign is not installed, and KARDINAL_REQUIRE_COSIGN=1: %v", err)
+		}
+		t.Skip("cosign is not installed")
+	}
+	b, _, err := buildPack(t, packWorld(t, 50), &pager{}, packPeriodOpts)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	pack := filepath.Join(dir, "q3.tar.gz")
+	require.NoError(t, os.WriteFile(pack, b, 0o600))
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(cosign, args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "COSIGN_PASSWORD=")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := run("generate-key-pair")
+	require.NoError(t, err, out)
+	out, err = run("sign-blob", "--yes", "--key", "cosign.key", "--tlog-upload=false", "--bundle", "q3.tar.gz.sigstore.json", "q3.tar.gz")
+	require.NoError(t, err, out)
+	out, err = run("verify-blob", "--key", "cosign.pub", "--bundle", "q3.tar.gz.sigstore.json", "--insecure-ignore-tlog", "q3.tar.gz")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "Verified OK")
+
+	f, err := os.OpenFile(pack, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("x")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	out, err = run("verify-blob", "--key", "cosign.pub", "--bundle", "q3.tar.gz.sigstore.json", "--insecure-ignore-tlog", "q3.tar.gz")
+	require.Error(t, err, "a changed pack does not verify:\n%s", out)
 }
