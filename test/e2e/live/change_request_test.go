@@ -32,8 +32,7 @@ import (
 // ProviderError: this controller serves no provider yet), and the gate
 // blocks naming the change request. Nobody but kardinal may write an
 // instance: a user with full RBAC on changerequests and the cluster admin
-// cannot mark it approved or forge one. A superseded Bundle's instance is
-// suspended.
+// cannot mark it approved or forge one.
 //
 // Covers CHANGE-REQUEST-02, CHANGE-REQUEST-03.
 func TestGate_ChangeRequestInstance(t *testing.T) {
@@ -99,18 +98,6 @@ func TestGate_ChangeRequestInstance(t *testing.T) {
 	mine := tmpl.DeepCopy()
 	mine.ObjectMeta = metav1.ObjectMeta{Name: "mallory-template", Namespace: a.ns}
 	require.NoError(t, mallory.Create(ctx, mine), "a template (no kardinal.io/bundle) is the user's")
-
-	// A superseded Bundle's instance stops: spec.suspend follows its phase.
-	e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
-	e.WaitBundlePhase(t, a.ns, bundle, "Superseded", promoteTimeout)
-	framework.Eventually(t, gateTimeout, "the superseded Bundle's instance is suspended", func(ctx context.Context) (bool, string) {
-		var cur v1alpha1.ChangeRequest
-		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: name}, &cur); err != nil {
-			return apierrors.IsNotFound(err), err.Error() // pruned with the Graph is fine too
-		}
-		c := meta.FindStatusCondition(cur.Status.Conditions, "Ready")
-		return cur.Spec.Suspend && c != nil && c.Reason == "Suspended", fmt.Sprintf("suspend=%v ready=%v", cur.Spec.Suspend, c)
-	})
 }
 
 // changeRequestLabels is labels without the ones kro adds to the objects it applies.

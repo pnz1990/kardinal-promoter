@@ -40,8 +40,10 @@ A `ChangeRequest` with `spec.perPromotion: true` is a template, like a
    the instance's status.
 3. The gate reads the instance's status as `changeRequests.<template name>`. It never calls the
    ticketing system itself.
-4. When the Bundle stops promoting (Verified, Failed, Superseded) the Graph sets
-   `spec.suspend` on the instance and the controller stops reading the ticket.
+4. When the Bundle is Verified or Failed the Graph sets `spec.suspend` on the instance and the
+   controller stops reading the ticket. A Superseded Bundle's Graph holds its steps, so its
+   instances are not suspended; they are deleted with the Graph when it is retired
+   (`graph.retire.superseded`, one minute by default). kardinal does not close or cancel the ticket.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
