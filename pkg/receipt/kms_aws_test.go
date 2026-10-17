@@ -89,6 +89,7 @@ func fakeAWSKMSAuth(t *testing.T) (*httptest.Server, *ecdsa.PrivateKey, *atomic.
 // awsTestEnv gives the AWS SDK the test's static credentials only: never a
 // profile, a role or the host's credentials.
 func awsTestEnv(t *testing.T) {
+	t.Cleanup(CloseKMS)
 	for _, v := range []string{"AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN", "AWS_ROLE_ARN",
 		"AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
 		"AWS_TLS_INSECURE_SKIP_VERIFY"} {
@@ -103,6 +104,7 @@ func awsTestEnv(t *testing.T) {
 }
 
 func TestKMS_AWS(t *testing.T) {
+	t.Cleanup(CloseKMS)
 	awsTestEnv(t)
 	srv, key, signs := fakeAWSKMS(t)
 	ref := "awskms://" + strings.TrimPrefix(srv.URL, "https://") + "/1234abcd-12ab-34cd-56ef-1234567890ab"
@@ -171,4 +173,44 @@ func TestKMS_AWSRegionAndInsecure(t *testing.T) {
 	_, err = s.Sign(context.Background(), raw)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AWS_TLS_INSECURE_SKIP_VERIFY")
+}
+
+// TestKMS_AWSCredentialEndpointRefused (QA-3 #2111): an awskms:// endpoint
+// that is a credential address (where requests go without the egress
+// guard) is refused at start and at signing.
+func TestKMS_AWSCredentialEndpointRefused(t *testing.T) {
+	for ref, ok := range map[string]bool{
+		"awskms:///1234abcd-12ab-34cd-56ef-1234567890ab":                            true,
+		"awskms://kms.eu-west-1.amazonaws.com/1234abcd-12ab-34cd-56ef-1234567890ab": true,
+		"awskms://169.254.169.254/1234abcd-12ab-34cd-56ef-1234567890ab":             false,
+		"awskms://169.254.170.2:80/1234abcd-12ab-34cd-56ef-1234567890ab":            false,
+		"awskms://[fd00:ec2::254]/1234abcd-12ab-34cd-56ef-1234567890ab":             false,
+	} {
+		s := &Signer{Mode: v1alpha1.ReceiptSigningKMS, KMSRef: ref}
+		err := s.Validate()
+		if ok {
+			assert.NoError(t, err, ref)
+			continue
+		}
+		require.Error(t, err, ref)
+		assert.Contains(t, err.Error(), "is a credential address")
+	}
+}
+
+// TestKMS_AWSKeyReused: one AWS KMS key is loaded once for every receipt:
+// GetPublicKey and DescribeKey are not asked again per signature.
+func TestKMS_AWSKeyReused(t *testing.T) {
+	t.Cleanup(CloseKMS)
+	awsTestEnv(t)
+	srv, _, signs := fakeAWSKMS(t)
+	ref := "awskms://" + strings.TrimPrefix(srv.URL, "https://") + "/1234abcd-12ab-34cd-56ef-1234567890ab"
+	s := &Signer{Mode: v1alpha1.ReceiptSigningKMS, KMSRef: ref, Transport: srv.Client().Transport}
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	for i := 0; i < 5; i++ {
+		_, err := s.Sign(context.Background(), raw)
+		require.NoError(t, err)
+	}
+	assert.EqualValues(t, 5, signs.Load())
+	assert.Len(t, kmsCache.m, 1, "one key loaded")
 }
