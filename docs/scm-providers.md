@@ -282,6 +282,7 @@ export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo
 |---|---|
 | `write:issue` | Post comments on pull requests |
 | `write:repository` | Create and close pull requests, add labels, set the `kardinal/gates` commit status, delete the head branch of a PR kardinal closed, or of a step that ended before it opened a PR |
+| `read:user` (optional) | Read the token's own user, so the [receipt comment](receipts.md) is searched by author before it is posted; without it, the comment is posted unsearched |
 
 Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
 The startup token check cannot see these scopes; see [Token check at startup](#token-check-at-startup).

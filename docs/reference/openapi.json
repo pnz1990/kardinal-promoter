@@ -1507,6 +1507,14 @@
           "prURL": {
             "type": "string"
           },
+          "receipt": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/uiReceipt"
+              }
+            ],
+            "description": "Receipt is the step's signed promotion receipt (docs/receipts.md), when receipts are on and the step is Verified."
+          },
           "state": {
             "type": "string"
           },
@@ -2512,6 +2520,29 @@
           "bundle",
           "reason",
           "releaseCommand"
+        ],
+        "type": "object"
+      },
+      "uiReceipt": {
+        "additionalProperties": false,
+        "description": "uiReceipt names a step's PromotionReceipt and its phase.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "phase": {
+            "description": "Phase is Pending, Signed, Stored or Failed.",
+            "type": "string"
+          },
+          "verified": {
+            "description": "Verified is true once it is signed (Signed or Stored).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "phase",
+          "verified"
         ],
         "type": "object"
       },

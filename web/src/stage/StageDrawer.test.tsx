@@ -74,6 +74,18 @@ describe('StageDrawer (U3)', () => {
     expect(screen.getByTestId('shipped-by')).toHaveTextContent('1.5.0 shipped by agent fixer for alice.')
   })
 
+  it('names the step\'s signed promotion receipt and how to verify it (docs/receipts.md)', () => {
+    const signed = { ...step, receipt: { name: 'web-3-prod', phase: 'Stored', verified: true } }
+    renderDrawer([approvalGate], { data: { pipeline, bundles, steps: [signed], gates: [approvalGate] } })
+    expect(screen.getByTestId('receipt')).toHaveTextContent(`Receipt web-3-prod: verified ✓ · kardinal verify-receipt web ${signed.environment} --bundle ${signed.bundle}`)
+  })
+
+  it('says a receipt not signed yet is pending, and nothing without one', () => {
+    const pending = { ...step, receipt: { name: 'web-3-prod', phase: 'Pending', verified: false } }
+    renderDrawer([approvalGate], { data: { pipeline, bundles, steps: [pending], gates: [approvalGate] } })
+    expect(screen.getByTestId('receipt')).toHaveTextContent('Receipt web-3-prod: pending')
+  })
+
   it('says nothing about who shipped a version with no known creator', () => {
     renderDrawer()
     expect(screen.queryByText('Shipped by')).not.toBeInTheDocument()

@@ -150,6 +150,7 @@ nav:
       - Analysis (Argo Rollouts): analysis.md
     - Run pre- and post-deploy hooks: hooks.md
     - Verify image signatures: image-verification.md
+    - Sign promotion receipts: receipts.md
     - Roll back: rollback.md
     - Reject a version: reject.md
     - Pause a pipeline: pause.md
@@ -234,6 +235,7 @@ nav:
       - kardinal verify:
         - kardinal verify: reference/cli/kardinal-verify.md
         - kardinal verify list: reference/cli/kardinal-verify-list.md
+      - kardinal verify-receipt: reference/cli/kardinal-verify-receipt.md
       - kardinal version: reference/cli/kardinal-version.md
       - kardinal why: reference/cli/kardinal-why.md
       # END CLI NAV

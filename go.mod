@@ -12,9 +12,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.8
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.8
 	github.com/bmatcuk/doublestar/v4 v4.10.2
+	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/go-git/go-billy/v5 v5.9.2
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-logr/logr v1.4.4
+	github.com/go-openapi/runtime v0.33.0
+	github.com/go-openapi/strfmt v0.27.0
 	github.com/google/cel-go v0.31.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/mattn/go-isatty v0.0.24
@@ -23,7 +26,9 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/rs/zerolog v1.35.1
-	github.com/sigstore/sigstore v1.10.8
+	github.com/sigstore/protobuf-specs v0.5.1
+	github.com/sigstore/rekor v1.5.4
+	github.com/sigstore/sigstore v1.10.9
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/skeema/knownhosts v1.3.1
 	github.com/spf13/cobra v1.10.2
@@ -80,18 +85,16 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.3 // indirect
 	github.com/aws/smithy-go v1.28.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
+	github.com/coreos/go-oidc/v3 v3.20.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
-	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
 	github.com/docker/cli v29.7.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
@@ -105,15 +108,13 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
-	github.com/go-openapi/analysis v0.25.5 // indirect
+	github.com/go-openapi/analysis v0.26.0 // indirect
 	github.com/go-openapi/errors v0.22.8 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
-	github.com/go-openapi/loads v0.25.0 // indirect
-	github.com/go-openapi/runtime v0.33.0 // indirect
+	github.com/go-openapi/loads v0.25.1 // indirect
 	github.com/go-openapi/runtime/server-middleware v0.30.0 // indirect
 	github.com/go-openapi/spec v0.22.9 // indirect
-	github.com/go-openapi/strfmt v0.27.0 // indirect
 	github.com/go-openapi/swag v0.28.0 // indirect
 	github.com/go-openapi/swag/cmdutils v0.28.0 // indirect
 	github.com/go-openapi/swag/conv v0.28.0 // indirect
@@ -126,7 +127,7 @@ require (
 	github.com/go-openapi/swag/stringutils v0.28.0 // indirect
 	github.com/go-openapi/swag/typeutils v0.28.0 // indirect
 	github.com/go-openapi/swag/yamlutils v0.28.0 // indirect
-	github.com/go-openapi/validate v0.26.1 // indirect
+	github.com/go-openapi/validate v0.26.3 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
@@ -149,7 +150,6 @@ require (
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/letsencrypt/boulder v0.20260309.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
@@ -170,22 +170,19 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
-	github.com/sassoftware/relic v7.2.1+incompatible // indirect
+	github.com/sassoftware/relic/v8 v8.2.0 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/sigstore/protobuf-specs v0.5.1 // indirect
-	github.com/sigstore/rekor v1.5.3 // indirect
 	github.com/sigstore/rekor-tiles/v2 v2.3.0 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.1.3 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/theupdateframework/go-tuf v0.7.0 // indirect
-	github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399 // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/x448/float16 v0.8.4 // indirect

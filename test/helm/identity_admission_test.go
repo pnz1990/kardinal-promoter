@@ -814,6 +814,8 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	// The actor policies (actor-admission.yaml) exempt the controller too.
 	policies = append(policies, "kardinal-promoter-actor", "kardinal-promoter-actor-records", "kardinal-promoter-actor-overrides",
 		"kardinal-promoter-override-marker", "kardinal-promoter-actor-record-marker", "kardinal-promoter-audit-actor")
+	// receipts (receipts-admission.yaml) exempts the controller too.
+	policies = append(policies, "kardinal-promoter-receipts")
 	team := bindings("--set", "controller.namespaceShard=team-b")
 	// agent-identities and agent-index match cluster-scoped kinds: one
 	// binding each, without a namespace selector, in every mode.

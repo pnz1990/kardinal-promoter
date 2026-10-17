@@ -149,6 +149,19 @@ var (
 		},
 	)
 
+	// ReceiptsFailedTotal counts failed promotion receipt attempts by sink:
+	// signing (the signature, and Rekor when it is configured), oci, and
+	// pr-comment, each retried with backoff; and build, once per step whose
+	// receipt can never be built. A failing sink never holds a promotion
+	// (docs/receipts.md).
+	ReceiptsFailedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_receipts_failed_total",
+			Help: "Failed promotion receipt attempts by sink (signing, oci, pr-comment: retried with backoff; build: a receipt that can never be built, once per step).",
+		},
+		[]string{"sink"},
+	)
+
 	// HoldBundleMissingTotal counts holds (Pipeline spec.holds) whose
 	// rollback Bundle has not existed for the grace, once per hold. The
 	// hold stays in effect until a human releases it (#1629).
@@ -217,6 +230,7 @@ func init() {
 		AuditEventsPrunedTotal,
 		VerdictsTotal,
 		AgentRunsTotal,
+		ReceiptsFailedTotal,
 		HoldBundleMissingTotal,
 		NotificationsDroppedTotal,
 		PRCleanupFailuresTotal,

@@ -202,6 +202,7 @@ function DrawerBody({ namespace, pipeline, env, section, onClose, onNavigate, da
           <section className="stage-section" data-section="history" ref={el => { sectionRefs.current.history = el }} aria-labelledby={`${headingId}-history`}>
             <h3 id={`${headingId}-history`} className="stage-section__title">History</h3>
             <ShippedByLine bundle={data.bundles.find(x => x.name === view.step?.bundle)} />
+            <ReceiptLine step={view.step} pipeline={pipeline} />
             <History namespace={namespace} step={view.step} />
           </section>
 
@@ -234,6 +235,19 @@ function ShippedByLine({ bundle }: { bundle?: Bundle }) {
   const by = actorOfBundle(bundle)
   if (!by || !bundle) return null
   return <p className="stage-muted" data-testid="shipped-by">{bundle.version ?? bundle.name} shipped by <ActorBadge actor={by} />.</p>
+}
+
+/** The step's signed promotion receipt (docs/receipts.md): verified once
+ *  signed, with the command that checks it; nothing without one. */
+function ReceiptLine({ step, pipeline }: { step?: PromotionStep; pipeline: string }) {
+  const r = step?.receipt
+  if (!step || !r) return null
+  return (
+    <p className="stage-muted" data-testid="receipt">
+      Receipt {r.name}: {r.verified ? 'verified ✓' : r.phase.toLowerCase()}
+      {r.verified && <> · <code>kardinal verify-receipt {pipeline} {step.environment} --bundle {step.bundle}</code></>}
+    </p>
+  )
 }
 
 /** A version as people know it (the tag), with the Bundle name after it only when it says something more. */

@@ -94,7 +94,7 @@ Getting started:
 	add(groupShip, newShipCmd(), newCreateCmd(), newStatusCmd(), newWhyCmd(), newExplainCmd(), newHistoryCmd(), newLogsCmd(), newDiffCmd(), newGetCmd())
 	add(groupGate, newInboxCmd(), newApproveCmd(), newVerifyCmd(), newOverrideCmd(), newPromoteCmd(), newPolicyCmd())
 	add(groupIncident, newPauseCmd(), newResumeCmd(), newFreezeCmd(), newUnfreezeCmd(), newRollbackCmd(), newHoldCmd(), newReleaseHoldCmd(), newRejectCmd())
-	add(groupAdmin, newValidateCmd(), newAuditCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newMCPCmd(), newCompletionCmd())
+	add(groupAdmin, newValidateCmd(), newAuditCmd(), newVerifyReceiptCmd(), newMetricsCmd(), newRefreshCmd(), newDeleteCmd(), newMCPCmd(), newCompletionCmd())
 	root.SetHelpCommandGroupID(groupAdmin)
 	root.SetCompletionCommandGroupID(groupAdmin)
 

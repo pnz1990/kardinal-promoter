@@ -18,7 +18,9 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
+	receiptrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionreceipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
 )
 
@@ -164,6 +166,8 @@ func buildCacheOpts(watchNamespace string) cache.Options {
 	opts := cache.Options{
 		ByObject: map[sigs_client.Object]cache.ByObject{
 			&batchv1.Job{}: {Label: hookJobSelector},
+			// Done receipts without their statement and signed bundle.
+			&v1alpha1.PromotionReceipt{}: {Transform: receiptrecon.CacheTransform},
 		},
 	}
 	if watchNamespace != "" {

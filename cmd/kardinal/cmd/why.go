@@ -208,11 +208,18 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 	if failed != nil && (envFilter == "" || failed.Environment == "" || failed.Environment == envFilter) {
 		answers = append(answers, whyFailed(p, failed))
 	}
+	receipts := pipelineReceipts(ctx, c, ns, p.Name)
 	for _, e := range envs {
 		if envFilter != "" && e.Name != envFilter {
 			continue
 		}
-		answers = append(answers, whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, windows, whyNow()))
+		a := whyEnvironment(p, e, envs, gates.Items, steps.Items, byName, me, windows, whyNow())
+		// The signed receipt of the version running there (docs/receipts.md).
+		if rc, ok := receipts[receiptKey{e.Bundle, e.Name}]; ok && e.Bundle != "" {
+			a.lines = append(a.lines, whyLine{"Receipt", fmt.Sprintf("%s, %s: kardinal verify-receipt %s %s --bundle %s",
+				rc.Name, receiptMark(rc), p.Name, e.Name, e.Bundle)})
+		}
+		answers = append(answers, a)
 	}
 	return answers, nil
 }

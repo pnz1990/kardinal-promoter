@@ -192,6 +192,8 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-fleets",
 			"ValidatingAdmissionPolicy/kardinal-promoter-gitops-writes",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-gitops-writes",
+			"ValidatingAdmissionPolicy/kardinal-promoter-receipts",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-receipts",
 		), got, "args %v", args)
 	}
 }
@@ -473,6 +475,10 @@ var optionalAccess = []struct {
 	// clusterOnly: the value cannot be set in namespace mode.
 	clusterOnly bool
 }{
+	{"receipts.enabled=true", []apiAccess{
+		{"kardinal.io", "promotionreceipts", []string{"get", "list", "watch", "create"}, inWatched, "", "promotionstep receipt.go flushReceipt (create); promotionreceipt reconciler (watch)"},
+		{"kardinal.io", "promotionreceipts/status", []string{"get", "update", "patch"}, inWatched, "", "promotionreceipt reconciler.go patch"},
+	}, false},
 	{"ui.auth.tokenReview=true", []apiAccess{
 		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
 		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},

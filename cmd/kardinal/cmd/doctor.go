@@ -58,7 +58,7 @@ const kroMinVersion = "0.10.0-rc.0"
 var kardinalResources = []string{
 	"agentidentities", "agentindexes", "agentruns", "approvals", "auditevents", "bundles", "changewindows",
 	"clusterscmproviders", "hookruns", "imageverifications", "metricchecks", "notificationhooks",
-	"pipelines", "policygates", "promotionsteps", "prstatuses", "renderruns",
+	"pipelines", "policygates", "promotionreceipts", "promotionsteps", "prstatuses", "renderruns",
 	"rollbackpolicies", "scheduleclocks", "scmproviders", "steptemplates", "subscriptions", "verdicts",
 }
 

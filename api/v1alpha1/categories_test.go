@@ -29,7 +29,7 @@ var userKinds = []string{"AgentIdentity", "Bundle", "ChangeWindow", "ClusterScmP
 func TestCRDCategories(t *testing.T) {
 	files, err := filepath.Glob("../../config/crd/bases/*.yaml")
 	require.NoError(t, err)
-	require.Len(t, files, 23)
+	require.Len(t, files, 24)
 	var user []string
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
