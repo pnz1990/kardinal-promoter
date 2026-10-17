@@ -49,7 +49,9 @@ func TestGate_ApprovalFields(t *testing.T) {
 	a.apply(t, a.pipeline(nil))
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	e.WaitGateReady(t, a.ns, bundle, "prod", "change", false, "waiting for approvals: 0 of 1", gateTimeout)
+	// The expression reads the counted approvals' tickets: false until one
+	// counts, and the reason says so.
+	e.WaitGateReady(t, a.ns, bundle, "prod", "change", false, `approvals.fields.ticketID.exists(id, id.startsWith("CHG")) = false`, gateTimeout)
 
 	why := e.MustKardinal(t, a.ns, "why", pipelineName, "prod")
 	assert.Contains(t, why, "ticketID (ServiceNow change number), riskAcknowledged true", "why names the fields")
