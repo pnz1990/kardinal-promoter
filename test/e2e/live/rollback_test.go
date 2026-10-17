@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -1024,4 +1025,53 @@ func TestRollback_MultiEnvironment(t *testing.T) {
 	assertEnvAt(t, a, "test", fixtures.V3)
 	e.NoStep(t, a.ns, pipelineName, rb, "prod-eu", 5*time.Second)
 	assertEnvAt(t, a, "prod-eu", fixtures.V3)
+}
+
+// TestRollback_OnHealthFailureForeignBundleAtName (#2090): Bundles that are
+// not the automatic rollback sit at both of its names (here of another
+// pipeline, so they promote nothing). When the release fails its health
+// check, the step adopts neither and stops at AbortedByAlarm at once, naming
+// the Bundle in the way; it does not retry, and creates no Bundle.
+//
+// Covers RB-AUTO-NAME-03.
+func TestRollback_OnHealthFailureForeignBundleAtName(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := rbAlarmPipeline(t, e, nil)
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	rbVerified(t, a, b1, "test")
+
+	b2 := e.CreateBundleObject(t, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: pipelineName + "-broken", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Pipeline: pipelineName, Type: "image",
+			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.BrokenTag}}}})
+	plain := lifecycle.AutoRollbackName(b2, "alarm")
+	own := lifecycle.AutoRollbackName(b2, "alarm-test")
+	for _, name := range []string{plain, own} {
+		e.CreateBundleObject(t, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns},
+			Spec: v1alpha1.BundleSpec{Pipeline: "not-" + pipelineName, Type: "image",
+				Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V1}}}})
+	}
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, b2, "test", "AbortedByAlarm", promoteTimeout)
+	assert.Contains(t, ps.Status.Message, fmt.Sprintf(
+		"no automatic rollback (bundle %s is at the automatic rollback's name and is not a rollback of %s in test (nor is %s)",
+		own, b2, plain), ps.Status.Message)
+	assert.Contains(t, ps.Status.Message, "human intervention required")
+	for _, name := range []string{plain, own} {
+		var b v1alpha1.Bundle
+		require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: a.ns, Name: name}, &b))
+		assert.Empty(t, b.Annotations[lifecycle.AnnotationRollbackFrom], "%s is left as it was", name)
+	}
+	framework.Consistently(t, 20*time.Second, "no rollback Bundle, and the step stays stopped", func(ctx context.Context) (bool, string) {
+		n, err := rbCountBundles(ctx, e, a.ns)
+		if err != nil {
+			return false, err.Error()
+		}
+		cur, _, err := e.Step(ctx, a.ns, pipelineName, b2, "test")
+		if err != nil || cur == nil {
+			return false, fmt.Sprintf("step lookup: %v", err)
+		}
+		return n == 4 && cur.Status.State == "AbortedByAlarm", fmt.Sprintf("%d Bundles; %s", n, framework.DescribeStep(cur))
+	})
+	rbNoAudit(t, e, a.ns, "RollbackStarted")
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -265,6 +266,65 @@ func TestRollbackPolicy_ForgedMarkersAreNotAdopted(t *testing.T) {
 			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "default", Name: got}, &rb))
 			assert.True(t, lifecycle.IsAutoRollback(&rb), "the policy's own rollback")
 			assert.Equal(t, "1.24.0", rb.Spec.Images[0].Tag, "of the version Verified before")
+		})
+	}
+}
+
+// #2090: a RollbackPolicy adopts only its own rollback at its name. A Bundle
+// someone else put at the plain name is left alone and the rollback takes
+// prod's own name; when that one is someone else's too, the policy refuses
+// (RollbackRefused, NameTaken, naming the Bundle) instead of retrying
+// forever.
+//
+// Covers RB-AUTO-NAME-02.
+func TestRollbackPolicy_ForeignBundleAtTheName(t *testing.T) {
+	foreign := func(name string) client.Object { return rtBundle(name, "9.9.9", 50) }
+	plain := lifecycle.AutoRollbackName("bundle-1", "policy")
+	own := lifecycle.AutoRollbackName("bundle-1", "policy-prod")
+	for _, tc := range []struct {
+		name     string
+		squat    []client.Object
+		wantName string
+	}{
+		{name: "someone else's at the plain name", squat: []client.Object{foreign(plain)}, wantName: own},
+		{name: "someone else's at both names", squat: []client.Object{foreign(plain), foreign(own)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+			failing := makePromotionStep("a-bundle-1-prod", "nginx-demo", "prod", 3)
+			failing.Labels["kardinal.io/bundle"] = "bundle-1"
+			objs := append([]client.Object{rp, failing, rtPipeline(), rtBundle("bundle-1", "1.25.0", 30),
+				rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5)}, tc.squat...)
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(objs...).
+				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+				WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+			r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
+			for range 2 {
+				_, err := r.Reconcile(ctx, req)
+				require.NoError(t, err, "a blocked name is not an error to retry forever")
+			}
+			var updated v1alpha1.RollbackPolicy
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+			for _, s := range tc.squat {
+				var b v1alpha1.Bundle
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(s), &b))
+				assert.Empty(t, b.Annotations[lifecycle.AnnotationRollbackFrom], "%s is left as it was", b.Name)
+			}
+			if tc.wantName == "" {
+				assert.Nil(t, updated.Status.RollbackBundleName)
+				cond := meta.FindStatusCondition(updated.Status.Conditions, rollbackpolicy.ConditionRollbackRefused)
+				require.NotNil(t, cond)
+				assert.Equal(t, rollbackpolicy.ReasonNameTaken, cond.Reason)
+				assert.Contains(t, cond.Message, "bundle "+own+" is at the automatic rollback's name and is not a rollback of bundle-1 in prod")
+				return
+			}
+			require.NotNil(t, updated.Status.RollbackBundleName)
+			assert.Equal(t, tc.wantName, *updated.Status.RollbackBundleName)
+			var rb v1alpha1.Bundle
+			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "default", Name: tc.wantName}, &rb))
+			assert.Equal(t, "bundle-1", rb.Annotations[lifecycle.AnnotationRollbackFrom])
 		})
 	}
 }
