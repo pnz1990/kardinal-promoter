@@ -50,7 +50,7 @@ type receiptFixture struct {
 	gate types.NamespacedName
 }
 
-func newReceiptFixture(t *testing.T, receipts bool, mutate func(*v1alpha1.Bundle, *v1alpha1.PromotionStep)) receiptFixture {
+func newReceiptFixture(t *testing.T, receipts bool, mutate func(*v1alpha1.Bundle, *v1alpha1.PromotionStep), extra ...client.Object) receiptFixture {
 	t.Helper()
 	evaluated := metav1.NewTime(time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC))
 	tmpl := &v1alpha1.PolicyGate{
@@ -79,8 +79,8 @@ func newReceiptFixture(t *testing.T, receipts bool, mutate func(*v1alpha1.Bundle
 		mutate(bundle, step)
 	}
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithStatusSubresource(
-		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PolicyGate{}, &v1alpha1.PromotionReceipt{},
-	).WithObjects(step, makePipeline("nginx-demo"), bundle, tmpl, gate).Build()
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PolicyGate{}, &v1alpha1.PromotionReceipt{}, &v1alpha1.ChangeWindow{},
+	).WithObjects(append([]client.Object{step, makePipeline("nginx-demo"), bundle, tmpl, gate}, extra...)...).Build()
 	r := &promotionstep.Reconciler{
 		Client:    c,
 		SCM:       &mockSCM{merged: true, prURL: "https://github.com/test/repo/pull/1", prNumber: 1},
@@ -571,5 +571,55 @@ func TestReceiptJourney_FreezeExempted(t *testing.T) {
 	assert.Equal(t, "carol", x.CreatedBy)
 	assert.Equal(t, "hotfix INC-7", x.Reason)
 	assert.Equal(t, "2026-10-14T11:00:00Z", x.Until)
+	assert.Contains(t, st.Predicate.VerifiedLevels, receipt.LevelFreezeExempted)
+}
+
+// TestReceiptJourney_FreezeExemptedForReal (QA-3 #2115): an active freeze
+// of everyone holds the step until it has an exemption for its Pipeline;
+// the reconciler lets it through, records the exemption, takes it to
+// Verified, and its receipt records the exemption and claims
+// KARDINAL_FREEZE_EXEMPTED, from the freeze itself, not a status filled in
+// by hand.
+//
+// Covers RECEIPT-JOURNEY-06.
+func TestReceiptJourney_FreezeExemptedForReal(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	ex := v1alpha1.FreezeExemption{Namespace: "default", Pipeline: "nginx-demo", Reason: "hotfix INC-7", CreatedBy: "carol",
+		Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "carol"}, ExpiresAt: metav1.NewTime(now.Add(time.Hour))}
+	freeze := &v1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-everyone", Generation: 1},
+		Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.NewTime(now.Add(-time.Hour)), Reason: "INC-7",
+			Freeze: &v1alpha1.ChangeWindowFreeze{Actors: v1alpha1.FreezeEveryone, CreatedBy: "alice", Exemptions: []v1alpha1.FreezeExemption{ex}}},
+		Status: v1alpha1.ChangeWindowStatus{Active: true, ObservedGeneration: 1, Exemptions: []v1alpha1.FreezeExemption{ex}},
+	}
+	f := newReceiptFixture(t, true, nil, freeze)
+	s := f.toVerified(t)
+	require.Len(t, s.Status.FreezeExemptions, 1, "the reconciler recorded the exemption")
+	_, st := f.receipt(t)
+	require.Len(t, st.Predicate.Kardinal.FreezeExemptions, 1)
+	x := st.Predicate.Kardinal.FreezeExemptions[0]
+	assert.Equal(t, "kardinal-freeze-everyone", x.Freeze)
+	assert.Equal(t, "carol", x.CreatedBy)
+	assert.Equal(t, "hotfix INC-7", x.Reason)
+	assert.False(t, st.Predicate.Kardinal.FreezeExemptionsUnknown)
+	assert.Contains(t, st.Predicate.VerifiedLevels, receipt.LevelFreezeExempted)
+}
+
+// TestReceiptJourney_FreezeExemptedUnknown (#2115, upgrade from v0.12): a
+// step let through a freeze by v0.12 has the FreezeExempted condition and
+// no record of which exemption; once the freeze is gone nothing can be
+// recorded, and its receipt says the exemptions are unknown and claims
+// KARDINAL_FREEZE_EXEMPTED, so a verifier that refuses exempted promotions
+// refuses it.
+func TestReceiptJourney_FreezeExemptedUnknown(t *testing.T) {
+	f := newReceiptFixture(t, true, func(_ *v1alpha1.Bundle, ps *v1alpha1.PromotionStep) {
+		ps.Status.Conditions = append(ps.Status.Conditions, metav1.Condition{Type: v1alpha1.ConditionFreezeExempted,
+			Status: metav1.ConditionTrue, Reason: "Exempted", Message: "let through freeze kardinal-freeze-everyone (everyone) by carol",
+			LastTransitionTime: metav1.Now()})
+	})
+	f.toVerified(t)
+	_, st := f.receipt(t)
+	assert.Empty(t, st.Predicate.Kardinal.FreezeExemptions)
+	assert.True(t, st.Predicate.Kardinal.FreezeExemptionsUnknown)
 	assert.Contains(t, st.Predicate.VerifiedLevels, receipt.LevelFreezeExempted)
 }

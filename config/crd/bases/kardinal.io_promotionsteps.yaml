@@ -890,7 +890,10 @@ spec:
                 description: |-
                   FreezeExemptions are the freezes the step went on through under an
                   exemption (kardinal override --freeze), as it recorded them with its
-                  FreezeExempted condition; the step's receipt records them.
+                  FreezeExempted condition; the step's receipt records them. A step with
+                  the condition and none recorded (it was let through by v0.12, which
+                  did not record them) has a receipt that says they are unknown and
+                  still claims KARDINAL_FREEZE_EXEMPTED.
                 items:
                   description: |-
                     StepFreezeExemption is a freeze a step went on through under an

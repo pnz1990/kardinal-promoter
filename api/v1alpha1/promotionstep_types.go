@@ -526,7 +526,10 @@ type PromotionStepStatus struct {
 
 	// FreezeExemptions are the freezes the step went on through under an
 	// exemption (kardinal override --freeze), as it recorded them with its
-	// FreezeExempted condition; the step's receipt records them.
+	// FreezeExempted condition; the step's receipt records them. A step with
+	// the condition and none recorded (it was let through by v0.12, which
+	// did not record them) has a receipt that says they are unknown and
+	// still claims KARDINAL_FREEZE_EXEMPTED.
 	// +optional
 	// +kubebuilder:validation:MaxItems=8
 	FreezeExemptions []StepFreezeExemption `json:"freezeExemptions,omitempty"`
@@ -590,6 +593,10 @@ type StepFreeze struct {
 	// +optional
 	Since *metav1.Time `json:"since,omitempty"`
 }
+
+// ConditionFreezeExempted is the PromotionStep condition (True) of a step
+// that went on through a freeze under an exemption.
+const ConditionFreezeExempted = "FreezeExempted"
 
 // StepFreezeExemption is a freeze a step went on through under an
 // exemption.

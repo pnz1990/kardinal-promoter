@@ -52,7 +52,7 @@ the extension field `kardinalPromotion`, which those tools ignore.
 | `kardinalPromotion.checks` | The per-promotion MetricCheck results, the ImageVerification result per image, and the health check. |
 | `kardinalPromotion.change` | The environment and the PR (URL, number, merge commit), or the commit pushed for `approval: auto`. |
 | `kardinalPromotion.rollbackOf` | The version a rollback restores. |
-| `kardinalPromotion.freezeExemptions` | Each freeze the promotion went on through under an exemption ([`kardinal override --freeze`](agentic/freezes.md#let-one-change-through)): the freeze and whom it held, who made the exemption (with their actor stamp), why, its environment or version when it named one, and until when it counted. The step records them as it goes on (`status.freezeExemptions`). |
+| `kardinalPromotion.freezeExemptions` | Each freeze the promotion went on through under an exemption ([`kardinal override --freeze`](agentic/freezes.md#let-one-change-through)): the freeze and whom it held, who made the exemption (with their actor stamp), why, its environment or version when it named one, and until when it counted. The step records them as it goes on (`status.freezeExemptions`). They cover the receipt's own step: a step deleted and created again (a retry) starts a new record. A step let through by v0.12, which did not record them, has `freezeExemptionsUnknown: true` instead (when the freeze is still on at its next git step, the record is written then), and its receipt claims `KARDINAL_FREEZE_EXEMPTED` all the same, so `--require '!FREEZE_EXEMPTED'` refuses it. |
 
 ### Gates are recorded when the step starts
 

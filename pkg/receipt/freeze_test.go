@@ -90,3 +90,31 @@ func TestVerify_RequireNotFreezeExempted(t *testing.T) {
 		}
 	}
 }
+
+// TestBuild_FreezeExemptionsUnknown (#2115): a step with the FreezeExempted
+// condition and no recorded exemption (let through by v0.12) yields a
+// receipt that says the exemptions are unknown and claims
+// KARDINAL_FREEZE_EXEMPTED, so --require '!FREEZE_EXEMPTED' refuses it
+// (fail closed). A condition that is not True claims nothing.
+//
+// Covers RECEIPT-FREEZE-01.
+func TestBuild_FreezeExemptionsUnknown(t *testing.T) {
+	s, pub := keySigner(t)
+	for _, tc := range []struct {
+		status  metav1.ConditionStatus
+		refused bool
+	}{{metav1.ConditionTrue, true}, {metav1.ConditionFalse, false}} {
+		in := input("image")
+		in.Step.Status.Conditions = []metav1.Condition{{Type: v1alpha1.ConditionFreezeExempted, Status: tc.status,
+			Reason: "Exempted", Message: "let through", LastTransitionTime: metav1.Now()}}
+		raw, _, err := Build(in)
+		require.NoError(t, err)
+		st, err := Parse(raw)
+		require.NoError(t, err)
+		assert.Equal(t, tc.refused, st.Predicate.Kardinal.FreezeExemptionsUnknown)
+		signed, err := s.Sign(context.Background(), raw)
+		require.NoError(t, err)
+		_, err = Verify(signed.Bundle, VerifyOptions{Key: pub, Require: []string{"!FREEZE_EXEMPTED"}})
+		assert.Equal(t, tc.refused, err != nil, "%v", err)
+	}
+}

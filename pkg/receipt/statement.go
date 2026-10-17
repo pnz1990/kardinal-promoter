@@ -34,6 +34,9 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
@@ -124,9 +127,13 @@ type Record struct {
 	// FreezeExemptions are the freezes the promotion went on through under
 	// an exemption: who made it, why, and until when.
 	FreezeExemptions []FreezeExemption `json:"freezeExemptions,omitempty"`
-	Controller       string            `json:"controller,omitempty"`
-	Chart            string            `json:"chart,omitempty"`
-	Truncated        bool              `json:"truncated"`
+	// FreezeExemptionsUnknown: the step went on through a freeze under an
+	// exemption, and which one was not recorded (a step let through by
+	// v0.12). The receipt claims KARDINAL_FREEZE_EXEMPTED all the same.
+	FreezeExemptionsUnknown bool   `json:"freezeExemptionsUnknown,omitempty"`
+	Controller              string `json:"controller,omitempty"`
+	Chart                   string `json:"chart,omitempty"`
+	Truncated               bool   `json:"truncated"`
 	// Redacted are the JSON paths of the strings redacted before signing
 	// (the userinfo of a URL, the value of a credential parameter such as
 	// ?token=): a receipt is signed and may be published for good, so a
@@ -389,6 +396,14 @@ func statement(in Input) (Statement, error) {
 	if b.Spec.Provenance != nil {
 		rec.RollbackOf = b.Spec.Provenance.RollbackOf
 	}
+	// A step let through a freeze by v0.12 has the condition and no
+	// record: its exemptions are unknown, and the receipt says so and
+	// claims KARDINAL_FREEZE_EXEMPTED (a verifier that refuses exempted
+	// promotions refuses it: fail closed).
+	if c := meta.FindStatusCondition(ps.Status.Conditions, v1alpha1.ConditionFreezeExempted); c != nil &&
+		c.Status == metav1.ConditionTrue && len(ps.Status.FreezeExemptions) == 0 {
+		rec.FreezeExemptionsUnknown = true
+	}
 	for _, x := range ps.Status.FreezeExemptions {
 		rec.FreezeExemptions = append(rec.FreezeExemptions, FreezeExemption{Freeze: x.Freeze, Actors: x.Actors,
 			CreatedBy: x.Exemption.CreatedBy, Actor: x.Exemption.Actor, Reason: x.Exemption.Reason,
@@ -616,7 +631,7 @@ func levels(rec Record, facts *v1alpha1.DecisionFacts) []string {
 	if overridden {
 		out = append(out, LevelOverridden)
 	}
-	if len(rec.FreezeExemptions) > 0 {
+	if len(rec.FreezeExemptions) > 0 || rec.FreezeExemptionsUnknown {
 		out = append(out, LevelFreezeExempted)
 	}
 	return out
