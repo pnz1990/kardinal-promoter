@@ -90,6 +90,18 @@ func TestCore_ReadyzWaitsForCaches(t *testing.T) {
 		}
 	}
 	c.Env = env
+	// The ConfigMaps the controller mounts (the change request CA bundle of
+	// the suite's fake ticketing API) live in its namespace: the copy gets
+	// its own, or it never starts.
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.ConfigMap == nil {
+			continue
+		}
+		cm, err := e.Kube.CoreV1().ConfigMaps(dep.Namespace).Get(ctx, v.ConfigMap.Name, metav1.GetOptions{})
+		require.NoError(t, err, "the controller's ConfigMap %s", v.ConfigMap.Name)
+		require.NoError(t, e.Client.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cm.Name, Namespace: ns},
+			Data: cm.Data, BinaryData: cm.BinaryData}))
+	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{"app": name}},
 		Spec: corev1.PodSpec{
