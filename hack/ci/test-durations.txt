@@ -8,7 +8,7 @@
 # by hand: go run ./hack/citool durations LOG... > hack/ci/test-durations.txt
 github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1 29.8
 github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal-controller 45.0
-github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd 45.0
+github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd 110.0
 github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style 1.0
 github.com/kardinal-promoter/kardinal-promoter/hack/check-site-offline 1.0
 github.com/kardinal-promoter/kardinal-promoter/hack/citool 1.1
