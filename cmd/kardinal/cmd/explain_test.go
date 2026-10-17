@@ -712,3 +712,42 @@ func TestExplain_ChangeWindowGateOpens(t *testing.T) {
 	assert.Contains(t, out.String(), "ChangeWindow prod-hours blocks, opens at Thursday 04:25 UTC, in about 18m")
 	assert.Contains(t, errb.String(), "Wait: prod-hours opens by itself at Thursday 04:25 UTC, in about 18m")
 }
+
+// TestExplain_AliasOfWhyWide (#1758): kardinal explain is kardinal why -o
+// wide: the same stdout (the table, or with -o json and yaml the same
+// entries), and one deprecation notice on stderr that names the why command
+// to use instead. It is left out of kardinal --help.
+//
+// Covers CLI-EXPLAIN-ALIAS-01.
+func TestExplain_AliasOfWhyWide(t *testing.T) {
+	keepStyle(t)
+	c := policyClient(t, outputFixture()...)
+	cases := []struct {
+		explain, why []string
+		use          string
+	}{
+		{[]string{"explain", "demo"}, []string{"why", "demo", "-o", "wide"}, "kardinal why demo -o wide"},
+		{[]string{"explain", "demo", "prod"}, []string{"why", "demo", "prod", "-o", "wide"}, "kardinal why demo prod -o wide"},
+		{[]string{"explain", "demo", "--env", "prod"}, []string{"why", "demo", "--env", "prod", "-o", "wide"}, "kardinal why demo prod -o wide"},
+		{[]string{"explain", "demo", "-o", "json"}, []string{"why", "demo", "-o", "json"}, "kardinal why demo -o json"},
+		{[]string{"explain", "demo", "prod", "-o", "yaml"}, []string{"why", "demo", "prod", "-o", "yaml"}, "kardinal why demo prod -o yaml"},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.explain, " "), func(t *testing.T) {
+			wantOut, wantErr, err := runOutput(t, c, tc.why...)
+			require.NoError(t, err)
+			out, errOut, err := runOutput(t, c, tc.explain...)
+			require.NoError(t, err)
+			assert.Equal(t, wantOut, out, "stdout is why -o wide's")
+			notice := "warning: kardinal explain is deprecated and will be removed in a later release: use " + tc.use +
+				" (the same output)\n"
+			assert.Equal(t, notice+wantErr, errOut, "one notice, then what why prints on stderr")
+		})
+	}
+	assert.Equal(t, "warning: kardinal explain is deprecated and will be removed in a later release: "+
+		"use kardinal why demo prod -o wide -w (the same output)", explainDeprecation("demo", "prod", true), "-w is kept")
+	help, _, err := runOutput(t, c, "--help")
+	require.NoError(t, err)
+	assert.NotRegexp(t, `(?m)^  explain\s`, help, "kardinal --help teaches why")
+	assert.Regexp(t, `(?m)^  why\s`, help)
+}

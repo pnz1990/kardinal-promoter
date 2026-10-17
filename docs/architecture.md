@@ -350,7 +350,7 @@ What a retired Bundle keeps and loses:
 
 - **Kept**: rollback and `kardinal promote` (which Bundle is deployed where, which were Verified),
   `kardinal history`, `kardinal metrics` and the Pipeline's `status.deploymentMetrics`, the
-  Pipeline phase, `kardinal status`, `kardinal explain` and `kardinal get pipelines`, the UI's
+  Pipeline phase, `kardinal status`, `kardinal why -o wide` and `kardinal get pipelines`, the UI's
   graph and step list (state, message and PR link per environment), `status.environments`, and
   the AuditEvents, which never belonged to the Graph.
 - **Lost**: the PolicyGate instances (gate results and overrides; the AuditEvents keep each

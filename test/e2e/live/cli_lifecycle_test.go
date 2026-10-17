@@ -177,7 +177,7 @@ func TestCLI_Rollback(t *testing.T) {
 	assert.Empty(t, r.Stderr)
 	m := regexp.MustCompile(`^Rolling back podinfo in prod from ` + bB + ` to ` + bA + ` \(` + regexp.QuoteMeta(fixtures.Image+":"+fixtures.V2) + `\)\n` +
 		`Bundle (podinfo-rollback-[a-z0-9]{5}) created \(rollbackOf=` + bA + `\)\n` +
-		`Track with: kardinal explain podinfo --env prod\n` + regexp.QuoteMeta(notPinnedNote(fixtures.Image+":"+fixtures.V2)) + `$`).FindStringSubmatch(r.Stdout)
+		`Track with: kardinal why podinfo prod\n` + regexp.QuoteMeta(notPinnedNote(fixtures.Image+":"+fixtures.V2)) + `$`).FindStringSubmatch(r.Stdout)
 	require.NotNil(t, m, "rollback output:\n%s", r.Stdout)
 	bR := m[1]
 	rb := getBundle(t, e, a.ns, bR)
@@ -227,7 +227,7 @@ func TestCLI_Rollback(t *testing.T) {
 	out := c.Must(a.ns, "rollback", pipelineName, "--env", "prod", "--to", bB)
 	m = regexp.MustCompile(`^Rolling back podinfo in prod from ` + bR + ` to ` + bB + ` \(` + regexp.QuoteMeta(fixtures.Image+":"+fixtures.V3) + `\)\n` +
 		`Bundle (podinfo-rollback-[a-z0-9]{5}) created \(rollbackOf=` + bB + `\)\n` +
-		`Track with: kardinal explain podinfo --env prod\n` + regexp.QuoteMeta(notPinnedNote(fixtures.Image+":"+fixtures.V3)) + `$`).FindStringSubmatch(out)
+		`Track with: kardinal why podinfo prod\n` + regexp.QuoteMeta(notPinnedNote(fixtures.Image+":"+fixtures.V3)) + `$`).FindStringSubmatch(out)
 	require.NotNil(t, m, "rollback --to output:\n%s", out)
 	bR2 := m[1]
 	rb2 := getBundle(t, e, a.ns, bR2)

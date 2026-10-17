@@ -6,8 +6,9 @@ Say why an environment waits, and what moves it on
 
 Say, for <env> of <pipeline> (or each environment), in a sentence what it
 waits for, then the version, the gate or PR, and the command that moves it
-on. -o wide prints kardinal explain's table instead; -o json and yaml print
-explain's entries. -w refreshes every 3 seconds.
+on. -o wide prints the table of every step and gate instead (what the
+deprecated kardinal explain printed); -o json and yaml print its entries.
+-w refreshes every 3 seconds.
 
 why answers, per environment, in one sentence what it waits for, then the
 details and the command that moves it on:
@@ -44,9 +45,11 @@ it starts promoting, so a gate created or edited later applies to the
 versions shipped after it, not to one already waiting (Policy Gates, "When a
 new or edited gate takes effect").
 
--o wide prints kardinal explain's table (every step and gate of the current
-version, with kinds and expressions), with the commands that get past a
-gate on stderr; -o json and yaml print explain's entries.
+-o wide prints the table of every step and gate of the current version,
+with kinds and expressions, and the commands that get past a gate on
+stderr; -o json and yaml print the same entries. kardinal explain, now
+deprecated, is this command with -o wide: it prints the same, after a
+notice on stderr.
 
 ```
 kardinal why <pipeline> [<env>] [flags]
@@ -75,7 +78,7 @@ kardinal why <pipeline> [<env>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

@@ -13,7 +13,7 @@ GATE                  ENV   RULE                             REASON             
 prod-approval         prod  approval 0 of 1                  prod waits for your approval (wa...             <time>
 uat-soak-before-prod  prod  bundle.upstreamSoakMinutes >= 3  soak 0.4 of 3 min in uat, opens in about 2m36s  <time>
 
-$ kardinal explain demo prod
+$ kardinal why demo prod -o wide
 ENVIRONMENT   VERSION                    TYPE         NAME                   STATE      EXPRESSION                        REASON
 prod          sha-9349a3f (demo-kzwhs)   PolicyGate   prod-approval          Blocking   true                              prod waits for your approval (waiting for approvals: 0 of 1; version sha-9349a3f)
 prod          sha-9349a3f (demo-kzwhs)   PolicyGate   uat-soak-before-prod   Blocking   bundle.upstreamSoakMinutes >= 3   bundle.upstreamSoakMinutes >= 3 = false; version sha-9349a3f; soak 0.4 of 3 min in uat, opens in about 2m36s

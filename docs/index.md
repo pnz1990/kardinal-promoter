@@ -53,7 +53,7 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
     ---
 
     Block weekends, require soak time, ask for approvers, read metrics, all in CEL.
-    `kardinal explain` says which gate holds a version and why.
+    `kardinal why -o wide` says which gate holds a version and why.
 
     [:octicons-arrow-right-24: Gate promotions](policy-gates.md)
 

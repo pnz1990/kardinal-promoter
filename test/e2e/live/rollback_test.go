@@ -65,7 +65,7 @@ func rbRefused(t *testing.T, a *app, args ...string) string {
 // rbOutput is kardinal rollback's output for a rollback of env from the
 // Bundle deployed now to target, as rb deploying artifacts.
 func rbOutput(env, from, target, artifacts, rb string) string {
-	return fmt.Sprintf("Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal explain %s --env %s\n",
+	return fmt.Sprintf("Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal why %s %s\n",
 		pipelineName, env, from, target, artifacts, rb, target, pipelineName, env)
 }
 

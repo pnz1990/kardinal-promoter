@@ -382,7 +382,7 @@ command whose code each runs:
     inbox      kardinal inbox -o json
     history    kardinal history <pipeline> [<env>] -o json
     diff       kardinal diff <a> <b>: both versions' images and provenance
-    explain    kardinal explain <pipeline> [<env>] -o json
+    explain    kardinal why <pipeline> [<env>] -o json
     gates      kardinal policy list
     simulate   kardinal policy simulate <pipeline> <env> [--as-agent ...]: each
                gate's result, and when a blocked gate would pass with the

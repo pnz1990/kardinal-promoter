@@ -710,7 +710,7 @@ With a controller older than status.environments, the CLI computes the same
 rows itself, with the controller's code; SINCE is then known only for live
 environments. -o json and -o yaml print the same data with the API's state
 values (Verified, WaitingForMerge) and "source": "controller" or "cli".
-kardinal explain shows the steps and every gate of the current Bundle.`
+kardinal why <pipeline> -o wide shows the steps and every gate of the current Bundle.`
 
 // failedNotice is status's ERROR line for a failed newest version.
 func failedNotice(pipeline string, f *v1alpha1.PipelineFailedVersion) string {

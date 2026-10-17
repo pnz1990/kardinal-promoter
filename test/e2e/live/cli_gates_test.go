@@ -205,7 +205,9 @@ func policyRows(t *testing.T, out string, nss ...string) []map[string]string {
 // step Failed with why, and override refuses a gate whose only instances
 // belong to finished Bundles.
 //
-// Covers CLI-EXPLAIN-01, CLI-EXPLAIN-02, CLI-STATUS-01, CLI-OVERRIDE-01, CLI-POLICY-LIST-01.
+// kardinal explain, deprecated, prints what why -o wide prints, after a
+// notice on stderr (#1758).
+// Covers CLI-EXPLAIN-01, CLI-EXPLAIN-02, CLI-EXPLAIN-ALIAS-02, CLI-STATUS-01, CLI-OVERRIDE-01, CLI-POLICY-LIST-01.
 func TestCLI_GatesExplainOverride(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -448,6 +450,17 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	// --color colors the STATE cell only; NO_COLOR wins.
 	plain := c.Must(ns, "explain", pipelineName, "--env", "prod")
 	assert.NotContains(t, plain, "\x1b[", "no color when stdout is not a terminal")
+	// #1758: explain is why -o wide: the same stdout, -o json too, and a
+	// deprecation notice first on stderr naming the why command.
+	ex := c.Run(ns, "explain", pipelineName, "--env", "prod")
+	require.Equal(t, 0, ex.Code, ex.Output())
+	why := c.Run(ns, "why", pipelineName, "prod", "-o", "wide")
+	require.Equal(t, 0, why.Code, why.Output())
+	assert.Equal(t, why.Stdout, ex.Stdout, "explain prints what why -o wide prints")
+	assert.Equal(t, "warning: kardinal explain is deprecated and will be removed in a later release: use kardinal why "+
+		pipelineName+" prod -o wide (the same output)\n"+why.Stderr, ex.Stderr)
+	assert.NotContains(t, why.Stderr, "deprecated")
+	assert.JSONEq(t, c.Must(ns, "why", pipelineName, "prod", "-o", "json"), c.Must(ns, "explain", pipelineName, "prod", "-o", "json"))
 	// The 16-colour form: COLORTERM unset.
 	colorEnv := framework.CLIOptions{Env: []string{"COLORTERM=", "NO_COLOR="}}
 	cr := c.Exec(colorEnv, c.Args(ns, "explain", pipelineName, "--env", "prod", "--color")...)

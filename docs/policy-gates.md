@@ -128,7 +128,7 @@ evaluated result and the version in parentheses:
 Production deployments are blocked on weekends (!schedule.isWeekend = false; version 1.29.0)
 ```
 
-The gate's `Ready` condition, `kardinal explain` and the UI show this reason. `kardinal status
+The gate's `Ready` condition, `kardinal why -o wide` and the UI show this reason. `kardinal status
 <pipeline>` shows the message alone under Blocking gates. The Pending step's message names
 the gate instance and the gate's message: `waiting for gate
 no-weekend-deploys-platform-policies-prod--<bundle>: Production deployments are blocked on
@@ -515,7 +515,7 @@ expression: 'bundle.version.startsWith("1.")'
 ```
 
 While a soak gate (`bundle.upstreamSoakMinutes` or `upstream.<env>.soakMinutes` compared with
-`>=` or `>`) holds a version, `kardinal why`, `kardinal explain` and `kardinal status` show how far
+`>=` or `>`) holds a version, `kardinal why` (also with `-o wide`) and `kardinal status` show how far
 it soaked and, when the comparison is the whole expression, when it opens:
 
 ```
@@ -587,7 +587,7 @@ spec:
 
 The controller checks for the permission when it builds the Bundle's Graph. If no permission exists, the version goes to phase `Failed`, and its status conditions give the reason: `skip denied for environment "staging": ...`. The version does not promote.
 
-If a permission exists, the controller evaluates its expression like any other gate. It creates an instance of the permission gate in front of the next environment the version promotes. That environment, `prod` in a `test → staging → prod` pipeline, waits until the expression is true. It never starts for a version the permission does not cover. `kardinal explain` shows the instance with the other gates of that environment. The instance is annotated `kardinal.io/skipped-environments: staging`. If the skipped environment is the last one, nothing comes after it, so nothing waits on the permission.
+If a permission exists, the controller evaluates its expression like any other gate. It creates an instance of the permission gate in front of the next environment the version promotes. That environment, `prod` in a `test → staging → prod` pipeline, waits until the expression is true. It never starts for a version the permission does not cover. `kardinal why -o wide` shows the instance with the other gates of that environment. The instance is annotated `kardinal.io/skipped-environments: staging`. If the skipped environment is the last one, nothing comes after it, so nothing waits on the permission.
 
 Without a skip-permission gate, skipping an environment that has org gates is always denied. An environment that only team gates apply to can be skipped without a permission.
 
@@ -676,7 +676,7 @@ ScheduleClock tick follows the number of versions in flight, not the version his
 kardinal policy list
 
 # See which gates are blocking a promotion
-kardinal explain my-app --env prod
+kardinal why my-app prod -o wide
 
 # Validate a PolicyGate file
 kardinal policy test my-gate.yaml
@@ -694,7 +694,7 @@ because its environment is not reached yet or the version failed (it can still r
 **Waiting** (grey) instead of **Block** (red). A superseded version's gates that are not ready are
 shown as **Superseded**, and a rejected version's (`kardinal reject`) as **Rejected**: they are not evaluated again.
 
-`kardinal explain` gives each gate the same state in its STATE column: **Pass** (ready), **Block**
+`kardinal why -o wide` gives each gate the same state in its STATE column: **Pass** (ready), **Block**
 (holding the version), **Superseded**, **Rejected**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
 ready, not holding the version).
 
@@ -735,7 +735,7 @@ with `(hold exemption refused: <why>)`.
 An exempt gate has the `status.reason`
 `EXEMPT: rollback <bundle> holds <env> (by <user>: <reason>); without the hold: <the gate's own result>`.
 The flip is a `GateEvaluated` AuditEvent, and the gate gets a `GateExempted` Warning Event, so
-`kardinal explain`, `kardinal audit` and `kubectl get events` all show it (the Event is best
+`kardinal why -o wide`, `kardinal audit` and `kubectl get events` all show it (the Event is best
 effort; the AuditEvent and `status.reason` are the durable record: [Kubernetes Events](operate.md#kubernetes-events)).
 `kardinal unhold` ends the exemption, and the gates are evaluated again at once. See
 [Roll back and hold](rollback.md#roll-back-and-hold).

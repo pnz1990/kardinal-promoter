@@ -77,7 +77,7 @@ func TestWalkGates_Golden(t *testing.T) {
 	c := policyClient(t, walkGatesFixture(now)...)
 
 	var golden strings.Builder
-	for _, args := range [][]string{{"status", "demo"}, {"explain", "demo", "prod"}, {"why", "demo", "prod"}} {
+	for _, args := range [][]string{{"status", "demo"}, {"why", "demo", "prod", "-o", "wide"}, {"why", "demo", "prod"}} {
 		out, stderr, err := runOutput(t, c, args...)
 		require.NoError(t, err, args)
 		golden.WriteString("$ kardinal " + strings.Join(args, " ") + "\n" + volatile.ReplaceAllString(out, "<time>"))

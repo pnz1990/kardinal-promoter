@@ -25,7 +25,7 @@ command whose code each runs:
     inbox      kardinal inbox -o json
     history    kardinal history <pipeline> [<env>] -o json
     diff       kardinal diff <a> <b>: both versions' images and provenance
-    explain    kardinal explain <pipeline> [<env>] -o json
+    explain    kardinal why <pipeline> [<env>] -o json
     gates      kardinal policy list
     simulate   kardinal policy simulate <pipeline> <env> [--as-agent ...]: each
                gate's result, and when a blocked gate would pass with the
@@ -85,7 +85,7 @@ kardinal mcp [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO
