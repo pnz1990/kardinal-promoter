@@ -197,7 +197,8 @@ func TestCLI_Version(t *testing.T) {
 // the file names them, KARDINAL_PIPELINE wins over the file, and one
 // argument that is an environment of the default pipeline is that
 // environment. Without any default the error names the argument, the
-// variable and the file, and a file that names a context is refused.
+// variable and the file, and a file that names a context is refused. Each
+// default used is said on stderr with its source.
 // Covers CLI-DEFAULTS-02.
 func TestCLI_RepoDefaults(t *testing.T) {
 	t.Parallel()
@@ -225,9 +226,14 @@ func TestCLI_RepoDefaults(t *testing.T) {
 
 	// The file, found from a subdirectory: pipeline and namespace.
 	dir := repo("pipeline: web\nnamespace: " + ns + "\n")
+	file := filepath.Join(filepath.Dir(filepath.Dir(dir)), ".kardinal.yaml")
 	r := cli.Exec(framework.CLIOptions{Dir: dir}, "--context", e.Context, "pause", "--reason", "e2e")
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Contains(t, r.Stdout, "Pipeline web paused.")
+	// Each default is said on stderr, with where it came from (QA on #2179).
+	assert.Contains(t, r.Stderr, "using pipeline web (from "+file+")\n")
+	assert.Contains(t, r.Stderr, "using namespace "+ns+" (from "+file+")\n")
+	assert.NotContains(t, r.Stdout, "using ")
 	assert.True(t, paused())
 
 	// KARDINAL_PIPELINE over the file: a pipeline that does not exist.
@@ -239,6 +245,7 @@ func TestCLI_RepoDefaults(t *testing.T) {
 	r = cli.Exec(framework.CLIOptions{Dir: repo(""), Env: []string{"KARDINAL_PIPELINE=web", "KARDINAL_NAMESPACE=" + ns}},
 		"--context", e.Context, "resume")
 	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "using pipeline web (from KARDINAL_PIPELINE)\nusing namespace "+ns+" (from KARDINAL_NAMESPACE)\n")
 	assert.False(t, paused())
 
 	// One argument that is an environment of the default pipeline.

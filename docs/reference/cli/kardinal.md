@@ -28,9 +28,16 @@ working directory's only):
 
 With a default pipeline, no argument is that pipeline, and one argument is
 an environment when the default pipeline has an environment of that name
-(kardinal why prod), else a pipeline (kardinal why other-app). The file may
-set pipeline and namespace only: it never names a context or a cluster, and
-any other key is an error.
+(kardinal why prod), else a pipeline (kardinal why other-app); when the
+cluster cannot say (the default pipeline cannot be read), the command
+refuses rather than guess. Each default a command uses is said once on
+stderr with its source ("using namespace team-a (from
+/src/app/.kardinal.yaml)"), so a value the command line does not show is
+never silent. The file may set pipeline and namespace only: it never names
+a context or a cluster, and any other key is an error; -n (or
+KARDINAL_NAMESPACE) and an explicit pipeline go without a broken file.
+kardinal mcp's tools never read the file: the agent's working directory
+may be a repository it does not trust.
 
 Output follows where it goes. On a terminal, each state reads as a glyph and
 its label in the status colours of the UI, from its design tokens

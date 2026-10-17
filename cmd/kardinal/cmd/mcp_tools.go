@@ -240,6 +240,8 @@ func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	}
 	globalOutput = "json"
 	sty, errOut = style.Plain(), io.Discard
+	// A .kardinal.yaml in the agent's working directory picks nothing.
+	ignoreRepoFile = true
 	// The writes are stamped by the commands' own code (stampOf): the actor
 	// is who the kubeconfig authenticates. What the client says about itself
 	// goes in the stamp's asserted fields: kardinal mcp and the agent that
