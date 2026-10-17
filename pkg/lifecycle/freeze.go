@@ -152,6 +152,10 @@ func Freeze(ctx context.Context, c client.Client, req FreezeRequest) (*v1alpha1.
 // writer raced is read again.
 func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v1alpha1.FreezeLift) error {
 	var first *v1alpha1.ChangeWindow // the freeze as first read: the one to lift
+	// marked is whether this unfreeze wrote the lift mark, on any pass: a
+	// later pass sees its own mark and does not write it again, but must
+	// still take it back when the lift fails.
+	marked := false
 	for attempt := 0; ; attempt++ {
 		var cw v1alpha1.ChangeWindow
 		if err := c.Get(ctx, types.NamespacedName{Name: name}, &cw); err != nil {
@@ -168,6 +172,9 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 		} else if cw.Spec.Freeze != nil && cw.DeletionTimestamp.IsZero() && !sameFreeze(first, &cw) {
 			// Frozen again (or edited) since it was read: that freeze is
 			// not the one this unfreeze was asked to lift.
+			if marked {
+				clearLift(ctx, c, name, lift)
+			}
 			return changedMeanwhile(name)
 		}
 		if cw.Spec.Freeze == nil {
@@ -181,7 +188,6 @@ func Unfreeze(ctx context.Context, c client.Client, name, onlyBy string, lift *v
 			return nil
 		}
 		// The requester replaces a lift an earlier, failed unfreeze left.
-		marked := false
 		if lift != nil && lift.By != "" && !equality.Semantic.DeepEqual(cw.Spec.Freeze.Lifted, lift) {
 			mark := cw.DeepCopy()
 			mark.Spec.Freeze.Lifted = lift
