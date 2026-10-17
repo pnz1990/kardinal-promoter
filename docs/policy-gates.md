@@ -287,6 +287,7 @@ its in-flight versions. The [CEL context](reference/cel-context.md#actor) lists 
 | `actor.kind` | string | `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp |
 | `actor.verified` | bool | The version has a stamp |
 | `actor.agent` | string | The agent's name, when the kind is `agent` |
+| `actor.via` | string | `ui` or `api` when the controller wrote the version for its caller, `subscription` or `auto-rollback` for its own; else `""` |
 | `agent.registered` | bool | The agent's AgentIdentity is ready |
 | `agent.autonomy` | string | `auto`, `approve` or `deny`, now |
 
@@ -299,7 +300,18 @@ expression: actor.verified && actor.kind == "human"
 ---
 # Hold an agent's version once its agent is suspended or deregistered
 expression: actor.kind != "agent" || (agent.registered && !agent.suspended)
+---
+# Let the controller's automatic rollback through
+expression: actor.kind == "controller" && actor.via == "auto-rollback"
 ```
+
+!!! warning "Never trust a version's labels or annotations for who made it"
+    Whoever creates a Bundle writes its labels and annotations, `kardinal.io/rollback` and
+    `kardinal.io/rollback-from` included, and no admission rule checks them. A gate such as
+    `"kardinal.io/rollback" in bundle.labels` lets through any version that says it is a rollback.
+    Check the actor stamp instead, which the chart's admission lets only the controller write for
+    its own versions: `actor.kind == "controller" && actor.via == "auto-rollback"` for an automatic
+    rollback.
 
 For per-environment autonomy, set `agents` on the Pipeline's environment instead of writing
 gates ([Actor-aware policy](agentic/policy.md)).
