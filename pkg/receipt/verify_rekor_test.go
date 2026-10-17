@@ -35,7 +35,12 @@ const (
 func loggedBundle(t *testing.T, vs *ca.VirtualSigstore, statement []byte, edit func(*protorekor.TransparencyLogEntry),
 	bundleEdits ...func(*protobundle.Bundle)) []byte {
 	t.Helper()
-	e, err := vs.AttestAtTimeHashedRekordV2(rekorTestIdentity, rekorTestIssuer, statement, time.Now())
+	// A few seconds ahead: the leaf certificate is issued a moment later
+	// with NotBefore now, and both times are truncated to the second, so
+	// time.Now() could fall one second before NotBefore across a second
+	// boundary and the entry be rejected ("integrated time outside
+	// certificate validity", QA-3 on #2155). The leaf is valid 10 minutes.
+	e, err := vs.AttestAtTimeHashedRekordV2(rekorTestIdentity, rekorTestIssuer, statement, time.Now().Add(5*time.Second))
 	require.NoError(t, err)
 	vc, err := e.VerificationContent()
 	require.NoError(t, err)
