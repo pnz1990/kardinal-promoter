@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +47,10 @@ type Step struct {
 	Clusters int
 	// Heavy steps hold the host's heavy-load lock while they run.
 	Heavy bool
+	// HeavyGroup, when set, lets the heavy steps of one group run together
+	// (the parts of one suite, each on a cluster of its own): the gate holds
+	// the lock while any of them runs. No other heavy step runs meanwhile.
+	HeavyGroup string
 	// Tests is the go test -json file the step writes, relative to its
 	// directory, for the totals.
 	Tests string
@@ -423,34 +428,85 @@ done
 `, cluster)
 }
 
+// scaleFullParts is how many clusters the full scale profile is split
+// across: its serial tests (chaos and load, each owning its controller)
+// took 1h43m of the v0.12 gate's 1h56m on one cluster.
+const scaleFullParts = 2
+
+// etcdNoFsync is the kind config of the full scale profile's parts: test
+// clusters only, never a production setting. Two parts' etcds on the host's
+// one disk timed out on fsync while the parts ran together (#2107: lease and
+// status writes failed, the controller and kro restarted), so these clusters'
+// etcd skips fsync (--unsafe-no-fsync): a crash of the node can lose its
+// last writes, which a test cluster deleted at the end does not care about.
+// The latency SLO stays the soak profile's judgement, on a cluster with
+// normal etcd.
+const etcdNoFsync = `cp test/e2e/kind-config.yaml "$STEP_DIR/kind-config.yaml"
+cat >> "$STEP_DIR/kind-config.yaml" <<'KINDEOF'
+      - |
+        kind: ClusterConfiguration
+        apiVersion: kubeadm.k8s.io/v1beta4
+        etcd:
+          local:
+            extraArgs:
+              - name: unsafe-no-fsync
+                value: "true"
+KINDEOF
+export KIND_CONFIG="$STEP_DIR/kind-config.yaml"
+`
+
 func scaleSteps(r *Repo, o Options) []Step {
 	var steps []Step
+	soak := slices.Contains(o.ScaleProfiles, "soak")
 	for _, p := range o.ScaleProfiles {
-		st := Step{
-			ID: "scale-" + p, Area: areaScale, Title: "scale suite, " + p + " profile",
-			Clusters: clusterWeight["scale"], Heavy: true, Tests: "e2e/test.json", MinTests: 1,
+		parts := 1
+		if p == "full" {
+			parts = scaleFullParts
 		}
-		if r.nodeImage("scale", o.Newest) == "" {
-			st.Missing = fmt.Sprintf("no node image for Kubernetes 1.%d", o.Newest)
+		for part := 1; part <= parts; part++ {
+			id, title, cluster := "scale-"+p, "scale suite, "+p+" profile", "kp-rg-scale-"+p
+			if parts > 1 {
+				id += fmt.Sprintf("-%dof%d", part, parts)
+				title += fmt.Sprintf(", part %d of %d", part, parts)
+				cluster += fmt.Sprintf("-%d", part)
+			}
+			st := Step{
+				ID: id, Area: areaScale, Title: title,
+				Clusters: clusterWeight["scale"], Heavy: true, HeavyGroup: "scale-" + p, Tests: "e2e/test.json", MinTests: 1,
+			}
+			if r.nodeImage("scale", o.Newest) == "" {
+				st.Missing = fmt.Sprintf("no node image for Kubernetes 1.%d", o.Newest)
+				steps = append(steps, st)
+				continue
+			}
+			minor := fmt.Sprintf("1.%d", o.Newest)
+			env := []string{"KARDINAL_E2E_NODE_MEMORY=24g", "KARDINAL_E2E_KRO_MEMORY=8Gi", "KARDINAL_E2E_SCALE_PROFILE=" + p}
+			switch p {
+			case "full":
+				env = append(env, "KARDINAL_E2E_TIMEOUT=4h")
+			case "soak":
+				// test/e2e/README.md#scale-suite: the soak profile is the sustained load.
+				env = append(env, "KARDINAL_E2E_TIMEOUT=3h")
+			}
+			script := liveScript("scale", cluster, minor, 1, env)
+			switch {
+			case p == "soak":
+				script = strings.Replace(script, "unset RUN SHARD\n", "unset SHARD\nexport RUN='^TestScale_LoadSustained$'\n", 1)
+			case parts > 1:
+				// The parts split the tests by their full-profile durations
+				// (hack/e2e/run.sh SHARD); the soak profile's sustained load
+				// (5/s for 30m over 100 Pipelines) covers full's (2/s for 10m
+				// over 50), so full leaves it to soak when the gate runs both.
+				shard := fmt.Sprintf("unset RUN\nexport SHARD=%d/%d DURATIONS=hack/e2e/durations-scale-full.txt\n", part, parts) +
+					etcdNoFsync
+				if soak {
+					shard += "export SKIP='^TestScale_LoadSustained$'\n"
+				}
+				script = strings.Replace(script, "unset RUN SHARD\n", shard, 1)
+			}
+			st.Script, st.Cleanup = script, deleteClusters(cluster)
 			steps = append(steps, st)
-			continue
 		}
-		minor := fmt.Sprintf("1.%d", o.Newest)
-		env := []string{"KARDINAL_E2E_NODE_MEMORY=24g", "KARDINAL_E2E_KRO_MEMORY=8Gi", "KARDINAL_E2E_SCALE_PROFILE=" + p}
-		switch p {
-		case "full":
-			env = append(env, "KARDINAL_E2E_TIMEOUT=4h")
-		case "soak":
-			// test/e2e/README.md#scale-suite: the soak profile is the sustained load.
-			env = append(env, "KARDINAL_E2E_TIMEOUT=3h")
-		}
-		cluster := "kp-rg-scale-" + p
-		script := liveScript("scale", cluster, minor, 1, env)
-		if p == "soak" {
-			script = strings.Replace(script, "unset RUN SHARD\n", "unset SHARD\nexport RUN='^TestScale_LoadSustained$'\n", 1)
-		}
-		st.Script, st.Cleanup = script, deleteClusters(cluster)
-		steps = append(steps, st)
 	}
 	return steps
 }
