@@ -33,6 +33,11 @@ import (
 // Covers COMPLIANCE-01.
 func TestFrameworks_NameRealRecords(t *testing.T) {
 	written := writtenActions(t)
+	// Written through locals and a second taker (QA-2, #2178): the scanner
+	// must see them, or a change-management row citing them fails falsely.
+	for _, a := range []string{"ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved", "ChangeRequestRejected"} {
+		assert.True(t, written[a], "the scanner sees pkg/reconciler/changerequest write %s", a)
+	}
 	scheme := k8sruntime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(scheme))
 	ids := map[string]bool{}
@@ -165,9 +170,13 @@ func TestForPack(t *testing.T) {
 var writerDirs = []string{"pkg/reconciler", "cmd/kardinal-controller"}
 
 // writtenActions returns the AuditEvent actions the non-test Go code of
-// writerDirs writes (scanWrites). An action built at run time ("Freeze" +
-// "Started", fmt.Sprintf) is not seen and is reported as not written: a
-// false failure, the safe direction.
+// writerDirs writes (scanWrites). It is not seen, and is reported as not
+// written (a false failure, the safe direction), when it is built at run
+// time ("Freeze" + "Started", fmt.Sprintf), held in a struct field or a
+// global var assigned at run time, or passed through an interface method or
+// a func-typed field with an action parameter (actionParams indexes only
+// functions, methods and function literals assigned to a name; no writer
+// in the tree uses one today).
 func writtenActions(t *testing.T) map[string]bool {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
@@ -192,8 +201,10 @@ func writtenActions(t *testing.T) map[string]bool {
 }
 
 // scanWrites returns the AuditEvent actions files write. An action is
-// written where it, as a string literal or as a const or var whose value is
-// that literal, is passed to a parameter named action (actionParams), is a
+// written where it, as a string literal, a const or var whose value is that
+// literal, or a local of the function assigned it (a := AuditActionApproved,
+// then a = AuditActionRejected: both), is passed to a parameter named
+// action (actionParams), is a
 // value (not a key) of a composite literal (Action: x in an AuditEventSpec,
 // a map from a state to an action), or is assigned to an Action field. A
 // comparison, a switch case, a log field or a declaration is not a write,
@@ -218,46 +229,77 @@ func scanWrites(files []*ast.File) map[string]bool {
 			return true
 		})
 	}
-	// action is the action e names: a literal, a name (a local of the
-	// function first: action := "GateEvaluated"), or pkg.Name.
-	action := func(e ast.Expr, locals map[string]string) (string, bool) {
+	// actions is the set of actions e names: a literal, pkg.Name, or a name
+	// (a local of the function first, with every action assigned to it).
+	resolve := func(e ast.Expr, locals map[string]map[string]bool) map[string]bool {
 		switch e := e.(type) {
 		case *ast.BasicLit:
 			if actions[e.Value] {
-				return e.Value[1 : len(e.Value)-1], true
+				return map[string]bool{e.Value[1 : len(e.Value)-1]: true}
 			}
 		case *ast.Ident:
-			if a, ok := locals[e.Name]; ok {
-				return a, true
+			if as, ok := locals[e.Name]; ok {
+				return as
 			}
-			a, ok := named[e.Name]
-			return a, ok
+			if a, ok := named[e.Name]; ok {
+				return map[string]bool{a: true}
+			}
 		case *ast.SelectorExpr:
-			a, ok := named[e.Sel.Name]
-			return a, ok
+			if a, ok := named[e.Sel.Name]; ok {
+				return map[string]bool{a: true}
+			}
 		}
-		return "", false
+		return nil
 	}
 	takers := actionParams(files)
 	written := map[string]bool{}
 	for _, f := range files {
 		for _, decl := range f.Decls {
-			// The function's locals defined as an action, then its writes.
-			locals := map[string]string{}
-			ast.Inspect(decl, func(n ast.Node) bool {
-				if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.DEFINE && len(as.Lhs) == len(as.Rhs) {
-					for i, lhs := range as.Lhs {
-						if id, ok := lhs.(*ast.Ident); ok {
-							if lit, ok := as.Rhs[i].(*ast.BasicLit); ok && actions[lit.Value] {
-								locals[id.Name] = lit.Value[1 : len(lit.Value)-1]
+			// The function's locals that hold an action: every :=, = or var
+			// that gives a name of it an action (a literal, a const, another
+			// such local), whatever the branch (a := Approved; if … { a =
+			// Rejected }). The union is flow-insensitive: an over-count,
+			// never a missed writer.
+			locals := map[string]map[string]bool{}
+			bind := func(lhs ast.Expr, rhs ast.Expr) bool {
+				id, ok := lhs.(*ast.Ident)
+				if !ok {
+					return false
+				}
+				grew := false
+				for a := range resolve(rhs, locals) {
+					if locals[id.Name] == nil {
+						locals[id.Name] = map[string]bool{}
+					}
+					if !locals[id.Name][a] {
+						locals[id.Name][a] = true
+						grew = true
+					}
+				}
+				return grew
+			}
+			for grew := true; grew; {
+				grew = false
+				ast.Inspect(decl, func(n ast.Node) bool {
+					switch n := n.(type) {
+					case *ast.AssignStmt:
+						if (n.Tok == token.DEFINE || n.Tok == token.ASSIGN) && len(n.Lhs) == len(n.Rhs) {
+							for i := range n.Lhs {
+								grew = bind(n.Lhs[i], n.Rhs[i]) || grew
+							}
+						}
+					case *ast.ValueSpec:
+						if len(n.Values) == len(n.Names) {
+							for i := range n.Names {
+								grew = bind(n.Names[i], n.Values[i]) || grew
 							}
 						}
 					}
-				}
-				return true
-			})
+					return true
+				})
+			}
 			inspectWrites(decl, takers, func(e ast.Expr) {
-				if a, ok := action(e, locals); ok {
+				for a := range resolve(e, locals) {
 					written[a] = true
 				}
 			})
@@ -275,6 +317,7 @@ func TestScanWrites(t *testing.T) {
 	src := func(body string) *ast.File {
 		f, err := parser.ParseFile(token.NewFileSet(), "x.go", `package x
 const AuditActionFreezeStarted = "FreezeStarted"
+const AuditActionFreezeLifted = "FreezeLifted"
 func writeAudit(ctx any, action string) {}
 `+body, 0)
 		require.NoError(t, err)
@@ -293,6 +336,16 @@ func writeAudit(ctx any, action string) {}
 		{"fmt.Sprintf", `func f() { _ = fmt.Sprintf("%s", AuditActionFreezeStarted) }`, false},
 		{"another parameter of a taker", `func f() { writeAudit(AuditActionFreezeStarted, "") }`, false},
 		{"a comparison", `func f(a string) bool { return a == AuditActionFreezeStarted }`, false},
+		// A const through a local (QA-2, #2178: pkg/reconciler/changerequest).
+		{"a const through a local", `func f() { a := AuditActionFreezeStarted; writeAudit(nil, a) }`, true},
+		{"a local reassigned (the first value)", `func f(x bool) { a := AuditActionFreezeStarted; if x { a = AuditActionFreezeLifted }; writeAudit(nil, a) }`, true},
+		{"a local reassigned (the second value)", `func f(x bool) { a := AuditActionFreezeLifted; if x { a = AuditActionFreezeStarted }; writeAudit(nil, a) }`, true},
+		{"a var assigned in a switch", `func f(x int) { var action string; switch x { case 1: action = AuditActionFreezeStarted }; writeAudit(nil, action) }`, true},
+		{"a var declared with the action", `func f() { var a = AuditActionFreezeStarted; writeAudit(nil, a) }`, true},
+		{"through a local of a local", `func f() { a := AuditActionFreezeStarted; b := a; writeAudit(nil, b) }`, true},
+		{"an action parameter passed on to a second taker", `func record(n int, action string) { writeAudit(nil, action) }; func f() { var action string; action = AuditActionFreezeStarted; record(1, action) }`, true},
+		{"a local only compared", `func f(x string) bool { a := AuditActionFreezeStarted; return x == a }`, false},
+		{"a local passed to another parameter", `func f() { a := AuditActionFreezeStarted; writeAudit(a, "") }`, false},
 	} {
 		got := scanWrites([]*ast.File{src(tc.body)})["FreezeStarted"]
 		assert.Equal(t, tc.written, got, tc.name)
