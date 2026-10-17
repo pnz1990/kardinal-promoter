@@ -770,6 +770,20 @@
     "receipts": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "Keyless signing with Rekor v2 needs a timestamp authority: a Rekor v2 entry does not prove the signing time, and the certificate is short-lived, so such a receipt could never verify.",
+          "if": {
+            "required": ["enabled", "signing", "sinks"],
+            "properties": {
+              "enabled": {"const": true},
+              "signing": {"properties": {"mode": {"const": "keyless"}}},
+              "sinks": {"required": ["rekor"], "properties": {"rekor": {"required": ["url", "version"], "properties": {"url": {"minLength": 1}, "version": {"const": 2}}}}}
+            }
+          },
+          "then": {"properties": {"signing": {"required": ["tsaURL"], "properties": {"tsaURL": {"minLength": 1}}}}}
+        }
+      ],
       "properties": {
         "enabled": {"type": "boolean", "description": "--receipts: create and sign a PromotionReceipt for every promotion that reaches Verified."},
         "clusterID": {"type": "string", "description": "--receipt-cluster-id; empty reads the kube-system Namespace UID."},

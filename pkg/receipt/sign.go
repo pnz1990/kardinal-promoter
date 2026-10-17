@@ -100,6 +100,13 @@ func (s *Signer) Validate() error {
 		if s.RekorURL == "" && s.TSAURL == "" {
 			return errors.New("keyless receipt signing needs a Rekor or a timestamp authority URL: the certificate is short-lived, so the signing time must be proven")
 		}
+		// A Rekor v2 entry has no integrated time: it proves inclusion, not
+		// when. Without a timestamp authority a keyless receipt could never
+		// verify once its certificate expired, so it is refused here rather
+		// than marked Signed.
+		if s.RekorURL != "" && s.RekorVersion == 2 && s.TSAURL == "" {
+			return errors.New("keyless receipt signing with Rekor v2 needs a timestamp authority URL: a Rekor v2 entry does not prove the signing time, and the certificate is short-lived")
+		}
 	case v1alpha1.ReceiptSigningKey:
 		if s.Key == nil {
 			return errors.New("key receipt signing needs a key Secret")
