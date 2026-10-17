@@ -228,6 +228,144 @@ func TestReleaseRefusesTagsOffMain(t *testing.T) {
 	}
 }
 
+// TestReleaseMaintenanceBranch: a patch is released from its maintenance
+// branch release/vX.Y when main has moved on, if that branch descends from
+// vX.Y.0. A .0 off main, a patch on a branch that does not descend from its
+// .0, or on another minor's branch, is refused; so is a dry run of a
+// version outside its branch's line.
+func TestReleaseMaintenanceBranch(t *testing.T) {
+	script := preflightScript(t, "Check that the tagged commit is on main")
+
+	origin := t.TempDir()
+	runGit(t, origin, "init", "-q", "-b", "main")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v0.11")
+	runGit(t, origin, "tag", "v0.11.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v0.12")
+	runGit(t, origin, "tag", "v0.12.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v0.13 work")
+	// release/v0.12 from v0.12.0, with a cherry-picked fix.
+	runGit(t, origin, "checkout", "-q", "-b", "release/v0.12", "v0.12.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "fix")
+	runGit(t, origin, "tag", "v0.12.1")
+	runGit(t, origin, "tag", "v0.12.2-rc.1")
+	runGit(t, origin, "tag", "v0.12.3-wrong-zero")
+	// A branch named for v0.11 that starts after v0.11.0's line diverged
+	// is fine; one named release/v0.10 without a v0.10.0 is not.
+	runGit(t, origin, "checkout", "-q", "-b", "release/v0.10", "v0.11.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "no v0.10.0 here")
+	runGit(t, origin, "tag", "v0.10.1")
+	// A release/v0.11 cut before v0.11.0's successor exists is fine; one
+	// cut from v0.11.0 but named release/v0.12 does not descend from
+	// v0.12.0.
+	runGit(t, origin, "checkout", "-q", "-b", "release/v0.12-wrong", "v0.11.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "cut from v0.11.0")
+	runGit(t, origin, "tag", "v0.12.5")
+	// A side branch, not a maintenance branch.
+	runGit(t, origin, "checkout", "-q", "-b", "side", "v0.12.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "side")
+	runGit(t, origin, "tag", "v0.12.4")
+	runGit(t, origin, "tag", "v0.13.0-side")
+	runGit(t, origin, "checkout", "-q", "release/v0.12")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "a .0 on a maintenance branch")
+	// A v0.12.0-less line merged into release/v0.12: the tagged commit is on
+	// the branch, but does not descend from v0.12.0.
+	runGit(t, origin, "merge", "-q", "--no-ff", "--no-edit", "release/v0.12-wrong")
+	runGit(t, origin, "tag", "v0.12.0-again")
+	runGit(t, origin, "checkout", "-q", "main")
+
+	work := func(t *testing.T, ref string) (string, string) {
+		t.Helper()
+		w := t.TempDir()
+		runGit(t, w, "init", "-q")
+		runGit(t, w, "remote", "add", "origin", origin)
+		runGit(t, w, "fetch", "-q", "--no-tags", "origin", "+"+ref+":"+ref)
+		runGit(t, w, "checkout", "-q", "--detach", ref)
+		return w, runGit(t, w, "rev-parse", "HEAD")
+	}
+	for _, tt := range []struct {
+		tag, want string
+		ok        bool
+	}{
+		{tag: "v0.12.1", ok: true, want: "is on the maintenance branch release/v0.12, which descends from v0.12.0"},
+		{tag: "v0.12.2-rc.1", ok: true, want: "maintenance branch release/v0.12"},
+		{tag: "v0.10.1", want: "does not descend from v0.10.0"},
+		{tag: "v0.12.4", want: "nor on its maintenance branch release/v0.12"},
+		{tag: "v0.12.5", want: "does not descend from v0.12.0"},
+	} {
+		t.Run(tt.tag, func(t *testing.T) {
+			w, sha := work(t, "refs/tags/"+tt.tag)
+			out, _, err := runReleaseStep(t, w, script, "GITHUB_SHA="+sha, "GITHUB_REF_NAME="+tt.tag)
+			if tt.ok {
+				require.NoError(t, err, out)
+			} else {
+				require.Error(t, err, out)
+			}
+			assert.Contains(t, out, tt.want)
+		})
+	}
+	t.Run("a .0 off main", func(t *testing.T) {
+		w, sha := work(t, "refs/tags/v0.12.0-again")
+		out, _, err := runReleaseStep(t, w, script, "GITHUB_SHA="+sha, "GITHUB_REF_NAME=v0.13.0")
+		require.Error(t, err, out)
+		assert.Contains(t, out, "A .0 release is tagged on main")
+	})
+
+	// Dry runs: from release/v0.12, of a v0.12.x version only.
+	for _, tt := range []struct {
+		ref, version, want string
+		ok                 bool
+	}{
+		{ref: "release/v0.12", version: "v0.12.1-dryrun.1", ok: true, want: "descends from v0.12.0"},
+		{ref: "release/v0.12", version: "v0.13.1-dryrun.1", want: "runs from release/v0.13"},
+		{ref: "release/v0.12", version: "v0.12.0-dryrun.1", want: "A .0 release is tagged on main"},
+		{ref: "release/v0.10", version: "v0.10.1-dryrun.1", want: "does not descend from v0.10.0"},
+		{ref: "main", version: "v0.13.0-dryrun.1", ok: true, want: "the tag check runs at the real release"},
+	} {
+		t.Run("dry run "+tt.ref+" "+tt.version, func(t *testing.T) {
+			w, sha := work(t, "refs/heads/"+tt.ref)
+			out, _, err := runReleaseStep(t, w, script, "DRY_RUN=true", "DISPATCH_VERSION="+tt.version,
+				"GITHUB_SHA="+sha, "GITHUB_REF_NAME="+tt.ref)
+			if tt.ok {
+				require.NoError(t, err, out)
+			} else {
+				require.Error(t, err, out)
+			}
+			assert.Contains(t, out, tt.want)
+		})
+	}
+}
+
+// TestReleaseLatestIsTheHighestRelease: a patch of an older minor, released
+// after a newer minor, gets neither the latest image tags nor the latest
+// GitHub release; the newest final release does.
+func TestReleaseLatestIsTheHighestRelease(t *testing.T) {
+	script := preflightScript(t, "Set version and release channel from tag")
+	const image = "ghcr.io/pnz1990/kardinal-promoter/controller"
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	runGit(t, dir, "commit", "-q", "--allow-empty", "-m", "x")
+	for _, tag := range []string{"v0.12.0", "v0.13.0", "v0.14.0-rc.1", "v0.13.1-dryrun.1"} {
+		runGit(t, dir, "tag", tag)
+	}
+	for _, tt := range []struct {
+		tag    string
+		latest bool
+	}{
+		{"v0.12.1", false}, // v0.13.0 is out
+		{"v0.13.1", true},  // a prerelease of v0.14 does not count
+		{"v0.14.0", true},
+		{"v0.13.0", true}, // re-running the newest release
+	} {
+		t.Run(tt.tag, func(t *testing.T) {
+			out, got, err := runReleaseStep(t, dir, script, "GITHUB_REF_NAME="+tt.tag)
+			require.NoError(t, err, out)
+			assert.Equal(t, fmt.Sprint(tt.latest), got["make-latest"], out)
+			assert.Equal(t, tt.latest, strings.Contains(got["image-tags"], image+":latest"), got["image-tags"])
+			assert.Equal(t, "false", got["prerelease"])
+		})
+	}
+}
+
 // TestReleaseChannelFromVersion checks that only a final version (no "-")
 // pushes controller:latest and becomes the latest GitHub release.
 func TestReleaseChannelFromVersion(t *testing.T) {
@@ -270,7 +408,9 @@ func TestReleaseChannelFromVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.tag, func(t *testing.T) {
-			out, got, err := runReleaseStep(t, repoRoot(t), script, "GITHUB_REF_NAME="+tt.tag)
+			// Outside a repository: no released tags, so a final version is
+			// the highest (TestReleaseLatestIsTheHighestRelease has tags).
+			out, got, err := runReleaseStep(t, t.TempDir(), script, "GITHUB_REF_NAME="+tt.tag)
 			if tt.wantErr {
 				require.Error(t, err, out)
 				assert.Contains(t, out, "is not vMAJOR.MINOR.PATCH")
@@ -733,7 +873,7 @@ func TestReleaseWorkflowWiring(t *testing.T) {
 		}
 		require.Len(t, names, 7)
 		assert.True(t, strings.HasPrefix(preflight.Steps[0].Uses, "actions/checkout@"))
-		assert.Equal(t, "Check that the tagged commit is on main", names[1])
+		assert.Equal(t, "Check that the tagged commit is on main or its maintenance branch", names[1])
 		for name, job := range jobs {
 			if name != "preflight" {
 				assert.Contains(t, job.needs(), "preflight", "job %s must wait for preflight", name)
@@ -1021,8 +1161,13 @@ func TestReleaseDryRun(t *testing.T) {
 	}
 
 	for _, s := range releaseJobs(t)["preflight"].Steps {
-		if s.Name == "No unreleased changelog fragments" || s.Name == "Check that the tagged commit is on main" {
+		switch s.Name {
+		case "No unreleased changelog fragments":
 			assert.Equal(t, "env.DRY_RUN != 'true'", fmt.Sprint(s.If), "%s: a dry run builds a branch with fragments", s.Name)
+		case "Check that the tagged commit is on main or its maintenance branch":
+			// It runs on a dry run too: from release/vX.Y it checks the
+			// branch's ancestry (TestReleaseMaintenanceBranch).
+			assert.Nil(t, s.If, s.Name)
 		}
 	}
 

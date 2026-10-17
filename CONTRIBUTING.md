@@ -184,6 +184,32 @@ into the report. Running the gate again on the same commit waits for that
 run, and re-runs only its failed jobs. The scale profiles stay on the host:
 a runner is too small for them.
 
+### Patch releases from a maintenance branch
+
+A patch (`vX.Y.Z`, Z > 0) for a released minor ships from `release/vX.Y` when main already
+holds the next minor's work. `release.yml`'s preflight accepts a tag on main, or a patch tag on
+`release/vX.Y` whose commit descends from `vX.Y.0`. A `.0` is always tagged on main. The GitHub
+release and the `latest` image tags go only to the highest final release, so a v0.12.x released
+after v0.13.0 does not take them.
+
+1. **The branch.** `git branch release/vX.Y vX.Y.0` and push it, once per minor.
+2. **The fixes.** Cherry-pick each fix's squash commit from main (`git cherry-pick -x`), with
+   its `docs/changelog.d` fragment.
+3. **The release commit on the branch:**
+   - `make changelog-release VERSION=vX.Y.Z` (only the cherry-picked fragments);
+   - chart `version: X.Y.Z` / `appVersion: "vX.Y.Z"`;
+   - the `--version` pins in the docs and `docs/upgrade.md`.
+4. **Evidence.** A dry run from the branch (`gh workflow run release.yml --ref release/vX.Y -f
+   version=vX.Y.Z-dryrun.1`): its preflight checks the branch's ancestry and that the version is
+   in the branch's line. Then the release gate's patch scope, which the release issue lists.
+5. **Tag** the branch head: `git tag -a vX.Y.Z -m 'kardinal-promoter vX.Y.Z'`.
+6. **Back on main**, one PR:
+   - adds the `## [vX.Y.Z]` section to `docs/changelog.md`;
+   - deletes the cherry-picked fragments (main's other unreleased fragments stay);
+   - bumps the docs pins to vX.Y.Z when it is the newest release.
+
+   The docs site deploys from main.
+
 ## How to Contribute
 
 ### Bug Reports
