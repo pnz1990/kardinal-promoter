@@ -134,9 +134,9 @@ kardinal verify-receipt --file receipt.sigstore.json --key receipt.pub \
 ```
 
 A receipt whose signed statement holds a credential (a token in a CI run URL, for example) cannot
-be redacted without breaking its signature, so the pack never exports it: it checks every value
-of the decoded statement, and leaves the statement and bundle out when one holds a credential,
-when the statement does not decode, or when the bundle does not sign exactly the statement. The
+be redacted without breaking its signature, so the pack never exports it: it checks every key
+and value of the decoded statement and bundle, and leaves both out when one holds a credential,
+when either does not decode, or when the bundle does not sign exactly the statement. The
 receipt is annotated `kardinal.io/evidence-pack-withheld` with the reason, the command warns,
 and `redactions.receiptsWithheld` counts them. Verify such a receipt from the cluster or its OCI
 or Rekor sink.

@@ -631,7 +631,10 @@ func (p *evidence) receipt(rc *v1alpha1.PromotionReceipt) {
 //   - a statement that does not decode is not shown safe;
 //   - the bundle's DSSE payload must be the statement, byte for byte: the
 //     check above saw the statement, and a bundle that signs anything else
-//     (a status edited by hand) would be exported unchecked.
+//     (a status edited by hand) would be exported unchecked;
+//   - every other string of the bundle (its verification material, a log
+//     entry) and every key of either is checked as the statement's values
+//     are.
 func receiptUnsafe(statement, bundle string) string {
 	var tree interface{}
 	if err := json.Unmarshal([]byte(statement), &tree); err != nil {
@@ -654,11 +657,19 @@ func receiptUnsafe(statement, bundle string) string {
 	if string(b.DSSE.Payload) != statement {
 		return "the Sigstore bundle's payload is not the statement"
 	}
+	var whole interface{}
+	if err := json.Unmarshal([]byte(bundle), &whole); err != nil {
+		return "the Sigstore bundle is not JSON, so its payload cannot be checked"
+	}
+	if path := credentialAt(whole, "bundle"); path != "" {
+		return "the Sigstore bundle holds a credential (" + path + ")"
+	}
 	return ""
 }
 
-// credentialAt is the path of the first string in tree that scm.RedactText
-// would change (a URL's userinfo, a credential parameter), or "".
+// credentialAt is the path of the first string in tree, a map's key or a
+// value, that scm.RedactText would change (a URL's userinfo, a credential
+// parameter), or "".
 func credentialAt(tree interface{}, path string) string {
 	switch t := tree.(type) {
 	case string:
@@ -672,6 +683,9 @@ func credentialAt(tree interface{}, path string) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			if scm.RedactText(k) != k {
+				return path + " (a key)"
+			}
 			if p := credentialAt(t[k], path+"."+k); p != "" {
 				return p
 			}
