@@ -658,7 +658,9 @@ func TestReceiptJourney_SLSABuildLevel(t *testing.T) {
 	f.toVerified(t)
 	_, st := f.receipt(t)
 	require.NotNil(t, st.Predicate.Kardinal.Checks.SLSA)
-	assert.Equal(t, receipt.SLSA{BuildLevel: 1, LevelSource: "builder", Images: 1}, *st.Predicate.Kardinal.Checks.SLSA)
+	level := 1
+	assert.Equal(t, receipt.SLSA{BuildLevel: 1, LevelSource: "builder", Images: []receipt.SLSAImage{
+		{Image: "nginx", Status: receipt.SLSAVerified, BuildLevel: &level, LevelSource: "builder"}}}, *st.Predicate.Kardinal.Checks.SLSA)
 	assert.Contains(t, st.Predicate.VerifiedLevels, "SLSA_BUILD_LEVEL_1")
 	assert.NotContains(t, st.Predicate.VerifiedLevels, "SLSA_BUILD_LEVEL_3")
 }
