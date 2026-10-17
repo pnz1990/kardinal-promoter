@@ -144,8 +144,10 @@ func TestRollouts_AnalysisVerifiesEnvironment(t *testing.T) {
 	sim := cli.Must(a.ns, "policy", "simulate", pipelineName, "prod")
 	assert.Contains(t, sim, "RESULT:", sim)
 	cli.Must(a.ns, "policy", "list", pipelineName)
+	assert.NotContains(t, sim, "verification", sim)
 	dry := cli.Must(a.ns, "create", "bundle", pipelineName, "--image", imageV2, "--dry-run")
 	assert.Contains(t, dry, "prod (verification: version-check, cluster/"+cluster+")", dry)
+	assert.NotContains(t, dry, "not checked", "the CLI reads the templates and counts their AnalysisRuns")
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 
@@ -209,9 +211,11 @@ func TestRollouts_AnalysisFailureFailsEnvironment(t *testing.T) {
 
 // TestRollouts_AnalysisMissingTemplateFailsBundle: a verification that names
 // a template that does not exist fails the Bundle before any environment
-// is promoted (InvalidSpec, GraphBuildFailed, naming the template).
+// is promoted (InvalidSpec, GraphBuildFailed, naming the template). Before
+// the Bundle, kardinal policy simulate says so: BLOCKED by verification,
+// exit non-zero (#2011).
 //
-// Covers ANALYSIS-MISSING-01.
+// Covers ANALYSIS-MISSING-01, CLI-PREVIEW-VERIFY-03.
 func TestRollouts_AnalysisMissingTemplateFailsBundle(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -220,6 +224,13 @@ func TestRollouts_AnalysisMissingTemplateFailsBundle(t *testing.T) {
 	p.Spec.Environments[0].Verification = &v1alpha1.VerificationSpec{
 		AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "nope"}}}
 	a.apply(t, p)
+
+	// #2011: the CLI's preview fails as the controller will.
+	sim := e.CLI(t).Run(a.ns, "policy", "simulate", pipelineName, "prod")
+	require.NotZero(t, sim.Code, "%s", sim.Output())
+	assert.Contains(t, sim.Stdout, "RESULT: BLOCKED\nBlocked by: verification\n", sim.Stdout)
+	assert.Contains(t, sim.Stdout, `AnalysisTemplate \"nope\" not found`, sim.Stdout)
+
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	e.WaitBundle(t, a.ns, bundle, time.Minute, "Failed with InvalidSpec",
 		failedWith("GraphBuildFailed", `AnalysisTemplate "nope" not found`))

@@ -8,8 +8,10 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -32,6 +34,14 @@ import (
 // Templates that do not exist are left out (Build fails with their name).
 // Other API errors are returned so the translation is retried.
 func (t *Translator) collectAnalyses(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline) (graph.AnalysisInput, error) {
+	return CollectAnalyses(ctx, t.k8s, t.mapper, pipeline)
+}
+
+// CollectAnalyses is what the Translator reads for spec.verification, for
+// a reader k8s and the cluster's mapper (nil: every kind is served). The
+// CLI's previews call it to fail as the controller does (#2011).
+func CollectAnalyses(ctx context.Context, k8s client.Reader, mapper meta.RESTMapper,
+	pipeline *kardinalv1alpha1.Pipeline) (graph.AnalysisInput, error) {
 	in := graph.AnalysisInput{Templates: map[string]graph.AnalysisTemplate{}}
 	var refs []kardinalv1alpha1.AnalysisTemplateRef
 	for _, env := range pipeline.Spec.Environments {
@@ -42,7 +52,7 @@ func (t *Translator) collectAnalyses(ctx context.Context, pipeline *kardinalv1al
 	if len(refs) == 0 {
 		return in, nil
 	}
-	if !t.servedKind(graph.AnalysisRunAPIVersion, "AnalysisRun") {
+	if !servedKind(mapper, graph.AnalysisRunAPIVersion, "AnalysisRun") {
 		in.Unavailable = fmt.Sprintf("%s AnalysisRun is not served by the cluster: install Argo Rollouts "+
 			"(its CRDs) or remove spec.verification; kardinal does not promote without the analysis",
 			graph.AnalysisRunAPIVersion)
@@ -54,7 +64,7 @@ func (t *Translator) collectAnalyses(ctx context.Context, pipeline *kardinalv1al
 		if _, done := in.Templates[key]; done {
 			continue
 		}
-		if !t.servedKind(graph.AnalysisRunAPIVersion, kind) {
+		if !servedKind(mapper, graph.AnalysisRunAPIVersion, kind) {
 			continue // Build reports it as not found
 		}
 		obj := &unstructured.Unstructured{}
@@ -64,7 +74,7 @@ func (t *Translator) collectAnalyses(ctx context.Context, pipeline *kardinalv1al
 		if kind == graph.KindAnalysisTemplate {
 			nn.Namespace = pipeline.Namespace
 		}
-		if err := t.k8s.Get(ctx, nn, obj); err != nil {
+		if err := k8s.Get(ctx, nn, obj); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}

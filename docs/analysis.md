@@ -171,13 +171,22 @@ Graph's size limits. One that kro cannot create holds only its environment, and 
 
 ## Previews
 
-`kardinal policy simulate`, `kardinal policy list --pipeline`, `kardinal validate` and
-`kardinal create bundle --dry-run` do not read the AnalysisTemplates. Verification adds no gate and
-does not change the promotion order, so they show the gates and the order the controller builds.
-`validate` still checks `verification.timeout`. The dry run names each environment's analyses
-(`-o json`: `environments[].analyses`, with `cluster/<name>` for a ClusterAnalysisTemplate) and
-leaves their AnalysisRun nodes out of its node count. A template that does not exist fails the
-version in the controller, not in a preview.
+`kardinal policy simulate`, `kardinal policy list --pipeline` and `kardinal create bundle --dry-run`
+read the AnalysisTemplates and ClusterAnalysisTemplates verification names, as the controller
+does, and fail as it would:
+
+- When they are all there, the gates decide the result, and the dry run counts their AnalysisRuns.
+- When one does not exist, or Argo Rollouts is not installed, `policy simulate` prints
+  `RESULT: BLOCKED`, `Blocked by: verification` with the controller's reason, and exits non-zero:
+  the controller fails such a version. `policy list` says `Verification fails:` with the reason,
+  and the dry run fails with it.
+- When the CLI may not read them (RBAC), the gates decide the result and the output says
+  `Verification not checked:` with the reason. The dry run then names each environment's analyses
+  (`-o json`: `environments[].analyses`, `cluster/<name>` for a ClusterAnalysisTemplate, and
+  `verificationNotChecked`) and leaves their AnalysisRuns out of its node count.
+
+`kardinal validate` does not read the cluster: it checks `verification.timeout`, and the controller
+checks the templates when it builds the version's Graph.
 
 ## What it cannot do
 

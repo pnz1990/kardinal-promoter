@@ -268,17 +268,17 @@ func (t *Translator) collectChangeRequestTemplates(ctx context.Context, ns strin
 	return out, nil
 }
 
-// servedKind reports whether the cluster serves apiVersion/kind. Without a
-// mapper every kind is assumed served.
-func (t *Translator) servedKind(apiVersion, kind string) bool {
-	if t.mapper == nil {
+// servedKind reports whether mapper, the cluster's, serves apiVersion's
+// kind. Without a mapper every kind is assumed served.
+func servedKind(mapper meta.RESTMapper, apiVersion, kind string) bool {
+	if mapper == nil {
 		return true
 	}
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
 		return false
 	}
-	_, err = t.mapper.RESTMapping(gv.WithKind(kind).GroupKind(), gv.Version)
+	_, err = mapper.RESTMapping(gv.WithKind(kind).GroupKind(), gv.Version)
 	return err == nil
 }
 
