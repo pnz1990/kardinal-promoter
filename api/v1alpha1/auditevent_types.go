@@ -140,6 +140,11 @@ var AuditActions = []string{
 	"PRMerged", "ReceiptFailed",
 }
 
+// AuditActionsNeverWritten are the actions spec.action accepts that kardinal
+// never writes (see AuditEventSpec.Action): a record that cites one as
+// evidence cites nothing.
+var AuditActionsNeverWritten = []string{"HealthCheckFailed", "GateBlocked"}
+
 // AuditOutcomes are the values spec.outcome accepts.
 var AuditOutcomes = []string{"Success", "Failure", "Pending"}
 

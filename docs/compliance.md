@@ -120,6 +120,14 @@ bytes.
 - **Changes that bypass it.** A direct push to the GitOps branch or a `kubectl apply` on the
   workload is invisible to kardinal. Protect the branches and require the `kardinal/gates`
   commit status.
+- **A record lost before it was written.** Writing audit records is best-effort under overload: a
+  reconciler's audit outbox drops its oldest entry when full, a record the API server rejects as
+  invalid is dropped, and `APIWrite` records over their rate budget are dropped. Each is counted
+  in `kardinal_audit_events_dropped_total`; alert when it rises
+  ([Audit outbox](guides/security.md#audit-outbox)).
+- **Changes kardinal does not record.** A direct write with kubectl, or by an agent through
+  `kardinal mcp` with its own kubeconfig, to a Pipeline, a PolicyGate or a ChangeWindow is in the
+  Kubernetes API server's audit log only.
 - **That a record was not deleted** before you exported it, by someone allowed to delete it.
   Export continuously, and keep `delete` on `kardinal.io` resources to the cluster's
   administrators.
@@ -139,12 +147,12 @@ bytes.
 | Element | kardinal record |
 |---|---|
 | Changes are tracked | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
-| Changes are approved before production | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
-| Developer and approver are different people | `approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as one party; `status.approvals[].reason` says why an approval did not count |
+| Approvals, where production requires them | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit status; an `auto` environment records none |
+| The version's creator does not approve it (when `excludeAuthor` is set) | `approval.excludeAuthor` (off by default) does not count an approval by the user who created the version (`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. `status.approvals[].reason` says why an approval did not count |
 | Emergency changes are controlled | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
 | Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
 
-**Your part:** The change policy itself, the review of the evidence, changes that bypass kardinal (direct pushes to the GitOps branch: protect it and require the `kardinal/gates` status), and access reviews of who holds the approver role.
+**Your part:** The change policy itself, the review of the evidence, changes that bypass kardinal (direct pushes to the GitOps branch: protect it and require the `kardinal/gates` status), and access reviews of who holds the approver role. Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment. Setting `approval.excludeAuthor: true` on those gates; and, to keep a change's commit author from approving it, the SCM's branch protection (required reviewers or code owners, no self-approval), which kardinal does not check.
 
 ### ISO/IEC 27001:2022 Annex A
 
@@ -156,11 +164,11 @@ bytes.
 |---|---|
 | The procedure is enforced, not advisory | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged (`admission.yaml` in the evidence pack) |
 | Changes are planned and recorded | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
-| Changes are approved | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Approvals, where production requires them | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit status; an `auto` environment records none |
 | Rollback | rollback versions (`spec.provenance.rollbackOf`) and their promotions; holds that keep an environment on a version (`Pipeline.spec.holds[]`) |
 | Change windows | `ChangeWindow` blackout and recurring windows, and freezes (who froze, who lifted, the exemptions) |
 
-**Your part:** The documented procedure, the risk assessment of a change, and communication to affected parties.
+**Your part:** The documented procedure, the risk assessment of a change, and communication to affected parties. Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment.
 
 #### A.5.3: Segregation of duties
 
@@ -168,12 +176,12 @@ bytes.
 
 | Element | kardinal record |
 |---|---|
-| The author is not the approver | `approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as one party; `status.approvals[].reason` says why an approval did not count |
+| The version's creator does not approve it (when `excludeAuthor` is set) | `approval.excludeAuthor` (off by default) does not count an approval by the user who created the version (`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. `status.approvals[].reason` says why an approval did not count |
 | An agent and the person accountable for it count as one | each agent's sponsor (`AgentIdentity.spec.sponsor`) and the approver's verified actor (`Approval.spec.actor`) |
 | Distinct roles | the chart's user roles (`<release>-viewer`, `-promoter`, `-approver`, `-admin`); approvers named by `approval.allowedUsers` and `allowedGroups` |
 | Quorum | `approval.required: N` distinct parties |
 
-**Your part:** Who is granted which role, and the access review.
+**Your part:** Who is granted which role, and the access review. Setting `approval.excludeAuthor: true` on those gates; and, to keep a change's commit author from approving it, the SCM's branch protection (required reviewers or code owners, no self-approval), which kardinal does not check.
 
 ### NIST SP 800-53 Rev. 5
 
@@ -184,10 +192,10 @@ bytes.
 | Element | kardinal record |
 |---|---|
 | Controlled changes are defined and implemented as approved | a change reaches an environment only through a PromotionStep its Pipeline and gates allow; the identity ValidatingAdmissionPolicies keep the names in the records from being forged (`admission.yaml` in the evidence pack) |
-| Decisions are reviewed, approved and documented | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Approvals, where production requires them | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit status; an `auto` environment records none |
 | Records are retained and change activity is reviewed | AuditEvents, kept as `--audit-retention-max-age` and `--audit-retention-max-per-pipeline` allow; `kardinal audit summary`, `kardinal audit export` and `kardinal audit evidence-pack` |
 
-**Your part:** The configuration management plan, the change control board's charter, and the system's other components.
+**Your part:** The configuration management plan, the change control board's charter, and the system's other components. Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment.
 
 #### CM-3(2): Testing, validation and documentation of changes
 
@@ -215,7 +223,7 @@ bytes.
 
 | Element | kardinal record |
 |---|---|
-| Enforcement and its records | ValidatingAdmissionPolicies that deny, not warn; `APIWrite` AuditEvents for the UI's and the Bundle API's writes, refusals included |
+| Enforcement and its records | ValidatingAdmissionPolicies that deny, not warn; `APIWrite` AuditEvents for the UI's and the Bundle API's writes, refusals included. The records are best-effort: one dropped under overload is counted in `kardinal_audit_events_dropped_total` |
 
 **Your part:** The Kubernetes API server's own audit log, for writes made with kubectl.
 
@@ -225,9 +233,9 @@ bytes.
 
 | Element | kardinal record |
 |---|---|
-| Duties are separated | `approval.excludeAuthor` against the version's verified creator; an agent and its sponsor count as one party; `status.approvals[].reason` says why an approval did not count |
+| The version's creator does not approve it (when `excludeAuthor` is set) | `approval.excludeAuthor` (off by default) does not count an approval by the user who created the version (`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. `status.approvals[].reason` says why an approval did not count |
 
-**Your part:** Which duties need separating in the organisation, and who holds each role.
+**Your part:** Which duties need separating in the organisation, and who holds each role. Setting `approval.excludeAuthor: true` on those gates; and, to keep a change's commit author from approving it, the SCM's branch protection (required reviewers or code owners, no self-approval), which kardinal does not check.
 
 ### DORA, Regulation (EU) 2022/2554
 
@@ -241,10 +249,10 @@ Change management is Article 9(4)(e) of the Regulation, detailed in the RTS on t
 |---|---|
 | Changes are recorded | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
 | Changes are tested | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
-| Changes are approved | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted); `pr-review` environments with the `kardinal/gates` commit status |
+| Approvals, where production requires them | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit status; an `auto` environment records none |
 | Emergency changes are handled and documented | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
 
-**Your part:** The ICT risk management framework and the change policy it requires.
+**Your part:** The ICT risk management framework and the change policy it requires. Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment.
 
 #### Art. 17: ICT-related incident management process
 
@@ -267,9 +275,9 @@ These articles bind the providers and deployers of the AI systems the Act names 
 
 | Element | kardinal record |
 |---|---|
-| Every change an agent makes is logged | AuditEvents with `actor.kind: agent`, the agent's sponsor and what it asserted about itself (model, session, client); `kardinal audit export` |
+| The agents' promotions, approvals, verdicts and freezes are logged | AuditEvents with `actor.kind: agent`, the agent's sponsor and what it asserted about itself (model, session, client), for what an agent does through kardinal: its versions and their promotions, approvals, verdicts, freezes and holds, and its UI and Bundle API writes (`APIWrite`); `kardinal audit export` |
 
-**Your part:** Deciding whether the Act applies to your systems, and their own documentation.
+**Your part:** Deciding whether the Act applies to your systems, and their own documentation. The Kubernetes API server's audit log, for an agent's direct writes (kubectl, or `kardinal mcp` with the agent's kubeconfig) to a Pipeline, a PolicyGate or a ChangeWindow, which kardinal does not record.
 
 #### Art. 14: Human oversight
 
@@ -311,9 +319,9 @@ Listed by the Annex A control's title; check the clause numbers against your cop
 
 | Element | kardinal record |
 |---|---|
-| The agents' changes are logged | AuditEvents with the agent's verified actor and sponsor |
+| The agents' promotions, approvals, verdicts and freezes are logged | AuditEvents with the agent's verified actor and sponsor, for what an agent does through kardinal |
 
-**Your part:** Logging of the AI systems themselves, outside kardinal.
+**Your part:** Logging of the AI systems themselves, outside kardinal, and the Kubernetes API server's audit log for an agent's direct writes.
 
 #### Use of AI systems
 

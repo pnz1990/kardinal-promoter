@@ -22,12 +22,15 @@ import (
 
 // TestFrameworks_NameRealRecords (spec 22 section 8): every kind the table
 // names is a kardinal.io kind of the scheme and every action is one
-// AuditEvent's spec.action accepts, so the page and the pack never point
+// AuditEvent's spec.action accepts and kardinal writes, so the page and the pack never point
 // at a record kardinal does not write. Every control says what the
 // customer still has to do, and has a shipped row or is left off the page.
 //
 // Covers COMPLIANCE-01.
 func TestFrameworks_NameRealRecords(t *testing.T) {
+	for _, a := range v1alpha1.AuditActionsNeverWritten {
+		require.True(t, slices.Contains(v1alpha1.AuditActions, a), "never-written action %s is an AuditEvent action", a)
+	}
 	scheme := k8sruntime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(scheme))
 	ids := map[string]bool{}
@@ -60,6 +63,7 @@ func TestFrameworks_NameRealRecords(t *testing.T) {
 				}
 				for _, a := range e.Actions {
 					assert.True(t, slices.Contains(v1alpha1.AuditActions, a), "%s: action %s is an AuditEvent action", where, a)
+					assert.False(t, slices.Contains(v1alpha1.AuditActionsNeverWritten, a), "%s: kardinal never writes action %s", where, a)
 				}
 			}
 		}
