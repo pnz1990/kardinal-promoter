@@ -44,12 +44,21 @@ type comment struct {
 // lives (a rotated token builds a new provider).
 var selfIDs sync.Map
 
-// self is the identity of p, from lookup the first time.
+// self is the identity of p, from lookup the first time. A token that may
+// not read its own user (a Forgejo token without read:user, a Bitbucket
+// token without account: a 403 that is not a rate limit) cannot search by
+// author, so it is ErrCommentSearchUnsupported: the caller posts without
+// searching, which at worst repeats a comment; a search by marker alone
+// would let anyone who can comment suppress it.
 func self(ctx context.Context, p interface{}, lookup func(context.Context) (string, error)) (string, error) {
 	if v, ok := selfIDs.Load(p); ok {
 		return v.(string), nil
 	}
 	id, err := lookup(ctx)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden && !apiErr.Transient {
+		return "", fmt.Errorf("%w: the token may not read its own user: %v", ErrCommentSearchUnsupported, err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("read the SCM identity: %w", err)
 	}

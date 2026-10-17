@@ -240,6 +240,10 @@ It checks, and exits non-zero when any check fails:
   comment by kardinal's own SCM identity counts (the token's user; a GitHub App's comments by the
   App), so anyone who may comment on the PR cannot keep the receipt's comment from being posted
   by posting the marker first. The search reads at most 20 pages of comments, oldest first.
+  A token that may not read its own user (a Forgejo/Gitea token with only the
+  `write:repository` and `write:issue` scopes, a Bitbucket token without `account`) is not
+  searched: the comment is posted, and a crash between the post and its status write can post
+  it twice. Add `read:user` (Forgejo/Gitea) or `account` (Bitbucket) to search.
 - **`kardinal history`** adds a RECEIPT column once a promotion has one: "verified" when it is
   signed.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to

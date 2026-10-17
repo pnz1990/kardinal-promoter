@@ -6,6 +6,7 @@ package scm_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -191,4 +192,47 @@ func TestHasPRComment_GitHubApp(t *testing.T) {
 	found, err = p.HasPRComment(context.Background(), "acme/app", 5, commentMarker)
 	require.NoError(t, err)
 	assert.True(t, found, "the App's own comment")
+}
+
+// TestHasPRComment_IdentityForbidden: a token that may not read its own user
+// (Forgejo without read:user, the scopes docs/scm-providers.md lists) cannot
+// search by author, so the search is unsupported and the caller posts; any
+// other failure to read the identity (a rejected token, a rate limit, an
+// outage) stays an error, and no comment is ever counted by marker alone.
+func TestHasPRComment_IdentityForbidden(t *testing.T) {
+	tests := []struct {
+		kind, repo, selfPath string
+		status               int
+		rateLimited          bool
+		unsupported          bool
+	}{
+		{"forgejo", "acme/app", "/api/v1/user", http.StatusForbidden, false, true},
+		{"bitbucket", "acme/app", "/2.0/user", http.StatusForbidden, false, true},
+		{"gitlab", "acme/app", "/api/v4/user", http.StatusForbidden, false, true},
+		{"forgejo", "acme/app", "/api/v1/user", http.StatusForbidden, true, false},
+		{"forgejo", "acme/app", "/api/v1/user", http.StatusUnauthorized, false, false},
+		{"forgejo", "acme/app", "/api/v1/user", http.StatusInternalServerError, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("%s %d rateLimited=%v", tc.kind, tc.status, tc.rateLimited), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.EscapedPath() != tc.selfPath {
+					t.Errorf("unexpected request %s: the comments are not read without the identity", r.URL)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if tc.rateLimited {
+					w.Header().Set("X-RateLimit-Remaining", "0")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(`{"message":"token does not have at least one of required scope(s): [read:user]"}`))
+			}))
+			defer srv.Close()
+			p, err := scm.NewProvider(tc.kind, "token", srv.URL, "")
+			require.NoError(t, err)
+			found, err := p.(scm.PRCommentFinder).HasPRComment(context.Background(), tc.repo, 5, commentMarker)
+			require.Error(t, err)
+			assert.False(t, found)
+			assert.Equal(t, tc.unsupported, errors.Is(err, scm.ErrCommentSearchUnsupported), "%v", err)
+		})
+	}
 }
