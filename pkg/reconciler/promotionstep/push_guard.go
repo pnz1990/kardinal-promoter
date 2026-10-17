@@ -226,6 +226,19 @@ func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *
 	return "", nil
 }
 
+// stepsLanded is when the last of ps's steps completed: its commit was on
+// the branch by then (git-push, or the merge wait-for-merge saw). Zero when
+// none has completed.
+func stepsLanded(ps *v1alpha1.PromotionStep) time.Time {
+	var at time.Time
+	for _, st := range ps.Status.Steps {
+		if st.CompletedAt != nil && st.CompletedAt.After(at) {
+			at = st.CompletedAt.Time
+		}
+	}
+	return at
+}
+
 // pushCompleted reports whether s completed git-push.
 func pushCompleted(s *v1alpha1.PromotionStep) bool {
 	for _, st := range s.Status.Steps {

@@ -145,12 +145,14 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 // environment's rendered branch, whose every file is the environment's).
 // It runs only when the resource check would pass, and costs the shared
 // remote cache's reads (one ls-remote per repository per remoteHeadsTTL,
-// one graph read per head, shared by every check at that head). A cached
-// head can predate want (another step read the heads before this one
-// pushed): a head that does not hold want is read again, once, before the
-// check says the branch moved (#2137: 300 environments on one branch).
+// one graph read per head, shared by every check at that head). It judges
+// only heads read after landed, when the step's commit landed (its last
+// step completed): cached heads read before then cannot show a later commit,
+// nor always the step's own (another step read them before this one pushed,
+// #2137: 300 environments on one branch), so they are read again, once per
+// step at most, before the check passes or says the branch moved.
 func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
-	env v1alpha1.EnvironmentSpec, want string) string {
+	env v1alpha1.EnvironmentSpec, want string, landed time.Time) string {
 	rh, ok := r.GitClient.(scm.RemoteHeadReader)
 	gr, gok := r.GitClient.(scm.BranchGraphReader)
 	if !ok || !gok || pipeline == nil {
@@ -173,7 +175,8 @@ func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeli
 	}
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
-	heads, err := r.remotes.remoteHeads(hctx, rh, url, auth, r.now())
+	// A status time has whole seconds: the commit landed before the next one.
+	heads, err := r.remotes.remoteHeadsSince(hctx, rh, url, auth, r.now(), landed.Add(time.Second))
 	if err != nil {
 		return unreadable(err.Error())
 	}
@@ -182,20 +185,6 @@ func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeli
 	if !holds {
 		if holds, err = r.descends(ctx, rh, gr, url, branch, auth, head, want, paths); err != nil {
 			return unreadable(err.Error())
-		}
-	}
-	if !holds {
-		fresh, err := r.remotes.readHeads(hctx, rh, url, auth, r.now())
-		if err != nil {
-			return unreadable(err.Error())
-		}
-		if now := fresh[branch]; now != head {
-			head = now
-			if holds = head != "" && head == want; !holds {
-				if holds, err = r.descends(ctx, rh, gr, url, branch, auth, head, want, paths); err != nil {
-					return unreadable(err.Error())
-				}
-			}
 		}
 	}
 	if !holds {
