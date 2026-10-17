@@ -64,14 +64,18 @@ var (
 
 // ticket is one change_request.
 type ticket struct {
-	SysID         string            `json:"sys_id"`
-	Number        string            `json:"number"`
-	State         string            `json:"state"`
-	Approval      string            `json:"approval"`
-	CorrelationID string            `json:"correlation_id"`
-	Fields        map[string]string `json:"fields"`
-	Approvers     []approver        `json:"approvers"`
-	Created       time.Time         `json:"created"`
+	SysID         string `json:"sys_id"`
+	Number        string `json:"number"`
+	State         string `json:"state"`
+	Approval      string `json:"approval"`
+	CorrelationID string `json:"correlation_id"`
+	// CreatedBy is the user_name that created it (sys_created_by): the
+	// authenticated user for a create, someone.else unless given for a
+	// ticket the control port adds.
+	CreatedBy string            `json:"sys_created_by"`
+	Fields    map[string]string `json:"fields"`
+	Approvers []approver        `json:"approvers"`
+	Created   time.Time         `json:"created"`
 }
 
 type approver struct {
@@ -145,6 +149,9 @@ func (s *server) add(t *ticket) *ticket {
 	}
 	if t.Approval == "" {
 		t.Approval = "not requested"
+	}
+	if t.CreatedBy == "" {
+		t.CreatedBy = "someone.else"
 	}
 	if t.Fields == nil {
 		t.Fields = map[string]string{}
@@ -279,7 +286,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, body []byte, rec 
 			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "failure"})
 			return http.StatusBadRequest
 		}
-		t := &ticket{CorrelationID: in["correlation_id"], Fields: map[string]string{}}
+		t := &ticket{CorrelationID: in["correlation_id"], CreatedBy: user, Fields: map[string]string{}}
 		for k, v := range in {
 			if k != "correlation_id" && k != "state" && k != "approval" && k != "number" && k != "sys_id" {
 				t.Fields[k] = v
@@ -297,13 +304,20 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request, body []byte, rec 
 		writeJSON(w, http.StatusOK, map[string]interface{}{"result": display(t, fields)})
 		return http.StatusOK
 	case r.Method == http.MethodGet && r.URL.Path == "/api/now/table/change_request":
-		cond := strings.SplitN(q.Get("sysparm_query"), "^", 2)[0]
-		name, value, _ := strings.Cut(cond, "=")
+		conds := strings.Split(q.Get("sysparm_query"), "^")
+		name, value, _ := strings.Cut(conds[0], "=")
+		createdBy := ""
+		for _, c := range conds[1:] {
+			if v, ok := strings.CutPrefix(c, "sys_created_by="); ok {
+				createdBy = v
+			}
+		}
 		var out []map[string]interface{}
 		list := append([]*ticket(nil), s.tickets...)
 		sort.SliceStable(list, func(i, j int) bool { return list[i].Created.Before(list[j].Created) })
 		for _, t := range list {
-			if (name == "correlation_id" && t.CorrelationID == value) || (name == "number" && t.Number == value) {
+			if ((name == "correlation_id" && t.CorrelationID == value) || (name == "number" && t.Number == value)) &&
+				(createdBy == "" || t.CreatedBy == createdBy) {
 				out = append(out, display(t, fields))
 			}
 		}
@@ -343,6 +357,7 @@ func display(t *ticket, fields string) map[string]interface{} {
 		"state":          dv(t.State, snStateNames[t.State]),
 		"approval":       dv(t.Approval, snApprovalNames[t.Approval]),
 		"correlation_id": dv(t.CorrelationID, t.CorrelationID),
+		"sys_created_by": dv(t.CreatedBy, t.CreatedBy),
 		"sys_created_on": dv(t.Created.UTC().Format("2006-01-02 15:04:05"), t.Created.UTC().Format("2006-01-02 15:04:05")),
 	}
 	for k, v := range t.Fields {

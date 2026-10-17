@@ -266,6 +266,15 @@ spec:
                     maxLength: 253
                     pattern: ^https://[^/?#@]+/?$
                     type: string
+                  integrationUser:
+                    description: |-
+                      IntegrationUser is the ServiceNow user_name the credential acts as.
+                      kardinal adopts an existing change (a create whose answer it lost)
+                      only when that user created it (sys_created_by), so nobody can plant a
+                      labelled change and approve it. With scheme basic it defaults to the
+                      credential's user; scheme bearer needs it.
+                    pattern: ^[A-Za-z0-9._@+-]{1,100}$
+                    type: string
                   scheme:
                     default: basic
                     description: |-
@@ -313,6 +322,10 @@ spec:
                 - credentialsSecretRef
                 - instanceURL
                 type: object
+                x-kubernetes-validations:
+                - message: 'scheme bearer needs servicenow.integrationUser: the user_name
+                    the OAuth token acts as, so kardinal adopts only changes it created'
+                  rule: '!has(self.scheme) || self.scheme != ''bearer'' || has(self.integrationUser)'
               suspend:
                 description: |-
                   Suspend stops reading the ticket (the Graph sets it on an instance

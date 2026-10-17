@@ -82,6 +82,12 @@ func TestChangeRequestsOnAPIServer(t *testing.T) {
 		}, "Unsupported value"},
 		{"a poll interval that is not a duration", func(s *v1alpha1.ChangeRequestSpec) { s.PollInterval = "often" }, "should match"},
 		{"timeout 0", func(s *v1alpha1.ChangeRequestSpec) { s.Timeout = "0" }, ""},
+		{"bearer without an integration user", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.Scheme = "bearer" },
+			"scheme bearer needs servicenow.integrationUser"},
+		{"bearer with an integration user", func(s *v1alpha1.ChangeRequestSpec) {
+			s.ServiceNow.Scheme, s.ServiceNow.IntegrationUser = "bearer", "svc.kardinal"
+		}, ""},
+		{"an integration user that is a query", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.IntegrationUser = "a^ORb" }, "should match"},
 		{"a states map", func(s *v1alpha1.ChangeRequestSpec) {
 			s.ServiceNow.States = map[string]string{"-3": "approved", "Implement": "closed"}
 		}, ""},

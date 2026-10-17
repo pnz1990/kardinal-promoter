@@ -53,6 +53,7 @@ type FakeSnowTicket struct {
 	State         string            `json:"state"`
 	Approval      string            `json:"approval"`
 	CorrelationID string            `json:"correlation_id"`
+	CreatedBy     string            `json:"sys_created_by"`
 	Fields        map[string]string `json:"fields"`
 }
 

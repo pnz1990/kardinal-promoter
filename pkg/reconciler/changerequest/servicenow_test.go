@@ -151,7 +151,7 @@ func TestServiceNow_CreateFindGet(t *testing.T) {
 	assert.Equal(t, http.MethodPost, got.Method)
 	assert.Equal(t, "/api/now/table/change_request", got.Path)
 	assert.Equal(t, "all", got.Query["sysparm_display_value"])
-	assert.Equal(t, "sys_id,number,state,approval,correlation_id,sys_created_on", got.Query["sysparm_fields"])
+	assert.Equal(t, "sys_id,number,state,approval,correlation_id,sys_created_on,sys_created_by", got.Query["sysparm_fields"])
 	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), r.Created, "sys_created_on is read as UTC")
 	assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte(snSecret)), got.Auth)
 	assert.Equal(t, map[string]string{"short_description": "Promote app v1 to prod", "assignment_group": "payments-cab",
@@ -165,7 +165,9 @@ func TestServiceNow_CreateFindGet(t *testing.T) {
 	assert.Equal(t, "approved", found.State)
 	assert.Equal(t, "Scheduled / Approved", found.ProviderState)
 	got = srv.requests()[1]
-	assert.Equal(t, "correlation_id="+key+"^ORDERBYsys_created_on", got.Query["sysparm_query"])
+	assert.Equal(t, "correlation_id="+key+"^sys_created_by=kardinal^ORDERBYsys_created_on", got.Query["sysparm_query"],
+		"only a change the integration user created is adopted")
+	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), found.Created, "Find reads the creation time too")
 	assert.Equal(t, "1", got.Query["sysparm_limit"])
 
 	other := snRequestFor(srv.URL)
@@ -226,7 +228,9 @@ func TestServiceNowState(t *testing.T) {
 	}{
 		{"-2", "Scheduled", "approved", nil, "approved"},
 		{"-1", "Implement", "approved", nil, "approved"},
-		{"-3", "Authorize", "approved", nil, "pending"}, // approved but not yet scheduled
+		{"-2", "Scheduled", "requested", nil, "pending"},     // scheduled, but nobody approved it
+		{"-1", "Implement", "not requested", nil, "pending"}, // implementing, never approved
+		{"-3", "Authorize", "approved", nil, "pending"},      // approved but not yet scheduled
 		{"-3", "Authorize", "requested", nil, "pending"},
 		{"-5", "New", "not requested", nil, "pending"},
 		{"-4", "Assess", "rejected", nil, "rejected"},
@@ -397,4 +401,45 @@ func TestServiceNow_InstanceURL(t *testing.T) {
 		assert.NotContains(t, err.Error(), "pw")
 	}
 	assert.Empty(t, srv.requests())
+}
+
+// TestServiceNow_PrePlanting (coordinator decision on #2129): Find adopts a
+// change only when the integration user created it: the query filters on
+// sys_created_by, and a change another user created with this promotion's
+// correlation key (planted, then approved by its planter) is not adopted
+// even if the instance ignores the filter. The user is the basic
+// credential's, or spec.servicenow.integrationUser (needed for bearer).
+func TestServiceNow_PrePlanting(t *testing.T) {
+	key := changerequest.CorrelationKey(corrID)
+	srv := newSNServer(t, key)
+	srv.answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/now/table/change_request" {
+			// An instance that ignores the filter, answering a planted change.
+			_, _ = w.Write([]byte(strings.Replace(string(fixture(t, "changes.json", key)),
+				`"sys_created_by": {"display_value": "kardinal", "value": "kardinal"}`,
+				`"sys_created_by": {"display_value": "mallory", "value": "mallory"}`, 1)))
+			return true
+		}
+		return false
+	}
+	sn := &changerequest.ServiceNow{Client: srv.Client()}
+	_, found, err := sn.Find(context.Background(), snRequestFor(srv.URL))
+	require.NoError(t, err)
+	assert.False(t, found, "a change mallory created is never adopted")
+
+	srv.answer = nil
+	bearer := snRequestFor(srv.URL, func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.Scheme = "bearer" })
+	n := len(srv.requests())
+	_, _, err = sn.Find(context.Background(), bearer)
+	assert.ErrorContains(t, err, "set spec.servicenow.integrationUser")
+	assert.Len(t, srv.requests(), n, "no request without a known integration user")
+	bearer.Spec.ServiceNow.IntegrationUser = "kardinal"
+	_, found, err = sn.Find(context.Background(), bearer)
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Contains(t, srv.requests()[len(srv.requests())-1].Query["sysparm_query"], "^sys_created_by=kardinal^")
+
+	injected := snRequestFor(srv.URL, func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.IntegrationUser = "x^ORsys_created_byISNOTEMPTY" })
+	_, _, err = sn.Find(context.Background(), injected)
+	assert.ErrorContains(t, err, "not a user_name", "a user that would rewrite the query is refused")
 }

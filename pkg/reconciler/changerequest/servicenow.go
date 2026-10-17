@@ -34,7 +34,7 @@ const (
 	snTable     = "api/now/table/change_request"
 	snApprovals = "api/now/table/sysapproval_approver"
 	// snFields are the fields read from a change_request.
-	snFields = "sys_id,number,state,approval,correlation_id,sys_created_on"
+	snFields = "sys_id,number,state,approval,correlation_id,sys_created_on,sys_created_by"
 )
 
 // snKeyRE is a change number a link may name; anything else would be part
@@ -126,17 +126,49 @@ func (s *ServiceNow) Create(ctx context.Context, req Request) (Reading, error) {
 	return s.reading(base, sn, req, out.Result, nil)
 }
 
+// snUserRE is a ServiceNow user_name kardinal puts into a query.
+var snUserRE = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,100}$`)
+
+// integrationUser is the user_name the credential acts as:
+// spec.servicenow.integrationUser, else, for scheme basic, the credential's
+// user.
+func integrationUser(ctx context.Context, req Request, sn *kardinalv1alpha1.ServiceNowChangeRequest) (string, error) {
+	user := sn.IntegrationUser
+	if user == "" && sn.Scheme != "bearer" && req.Secret != nil {
+		v, err := req.Secret(ctx, sn.CredentialsSecretRef)
+		if err != nil {
+			return "", fmt.Errorf("servicenow: credentials: %w", err)
+		}
+		user, _, _ = strings.Cut(v, ":")
+	}
+	if !snUserRE.MatchString(user) {
+		return "", errors.New("servicenow: the integration user is unknown or not a user_name: set spec.servicenow.integrationUser")
+	}
+	return user, nil
+}
+
 // Find returns the change_request whose correlation_id is the correlation
-// key, the oldest when there are several.
+// key and that the integration user created (sys_created_by), the oldest
+// when there are several. A change someone else created with the key is
+// never adopted: anyone who may create changes could plant one and approve
+// it.
 func (s *ServiceNow) Find(ctx context.Context, req Request) (Reading, bool, error) {
 	sn, base, auth, err := s.conf(ctx, req)
 	if err != nil {
 		return Reading{}, false, err
 	}
-	rec, ok, err := s.query(ctx, base, auth, "correlation_id="+CorrelationKey(req.CorrelationID)+"^ORDERBYsys_created_on",
+	user, err := integrationUser(ctx, req, sn)
+	if err != nil {
+		return Reading{}, false, err
+	}
+	rec, ok, err := s.query(ctx, base, auth,
+		"correlation_id="+CorrelationKey(req.CorrelationID)+"^sys_created_by="+user+"^ORDERBYsys_created_on",
 		snFieldsFor(req.Spec), "servicenow: find change")
 	if err != nil || !ok {
 		return Reading{}, false, err
+	}
+	if by, _ := rec.field("sys_created_by"); by != user {
+		return Reading{}, false, nil // the instance ignored the filter: not ours
 	}
 	r, err := s.reading(base, sn, req, rec, nil)
 	return r, err == nil, err

@@ -38,18 +38,25 @@ func TestFakeAgreesWithServiceNowProvider(t *testing.T) {
 			InstanceURL: api.URL, Template: map[string]string{"short_description": "Promote app v1"}}}}
 	ctx := context.Background()
 
+	// A change mallory planted with this promotion's correlation key, and
+	// approved: never adopted.
+	resp, err := http.Post(ctl.URL+"/_control/servicenow", "application/json", bytes.NewBufferString(
+		`{"correlation_id":"`+changerequest.CorrelationKey(req.CorrelationID)+`","sys_created_by":"mallory","state":"-2","approval":"approved"}`))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
 	_, found, err := sn.Find(ctx, req)
 	require.NoError(t, err)
-	assert.False(t, found)
+	assert.False(t, found, "the planted change is not adopted")
 	created, err := sn.Create(ctx, req)
 	require.NoError(t, err)
-	assert.Equal(t, "CHG0000001", created.Ticket.Key)
+	assert.Equal(t, "CHG0000002", created.Ticket.Key, "a new change, not the planted one")
 	assert.Equal(t, "pending", created.State)
+	assert.Equal(t, "u", s.tickets[1].CreatedBy)
 	assert.Equal(t, "New / Not Yet Requested", created.ProviderState)
 	assert.Equal(t, req.CorrelationID, created.CorrelationID)
-	assert.WithinDuration(t, s.tickets[0].Created, created.Created, time.Second, "sys_created_on is read")
-	assert.Equal(t, "Promote app v1", s.tickets[0].Fields["short_description"])
-	assert.Equal(t, "normal", s.tickets[0].Fields["type"])
+	assert.WithinDuration(t, s.tickets[1].Created, created.Created, time.Second, "sys_created_on is read")
+	assert.Equal(t, "Promote app v1", s.tickets[1].Fields["short_description"])
+	assert.Equal(t, "normal", s.tickets[1].Fields["type"])
 
 	again, found, err := sn.Find(ctx, req)
 	require.NoError(t, err)
@@ -64,14 +71,14 @@ func TestFakeAgreesWithServiceNowProvider(t *testing.T) {
 		_ = resp.Body.Close()
 		require.Less(t, resp.StatusCode, 300, path)
 	}
-	put("/_control/servicenow/CHG0000001", `{"state":"-2","approval":"approved","approvers":[{"name":"Jane Smith","state":"approved"}]}`)
+	put("/_control/servicenow/CHG0000002", `{"state":"-2","approval":"approved","approvers":[{"name":"Jane Smith","state":"approved"}]}`)
 	got, err := sn.Get(ctx, req, created.Ticket)
 	require.NoError(t, err)
 	assert.Equal(t, "approved", got.State)
 	assert.Equal(t, "Scheduled / Approved", got.ProviderState)
 	require.Len(t, got.Approvers, 1)
 	assert.Equal(t, "Jane Smith", got.Approvers[0].Name)
-	byNumber, err := sn.Get(ctx, req, kardinalv1alpha1.ChangeRequestTicket{Key: "CHG0000001"})
+	byNumber, err := sn.Get(ctx, req, kardinalv1alpha1.ChangeRequestTicket{Key: "CHG0000002"})
 	require.NoError(t, err)
 	assert.Equal(t, "approved", byNumber.State)
 	_, err = sn.Get(ctx, req, kardinalv1alpha1.ChangeRequestTicket{Key: "CHG0000099"})
@@ -88,7 +95,7 @@ func TestFakeAgreesWithServiceNowProvider(t *testing.T) {
 	_, err = sn.Get(ctx, req, created.Ticket)
 	assert.ErrorIs(t, err, changerequest.ErrCredentials)
 
-	resp, err := http.Get(ctl.URL + "/_control/requests")
+	resp, err = http.Get(ctl.URL + "/_control/requests")
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	var recs []record

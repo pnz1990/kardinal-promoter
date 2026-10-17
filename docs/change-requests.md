@@ -104,9 +104,15 @@ approvals from `sysapproval_approver`.
 | Call | Request |
 |---|---|
 | Open | `POST /api/now/table/change_request` with the template's fields, `type` (`spec.servicenow.type`), `correlation_id` and `correlation_display: kardinal` |
-| Find (before every create) | `GET /api/now/table/change_request?sysparm_query=correlation_id=<key>^ORDERBYsys_created_on` |
+| Find (before every create) | `GET /api/now/table/change_request?sysparm_query=correlation_id=<key>^sys_created_by=<integration user>^ORDERBYsys_created_on` |
 | Read | `GET /api/now/table/change_request/<sys_id>`, or by `number` for a linked ticket |
 | Approvers | `GET /api/now/table/sysapproval_approver?sysparm_query=sysapproval=<sys_id>` (a refusal leaves them out) |
+
+**Only kardinal's own changes are adopted.** Find returns a change only when the integration user
+created it (`sys_created_by`), so someone who may create changes cannot plant one with the
+promotion's correlation id and approve it themselves. With scheme `basic` the integration user is
+the credential's user; with `bearer` set `spec.servicenow.integrationUser` to the user_name the
+token acts as (the CRD requires it).
 
 The template cannot set `type`, `correlation_id` or `correlation_display`. `correlation_id`
 holds `kardinal-` and 32 hex characters of the promotion's correlation id's SHA-256, because the

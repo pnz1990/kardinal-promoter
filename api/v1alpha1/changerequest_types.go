@@ -115,6 +115,7 @@ type ChangeRequestAuth struct {
 }
 
 // ServiceNowChangeRequest configures provider servicenow.
+// +kubebuilder:validation:XValidation:rule="!has(self.scheme) || self.scheme != 'bearer' || has(self.integrationUser)",message="scheme bearer needs servicenow.integrationUser: the user_name the OAuth token acts as, so kardinal adopts only changes it created"
 type ServiceNowChangeRequest struct {
 	// InstanceURL is the ServiceNow instance, https://<instance>.service-now.com.
 	// +kubebuilder:validation:Pattern=`^https://[^/?#@]+/?$`
@@ -122,6 +123,15 @@ type ServiceNowChangeRequest struct {
 	InstanceURL string `json:"instanceURL"`
 
 	ChangeRequestAuth `json:",inline"`
+
+	// IntegrationUser is the ServiceNow user_name the credential acts as.
+	// kardinal adopts an existing change (a create whose answer it lost)
+	// only when that user created it (sys_created_by), so nobody can plant a
+	// labelled change and approve it. With scheme basic it defaults to the
+	// credential's user; scheme bearer needs it.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9._@+-]{1,100}$`
+	// +optional
+	IntegrationUser string `json:"integrationUser,omitempty"`
 
 	// Type is the change model of the Change Management API: normal,
 	// standard or emergency.
