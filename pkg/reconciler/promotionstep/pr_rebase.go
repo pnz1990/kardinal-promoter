@@ -135,6 +135,80 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 	}
 }
 
+// branchMoved says why the environment's branch no longer holds want, the
+// step's promoted commit, with the files the promotion wrote (its head does
+// not descend from want, or a later commit changed the environment's
+// paths), or "" when it does or the history cannot be read by this git
+// client. A read that fails says so: the check waits rather than passes.
+//
+// The branch is the one the step pushed to (targetBranch: a layout: branch
+// environment's rendered branch, whose every file is the environment's).
+// It runs only when the resource check would pass, and costs the shared
+// remote cache's reads (one ls-remote per repository per remoteHeadsTTL,
+// one graph read per head, shared by every check at that head). It judges
+// only heads read after landed, when the step's commit landed (its last
+// step completed): cached heads read before then cannot show a later commit,
+// nor always the step's own (another step read them before this one pushed,
+// #2137: 300 environments on one branch), so they are read again, once per
+// step at most, before the check passes or says the branch moved.
+//
+// The health check calls it through stepMoved, which takes landed from the
+// step itself. A zero landed (no step completed) fails closed: the commit
+// has not landed, and the check waits.
+func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
+	env v1alpha1.EnvironmentSpec, want string, landed time.Time) string {
+	rh, ok := r.GitClient.(scm.RemoteHeadReader)
+	gr, gok := r.GitClient.(scm.BranchGraphReader)
+	if !ok || !gok || pipeline == nil {
+		return ""
+	}
+	if landed.IsZero() {
+		return "commit " + short(want) + " has not landed yet: no step of this promotion has completed"
+	}
+	unreadable := func(why string) string {
+		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + why
+	}
+	cred := r.resolveGitCredential(ctx, log, pipeline)
+	if cred.refused != nil {
+		return unreadable(cred.refused.Error())
+	}
+	if cred.reason == reasonSecretNotReferenceable {
+		return unreadable(cred.notReferenceable())
+	}
+	url, auth := pipeline.Spec.Git.URL, cred.auth()
+	branch, paths := targetBranch(pipeline, env), prPaths(env)
+	if v1alpha1.RendersToBranch(pipeline.Spec, env) {
+		paths = []string{"."}
+	}
+	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	// A status time has whole seconds: the commit landed before the next one.
+	heads, err := r.remotes.remoteHeadsSince(hctx, rh, url, auth, r.now(), landed.Add(time.Second))
+	if err != nil {
+		return unreadable(err.Error())
+	}
+	head := heads[branch]
+	holds := head != "" && head == want
+	if !holds {
+		if holds, err = r.descends(ctx, rh, gr, url, branch, auth, head, want, paths); err != nil {
+			return unreadable(err.Error())
+		}
+	}
+	if !holds {
+		return fmt.Sprintf("branch %s no longer holds this promotion's commit %s with the files it wrote for %s (head %s): "+
+			"the workload's images do not say which version runs, so its health does not verify this promotion",
+			branch, short(want), env.Name, short(head))
+	}
+	return ""
+}
+
+// stepMoved is branchMoved for ps, the health-checking step: want is its
+// promoted commit, landed when its last step completed (stepsLanded).
+func (r *Reconciler) stepMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
+	env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep, want string) string {
+	return r.branchMoved(ctx, log, pipeline, env, want, stepsLanded(ps))
+}
+
 // revisionBehind is health.CheckOptions.RevisionBehind for the step: how
 // many commits want, the promoted commit, has on the environment's branch
 // that rev does not, when rev is an ancestor of it (#1883). It reads the same

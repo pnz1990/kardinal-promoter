@@ -23,6 +23,7 @@ follow [Upgrading from v0.11.0](upgrade.md#upgrading-from-v0110) with `--version
   - **What went wrong:** an older version's step still health-checking an environment could pass after a newer version pushed there and was Verified. It was then recorded Verified with a `PromotionSucceeded` AuditEvent, for a version the environment no longer ran. This happened when health was checked on the Deployment (`resource`) and its images could not name the version (kustomize `newName`, or a config version).
   - **Superseded, not Verified:** a step still health-checking when a newer version's step has pushed to the same environment ends `Superseded`, with a `PromotionSuperseded` record. It is decided from the newer step's recorded push, even when the Bundle's supersession is written late.
   - **The branch must still hold the commit:** when the images cannot name the version, the `resource` check requires that the environment's branch still holds the promotion's commit with the files it wrote, as `argocd` and `flux` already do (#1575).
+    It reads the branch the step pushed: a `layout: branch` environment's rendered branch. A rollback of one fleet target pushes every environment on its way to that target; when it replaces a version still health-checking one of them, that version's step there is `Superseded` too, not failed at its timeout.
   - See [Health adapters](health-adapters.md).
 
 ## [v0.12.0] — 2026-10-17
