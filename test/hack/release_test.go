@@ -273,13 +273,27 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 	runGit(t, origin, "checkout", "-q", "-b", "side", "v0.12.0")
 	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "side")
 	runGit(t, origin, "tag", "v0.12.4")
-	runGit(t, origin, "tag", "v0.13.0-side")
 	runGit(t, origin, "checkout", "-q", "release/v0.12")
 	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "a .0 on a maintenance branch")
 	// A v0.12.0-less line merged into release/v0.12: the tagged commit is on
 	// the branch, but does not descend from v0.12.0.
 	runGit(t, origin, "merge", "-q", "--no-ff", "--no-edit", "release/v0.12-wrong")
 	runGit(t, origin, "tag", "v0.12.0-again")
+	// A major bump on main, and a later line's prerelease.
+	runGit(t, origin, "checkout", "-q", "main")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v1")
+	runGit(t, origin, "tag", "v1.0.0")
+	runGit(t, origin, "checkout", "-q", "-b", "release/v0.13", "v0.13.0")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "a v0.13 fix")
+	runGit(t, origin, "tag", "v0.13.1")
+	runGit(t, origin, "checkout", "-q", "-b", "v13-major", "release/v0.13")
+	runGit(t, origin, "merge", "-q", "--no-ff", "--no-edit", "v1.0.0")
+	runGit(t, origin, "tag", "v0.13.2")
+	runGit(t, origin, "checkout", "-q", "-b", "v13-rc", "release/v0.13")
+	runGit(t, origin, "commit", "-q", "--allow-empty", "-m", "v0.14 work")
+	runGit(t, origin, "tag", "v0.14.0-rc.1")
+	runGit(t, origin, "tag", "v0.13.3")
+	runGit(t, origin, "checkout", "-q", "main")
 	// main (with v0.13.0) merged into release/v0.12, then tagged as a patch.
 	runGit(t, origin, "checkout", "-q", "-b", "release/v0.12-merged", "release/v0.12")
 	runGit(t, origin, "merge", "-q", "--no-ff", "--no-edit", "v0.13.0")
@@ -306,8 +320,11 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 		{tag: "v0.10.1", want: "contains v0.11.0"},
 		{tag: "v0.12.4", want: "nor on its maintenance branch release/v0.12"},
 		{tag: "v0.12.5", want: "does not descend from v0.12.0"},
-		{tag: "v0.12.6", want: "contains v0.13.0: a v0.12 patch must not carry the next minor's work"},
+		{tag: "v0.12.6", want: "contains v0.13.0: a v0.12 patch must not carry a later line's work"},
 		{tag: "v0.12.7", want: "contains v0.13.0"},
+		{tag: "v0.13.1", ok: true, want: "maintenance branch release/v0.13"}, // v1.0.0 is later, but not in it
+		{tag: "v0.13.2", want: "contains v1.0.0"},                            // a major bump merged in
+		{tag: "v0.13.3", want: "contains v0.14.0-rc.1"},                      // a later line's prerelease
 	} {
 		t.Run(tt.tag, func(t *testing.T) {
 			w, sha := work(t, "refs/tags/"+tt.tag)
@@ -320,6 +337,14 @@ func TestReleaseMaintenanceBranch(t *testing.T) {
 			assert.Contains(t, out, tt.want)
 		})
 	}
+	t.Run("a failed tag fetch does not skip the later-line check", func(t *testing.T) {
+		w, sha := work(t, "refs/tags/v0.12.6")
+		runGit(t, w, "fetch", "-q", "--no-tags", "origin", "+refs/tags/v0.13.0:refs/tags/v0.13.0")
+		runGit(t, w, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone"))
+		out, _, err := runReleaseStep(t, w, script, "GITHUB_SHA="+sha, "GITHUB_REF_NAME=v0.12.6")
+		require.Error(t, err, out)
+		assert.Contains(t, out, "contains v0.13.0")
+	})
 	t.Run("a .0 off main", func(t *testing.T) {
 		w, sha := work(t, "refs/tags/v0.12.0-again")
 		out, _, err := runReleaseStep(t, w, script, "GITHUB_SHA="+sha, "GITHUB_REF_NAME=v0.13.0")

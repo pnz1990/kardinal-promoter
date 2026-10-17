@@ -202,7 +202,10 @@ after v0.13.0 does not take them.
 4. **Evidence.** A dry run from the branch (`gh workflow run release.yml --ref release/vX.Y -f
    version=vX.Y.Z-dryrun.1`): its preflight checks the branch's ancestry and that the version is
    in the branch's line. Then the release gate's patch scope, which the release issue lists.
-5. **Tag** the branch head: `git tag -a vX.Y.Z -m 'kardinal-promoter vX.Y.Z'`.
+5. **Tag** the branch head: `git tag -a vX.Y.Z -m 'kardinal-promoter vX.Y.Z'`. Push one release tag
+   at a time: release runs share one concurrency group, and a third tag pushed while one runs
+   and one waits cancels the waiting one. A release shown as cancelled is re-run from its run
+   page (its tag is still there).
 6. **Back on main**, one PR:
    - adds the `## [vX.Y.Z]` section to `docs/changelog.md`;
    - deletes the cherry-picked fragments (main's other unreleased fragments stay);
