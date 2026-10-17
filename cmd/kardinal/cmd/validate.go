@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	crdbases "github.com/kardinal-promoter/kardinal-promoter/config/crd/bases"
+	crdfiles "github.com/kardinal-promoter/kardinal-promoter/config/crd"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/crdschema"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -325,7 +325,7 @@ func reportValidation(out io.Writer, file string, errs, warnings []string) error
 // crdSchemas are the schemas of the CRDs the CLI embeds (config/crd/bases),
 // by kind, loaded once.
 var crdSchemas = sync.OnceValues(func() (map[string]crdschema.Schema, error) {
-	return crdschema.Load(crdbases.FS, kardinalv1alpha1.GroupVersion.Version)
+	return crdschema.Load(crdfiles.Bases(), kardinalv1alpha1.GroupVersion.Version)
 })
 
 // schemaErrors checks the document data of kind against its CRD's schema
