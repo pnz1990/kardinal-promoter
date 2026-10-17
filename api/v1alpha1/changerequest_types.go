@@ -37,6 +37,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.provider != 'servicenow' || has(self.servicenow)",message="provider servicenow needs spec.servicenow"
 // +kubebuilder:validation:XValidation:rule="self.provider != 'jira' || has(self.jira)",message="provider jira needs spec.jira"
 // +kubebuilder:validation:XValidation:rule="self.mode != 'link' || has(self.link)",message="mode link needs spec.link: where the ticket key comes from"
+// +kubebuilder:validation:XValidation:rule="self.provider != 'jira' || (has(self.mode) && self.mode == 'link') || (has(self.jira) && has(self.jira.project))",message="provider jira in mode open needs spec.jira.project: the project issues are opened in"
 type ChangeRequestSpec struct {
 	// PerPromotion makes this ChangeRequest a template: the Graph creates an
 	// instance of it per Bundle and environment whose gates read
@@ -167,8 +168,16 @@ type JiraChangeRequest struct {
 
 	ChangeRequestAuth `json:",inline"`
 
-	// Project is the key of the project issues are opened in.
-	// +kubebuilder:validation:MaxLength=64
+	// APIVersion is the REST API version: 3 for Jira Cloud (a description is
+	// sent as an Atlassian Document Format paragraph), 2 for Jira Data Center.
+	// +kubebuilder:validation:Enum="2";"3"
+	// +kubebuilder:default="3"
+	// +optional
+	APIVersion string `json:"apiVersion,omitempty"`
+
+	// Project is the key of the project issues are opened in (mode open
+	// needs it).
+	// +kubebuilder:validation:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
 	// +optional
 	Project string `json:"project,omitempty"`
 

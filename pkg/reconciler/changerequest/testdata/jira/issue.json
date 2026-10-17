@@ -1,0 +1,19 @@
+{
+  "expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+  "id": "10042",
+  "key": "CHG-42",
+  "self": "{{BASE}}/rest/api/3/issue/10042",
+  "fields": {
+    "status": {
+      "self": "{{BASE}}/rest/api/3/status/10001",
+      "description": "",
+      "name": "Awaiting approval",
+      "id": "10001",
+      "statusCategory": {"self": "{{BASE}}/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}
+    },
+    "resolution": null,
+    "labels": ["{{CORRELATION}}", "release"],
+    "customfield_10010": {"self": "{{BASE}}/rest/api/3/customFieldOption/10100", "value": "checkout", "id": "10100"},
+    "components": [{"name": "payroll"}, {"name": "checkout"}]
+  }
+}

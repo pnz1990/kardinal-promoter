@@ -137,5 +137,6 @@ func DefaultProviders(o ProviderOptions) map[string]Provider {
 	hc := newHTTPClient(o)
 	return map[string]Provider{
 		kardinalv1alpha1.ChangeRequestServiceNow: &ServiceNow{Client: hc},
+		kardinalv1alpha1.ChangeRequestJira:       &Jira{Client: hc},
 	}
 }

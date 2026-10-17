@@ -80,6 +80,15 @@ spec:
               jira:
                 description: Jira configures provider jira.
                 properties:
+                  apiVersion:
+                    default: "3"
+                    description: |-
+                      APIVersion is the REST API version: 3 for Jira Cloud (a description is
+                      sent as an Atlassian Document Format paragraph), 2 for Jira Data Center.
+                    enum:
+                    - "2"
+                    - "3"
+                    type: string
                   approvedStatusCategory:
                     default: done
                     description: |-
@@ -138,9 +147,10 @@ spec:
                     maxLength: 64
                     type: string
                   project:
-                    description: Project is the key of the project issues are opened
-                      in.
-                    maxLength: 64
+                    description: |-
+                      Project is the key of the project issues are opened in (mode open
+                      needs it).
+                    pattern: ^[A-Z][A-Z0-9_]{0,63}$
                     type: string
                   rejectedStatuses:
                     description: RejectedStatuses are the status names that mean rejected.
@@ -350,6 +360,10 @@ spec:
               rule: self.provider != 'jira' || has(self.jira)
             - message: 'mode link needs spec.link: where the ticket key comes from'
               rule: self.mode != 'link' || has(self.link)
+            - message: 'provider jira in mode open needs spec.jira.project: the project
+                issues are opened in'
+              rule: self.provider != 'jira' || (has(self.mode) && self.mode == 'link')
+                || (has(self.jira) && has(self.jira.project))
           status:
             description: ChangeRequestStatus is written by the ChangeRequest reconciler
               only.

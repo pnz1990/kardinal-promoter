@@ -106,3 +106,74 @@ func TestFakeAgreesWithServiceNowProvider(t *testing.T) {
 		assert.NotContains(t, rec.Query+rec.Body, "u:p", "no credential is recorded")
 	}
 }
+
+// TestFakeAgreesWithJiraProvider runs kardinal's real Jira provider against
+// the fake, on API versions 3 (basic) and 2 (bearer): a create is found by
+// its label and read by id and key; the control port moves it to Done with
+// resolution Won't Do (cancelled) and then to Approved (approved).
+func TestFakeAgreesWithJiraProvider(t *testing.T) {
+	for _, version := range []string{"3", "2"} {
+		t.Run("v"+version, func(t *testing.T) {
+			s := &server{user: "u", password: "p"}
+			api := httptest.NewTLSServer(http.HandlerFunc(s.api))
+			t.Cleanup(api.Close)
+			ctl := httptest.NewServer(http.HandlerFunc(s.control))
+			t.Cleanup(ctl.Close)
+			j := &changerequest.Jira{Client: api.Client()}
+			scheme, secret := "basic", "u:p"
+			if version == "2" {
+				scheme, secret = "bearer", "p"
+			}
+			req := changerequest.Request{CorrelationID: "kardinal:ns/app-v1/prod/uid",
+				Secret: func(context.Context, kardinalv1alpha1.SecretKeyRef) (string, error) { return secret, nil },
+				Spec: &kardinalv1alpha1.ChangeRequestSpec{Provider: "jira", Jira: &kardinalv1alpha1.JiraChangeRequest{
+					BaseURL: api.URL, APIVersion: version, Project: "CHG", ChangeRequestAuth: kardinalv1alpha1.ChangeRequestAuth{Scheme: scheme},
+					Template: map[string]string{"summary": "Promote app v1", "description": "text"}}}}
+			ctx := context.Background()
+			// Another promotion's issue, with another label.
+			resp, err := http.Post(ctl.URL+"/_control/jira", "application/json",
+				bytes.NewBufferString(`{"project":"OPS","labels":["kardinal-0123456789abcdef0123456789abcdef"]}`))
+			require.NoError(t, err)
+			_ = resp.Body.Close()
+			_, found, err := j.Find(ctx, req)
+			require.NoError(t, err)
+			assert.False(t, found, "another label is not this promotion's")
+			created, err := j.Create(ctx, req)
+			require.NoError(t, err)
+			assert.Equal(t, "CHG-2", created.Ticket.Key)
+			again, found, err := j.Find(ctx, req)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, created.Ticket.Key, again.Ticket.Key)
+			assert.Equal(t, "pending", again.State)
+			assert.Equal(t, req.CorrelationID, again.CorrelationID)
+			assert.Equal(t, "Promote app v1", s.issues[1].Fields["summary"])
+
+			put := func(body string) {
+				r, err := http.NewRequest(http.MethodPut, ctl.URL+"/_control/jira/CHG-2", bytes.NewBufferString(body))
+				require.NoError(t, err)
+				resp, err := http.DefaultClient.Do(r)
+				require.NoError(t, err)
+				_ = resp.Body.Close()
+				require.Less(t, resp.StatusCode, 300)
+			}
+			put(`{"status":"Done","category":"done","resolution":"Won't Do"}`)
+			got, err := j.Get(ctx, req, created.Ticket)
+			require.NoError(t, err)
+			assert.Equal(t, "cancelled", got.State)
+			assert.Equal(t, "Done / Won't Do", got.ProviderState)
+			put(`{"status":"Approved","category":"done","resolution":""}`)
+			got, err = j.Get(ctx, req, kardinalv1alpha1.ChangeRequestTicket{Key: "CHG-2"})
+			require.NoError(t, err)
+			assert.Equal(t, "approved", got.State)
+			_, err = j.Get(ctx, req, kardinalv1alpha1.ChangeRequestTicket{Key: "CHG-9"})
+			assert.ErrorIs(t, err, changerequest.ErrNotFound)
+			secret = "u:wrong"
+			if version == "2" {
+				secret = "wrong"
+			}
+			_, err = j.Get(ctx, req, created.Ticket)
+			assert.ErrorIs(t, err, changerequest.ErrCredentials)
+		})
+	}
+}

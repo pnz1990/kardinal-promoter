@@ -63,6 +63,22 @@ func TestChangeRequestsOnAPIServer(t *testing.T) {
 		want string
 	}{
 		{"servicenow, defaults", func(*v1alpha1.ChangeRequestSpec) {}, ""},
+		{"jira without a project in mode open", func(s *v1alpha1.ChangeRequestSpec) {
+			s.Provider, s.ServiceNow = "jira", nil
+			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://example.atlassian.net",
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}}}
+		}, "provider jira in mode open needs spec.jira.project"},
+		{"jira linking needs no project", func(s *v1alpha1.ChangeRequestSpec) {
+			s.Provider, s.ServiceNow, s.Mode = "jira", nil, "link"
+			s.Link = &v1alpha1.ChangeRequestLink{From: "bundleLabel", Name: "change"}
+			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://example.atlassian.net",
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}}}
+		}, ""},
+		{"a lower-case jira project", func(s *v1alpha1.ChangeRequestSpec) {
+			s.Provider, s.ServiceNow = "jira", nil
+			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://example.atlassian.net", Project: "chg",
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}}}
+		}, "should match"},
 		{"jira", func(s *v1alpha1.ChangeRequestSpec) {
 			s.Provider, s.ServiceNow = "jira", nil
 			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://example.atlassian.net", Project: "CHG",
