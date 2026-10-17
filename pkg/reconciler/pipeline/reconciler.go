@@ -118,6 +118,10 @@ func secretNotReferenceable(p *kardinalv1alpha1.Pipeline, gs gitSecret) *metav1.
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
 // and status.phase.
 type Reconciler struct {
+	// Receipts: promotion receipts are enabled (the chart grants their
+	// reads only then), and status.environments[].receipts counts them.
+	Receipts bool
+
 	// Agents reads the release's AgentIndex, which vouches for the agent
 	// stamps the change records name (actor.VerifyStamp); nil records no
 	// agent stamp.
@@ -346,6 +350,11 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// validated carries the fleets just resolved, as the Graph builder will
 	// see them.
 	desiredEnvs := ProjectEnvironments(validated, bundleList.Items, steps, gates, p.Status.Environments, r.now())
+	if r.Receipts {
+		if err := r.countReceipts(ctx, &p, desiredEnvs); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	desiredFailed := FailedVersion(p.Name, bundleList.Items)
 	desiredSummary := WithFailure(Summarize(&p, desired, desiredEnvs), desiredFailed, desiredEnvs)
 	desiredEnvLine := EnvironmentLine(desiredEnvs)
@@ -541,6 +550,51 @@ func coalesced(fn handler.MapFunc, urgent func(event.UpdateEvent) bool) handler.
 }
 
 // pipelineForBundle maps a Bundle to the Pipeline named by spec.pipeline.
+// pipelineForReceipt is the Pipeline of a PromotionReceipt (its label).
+func pipelineForReceipt(_ context.Context, obj client.Object) []ctrl.Request {
+	p := obj.GetLabels()[lifecycle.LabelPipeline]
+	if p == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: p}}}
+}
+
+// receiptSizeChanged passes receipt creates and deletes, and the update
+// that records its size (the signature).
+var receiptSizeChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok1 := e.ObjectOld.(*kardinalv1alpha1.PromotionReceipt)
+		n, ok2 := e.ObjectNew.(*kardinalv1alpha1.PromotionReceipt)
+		return !ok1 || !ok2 || o.Status.Bytes != n.Status.Bytes
+	},
+}
+
+// countReceipts sets status.environments[].receipts: each environment's
+// PromotionReceipts (by their environment label) and their size, from the
+// cache.
+func (r *Reconciler) countReceipts(ctx context.Context, p *kardinalv1alpha1.Pipeline, envs []kardinalv1alpha1.PipelineEnvironmentStatus) error {
+	var list kardinalv1alpha1.PromotionReceiptList
+	if err := r.List(ctx, &list, client.InNamespace(p.Namespace), client.MatchingLabels{lifecycle.LabelPipeline: p.Name}); err != nil {
+		return fmt.Errorf("list receipts of pipeline %s: %w", p.Name, err)
+	}
+	totals := map[string]*kardinalv1alpha1.EnvironmentReceipts{}
+	for i := range list.Items {
+		rc := &list.Items[i]
+		env := rc.Labels[lifecycle.LabelEnvironment]
+		t := totals[env]
+		if t == nil {
+			t = &kardinalv1alpha1.EnvironmentReceipts{}
+			totals[env] = t
+		}
+		t.Count++
+		t.Bytes += rc.Status.Bytes
+	}
+	for i := range envs {
+		envs[i].Receipts = totals[envs[i].Name]
+	}
+	return nil
+}
+
 func pipelineForBundle(_ context.Context, obj client.Object) []ctrl.Request {
 	b, ok := obj.(*kardinalv1alpha1.Bundle)
 	if !ok || b.Spec.Pipeline == "" {
@@ -892,6 +946,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.PromotionStep{}, coalesced(pipelineForStep, stepSettled),
 			builder.WithPredicates(stepStateChanged),
 		)
+	if r.Receipts {
+		// A receipt created, signed (its size known) or deleted changes
+		// status.environments[].receipts.
+		b = b.Watches(&kardinalv1alpha1.PromotionReceipt{}, handler.EnqueueRequestsFromMapFunc(pipelineForReceipt),
+			builder.WithPredicates(receiptSizeChanged))
+	}
 	return shard.Active().Complete(b, tracing.WrapReconciler("pipeline", r), &kardinalv1alpha1.PipelineList{})
 }
 

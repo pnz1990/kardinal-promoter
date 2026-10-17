@@ -538,6 +538,27 @@
         ],
         "type": "object"
       },
+      "EnvironmentReceipts": {
+        "additionalProperties": false,
+        "description": "EnvironmentReceipts counts an environment's promotion receipts.",
+        "properties": {
+          "bytes": {
+            "description": "Bytes is their total size (statements and signed bundles).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "count": {
+            "description": "Count is how many PromotionReceipts the environment has.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bytes",
+          "count"
+        ],
+        "type": "object"
+      },
       "Event": {
         "additionalProperties": false,
         "description": "uiEventResponse is the JSON shape for a Kubernetes event in the UI API.",
@@ -1155,6 +1176,14 @@
           "prURL": {
             "description": "PRURL is the pull request of the newest Bundle's step while it waits for its merge.",
             "type": "string"
+          },
+          "receipts": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentReceipts"
+              }
+            ],
+            "description": "Receipts counts the environment's promotion receipts and their size, when receipts are enabled (docs/receipts.md): what retention would have to delete, and what verify-receipt --image reads per image."
           },
           "since": {
             "description": "Since is when State began: the Verified time for Verified, otherwise when the controller first recorded this Bundle in this State.",

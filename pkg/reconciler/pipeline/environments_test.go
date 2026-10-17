@@ -475,3 +475,40 @@ func TestProjectEnvironments_Frozen(t *testing.T) {
 	sum := pipeline.Summarize(p, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue}, envs)
 	assert.Contains(t, sum, "frozen by release-freeze in uat")
 }
+
+// TestPipelineReconciler_ReceiptCounts (#1951 N6): with receipts enabled,
+// status.environments[].receipts counts each environment's
+// PromotionReceipts and their size (status.bytes); an environment without
+// one has none; with receipts disabled nothing is counted (nor listed).
+//
+// Covers RECEIPT-SIZE-01.
+func TestPipelineReconciler_ReceiptCounts(t *testing.T) {
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}})
+	b := envBundle("b1", "1.4.0", "Promoting", envT0)
+	s1 := projStep("b1", "test", "Verified", envT0, envT0.Add(time.Minute))
+	rc := func(name, env string, bytes int64) *kardinalv1alpha1.PromotionReceipt {
+		return &kardinalv1alpha1.PromotionReceipt{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default",
+			Labels: map[string]string{"kardinal.io/pipeline": "app", "kardinal.io/environment": env}},
+			Status: kardinalv1alpha1.PromotionReceiptStatus{Bytes: bytes}}
+	}
+	other := rc("other-app", "test", 99)
+	other.Labels["kardinal.io/pipeline"] = "other"
+	c := newClientWithIndex(newScheme(), p, &b, &s1, rc("r1", "test", 1000), rc("r2", "test", 500), other)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app", Namespace: "default"}}
+
+	r := &pipeline.Reconciler{Client: c, Now: func() time.Time { return envT0.Add(time.Hour) }, Receipts: true}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(p), &got))
+	require.Len(t, got.Status.Environments, 2)
+	assert.Equal(t, &kardinalv1alpha1.EnvironmentReceipts{Count: 2, Bytes: 1500}, got.Status.Environments[0].Receipts)
+	assert.Nil(t, got.Status.Environments[1].Receipts, "prod has none")
+
+	off := newClientWithIndex(newScheme(), newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}), &b, &s1, rc("r1", "test", 1000))
+	r = &pipeline.Reconciler{Client: off, Now: func() time.Time { return envT0.Add(time.Hour) }}
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.NoError(t, off.Get(context.Background(), client.ObjectKeyFromObject(p), &got))
+	assert.Nil(t, got.Status.Environments[0].Receipts, "receipts disabled")
+}

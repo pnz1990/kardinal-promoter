@@ -282,7 +282,7 @@ func TestOCIRegistry_SkipsPushedReceipts(t *testing.T) {
 	const vsa = "https://slsa.dev/verification_summary/v1"
 	rcpt, err := key.BundleWithPredicate(repo, d.String(), vsa)
 	require.NoError(t, err)
-	pushed, err := (&receipt.Registry{Insecure: true}).PushReferrer(ctx, repo, repo, d.String(), rcpt)
+	pushed, err := (&receipt.Registry{Insecure: true}).PushReferrer(ctx, repo, repo, d.String(), "", rcpt)
 	require.NoError(t, err)
 	require.NotEmpty(t, pushed)
 

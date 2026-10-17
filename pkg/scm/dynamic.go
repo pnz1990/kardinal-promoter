@@ -88,7 +88,10 @@ func (d *DynamicProvider) ReloadCredentials(cred Credentials) error {
 	if err != nil {
 		return fmt.Errorf("creating SCM provider during reload: %w", err)
 	}
-	d.inner.Store(&p)
+	if old := d.inner.Swap(&p); old != nil {
+		// The replaced provider is not used again: its identity goes.
+		ForgetIdentity(*old)
+	}
 	// The credentials' fingerprint: a new token, or new App credentials,
 	// is another identity.
 	id := tokenIdentity(cred.fingerprint())
@@ -162,3 +165,6 @@ func (d *DynamicProvider) parseWebhookEvent(payload []byte, signature, eventType
 func (d *DynamicProvider) AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error {
 	return d.current().AddLabelsToPR(ctx, repo, prNumber, labels)
 }
+
+// wrapped is the provider d delegates to now (ForgetIdentity).
+func (d *DynamicProvider) wrapped() SCMProvider { return d.current() }

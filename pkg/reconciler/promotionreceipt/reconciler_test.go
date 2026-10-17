@@ -149,9 +149,16 @@ func (h harness) run(t *testing.T, times int) *v1alpha1.PromotionReceipt {
 func TestReconcile_StaticKey(t *testing.T) {
 	secret, pub := keySecret(t)
 	h := newHarness(t, secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64)))
+	signedBefore := testutil.ToFloat64(observability.ReceiptsTotal.WithLabelValues("key"))
+	bytesBefore := testutil.ToFloat64(observability.ReceiptBytesTotal)
 	rc := h.run(t, 3)
 	assert.Equal(t, v1alpha1.ReceiptStored, rc.Status.Phase)
 	require.NotEmpty(t, rc.Status.Bundle)
+	// The size is recorded with the signature (#1951 N6), and counted.
+	size := int64(len(rc.Spec.Statement) + len(rc.Status.Bundle))
+	assert.Equal(t, size, rc.Status.Bytes)
+	assert.Equal(t, signedBefore+1, testutil.ToFloat64(observability.ReceiptsTotal.WithLabelValues("key")))
+	assert.Equal(t, bytesBefore+float64(size), testutil.ToFloat64(observability.ReceiptBytesTotal))
 	assert.Equal(t, &v1alpha1.ReceiptSigner{Mode: "key", Identity: "kardinal-system/receipt-key", KeyHint: rc.Status.SignedBy.KeyHint}, rc.Status.SignedBy)
 	require.Len(t, rc.Status.Stored, 1)
 	assert.Equal(t, v1alpha1.ReceiptSinkCRD, rc.Status.Stored[0].Sink)
@@ -166,6 +173,7 @@ func TestReconcile_StaticKey(t *testing.T) {
 	first := rc.Status.Bundle
 	rc = h.run(t, 3)
 	assert.Equal(t, first, rc.Status.Bundle, "signed once")
+	assert.Equal(t, signedBefore+1, testutil.ToFloat64(observability.ReceiptsTotal.WithLabelValues("key")), "counted once")
 	assert.Len(t, h.scm.comments, 1, "commented once")
 }
 
@@ -261,7 +269,7 @@ func TestReconcile_OCI(t *testing.T) {
 	assert.True(t, strings.HasPrefix(rc.Status.Stored[1].Ref, repo+"@sha256:"))
 	assert.Contains(t, h.scm.comments[0], "stored in crd, oci "+repo+"@sha256:")
 
-	got, err := (&receipt.Registry{Insecure: true}).Referrers(context.Background(), repo, d.String())
+	got, err := bundlesOf((&receipt.Registry{Insecure: true}).Referrers(context.Background(), repo, d.String(), nil))
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	_, err = receipt.Verify(got[0], receipt.VerifyOptions{Key: pub, Subject: d.String()})
@@ -329,7 +337,7 @@ func TestReconcile_OCIAllowedRepositories(t *testing.T) {
 
 	rcA := get("payments")
 	assert.Equal(t, metav1.ConditionTrue, conditionOf(rcA, ConditionStored).Status)
-	got, err := (&receipt.Registry{Insecure: true}).Referrers(context.Background(), repoA, dA)
+	got, err := bundlesOf((&receipt.Registry{Insecure: true}).Referrers(context.Background(), repoA, dA, nil))
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "team A's image has its referrer")
 
@@ -343,7 +351,7 @@ func TestReconcile_OCIAllowedRepositories(t *testing.T) {
 	for _, s := range rcB.Status.Stored {
 		assert.NotEqual(t, v1alpha1.ReceiptSinkOCI, s.Sink)
 	}
-	got, err = (&receipt.Registry{Insecure: true}).Referrers(context.Background(), repoB, dB)
+	got, err = bundlesOf((&receipt.Registry{Insecure: true}).Referrers(context.Background(), repoB, dB, nil))
 	require.NoError(t, err)
 	assert.Empty(t, got, "nothing written to a repository outside the allowlist")
 
@@ -521,3 +529,6 @@ func TestCacheTransform(t *testing.T) {
 	t.Logf("10,000 done receipts of the worst case: %d bytes each in the cache, %d MiB in all", perReceipt, total>>20)
 	assert.Less(t, perReceipt, 8*1024)
 }
+
+// bundlesOf is the bundles of a Referrers result.
+func bundlesOf(f receipt.Found, err error) ([][]byte, error) { return f.Bundles, err }

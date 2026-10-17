@@ -1183,6 +1183,9 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.environments[].incomingVersion` | string |  | IncomingVersion is what IncomingBundle ships. |
 | `status.environments[].name` | string | yes | Name is the environment name. |
 | `status.environments[].prURL` | string |  | PRURL is the pull request of the newest Bundle's step while it waits for its merge. |
+| `status.environments[].receipts` | object |  | Receipts counts the environment's promotion receipts and their size, when receipts are enabled (docs/receipts.md): what retention would have to delete, and what verify-receipt --image reads per image. |
+| `status.environments[].receipts.bytes` | integer (int64) | yes | Bytes is their total size (statements and signed bundles). |
+| `status.environments[].receipts.count` | integer (int64) | yes | Count is how many PromotionReceipts the environment has. |
 | `status.environments[].since` | string (date-time) |  | Since is when State began: the Verified time for Verified, otherwise when the controller first recorded this Bundle in this State. |
 | `status.environments[].state` | string |  | State is the PromotionStep state of the newest Bundle in the environment (IncomingBundle when set, else Bundle), an API value such as Verified or WaitingForMerge. Pending with BlockedBy set when gates hold the Bundle before its step exists. Empty when no Bundle reached the environment. |
 | `status.environments[].version` | string |  | Version is what Bundle ships: the image tag, "config &lt;sha&gt;" or the chart version. |
@@ -1519,6 +1522,7 @@ PromotionReceipt is the signed record of one promotion (docs/receipts.md). It ha
 | `status` | object |  | PromotionReceiptStatus is written by the receipt reconciler only. |
 | `status.attempts` | integer |  | Attempts counts the failed sign or store attempts since the last progress. |
 | `status.bundle` | string |  | Bundle is the Sigstore bundle (JSON, media type application/vnd.dev.sigstore.bundle.v0.3+json) of the signed statement: a DSSE envelope with the certificate or key hint, and the transparency log entry or timestamp when there is one. Set once. |
+| `status.bytes` | integer (int64) |  | Bytes is the size of spec.statement and status.bundle, written with the signature: they leave the controller's cache once the receipt is done, and the Pipeline's status.environments[].receipts sums it. |
 | `status.conditions` | []object |  | Conditions are Signed and Stored, with reasons naming a failing sink. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
