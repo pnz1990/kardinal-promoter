@@ -4,6 +4,7 @@
 package policygate
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -210,6 +211,40 @@ func TestAttestationContext_ImagesDisagree(t *testing.T) {
 				}
 				return
 			}
+			require.NoError(t, err, reason)
+			assert.Equal(t, tc.want, ok, reason)
+		})
+	}
+}
+
+// TestAttestationContext_UnverifiedImageDropsLevel: with several images,
+// one whose provenance did not verify (no SLSA result) makes the combined
+// build level 0, and verified false, so a level gate blocks.
+func TestAttestationContext_UnverifiedImageDropsLevel(t *testing.T) {
+	v := attestedIV("app-v1-verify", "app-v1", time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC), "Verified")
+	for i := range v.Status.Attestations {
+		r := &v.Status.Attestations[i]
+		if r.Name == "provenance" && strings.HasSuffix(r.Image, "@sha256:bb") {
+			*r = kardinalv1alpha1.AttestationResult{Name: "provenance", Image: r.Image, PredicateType: r.PredicateType,
+				Message: "no verified attestation"}
+		}
+	}
+	r := attestationReconciler(t, v)
+	gate := &kardinalv1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "prod-gate", Namespace: "default",
+		Labels: map[string]string{labelPipeline: "app", labelEnvironment: "prod", labelBundle: "app-v1"}}}
+	for _, tc := range []struct {
+		expr string
+		want bool
+	}{
+		{"attestations.provenance.slsa.buildLevel == 0", true},
+		{"attestations.provenance.slsa.buildLevel >= 1", false},
+		{"attestations.provenance.verified", false},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			gate.Spec.Expression = tc.expr
+			celCtx, _, err := r.buildContext(t.Context(), gate, "app-v1")
+			require.NoError(t, err)
+			ok, reason, err := r.eval.evaluate(t.Context(), tc.expr, celCtx)
 			require.NoError(t, err, reason)
 			assert.Equal(t, tc.want, ok, reason)
 		})

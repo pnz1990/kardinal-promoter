@@ -77,6 +77,8 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
   policy does not verify is skipped before it counts, and so are kardinal's own
   [promotion receipts](design/21-receipts.md) (annotation `kardinal.io/receipt`). Other attestations on
   the image therefore cannot crowd out its signatures or the attestations the policy reads.
+  The referrers index itself, and every manifest, is read up to 4 MiB (tens of thousands of
+  referrers); a larger one fails the read, and the image is not verified.
 - **Legacy cosign signatures** in the `sha256-<digest>.sig` tag (cosign v2's default): key
   authorities only. A keyless signature must be a Sigstore bundle.
 

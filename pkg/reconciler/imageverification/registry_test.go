@@ -220,3 +220,40 @@ func TestOCIRegistry_ReceiptsDoNotCrowdOutAttestations(t *testing.T) {
 	assert.Len(t, got.Bundles, 1, "the signature, whatever the number of attestations")
 	assert.Len(t, got.Attestations, 64, "attestations are bounded on their own")
 }
+
+// TestOCIRegistry_ReferrersIndexIsBounded: a referrers index over
+// MaxIndexBytes fails the read, and so the verification, closed, whether
+// the registry declares its length or streams it.
+func TestOCIRegistry_ReferrersIndexIsBounded(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("b", 64)
+	huge := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[],"annotations":{"pad":"` +
+		strings.Repeat("x", iv.MaxIndexBytes) + `"}}`
+	for _, chunked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("chunked=%v", chunked), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/v2/":
+					w.WriteHeader(http.StatusOK)
+				case strings.Contains(r.URL.Path, "/referrers/"):
+					w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+					if !chunked {
+						w.Header().Set("Content-Length", fmt.Sprint(len(huge)))
+					}
+					_, _ = io.WriteString(w, huge[:len(huge)/2])
+					if f, ok := w.(http.Flusher); ok && chunked {
+						f.Flush()
+					}
+					_, _ = io.WriteString(w, huge[len(huge)/2:])
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			host := mustHost(t, srv.URL)
+			r := &iv.OCIRegistry{Transport: http.DefaultTransport}
+			_, err := r.Signatures(context.Background(), host+"/app", digest, iv.RegistryOptions{Insecure: []string{host}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "over 4 MiB")
+		})
+	}
+}

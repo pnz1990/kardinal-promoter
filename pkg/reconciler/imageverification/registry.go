@@ -47,6 +47,12 @@ const (
 	cosignCertificateAnnotation = "dev.sigstore.cosign/certificate"
 	// maxSignatureBytes bounds what is read per signature blob.
 	maxSignatureBytes = 1 << 20
+	// MaxIndexBytes bounds what is read of any registry response that is
+	// not a blob: the referrers index (the OCI referrers API or its tag
+	// fallback) and manifests. go-containerregistry alone would read up to
+	// 100 MiB of an index; an image with more referrers than 4 MiB lists
+	// (tens of thousands) fails its read, and so its verification, closed.
+	MaxIndexBytes = 4 << 20
 	// maxSignatures bounds the signature bundles read per image, and
 	// maxAttestations the attestation bundles. The budgets are separate,
 	// so no number of attestations crowds out a signature. A bundle that
@@ -98,8 +104,56 @@ func (r *OCIRegistry) transport(insecure []string) http.RoundTripper {
 			r.Transport = t
 		}
 	})
-	return httpsOnly{base: r.Transport, insecure: insecure}
+	return httpsOnly{base: boundedIndexes{base: r.Transport}, insecure: insecure}
 }
+
+// errIndexTooLarge is a registry response over MaxIndexBytes.
+var errIndexTooLarge = fmt.Errorf("a referrers index or manifest over %d MiB", MaxIndexBytes>>20)
+
+// boundedIndexes caps every response that is not a blob at MaxIndexBytes:
+// one declared larger is refused before its body is read, and one whose
+// body runs past it fails the read.
+type boundedIndexes struct{ base http.RoundTripper }
+
+func (b boundedIndexes) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := b.base.RoundTrip(req)
+	if err != nil || strings.Contains(req.URL.Path, "/blobs/") {
+		return resp, err
+	}
+	if resp.ContentLength > MaxIndexBytes {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("%s %s: %w (Content-Length %d)", req.Method, req.URL.Path, errIndexTooLarge, resp.ContentLength)
+	}
+	resp.Body = &cappedBody{rc: resp.Body, left: MaxIndexBytes, what: req.URL.Path}
+	return resp, nil
+}
+
+// cappedBody fails a read past its limit, so a truncated index is never
+// parsed as a smaller one.
+type cappedBody struct {
+	rc   io.ReadCloser
+	left int64
+	what string
+}
+
+func (c *cappedBody) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var one [1]byte
+		n, err := c.rc.Read(one[:])
+		if n > 0 {
+			return 0, fmt.Errorf("%s: %w", c.what, errIndexTooLarge)
+		}
+		return 0, err
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.rc.Read(p)
+	c.left -= int64(n)
+	return n, err
+}
+
+func (c *cappedBody) Close() error { return c.rc.Close() }
 
 // httpsOnly refuses plain-HTTP requests to hosts not listed as insecure.
 // go-containerregistry falls back to HTTP for RFC 1918 and localhost

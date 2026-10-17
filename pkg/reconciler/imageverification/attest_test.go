@@ -161,6 +161,12 @@ func TestAttestations_SLSALevels(t *testing.T) {
 			return [][]byte{attest(t, k.release, iv.PredicateSLSAProvenance, provenance("https://ci.example/builder")),
 				attest(t, k.release, iv.PredicateSLSAVSA, vsa(repo+"@sha256:"+strings.Repeat("b", 64), "SLSA_BUILD_LEVEL_3"))}
 		}, 1, "builder", v1alpha1.ImageVerificationPending, iv.ReasonSLSALevelTooLow},
+		{"a VSA that did not pass does not", 2, func() [][]byte {
+			failed := vsa(repo+"@"+digestA, "SLSA_BUILD_LEVEL_3")
+			failed["verificationResult"] = "FAILED"
+			return [][]byte{attest(t, k.release, iv.PredicateSLSAProvenance, provenance("https://ci.example/builder")),
+				attest(t, k.release, iv.PredicateSLSAVSA, failed)}
+		}, 1, "builder", v1alpha1.ImageVerificationPending, iv.ReasonSLSALevelTooLow},
 		{"a VSA from no authority does not", 2, func() [][]byte {
 			return [][]byte{attest(t, k.release, iv.PredicateSLSAProvenance, provenance("https://ci.example/builder")),
 				attest(t, k.other, iv.PredicateSLSAVSA, vsa(repo+"@"+digestA, "SLSA_BUILD_LEVEL_3"))}
@@ -265,6 +271,50 @@ func TestAttestations_VEX(t *testing.T) {
 			assert.Equal(t, "trivy", r.Vulns.Scanner)
 			assert.Equal(t, "0.58.0", r.Vulns.ScannerVersion)
 			assert.Equal(t, "2026-10-14T09:00:00Z", r.Vulns.ScannedAt)
+		})
+	}
+}
+
+// TestAttestations_VEXNewestWins (§3.4): for one vulnerability, the newest
+// statement decides, by its timestamp, whatever order the referrers list
+// the documents in: a later affected takes back an earlier not_affected,
+// and a later not_affected suppresses an earlier affected.
+func TestAttestations_VEXNewestWins(t *testing.T) {
+	k := newKeys(t)
+	product := repo + "@" + digestA
+	at := func(status, when string) map[string]any {
+		d := openVEX(product, [2]string{"CVE-2026-0001", status})
+		d["timestamp"] = when
+		return d
+	}
+	policy := v1alpha1.AttestationPolicy{Name: "vulns", PredicateType: iv.PredicateCosignVuln, Authorities: []string{"release"},
+		Required: true, VEX: &v1alpha1.VEXPolicy{Authorities: []string{"security"}}}
+	for _, tc := range []struct {
+		name           string
+		first, second  map[string]any
+		wantSuppressed bool
+	}{
+		{"a later affected takes it back", at("affected", "2026-10-15T10:00:00Z"), at("not_affected", "2026-10-14T10:00:00Z"), false},
+		{"a later not_affected suppresses it", at("not_affected", "2026-10-15T10:00:00Z"), at("affected", "2026-10-14T10:00:00Z"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secrets := k.secrets(t)
+			h := newHarness(t, nil, attestIV("", policy), secrets[0], secrets[1])
+			h.reg.sigs[digestA] = iv.Signatures{Bundles: [][]byte{sign(t, k.release)}, Attestations: [][]byte{
+				attest(t, k.release, iv.PredicateCosignVuln, trivyScan([2]string{"CVE-2026-0001", "CRITICAL"})),
+				// The newer document first: the order does not decide.
+				attest(t, k.security, iv.PredicateOpenVEX, tc.first),
+				attest(t, k.security, iv.PredicateOpenVEX, tc.second)}}
+			got, _ := h.reconcile()
+			require.Equal(t, v1alpha1.ImageVerificationVerified, got.Status.Phase, got.Status.Message)
+			r := resultOf(t, got, "vulns")
+			require.NotNil(t, r.Vulns)
+			if tc.wantSuppressed {
+				assert.Zero(t, r.Vulns.Effective.Critical)
+			} else {
+				assert.Equal(t, 1, r.Vulns.Effective.Critical)
+				assert.Equal(t, []string{"CVE-2026-0001"}, r.Vulns.EffectiveIDs)
+			}
 		})
 	}
 }
