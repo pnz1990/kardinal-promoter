@@ -89,8 +89,9 @@ func Entry(name string, labels map[string]string, spec v1alpha1.AuditEventSpec, 
 }
 
 // Enqueue appends e to pending unless an entry with its name is already
-// there. When the outbox is full, the oldest entry is dropped, logged and
-// counted: the outbox is bounded so a long API outage cannot grow the
+// there. When the outbox is full, entries of an action with a registered
+// Coalesce are merged first, oldest pair first (RegisterCoalescer); only
+// when none merge is the oldest entry dropped, logged and counted: the outbox is bounded so a long API outage cannot grow the
 // writer's status without limit. kind labels the metric.
 //
 // An entry the CRD would refuse (Validate) is dropped, logged and counted
@@ -111,12 +112,58 @@ func Enqueue(ctx context.Context, kind string, pending []v1alpha1.PendingAuditEv
 	}
 	pending = append(pending, e)
 	for len(pending) > v1alpha1.MaxPendingAuditEvents {
+		if merged, ok := coalesceOldest(pending); ok {
+			pending = merged
+			zerolog.Ctx(ctx).Warn().Str("kind", kind).
+				Msg("audit outbox full; two unwritten AuditEvents of the same kind merged into one")
+			continue
+		}
 		zerolog.Ctx(ctx).Error().Str("auditEvent", pending[0].Name).Str("kind", kind).
 			Msg("audit outbox full; oldest unwritten AuditEvent dropped")
 		Dropped.WithLabelValues(kind, "overflow").Inc()
 		pending = pending[1:]
 	}
 	return pending
+}
+
+// Coalesce merges two outbox entries of the same action, older first, into
+// one record that says what both said, and reports false when they cannot
+// be merged (for example, they are about different versions).
+type Coalesce func(older, newer v1alpha1.PendingAuditEvent) (v1alpha1.PendingAuditEvent, bool)
+
+// coalescers are the registered Coalesce functions, by action.
+var coalescers = map[string]Coalesce{}
+
+// RegisterCoalescer lets a full outbox merge entries of action with fn
+// before it drops any entry: a burst of one kind (a policy sync changing
+// gates again and again during a write outage) then takes one slot, not the
+// slots of the records around it. Call it from an init function.
+func RegisterCoalescer(action string, fn Coalesce) {
+	coalescers[action] = fn
+}
+
+// coalesceOldest merges the oldest pair of entries that a registered
+// Coalesce accepts, in place: the merged entry takes the newer one's place
+// and the older is removed. It reports false when no pair merges.
+func coalesceOldest(pending []v1alpha1.PendingAuditEvent) ([]v1alpha1.PendingAuditEvent, bool) {
+	for i := range pending {
+		fn := coalescers[pending[i].Spec.Action]
+		if fn == nil {
+			continue
+		}
+		for j := i + 1; j < len(pending); j++ {
+			if pending[j].Spec.Action != pending[i].Spec.Action {
+				continue
+			}
+			merged, ok := fn(pending[i], pending[j])
+			if !ok || Validate(merged) != nil {
+				continue
+			}
+			pending[j] = merged
+			return slices.Delete(pending, i, i+1), true
+		}
+	}
+	return pending, false
 }
 
 // Validate checks e against what the CRD accepts for an outbox entry and an

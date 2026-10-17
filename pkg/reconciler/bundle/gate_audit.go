@@ -75,33 +75,97 @@ func gateChangeEntry(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipe
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].key < changes[j].key })
 	env := changes[0].env
-	h := sha256.New()
-	listed := make([]kardinalv1alpha1.AuditGateChange, 0, min(len(changes), kardinalv1alpha1.MaxAuditGateChanges))
-	for i, c := range changes {
-		gc := c.gate
-		_, _ = fmt.Fprintf(h, "%s|%s|%d|%s|%d\n", c.key, gc.OldDigest, gc.OldGeneration, gc.NewDigest, gc.NewGeneration)
+	all := make([]kardinalv1alpha1.AuditGateChange, 0, len(changes))
+	for _, c := range changes {
 		if c.env != env {
 			env = rejectionEnvironment
 		}
+		all = append(all, c.gate)
+	}
+	return gateChangeRecord(b.Name, b.Spec.Pipeline, env, all, 0, metav1.NewTime(now)), true
+}
+
+// gateChangeRecord is the GateChanged outbox entry for changes (in template
+// order) under version bundle, past which omitted more are known only by
+// count. It lists the first MaxAuditGateChanges and counts the rest, and is
+// named after the version and every change, so the same changes are
+// written once.
+func gateChangeRecord(bundle, pipeline, env string, changes []kardinalv1alpha1.AuditGateChange, omitted int,
+	at metav1.Time) kardinalv1alpha1.PendingAuditEvent {
+	h := sha256.New()
+	listed := make([]kardinalv1alpha1.AuditGateChange, 0, min(len(changes), kardinalv1alpha1.MaxAuditGateChanges))
+	for i, gc := range changes {
+		_, _ = fmt.Fprintf(h, "%s/%s|%s|%d|%s|%d\n", gc.Namespace, gc.Template, gc.OldDigest, gc.OldGeneration, gc.NewDigest, gc.NewGeneration)
 		if i < kardinalv1alpha1.MaxAuditGateChanges {
 			listed = append(listed, gc)
 		}
 	}
-	omitted := len(changes) - len(listed)
-	return audit.Entry(gateChangeName(b.Name, h.Sum(nil)), map[string]string{
-		lifecycle.LabelPipeline: b.Spec.Pipeline,
-		lifecycle.LabelBundle:   b.Name,
+	omitted += len(changes) - len(listed)
+	_, _ = fmt.Fprintf(h, "+%d", omitted)
+	return audit.Entry(gateChangeName(bundle, h.Sum(nil)), map[string]string{
+		lifecycle.LabelPipeline: pipeline,
+		lifecycle.LabelBundle:   bundle,
 		"kardinal.io/action":    AuditActionGateChanged,
 	}, kardinalv1alpha1.AuditEventSpec{
-		BundleName:   b.Name,
-		PipelineName: b.Spec.Pipeline,
+		BundleName:   bundle,
+		PipelineName: pipeline,
 		Environment:  env,
 		Action:       AuditActionGateChanged,
 		Outcome:      "Success",
-		Message:      gateChangeMessage(b.Name, listed, omitted),
+		Message:      gateChangeMessage(bundle, listed, omitted),
 		Gates:        listed,
 		GatesOmitted: int32(omitted),
-	}, metav1.NewTime(now)), true
+	}, at)
+}
+
+func init() {
+	audit.RegisterCoalescer(AuditActionGateChanged, coalesceGateChanges)
+}
+
+// coalesceGateChanges merges two unwritten GateChanged records of the same
+// version, older first, when the audit outbox is full: one record then
+// says how each template went from its stamp in the older record to its
+// stamp in the newer, so a long write outage under repeated gate edits
+// takes one outbox slot and never pushes out the version's other records.
+// A template edited and edited back to the same stamp is no change. The
+// counts of changes neither record listed add up.
+func coalesceGateChanges(older, newer kardinalv1alpha1.PendingAuditEvent) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	o, n := older.Spec, newer.Spec
+	if o.BundleName != n.BundleName || o.PipelineName != n.PipelineName {
+		return kardinalv1alpha1.PendingAuditEvent{}, false
+	}
+	byKey := map[string]kardinalv1alpha1.AuditGateChange{}
+	for _, gc := range o.Gates {
+		byKey[gc.Namespace+"/"+gc.Template] = gc
+	}
+	for _, gc := range n.Gates {
+		key := gc.Namespace + "/" + gc.Template
+		if was, ok := byKey[key]; ok {
+			gc.OldDigest, gc.OldGeneration = was.OldDigest, was.OldGeneration
+			if gc.Manager == "" {
+				gc.Manager = was.Manager
+			}
+		}
+		byKey[key] = gc
+	}
+	changes := make([]kardinalv1alpha1.AuditGateChange, 0, len(byKey))
+	for _, gc := range byKey {
+		if gc.OldDigest == gc.NewDigest && gc.OldGeneration == gc.NewGeneration {
+			continue
+		}
+		changes = append(changes, gc)
+	}
+	sort.Slice(changes, func(i, j int) bool {
+		return changes[i].Namespace+"/"+changes[i].Template < changes[j].Namespace+"/"+changes[j].Template
+	})
+	if len(changes) == 0 && o.GatesOmitted+n.GatesOmitted == 0 {
+		return kardinalv1alpha1.PendingAuditEvent{}, false
+	}
+	env := o.Environment
+	if n.Environment != env {
+		env = rejectionEnvironment
+	}
+	return gateChangeRecord(n.BundleName, n.PipelineName, env, changes, int(o.GatesOmitted+n.GatesOmitted), n.Timestamp), true
 }
 
 // gateEnvironment is the environment a GateChanged record names: the
@@ -159,6 +223,9 @@ func gateChangeMessage(bundle string, listed []kardinalv1alpha1.AuditGateChange,
 	noun := "template"
 	if n != 1 {
 		noun = "templates"
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("%d PolicyGate %s changed under version %s", n, noun, bundle)
 	}
 	return fmt.Sprintf("%d PolicyGate %s changed under version %s: %s%s", n, noun, bundle, strings.Join(parts, "; "), more)
 }

@@ -177,3 +177,86 @@ func TestGateChangeEntry_UnstampedCopiesAreTheBaseline(t *testing.T) {
 	require.Len(t, e.Spec.Gates, 1)
 	assert.Equal(t, graph.TemplateDigest(edited), e.Spec.Gates[0].OldDigest)
 }
+
+// QA's residual risk on #2146: during a long write outage, repeated gate
+// edits fill a version's outbox with GateChanged records. A full outbox
+// merges them, oldest pair first, before it drops anything: the
+// PromotionStarted record stays, and the merged record says how each
+// template went from its first recorded stamp to its last.
+//
+// Covers AUDIT-OUTBOX-02.
+func TestGateChanged_FullOutboxMergesBeforeDropping(t *testing.T) {
+	ctx := context.Background()
+	p, b := gateAuditFixture()
+	at := metav1.NewTime(time.Unix(300, 0))
+	started := audit.Entry("app-v1-started", map[string]string{"kardinal.io/bundle": "app-v1"}, kardinalv1alpha1.AuditEventSpec{
+		BundleName: "app-v1", PipelineName: "app", Environment: "test", Action: "PromotionStarted", Outcome: "Success"}, at)
+	pending := []kardinalv1alpha1.PendingAuditEvent{started}
+
+	// Edit "hold" again and again: generation g to g+1 each time, and one
+	// other template per edit.
+	digest := func(gen int64) string {
+		return graph.TemplateDigest(gateAuditGate("hold", "prod", fmt.Sprintf("x == %d", gen), gen))
+	}
+	edit := func(gen int64) kardinalv1alpha1.PendingAuditEvent {
+		hold := gateAuditGate("hold", "prod", fmt.Sprintf("x == %d", gen+1), gen+1)
+		other := gateAuditGate(fmt.Sprintf("other-%02d", gen), "prod", "true", 1)
+		before := map[string]graph.TemplateStamp{"platform-policies/hold": {Digest: digest(gen), Generation: gen}}
+		e, ok := gateChangeEntry(b, p, before, []kardinalv1alpha1.PolicyGate{hold, other}, time.Unix(300+gen, 0))
+		require.True(t, ok)
+		return e
+	}
+	for gen := int64(1); gen <= int64(kardinalv1alpha1.MaxPendingAuditEvents)+5; gen++ {
+		pending = audit.Enqueue(ctx, auditKind, pending, edit(gen))
+	}
+	require.Len(t, pending, kardinalv1alpha1.MaxPendingAuditEvents)
+	assert.Equal(t, "app-v1-started", pending[0].Name, "PromotionStarted is not pushed out")
+	var gateChanged int
+	for _, e := range pending {
+		if e.Spec.Action == AuditActionGateChanged {
+			gateChanged++
+		}
+	}
+	assert.Equal(t, kardinalv1alpha1.MaxPendingAuditEvents-1, gateChanged)
+
+	// The oldest GateChanged is the merge of the first edits: hold from its
+	// first stamp to the stamp of the last edit merged into it.
+	merged := pending[1].Spec
+	var hold *kardinalv1alpha1.AuditGateChange
+	for i, gc := range merged.Gates {
+		if gc.Template == "hold" {
+			hold = &merged.Gates[i]
+		}
+	}
+	require.NotNil(t, hold)
+	assert.Equal(t, digest(1), hold.OldDigest)
+	assert.Equal(t, int64(1), hold.OldGeneration)
+	assert.Greater(t, hold.NewGeneration, int64(2), "later edits merged in")
+	assert.Greater(t, len(merged.Gates), 2, "the other templates of the merged edits are listed")
+}
+
+// Records of different versions are not merged.
+func TestCoalesceGateChanges_SameVersionOnly(t *testing.T) {
+	p, b := gateAuditFixture()
+	added := gateAuditGate("added", "uat", "true", 1)
+	e1, ok := gateChangeEntry(b, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, time.Unix(300, 0))
+	require.True(t, ok)
+	other := *b
+	other.Name = "app-v2"
+	e2, ok := gateChangeEntry(&other, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, time.Unix(301, 0))
+	require.True(t, ok)
+	_, ok = coalesceGateChanges(e1, e2)
+	assert.False(t, ok)
+
+	// The same version: deleted, then added again, is one change from the
+	// deleted stamp to the new one.
+	gone := map[string]graph.TemplateStamp{"platform-policies/added": {Digest: "sha256:old", Generation: 3}}
+	d, ok := gateChangeEntry(b, p, gone, nil, time.Unix(302, 0))
+	require.True(t, ok)
+	m, ok := coalesceGateChanges(d, e1)
+	require.True(t, ok)
+	require.Len(t, m.Spec.Gates, 1)
+	assert.Equal(t, "sha256:old", m.Spec.Gates[0].OldDigest)
+	assert.Equal(t, graph.TemplateDigest(added), m.Spec.Gates[0].NewDigest)
+	assert.Equal(t, "*", m.Spec.Environment, "the deletion names every environment")
+}
