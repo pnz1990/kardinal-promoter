@@ -85,3 +85,19 @@ func TestBuild_ChangeRequestApproversCut(t *testing.T) {
 	assert.Len(t, r.Gates, 1)
 	assert.Zero(t, r.OmittedGates)
 }
+
+// TestBuild_ChangeRequestRedacted: a ticket URL or reason with a credential
+// (userinfo, ?access_token=) is redacted before the receipt is signed, and
+// the path is listed in redacted.
+func TestBuild_ChangeRequestRedacted(t *testing.T) {
+	in := input("image")
+	in.Decision.ChangeRequests = []v1alpha1.DecisionChangeRequest{{Name: "c", Instance: "i", Provider: "jira",
+		Ticket:         &v1alpha1.ChangeRequestTicket{Key: "OPS-1", URL: "https://svc:TICKETPW@jira.example.com/browse/OPS-1?access_token=TICKETTOKEN"},
+		VerifiedReason: "linked from https://u:REASONPW@jira.example.com/x"}}
+	st, b := build(t, in)
+	for _, secret := range []string{"TICKETPW", "TICKETTOKEN", "REASONPW"} {
+		assert.NotContains(t, string(b), secret)
+	}
+	assert.Contains(t, st.Predicate.Kardinal.Redacted, "kardinalPromotion.changeRequests[0].url")
+	assert.Contains(t, st.Predicate.Kardinal.Redacted, "kardinalPromotion.changeRequests[0].verifiedReason")
+}
