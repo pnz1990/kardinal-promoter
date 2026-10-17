@@ -52,7 +52,7 @@ and never on work of its own party (its sponsor's, or its own).`,
   kardinal verify checkout uat --check exploratory-qa --revoke
 
   kardinal verify list checkout --env uat`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -92,6 +92,11 @@ and never on work of its own party (its sponsor's, or its own).`,
 // verifyTarget is the Bundle and environment of kardinal verify:
 // <bundle> --env <env>, or <pipeline> <env>, the Bundle that runs there.
 func verifyTarget(ctx context.Context, c sigs_client.Client, ns string, cmd *cobra.Command, args []string, flagEnv string) (string, string, error) {
+	// The default pipeline filled in first: one argument left is a Bundle.
+	args, err := withDefaultPipeline(args, flagEnv)
+	if err != nil {
+		return "", "", err
+	}
 	first, env, err := envArgs(cmd, args, flagEnv)
 	if err != nil {
 		return "", "", err

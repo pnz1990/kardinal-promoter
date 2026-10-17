@@ -47,9 +47,16 @@ func envFlagName(cmd *cobra.Command) string {
 // envArgs returns the pipeline (args[0]) and the environment of a
 // <pipeline> [<env>] command: args[1], else the environment flag of cmd
 // (flagEnv). Both given and different is an error.
+//
+// The pipeline may come from the defaults (withDefaultPipeline): no
+// argument is the default pipeline, one argument may be an environment of
+// it.
 func envArgs(cmd *cobra.Command, args []string, flagEnv string) (pipeline, env string, err error) {
+	if args, err = withDefaultPipeline(args, flagEnv); err != nil {
+		return "", "", err
+	}
 	if len(args) == 0 {
-		return "", "", fmt.Errorf("a pipeline name is required")
+		return "", "", errNoPipeline(cmd)
 	}
 	pipeline, env = args[0], flagEnv
 	if len(args) > 1 {

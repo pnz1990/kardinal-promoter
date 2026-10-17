@@ -64,7 +64,7 @@ your Approval.`,
 
   # a gate that asks for a change ticket and an acknowledgement (kardinal why lists them)
   kardinal approve my-app prod --field ticketID=CHG0031337 --field riskAcknowledged=true`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
@@ -154,6 +154,11 @@ func approveChecked(ctx context.Context, w io.Writer, c sigs_client.Client, ns, 
 // Bundle), or <pipeline> <env>, the Bundle waiting to enter env
 // (waitingBundle).
 func approveTarget(ctx context.Context, c sigs_client.Client, ns string, cmd *cobra.Command, args []string, flagEnv string) (string, string, error) {
+	// The default pipeline filled in first: one argument left is a Bundle.
+	args, err := withDefaultPipeline(args, flagEnv)
+	if err != nil {
+		return "", "", err
+	}
 	first, env, err := envArgs(cmd, args, flagEnv)
 	if err != nil {
 		return "", "", err

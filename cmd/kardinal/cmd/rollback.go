@@ -57,7 +57,7 @@ flow; upstream environments that verified it are not promoted again. With
 
   # roll back to a named Bundle and keep prod there for a day
   kardinal rollback my-app prod --to my-app-v1-4 --hold --reason "incident 4521" --hold-expires-in 1d`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := requireEnv(cmd, args, envFlag)
 			if err != nil {
@@ -344,7 +344,7 @@ put it there. The newest version held back then promotes into <env> through
 its normal gates. release-hold is the same command.`,
 		Example: `  kardinal unhold my-app prod
   kardinal release-hold my-app prod`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := requireEnv(cmd, args, envFlag)
 			if err != nil {
@@ -403,7 +403,7 @@ kardinal rollback <pipeline> <env> --hold.`,
 		Example: `  kardinal hold my-app prod --reason "freeze during the audit"
   kardinal hold my-app prod --reason "INC-4521" --expires-in 4h
   kardinal unhold my-app prod`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := requireEnv(cmd, args, envFlag)
 			if err != nil {
