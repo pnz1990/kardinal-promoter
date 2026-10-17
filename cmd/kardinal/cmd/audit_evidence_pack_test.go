@@ -892,10 +892,15 @@ func TestEvidencePack_Cosign(t *testing.T) {
 // decode, and requires the bundle to sign the statement.
 func TestReceiptUnsafe(t *testing.T) {
 	stmt := `{"a":"https://ci.example.com/r?x=1&token=T","b":"fine"}`
-	bundleOf := func(payload string) string {
-		b, _ := json.Marshal(map[string]interface{}{"dsseEnvelope": map[string]interface{}{"payload": []byte(payload)}})
+	bundleWith := func(payload string, extra map[string]interface{}) string {
+		m := map[string]interface{}{"dsseEnvelope": map[string]interface{}{"payload": []byte(payload)}}
+		for k, v := range extra {
+			m[k] = v
+		}
+		b, _ := json.Marshal(m)
 		return string(b)
 	}
+	bundleOf := func(payload string) string { return bundleWith(payload, nil) }
 	for _, tc := range []struct {
 		statement, bundle, want string
 	}{
@@ -906,6 +911,11 @@ func TestReceiptUnsafe(t *testing.T) {
 		{`not json`, "", "the signed statement is not JSON"},
 		{`{"a":"ok"}`, `not json`, "the Sigstore bundle is not JSON"},
 		{`{"a":"ok"}`, bundleOf(`{"a":"other"}`), "the Sigstore bundle's payload is not the statement"},
+		// QA-2's note on #2161: a key, and a bundle field other than the payload.
+		{`{"https://u:SECRETKEY@ci.example.com/x":"ok"}`, "", "the signed statement holds a credential (statement (a key))"},
+		{`{"a":{"see https://ci.example.com/r?x=1&token=T":1}}`, "", "the signed statement holds a credential (statement.a (a key))"},
+		{`{"a":"ok"}`, bundleWith(`{"a":"ok"}`, map[string]interface{}{"verificationMaterial": map[string]interface{}{
+			"note": "https://u:SECRETMAT@rekor.example.com"}}), "the Sigstore bundle holds a credential (bundle.verificationMaterial.note)"},
 	} {
 		got := receiptUnsafe(tc.statement, tc.bundle)
 		if tc.want == "" {
