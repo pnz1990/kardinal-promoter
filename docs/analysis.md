@@ -169,6 +169,16 @@ and kept from then on; `spec.terminate` is set the same way. Each AnalysisRun co
 Graph's size limits. One that kro cannot create holds only its environment, and the version's
 `RunsCreated` condition names it.
 
+## Previews
+
+`kardinal policy simulate`, `kardinal policy list --pipeline`, `kardinal validate` and
+`kardinal create bundle --dry-run` do not read the AnalysisTemplates. Verification adds no gate and
+does not change the promotion order, so they show the gates and the order the controller builds.
+`validate` still checks `verification.timeout`. The dry run names each environment's analyses
+(`-o json`: `environments[].analyses`, with `cluster/<name>` for a ClusterAnalysisTemplate) and
+leaves their AnalysisRun nodes out of its node count. A template that does not exist fails the
+version in the controller, not in a preview.
+
 ## What it cannot do
 
 - The AnalysisRuns run in the Pipeline's namespace on the cluster kardinal runs in. The Argo

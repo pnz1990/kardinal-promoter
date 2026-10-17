@@ -230,8 +230,12 @@ func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
 	// Target env so the Graph holds exactly env and the environments before it.
 	targeted := buildableBundle(bundle)
 	targeted.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: env}
+	preview, _, err := previewPipeline(pipe)
+	if err != nil {
+		return nil, nil, err
+	}
 	res, err := graph.NewBuilder().Build(graph.BuildInput{
-		Pipeline: pipe, Bundle: targeted, PolicyGates: templates, PolicyNamespaces: policyNS,
+		Pipeline: preview, Bundle: targeted, PolicyGates: templates, PolicyNamespaces: policyNS,
 	})
 	if err != nil {
 		return nil, nil, err // Build errors start with "build: "

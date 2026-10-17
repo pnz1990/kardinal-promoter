@@ -117,7 +117,10 @@ func runArgs(r unstructured.Unstructured) map[string]string {
 // with reason VerificationSucceeded, once both are Successful; test, without
 // verification, gets no AnalysisRun.
 //
-// Covers ANALYSIS-01, ANALYSIS-ARGS-01, ANALYSIS-CLUSTER-01.
+// Before the Bundle, kardinal policy simulate, policy list and create bundle
+// --dry-run preview the Pipeline without reading the templates (#2011).
+//
+// Covers ANALYSIS-01, ANALYSIS-ARGS-01, ANALYSIS-CLUSTER-01, CLI-PREVIEW-VERIFY-02.
 func TestRollouts_AnalysisVerifiesEnvironment(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -135,6 +138,15 @@ func TestRollouts_AnalysisVerifiesEnvironment(t *testing.T) {
 		Args:              []v1alpha1.AnalysisArg{{Name: "service", Value: fixtures.Workload("prod")}},
 	}
 	a.apply(t, p)
+
+	// #2011: the CLI previews the Pipeline without reading its templates.
+	cli := e.CLI(t)
+	sim := cli.Must(a.ns, "policy", "simulate", pipelineName, "prod")
+	assert.Contains(t, sim, "RESULT:", sim)
+	cli.Must(a.ns, "policy", "list", pipelineName)
+	dry := cli.Must(a.ns, "create", "bundle", pipelineName, "--image", imageV2, "--dry-run")
+	assert.Contains(t, dry, "prod (verification: version-check, cluster/"+cluster+")", dry)
+
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verifying", promoteTimeout)

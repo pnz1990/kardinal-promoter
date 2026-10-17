@@ -239,7 +239,13 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		// A reserved name fails Build on its node ID, already reported above;
 		// the ordering checks (unknown dependsOn, cycles) still run.
 		check := func() error {
-			_, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)})
+			// The AnalysisTemplates verification names are in the cluster,
+			// which validate does not read (#2011).
+			preview, _, err := previewPipeline(buildable)
+			if err != nil {
+				return err
+			}
+			_, err = b.Build(graph.BuildInput{Pipeline: preview, Bundle: buildableBundle(dummyBundle)})
 			return err
 		}
 		if reserved {

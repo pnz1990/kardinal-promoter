@@ -274,8 +274,14 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	if opts.CompactAbove != nil {
 		b.CompactAbove = *opts.CompactAbove
 	}
+	// The controller reads the AnalysisTemplates verification names; the
+	// dry run names them instead of building their AnalysisRuns (#2011).
+	preview, analyses, err := previewPipeline(&pipe)
+	if err != nil {
+		return fmt.Errorf("dry-run: %w", err)
+	}
 	result, err := b.Build(graph.BuildInput{
-		Pipeline:    &pipe,
+		Pipeline:    preview,
 		Bundle:      bundle,
 		PolicyGates: gates,
 	})
@@ -301,7 +307,7 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		for _, env := range order {
 			g := gatesByEnv[env]
 			sort.Strings(g)
-			out.Environments = append(out.Environments, dryRunEnvironment{Name: env, Gates: g})
+			out.Environments = append(out.Environments, dryRunEnvironment{Name: env, Gates: g, Analyses: analyses[env]})
 		}
 		return writeStructured(w, out)
 	}
@@ -320,7 +326,14 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 			sort.Strings(g)
 			line += " (gates: " + strings.Join(g, ", ") + ")"
 		}
+		if a := analyses[env]; len(a) > 0 {
+			line += " (verification: " + strings.Join(a, ", ") + ")"
+		}
 		_, _ = fmt.Fprintln(w, line)
+	}
+	if len(analyses) > 0 {
+		_, _ = fmt.Fprintf(w, "\nThe node count leaves out verification: the controller reads its AnalysisTemplates and adds\n"+
+			"their AnalysisRuns after each environment's health check.\n")
 	}
 
 	_, _ = fmt.Fprintf(w, "\nNo resources were created. Remove --dry-run to apply.\n")
@@ -347,6 +360,10 @@ type dryRunResult struct {
 type dryRunEnvironment struct {
 	Name  string   `json:"name"`
 	Gates []string `json:"gates,omitempty"`
+	// Analyses are the AnalysisTemplates its verification names
+	// ("cluster/<name>" for a ClusterAnalysisTemplate). The dry run does
+	// not read them or count their AnalysisRun nodes.
+	Analyses []string `json:"analyses,omitempty"`
 }
 
 // parseImageRefs turns --image values into ImageRefs. "repo@sha256:..." sets
