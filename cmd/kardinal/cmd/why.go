@@ -48,8 +48,9 @@ func newWhyCmd() *cobra.Command {
 		Short: "Say why an environment waits, and what moves it on",
 		Long: `Say, for <env> of <pipeline> (or each environment), in a sentence what it
 waits for, then the version, the gate or PR, and the command that moves it
-on. -o wide prints kardinal explain's table instead; -o json and yaml print
-explain's entries. -w refreshes every 3 seconds.`,
+on. -o wide prints the table of every step and gate instead (what the
+deprecated kardinal explain printed); -o json and yaml print its entries.
+-w refreshes every 3 seconds.`,
 		Example: `  kardinal why my-app prod
   kardinal why my-app
   kardinal why my-app prod -o wide`,
@@ -371,7 +372,7 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 			return whyGate(p, e.Name, version, mine, me, author, known, byName[incoming], windows, now)
 		}
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
-			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal explain %s %s%s", p.Name, e.Name, nsArg(p.Namespace))}}}
+			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal why %s %s -o wide%s", p.Name, e.Name, nsArg(p.Namespace))}}}
 	}
 	state := display.Step(e.State)
 	switch {
@@ -698,9 +699,11 @@ it starts promoting, so a gate created or edited later applies to the
 versions shipped after it, not to one already waiting (Policy Gates, "When a
 new or edited gate takes effect").
 
--o wide prints kardinal explain's table (every step and gate of the current
-version, with kinds and expressions), with the commands that get past a
-gate on stderr; -o json and yaml print explain's entries.`
+-o wide prints the table of every step and gate of the current version,
+with kinds and expressions, and the commands that get past a gate on
+stderr; -o json and yaml print the same entries. kardinal explain, now
+deprecated, is this command with -o wide: it prints the same, after a
+notice on stderr.`
 
 // whyFailed is why's answer when the Pipeline's newest version failed
 // (status.failedVersion): what failed, the reason, what fixes it where

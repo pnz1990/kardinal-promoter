@@ -1,6 +1,6 @@
 # Troubleshoot
 
-Start with `kardinal doctor` and `kardinal explain` below, then go by symptom:
+Start with `kardinal doctor` and `kardinal why -o wide` below, then go by symptom:
 
 - [Promotion stuck or failed](troubleshoot-promotions.md): a version that does not move, a step
   that waits, a health check or a gate that never passes, an object that does not delete.
@@ -100,10 +100,10 @@ kardinal get pipelines
 kardinal get steps my-app
 
 # Why is an environment blocked?
-kardinal explain my-app --env prod
+kardinal why my-app prod -o wide
 
 # Redraw every 3 seconds until Ctrl-C
-kardinal explain my-app --env prod --watch
+kardinal why my-app prod -o wide -w
 
 # Bundle history and evidence
 kardinal history my-app

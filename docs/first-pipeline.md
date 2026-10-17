@@ -267,7 +267,7 @@ kardinal get steps kardinal-test-app
 
 # Check why prod hasn't started: prod gets a PromotionStep only after uat is
 # Verified (and, with gates, after every gate passes)
-kardinal explain kardinal-test-app --env prod
+kardinal why kardinal-test-app prod -o wide
 # No promotion for "prod" in pipeline "kardinal-test-app" yet
 ```
 
@@ -341,11 +341,11 @@ The next version promoted to prod has this gate in its Graph. Ship it, `main`:
 kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0
 ```
 
-On a weekend the gate blocks it before prod, and `kardinal explain` shows the gate with the
+On a weekend the gate blocks it before prod, and `kardinal why -o wide` shows the gate with the
 controller's latest evaluation, the version it belongs to, and the version still deployed in prod:
 
 ```bash
-kardinal explain kardinal-test-app --env prod
+kardinal why kardinal-test-app prod -o wide
 # ENVIRONMENT   VERSION                          TYPE         NAME                 STATE      EXPRESSION            REASON
 # prod          main (kardinal-test-app-wcfzk)   PolicyGate   no-weekend-deploys   Blocking   !schedule.isWeekend   Production deployments are blocked on weekends (!schedule.isWeekend = false; version main)
 #

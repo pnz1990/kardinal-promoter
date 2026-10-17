@@ -1,7 +1,7 @@
 # Git and SCM problems
 
 Clone, push, pull request and SCM API errors. Start with
-[`kardinal doctor` and `kardinal explain`](troubleshooting.md#start-here-kardinal-doctor).
+[`kardinal doctor` and `kardinal why -o wide`](troubleshooting.md#start-here-kardinal-doctor).
 
 ## Git errors
 

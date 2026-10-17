@@ -22,7 +22,6 @@
 | [`kardinal delete bundle`](reference/cli/kardinal-delete-bundle.md) | Delete a Bundle by name |
 | [`kardinal diff`](reference/cli/kardinal-diff.md) | Show what changes between two versions (Bundles) |
 | [`kardinal doctor`](reference/cli/kardinal-doctor.md) | Run pre-flight checks to verify the cluster is correctly configured |
-| [`kardinal explain`](reference/cli/kardinal-explain.md) | Explain the current state of a promotion pipeline |
 | [`kardinal freeze`](reference/cli/kardinal-freeze.md) | Freeze agents, or stop the line for everyone; with no flags, list the freezes |
 | [`kardinal get`](reference/cli/kardinal-get.md) | Display one or more kardinal resources |
 | [`kardinal get auditevents`](reference/cli/kardinal-get-auditevents.md) | List AuditEvent records: the immutable promotion event log |
