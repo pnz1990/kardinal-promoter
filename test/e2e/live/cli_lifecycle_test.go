@@ -104,6 +104,14 @@ func waitBundleGone(t *testing.T, e *framework.Env, ns, name string) {
 	})
 }
 
+// notPinnedNote is kardinal rollback's last line for a rollback of prod
+// whose image ref is pinned by tag only (docs/rollback.md): it is promoted
+// through test first.
+func notPinnedNote(ref string) string {
+	return "Note: " + ref + " not pinned by digest, so the rollback is promoted through test first: a tag can be pushed " +
+		"again with other bytes. To change only prod, roll back to a version whose images are pinned (repo:tag@sha256:...).\n"
+}
+
 // TestCLI_Rollback rolls prod back with kardinal rollback. Before anything
 // has reached prod, and for an unknown environment or Pipeline, it refuses
 // and creates nothing. --to refuses the Bundle prod runs, a missing Bundle
@@ -161,13 +169,15 @@ func TestCLI_Rollback(t *testing.T) {
 		"rollback", pipelineName, "--env", "prod", "--to", bC)
 	assert.Len(t, bundles(t, e, a.ns), 3, "a refused rollback creates nothing")
 
-	// The default target is A, the newest other Bundle Verified in prod.
+	// The default target is A, the newest other Bundle Verified in prod. Its
+	// image is pinned by tag only, so the CLI says the rollback goes
+	// through test first (#2175, #2204).
 	r = c.Run(a.ns, "rollback", pipelineName, "--env", "prod")
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Empty(t, r.Stderr)
 	m := regexp.MustCompile(`^Rolling back podinfo in prod from ` + bB + ` to ` + bA + ` \(` + regexp.QuoteMeta(fixtures.Image+":"+fixtures.V2) + `\)\n` +
 		`Bundle (podinfo-rollback-[a-z0-9]{5}) created \(rollbackOf=` + bA + `\)\n` +
-		`Track with: kardinal explain podinfo --env prod\n$`).FindStringSubmatch(r.Stdout)
+		`Track with: kardinal explain podinfo --env prod\n` + regexp.QuoteMeta(notPinnedNote(fixtures.Image+":"+fixtures.V2)) + `$`).FindStringSubmatch(r.Stdout)
 	require.NotNil(t, m, "rollback output:\n%s", r.Stdout)
 	bR := m[1]
 	rb := getBundle(t, e, a.ns, bR)
@@ -217,7 +227,7 @@ func TestCLI_Rollback(t *testing.T) {
 	out := c.Must(a.ns, "rollback", pipelineName, "--env", "prod", "--to", bB)
 	m = regexp.MustCompile(`^Rolling back podinfo in prod from ` + bR + ` to ` + bB + ` \(` + regexp.QuoteMeta(fixtures.Image+":"+fixtures.V3) + `\)\n` +
 		`Bundle (podinfo-rollback-[a-z0-9]{5}) created \(rollbackOf=` + bB + `\)\n` +
-		`Track with: kardinal explain podinfo --env prod\n$`).FindStringSubmatch(out)
+		`Track with: kardinal explain podinfo --env prod\n` + regexp.QuoteMeta(notPinnedNote(fixtures.Image+":"+fixtures.V3)) + `$`).FindStringSubmatch(out)
 	require.NotNil(t, m, "rollback --to output:\n%s", out)
 	bR2 := m[1]
 	rb2 := getBundle(t, e, a.ns, bR2)
