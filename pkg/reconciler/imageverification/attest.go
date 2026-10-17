@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"math"
 	"slices"
 	"sort"
@@ -160,6 +161,10 @@ func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolic
 	}
 	newest := found[len(found)-1]
 	res.Verified, res.Authority, res.Signer, res.Digest, res.Count = true, newest.authority, clip(newest.signer), newest.payloadDigest, len(found)
+	if !newest.at.IsZero() {
+		t := metav1.NewTime(newest.at.UTC())
+		res.VerifiedAt = &t
+	}
 	res.Predicate = string(newest.predicate)
 	if len(newest.predicate) > maxPredicateBytes {
 		res.Predicate, res.PredicateOmitted = "", "64 KiB"

@@ -122,6 +122,20 @@ type AttestationPolicy struct {
 	// scan does not apply.
 	// +optional
 	VEX *VEXPolicy `json:"vex,omitempty"`
+
+	// MaxAge, when set, is how old the attestation may be (a Go duration,
+	// for example 24h): a scan from its scannedAt, any other attestation
+	// from its verified signing time. Past it the result is stale
+	// (status.attestations[].stale, attestations.<name>.stale in a gate),
+	// also after the ImageVerification is Verified, and kardinal looks for
+	// a newer attestation in the image's referrers until one replaces it.
+	// A required attestation that is already stale is waited for like a
+	// missing one. An attestation with no verified time (a key signature
+	// without a transparency log entry) is stale at once. See
+	// docs/image-verification.md#attestation-age.
+	// +kubebuilder:validation:Pattern=`^(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$`
+	// +optional
+	MaxAge string `json:"maxAge,omitempty"`
 }
 
 // SLSAPolicy is how SLSA build levels are decided: the level a policy
@@ -364,6 +378,17 @@ type AttestationResult struct {
 	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	Signer string `json:"signer,omitempty"`
+	// VerifiedAt is the verified signing time of the attestation: its
+	// transparency log or timestamp authority time.
+	// +optional
+	VerifiedAt *metav1.Time `json:"verifiedAt,omitempty"`
+	// StaleAt is when the attestation passes the policy's maxAge.
+	// +optional
+	StaleAt *metav1.Time `json:"staleAt,omitempty"`
+	// Stale is true once StaleAt has passed, until a newer attestation
+	// replaces it.
+	// +optional
+	Stale bool `json:"stale,omitempty"`
 	// Digest is the sha256 of the verified DSSE payload.
 	// +kubebuilder:validation:MaxLength=80
 	// +optional

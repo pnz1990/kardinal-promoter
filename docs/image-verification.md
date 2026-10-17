@@ -202,6 +202,7 @@ cosign attest --new-bundle-format --key security.key --type openvex --predicate 
 | `slsa.minLevel` | `0` | Hold the version while an image's level is below it; at the `timeout` it fails (`SLSALevelTooLow`). |
 | `vex.authorities[]` | | Names of `authorities` whose OpenVEX attestations count against the scan's findings. The scan's own signer does not suppress its findings unless it is listed. |
 | `vex.predicateType` | `https://openvex.dev/ns` | The predicate type of the VEX attestations. |
+| `maxAge` | | How old the attestation may be, a Go duration (`24h`): see [Attestation age](#attestation-age). |
 
 **What is checked.** An attestation counts when its bundle verifies against one of its
 `authorities` (key, keyless, private trusted root, as for signatures), its in-toto statement's
@@ -224,10 +225,8 @@ finding is **effective** unless the latest OpenVEX statement for its ID (or an a
 that names the image (`<repository>@<digest>`, the digest, or its `pkg:oci` purl), says
 `not_affected` or `fixed`; `affected` and `under_investigation` keep it. The status counts the
 findings by severity (critical, high, medium, low, unknown) before and after VEX, and lists the IDs
-of the effective critical and high ones (at most 50). A gate cannot yet judge how old a scan
-is: `attestations.vulns.scannedAt` is recorded, but gate CEL has no current time to compare it
-with, and the result is not refreshed once the version is Verified (see Timing). A maximum scan
-age is planned (#2044).
+of the effective critical and high ones (at most 50). To bound how old a scan may be, set its
+`maxAge` ([Attestation age](#attestation-age)).
 
 **Several images.** A version with several images gets one value per attestation name in
 gates: verified when every image is, the lowest build level, the summed counts and the oldest
@@ -242,8 +241,45 @@ its summary, and `predicateOmitted` says why: an expression that reads it then f
 blocks rather than passes. The predicate is the build's own text: a gate may compare it, as data.
 
 **Timing.** Verified is terminal, as for signatures: an attestation added later, or a vulnerability
-found later, is not seen by that version. An attestation not required that is missing when the rest
-verified is recorded as not verified.
+found later, is not seen by that version, except through `maxAge` below. An attestation not
+required that is missing when the rest verified is recorded as not verified.
+
+### Attestation age
+
+A version can wait at a gate for days; without a bound, prod promotes it on the scan it was
+verified with, however old. `maxAge` bounds it:
+
+```yaml
+attestations:
+  - name: vulns
+    predicateType: https://cosign.sigstore.dev/attestation/vuln/v1
+    authorities: [release]
+    maxAge: 24h
+```
+
+```yaml
+# prod: a scan no older than its maxAge, with no critical finding after VEX
+expression: '!attestations.vulns.stale && attestations.vulns.effective.critical == 0'
+```
+
+- **Age.** A scan's age counts from the earlier of its `scannedAt` and its verified signing time
+  (the transparency log's or timestamp authority's time), so a scan cannot claim to be newer than
+  its signature. Any other attestation counts from its signing time. One with no signing time and
+  no scan time (a key signature without a transparency log entry) cannot be dated: it is stale at
+  once.
+- **Status.** Each result records `verifiedAt`, `staleAt` (its age base plus `maxAge`) and
+  `stale`. The reconciler comes back at `staleAt` and sets `stale`. The phase stays Verified, and a
+  gate reads [`attestations.<name>.stale`](reference/cel-context.md#attestations), true when any
+  image's result is stale.
+- **A newer attestation.** While a result is stale, the image's referrers are read again every
+  quarter of `maxAge`, at least every hour and at most every 5 minutes. The newest attestation that
+  verifies and is not stale replaces the result, and the gates that read it are evaluated again.
+  For a 1h `maxAge` that is at most 4 registry reads per hour per stale version; nothing is read
+  before a result goes stale.
+- **Required.** A required attestation that is already stale when the version is checked is
+  waited for like a missing one, until the `timeout` (`status.reason: AttestationStale`).
+- A new vulnerability published after the scan is still not seen until a new scan is attached:
+  `maxAge` is what makes the scanner run again.
 
 ## Signed commits
 
