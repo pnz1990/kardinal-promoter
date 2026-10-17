@@ -87,7 +87,7 @@ func (h *localLiveHost) cmd(t *testing.T, env []string, args ...string) *exec.Cm
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(h.dir, "bin")+":"+os.Getenv("PATH"),
 		"KUBECONFIG=/dev/null", "KARDINAL_E2E_TOOLS=path", "KARDINAL_E2E_BUILD=", "KARDINAL_E2E_STATE=",
-		"KIND_CLUSTER=", "KEEP=", "AGENT_BADGE=", "RETRY=0.05", "OWNER=test",
+		"KIND_CLUSTER=", "KEEP=", "AGENT_BADGE=", "RETRY=0.05", "OWNER=test", "AGENT_ID=",
 		"LOCAL_LIVE_E2E_DIR="+filepath.Join(h.dir, "e2e"), "FAKE="+h.fake,
 		"LOADLOCK="+h.lock, "RELEASE_GATE_SLOTS="+h.slots,
 		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots)
@@ -109,7 +109,7 @@ func TestLocalLive(t *testing.T) {
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, nil, "-pr", "42", "-badge", "[BADGE]", "core").CombinedOutput()
 		require.NoError(t, err, "%s", out)
-		cluster := "kardinal-e2e-ll-core-35"
+		cluster := "kardinal-e2e-ll-test-core-35"
 		up := h.read("up")
 		e2eOut := filepath.Join(h.state, cluster)
 		assert.Contains(t, up, "KUBECONFIG="+filepath.Join(e2eOut, "kubeconfig"), "the cluster's own kubeconfig, never the user's")
@@ -139,7 +139,7 @@ func TestLocalLive(t *testing.T) {
 		assert.Equal(t, 3, exitCode(err), "%s", out)
 		assert.Contains(t, h.read("up"), "SHARD=2/3")
 		assert.Contains(t, string(out), "local live: core shard 2/3 on Kubernetes 1.37: FAIL")
-		assert.Equal(t, "kardinal-e2e-ll-core-37\n", h.read("deleted"))
+		assert.Equal(t, "kardinal-e2e-ll-test-core-37\n", h.read("deleted"))
 		assert.NoDirExists(t, h.lock)
 		assert.Empty(t, h.read("gh"), "no -pr, no comment")
 	})
@@ -147,7 +147,7 @@ func TestLocalLive(t *testing.T) {
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, []string{"KEEP=1"}, "gitea").CombinedOutput()
 		require.NoError(t, err, "%s", out)
-		cluster := "kardinal-e2e-ll-gitea-37"
+		cluster := "kardinal-e2e-ll-test-gitea-37"
 		assert.Empty(t, h.read("deleted"), "KEEP keeps the cluster")
 		assert.FileExists(t, filepath.Join(h.state, cluster, "secrets", "forgejo-token"))
 		assert.DirExists(t, filepath.Join(h.slots, "1"), "and its slot")
@@ -172,16 +172,32 @@ func TestLocalLive(t *testing.T) {
 		cmd := h.cmd(t, []string{"FAKE_SLEEP=30"}, "core")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		require.NoError(t, cmd.Start())
-		require.Eventually(t, func() bool { return strings.Contains(h.read("clusters"), "kardinal-e2e-ll-core-35") },
+		require.Eventually(t, func() bool { return strings.Contains(h.read("clusters"), "kardinal-e2e-ll-test-core-35") },
 			20*time.Second, 50*time.Millisecond)
 		start := time.Now()
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 		err := cmd.Wait()
 		assert.NotEqual(t, 0, exitCode(err))
 		assert.Less(t, time.Since(start), 15*time.Second, "the suite is stopped, not waited for")
-		assert.Equal(t, "kardinal-e2e-ll-core-35\n", h.read("deleted"))
+		assert.Equal(t, "kardinal-e2e-ll-test-core-35\n", h.read("deleted"))
 		assert.NoDirExists(t, h.lock)
 		assert.NoDirExists(t, filepath.Join(h.slots, "1"))
+	})
+	t.Run("the owner names the cluster, so two agents' runs do not collide", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		for _, tc := range []struct {
+			env  []string
+			args []string
+			want string
+		}{
+			{[]string{"AGENT_ID=ENGINEER-4"}, nil, "kardinal-e2e-ll-engineer-4-core-35"},
+			{[]string{"AGENT_ID=ENGINEER-6"}, nil, "kardinal-e2e-ll-engineer-6-core-35"},
+			{nil, []string{"-o", "QA-2 #2153 core"}, "kardinal-e2e-ll-qa-2-core-35"},
+		} {
+			out, err := h.cmd(t, tc.env, append(append([]string{"-n"}, tc.args...), "core")...).CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			assert.Contains(t, string(out), "cluster  "+tc.want+"\n", "%v %v", tc.env, tc.args)
+		}
 	})
 	t.Run("refuses to run on a shared host without the lock", func(t *testing.T) {
 		h := newLocalLiveHost(t)
@@ -192,10 +208,10 @@ func TestLocalLive(t *testing.T) {
 	})
 	t.Run("an existing cluster is not taken over", func(t *testing.T) {
 		h := newLocalLiveHost(t)
-		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-ll-core-35\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-ll-test-core-35\n"), 0o644))
 		out, err := h.cmd(t, nil, "core").CombinedOutput()
 		assert.Equal(t, 2, exitCode(err), "%s", out)
-		assert.Contains(t, string(out), "-reuse kardinal-e2e-ll-core-35")
+		assert.Contains(t, string(out), "-reuse kardinal-e2e-ll-test-core-35")
 		assert.Empty(t, h.read("deleted"), "another run's cluster is left alone")
 		assert.NoDirExists(t, h.lock)
 		assert.NoDirExists(t, filepath.Join(h.slots, "1"))

@@ -44,7 +44,7 @@ with `bash -n` and `zsh -n`.
 hack/e2e/local-live.sh core 1.37            # one suite as its CI job runs it
 hack/e2e/local-live.sh -pr 2137 -shard 1/3 core
 KEEP=1 hack/e2e/local-live.sh gitea         # keep the cluster for a re-run
-hack/e2e/local-live.sh -reuse kardinal-e2e-ll-gitea-37 gitea  # from any worktree
+hack/e2e/local-live.sh -reuse kardinal-e2e-ll-engineer-4-gitea-37 gitea  # from any worktree
 ```
 
 `hack/e2e/local-live.sh SUITE [MINOR]` runs one suite of
@@ -55,7 +55,7 @@ host (`KARDINAL_E2E_BUILD=host`) unless you set another build. It holds the
 host's heavy-load lock (`$LOADLOCK`, through `hack/loadlock.sh`) and a cluster
 slot (`$RELEASE_GATE_SLOTS/1..4`, as `hack/release-gate -slots` takes them)
 for the whole run, refuses to start without them (`-no-lock` on a host of your
-own), and deletes the cluster `kardinal-e2e-ll-<suite>-<minor>` and releases
+own), and deletes the cluster `kardinal-e2e-ll-<owner>-<suite>-<minor>` (`$AGENT_ID`, or `-o`'s first word) and releases
 both when it ends, however it ends. It prints a pass/fail summary with the
 commit, node image and tool pins, and `-pr N` posts it on pull request N.
 
