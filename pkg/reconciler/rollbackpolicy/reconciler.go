@@ -79,6 +79,9 @@ const (
 	// ReasonInvalidPolicy: the Pipeline or environment the policy names does
 	// not exist (lifecycle.ErrNotFound, lifecycle.ErrInvalid).
 	ReasonInvalidPolicy = "InvalidPolicy"
+	// ReasonNameTaken: both names of the automatic rollback hold Bundles that
+	// are not this rollback (lifecycle.AutoRollbackNameIn, #2090).
+	ReasonNameTaken = "NameTaken"
 	// ReasonRollbackCreated: a rollback Bundle was created or found.
 	ReasonRollbackCreated = "RollbackCreated"
 	// ReasonBelowThreshold: the failures dropped below the threshold after a
@@ -347,7 +350,14 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		return existing, nil, nil
 	}
 
-	rollbackName, err := lifecycle.AutoRollbackNameIn(ctx, r.Client, rp.Namespace, rp.Spec.BundleRef, "policy", rp.Spec.Environment)
+	rollbackName, err := lifecycle.AutoRollbackNameIn(ctx, r.Client, rp.Namespace, rp.Spec.PipelineName, rp.Spec.BundleRef,
+		"policy", rp.Spec.Environment)
+	if errors.Is(err, lifecycle.ErrConflict) {
+		// Both names are someone else's (#2090): a human decides.
+		log.Warn().Err(err).Str("bundleRef", rp.Spec.BundleRef).Str("environment", rp.Spec.Environment).
+			Msg("auto-rollback: the rollback's name is taken; no rollback bundle created, human intervention required")
+		return "", &refusal{reason: ReasonNameTaken, message: kubeevent.Truncate(err.Error())}, nil
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("name rollback of bundle %s: %w", rp.Spec.BundleRef, err)
 	}
@@ -381,13 +391,17 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 	plan.Bundle.Spec.Actor = actor.Controller(cmp.Or(r.ControllerUser, lifecycle.ControllerCreator), v1alpha1.ViaAutoRollback)
 	createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator)
 	if apierrors.IsAlreadyExists(createErr) {
-		// Another environment's, created in the meantime, is not this one's (#2082).
-		taken, takenErr := lifecycle.RollbackTaken(ctx, r.Client, rp.Namespace, rollbackName, rp.Spec.Environment)
+		// Another environment's, or someone else's, created in the meantime
+		// is not this one's (#2082, #2090): the next reconcile names env's
+		// own, or refuses.
+		taken, takenErr := lifecycle.RollbackTaken(ctx, r.Client, rp.Namespace, rollbackName,
+			rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
 		if takenErr != nil {
 			return "", nil, takenErr
 		}
 		if taken {
-			return "", nil, fmt.Errorf("rollback bundle %s rolls another environment back; retrying with %s's own", rollbackName, rp.Spec.Environment)
+			return "", nil, fmt.Errorf("bundle %s, created meanwhile, is not the rollback of %s in %s; naming the rollback again",
+				rollbackName, rp.Spec.BundleRef, rp.Spec.Environment)
 		}
 		createErr = nil
 	}

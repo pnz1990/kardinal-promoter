@@ -187,7 +187,11 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 	if existing != "" {
 		return existing, nil, nil
 	}
-	name, err = lifecycle.AutoRollbackNameIn(ctx, r.Client, ps.Namespace, ps.Spec.BundleName, "alarm", ps.Spec.Environment)
+	name, err = lifecycle.AutoRollbackNameIn(ctx, r.Client, ps.Namespace, ps.Spec.PipelineName, ps.Spec.BundleName,
+		"alarm", ps.Spec.Environment)
+	if errors.Is(err, lifecycle.ErrConflict) {
+		return "", err, nil // both names are someone else's (#2090): a human decides
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("name rollback of bundle %s: %w", ps.Spec.BundleName, err)
 	}
@@ -215,14 +219,18 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 	plan.Bundle.Spec.Actor = actor.Controller(cmp.Or(r.ControllerUser, lifecycle.ControllerCreator), v1alpha1.ViaAutoRollback)
 	createErr := lifecycle.CreateBundleAs(ctx, r.Client, plan.Bundle, lifecycle.ControllerCreator)
 	if apierrors.IsAlreadyExists(createErr) {
-		// A retried reconcile's own, or another environment's created in the
-		// meantime: that one is not this environment's rollback (#2082).
-		taken, takenErr := lifecycle.RollbackTaken(ctx, r.apiReader(), ps.Namespace, name, ps.Spec.Environment)
+		// A retried reconcile's own is adopted. Another environment's, or
+		// someone else's, created in the meantime is not this environment's
+		// rollback (#2082, #2090): the next reconcile names env's own, or
+		// stops for a human.
+		taken, takenErr := lifecycle.RollbackTaken(ctx, r.apiReader(), ps.Namespace, name,
+			ps.Spec.PipelineName, ps.Spec.Environment, ps.Spec.BundleName)
 		if takenErr != nil {
 			return "", nil, takenErr
 		}
 		if taken {
-			return "", nil, fmt.Errorf("rollback bundle %s rolls another environment back; retrying with %s's own", name, ps.Spec.Environment)
+			return "", nil, fmt.Errorf("bundle %s, created meanwhile, is not the rollback of %s in %s; naming the rollback again",
+				name, ps.Spec.BundleName, ps.Spec.Environment)
 		}
 		createErr = nil
 	}
