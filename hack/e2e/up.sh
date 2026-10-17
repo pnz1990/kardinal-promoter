@@ -147,7 +147,8 @@ case "$SUITE" in
   # external Fulcio: components/kardinal.sh generates the key and points the
   # OCI sink at the suite's registry (components/registry.sh). A suite of its
   # own: receipts comment on every PR, which other suites count.
-  receipts) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh) RUN='^TestReceipts_'
+  # The fake ticketing API, for the change request a receipt records.
+  receipts) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh ticketapi.sh) RUN='^TestReceipts_'
     export KARDINAL_E2E_RECEIPTS=1 ;;
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'

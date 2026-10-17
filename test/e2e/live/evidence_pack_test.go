@@ -237,8 +237,8 @@ func TestAudit_EvidencePack(t *testing.T) {
 	r = c.Exec(framework.CLIOptions{Kubeconfig: nsAuditor}, c.Args("", "audit", "evidence-pack", "-A", "--since", "1h", "-o", pack)...)
 	require.Zero(t, r.Code, r.Output())
 	_, m = packOf(t, pack)
-	assert.ElementsMatch(t, []interface{}{"AuditEvent", "Approval", "Bundle", "Pipeline", "PolicyGate", "PolicyGateTemplate",
-		"PromotionReceipt", "Verdict"},
+	assert.ElementsMatch(t, []interface{}{"AuditEvent", "Approval", "Bundle", "ChangeRequest", "ChangeRequestTemplate", "Pipeline", "PolicyGate",
+		"PolicyGateTemplate", "PromotionReceipt", "Verdict"},
 		m["coverage"].(map[string]interface{})["forbidden"])
 }
 
