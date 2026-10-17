@@ -291,3 +291,54 @@ func TestEvidence_SoakStopsWhenReplacedUpstream(t *testing.T) {
 	require.NotNil(t, test.ReplacedAt)
 	assert.Equal(t, int64(49*60), test.SoakMinutes)
 }
+
+// QA on #2122: a chart without a digest is not pinned either: a chart
+// version can be published again with other contents.
+//
+// Covers RB-MULTI-02.
+func TestEvidence_ChartWithoutDigestNeverCarries(t *testing.T) {
+	chart := func(b *kardinalv1alpha1.Bundle, digest string) *kardinalv1alpha1.Bundle {
+		b.Spec.Type, b.Spec.Images = "chart", nil
+		b.Spec.Chart = &kardinalv1alpha1.ChartRef{RepoURL: "oci://ghcr.io/acme/charts", Name: "app", Version: "1.0.0", Digest: digest}
+		return b
+	}
+	for _, tc := range []struct {
+		digest, reason string
+		promoted       []string
+	}{
+		{"", "NotPinned", []string{"test", "uat", "prod"}},
+		{"sha256:" + strings.Repeat("c", 64), "Carried", []string{"prod"}},
+	} {
+		src := chart(evidenceBundle("app-v1", "1.0", "Superseded", "test", "uat"), tc.digest)
+		rb := chart(rollbackTo("1.0"), tc.digest)
+		r, tr, c := evidenceRig(t, src, rb)
+		lcReconcile(t, r, rb.Name)
+		cond := meta.FindStatusCondition(lcGet(t, c, rb.Name).Status.Conditions, "UpstreamEvidence")
+		require.NotNil(t, cond)
+		assert.Equal(t, tc.reason, cond.Reason, cond.Message)
+		assert.Equal(t, [][]string{tc.promoted}, tr.promoted)
+		if tc.digest == "" {
+			assert.Contains(t, cond.Message, "chart app 1.0.0 not pinned by digest")
+		}
+	}
+}
+
+// QA on #2122: a replacer that finished and was retired has no
+// PromotionSteps left; its Verified time in status still bounds the soak.
+//
+// Covers RB-MULTI-02.
+func TestEvidence_RetiredReplacerBoundsTheSoak(t *testing.T) {
+	v1 := evidenceBundle("app-v1", "1.0", "Superseded", "test", "uat")
+	v2 := evidenceBundle("app-v2", "2.0", "Verified")
+	at := metav1.NewTime(evidenceT0.Add(100 * time.Minute))
+	v2.Status.Environments = []kardinalv1alpha1.EnvironmentStatus{{Name: "uat", Phase: "Verified", HealthCheckedAt: &at}}
+	rb := rollbackTo("1.0")
+	r, _, c := evidenceRig(t, v1, v2, rb) // no PromotionSteps: v2's are retired
+	lcReconcile(t, r, rb.Name)
+	got := lcGet(t, c, rb.Name)
+	require.Len(t, got.Status.UpstreamEvidence, 2)
+	uat := got.Status.UpstreamEvidence[1]
+	require.NotNil(t, uat.ReplacedAt, "the status fallback finds v2")
+	assert.True(t, at.Equal(uat.ReplacedAt))
+	assert.Equal(t, int64(40), uat.SoakMinutes, "verified at T0+1h, replaced at T0+1h40m")
+}
