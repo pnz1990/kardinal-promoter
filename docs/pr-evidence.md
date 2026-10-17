@@ -386,7 +386,11 @@ What the retry does:
   restarted after its push, or the step re-pushes): kardinal force-pushes its PR branch only when
   the branch does not exist or its head is one of the commits this promotion pushed. It reads the
   head first and pushes with a lease on it, so a commit pushed in between is not overwritten
-  either. Otherwise it pushes nothing.
+  either. Otherwise it pushes nothing. A push is recorded before it is made, so a controller that
+  dies right after one finds it again. A PromotionStep that was recreated (its status, and so its
+  record of pushes, gone) and finds kardinal's branch present refuses too, with
+  `PRBranchForeignCommit`: delete the branch (`git push origin :refs/heads/<branch>`) and the
+  step pushes again.
 
 In each case the step fails against its normal retry budget, about 4.5 minutes, and then is
 Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message names the head
