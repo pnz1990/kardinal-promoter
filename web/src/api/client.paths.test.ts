@@ -6,7 +6,7 @@
 // so "../gates" or "a?b=c" must stay one encoded path segment.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { api } from './client'
+import { api, apiBase } from './client'
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -36,5 +36,20 @@ describe('api client path segments', () => {
     await call()
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(calledPath()).toBe(want)
+  })
+})
+
+// The UI finds its API from its own URL, under any --ui-base-path (#1933).
+describe('apiBase', () => {
+  it.each([
+    ['/', '/api/v1/ui'],
+    ['/ui/', '/api/v1/ui'],
+    ['/ui/index.html', '/api/v1/ui'],
+    ['/ui', '/api/v1/ui'],
+    ['/kardinal/ui/', '/kardinal/api/v1/ui'],
+    ['/tools/kardinal/ui/', '/tools/kardinal/api/v1/ui'],
+    ['/tools/kardinal/ui', '/tools/kardinal/api/v1/ui'],
+  ])('a page at %s calls %s', (pathname, want) => {
+    expect(apiBase(pathname)).toBe(want)
   })
 })

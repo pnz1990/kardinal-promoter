@@ -219,6 +219,12 @@ spec:
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}
             - --ui-allowed-hosts={{ include "kardinal-promoter.uiAllowedHosts" . }}
+            {{- with .Values.ui.basePath }}
+            {{- if regexMatch "^/(ui|api)(/|$)|(^|/)\\.\\.?(/|$)" . }}
+            {{- fail (printf "ui.basePath %q: must not start with /ui or /api, nor have a . or .. segment" .) }}
+            {{- end }}
+            - --ui-base-path={{ . }}
+            {{- end }}
             {{- with .Values.tracing }}
             {{- if .enabled }}
             - --tracing-enabled=true

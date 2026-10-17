@@ -420,6 +420,10 @@
             "pattern": "^[^/*@,\\s]+$"
           }
         },
+        "basePath": {
+          "type": "string",
+          "pattern": "^$|^(/[A-Za-z0-9._~-]+)+/?$"
+        },
         "auth": {
           "type": "object",
           "additionalProperties": false,

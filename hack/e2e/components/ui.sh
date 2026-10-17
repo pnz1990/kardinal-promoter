@@ -14,7 +14,8 @@
 #   every namespace:
 #     kui-token      kardinal-ui-token      static UI token, CORS origin
 #                                           http://allowed.example, allowed
-#                                           host kardinal-ui.test
+#                                           host kardinal-ui.test, also under
+#                                           ui.basePath /kardinal
 #     kui-tr         kardinal-ui-tr         ui.auth.tokenReview=true
 #     kui-tr-norbac  kardinal-ui-tr-norbac  --ui-tokenreview-auth through
 #                                           extraArgs, without the RBAC the
@@ -119,7 +120,8 @@ env_set KARDINAL_E2E_UI_TOKEN_FILE "$SECRETS_DIR/ui-token"
 NS=kardinal-ui-token
 kube_secret "$NS" ui-token token ui-token
 release kui-token "$NS" --set ui.auth.tokenSecretRef.name=ui-token \
-  --set 'ui.corsAllowedOrigins={http://allowed.example}' --set 'ui.allowedHosts={kardinal-ui.test}'
+  --set 'ui.corsAllowedOrigins={http://allowed.example}' --set 'ui.allowedHosts={kardinal-ui.test}' \
+  --set ui.basePath=/kardinal
 url="http://$IP:$(nodeport "$NS" kui-token-nodeport ui)"
 wait_http "$url/ui/" 60 || die "kui-token UI at $url does not answer"
 env_set KARDINAL_E2E_UI_TOKEN_URL "$url"

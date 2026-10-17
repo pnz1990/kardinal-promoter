@@ -399,6 +399,12 @@ ui:
   # included, gets 403 (DNS rebinding protection). Static /ui/ assets are not
   # checked. Host names only: no scheme, path or wildcard.
   allowedHosts: []
+  # -- A path prefix, for example /kardinal, under which the UI is also served
+  # (<basePath>/ui/, API <basePath>/api/v1/ui/*), for a proxy or Ingress that
+  # routes a shared host by path and keeps the path (--ui-base-path). The
+  # unprefixed /ui/ keeps working (kubectl port-forward). Must not start with
+  # /ui or /api. Empty: no prefix.
+  basePath: ""
   # With neither auth mode set, /api/ serves only clients connecting from
   # loopback (kubectl port-forward); Ingress, NodePort, LoadBalancer and pod
   # clients get 403. Set one mode to serve them. A service-mesh sidecar makes

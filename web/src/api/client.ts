@@ -23,7 +23,19 @@ export interface RollbackResponse {
   fleet?: FleetTargetRollback[]
 }
 
-const BASE = '/api/v1/ui'
+/**
+ * The UI API's path for a page at pathname: the UI is at <prefix>/ui/ and its
+ * API at <prefix>/api/v1/ui, where the prefix is the controller's
+ * --ui-base-path ("" without one). The prefix comes from the page's own URL,
+ * so one build serves under any prefix.
+ */
+export function apiBase(pathname: string): string {
+  const i = pathname.lastIndexOf('/ui/')
+  const prefix = i >= 0 ? pathname.slice(0, i) : pathname.endsWith('/ui') ? pathname.slice(0, -3) : ''
+  return `${prefix}/api/v1/ui`
+}
+
+const BASE = apiBase(typeof location === 'undefined' ? '/' : location.pathname)
 
 // ─── Authentication ──────────────────────────────────────────────────────────
 //

@@ -144,6 +144,20 @@ func TestUI_BrowserInsecureBanner(t *testing.T) {
 		"KARDINAL_UI_TLS_URL", framework.MustEnv(t, framework.EnvUITLSURL)))
 }
 
+// TestUI_BrowserBasePath opens kui-token's UI under its ui.basePath: the
+// page loads, signs in with the token and calls its API under the prefix, and
+// requests nothing outside it (#1933).
+//
+// Covers UIAPI-BASEPATH-01.
+func TestUI_BrowserBasePath(t *testing.T) {
+	t.Parallel()
+	framework.Playwright(t, "base-path.spec.ts", map[string]string{
+		"KARDINAL_UI_TOKEN_URL":  framework.MustEnv(t, framework.EnvUITokenURL),
+		"KARDINAL_UI_BASE_PATH":  framework.UIBasePath,
+		"KARDINAL_UI_TOKEN_FILE": framework.MustEnv(t, framework.EnvUITokenFile),
+	})
+}
+
 // TestUI_BrowserDAG checks the promotion DAG of a Bundle that waits on its
 // prod PR behind a passing gate: one node per environment and gate with its
 // state, the PR badge, the hover tooltip with the PR link and the gate's
@@ -351,7 +365,8 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 
 	index := c.Get(t, "/ui/")
 	require.Equal(t, http.StatusOK, index.Status, "GET /ui/: %s", index)
-	scripts := regexp.MustCompile(`<script[^>]*\ssrc="(/ui/[^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
+	// index.html names its files relative to /ui/ (#1933).
+	scripts := regexp.MustCompile(`<script[^>]*\ssrc="\./([^"]+\.js)"`).FindAllStringSubmatch(index.Body, -1)
 	require.NotEmpty(t, scripts, "index.html names no script: %s", index.Body)
 	// The entry script and every chunk it loads (the lazy views are their own chunks):
 	// none calls the per-gate approve endpoint.
@@ -360,7 +375,7 @@ func TestUI_BrowserGateOverride(t *testing.T) {
 	chunk := regexp.MustCompile(`assets/([A-Za-z0-9_.-]+\.js)|(?:from|import\()\s*["'\x60]\./([A-Za-z0-9_.-]+\.js)`)
 	queue := []string{}
 	for _, m := range scripts {
-		queue = append(queue, m[1])
+		queue = append(queue, "/ui/"+m[1])
 	}
 	seen := map[string]bool{}
 	for len(queue) > 0 {
@@ -763,8 +778,10 @@ func TestUI_BrowserStatic(t *testing.T) {
 	types := map[string]string{".js": "javascript", ".css": "text/css", ".png": "image/png", ".woff2": "font/woff2"}
 	named := map[string]int{}
 	seen := map[string]bool{}
-	for _, m := range regexp.MustCompile(`(?:src|href)="(/ui/[^"]+)"`).FindAllStringSubmatch(index.Body, -1) {
-		p := m[1]
+	// index.html names its files relative to /ui/, so they load under
+	// --ui-base-path too (#1933).
+	for _, m := range regexp.MustCompile(`(?:src|href)="\./([^"]+)"`).FindAllStringSubmatch(index.Body, -1) {
+		p := "/ui/" + m[1]
 		if seen[p] {
 			continue
 		}

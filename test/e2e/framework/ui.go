@@ -32,7 +32,7 @@ const (
 	// reached from off the pod, so not a loopback peer.
 	EnvUINodePortURL = "KARDINAL_E2E_UI_NODEPORT_URL"
 	// EnvUITokenURL is the kui-token release (static UI token, CORS origin
-	// UICORSOrigin, allowed host UIAllowedHost).
+	// UICORSOrigin, allowed host UIAllowedHost, base path UIBasePath).
 	EnvUITokenURL = "KARDINAL_E2E_UI_TOKEN_URL"
 	// EnvUITokenFile holds the static UI token of kui-token and kui-tls.
 	EnvUITokenFile = "KARDINAL_E2E_UI_TOKEN_FILE"
@@ -58,6 +58,8 @@ const (
 	UIAllowedHost = "kardinal-ui.test"
 	// UICORSOrigin is kui-token's ui.corsAllowedOrigins.
 	UICORSOrigin = "http://allowed.example"
+	// UIBasePath is kui-token's ui.basePath (#1933).
+	UIBasePath = "/kardinal"
 	// UIPort is the chart's UI port.
 	UIPort = 8082
 	// ControllerService is the main release's Service.

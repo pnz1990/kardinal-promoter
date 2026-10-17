@@ -178,6 +178,28 @@ release name that does not contain `kardinal-promoter`, the Service is named
     `ui.allowedHosts` (`--ui-allowed-hosts`) as well as setting an auth mode. See
     [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
 
+### Under a path prefix on a shared host
+
+!!! info "New in v0.13.0"
+    v0.12.0 and earlier serve the UI at `/ui/` and its API at `/api/v1/ui/` only. The [changelog](changelog.md) lists every v0.13.0 change.
+
+When one host routes several tools by path, set `ui.basePath` (`--ui-base-path`), for example
+`/kardinal`. The controller then also serves the UI at `/kardinal/ui/` and its API at
+`/kardinal/api/v1/ui/`, so the proxy or Ingress needs one rule, for `/kardinal`, and must pass the
+path on as it is: do not strip the prefix. `/kardinal` and `/kardinal/ui` redirect to
+`/kardinal/ui/`. The UI finds its API from its own address, and the authentication, host and CORS
+checks are the same under the prefix. The unprefixed `/ui/` keeps working, for
+`kubectl port-forward`. A prefix may have several segments (`/tools/kardinal`) of letters,
+digits, `.`, `_`, `~` and `-`, and must not start with `/ui` or `/api`.
+
+```yaml
+ui:
+  basePath: /kardinal
+  allowedHosts: [tools.example.com]
+  auth:
+    tokenReview: true
+```
+
 ### What the UI shows
 
 The UI calls a Bundle a *version*, a PromotionStep a *stage* and a PolicyGate a *gate*
