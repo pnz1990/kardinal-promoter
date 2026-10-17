@@ -1,0 +1,765 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: changerequests.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    categories:
+    - kardinal
+    - kardinal-all
+    kind: ChangeRequest
+    listKind: ChangeRequestList
+    plural: changerequests
+    singular: changerequest
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provider
+      name: Provider
+      type: string
+    - jsonPath: .status.ticket.key
+      name: Ticket
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ChangeRequest is a change request a promotion waits for
+          (docs/design/23-change-requests.md).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ChangeRequestSpec defines a change request: a ticket in a ticketing system
+              (ServiceNow, Jira) that kardinal opens, or links, for a promotion into an
+              environment, and whose state a PolicyGate waits for
+              (changeRequests.<name> in its expression).
+
+              A template (perPromotion: true) is not itself a ticket: the promotion
+              Graph creates one instance per Bundle and environment whose gates read
+              changeRequests.<name>, once the environment's upstreams are Verified. Only
+              the ChangeRequest reconciler calls the provider, and only it writes
+              status.
+            properties:
+              appliesTo:
+                description: |-
+                  AppliesTo, when set, limits the environments that get an instance to
+                  these (a fleet target counts as its fleet). Unset: every environment
+                  whose gates read changeRequests.<name>.
+                items:
+                  maxLength: 63
+                  type: string
+                maxItems: 32
+                type: array
+              jira:
+                description: Jira configures provider jira.
+                properties:
+                  approvedStatusCategory:
+                    default: done
+                    description: |-
+                      ApprovedStatusCategory is the status category (new, indeterminate,
+                      done) that means approved when ApprovedStatuses is unset.
+                    enum:
+                    - new
+                    - indeterminate
+                    - done
+                    type: string
+                  approvedStatuses:
+                    description: |-
+                      ApprovedStatuses are the status names that mean approved; when unset,
+                      a status in ApprovedStatusCategory does.
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
+                  baseURL:
+                    description: |-
+                      BaseURL is the Jira site, https://<site>.atlassian.net or a Data
+                      Center base URL.
+                    maxLength: 253
+                    pattern: ^https://[^?#@]+$
+                    type: string
+                  cancelledResolutions:
+                    description: |-
+                      CancelledResolutions are the resolution names that mean cancelled
+                      (default: Won't Do).
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef names the Secret key that holds the credential:
+                      a token, or "user:password" for basic. The Secret must be in the
+                      ChangeRequest's namespace and labelled kardinal.io/referenceable=true.
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  issueType:
+                    default: Task
+                    description: IssueType is the issue type opened (Change, Task,
+                      ...).
+                    maxLength: 64
+                    type: string
+                  project:
+                    description: Project is the key of the project issues are opened
+                      in.
+                    maxLength: 64
+                    type: string
+                  rejectedStatuses:
+                    description: RejectedStatuses are the status names that mean rejected.
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
+                  scheme:
+                    default: basic
+                    description: |-
+                      Scheme is basic (the key holds user:password, or Jira Cloud's
+                      email:api-token) or bearer (an OAuth token, or a Jira Data Center PAT).
+                    enum:
+                    - basic
+                    - bearer
+                    type: string
+                  template:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Template are the fields the issue is created with (summary,
+                      description), with the same placeholders as ServiceNow's.
+                    maxProperties: 32
+                    type: object
+                required:
+                - baseURL
+                - credentialsSecretRef
+                type: object
+              link:
+                description: Link says where mode link reads the ticket key.
+                properties:
+                  from:
+                    description: |-
+                      From is approvalField (a structured approval field of the
+                      environment's counted approvals), bundleLabel or bundleAnnotation.
+                    enum:
+                    - approvalField
+                    - bundleLabel
+                    - bundleAnnotation
+                    type: string
+                  name:
+                    description: Name is the approval field, label or annotation.
+                    maxLength: 317
+                    minLength: 1
+                    type: string
+                  requireField:
+                    description: |-
+                      RequireField, when set, verifies the linked ticket: its field Name
+                      must equal Value (for example cmdb_ci). Without it, a ticket is
+                      verified only when it carries the promotion's correlation id;
+                      otherwise status.verified is false.
+                    properties:
+                      name:
+                        maxLength: 128
+                        minLength: 1
+                        type: string
+                      value:
+                        maxLength: 1024
+                        type: string
+                    required:
+                    - name
+                    - value
+                    type: object
+                required:
+                - from
+                - name
+                type: object
+              mode:
+                default: open
+                description: |-
+                  Mode is open (kardinal creates the ticket) or link (kardinal reads its
+                  key from spec.link and tracks it, never creating one).
+                enum:
+                - open
+                - link
+                type: string
+              perPromotion:
+                description: |-
+                  PerPromotion makes this ChangeRequest a template: the Graph creates an
+                  instance of it per Bundle and environment whose gates read
+                  changeRequests.<name>. A ChangeRequest without it is not used by a
+                  promotion.
+                type: boolean
+              pollInterval:
+                default: 1m
+                description: |-
+                  PollInterval is how often the ticket's state is read: at least 30s,
+                  default 1m. A webhook trigger (POST /webhook/changerequests/...) reads
+                  it at once.
+                pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                type: string
+              provider:
+                description: Provider is the ticketing system.
+                enum:
+                - servicenow
+                - jira
+                type: string
+              servicenow:
+                description: ServiceNow configures provider servicenow.
+                properties:
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef names the Secret key that holds the credential:
+                      a token, or "user:password" for basic. The Secret must be in the
+                      ChangeRequest's namespace and labelled kardinal.io/referenceable=true.
+                    properties:
+                      key:
+                        description: Key is the key in the Secret's data.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  instanceURL:
+                    description: InstanceURL is the ServiceNow instance, https://<instance>.service-now.com.
+                    maxLength: 253
+                    pattern: ^https://[^/?#@]+/?$
+                    type: string
+                  scheme:
+                    default: basic
+                    description: |-
+                      Scheme is basic (the key holds user:password, or Jira Cloud's
+                      email:api-token) or bearer (an OAuth token, or a Jira Data Center PAT).
+                    enum:
+                    - basic
+                    - bearer
+                    type: string
+                  states:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      States maps raw state values (the change_request state field) to
+                      kardinal states, over the default Change Management state model.
+                    maxProperties: 32
+                    type: object
+                  template:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Template are the fields the change request is created with
+                      (short_description, assignment_group, ...): string values, with the
+                      placeholders of a per-promotion MetricCheck ({{ bundle.version }},
+                      {{ pipeline.name }}, {{ environment.name }}, ...).
+                    maxProperties: 32
+                    type: object
+                  type:
+                    default: normal
+                    description: |-
+                      Type is the change model of the Change Management API: normal,
+                      standard or emergency.
+                    enum:
+                    - normal
+                    - standard
+                    - emergency
+                    type: string
+                required:
+                - credentialsSecretRef
+                - instanceURL
+                type: object
+              suspend:
+                description: |-
+                  Suspend stops reading the ticket (the Graph sets it on an instance
+                  once its Bundle stops promoting). The last state stays in status and
+                  goes stale.
+                type: boolean
+              timeout:
+                default: 24h
+                description: |-
+                  Timeout is how long after the instance's first read status.timedOut
+                  becomes true; the gate's expression decides what that means. Default
+                  24h; "0" for none.
+                pattern: ^(0|([0-9]+(\.[0-9]+)?(ms|s|m|h))+)$
+                type: string
+            required:
+            - provider
+            type: object
+            x-kubernetes-validations:
+            - message: provider servicenow needs spec.servicenow
+              rule: self.provider != 'servicenow' || has(self.servicenow)
+            - message: provider jira needs spec.jira
+              rule: self.provider != 'jira' || has(self.jira)
+            - message: 'mode link needs spec.link: where the ticket key comes from'
+              rule: self.mode != 'link' || has(self.link)
+          status:
+            description: ChangeRequestStatus is written by the ChangeRequest reconciler
+              only.
+            properties:
+              approvers:
+                description: Approvers are the ticket's approvers, when the provider
+                  exposes them.
+                items:
+                  description: |-
+                    ChangeRequestApprover is one approver's decision, when the provider
+                    exposes it.
+                  properties:
+                    at:
+                      format: date-time
+                      type: string
+                    decision:
+                      description: Decision is the provider's (approved, rejected,
+                        requested).
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 32
+                type: array
+              conditions:
+                description: |-
+                  Conditions: Ready, Stale, CredentialsInvalid, Refused (egress) and
+                  ProviderError.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              correlationID:
+                description: |-
+                  CorrelationID is the promotion's id written into the ticket
+                  (kardinal:<namespace>/<bundle>/<environment>/<bundle UID>).
+                type: string
+              observedAt:
+                description: ObservedAt is the last successful read of the ticket.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the generation of the spec last
+                  acted on.
+                format: int64
+                type: integer
+              pendingAuditEvents:
+                description: |-
+                  PendingAuditEvents are ChangeRequestOpened, ChangeRequestLinked,
+                  ChangeRequestApproved and ChangeRequestRejected records not yet written
+                  (the audit outbox).
+                items:
+                  description: |-
+                    PendingAuditEvent is an AuditEvent that a reconciler has decided to write
+                    but has not yet seen created. The reconciler stores it in its own status in
+                    the same patch as the transition it records. It creates the AuditEvent on
+                    that reconcile or a later one, then removes the entry. The name is fixed
+                    when the entry is stored, so a retried create that the API server already
+                    applied returns AlreadyExists, which counts as written.
+                  properties:
+                    createdAt:
+                      description: |-
+                        CreatedAt is the transition time in RFC 3339 with nanoseconds, written
+                        to the AuditEvent's kardinal.io/created-at annotation: spec.timestamp
+                        has one-second resolution.
+                      type: string
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: Labels are the AuditEvent's labels.
+                      type: object
+                    name:
+                      description: Name is the AuditEvent's name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    spec:
+                      description: |-
+                        Spec is the AuditEvent's spec, timestamp included: the record carries
+                        the time of the transition, not the time it was written.
+                      properties:
+                        action:
+                          description: |-
+                            Action is a short verb describing what happened.
+                            Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
+                                          "PromotionSuperseded", "PromotionRejected", "RollbackStarted", "RollbackSucceeded",
+                                          "HealthCheckFailed", "GateBlocked", "GateEvaluated", "GateOverridden",
+                                          "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
+                                          "HoldBundleMissing", "BundleRejected", "APIWrite", "VerdictRecorded",
+                                          "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
+                                          "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed".
+                            ReceiptFailed is written by a promotion step that reached Verified
+                            without a PromotionReceipt, because its receipt could not be built
+                            (status.receiptError).
+                            PRMerged is written by a promotion step when its pull request is merged,
+                            naming who merged it as the SCM API reports it.
+                            ApprovalRecorded and ApprovalRevoked are written by an approval gate
+                            when a decision (kardinal approve) appears in or leaves its
+                            spec.approvals.
+                            BundleRejected is written once when a Bundle's spec.rejected is set
+                            (kardinal reject or the UI), naming who rejected it and why; its
+                            environment is "*" (the whole Bundle).
+                            GateOverridden is written once per spec.overrides entry of a gate
+                            instance, naming who created it (kardinal override or the UI).
+                            APIWrite is written for each write through the UI API or the Bundle
+                            API (controller.accessLog.auditEvents), naming the caller in actor and
+                            the route in request.
+                            FreezeExempted is written once per exemption when a PromotionStep goes
+                            on through an active freeze under it (kardinal override --freeze),
+                            naming who made the exemption and why.
+                            HealthCheckFailed and GateBlocked are accepted but never written: a
+                            failed health check records PromotionFailed (RollbackStarted when
+                            onHealthFailure is rollback), and a blocked gate records GateEvaluated
+                            with outcome Failure.
+                          enum:
+                          - PromotionStarted
+                          - PromotionSucceeded
+                          - PromotionFailed
+                          - PromotionSuperseded
+                          - PromotionRejected
+                          - RollbackStarted
+                          - RollbackSucceeded
+                          - HealthCheckFailed
+                          - GateBlocked
+                          - GateEvaluated
+                          - GateOverridden
+                          - ApprovalRecorded
+                          - ApprovalRevoked
+                          - HoldCreated
+                          - HoldReleased
+                          - HoldBundleMissing
+                          - BundleRejected
+                          - APIWrite
+                          - VerdictRecorded
+                          - VerdictRevoked
+                          - FreezeExempted
+                          - PipelinePaused
+                          - PipelineResumed
+                          - FreezeStarted
+                          - FreezeLifted
+                          - PRMerged
+                          - ReceiptFailed
+                          type: string
+                        actor:
+                          description: |-
+                            Actor is who caused the event (docs/actors.md). Absent on records
+                            written before v0.12.
+                          properties:
+                            agent:
+                              description: Agent is the AgentIdentity name, when kind
+                                is agent.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            asserted:
+                              description: |-
+                                Asserted holds what the client says about itself. It is recorded as
+                                written and never used for a security decision.
+                              properties:
+                                client:
+                                  description: Client is the tool that wrote the record
+                                    (for example kardinal/0.12.0).
+                                  maxLength: 128
+                                  type: string
+                                model:
+                                  description: Model is the AI model the client says
+                                    it runs.
+                                  maxLength: 128
+                                  type: string
+                                session:
+                                  description: Session is the client's session or
+                                    run identifier.
+                                  maxLength: 128
+                                  type: string
+                              type: object
+                            kind:
+                              description: Kind is human, agent, bot or controller
+                                (docs/actors.md).
+                              enum:
+                              - human
+                              - agent
+                              - bot
+                              - controller
+                              maxLength: 16
+                              type: string
+                            principal:
+                              description: Principal is the username the API server
+                                authenticated.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            sponsor:
+                              description: |-
+                                Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                                the record was written, when kind is agent.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            via:
+                              description: |-
+                                Via says how the controller came to write the record: ui and api for a
+                                caller it authenticated, subscription and auto-rollback for its own
+                                Bundles. Only the controller may set it.
+                              enum:
+                              - ui
+                              - api
+                              - subscription
+                              - auto-rollback
+                              maxLength: 16
+                              type: string
+                          required:
+                          - kind
+                          - principal
+                          type: object
+                          x-kubernetes-validations:
+                          - message: actor.agent and actor.sponsor are set exactly
+                              when actor.kind is agent
+                            rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                              : (!has(self.agent) && !has(self.sponsor))'
+                          - message: a controller actor says why it acted (actor.via)
+                            rule: self.kind != 'controller' || has(self.via)
+                        bundleName:
+                          description: BundleName is the name of the Bundle being
+                            promoted.
+                          minLength: 1
+                          type: string
+                        environment:
+                          description: Environment is the environment name where the
+                            event occurred.
+                          minLength: 1
+                          type: string
+                        fields:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Fields are an ApprovalRecorded or ApprovalRevoked decision's
+                            structured values (Approval spec.fields) the gate declares, whole.
+                          maxProperties: 16
+                          type: object
+                        message:
+                          description: Message is a human-readable description of
+                            the event.
+                          type: string
+                        outcome:
+                          description: |-
+                            Outcome describes the result of the action.
+                            Valid values: "Success", "Failure", "Pending".
+                          enum:
+                          - Success
+                          - Failure
+                          - Pending
+                          type: string
+                        pipelineName:
+                          description: PipelineName is the name of the Pipeline the
+                            Bundle is promoting through.
+                          minLength: 1
+                          type: string
+                        request:
+                          description: |-
+                            Request is the API request of an APIWrite event. It records no body
+                            and no token.
+                          properties:
+                            method:
+                              description: Method is the HTTP method.
+                              maxLength: 16
+                              type: string
+                            route:
+                              description: |-
+                                Route is the API route pattern, for example
+                                /api/v1/ui/pipelines/{name}/pause.
+                              maxLength: 256
+                              type: string
+                          required:
+                          - method
+                          - route
+                          type: object
+                        timestamp:
+                          description: Timestamp is when the event occurred (RFC 3339
+                            format).
+                          format: date-time
+                          type: string
+                      required:
+                      - action
+                      - outcome
+                      - timestamp
+                      type: object
+                      x-kubernetes-validations:
+                      - message: an AuditEvent names at least one of bundleName, pipelineName
+                          and environment
+                        rule: has(self.bundleName) || has(self.pipelineName) || has(self.environment)
+                  required:
+                  - name
+                  - spec
+                  type: object
+                type: array
+              pendingCreate:
+                description: |-
+                  PendingCreate is a create in flight (the outbox, see
+                  ChangeRequestPendingCreate).
+                properties:
+                  correlationID:
+                    description: CorrelationID is the id the create carries.
+                    type: string
+                  since:
+                    description: Since is when the create was first attempted.
+                    format: date-time
+                    type: string
+                required:
+                - correlationID
+                - since
+                type: object
+              providerState:
+                description: ProviderState is the raw state, for people.
+                type: string
+              ready:
+                description: Ready is true once the reconciler has a ticket and has
+                  read its state.
+                type: boolean
+              retryAt:
+                description: |-
+                  RetryAt, after a provider error or a 429, is when the next request is
+                  sent.
+                format: date-time
+                type: string
+              startedAt:
+                description: 'StartedAt is the instance''s first reconcile: the timeout
+                  counts from it.'
+                format: date-time
+                type: string
+              state:
+                description: |-
+                  State is the normalised state: pending, approved, rejected, cancelled,
+                  closed or unknown.
+                enum:
+                - pending
+                - approved
+                - rejected
+                - cancelled
+                - closed
+                - unknown
+                type: string
+              ticket:
+                description: Ticket is the ticket the instance tracks.
+                properties:
+                  id:
+                    description: ID is the ServiceNow sys_id or the Jira issue id.
+                    type: string
+                  key:
+                    description: Key is the ServiceNow number (CHG0031337) or the
+                      Jira issue key (CHG-42).
+                    type: string
+                  url:
+                    description: URL is the ticket's page.
+                    type: string
+                required:
+                - key
+                type: object
+              timedOut:
+                description: TimedOut is true once spec.timeout has passed since StartedAt.
+                type: boolean
+              validUntil:
+                description: |-
+                  ValidUntil is ObservedAt plus twice pollInterval: a gate evaluated
+                  after it reads changeRequests.<name>.stale as true.
+                format: date-time
+                type: string
+              verified:
+                description: |-
+                  Verified, for a linked ticket, reports whether it carries the
+                  correlation id or satisfies link.requireField. An unverified link is
+                  tracked but says so.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

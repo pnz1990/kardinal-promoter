@@ -130,6 +130,12 @@ func (t *Translator) Translate(ctx context.Context,
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: collect metric checks: %w", err)
 	}
+	// Per-promotion ChangeRequests of the Pipeline namespace: the builder adds
+	// an instance for each one a gate reads, in the environments it applies to.
+	changeRequests, err := t.collectChangeRequestTemplates(ctx, pipeline.Namespace)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: collect change requests: %w", err)
+	}
 
 	// Build validates the input (names, skip permissions, node IDs) and
 	// returns the Graph spec. Only the controller's org namespaces count as
@@ -161,6 +167,7 @@ func (t *Translator) Translate(ctx context.Context,
 		Analyses:         analyses,
 		Shape:            shape,
 		MetricChecks:     metricChecks,
+		ChangeRequests:   changeRequests,
 	})
 	if err != nil {
 		return "", &BuildError{Err: fmt.Errorf("translator.Translate: %w", err), Gates: gates}
@@ -238,6 +245,23 @@ func (t *Translator) collectMetricTemplates(ctx context.Context, ns string) ([]k
 	for _, mc := range list.Items {
 		if mc.Spec.PerPromotion {
 			out = append(out, mc)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// collectChangeRequestTemplates returns the ChangeRequests in ns with
+// spec.perPromotion, sorted by name.
+func (t *Translator) collectChangeRequestTemplates(ctx context.Context, ns string) ([]kardinalv1alpha1.ChangeRequest, error) {
+	var list kardinalv1alpha1.ChangeRequestList
+	if err := t.k8s.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil, fmt.Errorf("list changerequests in %s: %w", ns, err)
+	}
+	var out []kardinalv1alpha1.ChangeRequest
+	for _, cr := range list.Items {
+		if cr.Spec.PerPromotion {
+			out = append(out, cr)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

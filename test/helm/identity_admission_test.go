@@ -621,7 +621,7 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 		assert.Contains(t, rules[0].Resources, k)
 		assert.Contains(t, rules[0].Resources, k+"/status", "status is checked too")
 	}
-	assert.Equal(t, []string{"metricchecks", "metricchecks/status"}, rules[1].Resources)
+	assert.Equal(t, []string{"metricchecks", "metricchecks/status", "changerequests", "changerequests/status"}, rules[1].Resources)
 	assert.Equal(t, []string{"argoproj.io"}, rules[2].APIGroups)
 	assert.Equal(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Create}, rules[2].Operations)
 
@@ -665,6 +665,14 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 	}
 	mcTemplate := func() map[string]interface{} {
 		return obj(map[string]interface{}{"kardinal.io/environment": "prod"}, map[string]interface{}{"provider": "prometheus"})
+	}
+	crs, crStatus := res("kardinal.io", "changerequests", ""), res("kardinal.io", "changerequests", "status")
+	crInstance := func() map[string]interface{} {
+		return obj(map[string]interface{}{"kardinal.io/bundle": "app-v1", "kardinal.io/change-request-template": "prod-change"},
+			map[string]interface{}{"provider": "servicenow"})
+	}
+	crTemplate := func() map[string]interface{} {
+		return obj(nil, map[string]interface{}{"provider": "servicenow", "perPromotion": true})
 	}
 	user := []interface{}{"system:authenticated"}
 	saGroups := []interface{}{"system:authenticated", "system:serviceaccounts", "system:serviceaccounts:team-a"}
@@ -724,6 +732,15 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 		{name: "kro creates a MetricCheck instance", cur: mcInstance(), user: graphSA, groups: saGroups, req: mcs, want: true},
 		{name: "the controller writes an instance's status", old: mcInstance(), cur: mcInstance(), user: controller, req: mcStatus, want: true},
 		{name: "kro adopts a user's MetricCheck", old: mcTemplate(), cur: mcInstance(), user: graphSA, groups: saGroups, req: mcs, want: false},
+		{name: "a user writes a ChangeRequest template", cur: crTemplate(), user: "alice", req: crs, want: true},
+		{name: "a user forges a ChangeRequest instance", cur: crInstance(), user: "alice", req: crs, want: false},
+		{name: "a user marks a change request approved", old: crInstance(), cur: crInstance(), user: "alice", req: crStatus, want: false},
+		{name: "a cluster admin marks a change request approved", old: crInstance(), cur: crInstance(),
+			user: "kubernetes-admin", req: crStatus, want: false},
+		{name: "a user strips a ChangeRequest instance's label", old: crInstance(), cur: crTemplate(), user: "alice", req: crs, want: false},
+		{name: "kro creates a ChangeRequest instance", cur: crInstance(), user: graphSA, groups: saGroups, req: crs, want: true},
+		{name: "the controller writes a ChangeRequest's status", old: crInstance(), cur: crInstance(), user: controller, req: crStatus, want: true},
+		{name: "kro adopts a user's ChangeRequest", old: crTemplate(), cur: crInstance(), user: graphSA, groups: saGroups, req: crs, want: false},
 		{name: "a user creates kardinal's AnalysisRun", cur: obj(map[string]interface{}{"kardinal.io/bundle": "app-v1"}, nil),
 			user: "alice", req: runs, want: false},
 		{name: "a user creates their own AnalysisRun", cur: obj(nil, nil), user: "alice", req: runs, want: true},

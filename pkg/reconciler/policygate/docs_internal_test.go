@@ -161,6 +161,20 @@ func docsCELFixture(t *testing.T) (*Reconciler, *kardinalv1alpha1.PolicyGate) {
 			Status:     kardinalv1alpha1.MetricCheckStatus{LastValue: value, Result: "Pass", ValidUntil: &validUntil},
 		})
 	}
+	// The change request docs/change-requests.md and cel-context.md name: a
+	// template and its approved instance for this gate's Bundle and
+	// environment.
+	objs = append(objs, &kardinalv1alpha1.ChangeRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-change", Namespace: ns},
+		Spec:       kardinalv1alpha1.ChangeRequestSpec{PerPromotion: true, Provider: "servicenow"},
+	}, &kardinalv1alpha1.ChangeRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-change-prod--app-v1", Namespace: ns, Labels: map[string]string{
+			"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod", "kardinal.io/change-request-template": "prod-change"}},
+		Spec: kardinalv1alpha1.ChangeRequestSpec{Provider: "servicenow"},
+		Status: kardinalv1alpha1.ChangeRequestStatus{State: "approved", ValidUntil: &validUntil,
+			Ticket:    &kardinalv1alpha1.ChangeRequestTicket{Key: "CHG0031337", URL: "https://example.service-now.com/x"},
+			Approvers: []kardinalv1alpha1.ChangeRequestApprover{{Name: "jane@example.com", Decision: "approved"}}},
+	})
 	objs = append(objs, &kardinalv1alpha1.PRStatus{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "app-v1-staging", Namespace: ns,
@@ -245,7 +259,7 @@ func collectDocExprs(t *testing.T) []docExpr {
 var (
 	fenceRe = regexp.MustCompile("^\\s*```\\s*([A-Za-z]*)")
 	// A CEL context table row: | `attribute` | type | ...
-	attrRowRe = regexp.MustCompile("^\\|\\s*`((?:bundle|schedule|environment|upstream|metrics|changewindow|approvals|actor|agent)[^`]*)`\\s*\\|\\s*([a-z ]+?)\\s*\\|")
+	attrRowRe = regexp.MustCompile("^\\|\\s*`((?:bundle|schedule|environment|upstream|metrics|changewindow|changeRequests|approvals|actor|agent)[^`]*)`\\s*\\|\\s*([a-z ]+?)\\s*\\|")
 	// Any row of a function table; the example is the last backticked cell.
 	cellRe = regexp.MustCompile("`([^`]+)`")
 )
@@ -320,7 +334,7 @@ func markdownExprs(t *testing.T, path string) []docExpr {
 // is not an attribute with a checkable type.
 func celTypeName(docType string) string {
 	switch {
-	case docType == "string", docType == "int", docType == "bool":
+	case docType == "string", docType == "int", docType == "bool", docType == "list":
 		return docType
 	case strings.HasPrefix(docType, "map"):
 		return "map"

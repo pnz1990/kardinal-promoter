@@ -370,6 +370,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		if notes := staleMetricNotes(gate.Spec.Expression, celCtx); notes != "" {
 			reason = reason + "; " + notes
 		}
+		if notes := changeRequestNotes(gate.Spec.Expression, celCtx); notes != "" {
+			reason = reason + "; " + notes
+		}
 	}
 	// The rollback an environment is held on (spec.holds) passes the gates
 	// of that environment, with an explicit EXEMPT reason, the GateEvaluated
@@ -663,6 +666,23 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
+	// ChangeRequests (spec 23 section 6) are only listed when the expression
+	// reads them, from the namespace metrics are read from: an org gate's
+	// org namespace has no instances, so its changeRequests block. A List
+	// failure blocks the gate (fail closed).
+	crCtx := map[string]interface{}{}
+	if strings.Contains(gate.Spec.Expression, "changeRequests") {
+		ns, nsErr := r.metricsNamespace(ctx, gate)
+		if nsErr != nil {
+			return nil, version, fmt.Errorf("changeRequests: %w", nsErr)
+		}
+		var crErr error
+		crCtx, crErr = r.buildChangeRequestContext(ctx, ns, metricsNow, gate.Labels[labelBundle], gate.Labels[labelEnvironment])
+		if crErr != nil {
+			return nil, version, fmt.Errorf("changeRequests: %w", crErr)
+		}
+	}
+
 	author := lifecycle.BundleAuthor(&bundle)
 	agentCtx, err := r.buildAgentContext(ctx, gate, author)
 	if err != nil {
@@ -693,11 +713,12 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"environment": map[string]interface{}{
 			"name": gate.Labels[labelEnvironment],
 		},
-		"metrics":      metricsCtx,
-		"upstream":     upstreamCtx,
-		"changewindow": cwCtx,
-		"approvals":    tally.context(tally.Met()),
-		"verdicts":     tallyVerdicts(gate, &bundle, now).Context(),
+		"metrics":        metricsCtx,
+		"upstream":       upstreamCtx,
+		"changewindow":   cwCtx,
+		"changeRequests": crCtx,
+		"approvals":      tally.context(tally.Met()),
+		"verdicts":       tallyVerdicts(gate, &bundle, now).Context(),
 	}, version, nil
 }
 
@@ -1443,6 +1464,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.
 		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
+		// Watch ChangeRequest objects: a new ticket state (or a fresh reading
+		// of a stale one) re-evaluates the gates of its namespace that read
+		// changeRequests.
+		Watches(&kardinalv1alpha1.ChangeRequest{}, handler.EnqueueRequestsFromMapFunc(r.changeRequestRequests),
+			builder.WithPredicates(changeRequestChanged)).
 		// Watch the AgentIndex: a suspension or an autonomy change
 		// re-evaluates the gates that read agent.* (18-actor-policy 2.2).
 		Watches(&kardinalv1alpha1.AgentIndex{}, handler.EnqueueRequestsFromMapFunc(r.agentIndexGateRequests)).

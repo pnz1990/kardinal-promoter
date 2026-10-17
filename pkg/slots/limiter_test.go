@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package metriccheck_test
+package slots_test
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/slots"
 )
 
 func nn(ns, name string) types.NamespacedName { return types.NamespacedName{Namespace: ns, Name: name} }
@@ -38,9 +38,9 @@ func (w *wakes) take() []types.NamespacedName {
 	return out
 }
 
-func newLimiter(global, perNS int) (*metriccheck.Limiter, *wakes) {
+func newLimiter(global, perNS int) (*slots.Limiter, *wakes) {
 	w := &wakes{}
-	l := metriccheck.NewLimiter(global, perNS)
+	l := slots.NewLimiter(global, perNS)
 	l.Wake = w.wake
 	return l, w
 }
@@ -236,7 +236,7 @@ func TestLimiter_20kWaiters(t *testing.T) {
 // TestLimiter_Concurrent: under contention, with wake-ups delivered to
 // goroutines, the caps are never exceeded and every check is served.
 func TestLimiter_Concurrent(t *testing.T) {
-	l := metriccheck.NewLimiter(3, 1)
+	l := slots.NewLimiter(3, 1)
 	chans := map[types.NamespacedName]chan struct{}{}
 	for i := range 50 {
 		chans[nn([]string{"a", "b", "c", "d", "e"}[i%5], fmt.Sprint(i))] = make(chan struct{}, 1)

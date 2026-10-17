@@ -18,6 +18,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `upstream` | map | Per-environment soak data from upstream |
 | `metrics` | map | MetricCheck results from the gate's metrics namespace (the org policy namespace for an org gate, the gate's namespace otherwise) |
 | `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes) |
+| `changeRequests` | map | The change request tickets of this gate instance's promotion (ServiceNow, Jira). See [`changeRequests.*`](#changerequests) |
 | `approvals` | map | The Approvals counted for this gate instance (`kardinal approve`). See [`approvals.*`](#approvals) |
 | `verdicts` | map | The Verdicts a verify gate counted (`kardinal verify`, AgentRuns). See [`verdicts.*`](#verdicts) |
 | `actor` | map | Who created the version: its verified actor stamp. See [`actor.*`](#actor) |
@@ -335,6 +336,38 @@ a gate with `approval.allowAgents` that lists the agent ([Agents as approvers](.
 ```yaml
 # Two approvals, outside the weekend
 expression: 'approvals.count >= 2 && !approvals.rejected && !schedule.isWeekend'
+```
+
+## `changeRequests.*`
+
+One entry per per-promotion `ChangeRequest` template (`spec.perPromotion: true`) in the gate's
+metrics namespace, keyed by the template's name. The value is the instance the Graph made from it
+for the gate's own Bundle and environment (labels `kardinal.io/change-request-template`,
+`kardinal.io/bundle`, `kardinal.io/environment`). The ChangeRequest controller reads the ticket and
+writes all of it to the instance's status; the gate never calls the ticketing system. See
+[Change requests](../change-requests.md).
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `changeRequests["prod-change"].state` | string | `"approved"` | `pending`, `approved`, `rejected`, `cancelled`, `closed` or `unknown`; `""` until the instance has a ticket; `"unknown"` once the reading is stale |
+| `changeRequests["prod-change"].ticket` | string | `"CHG0031337"` | The ServiceNow number or Jira issue key; `""` until there is one |
+| `changeRequests["prod-change"].url` | string | `"https://example.service-now.com/..."` | The ticket's page |
+| `changeRequests["prod-change"].stale` | bool | `false` | `true` before the first reading, and when the gate's evaluation time is at or after the instance's `status.validUntil` (two poll intervals after its last reading) |
+| `changeRequests["prod-change"].timedOut` | bool | `false` | `true` once `spec.timeout` has passed since the instance started |
+| `changeRequests["prod-change"].verified` | bool | `true` | `true` for a ticket kardinal opened, and for a linked ticket that carries the promotion's correlation id or matches `link.requireField`; `false` otherwise |
+| `changeRequests["prod-change"].approvers` | list | `["jane@example.com"]` | The ticket's approvers, when the provider reports them |
+| `changeRequests["prod-change"].providerState` | string | `"Scheduled / approved"` | The ticketing system's own state, for people |
+
+A name with no template is an evaluation error, so the gate fails closed. An org gate (a template in
+an org policy namespace) reads that namespace, where the Graph creates no instances, so its
+`changeRequests` entries never have a ticket.
+
+```cel
+# Prod needs an approved, fresh change request
+changeRequests["prod-change"].state == "approved" && !changeRequests["prod-change"].stale
+
+# A linked ticket must be verified, and nobody may wait more than the timeout
+changeRequests["prod-change"].state == "approved" && changeRequests["prod-change"].verified && !changeRequests["prod-change"].timedOut
 ```
 
 ## `verdicts.*`

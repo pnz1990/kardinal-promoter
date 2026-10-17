@@ -168,6 +168,8 @@ kardinal approve my-app prod --field ticketID=CHG0031337 --field riskAcknowledge
   it is recorded and audited again.
 - **What a field proves.** It is a statement by the approver, verified as theirs (the Approval's
   identity admission), not as true. `riskAcknowledged: true` is evidence that the approver said so.
+  To check the ticket itself, link it with a [ChangeRequest](change-requests.md#open-or-link)
+  (`link.from: approvalField`): kardinal then reads its state from the ticketing system.
 - `kardinal why` lists the fields a waiting gate asks for, and gives the `kardinal approve` command
   with them.
 

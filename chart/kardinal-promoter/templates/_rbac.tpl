@@ -51,6 +51,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - promotionsteps
     - prstatuses
     - metricchecks
+    - changerequests
     - scheduleclocks
     - notificationhooks
     - hookruns
@@ -93,6 +94,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - promotionsteps/status
     - prstatuses/status
     - metricchecks/status
+    - changerequests/status
     - scheduleclocks/status
     - notificationhooks/status
     - hookruns/status

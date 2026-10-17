@@ -147,6 +147,7 @@ nav:
       - Verify a promotion: verify.md
       - Health checks: health-adapters.md
       - Metric checks: metric-checks.md
+      - Change requests: change-requests.md
       - Analysis (Argo Rollouts): analysis.md
     - Run pre- and post-deploy hooks: hooks.md
     - Verify image signatures: image-verification.md

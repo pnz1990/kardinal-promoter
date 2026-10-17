@@ -18,7 +18,7 @@ import (
 // userKinds are the kinds a user writes (or CI creates, Bundle):
 // kubectl get kardinal lists them. Every kind, generated ones included, is in
 // kardinal-all.
-var userKinds = []string{"AgentIdentity", "Bundle", "ChangeWindow", "ClusterScmProvider", "MetricCheck",
+var userKinds = []string{"AgentIdentity", "Bundle", "ChangeRequest", "ChangeWindow", "ClusterScmProvider", "MetricCheck",
 	"NotificationHook", "Pipeline", "PolicyGate", "ScmProvider", "StepTemplate", "Subscription"}
 
 // TestCRDCategories (P1): kubectl get kardinal lists the kinds users write,

@@ -270,7 +270,8 @@ The context has the version (`bundle.*`, with `bundle.upstreamSoakMinutes` and t
 review state in `bundle.pr`), who created it (`actor.*`) and its agent's registration
 (`agent.*`), the time (`schedule.*`), the target environment (`environment.name`),
 per-environment soak and history (`upstream.*`), MetricCheck results (`metrics.*`), change
-windows (`changewindow`) and approvals (`approvals.*`).
+windows (`changewindow`), change request tickets (`changeRequests.*`, see
+[Change Requests](change-requests.md)) and approvals (`approvals.*`).
 
 ### Actor attributes
 

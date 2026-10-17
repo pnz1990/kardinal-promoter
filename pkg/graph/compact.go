@@ -506,12 +506,20 @@ const (
 	iterMetric = "Metric"
 )
 
-// compactMetric is one per-promotion MetricCheck instance of the compact
-// shape.
+// compactMetric is one per-promotion MetricCheck or ChangeRequest instance
+// of the compact shape.
 type compactMetric struct {
 	name, env, template string
 	upstreams           []string // environment names
 	spec                map[string]interface{}
+}
+
+// compactKind names the nodes and the template label of one kind of
+// per-promotion instance in the compact shape.
+type compactKind struct {
+	kind, data, admit, collection, iter, templateLabel string
+	// bundleUID, when set, is written to the instances' LabelBundleUID.
+	bundleUID string
 }
 
 // compactMetricNodes builds the compact shape's per-promotion MetricCheck
@@ -528,6 +536,21 @@ type compactMetric struct {
 // instance. spec.suspend, in the data, follows the Bundle's phase as in the
 // node shape.
 func compactMetricNodes(pipelineName, bundleName string, metrics []compactMetric) []GraphNode {
+	return compactInstanceNodes(compactKind{kind: "MetricCheck", data: NodeMetricCheckData, admit: NodePromotionMetrics,
+		collection: NodeMetricChecks, iter: iterMetric, templateLabel: LabelMetricTemplate}, pipelineName, bundleName, metrics)
+}
+
+// compactChangeRequestNodes builds the compact shape's ChangeRequest
+// instances, admitted as compactMetricNodes admits MetricChecks.
+func compactChangeRequestNodes(pipelineName, bundleName, bundleUID string, crs []compactMetric) []GraphNode {
+	return compactInstanceNodes(compactKind{kind: "ChangeRequest", data: NodeChangeRequestData,
+		admit: NodePromotionChangeRequests, collection: NodeChangeRequests, iter: iterChangeRequest,
+		templateLabel: LabelChangeRequestTemplate, bundleUID: bundleUID}, pipelineName, bundleName, crs)
+}
+
+// compactInstanceNodes builds the data, admission and collection nodes of
+// one kind of per-promotion instance.
+func compactInstanceNodes(k compactKind, pipelineName, bundleName string, metrics []compactMetric) []GraphNode {
 	if len(metrics) == 0 {
 		return nil
 	}
@@ -550,30 +573,34 @@ func compactMetricNodes(pipelineName, bundleName string, metrics []compactMetric
 		field := chunkID("items", i)
 		data[field] = items
 		admit[field] = fmt.Sprintf("${%s.%s.filter(m, m.environment in %sstarted || m.upstreams.all(u, u in %sverified))}",
-			NodeMetricCheckData, field, state, state)
-		item := func(f string) string { return "${" + iterMetric + "." + f + "}" }
+			k.data, field, state, state)
+		item := func(f string) string { return "${" + k.iter + "." + f + "}" }
+		labels := map[string]interface{}{
+			"kardinal.io/pipeline":    pipelineName,
+			"kardinal.io/bundle":      bundleName,
+			"kardinal.io/environment": item("environment"),
+			k.templateLabel:           item("template"),
+		}
+		if k.bundleUID != "" {
+			labels[LabelBundleUID] = k.bundleUID
+		}
 		collections = append(collections, GraphNode{
-			ID:      chunkID(NodeMetricChecks, i),
-			ForEach: []map[string]string{{iterMetric: fmt.Sprintf("${%s.%s}", NodePromotionMetrics, field)}},
+			ID:      chunkID(k.collection, i),
+			ForEach: []map[string]string{{k.iter: fmt.Sprintf("${%s.%s}", k.admit, field)}},
 			Template: map[string]interface{}{
 				"apiVersion": "kardinal.io/v1alpha1",
-				"kind":       "MetricCheck",
+				"kind":       k.kind,
 				"metadata": map[string]interface{}{
-					"name": item("name"),
-					"labels": map[string]interface{}{
-						"kardinal.io/pipeline":    pipelineName,
-						"kardinal.io/bundle":      bundleName,
-						"kardinal.io/environment": item("environment"),
-						LabelMetricTemplate:       item("template"),
-					},
+					"name":   item("name"),
+					"labels": labels,
 				},
 				"spec": item("spec"),
 			},
 		})
 	}
 	return append([]GraphNode{
-		{ID: NodeMetricCheckData, Def: data},
-		{ID: NodePromotionMetrics, Def: admit},
+		{ID: k.data, Def: data},
+		{ID: k.admit, Def: admit},
 	}, collections...)
 }
 
