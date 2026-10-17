@@ -20,7 +20,6 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -218,7 +217,7 @@ func checkPredicate(st *Statement, o VerifyOptions) error {
 		if !strings.HasPrefix(r, "KARDINAL_") && !strings.HasPrefix(r, "SLSA_") {
 			r = "KARDINAL_" + r
 		}
-		if slices.Contains(p.VerifiedLevels, r) != want {
+		if hasLevel(p.VerifiedLevels, r) != want {
 			if want {
 				return fmt.Errorf("level %s is required and not verified", r)
 			}

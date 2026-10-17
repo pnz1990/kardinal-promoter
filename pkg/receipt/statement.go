@@ -225,7 +225,10 @@ type Approval struct {
 type Checks struct {
 	Metrics           []Metric     `json:"metrics,omitempty"`
 	ImageVerification []ImageCheck `json:"imageVerification,omitempty"`
-	Health            *Health      `json:"health,omitempty"`
+	// SLSA is the version's SLSA build level, from its ImageVerification's
+	// attestations; nil when its policy decides none.
+	SLSA   *SLSA   `json:"slsa,omitempty"`
+	Health *Health `json:"health,omitempty"`
 }
 
 // Metric is one per-promotion MetricCheck result.
@@ -449,7 +452,7 @@ func statement(in Input) (Statement, error) {
 			ResourceURI:        ResourceURI(in.ClusterID, ns, ps.Spec.PipelineName, ps.Spec.Environment),
 			Policy:             policy,
 			VerificationResult: ResultPassed,
-			VerifiedLevels:     levels(rec, facts),
+			VerifiedLevels:     append(levels(rec, facts), slsaLevels(rec)...),
 			SlsaVersion:        slsaVersion,
 			Kardinal:           rec,
 		},
@@ -544,6 +547,7 @@ func checks(in Input) Checks {
 		for _, r := range iv.Status.Images {
 			c.ImageVerification = append(c.ImageVerification, ImageCheck{Image: r.Image, Verified: r.Verified, By: r.Signer})
 		}
+		c.SLSA = slsaCheck(iv)
 	}
 	for _, s := range in.Step.Status.Steps {
 		if s.Name != "health-check" {

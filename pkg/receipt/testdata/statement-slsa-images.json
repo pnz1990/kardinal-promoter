@@ -1,0 +1,138 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "kardinalPromotion": {
+      "actor": {
+        "agent": "fixer",
+        "asserted": {
+          "model": "claude-opus-5"
+        },
+        "kind": "agent",
+        "principal": "system:serviceaccount:ci:fixer",
+        "sponsor": "alice@example.com"
+      },
+      "change": {
+        "environment": "prod",
+        "pr": {
+          "mergeCommit": "m1",
+          "number": 412,
+          "url": "https://github.com/acme/deploy/pull/412"
+        }
+      },
+      "chart": "0.13.0",
+      "checks": {
+        "health": {
+          "adapter": "argocd",
+          "at": "2026-10-14T10:23:03Z",
+          "result": "Healthy"
+        },
+        "imageVerification": [
+          {
+            "by": "ci",
+            "image": "ghcr.io/acme/checkout@sha256:9f2c000000000000000000000000000000000000000000000000000000000001",
+            "verified": true
+          },
+          {
+            "by": "ci",
+            "image": "ghcr.io/acme/sidecar-1@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "verified": true
+          },
+          {
+            "by": "ci",
+            "image": "ghcr.io/acme/sidecar-2@sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            "verified": true
+          }
+        ],
+        "slsa": {
+          "buildLevel": 2,
+          "images": 3,
+          "levelSource": "builder"
+        }
+      },
+      "controller": "v0.13.0",
+      "decisionSnapshot": true,
+      "gates": [
+        {
+          "approvalRequired": true,
+          "approvals": [
+            {
+              "actor": {
+                "kind": "human",
+                "principal": "carol@example.com"
+              },
+              "counted": true,
+              "decision": "approve",
+              "user": "carol@example.com"
+            },
+            {
+              "counted": false,
+              "decision": "approve",
+              "reason": "the author cannot approve",
+              "user": "alice"
+            }
+          ],
+          "evaluatedAt": "2026-10-14T09:24:03Z",
+          "expression": "approvals.count \u003e= 1",
+          "name": "checkout-1-5-0-prod-approve",
+          "reason": "1 of 1 approvals",
+          "result": "pass",
+          "template": "payments/kardinal-agents-approve",
+          "templateDigest": {
+            "sha256": "aa"
+          },
+          "templateGeneration": 1,
+          "templateUID": "t1"
+        }
+      ],
+      "pipeline": "checkout",
+      "receipt": "checkout-1-5-0-prod",
+      "truncated": false,
+      "version": {
+        "bundle": "checkout-1-5-0",
+        "bundleUID": "1b2c",
+        "images": [
+          "ghcr.io/acme/checkout@sha256:9f2c000000000000000000000000000000000000000000000000000000000001"
+        ],
+        "provenance": {
+          "author": "alice",
+          "ciRunURL": "https://ci/1",
+          "commitSHA": "abc",
+          "timestamp": null
+        },
+        "type": "image",
+        "version": "1.5.0"
+      }
+    },
+    "policy": {
+      "digest": {
+        "sha256": "926389535001c11dcf451ac006455e4344b26b391107b89187ab86926557ecd3"
+      },
+      "uri": "kardinal://9b1e/namespaces/payments/pipelines/checkout?generation=14"
+    },
+    "resourceUri": "kardinal://9b1e/namespaces/payments/pipelines/checkout/environments/prod",
+    "slsaVersion": "1.0",
+    "timeVerified": "2026-10-14T10:24:03Z",
+    "verificationResult": "PASSED",
+    "verifiedLevels": [
+      "KARDINAL_GATES_PASSED",
+      "KARDINAL_APPROVED",
+      "KARDINAL_HEALTHY",
+      "SLSA_BUILD_LEVEL_2"
+    ],
+    "verifier": {
+      "id": "https://kardinal.io/controller",
+      "version": {
+        "kardinal-promoter": "v0.13.0"
+      }
+    }
+  },
+  "predicateType": "https://slsa.dev/verification_summary/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha256": "9f2c000000000000000000000000000000000000000000000000000000000001"
+      },
+      "name": "ghcr.io/acme/checkout"
+    }
+  ]
+}
