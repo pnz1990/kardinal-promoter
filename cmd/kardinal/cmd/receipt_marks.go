@@ -48,11 +48,13 @@ func receiptSigned(rc v1alpha1.PromotionReceipt) bool {
 	return rc.Status.Phase == v1alpha1.ReceiptSigned || rc.Status.Phase == v1alpha1.ReceiptStored
 }
 
-// receiptMark is a receipt's state for a person: "verified ✓" once signed
-// (the mark on a terminal only), else its phase.
+// receiptMark is a receipt's state for a person: "signed ✓" once the
+// controller signed it (the mark on a terminal only), else its phase.
+// "Verified" is what kardinal verify-receipt says of a receipt it checked,
+// not the controller's signature (#2135).
 func receiptMark(rc v1alpha1.PromotionReceipt) string {
 	if receiptSigned(rc) {
-		return sty.Paint(display.ToneVerified, "verified"+sty.Sym(" ✓", ""))
+		return sty.Paint(display.ToneVerified, "signed"+sty.Sym(" ✓", ""))
 	}
 	if rc.Status.Phase == "" {
 		return "pending"

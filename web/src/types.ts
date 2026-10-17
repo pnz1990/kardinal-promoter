@@ -343,7 +343,7 @@ export interface PromotionStep {
   /** #501: Number of bake timer resets due to health alarms. */
   bakeResets?: number
   /** The step's signed promotion receipt (docs/receipts.md), once Verified with receipts on. */
-  receipt?: { name: string; phase: string; verified: boolean }
+  receipt?: { name: string; phase: string; signed: boolean }
 }
 
 /** One entry of PromotionStep status.steps[]. */

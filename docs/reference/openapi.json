@@ -2686,15 +2686,15 @@
             "description": "Phase is Pending, Signed, Stored or Failed.",
             "type": "string"
           },
-          "verified": {
-            "description": "Verified is true once it is signed (Signed or Stored).",
+          "signed": {
+            "description": "Signed is true once the controller signed it (Signed or Stored): \"verified\" is what verify-receipt says of a receipt it checked.",
             "type": "boolean"
           }
         },
         "required": [
           "name",
           "phase",
-          "verified"
+          "signed"
         ],
         "type": "object"
       },

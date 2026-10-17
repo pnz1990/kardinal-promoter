@@ -75,13 +75,13 @@ describe('StageDrawer (U3)', () => {
   })
 
   it('names the step\'s signed promotion receipt and how to verify it (docs/receipts.md)', () => {
-    const signed = { ...step, receipt: { name: 'web-3-prod', phase: 'Stored', verified: true } }
+    const signed = { ...step, receipt: { name: 'web-3-prod', phase: 'Stored', signed: true } }
     renderDrawer([approvalGate], { data: { pipeline, bundles, steps: [signed], gates: [approvalGate] } })
-    expect(screen.getByTestId('receipt')).toHaveTextContent(`Receipt web-3-prod: verified ✓ · kardinal verify-receipt web ${signed.environment} --bundle ${signed.bundle}`)
+    expect(screen.getByTestId('receipt')).toHaveTextContent(`Receipt web-3-prod: signed ✓ · kardinal verify-receipt web ${signed.environment} --bundle ${signed.bundle}`)
   })
 
   it('says a receipt not signed yet is pending, and nothing without one', () => {
-    const pending = { ...step, receipt: { name: 'web-3-prod', phase: 'Pending', verified: false } }
+    const pending = { ...step, receipt: { name: 'web-3-prod', phase: 'Pending', signed: false } }
     renderDrawer([approvalGate], { data: { pipeline, bundles, steps: [pending], gates: [approvalGate] } })
     expect(screen.getByTestId('receipt')).toHaveTextContent('Receipt web-3-prod: pending')
   })

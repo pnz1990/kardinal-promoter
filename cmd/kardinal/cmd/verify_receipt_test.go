@@ -319,14 +319,15 @@ func TestReceiptMarks(t *testing.T) {
 	out, _, err := runOutput(t, c, "history", "checkout")
 	require.NoError(t, err)
 	assert.Contains(t, out, "RECEIPT")
-	assert.Contains(t, out, "verified")
+	assert.Contains(t, out, "signed")
+	assert.NotContains(t, out, "verified", "the controller signs; verify-receipt verifies (#2135)")
 	out, _, err = runOutput(t, c, "history", "checkout", "-o", "json")
 	require.NoError(t, err)
 	assert.Contains(t, out, `"receipt": {`)
-	assert.Contains(t, out, `"verified": true`)
+	assert.Contains(t, out, `"signed": true`)
 	out, _, err = runOutput(t, c, "why", "checkout", "prod")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Receipt  checkout-1-5-0-prod, verified: kardinal verify-receipt checkout prod --bundle checkout-1-5-0")
+	assert.Contains(t, out, "Receipt  checkout-1-5-0-prod, signed: kardinal verify-receipt checkout prod --bundle checkout-1-5-0")
 
 	bare := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(b, step, p).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
