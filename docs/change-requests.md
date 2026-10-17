@@ -105,7 +105,12 @@ approvals from `sysapproval_approver`.
 
 **Only kardinal's own changes are adopted.** Find returns a change only when the integration user
 created it (`sys_created_by`), so someone who may create changes cannot plant one with the
-promotion's correlation id and approve it themselves. With scheme `basic` the integration user is
+promotion's correlation id and approve it themselves. The answer must also carry the promotion's
+`correlation_id`. An answer that does not means the instance ignored part of the query (ServiceNow
+skips a condition it cannot apply) and returned another promotion's change: it is not adopted,
+and no change is created either, since the search cannot show whether this promotion's exists.
+The instance reports `ProviderError` with reason `ProviderIgnoredFilter` and retries after five
+minutes. With scheme `basic` the integration user is
 the credential's user; with `bearer` set `spec.servicenow.integrationUser` to the user_name the
 token acts as (the CRD requires it).
 
@@ -185,7 +190,10 @@ spec:
 created it (`creator = currentUser()`, checked again against `/myself`), so someone who may create
 issues cannot plant one with the promotion's label and move it to an approved status themselves.
 The creator, not the reporter, decides: Jira sets the creator and nobody can change it, while Modify
-Reporter and Service Management's "raise on behalf of" set the reporter to any account.
+Reporter and Service Management's "raise on behalf of" set the reporter to any account. The
+answer must also carry the promotion's label: a site that ignored part of the JQL and returned
+another promotion's issue gets `ProviderError` with reason `ProviderIgnoredFilter`, and nothing is
+adopted or created until a search answers correctly (retried after five minutes).
 
 The template cannot set `project`, `issuetype` or `labels`. The correlation label is `kardinal-` and
 32 hex characters of the correlation id's SHA-256. On API version 3 the `description` is sent as an

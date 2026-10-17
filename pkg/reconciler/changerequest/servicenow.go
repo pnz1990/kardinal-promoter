@@ -58,7 +58,9 @@ var snClosedStates = map[string]bool{"3": true, "0": true}
 type snRecord map[string]interface{}
 
 // field returns a field's value and display value. A plain string (a field
-// the instance returns without display_value) is both.
+// the instance returns without display_value) is both, and so is the value
+// of a reference without one ({"link", "value"}, the Table API's shape when
+// display values are not returned).
 func (r snRecord) field(name string) (string, string) {
 	switch v := r[name].(type) {
 	case string:
@@ -66,6 +68,9 @@ func (r snRecord) field(name string) (string, string) {
 	case map[string]interface{}:
 		val, _ := v["value"].(string)
 		disp, _ := v["display_value"].(string)
+		if _, has := v["display_value"]; !has {
+			disp = val
+		}
 		return val, disp
 	}
 	return "", ""
@@ -181,6 +186,14 @@ func (s *ServiceNow) Find(ctx context.Context, req Request) (Reading, bool, erro
 		return Reading{}, false, nil // the instance ignored the filter: not ours
 	}
 	r, err := s.reading(base, sn, req, rec, nil)
+	if err == nil && r.CorrelationID != req.CorrelationID {
+		// An instance that ignored the correlation filter (ServiceNow skips a
+		// condition it cannot apply) answers with another of kardinal's
+		// changes: another promotion's, never this one's. Creating one now
+		// could duplicate this promotion's, which the search did not show.
+		return Reading{}, false, fmt.Errorf("servicenow: find change: the answer, %s, does not carry this promotion's correlation id: %w",
+			r.Ticket.Key, ErrIgnoredFilter)
+	}
 	return r, err == nil, err
 }
 
