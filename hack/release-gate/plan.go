@@ -433,6 +433,28 @@ done
 // took 1h43m of the v0.12 gate's 1h56m on one cluster.
 const scaleFullParts = 2
 
+// etcdNoFsync is the kind config of the full scale profile's parts: test
+// clusters only, never a production setting. Two parts' etcds on the host's
+// one disk timed out on fsync while the parts ran together (#2107: lease and
+// status writes failed, the controller and kro restarted), so these clusters'
+// etcd skips fsync (--unsafe-no-fsync): a crash of the node can lose its
+// last writes, which a test cluster deleted at the end does not care about.
+// The latency SLO stays the soak profile's judgement, on a cluster with
+// normal etcd.
+const etcdNoFsync = `cp test/e2e/kind-config.yaml "$STEP_DIR/kind-config.yaml"
+cat >> "$STEP_DIR/kind-config.yaml" <<'KINDEOF'
+      - |
+        kind: ClusterConfiguration
+        apiVersion: kubeadm.k8s.io/v1beta4
+        etcd:
+          local:
+            extraArgs:
+              - name: unsafe-no-fsync
+                value: "true"
+KINDEOF
+export KIND_CONFIG="$STEP_DIR/kind-config.yaml"
+`
+
 func scaleSteps(r *Repo, o Options) []Step {
 	var steps []Step
 	soak := slices.Contains(o.ScaleProfiles, "soak")
@@ -475,7 +497,8 @@ func scaleSteps(r *Repo, o Options) []Step {
 				// (hack/e2e/run.sh SHARD); the soak profile's sustained load
 				// (5/s for 30m over 100 Pipelines) covers full's (2/s for 10m
 				// over 50), so full leaves it to soak when the gate runs both.
-				shard := fmt.Sprintf("unset RUN\nexport SHARD=%d/%d DURATIONS=hack/e2e/durations-scale-full.txt\n", part, parts)
+				shard := fmt.Sprintf("unset RUN\nexport SHARD=%d/%d DURATIONS=hack/e2e/durations-scale-full.txt\n", part, parts) +
+					etcdNoFsync
 				if soak {
 					shard += "export SKIP='^TestScale_LoadSustained$'\n"
 				}

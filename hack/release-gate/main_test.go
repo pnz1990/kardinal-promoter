@@ -118,8 +118,10 @@ func TestPlan(t *testing.T) {
 		assert.Contains(t, full.Script, fmt.Sprintf("export SHARD=%d/2 DURATIONS=hack/e2e/durations-scale-full.txt", i+1))
 		assert.Contains(t, full.Script, "export SKIP='^TestScale_LoadSustained$'", "soak's sustained load covers full's")
 		assert.Contains(t, full.Cleanup, fmt.Sprintf("kp-rg-scale-full-%d", i+1))
+		assert.Contains(t, full.Script, "unsafe-no-fsync", "the parts' test clusters skip etcd fsync")
 	}
 	assert.Contains(t, soak.Script, "export RUN='^TestScale_LoadSustained$'")
+	assert.NotContains(t, soak.Script, "unsafe-no-fsync", "soak judges latency on a normal etcd")
 	noSoak := fakeOptions()
 	noSoak.ScaleProfiles = []string{"full"}
 	assert.NotContains(t, byID(Plan(fakeRepo(), noSoak))["scale-full-1of2"].Script, "SKIP", "without soak, full runs its sustained load")
