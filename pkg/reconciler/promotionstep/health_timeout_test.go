@@ -389,7 +389,8 @@ func failingEnvironments(envs ...string) []client.Object {
 func TestRollbackFindsAnEarlierRollback(t *testing.T) {
 	legacy := makeBundle("b1-rollback-alarm-0a1b2c3d", "p")
 	legacy.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "p"}
-	legacy.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "b1"}
+	legacy.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "b1", lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+	legacy.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
 	legacy.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}
 	c := newClient(t, append(failingEnvironments("prod-eu"), legacy)...)
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},

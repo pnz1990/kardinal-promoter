@@ -55,10 +55,12 @@ func TestFindRollback(t *testing.T) {
 		return &v1alpha1.Bundle{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: "default",
-				Labels:      map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
-				Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: from},
+				Labels: map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
+				Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: from,
+					lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator},
 			},
-			Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: env}},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: env},
+				Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}},
 		}
 	}
 	c := newClient(t, rb("rb-uat", "app-v2", "uat"), rb("rb-other", "app-v1", "prod"))
@@ -98,8 +100,10 @@ func TestAutoRollbackName_LongEnvironment(t *testing.T) {
 // gets its own or its own again.
 func TestAutoRollbackNameIn(t *testing.T) {
 	ctx := context.Background()
-	rb := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2-rollback-alarm", Namespace: "default"},
-		Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}}}
+	rb := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2-rollback-alarm", Namespace: "default",
+		Annotations: map[string]string{lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}},
+		Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"},
+			Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}}}
 	empty := newClient(t)
 	got, err := lifecycle.AutoRollbackNameIn(ctx, empty, "default", "app-v2", "alarm", "prod-eu")
 	require.NoError(t, err)

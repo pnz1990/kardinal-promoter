@@ -397,7 +397,7 @@ the version and Pipeline names in the body. A rollback from the CLI or UI is nam
 (`onHealthFailure: rollback`) or `<bundle>-rollback-policy` (RollbackPolicy). When several
 environments of the version fail at once (fan-out, waves, a fleet's targets in flight together),
 each other environment's rollback is `<failing bundle>-rollback-alarm-<environment>` (or
-`-policy-<environment>`). A name longer than 63 characters is shortened to the start of the Bundle's name, `-rollback-` and a hash. Every rollback PR is labelled `kardinal/rollback`.
+`-policy-<environment>`). A name longer than 63 characters is shortened to the start of the Bundle's name, `-rollback-` and a hash. kardinal takes an existing Bundle for an automatic rollback only when the controller created it: its actor stamp is `{kind: controller, via: auto-rollback}` and its `kardinal.io/created-by` the controller, which the chart's admission policies let no one else write. The rollback labels, `kardinal.io/rollback-from` and the intent can be set by anyone who may create Bundles, so a Bundle that only carries them is not adopted. Every rollback PR is labelled `kardinal/rollback`.
 Bitbucket Cloud and Bitbucket Data Center have no PR labels; find rollback PRs there by their `[kardinal] Rollback ...` title.
 
 The rollback commit is a new commit, not a `git revert`. The history is always append-only.

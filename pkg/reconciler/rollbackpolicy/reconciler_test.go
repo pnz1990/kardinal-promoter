@@ -590,7 +590,8 @@ func TestReconciler_ShouldRollbackFollowsTheThreshold(t *testing.T) {
 func policyRollbackBundle(name string) *v1alpha1.Bundle {
 	b := makeBundle(name, "nginx-demo")
 	b.Labels[lifecycle.LabelRollback] = "true"
-	b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1"}
+	b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1", lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+	b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
 	return b
 }
 

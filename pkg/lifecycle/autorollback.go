@@ -56,15 +56,31 @@ func AutoRollbackNameIn(ctx context.Context, c client.Reader, ns, bundle, source
 		return name, nil
 	case err != nil:
 		return "", fmt.Errorf("get bundle %s: %w", name, err)
-	case b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != env:
+	case !IsAutoRollback(&b) || (b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != env):
+		// Someone else's Bundle at the name, or another environment's
+		// rollback: env's own name.
 		return AutoRollbackName(bundle, source+"-"+env), nil
 	}
 	return name, nil
 }
 
-// FindRollback returns the name of an existing rollback Bundle that rolls the
-// environment env of pipeline back from the Bundle from, or "" when there is
-// none. Automatic rollback paths (onHealthFailure=rollback and RollbackPolicy)
+// IsAutoRollback reports whether b is an automatic rollback the controller
+// created: its actor stamp is the controller's, via auto-rollback, and its
+// kardinal.io/created-by is the controller. Only the controller may write
+// that stamp (the chart's actor admission refuses a via or a controller
+// kind from anyone else) and that creator (bundle-creator admission). The
+// rollback labels, kardinal.io/rollback-from and the intent are not proof:
+// anyone who may create Bundles can set them, and a Bundle adopted as the
+// automatic rollback on them would stand in for it (#2090 QA).
+func IsAutoRollback(b *v1alpha1.Bundle) bool {
+	a := b.Spec.Actor
+	return a != nil && a.Kind == v1alpha1.ActorController && a.Via == v1alpha1.ViaAutoRollback &&
+		b.Annotations[AnnotationCreatedBy] == ControllerCreator
+}
+
+// FindRollback returns the name of an existing automatic rollback Bundle
+// (IsAutoRollback) that rolls the environment env of pipeline back from the
+// Bundle from, or "" when there is none. Automatic rollback paths (onHealthFailure=rollback and RollbackPolicy)
 // call it first, so one failing Bundle gets one rollback in an environment.
 func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from string) (string, error) {
 	var list v1alpha1.BundleList
@@ -74,7 +90,7 @@ func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from 
 	}
 	for i := range list.Items {
 		b := &list.Items[i]
-		if b.Annotations[AnnotationRollbackFrom] != from {
+		if b.Annotations[AnnotationRollbackFrom] != from || !IsAutoRollback(b) {
 			continue
 		}
 		if b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == env {
@@ -93,5 +109,5 @@ func RollbackTaken(ctx context.Context, c client.Reader, ns, name, env string) (
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); err != nil {
 		return false, fmt.Errorf("get bundle %s: %w", name, err)
 	}
-	return b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != env, nil
+	return !IsAutoRollback(&b) || (b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != env), nil
 }
