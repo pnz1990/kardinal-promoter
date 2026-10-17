@@ -250,8 +250,12 @@ How the Graph runs it:
 - The instance is created once every upstream environment of the gated one is Verified, so the
   analysis starts when there is a deployment to analyse. Until then the gate sees the template,
   which has no result, and blocks.
-- Once the version is no longer promoting (Verified, Failed, Superseded or Rejected) the Graph sets the
-  instance's `spec.suspend`, and it stops querying. A Failed version that promotes again resumes it.
+- Once the version is Verified or Failed the Graph sets the instance's `spec.suspend`, and it stops
+  querying. A Failed version that promotes again resumes it. A Superseded or Rejected version's Graph
+  holds its steps, so it does not set `spec.suspend`; the controller stops those instances itself, as
+  soon as the version is Superseded or Rejected (reason `Suspended: its version is Superseded or
+  Rejected`), and the version's Graph, with its instances, is retired after
+  `graph.retire.superseded` (1 minute by default).
 - A value with a character outside `A-Z a-z 0-9 . _ + -` (a digest such as `sha256:<hex>`
   excepted), an empty value, a value that starts with `.`, and a value containing `..` are not put
   into a query (a version's tag comes from CI, and

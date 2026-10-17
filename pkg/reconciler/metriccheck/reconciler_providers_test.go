@@ -19,6 +19,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
@@ -169,6 +171,66 @@ func TestReconciler_Suspended(t *testing.T) {
 	require.NotNil(t, first.Status.ValidUntil)
 	assert.True(t, first.Status.ValidUntil.Equal(&until), "validUntil is not extended")
 	assert.Equal(t, first.ResourceVersion, second.ResourceVersion)
+}
+
+// TestReconciler_FinalVersionNotQueried (#2138): a per-promotion instance
+// of a Superseded or Rejected version is not queried, though its
+// spec.suspend is false (the Graph holds the steps it reads), and keeps its
+// last result; an instance of a version still promoting, a Verified or
+// Failed one (whose Graph sets spec.suspend), or one whose version is gone,
+// is queried as before.
+func TestReconciler_FinalVersionNotQueried(t *testing.T) {
+	for _, tc := range []struct {
+		phase   string
+		queried bool
+	}{
+		{"Superseded", false}, {"Rejected", false}, {"Promoting", true}, {"Verified", true}, {"", true},
+	} {
+		t.Run(tc.phase, func(t *testing.T) {
+			mc := newMetricCheck("error-rate-prod--app-v1", "lt", 1)
+			mc.Labels = map[string]string{"kardinal.io/bundle": "app-v1"}
+			until := metav1.NewTime(fixedNow.Add(time.Minute))
+			mc.Status = kardinalv1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0", ValidUntil: &until}
+			var objs []client.Object
+			if tc.phase != "" {
+				objs = append(objs, &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: mc.Namespace},
+					Status: kardinalv1alpha1.BundleStatus{Phase: tc.phase}})
+			}
+			b := &valueBackend{value: metriccheck.NumberValue(0)}
+			first, second, res := run(t, mc, map[string]metriccheck.Backend{"prometheus": b}, objs...)
+			if tc.queried {
+				assert.Positive(t, b.calls)
+				return
+			}
+			assert.Zero(t, b.calls, "an instance of a final version is not queried")
+			assert.Equal(t, ctrl.Result{}, res, "no requeue")
+			assert.Equal(t, metriccheck.ReasonVersionFinal, first.Status.Reason)
+			assert.Equal(t, "Pass", first.Status.Result)
+			assert.Equal(t, first.ResourceVersion, second.ResourceVersion)
+		})
+	}
+}
+
+// TestReconciler_FinalVersionWakesInstances (#2138): a Bundle that becomes
+// Superseded or Rejected re-queues its own MetricCheck instances at once, not
+// at their next interval; other Bundle changes do not.
+func TestReconciler_FinalVersionWakesInstances(t *testing.T) {
+	bundle := func(phase string) *kardinalv1alpha1.Bundle {
+		return &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: phase}}
+	}
+	assert.True(t, metriccheck.BecameFinal.Update(event.UpdateEvent{ObjectOld: bundle("Promoting"), ObjectNew: bundle("Superseded")}))
+	assert.True(t, metriccheck.BecameFinal.Update(event.UpdateEvent{ObjectOld: bundle("Failed"), ObjectNew: bundle("Rejected")}))
+	assert.False(t, metriccheck.BecameFinal.Update(event.UpdateEvent{ObjectOld: bundle("Superseded"), ObjectNew: bundle("Superseded")}))
+	assert.False(t, metriccheck.BecameFinal.Update(event.UpdateEvent{ObjectOld: bundle("Promoting"), ObjectNew: bundle("Verified")}))
+
+	mine := newMetricCheck("error-rate-prod--app-v1", "lt", 1)
+	mine.Labels = map[string]string{"kardinal.io/bundle": "app-v1"}
+	other := newMetricCheck("error-rate-prod--app-v2", "lt", 1)
+	other.Labels = map[string]string{"kardinal.io/bundle": "app-v2"}
+	c := fake.NewClientBuilder().WithScheme(schemeWithCore()).WithObjects(mine, other).Build()
+	r := &metriccheck.Reconciler{Client: c}
+	assert.Equal(t, []reconcile.Request{{NamespacedName: key(mine)}}, r.BundleInstances(context.Background(), bundle("Superseded")))
 }
 
 // TestReconciler_UnrenderedPlaceholderFails: a queried MetricCheck with a
