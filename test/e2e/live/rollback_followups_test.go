@@ -205,10 +205,9 @@ func rfDescribeAudit(evs []v1alpha1.AuditEvent) string {
 
 // TestRollback_SucceededAuditEvent checks the RollbackSucceeded AuditEvent:
 // when `kardinal rollback` restores Bundle A after B, each step of the
-// rollback Bundle that reaches Verified writes one, besides
-// PromotionSucceeded, naming the restored and the replaced Bundle. A verified
-// test before, so the rollback has a prod step only (#1311). The forward
-// Bundles write none, and kardinal get auditevents lists it.
+// rollback Bundle that reaches Verified (test, then prod) writes one, besides
+// PromotionSucceeded, naming the restored and the replaced Bundle. The
+// forward Bundles write none, and kardinal get auditevents lists them.
 //
 // Covers RB-AUDIT-02.
 func TestRollback_SucceededAuditEvent(t *testing.T) {
@@ -232,18 +231,19 @@ func TestRollback_SucceededAuditEvent(t *testing.T) {
 	m := regexp.MustCompile(`Bundle (podinfo-rollback-[a-z0-9]{5}) created`).FindStringSubmatch(r.Stdout)
 	require.NotNil(t, m, "rollback output:\n%s", r.Stdout)
 	bR := m[1]
+	e.WaitStepState(t, a.ns, pipelineName, bR, "test", "Verified", promoteTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bR, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V2)
 
-	framework.Eventually(t, time.Minute, "RollbackSucceeded in prod", func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, time.Minute, "RollbackSucceeded in test and prod", func(ctx context.Context) (bool, string) {
 		var err error
 		if evs, err = rfAudit(ctx, e, a.ns, "RollbackSucceeded"); err != nil {
 			return false, err.Error()
 		}
-		return len(evs) >= 1, rfDescribeAudit(evs)
+		return len(evs) >= 2, rfDescribeAudit(evs)
 	})
-	require.Len(t, evs, 1, rfDescribeAudit(evs))
-	for i, env := range []string{"prod"} {
+	require.Len(t, evs, 2, rfDescribeAudit(evs))
+	for i, env := range []string{"test", "prod"} {
 		ae := evs[i]
 		assert.Equal(t, env, ae.Spec.Environment)
 		assert.Equal(t, bR, ae.Spec.BundleName)
@@ -260,14 +260,14 @@ func TestRollback_SucceededAuditEvent(t *testing.T) {
 			forR = append(forR, ae.Spec.Environment)
 		}
 	}
-	assert.Equal(t, []string{"prod"}, forR, "PromotionSucceeded is still written")
+	assert.Equal(t, []string{"test", "prod"}, forR, "PromotionSucceeded is still written")
 
 	framework.Consistently(t, 30*time.Second, "one RollbackSucceeded per step", func(ctx context.Context) (bool, string) {
 		got, err := rfAudit(ctx, e, a.ns, "RollbackSucceeded")
 		if err != nil {
 			return false, err.Error()
 		}
-		return len(got) == 1, rfDescribeAudit(got)
+		return len(got) == 2, rfDescribeAudit(got)
 	})
 
 	out := c.Must(a.ns, "get", "auditevents", "--bundle", bR, "-o", "json")
@@ -279,7 +279,7 @@ func TestRollback_SucceededAuditEvent(t *testing.T) {
 			envs = append(envs, ae.Spec.Environment)
 		}
 	}
-	assert.ElementsMatch(t, []string{"prod"}, envs, "kardinal get auditevents -o json:\n%s", out)
+	assert.ElementsMatch(t, []string{"test", "prod"}, envs, "kardinal get auditevents -o json:\n%s", out)
 }
 
 // rfConfigValue2 is the UI message of the second config commit in

@@ -875,9 +875,10 @@ func TestRollback_OnHealthFailureRefused(t *testing.T) {
 }
 
 // TestRollback_MultiEnvironment checks a rollback of one of two environments
-// that both follow test (#1311): the restored version was verified in test
-// before, so the rollback carries that verification and promotes only the
-// target, although a gate now closed holds test. test keeps what it runs,
+// that both follow test (#1311): the restored version, pinned by digest, was
+// verified in test before, so the rollback carries that verification and
+// promotes only the target, although a gate now closed holds test. (A
+// version pinned by tag only carries none: TestCLI_Rollback.) test keeps what it runs,
 // with no step of the rollback, and the other environment, not upstream of
 // the target, stays on the new version.
 //
@@ -892,7 +893,8 @@ func TestRollback_MultiEnvironment(t *testing.T) {
 	a.apply(t, p)
 	all := []string{"test", "prod-us", "prod-eu"}
 
-	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	pinned := imageV2 + "@" + fixtures.V2Digest
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", pinned)
 	rbVerified(t, a, b1, all...)
 	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	rbVerified(t, a, b2, all...)
@@ -900,11 +902,11 @@ func TestRollback_MultiEnvironment(t *testing.T) {
 	e.CreateGate(t, framework.Gate(a.ns, "test-closed", "test", "false", recheck))
 
 	out, rb := rbRollback(t, a, "prod-us")
-	assert.Equal(t, rbOutput("prod-us", b2, b1, imageV2, rb), out)
+	assert.Contains(t, out, fmt.Sprintf("Rolling back %s in prod-us from %s to %s", pipelineName, b2, b1))
 	rbAssertBundle(t, e, a.ns, rb, "prod-us", b2, b1, cliUser(t), "")
 	e.WaitStepState(t, a.ns, pipelineName, rb, "prod-us", "Verified", promoteTimeout)
 	e.WaitBundlePhase(t, a.ns, rb, "Verified", time.Minute)
-	assertEnvAt(t, a, "prod-us", fixtures.V2)
+	assert.Contains(t, e.DeploymentImage(t, a.ns, fixtures.Workload("prod-us")), fixtures.V2Digest, "prod-us runs the pinned V2")
 
 	var got v1alpha1.Bundle
 	require.NoError(t, e.Client.Get(context.Background(), client.ObjectKey{Namespace: a.ns, Name: rb}, &got))

@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -61,9 +62,19 @@ func (r *Reconciler) decideUpstreamEvidence(ctx context.Context, log zerolog.Log
 				gate, target, strings.Join(upstream, ", ")))
 		return nil
 	}
+	if loose := unpinned(b); len(loose) > 0 {
+		setBundleCondition(b, condUpstreamEvidence, metav1.ConditionFalse, "NotPinned",
+			fmt.Sprintf("%s not pinned by digest, so a verification upstream may have been of other bytes under the same tag; "+
+				"this version is promoted through %s first", strings.Join(loose, ", "), strings.Join(upstream, ", ")))
+		return nil
+	}
 	siblings, err := lifecycle.ListPipelineBundles(ctx, r.Client, b.Namespace, b.Spec.Pipeline)
 	if err != nil {
 		return fmt.Errorf("upstream evidence: %w", err)
+	}
+	starts, err := r.stepStarts(ctx, b)
+	if err != nil {
+		return err
 	}
 	now := r.now()
 	var evidence []kardinalv1alpha1.UpstreamEvidence
@@ -74,7 +85,10 @@ func (r *Reconciler) decideUpstreamEvidence(ctx context.Context, log zerolog.Log
 			missing = append(missing, env)
 			continue
 		}
-		e.SoakMinutes = soakSince(e.VerifiedAt.Time, now)
+		if e.ReplacedAt == nil {
+			e.ReplacedAt = replacedAt(siblings, starts, b, env, e.VerifiedAt.Time)
+		}
+		e.SoakMinutes = evidenceSoak(e, now)
 		evidence = append(evidence, e)
 		from = append(from, env+" by "+e.Bundle)
 	}
@@ -170,7 +184,8 @@ func newestVerification(siblings []kardinalv1alpha1.Bundle, b *kardinalv1alpha1.
 		if graph.CarriedEnvironments(s)[env] {
 			for _, e := range s.Status.UpstreamEvidence {
 				if e.Environment == env {
-					consider(kardinalv1alpha1.UpstreamEvidence{Environment: env, Bundle: e.Bundle, VerifiedAt: e.VerifiedAt})
+					consider(kardinalv1alpha1.UpstreamEvidence{Environment: env, Bundle: e.Bundle, VerifiedAt: e.VerifiedAt,
+						ReplacedAt: e.ReplacedAt})
 				}
 			}
 		}
@@ -178,13 +193,124 @@ func newestVerification(siblings []kardinalv1alpha1.Bundle, b *kardinalv1alpha1.
 	return best, found
 }
 
-// updateEvidenceSoak keeps the soak of b's carried verifications current.
-// Graph-first: a pure mutation before the caller's status patch.
-func updateEvidenceSoak(b *kardinalv1alpha1.Bundle, now time.Time) {
+// unpinned lists b's artifacts that are not pinned by content: images
+// without a digest, and a chart without one. A tag can be pushed again with
+// other bytes, so a verification of the same tag may not be of these
+// artifacts. A config commit is content-addressed.
+func unpinned(b *kardinalv1alpha1.Bundle) []string {
+	var out []string
+	for _, img := range b.Spec.Images {
+		if img.Digest == "" {
+			out = append(out, img.Repository+":"+img.Tag)
+		}
+	}
+	if c := b.Spec.Chart; c != nil && c.Version != "" && c.Digest == "" {
+		out = append(out, "chart "+c.Name+" "+c.Version)
+	}
+	return out
+}
+
+// stepStarts lists, by environment, when each PromotionStep of b's Pipeline
+// started (its creation), with the Bundle it promotes.
+func (r *Reconciler) stepStarts(ctx context.Context, b *kardinalv1alpha1.Bundle) (map[string][]stepStart, error) {
+	var steps kardinalv1alpha1.PromotionStepList
+	if err := r.List(ctx, &steps, client.InNamespace(b.Namespace),
+		client.MatchingLabels{"kardinal.io/pipeline": b.Spec.Pipeline}); err != nil {
+		return nil, fmt.Errorf("upstream evidence: list promotion steps: %w", err)
+	}
+	out := map[string][]stepStart{}
+	for _, ps := range steps.Items {
+		out[ps.Spec.Environment] = append(out[ps.Spec.Environment],
+			stepStart{bundle: ps.Spec.BundleName, at: ps.CreationTimestamp.Time})
+	}
+	return out, nil
+}
+
+// stepStart is when a PromotionStep of bundle started.
+type stepStart struct {
+	bundle string
+	at     time.Time
+}
+
+// replacedAt is when other artifacts than b's first started promoting to
+// env after verified, or nil: the earliest PromotionStep there, after
+// verified, of a Bundle with other artifacts, or its Verified time there
+// when its steps are gone (a retired Bundle). Bundles with the same
+// artifacts as b, b among them, do not replace them.
+func replacedAt(siblings []kardinalv1alpha1.Bundle, starts map[string][]stepStart, b *kardinalv1alpha1.Bundle,
+	env string, verified time.Time) *metav1.Time {
+	same := map[string]bool{b.Name: true}
+	for i := range siblings {
+		if lifecycle.SameArtifacts(&siblings[i], b) {
+			same[siblings[i].Name] = true
+		}
+	}
+	var first time.Time
+	earlier := func(t time.Time) {
+		if t.After(verified) && (first.IsZero() || t.Before(first)) {
+			first = t
+		}
+	}
+	for _, s := range starts[env] {
+		if !same[s.bundle] {
+			earlier(s.at)
+		}
+	}
+	for i := range siblings {
+		if same[siblings[i].Name] {
+			continue
+		}
+		for _, st := range siblings[i].Status.Environments {
+			if st.Name == env && st.HealthCheckedAt != nil {
+				earlier(st.HealthCheckedAt.Time)
+			}
+		}
+	}
+	if first.IsZero() {
+		return nil
+	}
+	t := metav1.NewTime(first)
+	return &t
+}
+
+// evidenceSoak is how long e's artifacts ran in its environment: from its
+// verification to ReplacedAt, or to now.
+func evidenceSoak(e kardinalv1alpha1.UpstreamEvidence, now time.Time) int64 {
+	if e.ReplacedAt != nil {
+		now = e.ReplacedAt.Time
+	}
+	return soakSince(e.VerifiedAt.Time, now)
+}
+
+// refreshEvidence keeps the soak of b's carried verifications current: a
+// verification whose artifacts other ones replaced since gets ReplacedAt, and
+// stops counting. It reads Bundle and PromotionStep status only, and changes
+// b in memory; the caller patches.
+func (r *Reconciler) refreshEvidence(ctx context.Context, b *kardinalv1alpha1.Bundle, now time.Time) error {
+	open := false
+	for _, e := range b.Status.UpstreamEvidence {
+		open = open || e.ReplacedAt == nil
+	}
+	if open {
+		siblings, err := lifecycle.ListPipelineBundles(ctx, r.Client, b.Namespace, b.Spec.Pipeline)
+		if err != nil {
+			return fmt.Errorf("upstream evidence: %w", err)
+		}
+		starts, err := r.stepStarts(ctx, b)
+		if err != nil {
+			return err
+		}
+		for i := range b.Status.UpstreamEvidence {
+			if e := &b.Status.UpstreamEvidence[i]; e.ReplacedAt == nil {
+				e.ReplacedAt = replacedAt(siblings, starts, b, e.Environment, e.VerifiedAt.Time)
+			}
+		}
+	}
 	for i := range b.Status.UpstreamEvidence {
 		e := &b.Status.UpstreamEvidence[i]
-		e.SoakMinutes = soakSince(e.VerifiedAt.Time, now)
+		e.SoakMinutes = evidenceSoak(*e, now)
 	}
+	return nil
 }
 
 // soakSince is the whole minutes from at to now, 0 when at is later.

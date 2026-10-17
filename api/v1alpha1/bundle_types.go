@@ -245,7 +245,7 @@ type BundleIntent struct {
 
 	// TargetOnly promotes only TargetEnvironment (for a fleet, its targets)
 	// when every environment upstream of it has verified this Bundle's
-	// artifacts in another Bundle of the Pipeline: the BundleReconciler
+	// artifacts, pinned by digest, in another Bundle of the Pipeline: the BundleReconciler
 	// records that verification in status.upstreamEvidence when it first
 	// builds the Graph, and the Graph has no upstream environment. When one
 	// has not, the Bundle promotes through them, as without TargetOnly, and
@@ -486,8 +486,15 @@ type UpstreamEvidence struct {
 	// status.environments healthCheckedAt).
 	VerifiedAt metav1.Time `json:"verifiedAt"`
 
-	// SoakMinutes is the number of minutes since VerifiedAt, written by the
-	// BundleReconciler like EnvironmentStatus.SoakMinutes.
+	// ReplacedAt is when another version (other artifacts) first started
+	// promoting to Environment after VerifiedAt: from then on Bundle's
+	// artifacts no longer ran there. Unset while they still do.
+	// +optional
+	ReplacedAt *metav1.Time `json:"replacedAt,omitempty"`
+
+	// SoakMinutes is the number of minutes from VerifiedAt to ReplacedAt,
+	// or to now while it is unset: how long the artifacts ran there. Written
+	// by the BundleReconciler like EnvironmentStatus.SoakMinutes.
 	// +optional
 	SoakMinutes int64 `json:"soakMinutes,omitempty"`
 }

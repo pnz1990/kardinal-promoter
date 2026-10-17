@@ -5,6 +5,7 @@ package bundle_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,13 +44,18 @@ var evidenceT0 = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 // environments Verified at evidenceT0 plus i hours.
 func evidenceBundle(name, tag, phase string, verified ...string) *kardinalv1alpha1.Bundle {
 	b := lcBundle(name, "image", phase, evidenceT0.Add(-24*time.Hour))
-	b.Spec.Images = []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/acme/app", Tag: tag}}
+	b.Spec.Images = []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/acme/app", Tag: tag, Digest: digestOf(tag)}}
 	for i, env := range verified {
 		at := metav1.NewTime(evidenceT0.Add(time.Duration(i) * time.Hour))
 		b.Status.Environments = append(b.Status.Environments,
 			kardinalv1alpha1.EnvironmentStatus{Name: env, Phase: "Verified", HealthCheckedAt: &at})
 	}
 	return b
+}
+
+// digestOf is the digest the tests pin tag to.
+func digestOf(tag string) string {
+	return "sha256:" + strings.Repeat(strings.ReplaceAll(tag, ".", ""), 64)[:64]
 }
 
 // rollbackTo is a targetOnly Bundle for prod deploying tag.
@@ -212,4 +218,76 @@ func TestEvidence_VerifyGateOnFleet(t *testing.T) {
 	require.NotNil(t, cond)
 	assert.Equal(t, "VerifyGate", cond.Reason)
 	assert.Equal(t, [][]string{{"test", "prod-eu"}}, tr.promoted)
+}
+
+// QA on #2122: a tag can be pushed again with other bytes, so a rollback
+// whose images are not pinned by digest never carries a verification: a
+// rebuilt tag would skip uat. It promotes through test and uat.
+//
+// Covers RB-MULTI-02.
+func TestEvidence_TagOnlyArtifactsNeverCarry(t *testing.T) {
+	src := evidenceBundle("app-v1", "1.0", "Superseded", "test", "uat")
+	src.Spec.Images[0].Digest = ""
+	rb := rollbackTo("1.0")
+	rb.Spec.Images[0].Digest = ""
+	r, tr, c := evidenceRig(t, src, rb)
+	lcReconcile(t, r, rb.Name)
+	got := lcGet(t, c, rb.Name)
+	assert.Equal(t, [][]string{{"test", "uat", "prod"}}, tr.promoted)
+	assert.Empty(t, got.Status.UpstreamEvidence)
+	cond := meta.FindStatusCondition(got.Status.Conditions, "UpstreamEvidence")
+	require.NotNil(t, cond)
+	assert.Equal(t, "NotPinned", cond.Reason)
+	assert.Contains(t, cond.Message, "ghcr.io/acme/app:1.0 not pinned by digest")
+
+	// Pinned, the same verification is carried.
+	src, rb = evidenceBundle("app-v1", "1.0", "Superseded", "test", "uat"), rollbackTo("1.0")
+	r, tr, _ = evidenceRig(t, src, rb)
+	lcReconcile(t, r, rb.Name)
+	assert.Equal(t, [][]string{{"prod"}}, tr.promoted)
+}
+
+// QA on #2122: a carried soak counts only while the artifacts ran upstream.
+// app-v1 was verified in uat at T0+1h and app-v2 started promoting there 20
+// minutes later, so the rollback, 49 hours on, carries a 20-minute uat soak,
+// not 49 hours, and a soak gate of 30 minutes on prod still holds it. A
+// replacement after the decision stops the count too.
+//
+// Covers RB-MULTI-02.
+func TestEvidence_SoakStopsWhenReplacedUpstream(t *testing.T) {
+	v1 := evidenceBundle("app-v1", "1.0", "Superseded", "test", "uat")
+	v2 := evidenceBundle("app-v2", "2.0", "Promoting")
+	step := lcStep("app-v2", "uat", "s-v2-uat", "Promoting")
+	step.CreationTimestamp = metav1.NewTime(evidenceT0.Add(80 * time.Minute))
+	step.Labels["kardinal.io/pipeline"] = "app" // as the Graph labels its steps
+	rb := rollbackTo("1.0")
+	r, _, c := evidenceRig(t, v1, v2, step, rb)
+	lcReconcile(t, r, rb.Name)
+	got := lcGet(t, c, rb.Name)
+	require.Len(t, got.Status.UpstreamEvidence, 2)
+	uat := got.Status.UpstreamEvidence[1]
+	require.Equal(t, "uat", uat.Environment)
+	require.NotNil(t, uat.ReplacedAt)
+	assert.True(t, step.CreationTimestamp.Equal(uat.ReplacedAt))
+	assert.Equal(t, int64(20), uat.SoakMinutes, "from its verification to its replacement")
+	soak, ok := graph.UpstreamSoak(&got, "uat")
+	require.True(t, ok)
+	assert.Less(t, soak, int64(30), "a 30-minute soak gate on prod holds the rollback")
+	test := got.Status.UpstreamEvidence[0]
+	assert.Nil(t, test.ReplacedAt, "test still runs 1.0")
+
+	// test is replaced after the decision: its soak stops at that time.
+	later := lcStep("app-v2", "test", "s-v2-test", "Promoting")
+	later.CreationTimestamp = metav1.NewTime(evidenceT0.Add(49 * time.Hour))
+	later.Labels["kardinal.io/pipeline"] = "app"
+	require.NoError(t, c.Create(context.Background(), later))
+	b := lcGet(t, c, rb.Name)
+	b.Status.Phase = "Promoting"
+	b.Status.GraphRef = graph.GraphNameFrom("app", rb.Name)
+	require.NoError(t, c.Status().Update(context.Background(), &b))
+	r.GraphChecker = &graphStatusReader{g: &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: b.Status.GraphRef, Namespace: "default"}}}
+	lcReconcile(t, r, rb.Name)
+	test = lcGet(t, c, rb.Name).Status.UpstreamEvidence[0]
+	require.NotNil(t, test.ReplacedAt)
+	assert.Equal(t, int64(49*60), test.SoakMinutes)
 }

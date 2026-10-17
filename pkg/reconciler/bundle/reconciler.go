@@ -1628,7 +1628,11 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	// The time is read here for a CRD status write — Graph-first compliant.
 	now := r.now().UTC()
 	b.Status.Environments = environmentStatuses(b, pipeline, steps, now)
-	updateEvidenceSoak(b, now)
+	if len(b.Status.UpstreamEvidence) > 0 {
+		if err := r.refreshEvidence(ctx, b, now); err != nil {
+			log.Warn().Err(err).Msg("refresh the carried upstream soak (non-fatal)")
+		}
+	}
 
 	var after []func()
 	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
