@@ -1264,6 +1264,9 @@ func main() {
 	// Registry and SCM webhooks that make a Subscription poll at once. Each
 	// Subscription opts in with spec.webhook and its own token.
 	mux.HandleFunc(subscriptionWebhookPrefix, newSubscriptionWebhook(mgr.GetClient(), logger).Handler())
+	// Ticketing systems' triggers that make a ChangeRequest template's
+	// instances read their tickets at once (spec.webhook, its own token).
+	mux.HandleFunc(changeRequestWebhookPrefix, newChangeRequestWebhook(mgr.GetClient(), logger).Handler())
 	mux.HandleFunc(openAPIPath, handleOpenAPI)
 	// Each ScmProvider and ClusterScmProvider has its own endpoint, checked
 	// with its own webhook secret (docs/scm-providers.md).

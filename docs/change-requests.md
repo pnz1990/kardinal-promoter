@@ -211,6 +211,74 @@ have no approvers: `approvers` stays empty. For a linked issue, `link.requireFie
 (`components`, `customfield_10010`, ...): an option or user matches by its value or name, a list when
 one element matches.
 
+## Webhook trigger
+
+kardinal polls each ticket every `pollInterval`, which is correct with no inbound path at all. A
+ticketing system can also tell kardinal that a ticket changed, so the gate opens within seconds of
+the approval instead of at the next poll:
+
+```yaml
+spec:
+  perPromotion: true
+  webhook:
+    secretRef: {name: cr-hook}   # labelled kardinal.io/referenceable=true; key token, 16+ characters
+```
+
+```text
+POST https://<controller webhook address>/webhook/changerequests/<namespace>/<template>
+X-Kardinal-Token: <token>
+```
+
+Send the token in the `X-Kardinal-Token` header. A sender that cannot set headers can put it in the
+last path segment instead (`.../<template>/<token>`), but proxies and access logs record paths, so
+prefer the header.
+
+**Generate the token** with a random source and put it in the Secret the template names. It must be
+at least 16 characters; 32 random bytes as hex is a good default:
+
+```bash
+kubectl -n checkout create secret generic cr-hook \
+  --from-literal=token="$(openssl rand -hex 32)"
+kubectl -n checkout label secret cr-hook kardinal.io/referenceable=true
+```
+
+Give the same value to ServiceNow or Jira and to no one else: whoever has it can make kardinal
+re-read the template's tickets (never approve them).
+
+**Rotate it** by writing a new value into the Secret and then updating the sender. The receiver reads
+the Secret on every request, so the new token works at once and the old one stops at once. Until
+the sender has the new value its triggers get `401`, and polling still reads the tickets, so a
+rotation delays a promotion by at most one `pollInterval`:
+
+```bash
+kubectl -n checkout create secret generic cr-hook \
+  --from-literal=token="$(openssl rand -hex 32)" --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The request makes every instance of the template read its ticket at once (the
+`kardinal.io/refresh` annotation; `status.observedRefresh` records the trigger it answered). Its
+body is never read for state: the state always comes from the ticketing system's API, so a forged
+or replayed body changes nothing, and a lost trigger only means the next poll reads the change.
+A wrong token, a template without `webhook`, and a template that does not exist all get the same
+`401`; the token is compared in constant time and never logged. A trigger never overrides a
+provider's Retry-After (`status.retryAt`). The receiver answers `429` past a coarse limit of 50
+requests a second across all templates, checked before anything is read, and past five valid
+triggers a second per template; requests with a wrong token never use up a template's budget.
+The coarse limit comes before the token check on purpose: it keeps unauthenticated requests from
+turning into ChangeRequest and Secret reads on the API server. A flood of such requests can
+therefore make your valid triggers wait their turn (`429`), but it cannot change any state, and
+polling still reads every ticket each `pollInterval`, so the only cost is latency.
+
+- **ServiceNow**: a business rule on `change_request` (after update, when `approval` or `state`
+  changes) that sends an outbound REST message to the URL with the `X-Kardinal-Token` header. Restrict it to the changes kardinal
+  opened with the condition `correlation_display` is `kardinal`.
+- **Jira**: a webhook (Settings, System, WebHooks) on "Issue updated" with the URL (Jira webhooks
+  set no custom headers, so the token goes in the path), filtered by
+  JQL to the project, for example `project = CHG AND labels ~ "kardinal-*"`.
+
+The URL carries the token, so expose the controller's webhook port only over TLS, as for
+[Subscription webhooks](subscription.md#webhooks).
+
 ## The gate
 
 `changeRequests.<name>` has `state`, `ticket`, `url`, `stale`, `timedOut`, `verified`,

@@ -108,7 +108,9 @@ func TestBuilder_PerPromotionChangeRequest(t *testing.T) {
 	other.Namespace = "elsewhere"
 	notTemplate := crTemplate("everywhere")
 	notTemplate.Name, notTemplate.Spec.PerPromotion = "everywhere-hand", false
-	crs := []kardinalv1alpha1.ChangeRequest{crTemplate("prod-change", "prod"), crTemplate("everywhere"),
+	hooked := crTemplate("prod-change", "prod")
+	hooked.Spec.Webhook = &kardinalv1alpha1.ChangeRequestWebhook{SecretRef: kardinalv1alpha1.SubscriptionSecretRef{Name: "hook"}}
+	crs := []kardinalv1alpha1.ChangeRequest{hooked, crTemplate("everywhere"),
 		crTemplate("org-only"), crTemplate("unread"), other, notTemplate}
 	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b, PolicyGates: gates, ChangeRequests: crs,
 		PolicyNamespaces: []string{"platform-policies"}})
@@ -133,6 +135,7 @@ func TestBuilder_PerPromotionChangeRequest(t *testing.T) {
 	spec := n.Template["spec"].(map[string]interface{})
 	assert.NotContains(t, spec, "perPromotion")
 	assert.NotContains(t, spec, "appliesTo")
+	assert.NotContains(t, spec, "webhook", "the webhook is the template's")
 	assert.Equal(t, `${!(bundle.status.phase in ["Available", "Promoting"])}`, spec["suspend"])
 	assert.Equal(t, `${["servicenow"].filter(x_, uat.status.state == "Verified")[0]}`, spec["provider"],
 		"the instance, and its ticket, only once uat is Verified")

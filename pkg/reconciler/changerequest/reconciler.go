@@ -335,10 +335,18 @@ func (r *Reconciler) nextCall(cr *kardinalv1alpha1.ChangeRequest, st *kardinalv1
 	if st.RetryAt != nil {
 		return st.RetryAt.Time
 	}
-	if st.ObservedAt == nil || st.Ticket == nil || st.PendingCreate != nil || st.ObservedGeneration != cr.Generation {
+	if st.ObservedAt == nil || st.Ticket == nil || st.PendingCreate != nil || st.ObservedGeneration != cr.Generation ||
+		refreshPending(cr, st) {
 		return time.Time{}
 	}
 	return st.ObservedAt.Add(poll)
+}
+
+// refreshPending reports whether a webhook trigger (the kardinal.io/refresh
+// annotation) has not been answered with a read yet.
+func refreshPending(cr *kardinalv1alpha1.ChangeRequest, st *kardinalv1alpha1.ChangeRequestStatus) bool {
+	v := cr.Annotations[kardinalv1alpha1.RefreshAnnotation]
+	return v != "" && v != st.ObservedRefresh
 }
 
 // record writes a reading to st: the ticket, its state and the clock, and
@@ -358,6 +366,7 @@ func (r *Reconciler) record(ctx context.Context, st *kardinalv1alpha1.ChangeRequ
 	st.ObservedAt, st.ValidUntil = &at, &until
 	st.Ready, st.RetryAt, st.PendingCreate = true, nil, nil
 	st.ObservedGeneration = cr.Generation
+	st.ObservedRefresh = cr.Annotations[kardinalv1alpha1.RefreshAnnotation]
 	st.Verified, st.VerifiedReason = nil, ""
 	if cr.Spec.Mode == kardinalv1alpha1.ChangeRequestModeLink {
 		if action == AuditActionLinked || st.LinkedAt == nil {
@@ -521,6 +530,7 @@ func (r *Reconciler) fail(st *kardinalv1alpha1.ChangeRequestStatus, cr *kardinal
 	at := metav1.NewTime(now.Add(retry))
 	st.RetryAt = &at
 	st.ObservedGeneration = cr.Generation
+	st.ObservedRefresh = cr.Annotations[kardinalv1alpha1.RefreshAnnotation]
 	if st.ObservedAt == nil {
 		setCondition(st, cr.Generation, CondReady, false, ReasonError, msg, now)
 	}

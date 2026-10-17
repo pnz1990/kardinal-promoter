@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -340,6 +341,74 @@ func TestGate_ChangeRequestJira(t *testing.T) {
 	e.WaitGateReady(t, a.ns, bundle, "prod", "cab", true, "", promoteTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	assert.Len(t, issuesOf(), 1, "one issue in all")
+}
+
+// TestGate_ChangeRequestWebhook (spec 23 §7.1): with a 10-minute poll, the
+// webhook trigger makes the instance read its ServiceNow change at once. A
+// wrong token gets 401 and triggers nothing; a trigger whose body claims the
+// change is approved only re-reads, and the change stays pending; approved
+// in ServiceNow, the next trigger opens the gate and prod promotes, minutes
+// before the poll would have.
+//
+// Covers CHANGE-REQUEST-09.
+func TestGate_ChangeRequestWebhook(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	token := strings.ReplaceAll(a.ns, "-", "") + "0123456789abcdef"
+	e.CreateSecretData(t, a.ns, "cr-hook", true, map[string]string{"token": token})
+	snowTemplate(t, e, a.ns, func(s *v1alpha1.ChangeRequestSpec) {
+		s.PollInterval = "10m"
+		s.Webhook = &v1alpha1.ChangeRequestWebhook{SecretRef: v1alpha1.SubscriptionSecretRef{Name: "cr-hook"}}
+	})
+	e.CreateGate(t, framework.Gate(a.ns, "cab", "prod", `changeRequests["prod-change"].state == "approved"`, recheck))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	name := "prod-change-prod--" + bundle
+	inst := waitChangeRequest(t, e, a.ns, name, "the instance opened its ticket", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		return cr.Status.Ticket != nil && cr.Status.State == "pending", fmt.Sprintf("%v", cr.Status.Conditions)
+	})
+	number := inst.Status.Ticket.Key
+	// The token in the X-Kardinal-Token header, as the docs recommend.
+	post := func(tok, body string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, framework.ControllerURL(t)+"/webhook/changerequests/"+a.ns+"/prod-change",
+			strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Kardinal-Token", tok)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	refreshOf := func() string {
+		var cr v1alpha1.ChangeRequest
+		require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: name}, &cr))
+		return cr.Annotations[v1alpha1.RefreshAnnotation]
+	}
+
+	assert.Equal(t, http.StatusUnauthorized, post(token[:len(token)-1]+"x", `{}`))
+	assert.Empty(t, refreshOf(), "a wrong token triggers nothing")
+
+	// The body claims approved; ServiceNow says pending: the read wins.
+	assert.Equal(t, http.StatusAccepted, post(token, `{"result":{"number":"`+number+`","state":"-2","approval":"approved"}}`))
+	waitChangeRequest(t, e, a.ns, name, "the trigger was answered with a read", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		v := cr.Annotations[v1alpha1.RefreshAnnotation]
+		return v != "" && cr.Status.ObservedRefresh == v, fmt.Sprintf("refresh %q observed %q", v, cr.Status.ObservedRefresh)
+	})
+	assert.Equal(t, "pending", waitChangeRequest(t, e, a.ns, name, "still pending", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		return true, ""
+	}).Status.State, "the body is never trusted")
+
+	e.SetFakeSnowTicket(t, number, map[string]interface{}{"state": "-2", "approval": "approved"})
+	assert.Equal(t, http.StatusAccepted, post(token, ""))
+	start := time.Now()
+	e.WaitGateReady(t, a.ns, bundle, "prod", "cab", true, "", promoteTimeout)
+	assert.Less(t, time.Since(start), 5*time.Minute, "the trigger, not the 10-minute poll, read the approval")
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 }
 
 // changeRequestLabels is labels without the ones kro adds to the objects it
