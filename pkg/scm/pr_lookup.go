@@ -106,18 +106,47 @@ func findMergedPR(ctx context.Context, l prLister, repo, head, base string, head
 	if err != nil {
 		return nil, err
 	}
-	var best *FoundPR
-	for i := range prs {
-		pr := prs[i]
-		if pr.OpenedAt.Before(since) || !slices.ContainsFunc(headSHAs, func(sha string) bool { return SameCommit(pr.HeadSHA, sha) }) {
-			continue
-		}
-		if best == nil || pr.OpenedAt.After(best.OpenedAt) {
-			best = &pr
+	pushed := func(sha string) bool {
+		return slices.ContainsFunc(headSHAs, func(p string) bool { return SameCommit(sha, p) })
+	}
+	var candidates []FoundPR
+	for _, pr := range prs {
+		if !pr.OpenedAt.Before(since) {
+			candidates = append(candidates, pr)
 		}
 	}
-	return best, nil
+	// Newest first: the newest PR that is the promotion's is taken.
+	slices.SortStableFunc(candidates, func(a, b FoundPR) int { return b.OpenedAt.Compare(a.OpenedAt) })
+	checked := 0
+	for _, pr := range candidates {
+		if pushed(pr.HeadSHA) {
+			return &pr, nil
+		}
+		// A reviewer's fixup on top of kardinal's commit, then the merge
+		// (#2092): the PR's commits, as the SCM keeps them, have it.
+		cl, ok := l.(prCommitLister)
+		if !ok || checked == maxPRCommitChecks {
+			continue
+		}
+		checked++
+		shas, complete, err := cl.listPRCommits(ctx, repo, pr.Number)
+		if _, none := statusIs(err, http.StatusNotFound); none {
+			continue // an SCM without the endpoint: not known to be kardinal's
+		}
+		if err != nil {
+			return nil, err
+		}
+		if complete && slices.ContainsFunc(shas, pushed) {
+			return &pr, nil
+		}
+	}
+	return nil, nil
 }
+
+// maxPRCommitChecks bounds how many merged PRs of a branch findMergedPR
+// reads the commits of: the PRs of one promotion's branch since it started
+// are few.
+const maxPRCommitChecks = 3
 
 // adoptRefused is the open PR of the repository's branch head into base,
 // after the SCM refused to create it as a duplicate (createErr). A refusal

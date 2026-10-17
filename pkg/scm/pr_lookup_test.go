@@ -6,6 +6,7 @@ package scm_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,10 @@ type lookupPR struct {
 	state      string // open, merged, or closed (closed without merging)
 	sha        string
 	created    time.Time
+	// commits are the PR's commits (#2092), oldest first; nil is the head
+	// alone. more says the SCM has more than the page it returns.
+	commits []string
+	more    bool
 }
 
 // lookupProvider renders lookupPRs as one provider's list API does, and
@@ -50,12 +55,27 @@ type lookupProvider struct {
 	wantQuery []string
 	// extra answers other GET paths (Azure DevOps reads the repository ID).
 	extra map[string]string
+	// commitsPath is the path of PR num's commit list, and commitsList its
+	// body with shas (and more: a page that is not the last).
+	commitsPath func(num int) string
+	commitsList func(shas []string, more bool) string
 }
 
 func iso(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 var lookupProviders = []lookupProvider{
 	{name: "github", repo: "o/r",
+		commitsPath: func(n int) string { return fmt.Sprintf("/repos/o/r/pulls/%d/commits", n) },
+		commitsList: func(shas []string, more bool) string {
+			var out []string
+			for _, s := range shas {
+				out = append(out, fmt.Sprintf(`{"sha":"%s"}`, s))
+			}
+			for more && len(out) < 100 {
+				out = append(out, fmt.Sprintf(`{"sha":"%040d"}`, len(out)))
+			}
+			return "[" + strings.Join(out, ",") + "]"
+		},
 		provider: func(u string) interface {
 			scm.OpenPRFinder
 			scm.MergedPRFinder
@@ -82,6 +102,17 @@ var lookupProviders = []lookupProvider{
 			return "[" + strings.Join(out, ",") + "]"
 		}},
 	{name: "gitlab", repo: "g/p",
+		commitsPath: func(n int) string { return fmt.Sprintf("/api/v4/projects/g/p/merge_requests/%d/commits", n) },
+		commitsList: func(shas []string, more bool) string {
+			var out []string
+			for _, s := range shas {
+				out = append(out, fmt.Sprintf(`{"id":"%s"}`, s))
+			}
+			for more && len(out) < 100 {
+				out = append(out, fmt.Sprintf(`{"id":"%040d"}`, len(out)))
+			}
+			return "[" + strings.Join(out, ",") + "]"
+		},
 		provider: func(u string) interface {
 			scm.OpenPRFinder
 			scm.MergedPRFinder
@@ -106,6 +137,17 @@ var lookupProviders = []lookupProvider{
 			return "[" + strings.Join(out, ",") + "]"
 		}},
 	{name: "forgejo and gitea", repo: "o/r",
+		commitsPath: func(n int) string { return fmt.Sprintf("/api/v1/repos/o/r/pulls/%d/commits", n) },
+		commitsList: func(shas []string, more bool) string {
+			var out []string
+			for _, s := range shas {
+				out = append(out, fmt.Sprintf(`{"sha":"%s"}`, s))
+			}
+			for more && len(out) < 50 {
+				out = append(out, fmt.Sprintf(`{"sha":"%040d"}`, len(out)))
+			}
+			return "[" + strings.Join(out, ",") + "]"
+		},
 		provider: func(u string) interface {
 			scm.OpenPRFinder
 			scm.MergedPRFinder
@@ -134,6 +176,18 @@ var lookupProviders = []lookupProvider{
 			return "[" + strings.Join(out, ",") + "]"
 		}},
 	{name: "bitbucket cloud", repo: "ws/r",
+		commitsPath: func(n int) string { return fmt.Sprintf("/2.0/repositories/ws/r/pullrequests/%d/commits", n) },
+		commitsList: func(shas []string, more bool) string {
+			var out []string
+			for _, s := range shas {
+				out = append(out, fmt.Sprintf(`{"hash":"%s"}`, s[:12]))
+			}
+			next := ""
+			if more {
+				next = `,"next":"https://api.bitbucket.org/page/2"`
+			}
+			return `{"values":[` + strings.Join(out, ",") + `]` + next + `}`
+		},
 		provider: func(u string) interface {
 			scm.OpenPRFinder
 			scm.MergedPRFinder
@@ -160,6 +214,16 @@ var lookupProviders = []lookupProvider{
 			return `{"values":[` + strings.Join(out, ",") + `]}`
 		}},
 	{name: "bitbucket data center", repo: "PROJ/repo",
+		commitsPath: func(n int) string {
+			return fmt.Sprintf("/rest/api/1.0/projects/PROJ/repos/repo/pull-requests/%d/commits", n)
+		},
+		commitsList: func(shas []string, more bool) string {
+			var out []string
+			for _, s := range shas {
+				out = append(out, fmt.Sprintf(`{"id":"%s"}`, s))
+			}
+			return fmt.Sprintf(`{"isLastPage":%t,"values":[%s]}`, !more, strings.Join(out, ","))
+		},
 		provider: func(u string) interface {
 			scm.OpenPRFinder
 			scm.MergedPRFinder
@@ -188,6 +252,19 @@ var lookupProviders = []lookupProvider{
 			return `{"isLastPage":true,"values":[` + strings.Join(out, ",") + `]}`
 		}},
 	{name: "azure devops", repo: "org/proj/repo",
+		commitsPath: func(n int) string {
+			return fmt.Sprintf("/org/proj/_apis/git/repositories/repo/pullRequests/%d/commits", n)
+		},
+		commitsList: func(shas []string, more bool) string {
+			var out []string
+			for _, s := range shas {
+				out = append(out, fmt.Sprintf(`{"commitId":"%s"}`, s))
+			}
+			for more && len(out) < 100 {
+				out = append(out, fmt.Sprintf(`{"commitId":"%040d"}`, len(out)))
+			}
+			return `{"value":[` + strings.Join(out, ",") + `]}`
+		},
 		provider: func(u string) interface {
 			scm.OpenPRFinder
 			scm.MergedPRFinder
@@ -227,6 +304,16 @@ func serveLookup(t *testing.T, lp lookupProvider, openList, mergedList []lookupP
 		if body, ok := lp.extra[r.URL.Path]; ok {
 			_, _ = w.Write([]byte(body))
 			return
+		}
+		for _, pr := range append(append([]lookupPR{}, openList...), mergedList...) {
+			if lp.commitsPath != nil && r.URL.Path == lp.commitsPath(pr.num) {
+				shas := pr.commits
+				if shas == nil {
+					shas = []string{pr.sha}
+				}
+				_, _ = w.Write([]byte(lp.commitsList(shas, pr.more)))
+				return
+			}
 		}
 		queries = append(queries, r.URL.RawQuery)
 		if lp.isMergedQuery(r.URL.RawQuery) {
@@ -461,4 +548,71 @@ func TestFindMergedPR_AnyPushedCommit(t *testing.T) {
 	pr, err = lp.provider(u).FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{otherCommit}, since)
 	require.NoError(t, err)
 	assert.Nil(t, pr)
+}
+
+// TestFindMergedPR_FixupOnTop (#2092): a merged PR of kardinal's own branch
+// whose head is a reviewer's fixup on top of kardinal's commit is the
+// promotion's when the SCM lists kardinal's commit among the PR's commits.
+// It is not when the PR's commits do not have it, when the SCM has more
+// commits than the page it returned (a partial read never adopts), or when
+// it is a fork's PR with the same commits.
+//
+// Covers SCM-MERGED-BEFORE-02.
+func TestFindMergedPR_FixupOnTop(t *testing.T) {
+	since := time.Date(2026, 10, 16, 5, 0, 0, 0, time.UTC)
+	const fixup = "5555555555555555555555555555555555555555"
+	for _, lp := range lookupProviders {
+		t.Run(lp.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name string
+				pr   lookupPR
+				want bool
+			}{
+				{name: "kardinal's commit, then the fixup", want: true,
+					pr: lookupPR{commits: []string{pushedCommit, fixup}}},
+				{name: "the PR's commits do not have it", pr: lookupPR{commits: []string{otherCommit, fixup}}},
+				{name: "a partial list", pr: lookupPR{commits: []string{pushedCommit, fixup}, more: true}},
+				{name: "a fork's PR", pr: lookupPR{commits: []string{pushedCommit, fixup}, fork: true}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					pr := tc.pr
+					pr.num, pr.head, pr.base, pr.state, pr.sha, pr.created = 9, lookupHead, lookupBase, "merged", fixup, since.Add(time.Minute)
+					u, _ := serveLookup(t, lp, nil, []lookupPR{pr})
+					got, err := lp.provider(u).FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{pushedCommit}, since)
+					require.NoError(t, err)
+					if !tc.want {
+						assert.Nil(t, got)
+						return
+					}
+					require.NotNil(t, got)
+					assert.Equal(t, 9, got.Number)
+					assert.Equal(t, lp.url(9), got.URL)
+				})
+			}
+		})
+	}
+}
+
+// An SCM that has no PR commit list (404) adopts nothing on it, and the
+// lookup does not fail: the step records no changes, as before #2092.
+func TestFindMergedPR_NoCommitList(t *testing.T) {
+	since := time.Date(2026, 10, 16, 5, 0, 0, 0, time.UTC)
+	lp := lookupProviders[2] // forgejo and gitea: older Gitea has no endpoint
+	pr := lookupPR{num: 9, head: lookupHead, base: lookupBase, state: "merged", sha: otherCommit, created: since.Add(time.Minute)}
+	inner, _ := serveLookup(t, lp, nil, []lookupPR{pr})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == lp.commitsPath(9) {
+			http.NotFound(w, r)
+			return
+		}
+		resp, err := http.Get(inner + r.URL.RequestURI())
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(srv.Close)
+	got, err := lp.provider(srv.URL).FindMergedPR(context.Background(), lp.repo, lookupHead, lookupBase, []string{pushedCommit}, since)
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }

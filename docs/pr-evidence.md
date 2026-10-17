@@ -392,10 +392,12 @@ is to reset the branch to kardinal's commit (`git push --force origin
 help, because the branch still carries the other commit.
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
-  looks up the merged PR of its branch, with a commit the step pushed as its head
+  looks up the merged PR of its branch with a commit the step pushed
   (`status.outputs.pushedSHAs` keeps the last eight, each recorded before it is pushed: a
-  restarted run pushes a new commit, while the PR a reviewer merged carries an earlier one), and
-  records the
+  restarted run pushes a new commit, while the PR a reviewer merged carries an earlier one): as
+  its head, or, when a reviewer pushed a fixup on top before merging, among the PR's commits as
+  the SCM lists them (which outlive a squash or rebase merge and the branch's deletion; a list
+  longer than one page of 100, 50 on Forgejo and Gitea, is not used). It records the
   merge as for any PR: the step's outputs name the PR, its merge commit and who merged it (asked
   of the SCM), and the `PRMerged` AuditEvent is written. Only a PR opened after the PromotionStep
   was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is
