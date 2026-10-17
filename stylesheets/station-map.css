@@ -229,8 +229,9 @@
 .station[data-tone="superseded"] { opacity: 0.5; }
 .station[data-tone="superseded"] .station__dot { stroke-dasharray: 2 2; }
 .station[data-tone="held"] .station__dot,
+.station[data-tone="frozen"] .station__dot,
 .station__ring2 { fill: none; stroke: var(--k-ink); stroke-width: var(--k-border-strong); }
-.station[data-tone="held"] .station__dot { fill: var(--k-surface-base); }
+.station[data-tone="held"] .station__dot, .station[data-tone="frozen"] .station__dot { fill: var(--k-surface-base); }
 .station[data-focused] .station__dot { stroke: var(--k-thread); stroke-width: var(--k-stroke-thread); }
 .station:focus-visible .station__hit { stroke: var(--k-thread); stroke-width: var(--k-stroke-ring); vector-effect: non-scaling-stroke; }
 .station[data-dim] { opacity: 0.25; }
@@ -283,7 +284,7 @@
 .group__seg[data-tone="waiting"] { fill: var(--k-status-waiting-fg); }
 .group__seg[data-tone="blocked"] { fill: var(--k-status-blocked-fg); }
 .group__seg[data-tone="failed"] { fill: var(--k-status-failed-fill); }
-.group__seg[data-tone="held"] { fill: var(--k-ink); }
+.group__seg[data-tone="held"], .group__seg[data-tone="frozen"] { fill: var(--k-ink); }
 .group__thread { fill: var(--k-thread); }
 
 .cell { cursor: pointer; outline: none; }
@@ -293,7 +294,7 @@
 .cell[data-tone="waiting"] .cell__box { stroke: var(--k-status-waiting-fg); }
 .cell[data-tone="blocked"] .cell__box { fill: var(--k-status-blocked-wash); stroke: var(--k-status-blocked-fg); }
 .cell[data-tone="failed"] .cell__box { fill: var(--k-status-failed-fill); stroke: var(--k-status-failed-fill); }
-.cell[data-tone="held"] .cell__box { stroke: var(--k-ink); stroke-width: var(--k-border-strong); }
+.cell[data-tone="held"] .cell__box, .cell[data-tone="frozen"] .cell__box { stroke: var(--k-ink); stroke-width: var(--k-border-strong); }
 .cell[data-tone="superseded"] { opacity: 0.5; }
 .cell[data-tone="superseded"] .cell__box { stroke-dasharray: 2 2; }
 .cell__mark { fill: none; stroke: var(--k-status-failed-on-fill); stroke-width: var(--k-border-strong); stroke-linecap: round; vector-effect: non-scaling-stroke; }
@@ -465,4 +466,4 @@
 .station__tick { fill: none; stroke: var(--k-status-waiting-fg); stroke-width: var(--k-border-strong); stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .cell__clock { fill: none; stroke: var(--k-status-waiting-fg); stroke-width: var(--k-border-hairline); stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .legend__dot[data-tone="waiting"] { border-color: var(--k-status-waiting-fg); }
-.legend__dot[data-tone="held"] { border-color: var(--k-ink); box-shadow: 0 0 0 var(--k-border-hairline) var(--k-surface-raised), 0 0 0 var(--k-border-strong) var(--k-ink); }
+.legend__dot[data-tone="held"], .legend__dot[data-tone="frozen"] { border-color: var(--k-ink); box-shadow: 0 0 0 var(--k-border-hairline) var(--k-surface-raised), 0 0 0 var(--k-border-strong) var(--k-ink); }
