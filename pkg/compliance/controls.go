@@ -146,12 +146,15 @@ func tested(element string) Evidence {
 	}
 }
 
-// receipts is the planned signed record of each promotion (spec 21).
+// receipts is the signed record of each promotion (spec 21).
 func receipts(element string) Evidence {
 	return Evidence{
 		Element: element,
-		Record:  "a signed `PromotionReceipt` per promotion per environment, verifiable offline",
-		Status:  Planned,
+		Record: "a signed `PromotionReceipt` per promotion per environment (v0.13, off by default: `receipts.enabled`), " +
+			"written when the step reaches Verified and verifiable offline with `kardinal verify-receipt`; " +
+			"`receipts.ndjson` in the evidence pack keeps each one with its signed envelope",
+		Kinds:  []string{"PromotionReceipt"},
+		Status: Shipped,
 	}
 }
 

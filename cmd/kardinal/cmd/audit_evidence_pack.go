@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/compliance"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // packFormat names the evidence pack's layout, in manifest.json.
@@ -411,6 +412,13 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 	}); err != nil {
 		return nil, err
 	}
+	if err := p.kind(ctx, c, "PromotionReceipt", &v1alpha1.PromotionReceiptList{}, nsOpts, func(o runtime.Object) bool {
+		rc := o.(*v1alpha1.PromotionReceipt)
+		b, ok := rc.Labels["kardinal.io/bundle"]
+		return ok && ofBundle(rc.Namespace, b) && envOK(rc.Labels["kardinal.io/environment"])
+	}); err != nil {
+		return nil, err
+	}
 	// The procedure and policy in force at export.
 	if err := p.kind(ctx, c, "Pipeline", &v1alpha1.PipelineList{}, nsOpts, func(o runtime.Object) bool {
 		return pipeOK(o.(*v1alpha1.Pipeline).Name)
@@ -578,8 +586,104 @@ func (p *evidence) record(obj sigs_client.Object, kind string) sigs_client.Objec
 	o := obj.DeepCopyObject().(sigs_client.Object)
 	o.SetManagedFields(nil)
 	o.GetObjectKind().SetGroupVersionKind(v1alpha1.GroupVersion.WithKind(kind))
+	if rc, ok := o.(*v1alpha1.PromotionReceipt); ok {
+		p.receipt(rc)
+		return rc
+	}
 	p.red.object(o)
 	return o
+}
+
+// withheldAnnotation marks a receipt whose signed statement the pack left
+// out, and says why.
+const withheldAnnotation = "kardinal.io/evidence-pack-withheld"
+
+// receipt redacts a PromotionReceipt but its signed record: the statement
+// and its Sigstore bundle are exported as signed, or they would not verify
+// (kardinal verify-receipt --file). The pack withholds both, and says why,
+// when it cannot show them safe (receiptUnsafe): a signed statement that
+// holds a credential cannot be redacted without breaking its signature
+// (#2158), so it is never exported.
+func (p *evidence) receipt(rc *v1alpha1.PromotionReceipt) {
+	statement, bundle := rc.Spec.Statement, rc.Status.Bundle
+	rc.Spec.Statement, rc.Status.Bundle = "", ""
+	p.red.object(rc)
+	if why := receiptUnsafe(statement, bundle); why != "" {
+		if rc.Annotations == nil {
+			rc.Annotations = map[string]string{}
+		}
+		rc.Annotations[withheldAnnotation] = why + "; verify it from the cluster or its sinks"
+		p.red.counts.ReceiptsWithheld++
+		p.manifest.Coverage.Warnings = append(p.manifest.Coverage.Warnings, fmt.Sprintf(
+			"receipt %s/%s: its signed statement and bundle are left out: %s", rc.Namespace, rc.Name, why))
+		return
+	}
+	rc.Spec.Statement, rc.Status.Bundle = statement, bundle
+}
+
+// receiptUnsafe says why a receipt's signed record must not leave the
+// cluster, or "" when it may. It fails closed:
+//   - the statement is decoded and every string in it is checked with
+//     scm.RedactText, the redaction of status, CLI output and logs: the
+//     statement's JSON text escapes "&" (\u0026) and quotes, so a
+//     credential parameter after the first, or a URL in an escaped string,
+//     does not show in the text (#2161, QA-2);
+//   - a statement that does not decode is not shown safe;
+//   - the bundle's DSSE payload must be the statement, byte for byte: the
+//     check above saw the statement, and a bundle that signs anything else
+//     (a status edited by hand) would be exported unchecked.
+func receiptUnsafe(statement, bundle string) string {
+	var tree interface{}
+	if err := json.Unmarshal([]byte(statement), &tree); err != nil {
+		return "the signed statement is not JSON, so it cannot be checked for credentials"
+	}
+	if path := credentialAt(tree, "statement"); path != "" {
+		return "the signed statement holds a credential (" + path + ")"
+	}
+	if bundle == "" {
+		return ""
+	}
+	var b struct {
+		DSSE struct {
+			Payload []byte `json:"payload"`
+		} `json:"dsseEnvelope"`
+	}
+	if err := json.Unmarshal([]byte(bundle), &b); err != nil {
+		return "the Sigstore bundle is not JSON, so its payload cannot be checked"
+	}
+	if string(b.DSSE.Payload) != statement {
+		return "the Sigstore bundle's payload is not the statement"
+	}
+	return ""
+}
+
+// credentialAt is the path of the first string in tree that scm.RedactText
+// would change (a URL's userinfo, a credential parameter), or "".
+func credentialAt(tree interface{}, path string) string {
+	switch t := tree.(type) {
+	case string:
+		if scm.RedactText(t) != t {
+			return path
+		}
+	case map[string]interface{}:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if p := credentialAt(t[k], path+"."+k); p != "" {
+				return p
+			}
+		}
+	case []interface{}:
+		for i, v := range t {
+			if p := credentialAt(v, fmt.Sprintf("%s[%d]", path, i)); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 // admission writes admission.yaml: the chart's ValidatingAdmissionPolicies
@@ -750,6 +854,9 @@ and admission policies are the ones in force at export.
     approvals.ndjson             their Approvals
     policygates.ndjson           their gate instances (overrides, results)
     verdicts.ndjson              their Verdicts
+    receipts.ndjson              their PromotionReceipts, statement and
+                                 Sigstore bundle as signed (verify one
+                                 with kardinal verify-receipt --file)
     pipelines.ndjson             the Pipelines
     policygate-templates.ndjson  the gate templates
     changewindows.ndjson         windows and freezes, with exemptions

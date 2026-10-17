@@ -30,6 +30,9 @@ and admission policies are the ones in force at export.
     approvals.ndjson             their Approvals
     policygates.ndjson           their gate instances (overrides, results)
     verdicts.ndjson              their Verdicts
+    receipts.ndjson              their PromotionReceipts, statement and
+                                 Sigstore bundle as signed (verify one
+                                 with kardinal verify-receipt --file)
     pipelines.ndjson             the Pipelines
     policygate-templates.ndjson  the gate templates
     changewindows.ndjson         windows and freezes, with exemptions

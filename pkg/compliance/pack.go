@@ -16,6 +16,10 @@ var PackFiles = map[string]string{
 	"ChangeWindow":  "changewindows.ndjson",
 	"AgentIdentity": "agentidentities.ndjson",
 	"Verdict":       "verdicts.ndjson",
+	// PromotionReceipt: each receipt of the period's versions with its
+	// signed envelope (status.bundle), which kardinal verify-receipt --file
+	// checks offline.
+	"PromotionReceipt": "receipts.ndjson",
 }
 
 // PackEvidence is a row of controls.json: the evidence with the pack files
