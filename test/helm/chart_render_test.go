@@ -596,6 +596,26 @@ func TestChartRBACFreezeControls(t *testing.T) {
 	assert.Error(t, err, "freeze controls without TokenReview fail the install")
 }
 
+// TestChartUIBasePath: ui.basePath passes --ui-base-path (#1933); a prefix
+// the UI server already serves, or one with a dot segment, fails the install.
+func TestChartUIBasePath(t *testing.T) {
+	deployment := func(args ...string) string {
+		var out []string
+		for _, d := range render(t, "kardinal-promoter", args...) {
+			if d.Kind == "Deployment" {
+				out = append(out, string(d.raw))
+			}
+		}
+		return strings.Join(out, "")
+	}
+	assert.NotContains(t, deployment(), "--ui-base-path", "no prefix by default")
+	assert.Contains(t, deployment("--set", "ui.basePath=/tools/kardinal"), "--ui-base-path=/tools/kardinal")
+	for _, bad := range []string{"/ui", "/api/x", "/a/..", "kardinal", "/a b", "/a?b"} {
+		_, err := helmTemplate(t, "kardinal-promoter", "--set", "ui.basePath="+bad)
+		assert.Error(t, err, bad)
+	}
+}
+
 // TestChartRBACLeastPrivilege: grants the code does not use are gone.
 func TestChartRBACLeastPrivilege(t *testing.T) {
 	v := newRBACView(t, render(t, "kardinal-promoter", allFeatures...))

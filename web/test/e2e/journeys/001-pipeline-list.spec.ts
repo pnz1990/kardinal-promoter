@@ -41,10 +41,12 @@ test.describe('Journey 001 — Pipeline list', () => {
   })
 
   test('Step 6: The logo loads from the /ui/ base path', async ({ page }) => {
-    // The controller serves static files only under /ui/ (E2E-10); the mock does the same.
+    // The controller serves static files only under [<prefix>]/ui/ (E2E-10); the mock does
+    // the same. The URL is relative, so it loads under --ui-base-path too (#1933).
     const logo = page.getByRole('img', { name: 'Kardinal' })
     await expect(logo).toBeVisible()
-    await expect(logo).toHaveAttribute('src', '/ui/logo.png')
+    await expect(logo).toHaveAttribute('src', './logo.png')
+    expect(new URL(await logo.evaluate((img: HTMLImageElement) => img.currentSrc)).pathname).toBe('/ui/logo.png')
     await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
   })
 })

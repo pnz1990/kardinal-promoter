@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -870,6 +871,55 @@ func TestUI_APIStaticToken(t *testing.T) {
 	app := anon.Get(t, "/ui/")
 	assert.Equal(t, http.StatusOK, app.Status, "/ui/ needs no token")
 	assert.Contains(t, app.Body, `<div id="root">`)
+}
+
+// TestUI_APIBasePath checks kui-token's ui.basePath (framework.UIBasePath):
+// the prefix and <prefix>/ui redirect to <prefix>/ui/, which serves the app
+// with relative asset URLs that load; <prefix>/api/v1/ui/* needs the token as
+// /api/v1/ui/* does; the unprefixed paths keep working; nothing else is served
+// under the prefix (#1933).
+//
+// Covers UIAPI-BASEPATH-01.
+func TestUI_APIBasePath(t *testing.T) {
+	t.Parallel()
+	url := framework.MustEnv(t, framework.EnvUITokenURL)
+	base := framework.UIBasePath
+	noFollow := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	anon := framework.UIClient{BaseURL: url, HTTP: noFollow}
+	for _, p := range []string{base, base + "/", base + "/ui"} {
+		r := anon.Get(t, p)
+		assert.Equal(t, http.StatusFound, r.Status, "%s: %s", p, r)
+		assert.Equal(t, base+"/ui/", r.Header.Get("Location"), p)
+		assert.NotEmpty(t, r.Header.Get("Content-Security-Policy"), "%s: security headers", p)
+	}
+
+	app := anon.Get(t, base+"/ui/")
+	require.Equal(t, http.StatusOK, app.Status, app.String())
+	assert.Contains(t, app.Body, `<div id="root">`)
+	refs := regexp.MustCompile(`(?:href|src)="([^"]+)"`).FindAllStringSubmatch(app.Body, -1)
+	require.NotEmpty(t, refs)
+	for _, m := range refs {
+		require.True(t, strings.HasPrefix(m[1], "./"), "the app refers to %q, which would not load under %s", m[1], base)
+		r := anon.Get(t, base+"/ui/"+strings.TrimPrefix(m[1], "./"))
+		assert.Equal(t, http.StatusOK, r.Status, "%s: %s", m[1], r)
+	}
+
+	r := anon.Get(t, base+uiAPI+"/pipelines")
+	assert.Equal(t, http.StatusUnauthorized, r.Status, r.String())
+	assert.Equal(t, uiAuthRealm, r.Header.Get("Www-Authenticate"))
+	authed := framework.UIClient{BaseURL: url, Token: framework.UIToken(t), HTTP: noFollow}
+	for _, p := range []string{base + uiAPI + "/pipelines", uiAPI + "/pipelines"} {
+		r := authed.Get(t, p)
+		require.Equal(t, http.StatusOK, r.Status, "%s: %s", p, r)
+		var list []uiPipeline
+		r.JSON(t, &list)
+	}
+	assert.Equal(t, http.StatusOK, anon.Get(t, "/ui/").Status, "the unprefixed app")
+	for _, p := range []string{base + "/metrics", base + "x/ui/", base + base + "/ui/"} {
+		assert.Equal(t, http.StatusNotFound, authed.Get(t, p).Status, p)
+	}
 }
 
 // TestUI_APICORS checks the CORS allow-list of kui-token (origin

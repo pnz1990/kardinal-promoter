@@ -296,6 +296,12 @@ func main() {
 	flag.StringVar(&uiListenAddress, "ui-listen-address", ":8082",
 		"The address the embedded kardinal-ui HTTP server binds to.")
 
+	var uiBasePathFlag string
+	flag.StringVar(&uiBasePathFlag, "ui-base-path", "",
+		"A path prefix (for example /kardinal) under which the UI server also serves the UI (<prefix>/ui/) and its API "+
+			"(<prefix>/api/v1/ui/*), for a proxy or Ingress that routes a shared host by path without rewriting it. "+
+			"The unprefixed paths keep working. Empty (default): no prefix. Chart value: ui.basePath.")
+
 	var corsAllowedOrigins string
 	flag.StringVar(&corsAllowedOrigins, "cors-allowed-origins", os.Getenv("KARDINAL_CORS_ORIGINS"),
 		"Comma-separated list of allowed CORS origins for /api/v1/ui/* routes. "+
@@ -653,6 +659,10 @@ func main() {
 	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
+	}
+	uiBasePath, err := parseUIBasePath(uiBasePathFlag)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --ui-base-path")
 	}
 
 	if watchNamespace != "" {
@@ -1231,14 +1241,19 @@ func main() {
 			"Helm ui.auth.tokenReview=true or ui.auth.tokenSecretRef.name (--ui-tokenreview-auth, --ui-auth-token)")
 	}
 
-	// Embedded UI server: the React app at /ui/ and its API.
+	// Embedded UI server: the React app at /ui/ and its API, also under
+	// --ui-base-path when set.
+	if uiBasePath != "" {
+		logger.Info().Str("basePath", uiBasePath).Msg("UI served under " + uiBasePath + "/ui/ (API " + uiBasePath + "/api/v1/ui/) and at /ui/")
+	}
 	distFS, err := fs.Sub(web.Assets, "dist")
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
 		distFS = nil
 	}
 	uiServer, err := newHTTPServer("ui", uiListenAddress,
-		accessLog.Middleware("ui", newUIHandler(mgr.GetClient(), mgr.GetAPIReader(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger)),
+		accessLog.Middleware("ui", withUIBasePath(uiBasePath,
+			newUIHandler(mgr.GetClient(), mgr.GetAPIReader(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger))),
 		tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure UI server")

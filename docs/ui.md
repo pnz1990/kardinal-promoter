@@ -8,6 +8,8 @@ kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
 
 and browse to <http://localhost:8082/ui/>. To serve it to other clients (an Ingress, a
 NodePort), turn on a UI auth mode first: see [Accessing the UI](installation.md#accessing-the-ui).
+To serve it under a path prefix on a shared host, set `ui.basePath`
+([Under a path prefix](installation.md#under-a-path-prefix-on-a-shared-host)).
 
 With `ui.auth.tokenReview` on, the UI reads and acts with your Kubernetes identity, so it shows
 and changes what your RBAC allows, as `kubectl` does. A static token (`ui.auth.tokenSecretRef`,

@@ -144,6 +144,20 @@ func TestUI_BrowserInsecureBanner(t *testing.T) {
 		"KARDINAL_UI_TLS_URL", framework.MustEnv(t, framework.EnvUITLSURL)))
 }
 
+// TestUI_BrowserBasePath opens kui-token's UI under its ui.basePath: the
+// page loads, signs in with the token and calls its API under the prefix, and
+// requests nothing outside it (#1933).
+//
+// Covers UIAPI-BASEPATH-01.
+func TestUI_BrowserBasePath(t *testing.T) {
+	t.Parallel()
+	framework.Playwright(t, "base-path.spec.ts", map[string]string{
+		"KARDINAL_UI_TOKEN_URL":  framework.MustEnv(t, framework.EnvUITokenURL),
+		"KARDINAL_UI_BASE_PATH":  framework.UIBasePath,
+		"KARDINAL_UI_TOKEN_FILE": framework.MustEnv(t, framework.EnvUITokenFile),
+	})
+}
+
 // TestUI_BrowserDAG checks the promotion DAG of a Bundle that waits on its
 // prod PR behind a passing gate: one node per environment and gate with its
 // state, the PR badge, the hover tooltip with the PR link and the gate's
