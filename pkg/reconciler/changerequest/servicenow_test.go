@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -396,13 +397,15 @@ func TestLoadRootCAs(t *testing.T) {
 
 func x509VerifyOptions(p *x509.CertPool) x509.VerifyOptions { return x509.VerifyOptions{Roots: p} }
 
-// TestServiceNow_InstanceURL: an instance that is not https://<host>, or
+// TestServiceNow_InstanceURL: an instance that is not https://<host> (a path,
+// query or fragment would reach every ticket URL), or
 // carries userinfo, is refused before any request (the CRD refuses them
 // too; the provider does not rely on it).
 func TestServiceNow_InstanceURL(t *testing.T) {
 	srv := newSNServer(t, "k")
 	sn := &changerequest.ServiceNow{Client: srv.Client()}
-	for _, u := range []string{strings.Replace(srv.URL, "https://", "http://", 1), strings.Replace(srv.URL, "https://", "https://user:pw@", 1), "https://"} {
+	for _, u := range []string{strings.Replace(srv.URL, "https://", "http://", 1), strings.Replace(srv.URL, "https://", "https://user:pw@", 1), "https://",
+		srv.URL + "?sig=pw", srv.URL + "?", srv.URL + "/#pw", srv.URL + "/x"} {
 		_, err := sn.Create(context.Background(), snRequestFor(u))
 		require.Error(t, err, u)
 		assert.Contains(t, err.Error(), "instanceURL must be https://<host>")
@@ -465,4 +468,31 @@ func TestServiceNow_PrePlanting(t *testing.T) {
 	injected := snRequestFor(srv.URL, func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.IntegrationUser = "x^ORsys_created_byISNOTEMPTY" })
 	_, _, err = sn.Find(context.Background(), injected)
 	assert.ErrorContains(t, err, "not a user_name", "a user that would rewrite the query is refused")
+}
+
+// TestServiceNow_NumberChecked (#2170 QA): the change number a reading
+// records reaches the PR body and the receipt, so a number that is not
+// capitals then digits (markup, a mention, a link) fails the reading closed,
+// on create, search and read alike.
+func TestServiceNow_NumberChecked(t *testing.T) {
+	for _, bad := range []string{`<img src=x>`, `@org/team`, `CHG1](https://evil)`, `chg0031337`, `XQZ`, `CHG 1`} {
+		t.Run(bad, func(t *testing.T) {
+			srv := newSNServer(t, "k")
+			srv.answer = func(w http.ResponseWriter, r *http.Request) bool {
+				body := strings.ReplaceAll(string(fixture(t, "change.json", "k")), `"CHG0031337"`, strconv.Quote(bad))
+				if r.Method == http.MethodPost {
+					w.WriteHeader(http.StatusCreated)
+				}
+				_, _ = w.Write([]byte(body))
+				return true
+			}
+			sn := &changerequest.ServiceNow{Client: srv.Client()}
+			_, err := sn.Create(context.Background(), snRequestFor(srv.URL))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "the change number is not capitals then digits")
+			assert.NotContains(t, err.Error(), bad, "the number is not echoed")
+			_, err = sn.Get(context.Background(), snRequestFor(srv.URL), v1alpha1.ChangeRequestTicket{Key: "CHG0031337", ID: "9f1c4b1e2f3a40d5a6b7c8d9e0f1a2b3"})
+			require.Error(t, err)
+		})
+	}
 }

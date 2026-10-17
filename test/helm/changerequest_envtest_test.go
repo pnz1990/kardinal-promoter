@@ -92,6 +92,25 @@ func TestChangeRequestsOnAPIServer(t *testing.T) {
 		{"link without spec.link", func(s *v1alpha1.ChangeRequestSpec) { s.Mode = "link" }, "mode link needs spec.link"},
 		{"an http instance", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.InstanceURL = "http://example.service-now.com" }, "should match"},
 		{"userinfo in the instance", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.InstanceURL = "https://a@b.service-now.com" }, "should match"},
+		// A query or fragment would be copied into every ticket URL, and so
+		// into PRs and signed receipts (#2170 QA).
+		{"a query in the instance", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.InstanceURL = "https://b.service-now.com?sig=x" }, "should match"},
+		{"a fragment in the instance", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.InstanceURL = "https://b.service-now.com/#x" }, "should match"},
+		{"a query in the jira base", func(s *v1alpha1.ChangeRequestSpec) {
+			s.Provider, s.ServiceNow = "jira", nil
+			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://x.atlassian.net/jira?sig=x", Project: "CHG",
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}}}
+		}, "should match"},
+		{"userinfo in the jira base", func(s *v1alpha1.ChangeRequestSpec) {
+			s.Provider, s.ServiceNow = "jira", nil
+			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://a:b@x.atlassian.net", Project: "CHG",
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}}}
+		}, "should match"},
+		{"a jira base with a path", func(s *v1alpha1.ChangeRequestSpec) {
+			s.Provider, s.ServiceNow = "jira", nil
+			s.Jira = &v1alpha1.JiraChangeRequest{BaseURL: "https://jira.example.com/jira", Project: "CHG",
+				ChangeRequestAuth: v1alpha1.ChangeRequestAuth{CredentialsSecretRef: v1alpha1.SecretKeyRef{Name: "jira", Key: "token"}}}
+		}, ""},
 		{"an unknown provider", func(s *v1alpha1.ChangeRequestSpec) { s.Provider = "remedy" }, "Unsupported value"},
 		{"an unknown link source", func(s *v1alpha1.ChangeRequestSpec) {
 			s.Mode, s.Link = "link", &v1alpha1.ChangeRequestLink{From: "comment", Name: "x"}

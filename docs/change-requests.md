@@ -109,6 +109,11 @@ promotion's correlation id and approve it themselves. With scheme `basic` the in
 the credential's user; with `bearer` set `spec.servicenow.integrationUser` to the user_name the
 token acts as (the CRD requires it).
 
+`instanceURL` is `https://<host>` only: a path, query, fragment or user name is refused (by the
+CRD and by the controller), since every ticket URL kardinal records is built from it. A change
+whose `number` is not capitals then digits (`CHG0031337`) is not read: its number would appear in
+the PR body and the receipt.
+
 The template cannot set `type`, `correlation_id` or `correlation_display`. `correlation_id`
 holds `kardinal-` and 32 hex characters of the promotion's correlation id's SHA-256, because the
 field holds 100 characters. Give the integration user a role that may create and read
@@ -379,7 +384,9 @@ the ticket is read so, `ChangeRequestApproved` and `ChangeRequestRejected`
   row for each ticket of the version in that environment: the template, the ticket key linked to
   its URL, the provider, the state (with the provider's own), whether the ticket is the
   promotion's (`yes`, or `no:` and the reason a link was not verified), the approvers and when the
-  ticket was last read. The rows are read when the PR is opened, like the gate table. A custom PR
+  ticket was last read. The rows are read when the PR is opened, like the gate table. Text from
+  the ticketing system (approver names, states, keys, reasons) is shown as plain text: HTML,
+  images, links and `@` mentions in it do not render. A custom PR
   body gets the section with `{{ changeRequestsTable }}`
   ([Customising the PR](pr-evidence.md#customising-the-pr)).
 - **The receipt.** `kardinalPromotion.changeRequests` records each ticket as the step read it

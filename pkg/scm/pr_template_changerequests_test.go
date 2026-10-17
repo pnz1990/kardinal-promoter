@@ -123,3 +123,37 @@ func TestPRTemplate_ChangeRequestsTable(t *testing.T) {
 	plain.ChangeRequests = nil
 	assert.Equal(t, marker+"before\n\nafter", render(plain))
 }
+
+// TestPRBody_ChangeRequestTextInert (#2170 QA): approver names, states,
+// reasons and keys come from the ticketing system, where anyone may set a
+// display name. In the prod PR body each is inert text: no HTML, no image,
+// no link (markdown or bare), no mention of a person or team, no code span,
+// and an escape in the text cannot cancel kardinal's.
+func TestPRBody_ChangeRequestTextInert(t *testing.T) {
+	const zw = "\u200b"
+	for _, tc := range []struct {
+		name, in, out string
+	}{
+		{"html", `<a href="https://phish.example">click</a>`, `&lt;a href="https:` + zw + `//phish.example"&gt;click&lt;/a&gt;`},
+		{"image", `![x](https://evil.example/t.png)`, `\!\[x\](https:` + zw + `//evil.example/t.png)`},
+		{"mention", `@pnz1990/admins`, `@` + zw + `pnz1990/admins`},
+		{"link", `[approve](https://phish.example)`, `\[approve\](https:` + zw + `//phish.example)`},
+		{"bare URL", `https://phish.example/approve`, `https:` + zw + `//phish.example/approve`},
+		{"entity", `&lt;img&gt;`, `&amp;lt;img&amp;gt;`},
+		{"escape cancelling", `\[x\](https://e)`, `\\\[x\\\](https:` + zw + `//e)`},
+		{"code and emphasis", "`x` *b* _i_ ~s~", "\\`x\\` \\*b\\* \\_i\\_ \\~s\\~"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := changeRequestBody()
+			b.ChangeRequests = []scm.ChangeRequest{{Name: "c", Ticket: tc.in, State: "approved", ProviderState: tc.in,
+				VerifiedReason: tc.in, Approvers: []string{tc.in}}}
+			body, err := scm.RenderPRBody(b)
+			require.NoError(t, err)
+			section := body[strings.Index(body, "### Change Requests"):strings.Index(body, "### Upstream Verification")]
+			assert.Contains(t, section, "\n| c | "+tc.out+" | — | approved ("+tc.out+") | no: "+tc.out+" | "+tc.out+" | — |\n")
+			for _, raw := range []string{"<a", "<img", "](", "@pnz1990", "https://", "`x`", "*b*"} {
+				assert.NotContains(t, strings.ReplaceAll(section, `\](`, ""), raw, "%s reaches the PR", raw)
+			}
+		})
+	}
+}

@@ -67,7 +67,7 @@ func (j *Jira) conf(ctx context.Context, req Request) (*kardinalv1alpha1.JiraCha
 		return nil, nil, "", "", errors.New("jira: spec.jira is not set")
 	}
 	base, err := url.Parse(strings.TrimSuffix(jc.BaseURL, "/"))
-	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" {
 		return nil, nil, "", "", errors.New("jira: baseURL must be https://<host>[/<path>]")
 	}
 	if !jiraProjectRE.MatchString(jc.Project) {

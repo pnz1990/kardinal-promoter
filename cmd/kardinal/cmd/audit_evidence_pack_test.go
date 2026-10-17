@@ -519,7 +519,8 @@ func newRedactProbe(t *testing.T) redactProbe {
 	)
 	p := redactProbe{
 		secrets: []string{token, apiKey, param, "FLAGTOKEN1", "FLAGKEY2", "FLAGPASSWORD3", "BEARERTOKEN4abc", "GHTOKEN5", "EXPORTKEY6",
-			"PASSPHRASE7", "PWD8", "AUTH9", "BEARERFLAG10", "PAT11", "PROBEPW12", "USERPASS13", "XAUTH14", "PRIV15", "DBPASS16"},
+			"PASSPHRASE7", "PWD8", "AUTH9", "BEARERFLAG10", "PAT11", "PROBEPW12", "USERPASS13", "XAUTH14", "PRIV15", "DBPASS16",
+			"TICKETPW17", "TICKETTOKEN18", "REASONPW19"},
 		command: []string{"sh", "-c", "GITHUB_TOKEN=GHTOKEN5 curl --token=FLAGTOKEN1 -H 'X: 1' --api-key 'FLAGKEY2' https://example.com; " +
 			"export API_KEY=EXPORTKEY6; DB_PASS=DBPASS16 run --path /etc --author bob"},
 		args: []string{"--password", "FLAGPASSWORD3", "--verbose", "--name", "smoke", "-H", "Authorization: Bearer BEARERTOKEN4abc",
@@ -546,6 +547,13 @@ func newRedactProbe(t *testing.T) redactProbe {
 		case *v1alpha1.Bundle:
 			if v.Name == "app-v2" {
 				v.Spec.Provenance = &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run/1?token=" + param}
+			}
+		case *v1alpha1.ChangeRequest:
+			// A ticket URL and reason with credentials (#2170 QA): the
+			// ticketing system or a template could put them there.
+			if v.Name == "cr-app-v2-prod" {
+				v.Status.Ticket.URL = "https://svc:TICKETPW17@jira.example.com/browse/CHG-1?access_token=TICKETTOKEN18"
+				v.Status.VerifiedReason = "linked from https://u:REASONPW19@jira.example.com/browse/CHG-1"
 			}
 		case *v1alpha1.AuditEvent:
 			if v.Name == "ev-0050" {
@@ -618,8 +626,19 @@ func TestEvidencePack_Redacts(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(sum[:]), digest(p.probe)["sha256"])
 
 	rules := (&redactor{}).rules()
-	assert.Equal(t, packRedactions{Rules: rules, URLCredentials: 4, EnvValues: 1, LastApplied: 1, Commands: commandsDigest, CommandDigests: 3}, m.Redactions,
-		"the git URL, the CI run URL, the AuditEvent message in auditevents.ndjson and its OCSF copy; command, args and the probe")
+	var cr map[string]interface{}
+	for _, c := range packLines(files["changerequests.ndjson"]) {
+		if c["metadata"].(map[string]interface{})["name"] == "cr-app-v2-prod" {
+			cr = c
+		}
+	}
+	require.NotNil(t, cr, "the change request is in the pack")
+	st := cr["status"].(map[string]interface{})
+	assert.Equal(t, "https://jira.example.com/browse/CHG-1?access_token=REDACTED", st["ticket"].(map[string]interface{})["url"],
+		"the ticket URL without its userinfo and token")
+	assert.NotContains(t, st["verifiedReason"], "REASONPW19")
+	assert.Equal(t, packRedactions{Rules: rules, URLCredentials: 6, EnvValues: 1, LastApplied: 1, Commands: commandsDigest, CommandDigests: 3}, m.Redactions,
+		"the git URL, the CI run URL, the AuditEvent message in auditevents.ndjson and its OCSF copy, the ticket URL and reason; command, args and the probe")
 }
 
 // TestEvidencePack_IncludeCommands (#2127, QA-2): --include-commands exports

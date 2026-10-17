@@ -152,6 +152,21 @@ type PRBody struct {
 // uses "||") would start a new cell and a newline would end the row.
 var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r", " ")
 
+// mdTextReplacer is mdCellReplacer for text from outside the cluster (a
+// ticketing system's approver names, states and keys): it also makes the
+// text inert in GitHub, GitLab and Forgejo markdown, so a display name
+// cannot put an image, a link, HTML or a team mention into a prod PR. HTML
+// is entity-escaped (& first, so an entity in the text shows as written),
+// the characters that open links, images and code are backslash-escaped
+// (the backslash too, so an escape in the text cannot cancel one), and a
+// zero-width space after "@" and inside "://" stops mentions and autolinks.
+var mdTextReplacer = strings.NewReplacer(
+	"|", `\|`, "\r\n", " ", "\n", " ", "\r", " ",
+	"&", "&amp;", "<", "&lt;", ">", "&gt;",
+	`\`, `\\`, "[", `\[`, "]", `\]`, "!", `\!`, "`", "\\`", "*", `\*`, "_", `\_`, "~", `\~`,
+	"@", "@\u200b", "://", ":\u200b//",
+)
+
 // ciRunLink renders the CI Run cell of the provenance table: a link when raw
 // passes graph.ValidateCIRunURL (an absolute http(s) URL), "—" otherwise. The
 // bundle API checks new Bundles, but a Bundle created another way or before
@@ -175,7 +190,7 @@ func ticketLink(key, raw string) string {
 	if key == "" {
 		return "—"
 	}
-	text := strings.NewReplacer("[", `\[`, "]", `\]`).Replace(mdCellReplacer.Replace(key))
+	text := mdTextReplacer.Replace(key)
 	if raw == "" || graph.ValidateCIRunURL(raw) != nil {
 		return text
 	}
@@ -201,6 +216,7 @@ func linkTarget(raw string) string {
 // prBodyFuncs are the functions of the default PR body template.
 var prBodyFuncs = template.FuncMap{
 	"mdcell": mdCellReplacer.Replace,
+	"mdtext": mdTextReplacer.Replace,
 	"cirun":  ciRunLink,
 	"ticket": ticketLink,
 	"join":   strings.Join,
@@ -288,7 +304,7 @@ Requested by: {{mdcell .RequestedBy}} (unverified)
 | Change request | Ticket | Provider | State | Verified | Approvers | Read at |
 |---|---|---|---|---|---|---|
 {{- range .ChangeRequests}}
-| {{mdcell .Name}} | {{ticket .Ticket .URL}} | {{or (mdcell .Provider) "—"}} | {{if .State}}{{mdcell .State}}{{else}}no ticket yet{{end}}{{with .ProviderState}} ({{mdcell .}}){{end}}{{if .TimedOut}}, timed out{{end}} | {{if .Verified}}yes{{else}}no{{with .VerifiedReason}}: {{mdcell .}}{{end}}{{end}} | {{if .Approvers}}{{mdcell (join .Approvers ", ")}}{{else}}—{{end}} | {{with .ObservedAt}}{{.UTC.Format "2006-01-02T15:04Z"}}{{else}}—{{end}} |
+| {{mdtext .Name}} | {{ticket .Ticket .URL}} | {{or (mdtext .Provider) "—"}} | {{if .State}}{{mdtext .State}}{{else}}no ticket yet{{end}}{{with .ProviderState}} ({{mdtext .}}){{end}}{{if .TimedOut}}, timed out{{end}} | {{if .Verified}}yes{{else}}no{{with .VerifiedReason}}: {{mdtext .}}{{end}}{{end}} | {{if .Approvers}}{{mdtext (join .Approvers ", ")}}{{else}}—{{end}} | {{with .ObservedAt}}{{.UTC.Format "2006-01-02T15:04Z"}}{{else}}—{{end}} |
 {{- end}}
 {{- end}}
 {{- end}}
