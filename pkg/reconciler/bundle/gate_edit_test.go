@@ -182,10 +182,28 @@ func TestGateEdit_ReachesPromotingBundle(t *testing.T) {
 	assert.Equal(t, before, g.gateData(t, "app-v1", "hold"), "its Graph keeps the gate it was held to")
 	assert.Equal(t, v1.Status.PolicyGatesHash, lcGet(t, g.c, "app-v1").Status.PolicyGatesHash)
 
-	// Idempotent: the next reconcile changes nothing.
+	// The next reconcile writes the GateChanged record (#2144) out of the
+	// outbox; after that, a reconcile changes nothing.
+	require.Len(t, v2.Status.PendingAuditEvents, 1)
+	lcReconcile(t, g.r, "app-v2")
+	var events kardinalv1alpha1.AuditEventList
+	require.NoError(t, g.c.List(context.Background(), &events))
+	require.Len(t, events.Items, 1, "one GateChanged, for v2 only")
+	ev := events.Items[0].Spec
+	assert.Equal(t, "GateChanged", ev.Action)
+	assert.Equal(t, "app-v2", ev.BundleName)
+	assert.Equal(t, "prod", ev.Environment)
+	require.Len(t, ev.Gates, 1)
+	assert.Equal(t, "hold", ev.Gates[0].Template)
+	assert.Equal(t, before["digest"], ev.Gates[0].OldDigest)
+	assert.Equal(t, after["digest"], ev.Gates[0].NewDigest)
+	v2 = lcGet(t, g.c, "app-v2")
+	assert.Empty(t, v2.Status.PendingAuditEvents)
 	v2Writes = g.writes("app-v2", "create")
 	lcReconcile(t, g.r, "app-v2")
 	assert.Equal(t, v2.ResourceVersion, lcGet(t, g.c, "app-v2").ResourceVersion)
+	require.NoError(t, g.c.List(context.Background(), &events))
+	assert.Len(t, events.Items, 1, "written once")
 	assert.Equal(t, v2Writes, g.writes("app-v2", "create"))
 	assert.Equal(t, 1, g.writes("app-v2", "update"))
 }
@@ -305,6 +323,9 @@ func TestGateEdit_InvalidEditKeepsBundlePromoting(t *testing.T) {
 	assert.Contains(t, synced.Message, "keeps the gates it has")
 	assert.Equal(t, built.Status.PolicyGatesHash, got.Status.PolicyGatesHash, "kept, so the edit is retried")
 	assert.Positive(t, res.RequeueAfter)
+	// An edit that was not applied is not recorded (#2144): the record is
+	// enqueued only after the re-translate succeeds.
+	assert.Empty(t, pendingActions(got, "GateChanged"), "an unbuildable edit records no GateChanged")
 
 	hold.Spec.Expression = "false"
 	require.NoError(t, c.Update(context.Background(), hold))
@@ -313,6 +334,18 @@ func TestGateEdit_InvalidEditKeepsBundlePromoting(t *testing.T) {
 	assert.True(t, meta.IsStatusConditionTrue(got.Status.Conditions, "GraphSynced"))
 	assert.NotEqual(t, built.Status.PolicyGatesHash, got.Status.PolicyGatesHash)
 	assert.Equal(t, 3, tr.calls)
+	assert.Len(t, pendingActions(got, "GateChanged"), 1, "the applied fix is recorded")
+}
+
+// pendingActions are the names of b's outbox entries with action.
+func pendingActions(b kardinalv1alpha1.Bundle, action string) []string {
+	var out []string
+	for _, e := range b.Status.PendingAuditEvents {
+		if e.Spec.Action == action {
+			out = append(out, e.Name)
+		}
+	}
+	return out
 }
 
 // #1360: a Promoting Bundle whose Graph was built before the gates hash was
@@ -349,4 +382,29 @@ func TestGateEdit_TemplateIndex(t *testing.T) {
 	assert.Nil(t, bundle.GateTemplateKey(inst))
 	assert.Nil(t, bundle.GateTemplateKey(gen))
 	assert.Nil(t, bundle.GateTemplateKey(&kardinalv1alpha1.Bundle{}))
+}
+
+// #2145: an edit reverted before the version's reconcile saw it (A, B, A)
+// leaves the same rule but a new template generation. The gates hash has
+// the generation, so the Graph is re-translated and its instances carry the
+// template's current generation; the record says the rule is the same.
+//
+// Covers GATE-EDIT-02.
+func TestGateEdit_RevertedEditRefreshesGeneration(t *testing.T) {
+	hold := gateTemplate("hold", "prod", false)
+	hold.Generation = 1
+	g := newGateEditRig(t, gateEditPipeline(), hold, gateEditBundle("app-v1", "Available", time.Now().UTC()))
+	lcReconcile(t, g.r, "app-v1")
+	before := g.gateData(t, "app-v1", "hold")
+	require.Equal(t, "1", before["generation"])
+
+	// Edited and edited back: same spec, generation 3.
+	g.editGate(t, "hold", func(p *kardinalv1alpha1.PolicyGate) { p.Generation = 3 })
+	lcReconcile(t, g.r, "app-v1")
+	after := g.gateData(t, "app-v1", "hold")
+	assert.Equal(t, "3", after["generation"], "the instances carry the current generation")
+	assert.Equal(t, before["digest"], after["digest"], "the rule is the same")
+	b := lcGet(t, g.c, "app-v1")
+	require.Len(t, b.Status.PendingAuditEvents, 1)
+	assert.Contains(t, b.Status.PendingAuditEvents[0].Spec.Message, "default/hold was edited back to the same rule (generation 1 to 3)")
 }

@@ -485,7 +485,7 @@ spec:
                                           "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
                                           "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed",
                                           "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved",
-                                          "ChangeRequestRejected".
+                                          "ChangeRequestRejected", "GateChanged".
                             The ChangeRequest actions are written by a per-promotion ChangeRequest
                             when it opens or links its ticket, and when the ticket is first read
                             approved or rejected (docs/design/23-change-requests.md section 9).
@@ -508,6 +508,11 @@ spec:
                             FreezeExempted is written once per exemption when a PromotionStep goes
                             on through an active freeze under it (kardinal override --freeze),
                             naming who made the exemption and why.
+                            GateChanged is written by the BundleReconciler when a PolicyGate
+                            template that applies to a Promoting version was created, edited or
+                            deleted and the version's Graph got the change; gates lists the
+                            templates of that rebuild with their old and new digest, one event per
+                            version and rebuild (#2144).
                             HealthCheckFailed and GateBlocked are accepted but never written: a
                             failed health check records PromotionFailed (RollbackStarted when
                             onHealthFailure is rollback), and a blocked gate records GateEvaluated
@@ -544,6 +549,7 @@ spec:
                           - ChangeRequestLinked
                           - ChangeRequestApproved
                           - ChangeRequestRejected
+                          - GateChanged
                           type: string
                         actor:
                           description: |-
@@ -641,6 +647,69 @@ spec:
                             structured values (Approval spec.fields) the gate declares, whole.
                           maxProperties: 16
                           type: object
+                        gates:
+                          description: |-
+                            Gates are the PolicyGate template changes a GateChanged event records:
+                            one event per version and rebuild, listing at most
+                            MaxAuditGateChanges changes in template order.
+                          items:
+                            description: |-
+                              AuditGateChange is a PolicyGate template's change under a version in
+                              flight: the template, and what the version's gate instances copied from
+                              it before and after (kardinal.io/gate-template-digest and -generation).
+                              An empty digest is a template that did not apply before (created) or no
+                              longer does (deleted).
+                            properties:
+                              manager:
+                                description: |-
+                                  Manager is the field manager of the template's newest managedFields
+                                  entry, as the writing client declared it (kubectl --field-manager sets
+                                  any name). It is not verified and does not say who wrote the
+                                  template: the API server's audit log does.
+                                maxLength: 128
+                                type: string
+                              namespace:
+                                description: Namespace is the template's namespace.
+                                maxLength: 63
+                                type: string
+                              newDigest:
+                                description: NewDigest is the digest the instances
+                                  have now.
+                                maxLength: 80
+                                type: string
+                              newGeneration:
+                                description: NewGeneration is the template generation
+                                  the instances have now.
+                                format: int64
+                                type: integer
+                              oldDigest:
+                                description: OldDigest is the digest the instances
+                                  had.
+                                maxLength: 80
+                                type: string
+                              oldGeneration:
+                                description: OldGeneration is the template generation
+                                  the instances had.
+                                format: int64
+                                type: integer
+                              template:
+                                description: Template is the PolicyGate template's
+                                  name.
+                                maxLength: 253
+                                type: string
+                            required:
+                            - namespace
+                            - template
+                            type: object
+                          maxItems: 20
+                          type: array
+                        gatesOmitted:
+                          description: |-
+                            GatesOmitted counts the changes of the same rebuild that Gates leaves
+                            out, past its first MaxAuditGateChanges.
+                          format: int32
+                          minimum: 0
+                          type: integer
                         message:
                           description: Message is a human-readable description of
                             the event.

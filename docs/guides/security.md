@@ -569,6 +569,7 @@ and turn it on after the export.
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion (a step that had not started writes none) |
 | `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../reject.md); a step that had not started writes none) |
 | `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
+| `GateChanged` | A PolicyGate that applies to a version in flight was created, edited or deleted, and the version's gates got the change. One record per version and rebuild, however many templates the rebuild changed: `spec.gates` lists the first 20 changes in template order, each with the template, the old and new digest and generation the version's gate copies carry and the field manager the template's last writer declared, and `spec.gatesOmitted` counts the rest; the message names the first five. An edit made and reverted before the version saw it is recorded as the same rule with a new generation. Gate copies of a version built before v0.13.0 have no digest: they are the baseline, so the first rebuild after the upgrade records only templates that are new, and later changes are measured from the digests it writes. Kubernetes keeps no record of who edited an object, so the record has no actor; the API server's audit log has the user |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal hold`, `kardinal rollback --hold`) appeared in, or left, `spec.holds`, naming who held and who released it (`kardinal unhold --reason`); or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
@@ -674,6 +675,7 @@ An event names at least one of the Pipeline, the Bundle and the environment.
 | Promotion and rollback events | The version's actor (its Bundle's `spec.actor`): the change belongs to whoever made the version |
 | `ApprovalRecorded`, `ApprovalRevoked` | The Approval's actor |
 | `GateOverridden` | The override's actor, when the identity admission policy checked it |
+| `GateChanged` | None. `spec.gates[].manager` is the field manager the writing client declared (`kubectl --field-manager` sets any name): it is not verified and does not say who wrote the template |
 | `APIWrite` | The caller, as the UI API or the Bundle API authenticated them |
 
 Its `kind`, `principal`, `agent`, `sponsor` and `via` are verified. The principal is the

@@ -66,7 +66,9 @@ to the gates.
 Each copy of a gate records the gate it came from in two annotations:
 `kardinal.io/gate-template-generation` is the gate's `metadata.generation`, and
 `kardinal.io/gate-template-digest` is `sha256:` and the SHA-256 of the gate's `spec` without
-`spec.overrides`. To see which revision of each gate holds a version:
+`spec.overrides`. The changes that reach a promoting version are recorded as one `GateChanged` AuditEvent per
+rebuild, listing each template with its old and new digest ([Events written automatically](guides/security.md#events-written-automatically)):
+`kardinal get auditevents --bundle <bundle>` lists them. To see which revision of each gate holds a version:
 
 ```bash
 kubectl get policygate -n <pipeline-namespace> -l kardinal.io/bundle=<bundle> \

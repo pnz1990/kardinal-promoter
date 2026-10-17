@@ -172,6 +172,13 @@ func TestLifecycle_GateChangeRetranslatesInFlightGraph(t *testing.T) {
 	assert.Equal(t, translator.GatesHash(lcPipeline("app", lcEnvs("test", "uat")...), gates), got.Status.PolicyGatesHash,
 		"the hash now records the gates the Graph was built with (#1360)")
 	assert.Equal(t, "Promoting", got.Status.Phase, "nothing is failing any more")
+	// The re-translate ran while the Bundle was Failed, not Promoting: a
+	// GateChanged records a change under a version in flight only (#2144).
+	assert.Empty(t, pendingActions(got, "GateChanged"))
+	lcReconcile(t, r, "app-v1")
+	var events kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(ctx, &events, client.MatchingLabels{"kardinal.io/action": "GateChanged"}))
+	assert.Empty(t, events.Items)
 }
 
 // #1312 (QA on #1487): the hash recorded is of the gates the failed build

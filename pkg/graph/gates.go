@@ -576,3 +576,40 @@ func approvalsOfItem(policies bool) string {
 
 // maxCopiedApprovals caps spec.approvals (the CRD's maxItems).
 const maxCopiedApprovals = 101
+
+// TemplateStamp is what a Graph's gate instances copied from one PolicyGate
+// template: its digest and generation (AnnotationGateTemplateDigest and
+// AnnotationGateTemplateGeneration).
+type TemplateStamp struct {
+	Digest     string
+	Generation int64
+}
+
+// TemplateStamps returns, by "namespace/name" of each template, the stamp
+// g's gate instances carry, read from its NodePolicyGateData node. A Graph
+// built before the stamps (#1360) has entries with an empty stamp; one with
+// no gates has none.
+func TemplateStamps(g *Graph) map[string]TemplateStamp {
+	out := map[string]TemplateStamp{}
+	if g == nil {
+		return out
+	}
+	for _, n := range g.Spec.Nodes {
+		if n.ID != NodePolicyGateData {
+			continue
+		}
+		templates, _ := n.Def["templates"].([]interface{})
+		for _, raw := range templates {
+			t, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _ := t["template"].(string)
+			ns, _ := t["templateNamespace"].(string)
+			digest, _ := t["digest"].(string)
+			gen, _ := strconv.ParseInt(fmt.Sprint(t["generation"]), 10, 64)
+			out[ns+"/"+name] = TemplateStamp{Digest: digest, Generation: gen}
+		}
+	}
+	return out
+}
