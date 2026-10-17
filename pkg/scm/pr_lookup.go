@@ -4,6 +4,7 @@
 package scm
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,14 @@ type FoundPR struct {
 	HeadSHA string
 	// OpenedAt is when the pull request was created.
 	OpenedAt time.Time
+	// Author is the SCM account that opened the pull request, as the SCM
+	// names it; "" when it names none.
+	Author string
+	// Unpushed is, for a merged PR findMergedPR adopted by its commit list
+	// (#2092), the commits of the PR that are not among the commits the
+	// promotion pushed: a reviewer's fixups on top of kardinal's commit.
+	// Nil when the PR's head is a commit the promotion pushed.
+	Unpushed []PRCommit
 }
 
 // OpenPRFinder is implemented by SCM providers that can find the open pull
@@ -106,18 +115,53 @@ func findMergedPR(ctx context.Context, l prLister, repo, head, base string, head
 	if err != nil {
 		return nil, err
 	}
-	var best *FoundPR
-	for i := range prs {
-		pr := prs[i]
-		if pr.OpenedAt.Before(since) || !slices.ContainsFunc(headSHAs, func(sha string) bool { return SameCommit(pr.HeadSHA, sha) }) {
-			continue
-		}
-		if best == nil || pr.OpenedAt.After(best.OpenedAt) {
-			best = &pr
+	pushed := func(sha string) bool {
+		return slices.ContainsFunc(headSHAs, func(p string) bool { return SameCommit(sha, p) })
+	}
+	var candidates []FoundPR
+	for _, pr := range prs {
+		if !pr.OpenedAt.Before(since) {
+			candidates = append(candidates, pr)
 		}
 	}
-	return best, nil
+	// Newest first: the newest PR that is the promotion's is taken.
+	slices.SortStableFunc(candidates, func(a, b FoundPR) int { return b.OpenedAt.Compare(a.OpenedAt) })
+	checked := 0
+	for _, pr := range candidates {
+		if pushed(pr.HeadSHA) {
+			return &pr, nil
+		}
+		// A reviewer's fixup on top of kardinal's commit, then the merge
+		// (#2092): the PR's commits, as the SCM keeps them, have it.
+		cl, ok := l.(prCommitLister)
+		if !ok || checked == maxPRCommitChecks {
+			continue
+		}
+		checked++
+		commits, complete, err := cl.listPRCommits(ctx, repo, pr.Number)
+		if _, none := statusIs(err, http.StatusNotFound, http.StatusForbidden); none {
+			// An SCM without the endpoint, or a token that may list PRs but
+			// not their commits: not known to be kardinal's.
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !complete || !slices.ContainsFunc(commits, func(c PRCommit) bool { return pushed(c.SHA) }) {
+			continue
+		}
+		// What the PR carries that the promotion did not push: the evidence
+		// names it (#2092, QA).
+		pr.Unpushed = slices.DeleteFunc(slices.Clone(commits), func(c PRCommit) bool { return pushed(c.SHA) })
+		return &pr, nil
+	}
+	return nil, nil
 }
+
+// maxPRCommitChecks bounds how many merged PRs of a branch findMergedPR
+// reads the commits of: the PRs of one promotion's branch since it started
+// are few.
+const maxPRCommitChecks = 3
 
 // adoptRefused is the open PR of the repository's branch head into base,
 // after the SCM refused to create it as a duplicate (createErr). A refusal
@@ -149,6 +193,7 @@ func (g *GitHubProvider) listPRs(ctx context.Context, repo, head, base string, m
 		HTMLURL   string     `json:"html_url"`
 		CreatedAt time.Time  `json:"created_at"`
 		MergedAt  *time.Time `json:"merged_at"`
+		User      *prUser    `json:"user"`
 		Head      ref        `json:"head"`
 		Base      ref        `json:"base"`
 	}
@@ -170,7 +215,7 @@ func (g *GitHubProvider) listPRs(ctx context.Context, repo, head, base string, m
 		if !sameRepo || pr.Head.Ref != head || pr.Base.Ref != base || merged != (pr.MergedAt != nil) {
 			continue
 		}
-		out = append(out, FoundPR{Number: pr.Number, URL: pr.HTMLURL, HeadSHA: pr.Head.SHA, OpenedAt: pr.CreatedAt})
+		out = append(out, FoundPR{Number: pr.Number, URL: pr.HTMLURL, HeadSHA: pr.Head.SHA, OpenedAt: pr.CreatedAt, Author: pr.User.login()})
 	}
 	return out, nil
 }
@@ -202,6 +247,9 @@ func (g *GitLabProvider) listPRs(ctx context.Context, repo, head, base string, m
 		TargetBranch    string    `json:"target_branch"`
 		SourceProjectID int       `json:"source_project_id"`
 		TargetProjectID int       `json:"target_project_id"`
+		Author          struct {
+			Username string `json:"username"`
+		} `json:"author"`
 	}
 	state := "opened"
 	if merged {
@@ -220,7 +268,7 @@ func (g *GitLabProvider) listPRs(ctx context.Context, repo, head, base string, m
 		if !sameRepo || mr.State != state || mr.SourceBranch != head || mr.TargetBranch != base {
 			continue
 		}
-		out = append(out, FoundPR{Number: mr.IID, URL: mr.WebURL, HeadSHA: mr.SHA, OpenedAt: mr.CreatedAt})
+		out = append(out, FoundPR{Number: mr.IID, URL: mr.WebURL, HeadSHA: mr.SHA, OpenedAt: mr.CreatedAt, Author: mr.Author.Username})
 	}
 	return out, nil
 }
@@ -264,6 +312,7 @@ func (f *ForgejoProvider) listPRs(ctx context.Context, repo, head, base string, 
 		HTMLURL   string    `json:"html_url"`
 		State     string    `json:"state"`
 		Merged    bool      `json:"merged"`
+		User      *prUser   `json:"user"`
 		CreatedAt time.Time `json:"created_at"`
 		Head      ref       `json:"head"`
 		Base      ref       `json:"base"`
@@ -294,7 +343,7 @@ func (f *ForgejoProvider) listPRs(ctx context.Context, repo, head, base string, 
 			if !sameRepo || pr.Head.Ref != head || pr.Base.Ref != base || pr.Merged != merged || (!merged && pr.State != "open") {
 				continue
 			}
-			out = append(out, FoundPR{Number: pr.Number, URL: pr.HTMLURL, HeadSHA: pr.Head.SHA, OpenedAt: pr.CreatedAt})
+			out = append(out, FoundPR{Number: pr.Number, URL: pr.HTMLURL, HeadSHA: pr.Head.SHA, OpenedAt: pr.CreatedAt, Author: pr.User.login()})
 		}
 		if len(prs) < forgejoPageSize {
 			return out, nil
@@ -336,11 +385,15 @@ func (b *BitbucketProvider) listPRs(ctx context.Context, repo, head, base string
 	}
 	var result struct {
 		Values []struct {
-			ID          int       `json:"id"`
-			State       string    `json:"state"`
-			CreatedOn   time.Time `json:"created_on"`
-			Source      end       `json:"source"`
-			Destination end       `json:"destination"`
+			ID        int       `json:"id"`
+			State     string    `json:"state"`
+			CreatedOn time.Time `json:"created_on"`
+			Author    struct {
+				Nickname    string `json:"nickname"`
+				DisplayName string `json:"display_name"`
+			} `json:"author"`
+			Source      end `json:"source"`
+			Destination end `json:"destination"`
 			Links       struct {
 				HTML struct {
 					Href string `json:"href"`
@@ -367,7 +420,8 @@ func (b *BitbucketProvider) listPRs(ctx context.Context, repo, head, base string
 		if !sameRepo || pr.State != state || pr.Source.Branch.Name != head || pr.Destination.Branch.Name != base {
 			continue
 		}
-		out = append(out, FoundPR{Number: pr.ID, URL: pr.Links.HTML.Href, HeadSHA: pr.Source.Commit.Hash, OpenedAt: pr.CreatedOn})
+		out = append(out, FoundPR{Number: pr.ID, URL: pr.Links.HTML.Href, HeadSHA: pr.Source.Commit.Hash, OpenedAt: pr.CreatedOn,
+			Author: cmp.Or(pr.Author.Nickname, pr.Author.DisplayName)})
 	}
 	return out, nil
 }
@@ -421,9 +475,14 @@ func (b *BitbucketDCProvider) listPRs(ctx context.Context, repo, head, base stri
 				ID          int    `json:"id"`
 				State       string `json:"state"`
 				CreatedDate int64  `json:"createdDate"`
-				FromRef     ref    `json:"fromRef"`
-				ToRef       ref    `json:"toRef"`
-				Links       struct {
+				Author      struct {
+					User struct {
+						Name string `json:"name"`
+					} `json:"user"`
+				} `json:"author"`
+				FromRef ref `json:"fromRef"`
+				ToRef   ref `json:"toRef"`
+				Links   struct {
 					Self []struct {
 						Href string `json:"href"`
 					} `json:"self"`
@@ -444,7 +503,8 @@ func (b *BitbucketDCProvider) listPRs(ctx context.Context, repo, head, base stri
 			if len(pr.Links.Self) > 0 {
 				href = pr.Links.Self[0].Href
 			}
-			out = append(out, FoundPR{Number: pr.ID, URL: href, HeadSHA: pr.FromRef.LatestCommit, OpenedAt: time.UnixMilli(pr.CreatedDate)})
+			out = append(out, FoundPR{Number: pr.ID, URL: href, HeadSHA: pr.FromRef.LatestCommit, OpenedAt: time.UnixMilli(pr.CreatedDate),
+				Author: pr.Author.User.Name})
 		}
 		if res.IsLastPage {
 			return out, nil
@@ -503,8 +563,12 @@ func (a *AzureDevOpsProvider) listPRs(ctx context.Context, repo, head, base stri
 			PullRequestID int       `json:"pullRequestId"`
 			Status        string    `json:"status"`
 			CreationDate  time.Time `json:"creationDate"`
-			SourceRefName string    `json:"sourceRefName"`
-			TargetRefName string    `json:"targetRefName"`
+			CreatedBy     struct {
+				UniqueName  string `json:"uniqueName"`
+				DisplayName string `json:"displayName"`
+			} `json:"createdBy"`
+			SourceRefName string `json:"sourceRefName"`
+			TargetRefName string `json:"targetRefName"`
 			// ForkSource is set on a PR from a fork, with the fork as its
 			// repository.
 			ForkSource            json.RawMessage `json:"forkSource"`
@@ -530,7 +594,8 @@ func (a *AzureDevOpsProvider) listPRs(ctx context.Context, repo, head, base stri
 			continue
 		}
 		out = append(out, FoundPR{Number: pr.PullRequestID, HeadSHA: pr.LastMergeSourceCommit.CommitID, OpenedAt: pr.CreationDate,
-			URL: a.prWebURL(pr.Repository.WebURL, org, project, repoName, pr.PullRequestID)})
+			Author: cmp.Or(pr.CreatedBy.UniqueName, pr.CreatedBy.DisplayName),
+			URL:    a.prWebURL(pr.Repository.WebURL, org, project, repoName, pr.PullRequestID)})
 	}
 	return out, nil
 }
@@ -633,3 +698,15 @@ var (
 	_ MergedPRFinder = (*DynamicProvider)(nil)
 	_ MergedPRFinder = (*guardedProvider)(nil)
 )
+
+// prUser is the account that opened a GitHub or Forgejo pull request.
+type prUser struct {
+	Login string `json:"login"`
+}
+
+func (u *prUser) login() string {
+	if u == nil {
+		return ""
+	}
+	return u.Login
+}
