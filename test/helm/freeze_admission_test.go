@@ -16,6 +16,7 @@ import (
 // (docs/design/18-actor-policy.md section 9.3). The controller, which writes
 // freezes for the UI's authenticated callers, is exempt.
 func TestFreezeAdmission(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "freezes")
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 1)

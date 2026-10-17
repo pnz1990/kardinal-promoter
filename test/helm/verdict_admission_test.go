@@ -15,6 +15,7 @@ import (
 // that AgentRun's Pod and is named after it, and only its writer (or the
 // garbage collector) deletes it.
 func TestIdentityAdmission_Verdicts(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "verdicts")
 	verdict := func(name, by string, groups []interface{}) map[string]interface{} {
 		return map[string]interface{}{

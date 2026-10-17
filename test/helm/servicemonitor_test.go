@@ -22,6 +22,7 @@ func findKind(docs []map[string]interface{}, kind string) []map[string]interface
 }
 
 func TestHelmTemplateServiceMonitorDisabledByDefault(t *testing.T) {
+	t.Parallel()
 	docs := renderChart(t, "kardinal-promoter")
 	assert.Empty(t, findKind(docs, "ServiceMonitor"),
 		"ServiceMonitor must not be rendered by default: its CRD exists only with Prometheus Operator")
@@ -32,6 +33,7 @@ func TestHelmTemplateServiceMonitorDisabledByDefault(t *testing.T) {
 // Prometheus Operator sets the job label to the Service name, so the Service
 // must be named fullname for the PrometheusRule alerts (job="<fullname>") to match.
 func TestHelmTemplateServiceMonitorScrapesMetricsService(t *testing.T) {
+	t.Parallel()
 	const release = "kp"
 	docs := renderChart(t, release,
 		"--namespace", "kardinal-system",
@@ -106,6 +108,7 @@ func TestHelmTemplateServiceMonitorScrapesMetricsService(t *testing.T) {
 }
 
 func TestHelmTemplateServiceMonitorNoIntervalByDefault(t *testing.T) {
+	t.Parallel()
 	docs := renderChart(t, "kardinal-promoter", "--set", "serviceMonitor.enabled=true")
 	sms := findKind(docs, "ServiceMonitor")
 	require.Len(t, sms, 1)

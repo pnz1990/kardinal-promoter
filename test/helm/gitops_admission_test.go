@@ -89,6 +89,7 @@ func gitopsAdmits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmission
 // status, operation, labels, annotations, finalizers or owner references is
 // denied unless it may update the object. Other users are not matched.
 func TestHelmTemplateGitOpsWritesPolicy(t *testing.T) {
+	t.Parallel()
 	vap, binding := gitopsWritesPolicy(t)
 	assert.Equal(t, admissionregistrationv1.Fail, *vap.Spec.FailurePolicy)
 	assert.Equal(t, []admissionregistrationv1.ValidationAction{"Deny"}, binding.Spec.ValidationActions)

@@ -63,6 +63,7 @@ func helmBin(t *testing.T) string {
 }
 
 func TestChartDirectoryExists(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
 	info, err := os.Stat(chartDir)
@@ -71,6 +72,7 @@ func TestChartDirectoryExists(t *testing.T) {
 }
 
 func TestChartYamlExists(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	chartYAML := filepath.Join(root, "chart", "kardinal-promoter", "Chart.yaml")
 	_, err := os.Stat(chartYAML)
@@ -78,6 +80,7 @@ func TestChartYamlExists(t *testing.T) {
 }
 
 func TestValuesYamlExists(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	valuesYAML := filepath.Join(root, "chart", "kardinal-promoter", "values.yaml")
 	_, err := os.Stat(valuesYAML)
@@ -85,6 +88,7 @@ func TestValuesYamlExists(t *testing.T) {
 }
 
 func TestRequiredTemplatesExist(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	templates := []string{
 		"deployment.yaml",
@@ -103,6 +107,7 @@ func TestRequiredTemplatesExist(t *testing.T) {
 }
 
 func TestHelmLint(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -115,6 +120,7 @@ func TestHelmLint(t *testing.T) {
 }
 
 func TestHelmTemplate(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -144,6 +150,7 @@ func TestHelmTemplate(t *testing.T) {
 // the Graph applier ClusterRole: no reader ClusterRole is shipped (#1283).
 // Setting the removed graph.readerNamespaces fails the install, saying why.
 func TestHelmTemplateGraphRBAC(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -176,6 +183,7 @@ func TestHelmTemplateGraphRBAC(t *testing.T) {
 }
 
 func TestHelmTemplateContainerImage(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -190,6 +198,7 @@ func TestHelmTemplateContainerImage(t *testing.T) {
 }
 
 func TestHelmTemplatePorts(t *testing.T) {
+	t.Parallel()
 	ports := map[int64]bool{}
 	for _, d := range renderChart(t, "kardinal-promoter") {
 		if d["kind"] != "Deployment" {
@@ -215,6 +224,7 @@ func TestHelmTemplatePorts(t *testing.T) {
 // kardinal, whose object names differ from kardinal-promoter. (The Graph
 // ServiceAccount is created by the controller in each Graph's namespace.)
 func TestHelmTemplateGraphFlagsNameRenderedObjects(t *testing.T) {
+	t.Parallel()
 	for _, release := range []string{"kardinal-promoter", "kardinal"} {
 		t.Run(release, func(t *testing.T) {
 			have := map[string]bool{}
@@ -284,6 +294,7 @@ func dig(v interface{}, keys ...string) interface{} {
 // controller Service's DNS names plus ui.allowedHosts, and that the schema
 // rejects an entry with a scheme (the controller would refuse to start).
 func TestHelmTemplateUIAllowedHosts(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -308,6 +319,7 @@ func TestHelmTemplateUIAllowedHosts(t *testing.T) {
 // while tracing is off, the flags when it is on (samplingRatio 0 included),
 // and the schema refuses a bad endpoint or ratio.
 func TestHelmTemplateTracing(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
 
@@ -340,6 +352,7 @@ func TestHelmTemplateTracing(t *testing.T) {
 // --egress-allowlist (and nothing when empty, which keeps the default of no
 // allowlist), and that the schema rejects a URL instead of a host or CIDR.
 func TestHelmTemplateEgressAllowlist(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
 
@@ -360,6 +373,7 @@ func TestHelmTemplateEgressAllowlist(t *testing.T) {
 }
 
 func TestDockerignoreExists(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	dockerignore := filepath.Join(root, ".dockerignore")
 	_, err := os.Stat(dockerignore)
@@ -367,6 +381,7 @@ func TestDockerignoreExists(t *testing.T) {
 }
 
 func TestDockerfileExists(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	dockerfile := filepath.Join(root, "Dockerfile")
 	_, err := os.Stat(dockerfile)
@@ -374,6 +389,7 @@ func TestDockerfileExists(t *testing.T) {
 }
 
 func TestHelmTemplatePDBCreatedForMultiReplica(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -393,6 +409,7 @@ func TestHelmTemplatePDBCreatedForMultiReplica(t *testing.T) {
 }
 
 func TestHelmTemplatePDBNotCreatedForSingleReplica(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -408,6 +425,7 @@ func TestHelmTemplatePDBNotCreatedForSingleReplica(t *testing.T) {
 }
 
 func TestHelmTemplateTopologySpreadForMultiReplica(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -427,6 +445,7 @@ func TestHelmTemplateTopologySpreadForMultiReplica(t *testing.T) {
 }
 
 func TestHelmTemplatePrometheusRuleDisabledByDefault(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -442,6 +461,7 @@ func TestHelmTemplatePrometheusRuleDisabledByDefault(t *testing.T) {
 }
 
 func TestHelmTemplatePrometheusRuleEnabledWhenConfigured(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -491,6 +511,7 @@ func TestHelmTemplatePrometheusRuleEnabledWhenConfigured(t *testing.T) {
 }
 
 func TestHelmTemplatePrometheusRuleAdditionalLabels(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
@@ -550,6 +571,7 @@ func rulesGrant(d map[string]interface{}, group, resource, verb string) bool {
 // release's roles only, the aggregation into view/edit/admin and its opt-out,
 // and nothing when disabled.
 func TestHelmTemplateUserRoles(t *testing.T) {
+	t.Parallel()
 	roles := userRoles(renderChart(t, "kardinal-promoter"), "kardinal-promoter")
 	require.Len(t, roles, 5)
 	viewer, promoter, approver, admin := roles["viewer"], roles["promoter"], roles["approver"], roles["admin"]
@@ -621,6 +643,7 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 // API-server-audience opt-in and the refusal of a static UI token together
 // with TokenReview.
 func TestHelmTemplateTokenReviewOptions(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
 	render := func(args ...string) (string, error) {
@@ -685,6 +708,7 @@ func TestHelmTemplateTokenReviewOptions(t *testing.T) {
 // TestHelmTemplateBundleAPITokenReview verifies bundleAPI.tokenReview: the
 // flag and the TokenReview/SubjectAccessReview grants.
 func TestHelmTemplateBundleAPITokenReview(t *testing.T) {
+	t.Parallel()
 	helm := helmBin(t)
 	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
 	out, err := exec.Command(helm, "template", "kardinal-promoter", chartDir).CombinedOutput()
@@ -721,6 +745,7 @@ func kroWatchRules(t *testing.T, rendered string) string {
 //
 // Covers EVIDENCE-PACK-AUDITOR-01.
 func TestHelmTemplateAuditorRole(t *testing.T) {
+	t.Parallel()
 	roles := map[string]map[string]interface{}{}
 	for _, d := range renderChart(t, "kardinal-promoter") {
 		if name, _ := dig(d, "metadata", "name").(string); d["kind"] == "ClusterRole" &&

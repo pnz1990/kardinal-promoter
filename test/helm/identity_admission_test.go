@@ -138,6 +138,7 @@ func admitsGroups(t *testing.T, vap *admissionregistrationv1.ValidatingAdmission
 // requesting user; Bundles without one, and the existing rejection of a
 // Bundle being updated (the CRD keeps it immutable), are not checked.
 func TestIdentityAdmission_BundleRejection(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "bundle-rejection")
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 1)
@@ -190,6 +191,7 @@ func TestIdentityAdmission_BundleRejection(t *testing.T) {
 // the UI; and only kro (the namespace's Graph ServiceAccount) and the
 // controller change a gate instance's expression, skipPermission or labels.
 func TestIdentityAdmission_GateOverrides(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "gate-overrides")
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 1)
@@ -314,6 +316,7 @@ func TestIdentityAdmission_GateOverrides(t *testing.T) {
 // this release's controller; another release's controller in another
 // namespace is not refused by them. Cluster mode binds every namespace.
 func TestIdentityAdmission_NamespaceMode(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want map[string]string
@@ -351,6 +354,7 @@ func TestIdentityAdmission_NamespaceMode(t *testing.T) {
 // policy compares every PolicyGate spec field but overrides, so a field added
 // to the API cannot be changed on a gate instance by hand unnoticed.
 func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "gate-overrides")
 	var only string
 	for _, v := range vap.Spec.Variables {
@@ -396,6 +400,7 @@ func TestIdentityAdmission_GateInstanceFieldsComplete(t *testing.T) {
 // kardinal.io/bundle and kardinal.io/environment labels equal to the spec;
 // the labels cannot change later.
 func TestIdentityAdmission_Approvals(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "approvals")
 	approval := func(user string, groups []interface{}, bundleLabel, envLabel string) map[string]interface{} {
 		labels := map[string]interface{}{}
@@ -540,6 +545,7 @@ func operation(obj, old map[string]interface{}) string {
 // be the requester; it cannot be added, changed or removed later; the
 // controller names the creator of the Bundles it creates.
 func TestIdentityAdmission_BundleCreator(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "bundle-creator")
 	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
 	bundle := func(creator string) map[string]interface{} {
@@ -601,6 +607,7 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 //
 // Covers GRAPH-OBJECTS-03.
 func TestIdentityAdmission_GraphObjects(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "graph-objects")
 	rules := vap.Spec.MatchConstraints.ResourceRules
 	require.Len(t, rules, 4)
@@ -759,6 +766,7 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 // update that adds the label is refused for everyone, kro and the controller
 // included, so the promotion waits until it is deleted.
 func TestIdentityAdmission_GateAdoptionRefused(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "gate-overrides")
 	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
 	gate := func(instance bool, extra map[string]interface{}) map[string]interface{} {
@@ -790,6 +798,7 @@ func TestIdentityAdmission_GateAdoptionRefused(t *testing.T) {
 // never refuse another shard's controller; the default shard also binds the
 // unlabelled namespaces, through a second binding per policy.
 func TestIdentityAdmission_ShardMode(t *testing.T) {
+	t.Parallel()
 	bindings := func(args ...string) map[string]admissionregistrationv1.ValidatingAdmissionPolicyBinding {
 		out := map[string]admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
 		for _, d := range render(t, "kardinal-promoter", args...) {
@@ -869,6 +878,7 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 // pod-name in userInfo.extra: kro impersonates it, while a token minted for it
 // (kubectl create token) or a Pod running as it carries one (ledger G16).
 func TestIdentityAdmission_GateOverridesImpersonated(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "gate-overrides")
 	const graphSA = "system:serviceaccount:team-a:kardinal-graph"
 	gate := func(expr string) map[string]interface{} {
@@ -903,6 +913,7 @@ func TestIdentityAdmission_GateOverridesImpersonated(t *testing.T) {
 // checking the virtual subresources with the authorizer, and bound to the
 // watched namespace only in namespace mode.
 func TestHelmTemplateScopedWritesPolicy(t *testing.T) {
+	t.Parallel()
 	find := func(docs []map[string]interface{}, kind string) map[string]interface{} {
 		for _, d := range docs {
 			if d["kind"] == kind && dig(d, "metadata", "name") == "kardinal-promoter-scoped-writes" {
@@ -1012,6 +1023,7 @@ func scopedAdmits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmission
 // authorizer on the object; the controller and the Graph ServiceAccount are
 // exempt.
 func TestScopedWrites_AuthorizerVariables(t *testing.T) {
+	t.Parallel()
 	vap := scopedWritesPolicy(t)
 	vars := map[string]string{}
 	for _, v := range vap.Spec.Variables {
@@ -1040,6 +1052,7 @@ func actorCheck(v string) func(map[string]interface{}) {
 }
 
 func TestScopedWrites_Rules(t *testing.T) {
+	t.Parallel()
 	vap := scopedWritesPolicy(t)
 	const alice = "system:serviceaccount:team-a:alice"
 	meta := func(mod func(m map[string]interface{})) map[string]interface{} {
@@ -1183,6 +1196,7 @@ func TestScopedWrites_Rules(t *testing.T) {
 // ui_api.go and policygate.DefaultMaxOverride) and the scoped-writes
 // policy's bound, so the three never differ.
 func TestGateOverrideCapIsOneValue(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -1216,6 +1230,7 @@ func TestGateOverrideCapIsOneValue(t *testing.T) {
 // namespace's Graph ServiceAccount are exempt; anyone else, a lookalike
 // included, is not.
 func TestScopedWrites_ExemptUsers(t *testing.T) {
+	t.Parallel()
 	const other = "system:serviceaccount:kardinal-system:kardinal-promoter-b"
 	vap := scopedWritesPolicy(t, "--set", "admission.controllerUsernames={"+other+"}")
 	var exempt string

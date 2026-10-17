@@ -69,6 +69,9 @@ type webhookServer struct {
 	// maxWebhookLimiters.
 	limitersMu sync.Mutex
 	limiters   *lru.Cache
+	// now is the buckets' clock (nil: time.Now); tests stop it, so a bucket
+	// refills only when they move it.
+	now func() time.Time
 }
 
 // newWebhookServerWithConfig constructs a webhookServer and records whether a webhook
@@ -194,7 +197,11 @@ func (s *webhookServer) allowDelivery(uid string) bool {
 		l = rate.NewLimiter(providerWebhookRate, providerWebhookBurst)
 		s.limiters.Add(uid, l)
 	}
-	return l.Allow()
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	return l.AllowN(now(), 1)
 }
 
 // handle validates and acts on one webhook delivery: parser checks the

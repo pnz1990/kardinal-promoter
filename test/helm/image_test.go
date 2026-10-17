@@ -72,6 +72,7 @@ func readRepoFile(t *testing.T, rel string) string {
 // BUILDPLATFORM and compile or download for TARGETARCH, and the final stage
 // runs nothing, so no stage depends on emulation or on a hardcoded arch.
 func TestDockerfileBuildsForTheTargetPlatform(t *testing.T) {
+	t.Parallel()
 	stages := dockerStages(readRepoFile(t, "Dockerfile"))
 	require.GreaterOrEqual(t, len(stages), 2, "expected build stages and a runtime stage")
 
@@ -115,6 +116,7 @@ func TestDockerfileBuildsForTheTargetPlatform(t *testing.T) {
 }
 
 func TestDockerStagesSplitsStages(t *testing.T) {
+	t.Parallel()
 	stages := dockerStages("# c\nFROM --platform=$BUILDPLATFORM a AS b\nRUN x \\\n  y\n# RUN z\nFROM c\nUSER 1\n")
 	require.Len(t, stages, 2)
 	assert.Equal(t, []string{"RUN x y"}, stages[0].instructions)
@@ -222,6 +224,7 @@ func declaresStringVar(t *testing.T, dir, name string) bool {
 // workflow and the Dockerfile names a string variable that exists, so the
 // shipped binaries report the release version.
 func TestBuildLdflagsNameExistingVariables(t *testing.T) {
+	t.Parallel()
 	var all []ldflagsVar
 	for _, f := range []string{".github/workflows/release.yml", "Dockerfile"} {
 		vars, err := ldflagsVars(f, readRepoFile(t, f))
@@ -240,6 +243,7 @@ func TestBuildLdflagsNameExistingVariables(t *testing.T) {
 }
 
 func TestLdflagsCheckCatchesKnownMistakes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		script string

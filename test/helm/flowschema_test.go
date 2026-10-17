@@ -31,6 +31,7 @@ func flowSchemas(t *testing.T, args ...string) []map[string]interface{} {
 //
 // Covers CHART-LEASE-APF-01.
 func TestChartLeaderElectionFlowSchema(t *testing.T) {
+	t.Parallel()
 	api := "--api-versions=flowcontrol.apiserver.k8s.io/v1"
 	fs := flowSchemas(t, api)
 	require.Len(t, fs, 1)

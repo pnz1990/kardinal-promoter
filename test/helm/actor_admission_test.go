@@ -143,6 +143,7 @@ func gateObj(t *testing.T, ns, env string, overrides ...v1alpha1.PolicyGateOverr
 // actor.Derive and actor.Scope: the policy is a transliteration of them, and
 // the two must agree on every case.
 func TestActorAdmission(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "actor")
 	require.NotNil(t, vap.Spec.ParamKind)
 	assert.Equal(t, "AgentIndex", vap.Spec.ParamKind.Kind)
@@ -270,6 +271,7 @@ func TestActorAdmission(t *testing.T) {
 // judges, people's included, until the controller has built it: the
 // registry fails closed. A Ready index with no agents admits people and bots.
 func TestActorAdmission_IndexNotReady(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "actor")
 	req := actorReq{resource: "bundles", namespace: "x", user: "alice", object: bundleObj(t, "x", "checkout", nil)}
 	empty := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
@@ -289,6 +291,7 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 // TestActorAdmission_Binding: the binding reads the release's AgentIndex and
 // denies when it is missing (fail closed).
 func TestActorAdmission_Binding(t *testing.T) {
+	t.Parallel()
 	for _, d := range render(t, "kardinal-promoter") {
 		if d.Kind != "ValidatingAdmissionPolicyBinding" || d.Name != "kardinal-promoter-actor" {
 			continue
@@ -308,6 +311,7 @@ func TestActorAdmission_Binding(t *testing.T) {
 // TestAuditActorAdmission: only the controller writes an AuditEvent that
 // names an actor; one without is admitted as before.
 func TestAuditActorAdmission(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "audit-actor")
 	ev := func(a *v1alpha1.Actor) map[string]interface{} {
 		return asMap(t, v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: "e", Namespace: "x"},
@@ -322,6 +326,7 @@ func TestAuditActorAdmission(t *testing.T) {
 // TestAgentIdentityDeleteAdmission: an AgentIdentity is deleted only once
 // suspended.
 func TestAgentIdentityDeleteAdmission(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "agent-identities")
 	id := func(suspended bool) map[string]interface{} {
 		return asMap(t, v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "fixer"},
@@ -340,6 +345,7 @@ func TestAgentIdentityDeleteAdmission(t *testing.T) {
 //
 // Covers ACTOR-PERF-01.
 func TestActorPolicies_Match(t *testing.T) {
+	t.Parallel()
 	actorVAP, gates := identityPolicy(t, "actor"), identityPolicy(t, "actor-overrides")
 	require.Len(t, actorVAP.Spec.MatchConstraints.ResourceRules, 2)
 	r := actorVAP.Spec.MatchConstraints.ResourceRules[0]
@@ -371,6 +377,7 @@ func TestActorPolicies_Match(t *testing.T) {
 //
 // Covers ACTOR-PERF-01.
 func TestOverrideMarkerAdmission(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "override-marker")
 	assert.Nil(t, vap.Spec.ParamKind, "no params: it judges every gate write at no cost that grows with the registry")
 	o := v1alpha1.PolicyGateOverride{Reason: "r", ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), CreatedBy: "alice"}
@@ -418,6 +425,7 @@ func TestOverrideMarkerAdmission(t *testing.T) {
 //
 // Covers ACTOR-ADMIT-06.
 func TestAgentIndexChart(t *testing.T) {
+	t.Parallel()
 	var found bool
 	for _, d := range render(t, "kardinal-promoter") {
 		if d.Kind != "AgentIndex" {
@@ -455,6 +463,7 @@ func TestAgentIndexChart(t *testing.T) {
 // freeze an agent lifted is admitted on their own stamp (QA on #1959: the
 // lifted clause of freezeStamps had no test).
 func TestActorAdmission_FreezeLift(t *testing.T) {
+	t.Parallel()
 	vap := identityPolicy(t, "actor")
 	ready := *actorRegistry(t)
 	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}

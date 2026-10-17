@@ -97,6 +97,7 @@ func holdAdmits(t *testing.T, vap *admissionregistrationv1.ValidatingAdmissionPo
 // and have a createdAt (an expiresAt after it), entries are not edited in
 // place, the controller is exempt, and other Pipeline edits pass.
 func TestHelmTemplateHoldWritesPolicy(t *testing.T) {
+	t.Parallel()
 	vap, binding := holdWritesPolicy(t)
 	rule := vap.Spec.MatchConstraints.ResourceRules[0]
 	assert.ElementsMatch(t, []admissionregistrationv1.OperationType{"CREATE", "UPDATE"}, rule.Operations)

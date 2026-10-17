@@ -20,6 +20,7 @@ import (
 //
 // Covers FLEET-14.
 func TestFleetsPolicy(t *testing.T) {
+	t.Parallel()
 	var vap *admissionregistrationv1.ValidatingAdmissionPolicy
 	bound := false
 	for _, d := range render(t, "kardinal-promoter") {
