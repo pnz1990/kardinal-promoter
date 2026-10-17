@@ -48,21 +48,23 @@ the extension field `kardinalPromotion`, which those tools ignore.
 | `verifiedLevels` | What the record shows, and nothing more: `KARDINAL_GATES_PASSED` (every required gate passed), `KARDINAL_APPROVED` (at least one counted approval), `KARDINAL_VERIFIED_BY_AGENT` (a verify gate counted a passing Verdict), `KARDINAL_HEALTHY` (the health check passed), `KARDINAL_OVERRIDDEN` (a gate passed by override). |
 | `kardinalPromotion.version` | The Bundle: name, UID, version, type, images, config commit, provenance. |
 | `kardinalPromotion.actor` | Who made the version and for whom ([the actor](actors.md#the-actor)); asserted fields stay under `asserted`. |
-| `kardinalPromotion.gates` | Each required gate **as it was when the step started**: expression, result, reason, when it was evaluated, the override in effect (with its actor and whether it was verified), its approvals and, for a verify gate, its Verdicts, with whether each counted. |
+| `kardinalPromotion.gates` | Each required gate **as it was when the step started**: expression, result, reason, when it was evaluated, the override in effect (with its actor and whether it was verified), its approvals (with their structured [fields](approvals.md#approval-fields)) and, for a verify gate, its Verdicts, with whether each counted. |
+| `kardinalPromotion.changeRequests` | Each [change request](change-requests.md) ticket of the version in the environment, **as it was when the step started**: template, instance, provider, ticket key and URL, state and the provider's state, whether the ticket is the promotion's (`verified`, and `verifiedReason`), approvers, `timedOut`, and when it was read (`observedAt`) and until when that reading counted (`validUntil`). Left out when there is none. |
 | `kardinalPromotion.checks` | The per-promotion MetricCheck results, the ImageVerification result per image, and the health check. |
 | `kardinalPromotion.change` | The environment and the PR (URL, number, merge commit), or the commit pushed for `approval: auto`. |
 | `kardinalPromotion.rollbackOf` | The version a rollback restores. |
 
 ### Gates are recorded when the step starts
 
-When a step leaves Pending, it records the gates it just checked in `status.decision`, in the
-same write that moves it to Promoting. The receipt uses that record, not the gates at Verified.
+When a step leaves Pending, it records the gates it just checked, and its change request
+tickets, in `status.decision`, in the same write that moves it to Promoting. The receipt uses that record, not the gates at Verified.
 A schedule gate that passed at 10:00 and reads false at 10:20, when the health check ends, is
 recorded as passed: that is what the promotion started on.
 
 The record is bounded (128 KiB): it leaves out what a receipt never shows (an approval's
 comment, a Verdict's summary), and a step with many heavy gates keeps the approvals and Verdicts
-that counted, cuts long texts to 1 KiB, and then leaves out the last gates (`omittedGates`); the
+that counted, cuts long texts to 1 KiB and drops the change requests' approvers (counted in
+`approversOmitted`), and then leaves out the last gates (`omittedGates`); the
 receipt says so (`truncated: true`, the gates left out in `omittedGateNames`, and `truncated` on
 each gate it cut), and its policy digest still covers every gate. The receipt's levels are
 decided over every gate before any cut: a gate passed by an override and left out still makes
@@ -77,7 +79,7 @@ read when the step was verified".
 ### Size
 
 A receipt is at most 256 KiB. Past that, the approvals and Verdicts that did not count are dropped
-first (counted in `approvalsOmitted` and `verdictsOmitted`), then long gate texts are cut, then the gates after the first
+first (counted in `approvalsOmitted` and `verdictsOmitted`), then long gate texts are cut and the change requests' approvers dropped (`approversOmitted`), then the gates after the first
 and the metrics. `truncated: true` says so. The levels are those of the full record.
 
 ### Credentials are redacted

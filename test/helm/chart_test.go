@@ -758,6 +758,7 @@ func TestHelmTemplateAuditorRole(t *testing.T) {
 		"AuditEvent": "auditevents", "Approval": "approvals", "PolicyGate": "policygates", "Bundle": "bundles",
 		"Pipeline": "pipelines", "ChangeWindow": "changewindows", "AgentIdentity": "agentidentities", "Verdict": "verdicts",
 		"PromotionReceipt": "promotionreceipts",
+		"ChangeRequest":    "changerequests",
 	}
 	// Each kind's scope, from its CRD.
 	var namespaced, cluster []string

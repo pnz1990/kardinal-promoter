@@ -101,10 +101,13 @@ func approved(element string) Evidence {
 		Element: element,
 		Record: "approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` " +
 			"(who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit " +
-			"status; an `auto` environment records none",
-		Kinds:   []string{"PolicyGate", "Approval", "Pipeline"},
-		Actions: []string{"ApprovalRecorded", "ApprovalRevoked", "GateEvaluated", "PRMerged"},
-		Status:  Shipped,
+			"status; an `auto` environment records none. A gate that reads `changeRequests` waits for the change request " +
+			"in ServiceNow or Jira: the `ChangeRequest` instance records the ticket, its state and approvers, and whether a " +
+			"linked ticket was verified as the promotion's",
+		Kinds: []string{"PolicyGate", "Approval", "Pipeline", "ChangeRequest"},
+		Actions: []string{"ApprovalRecorded", "ApprovalRevoked", "GateEvaluated", "PRMerged",
+			"ChangeRequestApproved", "ChangeRequestRejected"},
+		Status: Shipped,
 	}
 }
 

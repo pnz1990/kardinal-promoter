@@ -69,10 +69,13 @@ type mockSCM struct {
 	deleted    []string // "repo:branch" of every DeleteBranch call
 
 	labelsErr error // returned by AddLabelsToPR
+
+	bodies []string // body of every OpenPR call
 }
 
-func (m *mockSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
+func (m *mockSCM) OpenPR(_ context.Context, _, _, body, _, _ string) (string, int, error) {
 	m.openCalled++
+	m.bodies = append(m.bodies, body)
 	return m.prURL, m.prNumber, m.openPRErr
 }
 

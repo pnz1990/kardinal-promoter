@@ -116,10 +116,13 @@ type Record struct {
 	// OmittedGateNames name the gates the snapshot left out.
 	OmittedGateNames []string `json:"omittedGateNames,omitempty"`
 	Checks           Checks   `json:"checks"`
-	Change           Change   `json:"change"`
-	Controller       string   `json:"controller,omitempty"`
-	Chart            string   `json:"chart,omitempty"`
-	Truncated        bool     `json:"truncated"`
+	// ChangeRequests are the step's change request tickets as it started
+	// on them: the inputs its gates read as changeRequests.<name>.
+	ChangeRequests []ChangeRequest `json:"changeRequests,omitempty"`
+	Change         Change          `json:"change"`
+	Controller     string          `json:"controller,omitempty"`
+	Chart          string          `json:"chart,omitempty"`
+	Truncated      bool            `json:"truncated"`
 	// Redacted are the JSON paths of the strings redacted before signing
 	// (the userinfo of a URL, the value of a credential parameter such as
 	// ?token=): a receipt is signed and may be published for good, so a
@@ -189,6 +192,31 @@ type Approval struct {
 	Decision string          `json:"decision"`
 	Counted  bool            `json:"counted"`
 	Reason   string          `json:"reason,omitempty"`
+	// Fields are the decision's structured values (each cut to 256 bytes
+	// on the gate): statements by the approver, not facts.
+	Fields map[string]string `json:"fields,omitempty"`
+}
+
+// ChangeRequest is one change request ticket of the promotion.
+type ChangeRequest struct {
+	// Name is the ChangeRequest template, as gates read it.
+	Name     string `json:"name"`
+	Instance string `json:"instance"`
+	Provider string `json:"provider,omitempty"`
+	// Ticket is the ticket's key and URL; empty when it had none yet.
+	Ticket        string `json:"ticket,omitempty"`
+	URL           string `json:"url,omitempty"`
+	State         string `json:"state,omitempty"`
+	ProviderState string `json:"providerState,omitempty"`
+	// Verified: the ticket is this promotion's (opened by kardinal, or a
+	// link the reconciler verified).
+	Verified         bool     `json:"verified"`
+	VerifiedReason   string   `json:"verifiedReason,omitempty"`
+	Approvers        []string `json:"approvers,omitempty"`
+	ApproversOmitted int      `json:"approversOmitted,omitempty"`
+	TimedOut         bool     `json:"timedOut,omitempty"`
+	ObservedAt       string   `json:"observedAt,omitempty"`
+	ValidUntil       string   `json:"validUntil,omitempty"`
 }
 
 // Checks are the per-promotion checks at Verified.
@@ -376,6 +404,9 @@ func statement(in Input) (Statement, error) {
 		for i := range d.Gates {
 			rec.Gates = append(rec.Gates, gate(&d.Gates[i]))
 		}
+		for i := range d.ChangeRequests {
+			rec.ChangeRequests = append(rec.ChangeRequests, changeRequest(&d.ChangeRequests[i]))
+		}
 	}
 	// Every string of the record and every subject name, redacted before
 	// signing: the paths changed are recorded in kardinalPromotion.redacted.
@@ -473,12 +504,31 @@ func gate(g *v1alpha1.DecisionGate) Gate {
 		}
 	}
 	for _, a := range g.Approvals {
-		out.Approvals = append(out.Approvals, Approval{User: a.User, Actor: a.Actor, Decision: a.Decision, Counted: a.Counted, Reason: a.Reason})
+		out.Approvals = append(out.Approvals, Approval{User: a.User, Actor: a.Actor, Decision: a.Decision, Counted: a.Counted,
+			Reason: a.Reason, Fields: a.Fields})
 	}
 	out.VerifyRequired, out.Truncated = g.VerifyRequired, g.Truncated
 	for _, v := range g.Verdicts {
 		out.Verdicts = append(out.Verdicts, Verdict{Name: v.Name, Verifier: v.Verifier, Result: v.Result, Counted: v.Counted,
 			Reason: v.Reason, EvidenceURL: v.EvidenceURL, Findings: v.Findings})
+	}
+	return out
+}
+
+func changeRequest(c *v1alpha1.DecisionChangeRequest) ChangeRequest {
+	out := ChangeRequest{Name: c.Name, Instance: c.Instance, Provider: c.Provider, State: c.State, ProviderState: c.ProviderState,
+		Verified: c.Verified, VerifiedReason: c.VerifiedReason, ApproversOmitted: c.ApproversOmitted, TimedOut: c.TimedOut}
+	if c.Ticket != nil {
+		out.Ticket, out.URL = c.Ticket.Key, c.Ticket.URL
+	}
+	for _, a := range c.Approvers {
+		out.Approvers = append(out.Approvers, a.Name)
+	}
+	if c.ObservedAt != nil {
+		out.ObservedAt = stamp(c.ObservedAt.Time)
+	}
+	if c.ValidUntil != nil {
+		out.ValidUntil = stamp(c.ValidUntil.Time)
 	}
 	return out
 }
@@ -609,7 +659,8 @@ func levels(rec Record, facts *v1alpha1.DecisionFacts) []string {
 const maxCutField = 1024
 
 // fit marshals st, cutting it to MaxReceiptStatementBytes: first the
-// approvals and Verdicts that did not count, then long gate texts, then the gates past
+// approvals and Verdicts that did not count, then long gate texts and the
+// change requests' approvers, then the gates past
 // the first and the metrics; each cut is counted and sets truncated. The
 // verifiedLevels stay those of the full record.
 func fit(st *Statement) ([]byte, error) {
@@ -641,6 +692,11 @@ func fit(st *Statement) ([]byte, error) {
 			for i := range r.Gates {
 				g := &r.Gates[i]
 				g.Expression, g.Message, g.Reason = cut(g.Expression), cut(g.Message), cut(g.Reason)
+			}
+			for i := range r.ChangeRequests {
+				c := &r.ChangeRequests[i]
+				c.ApproversOmitted += len(c.Approvers)
+				c.Approvers = nil
 			}
 		},
 		func(r *Record) {

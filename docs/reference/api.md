@@ -1016,7 +1016,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].path` | string |  | Path is the subdirectory within the GitOps repository for this environment. Used when spec.git.layout is "directory". Defaults to "environments/&lt;name&gt;". |
 | `spec.environments[].pr` | object |  | PR configures the pull request a pr-review environment opens: its title and body, labels, reviewers, assignees, and whether the SCM merges it on its own once its checks and approvals pass (auto-merge). Every string is a Go text/template over the Bundle and the environment (see docs/pr-evidence.md#customising-the-pr). The Pipeline is Ready=False/ValidationFailed when a template does not parse or execute, and a control the SCM provider does not support fails the step before the PR is opened (docs/scm-providers.md#pr-controls). |
 | `spec.environments[].pr.assignees` | []string |  | Assignees are the users the PR is assigned to (templates, one user per output line). "{{ .Bundle.Author }}" assigns the author recorded in the Bundle's provenance. |
-| `spec.environments[].pr.bodyTemplate` | string |  | BodyTemplate replaces the default body. The evidence sections are template functions (evidence, provenanceTable, gatesTable, verificationTable, upstreamTable, rollbackNotice), so a custom body can keep them. |
+| `spec.environments[].pr.bodyTemplate` | string |  | BodyTemplate replaces the default body. The evidence sections are template functions (evidence, provenanceTable, gatesTable, changeRequestsTable, verificationTable, upstreamTable, rollbackNotice), so a custom body can keep them. |
 | `spec.environments[].pr.labels` | []string |  | Labels are added to the kardinal labels (kardinal, kardinal/promotion, kardinal/rollback). Each entry is a template; each line of its output is one label, and empty lines are dropped. |
 | `spec.environments[].pr.merge` | object |  | Merge asks the SCM to merge the PR on its own once the repository's required checks and approvals pass. |
 | `spec.environments[].pr.merge.allowImmediate` | boolean |  | AllowImmediate lets kardinal merge the PR at once when nothing is pending on it (no required check, review or pipeline). This skips human review and any CI the repository does not require. |
@@ -1623,6 +1623,26 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.contendedRetries` | integer |  | ContendedRetries is the number of consecutive retries of a git-push that lost to other writers of the base branch every time within one reconcile (the base branch kept moving). They have no limit, since contention is not a fault of the step, and do not use up the retries of retryCount; they only back off. Reset with retryCount. |
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery. |
 | `status.decision` | object |  | Decision is what the step started on: its required gates as it read them when it left Pending, and the policy versions. Written in the same patch as the move to Promoting when receipts are enabled, and cleared once the step's PromotionReceipt exists. |
+| `status.decision.changeRequests` | []object |  | ChangeRequests are the step's ChangeRequest instances (the tickets of its Bundle and environment, docs/change-requests.md) as the step read them when it left Pending: the inputs its gates read as changeRequests.&lt;name&gt;. |
+| `status.decision.changeRequests[].approvers` | []object |  | Approvers are the ticket's approvers, as the provider reported them. |
+| `status.decision.changeRequests[].approvers[].at` | string (date-time) |  |  |
+| `status.decision.changeRequests[].approvers[].decision` | string |  | Decision is the provider's (approved, rejected, requested). |
+| `status.decision.changeRequests[].approvers[].name` | string | yes |  |
+| `status.decision.changeRequests[].approversOmitted` | integer |  | ApproversOmitted counts the approvers the snapshot cut. |
+| `status.decision.changeRequests[].instance` | string | yes | Instance is the ChangeRequest instance. |
+| `status.decision.changeRequests[].name` | string | yes | Name is the ChangeRequest template the instance was made from: the name a gate reads as changeRequests.&lt;name&gt;. |
+| `status.decision.changeRequests[].observedAt` | string (date-time) |  | ObservedAt is when the ticket was last read. |
+| `status.decision.changeRequests[].provider` | string |  | Provider is servicenow or jira. |
+| `status.decision.changeRequests[].providerState` | string |  | ProviderState is the instance's status.providerState. |
+| `status.decision.changeRequests[].state` | string |  | State is the instance's status.state. |
+| `status.decision.changeRequests[].ticket` | object |  | Ticket is the ticket the instance tracks; nil when it has none yet. |
+| `status.decision.changeRequests[].ticket.id` | string |  | ID is the ServiceNow sys_id or the Jira issue id. |
+| `status.decision.changeRequests[].ticket.key` | string | yes | Key is the ServiceNow number (CHG0031337) or the Jira issue key (CHG-42). |
+| `status.decision.changeRequests[].ticket.url` | string |  | URL is the ticket's page. |
+| `status.decision.changeRequests[].timedOut` | boolean |  | TimedOut is the instance's status.timedOut. |
+| `status.decision.changeRequests[].validUntil` | string (date-time) |  | ValidUntil is until when that reading counts: a gate evaluated later reads the ticket's state as unknown. |
+| `status.decision.changeRequests[].verified` | boolean | yes | Verified reports whether the ticket is this promotion's: one kardinal opened, or a linked one the reconciler verified (ChangeRequestStatus.TicketVerified). |
+| `status.decision.changeRequests[].verifiedReason` | string |  | VerifiedReason is the instance's status.verifiedReason. |
 | `status.decision.facts` | object |  | Facts are what every required gate showed, decided before any cut: the receipt's levels come from them, so a gate left out of the snapshot still counts (an override on it is still OVERRIDDEN). |
 | `status.decision.facts.approved` | boolean | yes |  |
 | `status.decision.facts.gates` | integer | yes | Gates is how many required gates the step read. |
@@ -1694,7 +1714,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.pipelineSpecHash` | string |  | PipelineSpecHash is the Bundle's status.pipelineSpecHash. |
 | `status.decision.policyDigest` | string |  | PolicyDigest is sha256:&lt;hex&gt; of the canonical policy set: the Pipeline generation and spec hash, and each gate template's namespace, name, UID, generation and spec digest. |
 | `status.decision.takenAt` | string (date-time) | yes | TakenAt is when the step left Pending. |
-| `status.decision.truncated` | boolean |  | Truncated is true when the snapshot was cut to MaxDecisionBytes: approvals and Verdicts that did not count, long gate texts, or gates (OmittedGates). PolicyDigest covers every gate. |
+| `status.decision.truncated` | boolean |  | Truncated is true when the snapshot was cut to MaxDecisionBytes: approvals and Verdicts that did not count, long gate texts, change request approvers, or gates (OmittedGates). PolicyDigest covers every gate. |
 | `status.frozenBy` | object |  | FrozenBy is the freeze (a ChangeWindow with spec.freeze) that holds the step before it starts or before its next git step. Set with the "frozen by" message and cleared when no freeze holds it any more, so views show the hold without reading the message (#1974). |
 | `status.frozenBy.name` | string | yes | Name is the ChangeWindow's name (ChangeWindows are cluster-scoped). |
 | `status.frozenBy.since` | string (date-time) |  | Since is when the freeze started (the ChangeWindow's spec.start). |

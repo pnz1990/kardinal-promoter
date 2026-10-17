@@ -32,7 +32,7 @@ SubjectAccessReview, so these roles decide what a caller can do there too
   <fullname>-auditor   get and list on the namespaced kinds kardinal audit
                        evidence-pack reads (AuditEvents, Approvals,
                        PolicyGates, Bundles, Pipelines, Verdicts,
-                       PromotionReceipts). Bind it
+                       PromotionReceipts, ChangeRequests). Bind it
                        with a RoleBinding in each namespace an auditor may
                        read, or a ClusterRoleBinding for all. No write
   <fullname>-auditor-cluster  get and list on the cluster-scoped kinds of
@@ -218,7 +218,7 @@ metadata:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["kardinal.io"]
-  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "verdicts", "promotionreceipts"]
+  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "verdicts", "promotionreceipts", "changerequests"]
   verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

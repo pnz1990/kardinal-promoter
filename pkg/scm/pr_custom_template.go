@@ -211,7 +211,7 @@ func prTemplateFuncs(body PRBody, data PRTemplateData) tmplsafe.FuncMap {
 	funcs["evidence"] = tmplsafe.Lazy(func() (string, error) { return renderPRBodyFn(body) })
 	for fn, section := range map[string]string{
 		"heading": "heading", "rollbackNotice": "rollbackNotice", "provenanceTable": "provenance",
-		"gatesTable": "gates", "verificationTable": "verification", "upstreamTable": "upstream",
+		"gatesTable": "gates", "changeRequestsTable": "changeRequests", "verificationTable": "verification", "upstreamTable": "upstream",
 	} {
 		funcs[fn] = tmplsafe.Lazy(func() (string, error) {
 			text, err := renderSectionFn(section, body)

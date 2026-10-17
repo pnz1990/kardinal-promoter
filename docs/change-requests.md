@@ -109,6 +109,11 @@ promotion's correlation id and approve it themselves. With scheme `basic` the in
 the credential's user; with `bearer` set `spec.servicenow.integrationUser` to the user_name the
 token acts as (the CRD requires it).
 
+`instanceURL` is `https://<host>` only: a path, query, fragment or user name is refused (by the
+CRD and by the controller), since every ticket URL kardinal records is built from it. A change
+whose `number` is not capitals then digits (`CHG0031337`) is not read: its number would appear in
+the PR body and the receipt.
+
 The template cannot set `type`, `correlation_id` or `correlation_display`. `correlation_id`
 holds `kardinal-` and 32 hex characters of the promotion's correlation id's SHA-256, because the
 field holds 100 characters. Give the integration user a role that may create and read
@@ -372,6 +377,31 @@ The instance writes AuditEvents `ChangeRequestOpened`, `ChangeRequestLinked`, an
 the ticket is read so, `ChangeRequestApproved` and `ChangeRequestRejected`
 (`kardinal get auditevents --pipeline checkout --env prod`, or
 `kubectl get auditevents -l kardinal.io/action=ChangeRequestApproved`).
+
+### In the PR, the receipt and the evidence pack
+
+- **The PR.** A promotion PR has a `### Change Requests` section after the gate table, with one
+  row for each ticket of the version in that environment: the template, the ticket key linked to
+  its URL, the provider, the state (with the provider's own), whether the ticket is the
+  promotion's (`yes`, or `no:` and the reason a link was not verified), the approvers and when the
+  ticket was last read. The rows are read when the PR is opened, like the gate table. Text from
+  the ticketing system (approver names, states, keys, reasons) is shown as plain text: HTML,
+  images, links, `@` mentions and issue references in it do not render, and directional
+  formatting characters are removed. A custom PR
+  body gets the section with `{{ changeRequestsTable }}`
+  ([Customising the PR](pr-evidence.md#customising-the-pr)).
+- **The receipt.** `kardinalPromotion.changeRequests` records each ticket as the step read it
+  when it started, next to its gates: template, instance, provider, key and URL, state,
+  whether it was verified and why, approvers, `observedAt` and `validUntil`
+  ([Promotion receipts](receipts.md)). A ticket closed after the step started stays as the step
+  saw it. The approvals in the receipt carry their structured fields
+  ([Approval fields](approvals.md#approval-fields)).
+- **The evidence pack.** `changerequests.ndjson` holds the instances of the period's versions, and
+  `changerequest-templates.ndjson` the templates in force at export
+  ([Produce an evidence pack](compliance.md#produce-an-evidence-pack)).
+
+Each record names the template by the instance's `kardinal.io/change-request-template` label.
+A label value is at most 63 characters, so a longer template name appears cut, with a hash suffix.
 
 Only kardinal writes an instance: the chart's graph-objects admission policy refuses anyone else
 (a user with full RBAC, the cluster admin) creating one or changing its status. A template has no

@@ -440,6 +440,13 @@ type ChangeRequest struct {
 	Status ChangeRequestStatus `json:"status,omitempty"`
 }
 
+// TicketVerified reports whether the instance's ticket is its promotion's:
+// one it opened (open mode leaves verified unset), or a link the
+// reconciler verified. An instance without a ticket is not.
+func (s *ChangeRequestStatus) TicketVerified() bool {
+	return s.Ticket != nil && (s.Verified == nil || *s.Verified)
+}
+
 // ChangeRequestList contains a list of ChangeRequest.
 // +kubebuilder:object:root=true
 type ChangeRequestList struct {

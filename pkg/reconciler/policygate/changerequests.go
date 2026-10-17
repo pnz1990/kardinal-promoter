@@ -77,7 +77,7 @@ func changeRequestEntry(cr *kardinalv1alpha1.ChangeRequest, now time.Time) map[s
 	e["timedOut"] = st.TimedOut
 	e["providerState"] = st.ProviderState
 	// Open mode created the ticket with the correlation id; a link says.
-	e["verified"] = st.Ticket != nil && (st.Verified == nil || *st.Verified)
+	e["verified"] = st.TicketVerified()
 	e["verifiedReason"] = st.VerifiedReason
 	approvers := make([]interface{}, 0, len(st.Approvers))
 	for _, a := range st.Approvers {

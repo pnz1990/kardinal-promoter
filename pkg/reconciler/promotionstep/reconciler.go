@@ -1020,7 +1020,11 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	// The decision snapshot: the gates the step starts on, in the same
 	// patch as Promoting (docs/receipts.md).
 	if r.Receipts != nil {
-		ps.Status.Decision = r.decision(ctx, ps, gates, pipeline, bundle)
+		crs, err := r.changeRequestsOf(ctx, ps, bundle)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("decision snapshot: %w", err)
+		}
+		ps.Status.Decision = r.decision(ctx, ps, gates, crs, pipeline, bundle)
 		if ps.Status.Decision == nil {
 			// Too large even cut to one gate: the step starts without one,
 			// and without a receipt, rather than waiting (no promotion waits
@@ -1347,6 +1351,7 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		K8sClient:            r.Client,
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
 		GateResults:          r.collectGateResults(ctx, log, ps),
+		ChangeRequests:       r.collectChangeRequests(ctx, log, ps, bundle),
 		Verifications:        r.collectVerifications(ctx, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
@@ -3272,6 +3277,32 @@ func (r *Reconciler) collectVerifications(ctx context.Context, ps *v1alpha1.Prom
 		}
 		out = append(out, scm.Verification{Gate: gate, Check: g.Spec.Verify.Check, Environment: g.Spec.Verify.Environment,
 			Reason: g.Status.Reason, Verdicts: g.Status.Verdicts})
+	}
+	return out
+}
+
+// collectChangeRequests reads the step's ChangeRequest instances so the PR
+// body can show each ticket. Best effort, like collectGateResults: a list
+// that fails is logged and the section left out.
+func (r *Reconciler) collectChangeRequests(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	bundle *v1alpha1.Bundle) []scm.ChangeRequest {
+	crs, err := r.changeRequestsOf(ctx, ps, bundle)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not read change requests for PR body")
+		return nil
+	}
+	out := make([]scm.ChangeRequest, 0, len(crs))
+	for i := range crs {
+		c := decisionChangeRequest(&crs[i])
+		e := scm.ChangeRequest{Name: c.Name, Provider: c.Provider, State: c.State, ProviderState: c.ProviderState,
+			Verified: c.Verified, VerifiedReason: c.VerifiedReason, TimedOut: c.TimedOut, ObservedAt: c.ObservedAt}
+		if c.Ticket != nil {
+			e.Ticket, e.URL = c.Ticket.Key, c.Ticket.URL
+		}
+		for _, a := range c.Approvers {
+			e.Approvers = append(e.Approvers, a.Name)
+		}
+		out = append(out, e)
 	}
 	return out
 }

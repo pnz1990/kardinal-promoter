@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -132,6 +133,11 @@ type PRBody struct {
 	// GateResults holds PolicyGate evaluation results for this environment.
 	GateResults []v1alpha1.GateResult
 
+	// ChangeRequests are this environment's change request tickets
+	// (docs/change-requests.md). The Change Requests section is left out
+	// when it is empty.
+	ChangeRequests []ChangeRequest
+
 	// Verifications holds the verify gates of this environment and the
 	// verdicts each counted (docs/agentic/verify-with-agents.md). The
 	// Verification section is left out when it is empty.
@@ -147,6 +153,45 @@ type PRBody struct {
 // uses "||") would start a new cell and a newline would end the row.
 var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r", " ")
 
+// mdTextReplacer is mdCellReplacer for text from outside the cluster (a
+// ticketing system's approver names, states and keys): it also makes the
+// text inert in GitHub, GitLab and Forgejo markdown, so a display name
+// cannot put an image, a link, HTML, a mention or a cross-reference into a
+// prod PR. HTML is entity-escaped (& first, so an entity in the text shows
+// as written), the characters that open links, images and code are
+// backslash-escaped (the backslash too, so an escape in the text cannot
+// cancel one), and a zero-width space after "@" and "#" and inside "://"
+// stops mentions, issue and PR references (#1, owner/repo#1, and the #60 an
+// escaped &#60; would show) and autolinks.
+var mdTextReplacer = strings.NewReplacer(
+	"|", `\|`, "\r\n", " ", "\n", " ", "\r", " ",
+	"&", "&amp;", "<", "&lt;", ">", "&gt;",
+	`\`, `\\`, "[", `\[`, "]", `\]`, "!", `\!`, "`", "\\`", "*", `\*`, "_", `\_`, "~", `\~`,
+	"@", "@\u200b", "#", "#\u200b", "://", ":\u200b//",
+)
+
+// mdRefRE matches the case-insensitive words GitHub links without a "#" or
+// a scheme: a GH-<n> reference and a www. autolink.
+var mdRefRE = regexp.MustCompile(`(?i)\b(gh)-|\b(www)\.`)
+
+// bidiControls are the directional formatting characters, which reorder
+// how the text around them displays (an approver name that reads as
+// another): removed.
+var bidiControls = strings.NewReplacer(
+	"\u200e", "", "\u200f", "", "\u061c", "",
+	"\u202a", "", "\u202b", "", "\u202c", "", "\u202d", "", "\u202e", "",
+	"\u2066", "", "\u2067", "", "\u2068", "", "\u2069", "",
+)
+
+// mdText is text from outside the cluster as inert table-cell markdown
+// (mdTextReplacer, mdRefRE, bidiControls).
+func mdText(s string) string {
+	s = mdRefRE.ReplaceAllStringFunc(bidiControls.Replace(s), func(m string) string {
+		return m[:len(m)-1] + "\u200b" + m[len(m)-1:]
+	})
+	return mdTextReplacer.Replace(s)
+}
+
 // ciRunLink renders the CI Run cell of the provenance table: a link when raw
 // passes graph.ValidateCIRunURL (an absolute http(s) URL), "—" otherwise. The
 // bundle API checks new Bundles, but a Bundle created another way or before
@@ -159,6 +204,27 @@ func ciRunLink(raw string) string {
 	if raw == "" || graph.ValidateCIRunURL(raw) != nil {
 		return "—"
 	}
+	return "[CI run](" + linkTarget(raw) + ")"
+}
+
+// ticketLink renders a change request's ticket cell: its key linked to its
+// URL when the URL is an absolute http(s) URL (checked and encoded as
+// ciRunLink does: the URL comes from the ticketing system), the key alone
+// otherwise, and "—" without a ticket.
+func ticketLink(key, raw string) string {
+	if key == "" {
+		return "—"
+	}
+	text := mdText(key)
+	if raw == "" || graph.ValidateCIRunURL(raw) != nil {
+		return text
+	}
+	return "[" + text + "](" + linkTarget(raw) + ")"
+}
+
+// linkTarget is raw, a URL graph.ValidateCIRunURL accepted, with the
+// characters that could end a markdown link or table cell percent-encoded.
+func linkTarget(raw string) string {
 	var b strings.Builder
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
@@ -169,13 +235,16 @@ func ciRunLink(raw string) string {
 		}
 		fmt.Fprintf(&b, "%%%02X", c)
 	}
-	return "[CI run](" + b.String() + ")"
+	return b.String()
 }
 
 // prBodyFuncs are the functions of the default PR body template.
 var prBodyFuncs = template.FuncMap{
 	"mdcell": mdCellReplacer.Replace,
+	"mdtext": mdText,
 	"cirun":  ciRunLink,
+	"ticket": ticketLink,
+	"join":   strings.Join,
 }
 
 // prBodySections are the sections of the default PR body, each a named
@@ -252,6 +321,19 @@ Requested by: {{mdcell .RequestedBy}} (unverified)
 {{- end}}
 {{- end}}
 
+{{- define "changeRequests"}}
+{{- if .ChangeRequests}}
+
+### Change Requests
+
+| Change request | Ticket | Provider | State | Verified | Approvers | Read at |
+|---|---|---|---|---|---|---|
+{{- range .ChangeRequests}}
+| {{mdtext .Name}} | {{ticket .Ticket .URL}} | {{or (mdtext .Provider) "—"}} | {{if .State}}{{mdtext .State}}{{else}}no ticket yet{{end}}{{with .ProviderState}} ({{mdtext .}}){{end}}{{if .TimedOut}}, timed out{{end}} | {{if .Verified}}yes{{else}}no{{with .VerifiedReason}}: {{mdtext .}}{{end}}{{end}} | {{if .Approvers}}{{mdtext (join .Approvers ", ")}}{{else}}—{{end}} | {{with .ObservedAt}}{{.UTC.Format "2006-01-02T15:04Z"}}{{else}}—{{end}} |
+{{- end}}
+{{- end}}
+{{- end}}
+
 {{- define "verification"}}
 {{- range .Verifications}}
 
@@ -288,6 +370,24 @@ Requested by: {{mdcell .RequestedBy}} (unverified)
 *Generated by [kardinal-promoter](https://github.com/pnz1990/kardinal-promoter)*
 {{end}}`
 
+// ChangeRequest is one change request ticket in a PR body: the template a
+// gate reads it by, the ticket, and what the ChangeRequest instance's status
+// says of it.
+type ChangeRequest struct {
+	Name          string
+	Provider      string
+	Ticket        string
+	URL           string
+	State         string
+	ProviderState string
+	// Verified: kardinal opened the ticket, or verified the linked one.
+	Verified       bool
+	VerifiedReason string
+	TimedOut       bool
+	Approvers      []string
+	ObservedAt     *metav1.Time
+}
+
 // Verification is one verify gate's evidence in a PR body: its check, the
 // environment verified, its reason line, and its verdicts as the gate
 // recorded them (status.verdicts).
@@ -301,7 +401,7 @@ type Verification struct {
 
 // prBodyTemplate is the default PR body: every section, in order.
 var prBodyTemplate = template.Must(template.Must(template.New("pr-body").Funcs(prBodyFuncs).Parse(prBodySections)).
-	Parse(`{{template "marker" .}}{{template "heading" .}}{{template "provenance" .}}{{template "gates" .}}{{template "verification" .}}{{template "upstream" .}}{{template "footer" .}}`))
+	Parse(`{{template "marker" .}}{{template "heading" .}}{{template "provenance" .}}{{template "gates" .}}{{template "changeRequests" .}}{{template "verification" .}}{{template "upstream" .}}{{template "footer" .}}`))
 
 // renderSection renders one named section of the default body.
 func renderSection(name string, data PRBody) (string, error) {
