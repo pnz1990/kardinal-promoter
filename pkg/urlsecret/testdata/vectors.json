@@ -274,5 +274,215 @@
   "refused": true,
   "redacted": "https://example.org/x",
   "why": "an @ before the first / is read as user info"
+ },
+ {
+  "url": "https://ci.example.com/run/7?authorization=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?authorization=REDACTED&attempt=1",
+  "why": "credential parameter authorization"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Authorization=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Authorization=REDACTED&attempt=1",
+  "why": "credential parameter Authorization"
+ },
+ {
+  "url": "https://ci.example.com/run/7?bearer=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?bearer=REDACTED&attempt=1",
+  "why": "credential parameter bearer"
+ },
+ {
+  "url": "https://ci.example.com/run/7?passphrase=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?passphrase=REDACTED&attempt=1",
+  "why": "credential parameter passphrase"
+ },
+ {
+  "url": "https://ci.example.com/run/7?jsessionid=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?jsessionid=REDACTED&attempt=1",
+  "why": "credential parameter jsessionid"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sessionid=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?sessionid=REDACTED&attempt=1",
+  "why": "credential parameter sessionid"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sid=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?sid=REDACTED&attempt=1",
+  "why": "credential parameter sid"
+ },
+ {
+  "url": "https://ci.example.com/run/7?subscription-key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?subscription-key=REDACTED&attempt=1",
+  "why": "credential parameter subscription-key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Ocp-Apim-Subscription-Key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Ocp-Apim-Subscription-Key=REDACTED&attempt=1",
+  "why": "credential parameter Ocp-Apim-Subscription-Key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?authkey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?authkey=REDACTED&attempt=1",
+  "why": "credential parameter authkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?appkey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?appkey=REDACTED&attempt=1",
+  "why": "credential parameter appkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?masterkey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?masterkey=REDACTED&attempt=1",
+  "why": "credential parameter masterkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?key=REDACTED&attempt=1",
+  "why": "credential parameter key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token[]=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token[]=REDACTED&attempt=1",
+  "why": "credential parameter token[]"
+ },
+ {
+  "url": "https://ci.example.com/run/7?api_key[0]=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?api_key[0]=REDACTED&attempt=1",
+  "why": "credential parameter api_key[0]"
+ },
+ {
+  "url": "https://ci.example.com/run/7?ticket=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?ticket=REDACTED&attempt=1",
+  "why": "credential parameter ticket"
+ },
+ {
+  "url": "https://ci.example.com/run/7?client_assertion=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?client_assertion=REDACTED&attempt=1",
+  "why": "credential parameter client_assertion"
+ },
+ {
+  "url": "https://ci.example.com/run/7?session=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?session=REDACTED&attempt=1",
+  "why": "credential parameter session"
+ },
+ {
+  "url": "https://ci.example.com/run/7;jsessionid=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7;jsessionid=REDACTED",
+  "why": "a Jenkins ;jsessionid path parameter"
+ },
+ {
+  "url": "https://ci.example.com/run/7?monkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?monkey=1",
+  "why": "harmless name monkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?donkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?donkey=1",
+  "why": "harmless name donkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?turkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?turkey=1",
+  "why": "harmless name turkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?jockey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?jockey=1",
+  "why": "harmless name jockey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?hockey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?hockey=1",
+  "why": "harmless name hockey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?whiskey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?whiskey=1",
+  "why": "harmless name whiskey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?hotkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?hotkey=1",
+  "why": "harmless name hotkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sortkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?sortkey=1",
+  "why": "harmless name sortkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?primarykey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?primarykey=1",
+  "why": "harmless name primarykey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?foreignkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?foreignkey=1",
+  "why": "harmless name foreignkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?partitionkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?partitionkey=1",
+  "why": "harmless name partitionkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?groupkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?groupkey=1",
+  "why": "harmless name groupkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?cachekey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?cachekey=1",
+  "why": "harmless name cachekey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?lookupkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?lookupkey=1",
+  "why": "harmless name lookupkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sort_key=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?sort_key=1",
+  "why": "harmless name sort_key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Primary-Key=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?Primary-Key=1",
+  "why": "harmless name Primary-Key"
  }
 ]

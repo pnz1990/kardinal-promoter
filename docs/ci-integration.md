@@ -430,11 +430,19 @@ The PR body and the UI link `ciRunURL`, and a [promotion receipt](receipts.md) s
 checked when a version is created. It must be empty or an absolute `http://` or `https://` URL
 with a host, without user info (an `@` anywhere before the first `/` after `://`), without spaces
 or control characters, and without a credential query or fragment parameter. A parameter is a
-credential when its name, percent-decoded, lower-cased and with `-` and `_` removed, ends in
-`token`, `secret`, `signature`, `password`, `passwd`, `credential`, `credentials`, `apikey`,
-`accesskey`, `secretkey`, `privatekey` or `accesskeyid`, or is `sig`, `key`, `auth`, `jwt`, `code`,
-`pass` or `pwd`. So `circle-token`, `job_token`, `X-Goog-Signature`, `AWSAccessKeyId` and
-`accessToken` are refused, while `tokens` and `monkey` are not (the name must end in the word).
+credential when its name is normalized (percent-decoded, a trailing array index such as `[]` or
+`[0]` removed, lower-cased, `-` and `_` removed) and then either:
+
+- is `sig`, `auth`, `authorization`, `jwt`, `code`, `pass`, `pwd` or `sid`; or
+- ends in `token`, `secret`, `signature`, `password`, `passwd`, `passphrase`, `credential`,
+  `credentials`, `key`, `accesskeyid`, `session`, `sessionid`, `assertion`, `ticket` or `bearer`,
+  and is not one of the harmless names that end in `key`: `monkey`, `donkey`, `turkey`, `jockey`,
+  `hockey`, `whiskey`, `hotkey`, `sortkey`, `primarykey`, `foreignkey`, `partitionkey`,
+  `groupkey`, `cachekey`, `lookupkey`.
+
+So `circle-token`, `job_token`, `X-Goog-Signature`, `AWSAccessKeyId`, `subscription-key`,
+`;jsessionid`, `client_assertion` and `token[]` are refused. `tokens`, `keyboard` and `sort_key`
+are not, because a name only counts when it ends in the word.
 
 - The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value, and
   `kardinal create bundle --ci-run-url` returns an error.

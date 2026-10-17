@@ -25,15 +25,20 @@ const HTTP_AUTHORITY = /^https?:\/\/([^/?#]*)/i
 const SPACE_OR_CONTROL = /[\s\p{Cc}]/u
 
 // A credential query or fragment parameter, as pkg/urlsecret decides: the
-// name, percent-decoded, lower-cased and without "-" and "_", ends in one
-// of CREDENTIAL_SUFFIXES or is one of CREDENTIAL_EXACT (a Go test pins the
-// lists to urlsecret.Suffixes and urlsecret.Exact).
+// name, percent-decoded, without a trailing array index, lower-cased and
+// without "-" and "_", is one of CREDENTIAL_EXACT, or ends in one of
+// CREDENTIAL_SUFFIXES and is not one of CREDENTIAL_HARMLESS (a Go test pins
+// the lists to urlsecret.Exact, Suffixes and Harmless).
 const CREDENTIAL_PARAM = /[?&;#]([^=&;#\s]+)=/g
 const CREDENTIAL_SUFFIXES = [
-  'token', 'secret', 'signature', 'password', 'passwd', 'credential', 'credentials',
-  'apikey', 'accesskey', 'secretkey', 'privatekey', 'accesskeyid',
+  'token', 'secret', 'signature', 'password', 'passwd', 'passphrase', 'credential', 'credentials',
+  'key', 'accesskeyid', 'session', 'sessionid', 'assertion', 'ticket', 'bearer',
 ]
-const CREDENTIAL_EXACT = ['sig', 'key', 'auth', 'jwt', 'code', 'pass', 'pwd']
+const CREDENTIAL_EXACT = ['sig', 'auth', 'authorization', 'jwt', 'code', 'pass', 'pwd', 'sid']
+const CREDENTIAL_HARMLESS = [
+  'monkey', 'donkey', 'turkey', 'jockey', 'hockey', 'whiskey', 'hotkey', 'sortkey', 'primarykey',
+  'foreignkey', 'partitionkey', 'groupkey', 'cachekey', 'lookupkey',
+]
 
 function isCredentialName(raw: string): boolean {
   let name = raw
@@ -42,8 +47,10 @@ function isCredentialName(raw: string): boolean {
   } catch {
     // not percent-encoded as a whole: compare it as written
   }
-  name = name.toLowerCase().replace(/[-_]/g, '')
-  return CREDENTIAL_EXACT.includes(name) || CREDENTIAL_SUFFIXES.some((s) => name.endsWith(s))
+  name = name.replace(/(\[[^\]]*\])+$/, '').toLowerCase().replace(/[-_]/g, '')
+  if (CREDENTIAL_EXACT.includes(name)) return true
+  if (CREDENTIAL_HARMLESS.includes(name)) return false
+  return CREDENTIAL_SUFFIXES.some((s) => name.endsWith(s))
 }
 
 function hasCredentialParam(url: string): boolean {

@@ -90,9 +90,10 @@ afterwards without breaking its signature. So before the statement is signed, ev
   password with a raw `#`, `?` or space goes too;
 - the value of a credential query or fragment parameter, up to the next `&`, `;`, `#` or space,
   which becomes `REDACTED`. A credential parameter is one the [Provenance](ci-integration.md#provenance)
-  check refuses: its normalized name ends in `token`, `secret`, `signature`, `password`,
-  `credential`, `apikey`, ... or is `sig`, `key`, `auth`, `jwt`, `code`, `pass` or `pwd`. A
-  percent-encoded name counts too;
+  check refuses: its normalized name ends in `token`, `secret`, `key`, `signature`, `password`,
+  `passphrase`, `session`, `ticket`, `bearer`, ... (except harmless names such as `monkey` or
+  `sortkey`), or is `sig`, `auth`, `authorization`, `jwt`, `code`, `pass`, `pwd` or `sid`. A
+  percent-encoded name and an array name (`token[]`) count too;
 - a token known by its shape, wherever it is: GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`,
   `github_pat_`), GitLab (`glpat-`) and Slack (`xox?-`) tokens, and AWS access key IDs (`AKIA`,
   `ASIA`).

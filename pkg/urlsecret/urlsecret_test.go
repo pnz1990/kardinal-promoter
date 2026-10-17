@@ -5,6 +5,7 @@ package urlsecret_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -116,10 +117,52 @@ func ciRunURLRules(t *testing.T, file string) []string {
 	return out
 }
 
+// crdMessages are the messages of CRDRules' rules, in order.
+var crdMessages = []string{
+	"provenance.ciRunURL must not contain user info",
+	"provenance.ciRunURL must not contain a credential parameter (a name ending in token, secret, signature, password, session, ticket, ...)",
+	"provenance.ciRunURL must not contain a credential parameter (sig, auth, authorization, jwt, code, pass, pwd, sid)",
+	"provenance.ciRunURL must not contain a credential parameter (a name ending in key: apikey, subscription-key, ...)",
+	"provenance.ciRunURL must not percent-encode a parameter name",
+}
+
 // TestCRDRules: the Bundle CRD's ciRunURL rules (both copies) are exactly
-// CRDRules, the rule this package decides.
+// CRDRules, the rule this package decides. URLSECRET_UPDATE=1 rewrites the
+// markers in api/v1alpha1/bundle_types.go (then make manifests).
 func TestCRDRules(t *testing.T) {
 	want := urlsecret.CRDRules()
+	require.Len(t, crdMessages, len(want))
+	if os.Getenv("URLSECRET_UPDATE") == "1" {
+		types := filepath.Join("..", "..", "api", "v1alpha1", "bundle_types.go")
+		raw, err := os.ReadFile(types)
+		require.NoError(t, err)
+		var markers []string
+		for i, r := range want {
+			markers = append(markers, fmt.Sprintf("\t// +kubebuilder:validation:XValidation:rule=%q,message=%q", r, crdMessages[i]))
+		}
+		lines := strings.Split(string(raw), "\n")
+		var out []string
+		in, done := false, false
+		for _, l := range lines {
+			if strings.Contains(l, "// CIRunURL is the URL of the CI run") {
+				in = true
+			}
+			if in && strings.Contains(l, "+kubebuilder:validation:XValidation:rule=") {
+				if !done {
+					out, done = append(out, markers...), true
+				}
+				continue
+			}
+			if in && strings.Contains(l, "CIRunURL string") {
+				in = false
+			}
+			out = append(out, l)
+		}
+		require.True(t, done, "bundle_types.go has the ciRunURL markers")
+		require.NoError(t, os.WriteFile(types, []byte(strings.Join(out, "\n")), 0o644))
+		t.Log("rewrote the markers: run make manifests")
+		return
+	}
 	sort.Strings(want)
 	for _, f := range []string{
 		filepath.Join("..", "..", "config", "crd", "bases", "kardinal.io_bundles.yaml"),
@@ -127,7 +170,7 @@ func TestCRDRules(t *testing.T) {
 	} {
 		got := ciRunURLRules(t, f)
 		sort.Strings(got)
-		assert.Equal(t, want, got, "%s: regenerate the marker in api/v1alpha1/bundle_types.go from urlsecret.CRDRules", f)
+		assert.Equal(t, want, got, "%s: URLSECRET_UPDATE=1 go test ./pkg/urlsecret -run TestCRDRules, then make manifests", f)
 	}
 }
 
@@ -147,6 +190,7 @@ func TestWebMirrorsTheRule(t *testing.T) {
 	}
 	assert.Equal(t, urlsecret.Suffixes, list("CREDENTIAL_SUFFIXES"))
 	assert.Equal(t, urlsecret.Exact, list("CREDENTIAL_EXACT"))
+	assert.Equal(t, urlsecret.Harmless, list("CREDENTIAL_HARMLESS"))
 	tests, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "prLink.test.ts"))
 	require.NoError(t, err)
 	assert.True(t, strings.Contains(string(tests), "pkg/urlsecret/testdata/vectors.json"), "the web tests run the vectors")

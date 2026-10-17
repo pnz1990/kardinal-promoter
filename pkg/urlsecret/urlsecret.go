@@ -16,18 +16,27 @@ import (
 	"strings"
 )
 
-// Suffixes and Exact decide whether a parameter names a credential, after
-// its name is percent-decoded, lower-cased and stripped of "-" and "_"
-// (Access-Token, access_token and accesstoken are one name): it ends in a
-// suffix, or is an exact name. A name that only contains one (tokens,
-// monkey) does not count: the suffix must end at the "=".
+// Suffixes, Exact and Harmless decide whether a parameter names a
+// credential, after its name is percent-decoded, lower-cased, stripped of a
+// trailing array index ("token[]", "api_key[0]") and of "-" and "_"
+// (Access-Token, access_token and accesstoken are one name): it is an
+// exact name, or it ends in a suffix and is not a harmless name that
+// happens to (monkey, hotkey, sortkey, ...). A name that only contains a
+// suffix (tokens, keyboard) does not count: the suffix must end the name.
 var (
 	Suffixes = []string{
-		"token", "secret", "signature", "password", "passwd", "credential", "credentials",
-		"apikey", "accesskey", "secretkey", "privatekey", "accesskeyid",
+		"token", "secret", "signature", "password", "passwd", "passphrase", "credential", "credentials",
+		"key", "accesskeyid", "session", "sessionid", "assertion", "ticket", "bearer",
 	}
-	Exact = []string{"sig", "key", "auth", "jwt", "code", "pass", "pwd"}
+	Exact    = []string{"sig", "auth", "authorization", "jwt", "code", "pass", "pwd", "sid"}
+	Harmless = []string{
+		"monkey", "donkey", "turkey", "jockey", "hockey", "whiskey", "hotkey", "sortkey", "primarykey",
+		"foreignkey", "partitionkey", "groupkey", "cachekey", "lookupkey",
+	}
 )
+
+// arrayIndex is a trailing array index of a parameter name.
+var arrayIndex = regexp.MustCompile(`(\[[^\]]*\])+$`)
 
 // urlParam matches one key=value pair of a query or fragment, after "?",
 // "&", ";" or "#", in a text: the value stops at a quote, so a URL quoted
@@ -54,6 +63,7 @@ func normalize(name string) string {
 	if n, err := url.QueryUnescape(name); err == nil {
 		name = n
 	}
+	name = arrayIndex.ReplaceAllString(name, "")
 	return strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(name))
 }
 
@@ -64,6 +74,11 @@ func IsParam(name string) bool {
 	for _, e := range Exact {
 		if n == e {
 			return true
+		}
+	}
+	for _, h := range Harmless {
+		if n == h {
+			return false
 		}
 	}
 	for _, s := range Suffixes {
