@@ -161,6 +161,11 @@ these hold:
 - no other ChangeRequest holds it from earlier: one that opened it, or one that linked it first
   (`status.linkedAt`). One ticket approves one promotion.
 
+Holders are counted across the cluster: a team that links a ticket key first, from its own
+approval fields, leaves another team's later link of the same key unverified. That fails closed
+(it can delay a promotion, never approve one); use `requireField` values that belong to your
+service, and prefer mode `open`, whose tickets carry the promotion's correlation id.
+
 Otherwise `status.verified` and `changeRequests.<name>.verified` are false, `verifiedReason` says
 which rule failed, and the `ChangeRequestLinked` record says so: an approver could have linked an
 unrelated, old or already used approved ticket. Require it in the gate:

@@ -864,3 +864,68 @@ func TestChangeRequest_RelinkRestartsLinkedAt(t *testing.T) {
 	assert.False(t, *cr.Status.Verified)
 	assert.Contains(t, cr.Status.VerifiedReason, "already linked to checkout/prod-change-prod--app-v0")
 }
+
+// TestChangeRequest_LinkFailClosedChecks (QA on #2123, C6–C8): a Bundle
+// re-created under the same name (another UID) is not this promotion's, so
+// the link is unverified; a holder list that fails leaves it unverified; and
+// linkedAt stays the first link's time across polls, which the "earlier
+// holder wins" rule depends on.
+func TestChangeRequest_LinkFailClosedChecks(t *testing.T) {
+	t.Run("a re-created Bundle", func(t *testing.T) {
+		b := linkedBundle("CHG0000009")
+		b.UID = "uid-recreated"
+		e := newEnv(t, instance(requireFieldLink), b)
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		cr := e.get()
+		// bundleLabel mode reads the key from the Bundle too: it waits.
+		assert.Nil(t, cr.Status.Verified)
+		assert.Contains(t, cond(cr, changerequest.CondReady).Message, "re-created")
+
+		// approvalField mode reads the key elsewhere: the Bundle check is
+		// the link verification's.
+		gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: ns,
+			Labels: map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "true"},
+			Status: v1alpha1.PolicyGateStatus{Approvals: []v1alpha1.GateApprovalStatus{{User: "alice", Decision: "approve", Counted: true,
+				Fields: map[string]string{"ticketID": "CHG0000009"}}}}}
+		e2 := newEnv(t, instance(func(cr *v1alpha1.ChangeRequest) {
+			requireFieldLink(cr)
+			cr.Spec.Link.From, cr.Spec.Link.Name = "approvalField", "ticketID"
+		}), b, gate)
+		e2.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e2.reconcile()
+		cr = e2.get()
+		require.NotNil(t, cr.Status.Verified)
+		assert.False(t, *cr.Status.Verified)
+		assert.Contains(t, cr.Status.VerifiedReason, "the Bundle of this promotion cannot be read")
+	})
+	t.Run("the holder list fails", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.r.Client = interceptor.NewClient(e.c.(client.WithWatch), interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*v1alpha1.ChangeRequestList); ok {
+					return errors.New("cache down")
+				}
+				return c.List(ctx, list, opts...)
+			}})
+		e.reconcile()
+		cr := e.get()
+		require.NotNil(t, cr.Status.Verified)
+		assert.False(t, *cr.Status.Verified)
+		assert.Contains(t, cr.Status.VerifiedReason, "cannot be listed")
+	})
+	t.Run("linkedAt stays across polls", func(t *testing.T) {
+		e := newEnv(t, instance(requireFieldLink), linkedBundle("CHG0000009"))
+		e.f.add("CHG0000009", "", v1alpha1.ChangeRequestApproved)
+		e.reconcile()
+		first := e.get().Status.LinkedAt.UTC()
+		for i := 1; i <= 3; i++ {
+			e.now = t0.Add(time.Duration(i) * time.Minute)
+			e.reconcile()
+		}
+		assert.Equal(t, 4, e.f.count("Get"), "linked, then polled three times")
+		assert.Equal(t, first, e.get().Status.LinkedAt.UTC(), "the first link's time")
+	})
+}
