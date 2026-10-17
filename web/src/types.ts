@@ -89,6 +89,14 @@ export interface PipelineEnvironment {
   prURL?: string
   /** A rollback hold keeps it on bundle. */
   held?: boolean
+  /** The freeze (ChangeWindow) that holds the newest Bundle's step here (#1974). */
+  frozenBy?: string
+}
+
+/** The freeze that holds a PromotionStep (its status.frozenBy). */
+export interface StepFreeze {
+  name: string
+  since?: string
 }
 
 /** A Kubernetes status condition, as the UI API serves it. */
@@ -276,6 +284,8 @@ export interface GraphNode {
   environment: string
   state: string
   message?: string
+  /** The freeze that holds a PromotionStep node (#1974). */
+  frozenBy?: StepFreeze
   prURL?: string
   outputs?: Record<string, string>
   /** CEL expression for PolicyGate nodes. Populated by the graph API. */
@@ -310,6 +320,8 @@ export interface PromotionStep {
   stepType: string
   state: string
   message?: string
+  /** The freeze that holds the step (#1974). */
+  frozenBy?: StepFreeze
   prURL?: string
   outputs?: Record<string, string>
   /** Index of the currently executing sub-step within `steps`. */

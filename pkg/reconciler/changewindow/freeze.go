@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
@@ -185,6 +186,12 @@ func FreezeScope(f *kardinalv1alpha1.ChangeWindowFreeze) string {
 		where = "namespaces " + strings.Join(f.Namespaces, ", ")
 	}
 	return who + ", " + where
+}
+
+// StepFreezeOf is the status.frozenBy of a PromotionStep m holds.
+func StepFreezeOf(m FreezeMatch) *kardinalv1alpha1.StepFreeze {
+	since := metav1.NewTime(m.Since.UTC().Truncate(time.Second))
+	return &kardinalv1alpha1.StepFreeze{Name: m.Window.Name, Since: &since}
 }
 
 // FrozenMessage is the step message of a step m holds. It names the

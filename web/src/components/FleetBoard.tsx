@@ -39,6 +39,7 @@ function fleetNote(s: Station): string {
     return s.state === 'empty' ? `${f.total} targets, nothing deployed` : `${f.total} targets`
   }
   if (s.state === 'held') return `held by a gate, ${f.total} targets`
+  if (s.state === 'frozen') return `frozen by ${s.frozenBy}, ${f.total} targets`
   if (s.state === 'ahead') return `${f.total} targets, not reached yet`
   const parts = [`${f.verified}/${f.total} verified`]
   if (f.inFlight > 0) parts.push(`${f.inFlight} in flight${f.maxConcurrent > 0 ? ` (max ${f.maxConcurrent})` : ''}`)
@@ -63,6 +64,8 @@ function stationNote(s: Station, now: number): string {
       return s.incomingState === 'RollingBack' ? stateWords('step', 'RollingBack') : 'release failed'
     case 'held':
       return 'held by a gate'
+    case 'frozen':
+      return `frozen by ${s.frozenBy}`
     case 'empty':
       return 'nothing deployed'
   }
@@ -72,7 +75,7 @@ function stationNote(s: Station, now: number): string {
   return age === 'now' ? 'verified just now' : `verified ${age} ago`
 }
 
-const LIVE_LABEL = { arriving: 'on its way', held: 'held', failed: 'failed' } as const
+const LIVE_LABEL = { arriving: 'on its way', held: 'held', frozen: 'frozen', failed: 'failed' } as const
 
 function Rail({ row, index }: { row: FleetRow; index: number }) {
   const live = row.liveGroup === index ? row.live : undefined
@@ -143,7 +146,7 @@ function StationPlate({ s, pipeline, now, onSelect }: {
 
 /** How a wave plate names a state in its counts. */
 const PLATE_STATE: Record<StationState, string> = {
-  failed: 'failed', held: 'held', arriving: 'on its way', ahead: 'not reached', settled: 'settled', empty: 'nothing deployed',
+  failed: 'failed', frozen: 'frozen', held: 'held', arriving: 'on its way', ahead: 'not reached', settled: 'settled', empty: 'nothing deployed',
 }
 
 /**
@@ -253,7 +256,7 @@ export function FleetBoard({ pipelines, total, onSelect, now = Date.now() }: Fle
     .sort((a, b) => a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name))
     .map(fleetRow)
   const moving = rows.filter(r => r.live === 'arriving').length
-  const attention = rows.filter(r => r.live === 'held' || r.live === 'failed').length
+  const attention = rows.filter(r => r.live === 'held' || r.live === 'frozen' || r.live === 'failed').length
   return (
     <section className="fleet-board" aria-labelledby="fleet-title">
       <header className="fleet-board__head">

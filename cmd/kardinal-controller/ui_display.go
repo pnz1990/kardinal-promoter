@@ -32,6 +32,7 @@ func displayStates() uiDisplayStates {
 		Pipeline: conv(t[display.KindPipeline]), Bundle: conv(t[display.KindBundle]), Step: conv(t[display.KindStep]),
 		SubStep: conv(t[display.KindSubStep]), Gate: conv(t[display.KindGate]),
 		HeldByGate: uiState(display.HeldByGate("Pending", "{gate}")), Held: uiState(display.Held("Verified")),
+		Frozen: uiState(display.Frozen("Pending", "{freeze}")),
 	}
 }
 

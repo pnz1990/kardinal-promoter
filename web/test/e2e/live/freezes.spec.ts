@@ -41,5 +41,9 @@ test('the banner says who stopped the line, where, until when and why; the drawe
   const why = stageDrawer(page).locator('[data-section="why"]')
   await expect(why).toContainText('Held by a freeze: it promotes once the freeze is lifted, or exempted here.')
   await expect(why).toContainText(`frozen by ${name}`)
+  // The station map marks the station frozen, from the step's status.frozenBy (#1974).
+  const station = page.locator('.station[data-station="test"]')
+  await expect(station).toHaveAttribute('data-tone', 'frozen')
+  await expect(station).toHaveAttribute('aria-label', new RegExp(`Frozen by ${name}`))
   await axe(page)
 })

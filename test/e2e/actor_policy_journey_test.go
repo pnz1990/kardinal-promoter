@@ -334,9 +334,16 @@ func TestJourneyActorPolicy_FreezeAgentsNotHumans(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(w.step(areq).Status.Message, "frozen by "+name), w.step(areq).Status.Message)
 	assert.Equal(t, "", w.step(areq).Status.State)
+	require.NotNil(t, w.step(areq).Status.FrozenBy)
+	assert.Equal(t, name, w.step(areq).Status.FrozenBy.Name)
 	assert.Equal(t, psrec.StatePromoting, w.step(hreq).Status.State, "a person's version is not held")
+	assert.Nil(t, w.step(hreq).Status.FrozenBy)
 
+	// Lifted: the first reconcile clears status.frozenBy, the next starts the step.
 	require.NoError(t, lifecycle.Unfreeze(w.ctx, w.c, name, "", nil))
+	_, err = ar.Reconcile(w.ctx, areq)
+	require.NoError(t, err)
+	assert.Nil(t, w.step(areq).Status.FrozenBy)
 	_, err = ar.Reconcile(w.ctx, areq)
 	require.NoError(t, err)
 	assert.Equal(t, psrec.StatePromoting, w.step(areq).Status.State)

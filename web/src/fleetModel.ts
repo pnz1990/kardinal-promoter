@@ -14,6 +14,7 @@ export type StationState =
   | 'arriving'  // the active Bundle is promoting into it now
   | 'failed'    // the active Bundle failed here
   | 'held'      // the active Bundle waits here behind a gate
+  | 'frozen'    // a freeze holds the active Bundle's step here (#1974)
   | 'ahead'     // the active Bundle has not reached it yet
   | 'empty'     // never deployed and nothing on its way
 
@@ -34,6 +35,8 @@ export interface Station {
   state: StationState
   /** The active Bundle's step state here, when it has one. */
   incomingState?: string
+  /** The freeze that holds the active Bundle's step here (state frozen). */
+  frozenBy?: string
   /** Set on a fleet environment: its targets rolled up. */
   fleet?: FleetRollup
 }
@@ -73,7 +76,7 @@ export interface FleetRow {
   /** Index of the group the active Bundle is moving into, or -1. */
   liveGroup: number
   /** What the live connector shows: moving, held at a gate, or failed. */
-  live?: 'arriving' | 'held' | 'failed'
+  live?: 'arriving' | 'held' | 'frozen' | 'failed'
   /** The active Bundle's version, when it is still on its way somewhere. */
   incomingVersion?: string
 }
@@ -210,13 +213,15 @@ export function fleetRow(p: Pipeline): FleetRow {
   const deployed = p.deployed ?? {}
   const active = p.activeBundleName
   const fleets = new Map((p.environmentTopology ?? []).filter(e => e.fleet).map(e => [e.name, e.fleet!]))
+  const frozenBy = new Map((p.environments ?? []).filter(e => e.frozenBy).map(e => [e.name, e.frozenBy!]))
   const groups = depthGroups(p).map(g => g.map((env): Station => {
     const f = fleets.get(env)
     if (f) return fleetStation(env, f, p)
     const d = deployed[env]
     const incoming = active ? states[env] : undefined
     let state: StationState
-    if (incoming && FAILED.has(incoming)) state = 'failed'
+    if (active && frozenBy.has(env)) state = 'frozen'
+    else if (incoming && FAILED.has(incoming)) state = 'failed'
     else if (incoming && ARRIVING.has(incoming)) state = 'arriving'
     else if (incoming === 'Verified' || (d && (!active || d.bundle === active))) state = 'settled'
     // The active Bundle lists only the environments it has reached, so one
@@ -225,11 +230,15 @@ export function fleetRow(p: Pipeline): FleetRow {
     else state = d ? 'settled' : 'empty'
     const alsoRuns = d?.configVersion || d?.imagesVersion || undefined
     const alsoFrom = d?.configVersion ? d.configFrom : d?.imagesVersion ? d.imagesFrom : undefined
-    return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, alsoRuns, alsoFrom, actor: d?.actor, state, incomingState: incoming }
+    return { env, version: d?.version ?? '', bundle: d?.bundle ?? '', verifiedAt: d?.verifiedAt, alsoRuns, alsoFrom, actor: d?.actor, state, incomingState: incoming, frozenBy: frozenBy.get(env) }
   }))
 
   let liveGroup = groups.findIndex(g => g.some(s => s.state === 'failed'))
   let live: FleetRow['live'] = liveGroup >= 0 ? 'failed' : undefined
+  if (liveGroup < 0) {
+    liveGroup = groups.findIndex(g => g.some(s => s.state === 'frozen'))
+    if (liveGroup >= 0) live = 'frozen'
+  }
   if (liveGroup < 0) {
     liveGroup = groups.findIndex(g => g.some(s => s.state === 'arriving'))
     if (liveGroup >= 0) live = 'arriving'
@@ -278,7 +287,7 @@ export interface WavePlate {
   counts: Array<{ state: StationState; count: number }>
 }
 
-const PLATE_ORDER: StationState[] = ['failed', 'held', 'arriving', 'ahead', 'settled', 'empty']
+const PLATE_ORDER: StationState[] = ['failed', 'frozen', 'held', 'arriving', 'ahead', 'settled', 'empty']
 
 /** The plate of a wave of stations (at least one). */
 export function wavePlate(stations: Station[]): WavePlate {

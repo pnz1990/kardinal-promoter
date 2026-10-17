@@ -156,14 +156,15 @@ test.describe('Journey 027 — freezes', () => {
     expect(state.writes).toEqual([])
   })
 
-  test('the stage drawer says a freeze holds the step, in the controller\'s words', async ({ page }) => {
+  test('the stage drawer says a freeze holds the step (status.frozenBy), in the controller\'s words', async ({ page }) => {
     await serveFreezes(page)
     const msg = `frozen by ${AGENTS} (agents, every namespace) since 2026-10-15T06:00:00Z by alice: INC-4211 — lift it with: kardinal unfreeze ${AGENTS}, or let this through with: kardinal override kardinal-test-app uat --freeze --reason <why>`
     await page.route('**/api/v1/ui/bundles/kardinal-test-app-abc123/steps**', async route => {
       const res = await route.fetch()
       const steps = await res.json()
       await route.fulfill({ response: res, json: [...steps, { name: 'step-uat-abc', namespace: 'default', pipeline: 'kardinal-test-app',
-        bundle: 'kardinal-test-app-abc123', environment: 'uat', stepType: 'kustomize-set-image', state: 'Pending', message: msg }] })
+        bundle: 'kardinal-test-app-abc123', environment: 'uat', stepType: 'kustomize-set-image', state: 'Pending', message: msg,
+        frozenBy: { name: AGENTS, since: '2026-10-15T06:00:00Z' } }] })
     })
     await page.goto('/ui/#/p/default/kardinal-test-app/env/uat')
     const why = page.getByTestId('stage-drawer').locator('[data-section="why"]')

@@ -43,7 +43,7 @@ const autoRollbackActor = "kardinal-controller (onHealthFailure=rollback)"
 // The signal is the freeze PolicyGate (lifecycle.IsPaused), not
 // Pipeline.spec.paused: the Pipeline reconciler converges the gate to
 // spec.paused, and the gate is a CRD the step can watch. The step writes only
-// its own status message.
+// its own status: the message, and clearing status.frozenBy.
 func (r *Reconciler) holdIfPaused(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (bool, ctrl.Result, error) {
 	paused, err := lifecycle.IsPaused(ctx, r.Client, ps.Namespace, ps.Spec.PipelineName)
 	if err != nil {
@@ -53,9 +53,14 @@ func (r *Reconciler) holdIfPaused(ctx context.Context, log zerolog.Logger, ps *v
 		return false, ctrl.Result{}, nil
 	}
 	msg := lifecycle.PausedMessage(ps.Spec.PipelineName)
-	if ps.Status.Message != msg {
+	// The pause is the hold the step shows, so a freeze recorded earlier is
+	// cleared: it could be lifted while the pause holds, and holdIfFrozen
+	// runs after this one. After resume, holdIfFrozen records it again if it
+	// still holds the step (#1974).
+	if ps.Status.Message != msg || ps.Status.FrozenBy != nil {
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.Message = msg
+		ps.Status.FrozenBy = nil
 		if err := r.Status().Patch(ctx, ps, patch); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("patch paused message: %w", err)
 		}

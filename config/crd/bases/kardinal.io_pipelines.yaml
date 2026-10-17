@@ -2224,6 +2224,12 @@ spec:
                         Bundle is the Bundle whose change runs in the environment: the newest
                         one whose change landed there. Empty when none has.
                       type: string
+                    frozenBy:
+                      description: |-
+                        FrozenBy is the freeze (ChangeWindow name) that holds the newest
+                        Bundle's step here: its PromotionStep's status.frozenBy.
+                      maxLength: 253
+                      type: string
                     held:
                       description: |-
                         Held is true when a rollback hold (spec.holds) keeps the environment

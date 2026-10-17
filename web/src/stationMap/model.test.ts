@@ -90,6 +90,26 @@ describe('buildModel', () => {
     expect(m.attention.held).toEqual(['prod'])
   })
 
+  it('shows a step a freeze holds as frozen, from status.frozenBy, before any other hold (#1974)', () => {
+    const frozenStep = (env: string, state: string) => ({ ...step(env, state), frozenBy: { name: 'release-freeze' } })
+    const p = threeEnvs({ environmentTopology: [{ name: 'test' }, { name: 'uat', upstreams: ['test'] },
+      { name: 'prod', upstreams: ['uat'], hold: { bundle: 'app-rollback-x', reason: 'bad release' } }] })
+    const graph: GraphResponse = { nodes: [step('test', 'Verified'), frozenStep('uat', 'Promoting'), frozenStep('prod', 'NotStarted')],
+      edges: [{ from: 'step-test', to: 'step-uat' }, { from: 'step-uat', to: 'step-prod' }] }
+    const m = buildModel(p, { bundle: bundle('app-v2', '1.4.2'), graph })
+    expect(m.stations.get('uat')!.display).toMatchObject({ tone: 'frozen', label: 'Frozen by release-freeze', value: 'Promoting' })
+    // Held before it starts, the step has no state yet: the graph says NotStarted.
+    expect(m.stations.get('prod')!.display).toMatchObject({ tone: 'frozen', value: 'Pending' })
+    expect(m.attention.frozen).toEqual(['uat', 'prod'])
+    expect(m.attention.held).toEqual([])
+    expect(m.thread.find(t => t.to === 'uat')?.kind).toBe('held')
+
+    // A step that moved on is not frozen, whatever it carries.
+    const done = buildModel(threeEnvs(), { bundle: bundle('app-v2', '1.4.2'),
+      graph: { nodes: [frozenStep('test', 'Verified')], edges: [] } })
+    expect(done.stations.get('test')!.display.tone).toBe('verified')
+  })
+
   it('collapses a wave of 5 or more into a band, and a fleet into a platform', () => {
     const wave = Array.from({ length: 6 }, (_, i) => ({ name: `w${i}`, upstreams: ['test'] }))
     const p: Pipeline = {

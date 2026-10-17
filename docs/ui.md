@@ -69,7 +69,8 @@ pipelines as a sortable table.
 
 While a [freeze](agentic/freezes.md#in-the-ui) holds promotions, every view starts with its banner:
 whom it holds, where, who froze, since and until when, and why, with **Unfreeze** or the
-`kardinal unfreeze` command.
+`kardinal unfreeze` command. A station the freeze holds, on the map and on the fleet board, is
+marked frozen and says "Frozen by <freeze>".
 
 ### Who shipped a version
 
@@ -116,7 +117,7 @@ The map draws the pipeline as a station map:
 </figure>
 
 - **Needs attention.** A strip above the map counts what needs a look: failed environments,
-  environments blocked by each gate, held environments and environments that wait. Select an item to go to it.
+  environments blocked by each gate, held and frozen environments, and environments that wait. Select an item to go to it.
 - **Search** matches environment and target names, versions, version (Bundle) names, gate names
   and gate expressions; Enter and Shift+Enter move through the matches.
 - **Zoom.** The map has three levels:

@@ -407,6 +407,9 @@ type uiGraphNode struct {
 	// (graph.GateHolds, the rule blockerCount uses); its State is "Block".
 	// See graph.GateState for the other gate states.
 	Holding bool `json:"holding,omitempty"`
+	// FrozenBy is the freeze that holds a PromotionStep node (its
+	// status.frozenBy, #1974).
+	FrozenBy *v1alpha1.StepFreeze `json:"frozenBy,omitempty"`
 }
 
 // uiGraphEdge is a directed dependency edge in the promotion DAG.
@@ -436,6 +439,8 @@ type uiStepResponse struct {
 	CurrentStepIndex int               `json:"currentStepIndex"` // index into step sequence (#359)
 	// #341: Kubernetes conditions — shown in NodeDetail conditions panel.
 	Conditions []uiCondition `json:"conditions,omitempty"`
+	// FrozenBy is the freeze that holds the step (status.frozenBy, #1974).
+	FrozenBy *v1alpha1.StepFreeze `json:"frozenBy,omitempty"`
 	// #501: Bake countdown fields (served; the UI does not show them yet).
 	// BakeElapsedMinutes is contiguous healthy minutes so far in the current bake window.
 	BakeElapsedMinutes int64 `json:"bakeElapsedMinutes,omitempty"`
@@ -1325,6 +1330,7 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 				stepNode.State = ps.Status.State
 			}
 			stepNode.Message = ps.Status.Message
+			stepNode.FrozenBy = ps.Status.FrozenBy
 			stepNode.PRURL = ps.Status.PRURL
 			stepNode.Outputs = ps.Status.Outputs
 			if !ps.CreationTimestamp.IsZero() {
@@ -1464,6 +1470,7 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 			Outputs:            ps.Status.Outputs,
 			CurrentStepIndex:   ps.Status.CurrentStepIndex,
 			Conditions:         buildUIConditions(ps.Status.Conditions),
+			FrozenBy:           ps.Status.FrozenBy,
 			BakeElapsedMinutes: ps.Status.BakeElapsedMinutes,
 			BakeTargetMinutes:  bakeMinutes,
 			BakeResets:         ps.Status.BakeResets,

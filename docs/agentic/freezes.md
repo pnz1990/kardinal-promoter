@@ -29,6 +29,11 @@ freeze, who froze, since when and why, and the two ways on. A step that is waiti
 merge or running its health check finishes, as with [pause](../pause.md): stopping it would leave
 a merged change unverified. Auto-merge of a held step's PR is off.
 
+The step records the freeze in `status.frozenBy` (its name and since when) and clears it when no
+freeze holds it any more, or when a [pause](../pause.md) holds it instead. The Pipeline's `status.environments[].frozenBy`
+names the freeze for each environment it holds, and `kardinal get pipelines` and
+`kardinal status` show such an environment as "Frozen by <freeze>".
+
 | Freeze | Holds |
 |---|---|
 | `--agents` | Versions whose actor stamp says kind `agent` ([Actors](../actors.md)) |
@@ -96,7 +101,9 @@ colour, an agent freeze in the blocked one, and the words say which. **Unfreeze*
 those who may lift it; for everyone else, and while the controls below are off, the banner shows
 `kardinal unfreeze <name>`, with the controller's reason as its tooltip. The stage drawer of an
 environment a freeze holds says so in **Why it's waiting**, with the step's message: the freeze,
-and the commands to lift it or let this environment through.
+and the commands to lift it or let this environment through. On the station map and the fleet
+board, a station a freeze holds is marked frozen (❄, "Frozen by <freeze>"), and **Needs
+attention** counts it.
 The top bar's **Freeze** menu offers **Freeze agents…** and **Stop the line…** (which asks you to
 type `stop`). The controls need the UI's TokenReview sign-in (a freeze names who froze) and Helm
 `ui.freezeControls: true`, which lets the controller write freezes for allowed callers.

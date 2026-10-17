@@ -562,7 +562,7 @@ var bundlePhaseChanged = predicate.Funcs{
 
 // stepStateChanged passes the PromotionStep events the Pipeline status
 // depends on: creation, deletion, and an update that changes status.state,
-// or outputs.noChanges. The deployment metrics read the health-check step's
+// outputs.noChanges or the freeze that holds the step (status.frozenBy). The deployment metrics read the health-check step's
 // start, which a step writes as it enters HealthChecking. The rest are a running
 // step's own status writes, about one a second while it promotes and every
 // health check while it bakes; mapping each to its Pipeline reconciled every
@@ -575,8 +575,17 @@ var stepStateChanged = predicate.Funcs{
 			return true
 		}
 		return oldS.Status.State != newS.Status.State ||
-			oldS.Status.Outputs["noChanges"] != newS.Status.Outputs["noChanges"]
+			oldS.Status.Outputs["noChanges"] != newS.Status.Outputs["noChanges"] ||
+			frozenName(oldS) != frozenName(newS)
 	},
+}
+
+// frozenName is the name of the freeze that holds s (status.frozenBy), or "".
+func frozenName(s *kardinalv1alpha1.PromotionStep) string {
+	if s.Status.FrozenBy == nil {
+		return ""
+	}
+	return s.Status.FrozenBy.Name
 }
 
 // Step states that DerivePhase reports as Degraded.

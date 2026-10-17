@@ -302,7 +302,7 @@ export default function StationMap(props: StationMapProps) {
         e.preventDefault()
         if (e.shiftKey) onSetExpanded(new Set())
         else {
-          const urgent = [...model.groups.values()].filter(g => g.counts.some(c => ['failed', 'blocked', 'held'].includes(c.tone))).map(g => g.id)
+          const urgent = [...model.groups.values()].filter(g => g.counts.some(c => ['failed', 'blocked', 'held', 'frozen'].includes(c.tone))).map(g => g.id)
           onSetExpanded(new Set([...expanded, ...urgent]))
         }
         break
@@ -332,6 +332,7 @@ export default function StationMap(props: StationMapProps) {
   for (const b of att.blocked) byGate.set(b.gate, [...(byGate.get(b.gate) ?? []), b.env])
   for (const [g, envs] of byGate) attentionItems.push({ key: `blocked:${g}`, text: `${envs.length} blocked by ${g}`, envs })
   if (att.held.length) attentionItems.push({ key: 'held', text: `${att.held.length} held`, envs: att.held })
+  if (att.frozen.length) attentionItems.push({ key: 'frozen', text: `${att.frozen.length} frozen`, envs: att.frozen })
   if (att.waiting.length) attentionItems.push({ key: 'waiting', text: `${att.waiting.length} waiting`, envs: att.waiting })
 
   const showAttention = (envs: string[]) => {
@@ -367,7 +368,7 @@ export default function StationMap(props: StationMapProps) {
         boxes = boxes.map(b => ({ ...b, x: x + r - b.w }))
       }
       const tone = n.station.display.tone
-      const priority = focusedId === n.id ? 0 : tone === 'failed' || tone === 'blocked' || tone === 'held' ? 1 : onThread.has(n.id) ? 2 : 3
+      const priority = focusedId === n.id ? 0 : tone === 'failed' || tone === 'blocked' || tone === 'held' || tone === 'frozen' ? 1 : onThread.has(n.id) ? 2 : 3
       labels.push({ id: n.id, priority, boxes })
     }
     if (level === 'detail') {
@@ -672,7 +673,7 @@ function StationGlyph({ p, st, level, model, focusable, focused, dim, chain, onO
       {/* The whole station is the target: the dot and its labels. */}
       <rect className="station__area" x={p.x - p.w / 2 - 4} y={p.y - p.h / 2} width={p.w + 8} height={Math.min(p.h, labelsBottom(p, level) - (p.y - p.h / 2))} />
       <circle className="station__hit" cx={x} cy={y} r={r + 8} />
-      {tone === 'held' && <circle className="station__ring2" cx={x} cy={y} r={r + 3} />}
+      {(tone === 'held' || tone === 'frozen') && <circle className="station__ring2" cx={x} cy={y} r={r + 3} />}
       <circle className="station__dot" cx={x} cy={y} r={r} />
       {tone === 'failed' && <path className="station__notch" d={`M${x} ${y} L${x + r * 1.2} ${y - r * 0.7} L${x + r * 1.2} ${y + r * 0.7} Z`} />}
       {tone === 'waiting' && <path className="station__tick" d={`M${x} ${y - r * 0.6} L${x} ${y} L${x + r * 0.5} ${y}`} />}
@@ -694,7 +695,7 @@ export const AGENT_MARK = ' · agent'
 function stationText(st: Station, level: ZoomLevel, model: StationMapModel, p: Placed, focused: boolean): { name?: string; lines: Array<{ cls: string; text: string }> } {
   const tone = st.display.tone
   const onThread = model.thread.some(t => t.to === st.id || t.from === st.id)
-  const attention = tone === 'failed' || tone === 'blocked' || tone === 'held'
+  const attention = tone === 'failed' || tone === 'blocked' || tone === 'held' || tone === 'frozen'
   if (!(level !== 'overview' || onThread || attention || focused)) return { lines: [] }
   if (level === 'overview') return { name: st.env, lines: [] }
   const lines: Array<{ cls: string; text: string }> = []
@@ -843,7 +844,7 @@ function GroupGlyph({ p, g, expanded, model, level, active, focusedEnv, matchSet
             <rect className="cell__box" x={cell.x} y={cell.y} width={c} height={c} />
             {/* State by shape as well as hue: ✕ failed, hatch held, a bar blocked, a dot promoting. */}
             {tone === 'failed' && <path className="cell__mark" d={`M${cell.x + 2} ${cell.y + 2} L${cell.x + c - 2} ${cell.y + c - 2} M${cell.x + c - 2} ${cell.y + 2} L${cell.x + 2} ${cell.y + c - 2}`} />}
-            {tone === 'held' && <rect className="cell__held" x={cell.x} y={cell.y} width={c} height={c} fill={`url(#${hatch})`} />}
+            {(tone === 'held' || tone === 'frozen') && <rect className="cell__held" x={cell.x} y={cell.y} width={c} height={c} fill={`url(#${hatch})`} />}
             {tone === 'blocked' && <path className="cell__mark" d={`M${cell.x + 2} ${cell.y + c / 2} L${cell.x + c - 2} ${cell.y + c / 2}`} />}
             {tone === 'promoting' && <circle className="cell__dot" cx={cell.x + c / 2} cy={cell.y + c / 2} r={c / 5} />}
             {tone === 'waiting' && <path className="cell__clock" d={`M${cell.x + c / 2} ${cell.y + 2} L${cell.x + c / 2} ${cell.y + c / 2} L${cell.x + c - 2.5} ${cell.y + c / 2}`} />}
@@ -891,6 +892,7 @@ const LEGEND: Array<{ tone: string; label: string; desc: string }> = [
   { tone: 'waiting', label: 'Waiting for PR merge', desc: 'A person is next: a PR to merge, or an approval' },
   { tone: 'blocked', label: 'Held by a gate', desc: 'A policy gate holds it' },
   { tone: 'held', label: 'Held', desc: 'A rollback holds it on an earlier version' },
+  { tone: 'frozen', label: 'Frozen', desc: 'A freeze (kardinal freeze) holds it until it is lifted' },
   { tone: 'pending', label: 'Not reached', desc: 'Not reached yet, or waiting its turn' },
 ]
 

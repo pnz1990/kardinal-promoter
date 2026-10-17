@@ -271,10 +271,30 @@ func TestGate_FreezeAgentsAndStopTheLine(t *testing.T) {
 	agentV := agentShips(t, agent, a.ns, fixtures.Image+":"+fixtures.V3)
 	e.WaitStepMessage(t, a.ns, pipelineName, agentV, "test", "Pending", "frozen by "+agents, promoteTimeout)
 	e.StepHeld(t, a.ns, pipelineName, agentV, "test", "INC-4211 agents paused", 15*time.Second)
+	// The step records the freeze (#1974), the Pipeline projects it, and the
+	// CLI shows the environment frozen.
+	e.WaitStep(t, a.ns, pipelineName, agentV, "test", gateTimeout, "status.frozenBy names the freeze",
+		func(ps *v1alpha1.PromotionStep) (bool, string) {
+			f := ps.Status.FrozenBy
+			if f == nil {
+				return false, "frozenBy unset"
+			}
+			return f.Name == agents && f.Since != nil, fmt.Sprintf("%+v", *f)
+		})
+	e.WaitPipeline(t, a.ns, pipelineName, gateTimeout, "environment test frozen by "+agents, func(p *v1alpha1.Pipeline) bool {
+		for _, env := range p.Status.Environments {
+			if env.Name == "test" {
+				return env.FrozenBy == agents
+			}
+		}
+		return false
+	})
+	assert.Contains(t, c.Must(a.ns, "get", "pipelines"), "Frozen by "+agents)
 	listed := c.Must("", "freeze")
 	assert.Contains(t, listed, agents)
 	assert.Contains(t, c.Must(a.ns, "unfreeze", agents), "Freeze "+agents+" lifted")
-	e.WaitStepState(t, a.ns, pipelineName, agentV, "test", "Verified", promoteTimeout)
+	released := e.WaitStepState(t, a.ns, pipelineName, agentV, "test", "Verified", promoteTimeout)
+	assert.Nil(t, released.Status.FrozenBy, "the lifted freeze is cleared from the step")
 
 	// Stop the line: everyone's version holds.
 	c.Must(a.ns, "freeze", "--everyone", "--reason", "INC-4212 stop", "--yes")

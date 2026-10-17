@@ -115,6 +115,7 @@ func TestLabels(t *testing.T) {
 		{display.Step("Superseded"), "↷ Replaced by newer version", display.ToneSuperseded},
 		{display.HeldByGate("Pending", "no-weekend-deploys"), "⏸ Held by gate no-weekend-deploys", display.ToneBlocked},
 		{display.Held("Verified"), "⊙ Held by rollback", display.ToneHeld},
+		{display.Frozen("Pending", "release-freeze"), "❄ Frozen by release-freeze", display.ToneFrozen},
 		{display.Bundle("Verified"), "● Verified", display.ToneVerified},
 		{display.Pipeline("Ready", false), "● Up to date", display.ToneVerified},
 		{display.Pipeline("Promoting", true), "‖ Paused", display.TonePaused},
@@ -176,7 +177,7 @@ func typeScript() string {
 /** The design-system status bucket of a state: picks colour and shape. */
 export type Tone =
   | 'verified' | 'promoting' | 'waiting' | 'blocked' | 'failed' | 'superseded'
-  | 'paused' | 'held' | 'pending' | 'degraded' | 'unknown'
+  | 'paused' | 'held' | 'frozen' | 'pending' | 'degraded' | 'unknown'
 
 /** The object a state belongs to. */
 export type DisplayKind = 'pipeline' | 'bundle' | 'step' | 'substep' | 'gate'
@@ -211,6 +212,7 @@ export const DISPLAY_STATES: Record<DisplayKind, Record<string, DisplayState>> =
 	}
 	b.WriteString("}\n\n")
 	hg := display.HeldByGate("Pending", "{gate}")
+	fz := display.Frozen("Pending", "{freeze}")
 	fmt.Fprintf(&b, `/** Splits a CamelCase value into words, like Go's display.Words ('WaitingForMerge' → 'Waiting for merge'). */
 export function words(value: string): string {
   if (/[ \-_]/.test(value)) return value
@@ -246,7 +248,13 @@ export function held(stepState: string): DisplayState {
   const h: DisplayState = %s
   return { ...h, value: stepState }
 }
-`, tsString(hg.Label), tsString(hg.Glyph), tsString(hg.ASCII), tsString(string(hg.Tone)), tsState(display.Held("")))
+
+/** An environment whose step a freeze holds (Go: display.Frozen). */
+export function frozen(stepState: string, freeze: string): DisplayState {
+  return { value: stepState, label: %s.replace("{freeze}", freeze), glyph: %s, ascii: %s, tone: %s }
+}
+`, tsString(hg.Label), tsString(hg.Glyph), tsString(hg.ASCII), tsString(string(hg.Tone)), tsState(display.Held("")),
+		tsString(fz.Label), tsString(fz.Glyph), tsString(fz.ASCII), tsString(string(fz.Tone)))
 	return b.String()
 }
 

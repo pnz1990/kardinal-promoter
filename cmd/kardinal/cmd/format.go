@@ -417,7 +417,7 @@ func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
 			}
 			switch {
 			case newest == b.Name && e.State != "":
-				row.envs[e.Name] = heldCell(e.State, e.Held, e.BlockedBy)
+				row.envs[e.Name] = heldCell(e.State, e.Held, e.BlockedBy, e.FrozenBy)
 			case row.envs[e.Name] == "Waiting" && lifecycle.HeldFrom(p, e.Name, b.Name) != nil:
 				row.envs[e.Name] = cellHeld
 			}
