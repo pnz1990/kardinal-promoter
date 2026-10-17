@@ -43,6 +43,7 @@ func TestPlanRollback_Fleet(t *testing.T) {
 	require.NoError(t, err, "prod-eu ran nothing yet: the plan comes from prod-us")
 	assert.Equal(t, "app-v1", plan.Target.Name)
 	assert.Equal(t, "prod", plan.Bundle.Spec.Intent.TargetEnvironment, "the whole fleet")
+	assert.True(t, plan.Bundle.Spec.Intent.TargetOnly)
 	assert.Equal(t, "v1", plan.Bundle.Spec.Images[0].Tag)
 
 	one, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{

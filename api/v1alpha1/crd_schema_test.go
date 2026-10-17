@@ -895,6 +895,34 @@ func TestBundleImagesBounded(t *testing.T) {
 	}
 }
 
+// TestCRDBundleTargetOnlyRules (#1311): intent.targetOnly needs a target
+// environment and cannot be combined with skipEnvironments.
+func TestCRDBundleTargetOnlyRules(t *testing.T) {
+	crds := loadCRDs(t)
+	for _, c := range []struct {
+		intent map[string]interface{}
+		err    string
+	}{
+		{intent: map[string]interface{}{"targetEnvironment": "prod", "targetOnly": true}},
+		{intent: map[string]interface{}{"targetEnvironment": "prod", "targetOnly": false, "skipEnvironments": []interface{}{"uat"}}},
+		{intent: map[string]interface{}{"targetOnly": true}, err: "intent.targetOnly needs intent.targetEnvironment"},
+		{intent: map[string]interface{}{"targetEnvironment": "", "targetOnly": true}, err: "intent.targetOnly needs intent.targetEnvironment"},
+		{intent: map[string]interface{}{"targetEnvironment": "prod", "targetOnly": true, "skipEnvironments": []interface{}{"uat"}},
+			err: "intent.targetOnly cannot be combined with intent.skipEnvironments"},
+	} {
+		obj := baseObject("Bundle")
+		obj["spec"] = map[string]interface{}{"type": "image", "pipeline": "p", "intent": c.intent,
+			"images": []interface{}{map[string]interface{}{"repository": "ghcr.io/acme/app", "tag": "1.0"}}}
+		errs := validateCR(t, crds, obj)
+		if c.err == "" {
+			assert.Empty(t, errs, "%v", c.intent)
+			continue
+		}
+		require.Len(t, errs, 1, "%v", c.intent)
+		assert.Contains(t, errs[0], c.err)
+	}
+}
+
 // TestCRDSchemaEnvironmentCount: a Pipeline may have 1 to 500 environments
 // (#1473; it was 100).
 func TestCRDSchemaEnvironmentCount(t *testing.T) {

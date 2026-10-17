@@ -41,6 +41,43 @@ func DirectUpstreams(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alph
 	return filteredDeps(envName, deps, filteredSet), nil
 }
 
+// SoakUpstreams returns the environments whose soak a gate on envName reads
+// (bundle.upstreamSoakMinutes): DirectUpstreams, except that the environments
+// a targetOnly Bundle carries the verification of (CarriedEnvironments) count
+// as promoted. Their soak is in status.upstreamEvidence (UpstreamSoak).
+func SoakUpstreams(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	envName string) ([]string, error) {
+	carried := CarriedEnvironments(bundle)
+	if len(carried) == 0 {
+		return DirectUpstreams(pipeline, bundle, envName)
+	}
+	full := bundle.DeepCopy()
+	full.Status.UpstreamEvidence = nil
+	return DirectUpstreams(pipeline, full, envName)
+}
+
+// UpstreamSoak is the soak of bundle in env, and whether env is verified for
+// it: its own promotion when status.environments has env Verified, otherwise
+// another Bundle's verification it carries (status.upstreamEvidence).
+func UpstreamSoak(bundle *kardinalv1alpha1.Bundle, env string) (int64, bool) {
+	for _, e := range bundle.Status.Environments {
+		if e.Name == env {
+			if e.Phase == "Verified" {
+				return e.SoakMinutes, true
+			}
+			return 0, false
+		}
+	}
+	if CarriedEnvironments(bundle)[env] {
+		for _, e := range bundle.Status.UpstreamEvidence {
+			if e.Environment == env {
+				return e.SoakMinutes, true
+			}
+		}
+	}
+	return 0, false
+}
+
 // UpstreamsVerified reports whether the Graph Build generates for bundle has
 // released envName: every direct upstream environment (DirectUpstreams) has
 // the bundle's PromotionStep Verified. That is the upstream half of the gate

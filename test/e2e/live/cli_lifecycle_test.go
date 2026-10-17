@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -177,14 +178,19 @@ func TestCLI_Rollback(t *testing.T) {
 	assert.NotEmpty(t, rb.Annotations["kardinal.io/created-at"])
 	assert.Equal(t, "image", rb.Spec.Type)
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rb.Spec.Images)
-	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod"}, rb.Spec.Intent)
+	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true}, rb.Spec.Intent)
 	require.NotNil(t, rb.Spec.Provenance)
 	assert.Equal(t, v1alpha1.BundleProvenance{CommitSHA: "0a1b2c3", Author: "e2e-bot", CIRunURL: "https://ci.example/run/7", RollbackOf: bA},
 		*rb.Spec.Provenance, "the rollback Bundle carries the target's provenance")
 
-	// The rollback goes through test again, then prod.
+	// A's image is pinned by tag only, so the rollback carries no
+	// verification (#1311): it goes through test again, then prod.
 	e.WaitStepState(t, a.ns, pipelineName, bR, "test", "Verified", promoteTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, bR, "prod", "Verified", promoteTimeout)
+	cond := meta.FindStatusCondition(getBundle(t, e, a.ns, bR).Status.Conditions, "UpstreamEvidence")
+	if assert.NotNil(t, cond) {
+		assert.Equal(t, "NotPinned", cond.Reason, cond.Message)
+	}
 	for _, env := range []string{"test", "prod"} {
 		assertEnvAt(t, a, env, fixtures.V2)
 		assert.Equal(t, fixtures.V2, kustomizeTag(t, a, env))
@@ -291,7 +297,7 @@ func TestCLI_Promote(t *testing.T) {
 	assert.NotEmpty(t, p.Annotations["kardinal.io/created-at"])
 	assert.Equal(t, "image", p.Spec.Type)
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, p.Spec.Images)
-	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod"}, p.Spec.Intent)
+	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true}, p.Spec.Intent)
 	require.NotNil(t, p.Spec.Provenance)
 	assert.Equal(t, v1alpha1.BundleProvenance{CommitSHA: "4d5e6f7", Author: "e2e-bot", CIRunURL: "https://ci.example/run/9"}, *p.Spec.Provenance)
 

@@ -1286,6 +1286,14 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Pausing is enforced by the PromotionStep reconciler, which holds steps
 	// while the Pipeline's freeze gate exists (see pkg/lifecycle/pause.go), so
 	// a paused Pipeline still gets its Graph and resumes where it stopped.
+	//
+	// A targetOnly Bundle decides first whether it carries the upstream
+	// verification (#1311): Translate reads it from b's status. The patch
+	// below starts from before that decision, so it writes it.
+	beforeEvidence := b.DeepCopy()
+	if err := r.decideUpstreamEvidence(ctx, log, b, &pipeline); err != nil {
+		return ctrl.Result{}, err
+	}
 	// The gates are hashed before Translate reads them (builtGatesHash).
 	gatesHash := r.gatesHashFor(ctx, log, &pipeline)
 	graphName, err := r.translate(ctx, log, &pipeline, b)
@@ -1328,7 +1336,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)
 	}
 
-	patch := statusPatch(b.DeepCopy())
+	patch := statusPatch(beforeEvidence)
 	setPhase(b, phasePromoting, r.now())
 	b.Status.GraphRef = graphName                              // for recreation detection (#490)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // for change detection (#626)
@@ -1620,6 +1628,11 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	// The time is read here for a CRD status write — Graph-first compliant.
 	now := r.now().UTC()
 	b.Status.Environments = environmentStatuses(b, pipeline, steps, now)
+	if len(b.Status.UpstreamEvidence) > 0 {
+		if err := r.refreshEvidence(ctx, b, now); err != nil {
+			log.Warn().Err(err).Msg("refresh the carried upstream soak (non-fatal)")
+		}
+	}
 
 	var after []func()
 	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
@@ -1837,7 +1850,8 @@ func failureCause(env *kardinalv1alpha1.EnvironmentStatus, rejected *metav1.Cond
 	return "StepFailed", fmt.Sprintf("environment %s: %s", env.Name, detail)
 }
 
-// soakRequeue keeps status.environments[*].soakMinutes ticking while a
+// soakRequeue keeps status.environments[*].soakMinutes (and the carried
+// status.upstreamEvidence[*].soakMinutes) ticking while a
 // Promoting Bundle has a Verified environment. Once the PromotionSteps settle
 // nothing else re-triggers this reconcile, so a soak-based gate such as
 // upstream.uat.soakMinutes >= 30 would never see the time pass.
@@ -1849,6 +1863,9 @@ func soakRequeue(b *kardinalv1alpha1.Bundle) ctrl.Result {
 		if env.HealthCheckedAt != nil {
 			return ctrl.Result{RequeueAfter: time.Minute}
 		}
+	}
+	if len(b.Status.UpstreamEvidence) > 0 {
+		return ctrl.Result{RequeueAfter: time.Minute}
 	}
 	return ctrl.Result{}
 }

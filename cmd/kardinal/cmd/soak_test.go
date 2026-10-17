@@ -31,6 +31,7 @@ func TestSoakOf(t *testing.T) {
 		expr     string
 		approval bool
 		envs     []v1alpha1.EnvironmentStatus
+		carried  []v1alpha1.UpstreamEvidence
 		ok       bool
 		now      string
 		opens    string
@@ -94,6 +95,11 @@ func TestSoakOf(t *testing.T) {
 		{name: "a root environment has no upstream", p: policyPipeline("demo", "test"), env: "test",
 			expr: "bundle.upstreamSoakMinutes >= 3"},
 		{name: "not a soak gate", p: policyPipeline("demo", "uat", "prod"), env: "prod", expr: "!schedule.isWeekend"},
+		{name: "a targetOnly version soaks in the verification it carries (#1311)", p: policyPipeline("demo", "test", "uat", "prod"), env: "prod",
+			expr:    "bundle.upstreamSoakMinutes >= 30",
+			envs:    []v1alpha1.EnvironmentStatus{{Name: "prod", Phase: "Promoting"}},
+			carried: []v1alpha1.UpstreamEvidence{{Environment: "test", Bundle: "demo-a", VerifiedAt: *ago(2 * time.Hour)}, {Environment: "uat", Bundle: "demo-a", VerifiedAt: *ago(10 * time.Minute)}},
+			ok:      true, now: "soak 10.0 of 30 min in uat", opens: "in about 20m0s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -103,6 +109,10 @@ func TestSoakOf(t *testing.T) {
 			}
 			b := explainBundle("demo-b", "Promoting", now.Add(-time.Hour))
 			b.Status.Environments = tt.envs
+			if tt.carried != nil {
+				b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: tt.env, TargetOnly: true}
+				b.Status.UpstreamEvidence = tt.carried
+			}
 			s, ok := soakOf(tt.p, b, g, now)
 			assert.Equal(t, tt.ok, ok)
 			if !ok {

@@ -3208,6 +3208,16 @@ func upstreamEnvironments(bundle *v1alpha1.Bundle, env string) []v1alpha1.Enviro
 			out = append(out, e)
 		}
 	}
+	// A targetOnly Bundle's carried environments, with the time of the
+	// verification it carries (status.upstreamEvidence names its Bundle).
+	carried := graph.CarriedEnvironments(bundle)
+	for _, e := range bundle.Status.UpstreamEvidence {
+		if carried[e.Environment] && e.Environment != env {
+			at := e.VerifiedAt
+			out = append(out, v1alpha1.EnvironmentStatus{Name: e.Environment, Phase: "Verified",
+				HealthCheckedAt: &at, SoakMinutes: e.SoakMinutes})
+		}
+	}
 	return out
 }
 

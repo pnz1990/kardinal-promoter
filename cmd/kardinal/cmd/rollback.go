@@ -47,10 +47,10 @@ func newRollbackCmd() *cobra.Command {
 		Use:   "rollback <pipeline> <env>",
 		Short: "Roll back an environment to the version before",
 		Long: `Roll back <env> to the last version Verified there that deploys something
-else (or --to a named Bundle), as a new Bundle that goes through the gates,
-the PR flow and every upstream environment first. With --hold and --reason,
-<env> stays on the rollback until kardinal unhold (or --hold-expires-in); its
-blocking gates pass as audited exemptions meanwhile. See docs/rollback.md.`,
+else (or --to a named Bundle), as a new Bundle through <env>'s gates and PR
+flow; upstream environments that verified it are not promoted again. With
+--hold and --reason, <env> stays on the rollback until kardinal unhold (or
+--hold-expires-in); its blocking gates pass as audited exemptions. See docs/rollback.md.`,
 		Example: `  # roll prod back to the previous verified version
   kardinal rollback my-app prod
 

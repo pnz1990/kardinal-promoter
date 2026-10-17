@@ -139,7 +139,7 @@ left out. `_(none)_` means the environment has no gates. It also shows when no g
 
 ### Upstream Verification
 
-Lists every other environment recorded in the Bundle's `status.environments`:
+Lists every other environment recorded in the Bundle's `status.environments`, and for a rollback or promote version that promotes only its target, the upstream verifications it carries (`status.upstreamEvidence`, see [Multi-Environment Rollback](rollback.md#multi-environment-rollback)):
 - **Environment**: the environment name
 - **Health Checked At**: when the version passed its health check there
 - **Elapsed**: the time since that health check, when the PR was opened

@@ -145,7 +145,7 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 		},
 		Spec: v1alpha1.BundleSpec{
 			Pipeline: req.Pipeline,
-			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: req.Environment},
+			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: req.Environment, TargetOnly: true},
 			Actor:    req.Stamp,
 		},
 	}

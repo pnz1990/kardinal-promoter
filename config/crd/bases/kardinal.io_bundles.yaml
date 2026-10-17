@@ -241,7 +241,25 @@ spec:
                       TargetEnvironment restricts this Bundle to promoting only up to and
                       including this environment. Empty means promote through all environments.
                     type: string
+                  targetOnly:
+                    description: |-
+                      TargetOnly promotes only TargetEnvironment (for a fleet, its targets)
+                      when every environment upstream of it has verified this Bundle's
+                      artifacts, pinned by digest, in another Bundle of the Pipeline: the BundleReconciler
+                      records that verification in status.upstreamEvidence when it first
+                      builds the Graph, and the Graph has no upstream environment. When one
+                      has not, the Bundle promotes through them, as without TargetOnly, and
+                      its UpstreamEvidence condition says why. kardinal rollback, kardinal
+                      promote and the automatic rollback set it (#1311).
+                    type: boolean
                 type: object
+                x-kubernetes-validations:
+                - message: intent.targetOnly needs intent.targetEnvironment
+                  rule: '!has(self.targetOnly) || !self.targetOnly || (has(self.targetEnvironment)
+                    && size(self.targetEnvironment) > 0)'
+                - message: intent.targetOnly cannot be combined with intent.skipEnvironments
+                  rule: '!has(self.targetOnly) || !self.targetOnly || !has(self.skipEnvironments)
+                    || size(self.skipEnvironments) == 0'
               pipeline:
                 description: Pipeline is the name of the Pipeline this Bundle targets.
                 minLength: 1
@@ -997,6 +1015,56 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
+                x-kubernetes-list-type: map
+              upstreamEvidence:
+                description: |-
+                  UpstreamEvidence is, for a Bundle with spec.intent.targetOnly, the
+                  verification of its artifacts in each environment upstream of its
+                  target by another Bundle of the Pipeline. This Bundle does not promote
+                  those environments, so they are not in environments; gates read their
+                  soak from here. Recorded once, when the Graph is first built; empty
+                  when the Bundle promotes through them.
+                items:
+                  description: |-
+                    UpstreamEvidence is another Bundle's verification of the same artifacts in
+                    one environment upstream of a targetOnly Bundle's target.
+                  properties:
+                    bundle:
+                      description: |-
+                        Bundle is the Bundle of the same Pipeline, with the same artifacts,
+                        whose promotion was Verified in Environment.
+                      type: string
+                    environment:
+                      description: Environment is the upstream environment.
+                      type: string
+                    replacedAt:
+                      description: |-
+                        ReplacedAt is when another version (other artifacts) first started
+                        promoting to Environment after VerifiedAt: from then on Bundle's
+                        artifacts no longer ran there. Unset while they still do.
+                      format: date-time
+                      type: string
+                    soakMinutes:
+                      description: |-
+                        SoakMinutes is the number of minutes from VerifiedAt to ReplacedAt,
+                        or to now while it is unset: how long the artifacts ran there. Written
+                        by the BundleReconciler like EnvironmentStatus.SoakMinutes.
+                      format: int64
+                      type: integer
+                    verifiedAt:
+                      description: |-
+                        VerifiedAt is when that promotion's health check completed (its
+                        status.environments healthCheckedAt).
+                      format: date-time
+                      type: string
+                  required:
+                  - bundle
+                  - environment
+                  - verifiedAt
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - environment
                 x-kubernetes-list-type: map
               version:
                 description: |-

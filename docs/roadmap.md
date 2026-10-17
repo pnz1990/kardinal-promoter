@@ -67,7 +67,6 @@ what shipped.
 ### Also planned
 
 - Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
-- `rollback` and `promote --env` without re-running upstream environments
 
 ---
 

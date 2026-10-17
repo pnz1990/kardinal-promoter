@@ -558,10 +558,38 @@ func filterByIntent(orderedEnvs []string, deps map[string][]string,
 		}
 		result = kept
 	}
+	// A targetOnly Bundle does not promote the upstream environments whose
+	// verification it carries (CarriedEnvironments). They are bridged like
+	// skipped ones, but need no skip permission: the artifacts were verified
+	// there, by another Bundle.
+	if carried := CarriedEnvironments(bundle); len(carried) > 0 {
+		kept := result[:0]
+		for _, e := range result {
+			if !carried[e] {
+				kept = append(kept, e)
+			}
+		}
+		result = kept
+	}
 	if len(result) == 0 {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
 	return result, nil
+}
+
+// CarriedEnvironments are the environments a Bundle with
+// spec.intent.targetOnly does not promote: the ones its
+// status.upstreamEvidence records another Bundle's verification for (#1311).
+// nil for any other Bundle.
+func CarriedEnvironments(bundle *kardinalv1alpha1.Bundle) map[string]bool {
+	if bundle.Spec.Intent == nil || !bundle.Spec.Intent.TargetOnly || len(bundle.Status.UpstreamEvidence) == 0 {
+		return nil
+	}
+	carried := make(map[string]bool, len(bundle.Status.UpstreamEvidence))
+	for _, e := range bundle.Status.UpstreamEvidence {
+		carried[e.Environment] = true
+	}
+	return carried
 }
 
 // envPathTo returns all envs on the path from the first env to target (inclusive).

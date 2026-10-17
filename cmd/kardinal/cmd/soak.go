@@ -77,7 +77,7 @@ func soakOf(p *v1alpha1.Pipeline, b *v1alpha1.Bundle, g *v1alpha1.PolicyGate, no
 		if p == nil {
 			return gateSoak{}, false
 		}
-		ups, err := graph.DirectUpstreams(p, b, g.Labels["kardinal.io/environment"])
+		ups, err := graph.SoakUpstreams(p, b, g.Labels["kardinal.io/environment"])
 		if err != nil || len(ups) == 0 {
 			return gateSoak{}, false
 		}
@@ -86,6 +86,15 @@ func soakOf(p *v1alpha1.Pipeline, b *v1alpha1.Bundle, g *v1alpha1.PolicyGate, no
 	byName := make(map[string]v1alpha1.EnvironmentStatus, len(b.Status.Environments))
 	for _, e := range b.Status.Environments {
 		byName[e.Name] = e
+	}
+	// A targetOnly Bundle soaks in its carried environments from the
+	// verification it carries (#1311).
+	carried := graph.CarriedEnvironments(b)
+	for _, e := range b.Status.UpstreamEvidence {
+		if _, own := byName[e.Environment]; !own && carried[e.Environment] {
+			at := e.VerifiedAt
+			byName[e.Environment] = v1alpha1.EnvironmentStatus{Name: e.Environment, Phase: "Verified", HealthCheckedAt: &at}
+		}
 	}
 	// With several upstreams the gate reads the least soaked one.
 	s.live = true

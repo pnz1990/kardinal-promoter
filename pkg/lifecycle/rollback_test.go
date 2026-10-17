@@ -403,6 +403,7 @@ func TestPlanRollback(t *testing.T) {
 			require.Len(t, b.Spec.Images, len(plan.Target.Spec.Images), "the rollback bundle carries the target's images")
 			assert.Equal(t, tc.wantTag, b.Spec.Images[0].Tag)
 			assert.Equal(t, "prod", b.Spec.Intent.TargetEnvironment)
+			assert.True(t, b.Spec.Intent.TargetOnly, "the rollback promotes only prod when upstream verified it (#1311)")
 			assert.Equal(t, "app", b.Spec.Pipeline)
 			assert.Equal(t, "true", b.Labels[lifecycle.LabelRollback])
 			assert.Equal(t, "app", b.Labels[lifecycle.LabelPipeline])
