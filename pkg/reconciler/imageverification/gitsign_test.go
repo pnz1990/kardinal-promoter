@@ -164,13 +164,41 @@ func TestCommitObjectID(t *testing.T) {
 	want := gitHashObject(t, raw)
 	assert.Equal(t, want, got)
 
-	sha256ID, err := commitObjectID([]byte(testPayload), []byte(sig), true)
+	// A SHA-256 repository: the header is gpgsig-sha256 and the ID SHA-256,
+	// as git computes it there.
+	tree256 := strings.Repeat("3c", 32)
+	payload256 := strings.Replace(testPayload, "tree 3cced1b431769cf16b530b25162e23bb7545d79c", "tree "+tree256, 1)
+	payload256 = strings.Replace(payload256, "parent 4638d83b00e1119b9aab39ff747802a8ff63f530\n", "", 1)
+	raw256 := strings.Replace(payload256, "\n\n",
+		"\ngpgsig-sha256 "+strings.ReplaceAll(strings.TrimRight(sig, "\n"), "\n", "\n ")+"\n\n", 1)
+	sha256ID, err := commitObjectID([]byte(payload256), []byte(sig), true)
 	require.NoError(t, err)
 	assert.Len(t, sha256ID, 64)
-	assert.NotEqual(t, got, sha256ID[:40])
+	assert.Equal(t, gitHashObjectSHA256(t, raw256), sha256ID)
+	sha1Form, err := commitObjectID([]byte(payload256), []byte(sig), false)
+	require.NoError(t, err)
+	assert.NotEqual(t, sha256ID[:40], sha1Form, "the header and hash follow the repository's format")
 
 	_, err = commitObjectID([]byte("tree abc\n"), []byte(sig), false)
 	assert.ErrorContains(t, err, "no blank line")
+}
+
+// gitHashObjectSHA256 is git's object ID of commit object raw in a
+// SHA-256 repository.
+func gitHashObjectSHA256(t *testing.T, raw string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", "--object-format=sha256", dir).CombinedOutput(); err != nil {
+		t.Skipf("git cannot make a SHA-256 repository: %v: %s", err, out)
+	}
+	cmd := exec.Command("git", "-C", dir, "hash-object", "-t", "commit", "--literally", "--stdin")
+	cmd.Stdin = strings.NewReader(raw)
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	return strings.TrimSpace(string(out))
 }
 
 // gitHashObject is git's object ID of commit object raw, or the same
