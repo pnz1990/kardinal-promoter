@@ -140,7 +140,8 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 
 	out := e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "prod", "--key", pub,
 		"--require", "HEALTHY,!OVERRIDDEN")
-	assert.Contains(t, out, "VERIFIED receipt "+prodReceipt)
+	assert.Contains(t, out, "receipt "+prodReceipt+": every check below that was made passed")
+	assert.Contains(t, out, "✓ statement:")
 	assert.Contains(t, out, "change:      "+pr.URL)
 	out = e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "prod", "--bundle", bundle, "--key", pub, "-o", "json")
 	var res struct {
@@ -159,7 +160,8 @@ func TestReceipts_SignedPromotion(t *testing.T) {
 	out = e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--pipeline", pipelineName, "--env", "prod",
 		"--cluster", clusterIdentity(t, e), "--key", pub,
 		"--repository", reg.HostRepository(receiptsRepository), "--insecure-registry")
-	assert.Contains(t, out, "VERIFIED receipt")
+	assert.Contains(t, out, ": every check below that was made passed")
+	assert.Contains(t, out, "✓ subject digest:")
 
 	framework.Eventually(t, 2*time.Minute, "the receipt comment on the prod PR", func(context.Context) (bool, string) {
 		c := e.PRComments(t, a.repo, pr.Number, "Promotion receipt: `"+prodReceipt+"`")

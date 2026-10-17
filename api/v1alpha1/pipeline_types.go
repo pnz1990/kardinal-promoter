@@ -1293,11 +1293,24 @@ type PipelineFailedVersion struct {
 	Since *metav1.Time `json:"since,omitempty"`
 }
 
+// EnvironmentReceipts counts an environment's promotion receipts.
+type EnvironmentReceipts struct {
+	// Count is how many PromotionReceipts the environment has.
+	Count int64 `json:"count"`
+	// Bytes is their total size (statements and signed bundles).
+	Bytes int64 `json:"bytes"`
+}
+
 // PipelineEnvironmentStatus is what one environment of a Pipeline runs, and
 // where the newest version that reached it stands.
 type PipelineEnvironmentStatus struct {
 	// Name is the environment name.
 	Name string `json:"name"`
+	// Receipts counts the environment's promotion receipts and their size,
+	// when receipts are enabled (docs/receipts.md): what retention would
+	// have to delete, and what verify-receipt --image reads per image.
+	// +optional
+	Receipts *EnvironmentReceipts `json:"receipts,omitempty"`
 	// Bundle is the Bundle whose change runs in the environment: the newest
 	// one whose change landed there. Empty when none has.
 	// +optional

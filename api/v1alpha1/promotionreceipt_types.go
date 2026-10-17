@@ -130,6 +130,12 @@ type PromotionReceiptStatus struct {
 	// +optional
 	Bundle string `json:"bundle,omitempty"`
 
+	// Bytes is the size of spec.statement and status.bundle, written with
+	// the signature: they leave the controller's cache once the receipt is
+	// done, and the Pipeline's status.environments[].receipts sums it.
+	// +optional
+	Bytes int64 `json:"bytes,omitempty"`
+
 	// SignedBy says who signed the receipt.
 	// +optional
 	SignedBy *ReceiptSigner `json:"signedBy,omitempty"`

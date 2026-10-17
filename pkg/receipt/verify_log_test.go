@@ -139,3 +139,53 @@ func TestVerify_Pins(t *testing.T) {
 	_, err = Verify(signed.Bundle, o)
 	require.NoError(t, err, "any cluster, when not required")
 }
+
+// TestVerify_Checks: Verify returns what it checked, one by one, and what
+// it did not (an unpinned subject, an unchecked log entry): never just
+// "verified".
+//
+// Covers RECEIPT-VERIFY-05.
+func TestVerify_Checks(t *testing.T) {
+	s, pub := keySigner(t)
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	st, err := Parse(raw)
+	require.NoError(t, err)
+	r, err := ParseResourceURI(st.Predicate.ResourceURI)
+	require.NoError(t, err)
+	signed, err := s.Sign(context.Background(), raw)
+	require.NoError(t, err)
+	byName := func(cs []Check) map[string]Check {
+		m := map[string]Check{}
+		for _, c := range cs {
+			m[c.Name] = c
+		}
+		return m
+	}
+
+	v, err := Verify(signed.Bundle, VerifyOptions{Key: pub})
+	require.NoError(t, err)
+	c := byName(v.Checks)
+	assert.True(t, c["signature"].Checked)
+	assert.Contains(t, c["signature"].Detail, "key sha256:")
+	assert.Equal(t, Check{Name: "transparency log", Detail: "no entry"}, c["transparency log"])
+	assert.False(t, c["subject digest"].Checked)
+	assert.False(t, c["resource"].Checked)
+	assert.False(t, c["levels"].Checked)
+	_, ok := c["statement"]
+	assert.False(t, ok, "no statement given, none compared")
+
+	v, err = Verify(signed.Bundle, VerifyOptions{Key: pub, Statement: raw, Subject: "sha256:" + st.Subject[0].Digest["sha256"],
+		ClusterID: r.ClusterID, Namespace: r.Namespace, Pipeline: r.Pipeline, Environment: r.Environment, Require: []string{"HEALTHY"}})
+	require.NoError(t, err)
+	c = byName(v.Checks)
+	for _, name := range []string{"signature", "statement", "subject digest", "resource", "levels"} {
+		assert.True(t, c[name].Checked, name)
+	}
+	assert.Contains(t, c["resource"].Detail, "(cluster, namespace, pipeline, environment pinned)")
+	assert.Equal(t, "HEALTHY as required", c["levels"].Detail)
+
+	v, err = Verify(withForgedLogEntry(t, signed.Bundle), VerifyOptions{Key: pub})
+	require.NoError(t, err)
+	assert.Equal(t, Check{Name: "transparency log", Detail: "entry not checked (give --trusted-root)"}, byName(v.Checks)["transparency log"])
+}
