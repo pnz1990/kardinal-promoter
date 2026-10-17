@@ -5,9 +5,11 @@ package graphcleanup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -16,6 +18,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 // AnnotationReaderNamespaces is the annotation releases before #1283 put on
@@ -49,7 +52,7 @@ const managedBy = "app.kubernetes.io/managed-by"
 type HealthRefCleanup struct {
 	// Graphs removes the health ref nodes from the Graphs.
 	Graphs interface {
-		RemoveAllHealthRefs(ctx context.Context, namespace string) (int, error)
+		RemoveAllHealthRefs(ctx context.Context, namespace string) (changed, failed int, err error)
 	}
 	// Client lists Pipelines and deletes and updates RoleBindings.
 	Client client.Client
@@ -60,45 +63,99 @@ type HealthRefCleanup struct {
 	// Namespace, in namespace mode (--watch-namespace), is the only
 	// namespace looked at.
 	Namespace string
+	// Backoff is the wait before the first retry of a pass that left work
+	// undone (cleanupBackoff when 0); it doubles, up to cleanupMaxBackoff.
+	Backoff time.Duration
 }
+
+// The waits between the passes of HealthRefCleanup.
+const (
+	cleanupBackoff    = 10 * time.Second
+	cleanupMaxBackoff = 5 * time.Minute
+)
 
 // NeedLeaderElection makes the cleanup run on the leader only.
 func (c *HealthRefCleanup) NeedLeaderElection() bool { return true }
 
-// Start runs the cleanup once. A failure is logged, not returned: it must
-// not stop the manager, and the next start tries again.
+// Start runs the cleanup until it has left nothing undone: a pass skips a
+// Graph or RoleBinding it cannot clean and goes on with the others, and the
+// next pass, after a backoff (Backoff, doubling up to 5 minutes), tries what
+// is left again. A Graph left with a health ref is one kro cannot read, so
+// the cleanup does not give up on it. The kardinal_health_ref_cleanup_pending
+// metric is what the last pass left (0 when it is done, -1 while a pass
+// could not even list what to clean), and each such pass logs a warning. A
+// failure never stops the manager; Start returns when ctx ends.
 func (c *HealthRefCleanup) Start(ctx context.Context) error {
 	log := zerolog.Ctx(ctx).With().Str("runnable", "health-ref-cleanup").Logger()
+	backoff := c.Backoff
+	if backoff <= 0 {
+		backoff = cleanupBackoff
+	}
+	for {
+		pending, err := c.pass(ctx, log)
+		observability.HealthRefCleanupPending.Set(float64(pending))
+		if pending == 0 {
+			return nil
+		}
+		log.Warn().Err(err).Int("pending", pending).Dur("retryIn", backoff).
+			Msg("health ref cleanup left work undone (#1283); retrying")
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, cleanupMaxBackoff)
+	}
+}
+
+// pass cleans the Graphs and the reader RoleBindings once and returns how
+// many it could not clean, or -1 when it could not list them.
+func (c *HealthRefCleanup) pass(ctx context.Context, log zerolog.Logger) (int, error) {
+	pending := 0
+	var errs []error
 	if c.Graphs != nil {
-		n, err := c.Graphs.RemoveAllHealthRefs(ctx, c.Namespace)
+		changed, failed, err := c.Graphs.RemoveAllHealthRefs(ctx, c.Namespace)
+		if changed > 0 {
+			log.Info().Int("graphs", changed).Msg("removed the health ref nodes of an earlier release from Graphs (#1283)")
+		}
+		switch {
+		case failed > 0:
+			pending += failed
+		case err != nil:
+			pending = -1 // the List failed: what is left is unknown
+		}
 		if err != nil {
-			log.Warn().Err(err).Msg("removing the health ref nodes from Graphs failed (non-fatal); it runs again at the next start")
-		} else if n > 0 {
-			log.Info().Int("graphs", n).Msg("removed the health ref nodes of an earlier release from Graphs (#1283)")
+			errs = append(errs, err)
 		}
 	}
-	deleted, err := c.run(ctx, log)
-	if err != nil {
-		log.Warn().Err(err).Msg("reader RoleBinding cleanup failed (non-fatal); it runs again at the next start")
-		return nil
-	}
+	deleted, failed, err := c.run(ctx, log)
 	if deleted > 0 {
 		log.Info().Int("deleted", deleted).Msg("deleted the reader RoleBindings of the removed Graph health refs (#1283)")
 	}
-	return nil
+	switch {
+	case failed < 0 || pending < 0:
+		pending = -1
+	default:
+		pending += failed
+	}
+	if err != nil {
+		errs = append(errs, err)
+	}
+	return pending, errors.Join(errs...)
 }
 
 // run deletes the recorded reader RoleBindings and returns how many it
-// deleted.
-func (c *HealthRefCleanup) run(ctx context.Context, log zerolog.Logger) (int, error) {
+// deleted and in how many namespaces it failed, going on past a failure;
+// failed is -1 when it could not list the Pipelines.
+func (c *HealthRefCleanup) run(ctx context.Context, log zerolog.Logger) (deleted, failed int, err error) {
 	if c.Identity == nil {
-		return 0, nil
+		return 0, 0, nil
 	}
 	namespaces := []string{c.Namespace}
 	if c.Namespace == "" {
 		var pipelines v1alpha1.PipelineList
 		if err := c.Client.List(ctx, &pipelines); err != nil {
-			return 0, fmt.Errorf("list pipelines: %w", err)
+			return 0, -1, fmt.Errorf("list pipelines: %w", err)
 		}
 		seen := map[string]bool{}
 		for _, p := range pipelines.Items {
@@ -110,15 +167,16 @@ func (c *HealthRefCleanup) run(ctx context.Context, log zerolog.Logger) (int, er
 		}
 		sort.Strings(namespaces)
 	}
-	deleted := 0
+	var errs []error
 	for _, graphNS := range namespaces {
 		n, err := c.cleanNamespace(ctx, log, graphNS)
 		deleted += n
 		if err != nil {
-			return deleted, err
+			failed++
+			errs = append(errs, err)
 		}
 	}
-	return deleted, nil
+	return deleted, failed, errors.Join(errs...)
 }
 
 // cleanNamespace deletes the reader RoleBindings recorded on graphNS's

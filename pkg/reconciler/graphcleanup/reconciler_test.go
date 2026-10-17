@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +29,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 var managed = map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}
@@ -412,15 +414,26 @@ func readerBindingKeys(t *testing.T, c client.Client) []string {
 	return out
 }
 
-// fakeGraphs counts RemoveAllHealthRefs calls.
+// fakeGraphs records the namespaces of its RemoveAllHealthRefs calls. The
+// first len(failing) calls report failing[i] Graphs it could not clean
+// (and an error); later calls report none, unless always is set.
 type fakeGraphs struct {
 	namespaces []string
-	err        error
+	failing    []int
+	always     bool
 }
 
-func (f *fakeGraphs) RemoveAllHealthRefs(_ context.Context, ns string) (int, error) {
+func (f *fakeGraphs) RemoveAllHealthRefs(_ context.Context, ns string) (int, int, error) {
 	f.namespaces = append(f.namespaces, ns)
-	return 1, f.err
+	n := len(f.namespaces) - 1
+	if f.always || n < len(f.failing) {
+		failed := 1
+		if n < len(f.failing) {
+			failed = f.failing[n]
+		}
+		return 1, failed, errors.New("graph team-a/g2: forbidden")
+	}
+	return 1, 0, nil
 }
 
 // TestHealthRefCleanup (#1283): at startup the leader removes the health
@@ -457,12 +470,39 @@ func TestHealthRefCleanup(t *testing.T) {
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: graph.DefaultApplierClusterRole}, &applier))
 	assert.NotContains(t, applier.Annotations, graphcleanup.AnnotationReaderNamespaces, "the record goes")
 
+	assert.Zero(t, testutil.ToFloat64(observability.HealthRefCleanupPending), "nothing left")
+
 	// Idempotent; namespace mode looks at the watched namespace only.
 	require.NoError(t, cl.Start(ctx))
 	cl.Namespace = "team-b"
-	cl.Graphs = &fakeGraphs{err: errors.New("boom")}
-	require.NoError(t, cl.Start(ctx), "a failure is logged, the manager goes on")
+	cl.Graphs = &fakeGraphs{}
+	require.NoError(t, cl.Start(ctx))
 	assert.Equal(t, []string{"team-b"}, cl.Graphs.(*fakeGraphs).namespaces)
+}
+
+// TestHealthRefCleanup_RetriesUntilClean (QA on #2124): a pass that cannot
+// clean a Graph does not end the cleanup. It retries, with a backoff, until
+// a pass leaves nothing, and the metric says what is left meanwhile. Against
+// a refusal that never ends it keeps trying until the manager stops, with
+// the metric at what is left; a failure never stops the manager.
+//
+// Covers GRAPH-HEALTHREF-CLEANUP-02.
+func TestHealthRefCleanup_RetriesUntilClean(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	graphs := &fakeGraphs{failing: []int{2, 1}}
+	cl := &graphcleanup.HealthRefCleanup{Graphs: graphs, Client: c, APIReader: c,
+		Identity: &graph.IdentityProvisioner{}, Backoff: time.Millisecond}
+	require.NoError(t, cl.Start(context.Background()))
+	assert.Len(t, graphs.namespaces, 3, "two passes left a Graph, the third cleaned it")
+	assert.Zero(t, testutil.ToFloat64(observability.HealthRefCleanupPending))
+
+	refused := &fakeGraphs{always: true}
+	cl.Graphs = refused
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	require.NoError(t, cl.Start(ctx), "returns when the manager stops")
+	assert.Greater(t, len(refused.namespaces), 2, "it kept retrying")
+	assert.Equal(t, 1.0, testutil.ToFloat64(observability.HealthRefCleanupPending), "the refused Graph is pending")
 }
 
 // TestHealthRefCleanup_CustomRoleNames: the reader role is named after the

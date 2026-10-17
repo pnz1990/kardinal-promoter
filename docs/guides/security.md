@@ -138,7 +138,8 @@ Earlier releases also bound `<fullname>-graph-reader` in each namespace a Graph'
 node read (`<fullname>-graph-reader-<graph namespace>`), and recorded those bindings on the applier
 binding (`kardinal.io/reader-namespaces`). The chart no longer ships that ClusterRole, so the
 bindings grant nothing. At startup the controller deletes the bindings it recorded, and removes the
-health ref nodes from existing Graphs. Bindings from v0.8.1 and earlier, which kept no record,
+health ref nodes from existing Graphs, retrying what it cannot clean until nothing is left
+([Monitoring](monitoring.md#health-ref-cleanup-after-an-upgrade)). Bindings from v0.8.1 and earlier, which kept no record,
 stay; list them, and delete the ones you do not want, with:
 
 ```bash

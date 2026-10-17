@@ -5,15 +5,18 @@ package graph_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
@@ -68,9 +71,10 @@ func TestGraphClient_RemoveAllHealthRefs(t *testing.T) {
 		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"}, objs...)
 	gc := graph.NewGraphClient(dyn, zerolog.Nop())
 
-	n, err := gc.RemoveAllHealthRefs(ctx, "")
+	n, failed, err := gc.RemoveAllHealthRefs(ctx, "")
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
+	assert.Zero(t, failed)
 	updates := 0
 	for _, a := range dyn.Actions() {
 		if a.GetVerb() == "update" {
@@ -91,10 +95,52 @@ func TestGraphClient_RemoveAllHealthRefs(t *testing.T) {
 	assert.Equal(t, map[string]string{"kardinal.io/bundle": "g1"}, g.Labels)
 	assert.False(t, graph.HasHealthRefs(g))
 
-	n, err = gc.RemoveAllHealthRefs(ctx, "team-b")
+	n, failed, err = gc.RemoveAllHealthRefs(ctx, "team-b")
 	require.NoError(t, err)
 	assert.Zero(t, n)
+	assert.Zero(t, failed)
 	changed, err := gc.RemoveHealthRefs(ctx, "team-a", "gone")
 	require.NoError(t, err)
 	assert.False(t, changed, "a Graph that is gone is no change")
+}
+
+// QA on #2124: a Graph whose write is refused, in the middle of the others,
+// is skipped: the Graphs after it are cleaned, and it is reported as failed
+// on every pass while the refusal lasts.
+//
+// Covers GRAPH-HEALTHREF-CLEANUP-02.
+func TestGraphClient_RemoveAllHealthRefs_SkipsAFailingGraph(t *testing.T) {
+	ctx := context.Background()
+	var objs []runtime.Object
+	for _, name := range []string{"g1", "g2", "g3", "g4"} {
+		objs = append(objs, oldGraph("team-a", name, true))
+	}
+	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"}, objs...)
+	dyn.PrependReactor("update", "graphs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.UpdateAction).GetObject().(*unstructured.Unstructured).GetName() == "g2" {
+			return true, nil, apierrors.NewForbidden(graph.GraphGVR.GroupResource(), "g2", errors.New("denied"))
+		}
+		return false, nil, nil
+	})
+	gc := graph.NewGraphClient(dyn, zerolog.Nop())
+	for pass := 0; pass < 2; pass++ {
+		changed, failed, err := gc.RemoveAllHealthRefs(ctx, "team-a")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "team-a/g2")
+		assert.Equal(t, 1, failed, "pass %d", pass)
+		if pass == 0 {
+			assert.Equal(t, 3, changed, "g1, g3 and g4")
+		} else {
+			assert.Zero(t, changed, "already clean")
+		}
+	}
+	for _, name := range []string{"g1", "g3", "g4"} {
+		g, err := gc.Get(ctx, "team-a", name)
+		require.NoError(t, err)
+		assert.False(t, graph.HasHealthRefs(g), name)
+	}
+	g2, err := gc.Get(ctx, "team-a", "g2")
+	require.NoError(t, err)
+	assert.True(t, graph.HasHealthRefs(g2), "the refused Graph is left as it was")
 }

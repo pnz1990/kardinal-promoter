@@ -5,6 +5,7 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -119,33 +120,38 @@ const healthRefsPage = 50
 
 // RemoveAllHealthRefs removes the health ref nodes and reader labels from
 // every kardinal Graph (the kardinal.io/bundle label) in namespace, or in
-// every namespace when it is "", reading them a page at a time, and returns
-// how many Graphs it changed (RemoveHealthRefs).
-func (c *GraphClient) RemoveAllHealthRefs(ctx context.Context, namespace string) (int, error) {
+// every namespace when it is "", reading them a page at a time. It returns
+// how many Graphs it changed and how many it could not (RemoveHealthRefs
+// failed): a Graph that fails is skipped, so one refused write does not
+// leave the Graphs after it untouched. err joins those failures, or is the
+// List error that stopped the pass.
+func (c *GraphClient) RemoveAllHealthRefs(ctx context.Context, namespace string) (changed, failed int, err error) {
 	res := c.dynamic.Resource(GraphGVR).Namespace(namespace)
 	opts := metav1.ListOptions{LabelSelector: "kardinal.io/bundle", Limit: healthRefsPage}
-	changed := 0
+	var errs []error
 	for {
-		list, err := res.List(ctx, opts)
-		if err != nil {
-			return changed, fmt.Errorf("graph.RemoveAllHealthRefs: list %q: %w", namespace, err)
+		list, lerr := res.List(ctx, opts)
+		if lerr != nil {
+			errs = append(errs, fmt.Errorf("graph.RemoveAllHealthRefs: list %q: %w", namespace, lerr))
+			return changed, failed, errors.Join(errs...)
 		}
 		for i := range list.Items {
 			u := &list.Items[i]
-			g, err := FromUnstructured(u)
-			if err != nil || (!HasHealthRefs(g) && !hasOldReaderLabels(u.GetLabels())) {
+			g, gerr := FromUnstructured(u)
+			if gerr != nil || (!HasHealthRefs(g) && !hasOldReaderLabels(u.GetLabels())) {
 				continue
 			}
-			ok, err := c.RemoveHealthRefs(ctx, u.GetNamespace(), u.GetName())
-			if err != nil {
-				return changed, err
-			}
-			if ok {
+			ok, rerr := c.RemoveHealthRefs(ctx, u.GetNamespace(), u.GetName())
+			switch {
+			case rerr != nil:
+				failed++
+				errs = append(errs, rerr)
+			case ok:
 				changed++
 			}
 		}
 		if list.GetContinue() == "" {
-			return changed, nil
+			return changed, failed, errors.Join(errs...)
 		}
 		opts.Continue = list.GetContinue()
 	}
