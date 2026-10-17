@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // pager makes the fake client page as the API server does: it honours
@@ -743,11 +744,44 @@ func TestEvidencePack_Receipts(t *testing.T) {
 	in := packPeriodOpts.Since.Add(24 * time.Hour)
 	bundle.CreationTimestamp = metav1.NewTime(in)
 	rc.CreationTimestamp = metav1.NewTime(in)
-	leaky := rc.DeepCopy()
-	leaky.Name = "checkout-1-5-0-uat"
-	leaky.Labels = map[string]string{"kardinal.io/pipeline": "checkout", "kardinal.io/bundle": bundle.Name, "kardinal.io/environment": "uat"}
-	leaky.Spec.Statement = strings.Replace(leaky.Spec.Statement, `"kardinalPromotion"`,
-		`"ciRunURL":"https://ci.example.com/run/1?token=SECRETCI","kardinalPromotion"`, 1)
+	// Receipts whose signed record must stay in the cluster, their
+	// statements built with json.Marshal as the controller builds them: it
+	// escapes "&" (\u0026) and quotes, so a credential after the first URL
+	// parameter, or in an escaped string, does not show in the JSON text.
+	var stmt map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(rc.Spec.Statement), &stmt))
+	unsafe := map[string]func(map[string]interface{}){
+		"first-param": func(m map[string]interface{}) { m["ciRunURL"] = "https://ci.example.com/run/1?token=SECRETCI1" },
+		"later-param": func(m map[string]interface{}) { m["ciRunURL"] = "https://ci.example.com/run/1?a=1&b=2&token=SECRETCI2" },
+		"nested": func(m map[string]interface{}) {
+			m["deep"] = []interface{}{map[string]interface{}{"x": []interface{}{"see https://u:SECRETCI3@ci.example.com/x"}}}
+		},
+		"escaped-quote": func(m map[string]interface{}) {
+			m["note"] = `said "https://ci.example.com/r?a=1&access_token=SECRETCI4" twice`
+		},
+	}
+	var objs []sigs_client.Object
+	for _, name := range []string{"first-param", "later-param", "nested", "escaped-quote"} {
+		m := map[string]interface{}{}
+		for k, v := range stmt {
+			m[k] = v
+		}
+		unsafe[name](m)
+		raw, err := json.Marshal(m)
+		require.NoError(t, err)
+		leaky := rc.DeepCopy()
+		leaky.Name = "leaky-" + name
+		leaky.Labels = map[string]string{"kardinal.io/pipeline": "checkout", "kardinal.io/bundle": bundle.Name, "kardinal.io/environment": "uat"}
+		leaky.Spec.Statement = string(raw)
+		objs = append(objs, leaky)
+	}
+	// A clean statement whose bundle signs something else (a status edited
+	// by hand): the check saw the statement, not what the bundle signs.
+	swapped := rc.DeepCopy()
+	swapped.Name = "swapped"
+	swapped.Labels = map[string]string{"kardinal.io/pipeline": "checkout", "kardinal.io/bundle": bundle.Name, "kardinal.io/environment": "uat"}
+	swapped.Spec.Statement = strings.Replace(rc.Spec.Statement, "carol@example.com", "dave@example.com", 1)
+	objs = append(objs, swapped)
 	other := rc.DeepCopy()
 	other.Name, other.Labels = "old-prod", map[string]string{"kardinal.io/bundle": "older-version", "kardinal.io/environment": "prod"}
 	event := &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "ev"},
@@ -755,13 +789,21 @@ func TestEvidencePack_Receipts(t *testing.T) {
 
 	opts := packPeriodOpts
 	opts.Namespace = "default"
-	b, _, err := buildPack(t, []sigs_client.Object{bundle, rc, leaky, other, event}, &pager{}, opts)
+	b, stderr, err := buildPack(t, append(objs, bundle, rc, other, event), &pager{}, opts)
 	require.NoError(t, err)
 	files, _ := readPack(t, b)
 	recs := packLines(files["receipts.ndjson"])
-	require.Equal(t, []string{"default/checkout-1-5-0-prod", "default/checkout-1-5-0-uat"}, names(recs),
+	require.Equal(t, []string{"default/checkout-1-5-0-prod", "default/leaky-escaped-quote", "default/leaky-first-param",
+		"default/leaky-later-param", "default/leaky-nested", "default/swapped"}, names(recs),
 		"the receipts of the period's version, not another version's")
-	assert.NotContains(t, string(files["receipts.ndjson"]), "SECRETCI")
+	for name, content := range files {
+		assert.NotContains(t, string(content), "SECRETCI", "%s holds a credential", name)
+	}
+	for _, want := range []string{"leaky-later-param: its signed statement and bundle are left out: the signed statement holds a credential (statement.ciRunURL)",
+		"leaky-nested: its signed statement and bundle are left out: the signed statement holds a credential (statement.deep[0].x[0])",
+		"swapped: its signed statement and bundle are left out: the Sigstore bundle's payload is not the statement"} {
+		assert.Contains(t, stderr, want)
+	}
 
 	// Verify the receipt offline, as docs/compliance.md shows: its envelope
 	// written to a file, kardinal verify-receipt --file with the public key.
@@ -789,14 +831,15 @@ func TestEvidencePack_Receipts(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "NOT VERIFIED")
 
-	// The receipt whose statement holds a credential.
-	withheld := recs[1]
-	assert.Empty(t, withheld["spec"].(map[string]interface{})["statement"])
-	assert.Empty(t, withheld["status"].(map[string]interface{})["bundle"])
-	assert.Contains(t, withheld["metadata"].(map[string]interface{})["annotations"], withheldAnnotation)
+	// The receipts whose signed record must stay in the cluster.
+	for _, withheld := range recs[1:] {
+		assert.Empty(t, withheld["spec"].(map[string]interface{})["statement"], names([]map[string]interface{}{withheld}))
+		assert.Empty(t, withheld["status"].(map[string]interface{})["bundle"])
+		assert.Contains(t, withheld["metadata"].(map[string]interface{})["annotations"], withheldAnnotation)
+	}
 	var m packManifest
 	require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
-	assert.Equal(t, 1, m.Redactions.ReceiptsWithheld)
+	assert.Equal(t, 5, m.Redactions.ReceiptsWithheld)
 }
 
 // TestEvidencePack_Cosign (#2052, spec 22 section 4.3): the exporter signs
@@ -842,4 +885,39 @@ func TestEvidencePack_Cosign(t *testing.T) {
 	require.NoError(t, f.Close())
 	out, err = run("verify-blob", "--key", "cosign.pub", "--bundle", "q3.tar.gz.sigstore.json", "--insecure-ignore-tlog", "q3.tar.gz")
 	require.Error(t, err, "a changed pack does not verify:\n%s", out)
+}
+
+// TestReceiptUnsafe (#2161, QA-2): the receipt check decodes the statement
+// and checks each value, fails closed on a statement or bundle that does not
+// decode, and requires the bundle to sign the statement.
+func TestReceiptUnsafe(t *testing.T) {
+	stmt := `{"a":"https://ci.example.com/r?x=1&token=T","b":"fine"}`
+	bundleOf := func(payload string) string {
+		b, _ := json.Marshal(map[string]interface{}{"dsseEnvelope": map[string]interface{}{"payload": []byte(payload)}})
+		return string(b)
+	}
+	for _, tc := range []struct {
+		statement, bundle, want string
+	}{
+		{`{"a":"https://ci.example.com/r?x=1","b":["ok"]}`, "", ""},
+		{`{"a":"https://ci.example.com/r?x=1","b":["ok"]}`, bundleOf(`{"a":"https://ci.example.com/r?x=1","b":["ok"]}`), ""},
+		{stmt, "", "the signed statement holds a credential (statement.a)"},
+		{`{"a":{"b":[1,"https://u:p@host/x"]}}`, "", "the signed statement holds a credential (statement.a.b[1])"},
+		{`not json`, "", "the signed statement is not JSON"},
+		{`{"a":"ok"}`, `not json`, "the Sigstore bundle is not JSON"},
+		{`{"a":"ok"}`, bundleOf(`{"a":"other"}`), "the Sigstore bundle's payload is not the statement"},
+	} {
+		got := receiptUnsafe(tc.statement, tc.bundle)
+		if tc.want == "" {
+			assert.Empty(t, got, tc.statement)
+		} else {
+			assert.Contains(t, got, tc.want, tc.statement)
+		}
+	}
+	// json.Marshal writes "&" as \u0026: the JSON text alone hides the
+	// credential from scm.RedactText, which is why the check decodes.
+	raw, err := json.Marshal(map[string]string{"a": "https://ci.example.com/r?x=1&token=T"})
+	require.NoError(t, err)
+	assert.Equal(t, string(raw), scm.RedactText(string(raw)))
+	assert.Contains(t, receiptUnsafe(string(raw), ""), "the signed statement holds a credential (statement.a)")
 }

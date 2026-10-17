@@ -61,8 +61,9 @@ var commonRules = []string{
 	"every string: the userinfo (user name, token, password) of each URL and the value of secret query parameters are removed, as kardinal does for status, CLI output and logs",
 	"every container environment variable (env[]), in typed specs and in hook Job specs: a literal value is replaced by " + redactedValue + "; its name and valueFrom are kept",
 	"the " + lastAppliedAnnotation + " annotation is removed: it repeats the spec unredacted",
-	"a PromotionReceipt's signed statement and Sigstore bundle are exported as signed, so they verify; a receipt whose statement holds a " +
-		"credential has both withheld and the annotation " + withheldAnnotation,
+	"a PromotionReceipt's signed statement and Sigstore bundle are exported as signed, so they verify; both are withheld, with the " +
+		"annotation " + withheldAnnotation + " and a warning, when any decoded value of the statement holds a credential, the statement " +
+		"does not decode, or the bundle does not sign exactly the statement",
 }
 
 // digestRule and redactedRules describe how command and args were exported.
