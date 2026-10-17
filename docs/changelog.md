@@ -10,7 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- changelog.d: the unreleased entries are the files in docs/changelog.d (CONTRIBUTING.md, Changelog) -->
 
-## [v0.12.0] — 2026-10-16
+## [v0.12.0] — 2026-10-17
 
 **Agents now open, approve and ship changes. kardinal-promoter v0.12.0 records who made each change, holds agents to what they may do, and lets them take part in governance without being able to get around it.** The controller and the API server enforce it at the target, not inside the agent.
 
