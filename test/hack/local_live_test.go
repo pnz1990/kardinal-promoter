@@ -73,7 +73,9 @@ func newLocalLiveHost(t *testing.T) *localLiveHost {
 		require.NoError(t, os.MkdirAll(d, 0o755))
 	}
 	for name, body := range map[string]string{"bin/kind": localLiveKind, "bin/gh": localLiveGh,
-		"e2e/up.sh": localLiveUp, "e2e/run.sh": localLiveRun, "e2e/tools.sh": "#!/usr/bin/env bash\n"} {
+		"e2e/up.sh": localLiveUp, "e2e/run.sh": localLiveRun, "e2e/tools.sh": "#!/usr/bin/env bash\n",
+		// The core suite needs zsh on PATH; CI's runners have none.
+		"bin/zsh": "#!/usr/bin/env bash\n"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755))
 	}
 	return h
