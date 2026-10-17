@@ -56,8 +56,9 @@ func CleanSHA(sha string) string {
 }
 
 // CleanName is an SCM-supplied account or author name as kardinal records
-// it: without an e-mail address in angle brackets, without control
-// characters, and at most maxSCMName bytes (cut on a character boundary,
+// it: without an e-mail address in angle brackets, without control,
+// directional formatting or zero-width characters (scm.StripInvisible), and
+// at most maxSCMName bytes (cut on a character boundary,
 // marked with "…"). Renderings quote it (strconv.Quote), so no name can pass
 // for the text around it.
 func CleanName(name string) string {
@@ -66,7 +67,7 @@ func CleanName(name string) string {
 			return -1
 		}
 		return r
-	}, emailPart.ReplaceAllString(name, ""))
+	}, emailPart.ReplaceAllString(scm.StripInvisible(name), ""))
 	name = strings.TrimSpace(name)
 	if len(name) <= maxSCMName {
 		return name

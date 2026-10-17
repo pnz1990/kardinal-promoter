@@ -1769,6 +1769,10 @@ func TestCleanSHAAndName(t *testing.T) {
 	}
 	assert.Equal(t, "Jane Doe", steps.CleanName("Jane Doe <jane@example.com>"))
 	assert.Equal(t, "ab", steps.CleanName("a\nb\x00"))
+	// QA-2 on #2195: bidi and zero-width characters never reach status or
+	// the receipt: "alice\u202e" + "nimda" would display as "alice" + "admin".
+	assert.Equal(t, "alicenimda", steps.CleanName("alice\u202enimda"))
+	assert.Equal(t, "eve", steps.CleanName("\u200be\u200dv\u2066e\ufeff\u061c\u200f"))
 	long := steps.CleanName(strings.Repeat("é", 100))
 	assert.LessOrEqual(t, len(long), 128)
 	assert.True(t, utf8.ValidString(long))

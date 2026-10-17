@@ -660,3 +660,11 @@ func TestFindMergedPR_CommitChecksBounded(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, 4, got.Number)
 }
+
+// StripInvisible removes every directional formatting and zero-width
+// character and nothing else.
+func TestStripInvisible(t *testing.T) {
+	in := "a\u200eb\u200fc\u061cd\u202ae\u202bf\u202cg\u202dh\u202ei\u2066j\u2067k\u2068l\u2069m\u200bn\u200co\u200dp\u2060q\ufeffr"
+	assert.Equal(t, "abcdefghijklmnopqr", scm.StripInvisible(in))
+	assert.Equal(t, "Zoë 日本 <x@y>", scm.StripInvisible("Zoë 日本 <x@y>"))
+}
