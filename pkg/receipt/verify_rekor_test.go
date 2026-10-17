@@ -5,6 +5,7 @@ package receipt
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,8 +30,10 @@ const (
 // rekorTestIdentity), timestamps it with vs's TSA and logs it in vs's
 // Rekor v2 as a hashedrekord, as kardinal logs a receipt: the bundle
 // carries a real entry with its inclusion proof and signed checkpoint.
-// edit, when set, changes the entry before it is put in the bundle.
-func loggedBundle(t *testing.T, vs *ca.VirtualSigstore, statement []byte, edit func(*protorekor.TransparencyLogEntry)) []byte {
+// edit, when set, changes the entry before it is put in the bundle;
+// bundleEdits change the bundle before it is encoded.
+func loggedBundle(t *testing.T, vs *ca.VirtualSigstore, statement []byte, edit func(*protorekor.TransparencyLogEntry),
+	bundleEdits ...func(*protobundle.Bundle)) []byte {
 	t.Helper()
 	e, err := vs.AttestAtTimeHashedRekordV2(rekorTestIdentity, rekorTestIssuer, statement, time.Now())
 	require.NoError(t, err)
@@ -72,9 +75,34 @@ func loggedBundle(t *testing.T, vs *ca.VirtualSigstore, statement []byte, edit f
 			Signatures: []*protodsse.Signature{{Sig: sig, Keyid: env.Signatures[0].KeyID}},
 		}},
 	}
+	for _, be := range bundleEdits {
+		be(pb)
+	}
 	out, err := protojson.Marshal(pb)
 	require.NoError(t, err)
 	return out
+}
+
+// corruptCheckpoint returns the signed checkpoint cp with one byte of its
+// signature flipped. A checkpoint is a signed note: its last line is
+// "— <origin> <base64 of a 4-byte key hint and the signature>". The
+// signature is decoded, its last byte flipped and the line encoded again,
+// so the change always reaches the signature: flipping a character of the
+// base64 text can land on padding bits the decoder discards, and the
+// checkpoint then still verifies (QA-3 on #2155).
+func corruptCheckpoint(t *testing.T, cp string) string {
+	t.Helper()
+	body := strings.TrimSuffix(cp, "\n")
+	i := strings.LastIndex(body, "\n")
+	require.Positive(t, i, "a signed checkpoint has a signature line")
+	line := body[i+1:]
+	require.True(t, strings.HasPrefix(line, "\u2014 "), "the signature line starts with an em dash: %q", line)
+	j := strings.LastIndex(line, " ")
+	sig, err := base64.StdEncoding.DecodeString(line[j+1:])
+	require.NoError(t, err)
+	require.Greater(t, len(sig), 4, "a key hint and a signature")
+	sig[len(sig)-1] ^= 1
+	return body[:i+1] + line[:j+1] + base64.StdEncoding.EncodeToString(sig) + "\n"
 }
 
 // TestVerify_RekorEntryLogged (QA-3): a keyless receipt whose bundle
@@ -108,19 +136,28 @@ func TestVerify_RekorEntryLogged(t *testing.T) {
 	})
 	_, err = Verify(loggedBundle(t, vs, raw, func(e *protorekor.TransparencyLogEntry) { e.InclusionProof = otherProof }), opts)
 	require.Error(t, err, "the proof of another entry does not include this receipt")
+	assert.Contains(t, err.Error(), "verifying inclusion: calculated root")
 	_, err = Verify(loggedBundle(t, vs, raw, func(e *protorekor.TransparencyLogEntry) {
-		cp := []byte(e.InclusionProof.Checkpoint.Envelope)
-		cp[len(cp)-3] ^= 1
-		e.InclusionProof.Checkpoint.Envelope = string(cp)
+		e.InclusionProof.Checkpoint.Envelope = corruptCheckpoint(t, e.InclusionProof.Checkpoint.Envelope)
 	}), opts)
 	require.Error(t, err, "a checkpoint the log did not sign")
+	assert.Contains(t, err.Error(), "unverified checkpoint signature")
 
 	other, err := ca.NewVirtualSigstore()
 	require.NoError(t, err)
 	_, err = Verify(loggedBundle(t, vs, raw, nil), VerifyOptions{Identity: rekorTestIdentity, Issuer: rekorTestIssuer, TrustedRoot: other})
 	require.Error(t, err, "a log the trusted root does not hold is not trusted")
+	assert.Contains(t, err.Error(), "not enough verified log entries")
 
 	_, err = Verify(loggedBundle(t, vs, raw, nil), VerifyOptions{Identity: "https://github.com/mallory/x/.github/workflows/x.yaml@refs/heads/main",
 		Issuer: rekorTestIssuer, TrustedRoot: vs})
 	require.Error(t, err, "another identity")
+	assert.Contains(t, err.Error(), "mallory")
+
+	// A Rekor v2 entry carries no integrated time: a keyless receipt's
+	// signing time is proven by its TSA timestamp only, so without one it
+	// does not verify (the verifier requires an observer timestamp).
+	_, err = Verify(loggedBundle(t, vs, raw, nil, func(b *protobundle.Bundle) { b.VerificationMaterial.TimestampVerificationData = nil }), opts)
+	require.Error(t, err, "a keyless receipt without a timestamp has no proof of when it was signed")
+	assert.Contains(t, err.Error(), "timestamp")
 }
