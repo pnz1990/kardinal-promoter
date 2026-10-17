@@ -234,19 +234,35 @@ type ForeignPRHeadError struct {
 	URL          string
 	Branch       string
 	Head, Pushed string
+	// Push is set by git-push, which found the head before its push and
+	// pushed nothing over it (#2095).
+	Push bool
 }
 
 func (e *ForeignPRHeadError) Error() string {
 	what := fmt.Sprintf("kardinal's branch %s has head %s, which does not contain %s, the commit kardinal pushed: "+
 		"someone else pushed to it, and kardinal opens no PR from it", e.Branch, e.Head, e.Pushed)
-	if e.PR != 0 {
+	switch {
+	case e.PR != 0:
 		what = fmt.Sprintf("PR #%d (%s) is open from kardinal's branch %s, but its head %s does not contain %s, the commit kardinal pushed: "+
 			"someone else committed to the branch, and kardinal does not adopt the PR", e.PR, e.URL, e.Branch, e.Head, e.Pushed)
+	case e.Push && e.Pushed == "":
+		what = fmt.Sprintf("kardinal's branch %s has head %s, which this promotion never pushed: someone else pushed to it, "+
+			"and kardinal does not push over it", e.Branch, e.Head)
+	case e.Push:
+		what = fmt.Sprintf("kardinal's branch %s has head %s, which is not one of the commits this promotion pushed (last %s): "+
+			"someone else pushed to it, and kardinal does not push over it", e.Branch, e.Head, e.Pushed)
 	}
-	return what + fmt.Sprintf(" or push over their commit. To go on, reset the branch to kardinal's commit "+
-		"(git push --force origin %s:refs/heads/%s): the step retries for about 4.5 minutes (its retry budget), "+
-		"and once it has failed, promote again (kardinal promote <pipeline> <environment>, or ship a new version)",
-		e.Pushed, e.Branch)
+	way := fmt.Sprintf("reset the branch to kardinal's commit (git push --force origin %s:refs/heads/%s)", e.Pushed, e.Branch)
+	if e.Pushed == "" {
+		way = fmt.Sprintf("delete the branch (git push origin :refs/heads/%s)", e.Branch)
+	}
+	if e.Push {
+		return what + fmt.Sprintf(". To go on, %s: the step retries for about 4.5 minutes (its retry budget), "+
+			"and once it has failed, promote again (kardinal promote <pipeline> <environment>, or ship a new version)", way)
+	}
+	return what + fmt.Sprintf(" or push over their commit. To go on, %s: the step retries for about 4.5 minutes (its retry budget), "+
+		"and once it has failed, promote again (kardinal promote <pipeline> <environment>, or ship a new version)", way)
 }
 
 // ErrStalePush marks a push BeforePush refused because the promotion is

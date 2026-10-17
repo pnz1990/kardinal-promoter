@@ -382,8 +382,13 @@ What the retry does:
   PR would carry kardinal's evidence without kardinal's change, and its merge would count as the
   environment's approval. Before every PR it opens, kardinal checks that the branch's head is, or
   contains, its commit.
+- **Someone pushed onto kardinal's branch before kardinal pushes it again** (the controller
+  restarted after its push, or the step re-pushes): kardinal force-pushes its PR branch only when
+  the branch does not exist or its head is one of the commits this promotion pushed. It reads the
+  head first and pushes with a lease on it, so a commit pushed in between is not overwritten
+  either. Otherwise it pushes nothing.
 
-In both cases the step fails against its normal retry budget, about 4.5 minutes, and then is
+In each case the step fails against its normal retry budget, about 4.5 minutes, and then is
 Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message names the head
 and kardinal's commit, and the head is kept in `status.outputs.prForeignHead`. The way to go on
 is to reset the branch to kardinal's commit (`git push --force origin
