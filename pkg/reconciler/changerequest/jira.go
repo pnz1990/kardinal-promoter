@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -69,11 +70,35 @@ func (j *Jira) conf(ctx context.Context, req Request) (*kardinalv1alpha1.JiraCha
 	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
 		return nil, nil, "", "", errors.New("jira: baseURL must be https://<host>[/<path>]")
 	}
+	if !jiraProjectRE.MatchString(jc.Project) {
+		return nil, nil, "", "", errors.New("jira: spec.jira.project is needed: kardinal opens, searches and links issues only in configured projects")
+	}
 	auth, err := authHeader(ctx, req, jc.ChangeRequestAuth)
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("jira: %w", err)
 	}
 	return jc, base, "rest/api/" + jiraVersion(jc), auth, nil
+}
+
+// jiraProjectRE is a project key.
+var jiraProjectRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+
+// jiraProjects are the projects issues are searched and linked in: Project
+// and LinkProjects.
+func jiraProjects(jc *kardinalv1alpha1.JiraChangeRequest) []string {
+	out := []string{jc.Project}
+	for _, p := range jc.LinkProjects {
+		if jiraProjectRE.MatchString(p) && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// jiraProjectOf is the project key of an issue key (CHG-42 is CHG).
+func jiraProjectOf(key string) string {
+	p, _, _ := strings.Cut(key, "-")
+	return p
 }
 
 func jiraVersion(jc *kardinalv1alpha1.JiraChangeRequest) string {
@@ -85,7 +110,7 @@ func jiraVersion(jc *kardinalv1alpha1.JiraChangeRequest) string {
 
 // jiraFields are the fields read from an issue.
 func jiraFields(spec *kardinalv1alpha1.ChangeRequestSpec) []string {
-	f := []string{"status", "resolution", "labels"}
+	f := []string{"status", "resolution", "labels", "project", "created"}
 	if spec.Link != nil && spec.Link.RequireField != nil && jiraFieldRE.MatchString(spec.Link.RequireField.Name) &&
 		!slices.Contains(f, spec.Link.RequireField.Name) {
 		f = append(f, spec.Link.RequireField.Name)
@@ -101,9 +126,6 @@ func (j *Jira) Create(ctx context.Context, req Request) (Reading, error) {
 	jc, base, api, auth, err := j.conf(ctx, req)
 	if err != nil {
 		return Reading{}, err
-	}
-	if jc.Project == "" {
-		return Reading{}, errors.New("jira: spec.jira.project is needed to open an issue")
 	}
 	fields := map[string]interface{}{}
 	for k, v := range jc.Template {
@@ -155,7 +177,8 @@ func (j *Jira) Find(ctx context.Context, req Request) (Reading, bool, error) {
 		path = api + "/search/jql"
 	}
 	body := map[string]interface{}{
-		"jql":        fmt.Sprintf("labels = %q ORDER BY created ASC", CorrelationKey(req.CorrelationID)),
+		"jql": fmt.Sprintf("project = %q AND labels = %q ORDER BY created ASC", jc.Project,
+			CorrelationKey(req.CorrelationID)),
 		"maxResults": 1,
 		"fields":     jiraFields(req.Spec),
 	}
@@ -183,6 +206,10 @@ func (j *Jira) Get(ctx context.Context, req Request, t kardinalv1alpha1.ChangeRe
 		if !jiraKeyRE.MatchString(t.Key) {
 			return Reading{}, fmt.Errorf("jira: %q is not an issue key: %w", cut(t.Key, 64), ErrNotFound)
 		}
+		if !slices.Contains(jiraProjects(jc), jiraProjectOf(t.Key)) {
+			return Reading{}, fmt.Errorf("jira: issue %s is not in project %s: %w", t.Key,
+				strings.Join(jiraProjects(jc), ", "), ErrNotFound)
+		}
 		ref = t.Key
 	}
 	var out jiraIssue
@@ -197,6 +224,19 @@ func (j *Jira) Get(ctx context.Context, req Request, t kardinalv1alpha1.ChangeRe
 func (j *Jira) reading(base *url.URL, jc *kardinalv1alpha1.JiraChangeRequest, req Request, issue jiraIssue) (Reading, error) {
 	if !jiraKeyRE.MatchString(issue.Key) {
 		return Reading{}, errors.New("jira: the issue has no key")
+	}
+	// The issue's own project, not only its key: an id or a moved issue
+	// could name another project's issue.
+	var project struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(issue.Fields["project"], &project)
+	if project.Key == "" {
+		project.Key = jiraProjectOf(issue.Key)
+	}
+	if !slices.Contains(jiraProjects(jc), project.Key) {
+		return Reading{}, fmt.Errorf("jira: issue %s is in project %s, not %s: %w", issue.Key, cut(project.Key, 64),
+			strings.Join(jiraProjects(jc), ", "), ErrNotFound)
 	}
 	var status struct {
 		Name     string `json:"name"`
@@ -224,6 +264,12 @@ func (j *Jira) reading(base *url.URL, jc *kardinalv1alpha1.JiraChangeRequest, re
 		State:         JiraState(jc, status.Name, status.Category.Key, resolution.Name),
 		ProviderState: raw,
 		CorrelationID: corr,
+	}
+	var created string
+	if json.Unmarshal(issue.Fields["created"], &created) == nil {
+		if t, err := time.Parse("2006-01-02T15:04:05.000-0700", created); err == nil {
+			r.Created = t
+		}
 	}
 	if req.Spec.Link != nil && req.Spec.Link.RequireField != nil {
 		name := req.Spec.Link.RequireField.Name
@@ -276,11 +322,14 @@ func jiraFieldText(raw json.RawMessage, want string) string {
 //	status in rejectedStatuses                          rejected
 //	resolution in cancelledResolutions (Won't Do)       cancelled
 //	status in approvedStatuses, or, without them, the
-//	status category is approvedStatusCategory (done)    approved
+//	status category is approvedStatusCategory (done):
+//	  unresolved, or resolved in approvedResolutions    approved
+//	  resolved otherwise (Duplicate, Declined, ...)     closed: never approved
+//	resolved, any other status                          closed
 //	otherwise                                           pending
 //
-// A rejected or cancelled issue is often in the done category too, so they
-// come first.
+// Only an explicitly configured resolution counts: a resolution nobody
+// listed in approvedResolutions is not an approval.
 func JiraState(jc *kardinalv1alpha1.JiraChangeRequest, status, category, resolution string) string {
 	cancelled := jc.CancelledResolutions
 	if len(cancelled) == 0 {
@@ -290,15 +339,17 @@ func JiraState(jc *kardinalv1alpha1.JiraChangeRequest, status, category, resolut
 	if approvedCategory == "" {
 		approvedCategory = "done"
 	}
+	approvedStatus := (len(jc.ApprovedStatuses) > 0 && slices.Contains(jc.ApprovedStatuses, status)) ||
+		(len(jc.ApprovedStatuses) == 0 && category == approvedCategory)
 	switch {
 	case status != "" && slices.Contains(jc.RejectedStatuses, status):
 		return kardinalv1alpha1.ChangeRequestRejected
 	case resolution != "" && slices.Contains(cancelled, resolution):
 		return kardinalv1alpha1.ChangeRequestCancelled
-	case len(jc.ApprovedStatuses) > 0 && slices.Contains(jc.ApprovedStatuses, status):
+	case approvedStatus && (resolution == "" || slices.Contains(jc.ApprovedResolutions, resolution)):
 		return kardinalv1alpha1.ChangeRequestApproved
-	case len(jc.ApprovedStatuses) == 0 && category == approvedCategory:
-		return kardinalv1alpha1.ChangeRequestApproved
+	case resolution != "":
+		return kardinalv1alpha1.ChangeRequestClosed
 	}
 	return kardinalv1alpha1.ChangeRequestPending
 }

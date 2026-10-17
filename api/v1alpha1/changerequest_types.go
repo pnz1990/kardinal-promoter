@@ -37,7 +37,6 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.provider != 'servicenow' || has(self.servicenow)",message="provider servicenow needs spec.servicenow"
 // +kubebuilder:validation:XValidation:rule="self.provider != 'jira' || has(self.jira)",message="provider jira needs spec.jira"
 // +kubebuilder:validation:XValidation:rule="self.mode != 'link' || has(self.link)",message="mode link needs spec.link: where the ticket key comes from"
-// +kubebuilder:validation:XValidation:rule="self.provider != 'jira' || (has(self.mode) && self.mode == 'link') || (has(self.jira) && has(self.jira.project))",message="provider jira in mode open needs spec.jira.project: the project issues are opened in"
 type ChangeRequestSpec struct {
 	// PerPromotion makes this ChangeRequest a template: the Graph creates an
 	// instance of it per Bundle and environment whose gates read
@@ -175,11 +174,17 @@ type JiraChangeRequest struct {
 	// +optional
 	APIVersion string `json:"apiVersion,omitempty"`
 
-	// Project is the key of the project issues are opened in (mode open
-	// needs it).
+	// Project is the key of the project issues are opened in, searched and
+	// linked from (with LinkProjects). An issue of any other project is
+	// refused.
 	// +kubebuilder:validation:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
+	Project string `json:"project"`
+
+	// LinkProjects are further project keys a linked issue may be in.
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
 	// +optional
-	Project string `json:"project,omitempty"`
+	LinkProjects []string `json:"linkProjects,omitempty"`
 
 	// IssueType is the issue type opened (Change, Task, ...).
 	// +kubebuilder:validation:MaxLength=64
@@ -210,6 +215,15 @@ type JiraChangeRequest struct {
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	RejectedStatuses []string `json:"rejectedStatuses,omitempty"`
+
+	// ApprovedResolutions are the resolution names a resolved issue in an
+	// approved status may have to count as approved (for example Done). A
+	// resolved issue whose resolution is not listed (Duplicate, Declined,
+	// one nobody configured) is closed, never approved; an unresolved issue
+	// in an approved status is approved.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	ApprovedResolutions []string `json:"approvedResolutions,omitempty"`
 
 	// CancelledResolutions are the resolution names that mean cancelled
 	// (default: Won't Do).

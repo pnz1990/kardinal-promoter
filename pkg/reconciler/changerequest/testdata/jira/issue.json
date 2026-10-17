@@ -12,6 +12,8 @@
       "statusCategory": {"self": "{{BASE}}/rest/api/3/statuscategory/4", "id": 4, "key": "indeterminate", "colorName": "yellow", "name": "In Progress"}
     },
     "resolution": null,
+    "project": {"self": "{{BASE}}/rest/api/3/project/10000", "id": "10000", "key": "CHG", "name": "Changes"},
+    "created": "2026-10-01T11:00:00.000+0200",
     "labels": ["{{CORRELATION}}", "release"],
     "customfield_10010": {"self": "{{BASE}}/rest/api/3/customFieldOption/10100", "value": "checkout", "id": "10100"},
     "components": [{"name": "payroll"}, {"name": "checkout"}]

@@ -158,12 +158,14 @@ spec:
     baseURL: https://example.atlassian.net
     credentialsSecretRef: {name: jira-kardinal, key: token}   # email:API-token (Cloud), or a PAT
     scheme: basic                  # basic on Cloud; bearer for a Data Center personal access token
-    project: CHG                   # mode open needs it
+    project: CHG                   # required: issues are opened, searched and linked only here
+    linkProjects: [OPS]            # optional: further projects a linked issue may be in
     issueType: Change              # default Task
     template:
       summary: "Promote {{ pipeline.name }} {{ bundle.version }} to {{ environment.name }}"
       description: "Opened by kardinal for {{ namespace }}"
     approvedStatuses: [Approved]   # or, unset, approvedStatusCategory (default done)
+    approvedResolutions: [Done]    # a resolved issue counts as approved only with one of these
     rejectedStatuses: [Declined]
     cancelledResolutions: ["Won't Do"]   # the default
 ```
@@ -171,7 +173,7 @@ spec:
 | Call | Request |
 |---|---|
 | Open | `POST /rest/api/<v>/issue` with the template's fields, `project`, `issuetype` and the correlation label |
-| Find (before every create) | `POST /rest/api/3/search/jql` (v2: `/rest/api/2/search`), JQL `labels = "<key>" ORDER BY created ASC` |
+| Find (before every create) | `POST /rest/api/3/search/jql` (v2: `/rest/api/2/search`), JQL `project = "<project>" AND labels = "<key>" ORDER BY created ASC` |
 | Read | `GET /rest/api/<v>/issue/<id>`, or by key for a linked issue |
 
 The template cannot set `project`, `issuetype` or `labels`. The correlation label is `kardinal-` and
@@ -186,10 +188,14 @@ status. The state is read in this order:
 |---|---|
 | status in `rejectedStatuses` | `rejected` |
 | resolution in `cancelledResolutions` (default `Won't Do`) | `cancelled` |
-| status in `approvedStatuses`; without them, status category `approvedStatusCategory` (default `done`) | `approved` |
+| status in `approvedStatuses` (without them, status category `approvedStatusCategory`, default `done`), and unresolved or resolved in `approvedResolutions` | `approved` |
+| resolved in anything else (Duplicate, Declined, a resolution nobody configured) | `closed`: never approved |
 | anything else | `pending` |
 
-A rejected or cancelled issue is often in the done category too, which is why those come first.
+Only an explicitly configured resolution counts: with no `approvedResolutions`, a resolved issue
+is never approved. An issue outside `project` and `linkProjects` is refused (by its key before any
+request, and by its own project field after a read), so a link cannot point at another project's
+approved issue. A rejected or cancelled issue is often in the done category too, which is why those come first.
 `providerState` is the status, and the resolution when there is one (`Done / Won't Do`). Jira issues
 have no approvers: `approvers` stays empty. For a linked issue, `link.requireField` names a field
 (`components`, `customfield_10010`, ...): an option or user matches by its value or name, a list when

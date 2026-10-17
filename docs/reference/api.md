@@ -342,6 +342,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `spec.appliesTo` | []string |  | AppliesTo, when set, limits the environments that get an instance to these (a fleet target counts as its fleet). Unset: every environment whose gates read changeRequests.&lt;name&gt;. |
 | `spec.jira` | object |  | Jira configures provider jira. |
 | `spec.jira.apiVersion` | string |  | APIVersion is the REST API version: 3 for Jira Cloud (a description is sent as an Atlassian Document Format paragraph), 2 for Jira Data Center. One of: `2`, `3`. Default: `3`. |
+| `spec.jira.approvedResolutions` | []string |  | ApprovedResolutions are the resolution names a resolved issue in an approved status may have to count as approved (for example Done). A resolved issue whose resolution is not listed (Duplicate, Declined, one nobody configured) is closed, never approved; an unresolved issue in an approved status is approved. |
 | `spec.jira.approvedStatusCategory` | string |  | ApprovedStatusCategory is the status category (new, indeterminate, done) that means approved when ApprovedStatuses is unset. One of: `new`, `indeterminate`, `done`. Default: `done`. |
 | `spec.jira.approvedStatuses` | []string |  | ApprovedStatuses are the status names that mean approved; when unset, a status in ApprovedStatusCategory does. |
 | `spec.jira.baseURL` | string | yes | BaseURL is the Jira site, https://&lt;site&gt;.atlassian.net or a Data Center base URL. |
@@ -350,7 +351,8 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `spec.jira.credentialsSecretRef.key` | string | yes | Key is the key in the Secret's data. |
 | `spec.jira.credentialsSecretRef.name` | string | yes | Name is the Secret name. |
 | `spec.jira.issueType` | string |  | IssueType is the issue type opened (Change, Task, ...). Default: `Task`. |
-| `spec.jira.project` | string |  | Project is the key of the project issues are opened in (mode open needs it). |
+| `spec.jira.linkProjects` | []string |  | LinkProjects are further project keys a linked issue may be in. |
+| `spec.jira.project` | string | yes | Project is the key of the project issues are opened in, searched and linked from (with LinkProjects). An issue of any other project is refused. |
 | `spec.jira.rejectedStatuses` | []string |  | RejectedStatuses are the status names that mean rejected. |
 | `spec.jira.scheme` | string |  | Scheme is basic (the key holds user:password, or Jira Cloud's email:api-token) or bearer (an OAuth token, or a Jira Data Center PAT). One of: `basic`, `bearer`. Default: `basic`. |
 | `spec.jira.template` | map[string]string |  | Template are the fields the issue is created with (summary, description), with the same placeholders as ServiceNow's. |

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,7 +146,7 @@ func TestJira_CreateFindGet(t *testing.T) {
 	assert.Equal(t, corrID, found.CorrelationID)
 	got = srv.requests()[1]
 	assert.Equal(t, "/rest/api/3/search/jql", got.Path)
-	assert.Equal(t, `labels = "`+key+`" ORDER BY created ASC`, got.Body["jql"])
+	assert.Equal(t, `project = "CHG" AND labels = "`+key+`" ORDER BY created ASC`, got.Body["jql"], "searched only in the project")
 	assert.Equal(t, float64(1), got.Body["maxResults"])
 
 	other := jiraRequestFor(srv.URL)
@@ -157,7 +158,8 @@ func TestJira_CreateFindGet(t *testing.T) {
 	byID, err := j.Get(ctx, req, r.Ticket)
 	require.NoError(t, err)
 	assert.Equal(t, "/rest/api/3/issue/10042", srv.requests()[3].Path)
-	assert.Equal(t, "fields=status%2Cresolution%2Clabels", srv.requests()[3].RawQuery)
+	assert.Equal(t, "fields=status%2Cresolution%2Clabels%2Cproject%2Ccreated", srv.requests()[3].RawQuery)
+	assert.Equal(t, time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), byID.Created.UTC(), "created is read")
 	assert.Equal(t, "pending", byID.State, "Awaiting approval is in progress")
 	assert.Equal(t, "Awaiting approval", byID.ProviderState)
 	assert.Equal(t, corrID, byID.CorrelationID)
@@ -193,9 +195,39 @@ func TestJira_DataCenter(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "/rest/api/2/search", srv.requests()[1].Path)
 
+	n := len(srv.requests())
 	noProject := jiraRequestFor(srv.URL, func(jc *v1alpha1.JiraChangeRequest) { jc.Project = "" })
 	_, err = j.Create(context.Background(), noProject)
 	assert.ErrorContains(t, err, "spec.jira.project is needed")
+	_, _, err = j.Find(context.Background(), noProject)
+	assert.ErrorContains(t, err, "spec.jira.project is needed")
+	_, err = j.Get(context.Background(), noProject, v1alpha1.ChangeRequestTicket{Key: "CHG-42"})
+	assert.ErrorContains(t, err, "spec.jira.project is needed")
+	assert.Len(t, srv.requests(), n, "no project, no request")
+}
+
+// TestJira_ProjectScope (#2131 QA): a linked key of another project is
+// refused before any request; an issue whose own project is not configured
+// (read by id, or moved) is refused after it; LinkProjects admit more.
+func TestJira_ProjectScope(t *testing.T) {
+	srv := newJiraServer(t, "k")
+	j := &changerequest.Jira{Client: srv.Client()}
+	req := jiraRequestFor(srv.URL)
+	n := len(srv.requests())
+	_, err := j.Get(context.Background(), req, v1alpha1.ChangeRequestTicket{Key: "OPS-42"})
+	assert.ErrorIs(t, err, changerequest.ErrNotFound)
+	assert.ErrorContains(t, err, "is not in project CHG")
+	assert.Len(t, srv.requests(), n)
+
+	ops := jiraRequestFor(srv.URL, func(jc *v1alpha1.JiraChangeRequest) { jc.Project = "OPS" })
+	_, err = j.Get(context.Background(), ops, v1alpha1.ChangeRequestTicket{Key: "CHG-42", ID: "10042"})
+	assert.ErrorIs(t, err, changerequest.ErrNotFound)
+	assert.ErrorContains(t, err, "is in project CHG, not OPS")
+
+	both := jiraRequestFor(srv.URL, func(jc *v1alpha1.JiraChangeRequest) { jc.Project, jc.LinkProjects = "OPS", []string{"CHG"} })
+	r, err := j.Get(context.Background(), both, v1alpha1.ChangeRequestTicket{Key: "CHG-42"})
+	require.NoError(t, err)
+	assert.Equal(t, "CHG-42", r.Ticket.Key)
 }
 
 // TestJira_RequireField: link.requireField reads an option's value, a
@@ -222,8 +254,9 @@ func TestJira_RequireField(t *testing.T) {
 
 func TestJiraState(t *testing.T) {
 	def := &v1alpha1.JiraChangeRequest{}
+	done := &v1alpha1.JiraChangeRequest{ApprovedResolutions: []string{"Done"}}
 	named := &v1alpha1.JiraChangeRequest{ApprovedStatuses: []string{"Approved"}, RejectedStatuses: []string{"Declined"},
-		CancelledResolutions: []string{"Duplicate"}, ApprovedStatusCategory: "indeterminate"}
+		CancelledResolutions: []string{"Duplicate"}, ApprovedStatusCategory: "indeterminate", ApprovedResolutions: []string{"Done"}}
 	for _, tc := range []struct {
 		jc                           *v1alpha1.JiraChangeRequest
 		status, category, resolution string
@@ -231,14 +264,23 @@ func TestJiraState(t *testing.T) {
 	}{
 		{def, "To Do", "new", "", "pending"},
 		{def, "Awaiting approval", "indeterminate", "", "pending"},
-		{def, "Done", "done", "Done", "approved"},
-		{def, "Done", "done", "Won't Do", "cancelled"}, // a done issue resolved Won't Do is not approved
+		{def, "Approved", "done", "", "approved"},                // unresolved, in the approved category
+		{def, "Done", "done", "Done", "closed"},                  // no resolution configured: only an explicit set counts
+		{def, "Done", "done", "Duplicate", "closed"},             // never approved
+		{def, "Done", "done", "Declined", "closed"},              // never approved
+		{def, "Done", "done", "Rejected", "closed"},              // never approved
+		{def, "Done", "done", "Something new", "closed"},         // an unknown resolution is not an approval
+		{def, "Done", "done", "Won't Do", "cancelled"},           // the default cancelled resolution
+		{done, "Done", "done", "Done", "approved"},               // explicitly configured
+		{done, "Done", "done", "Duplicate", "closed"},            // not in the configured set
+		{done, "In Progress", "indeterminate", "Done", "closed"}, // a resolution outside an approved status
 		{named, "Approved", "done", "", "approved"},
+		{named, "Approved", "done", "Done", "approved"},
+		{named, "Approved", "done", "Declined", "closed"},
 		{named, "Done", "done", "", "pending"},               // approvedStatuses set: the category does not count
 		{named, "In Review", "indeterminate", "", "pending"}, // nor the configured category
 		{named, "Declined", "done", "", "rejected"},
 		{named, "Approved", "done", "Duplicate", "cancelled"},
-		{named, "Done", "done", "Won't Do", "pending"}, // Won't Do is not in the configured list
 		{&v1alpha1.JiraChangeRequest{ApprovedStatusCategory: "indeterminate"}, "In Review", "indeterminate", "", "approved"},
 	} {
 		assert.Equal(t, tc.want, changerequest.JiraState(tc.jc, tc.status, tc.category, tc.resolution),

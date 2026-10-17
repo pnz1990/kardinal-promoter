@@ -89,6 +89,17 @@ spec:
                     - "2"
                     - "3"
                     type: string
+                  approvedResolutions:
+                    description: |-
+                      ApprovedResolutions are the resolution names a resolved issue in an
+                      approved status may have to count as approved (for example Done). A
+                      resolved issue whose resolution is not listed (Duplicate, Declined,
+                      one nobody configured) is closed, never approved; an unresolved issue
+                      in an approved status is approved.
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
                   approvedStatusCategory:
                     default: done
                     description: |-
@@ -146,10 +157,19 @@ spec:
                       ...).
                     maxLength: 64
                     type: string
+                  linkProjects:
+                    description: LinkProjects are further project keys a linked issue
+                      may be in.
+                    items:
+                      pattern: ^[A-Z][A-Z0-9_]{0,63}$
+                      type: string
+                    maxItems: 16
+                    type: array
                   project:
                     description: |-
-                      Project is the key of the project issues are opened in (mode open
-                      needs it).
+                      Project is the key of the project issues are opened in, searched and
+                      linked from (with LinkProjects). An issue of any other project is
+                      refused.
                     pattern: ^[A-Z][A-Z0-9_]{0,63}$
                     type: string
                   rejectedStatuses:
@@ -178,6 +198,7 @@ spec:
                 required:
                 - baseURL
                 - credentialsSecretRef
+                - project
                 type: object
               link:
                 description: Link says where mode link reads the ticket key.
@@ -360,10 +381,6 @@ spec:
               rule: self.provider != 'jira' || has(self.jira)
             - message: 'mode link needs spec.link: where the ticket key comes from'
               rule: self.mode != 'link' || has(self.link)
-            - message: 'provider jira in mode open needs spec.jira.project: the project
-                issues are opened in'
-              rule: self.provider != 'jira' || (has(self.mode) && self.mode == 'link')
-                || (has(self.jira) && has(self.jira.project))
           status:
             description: ChangeRequestStatus is written by the ChangeRequest reconciler
               only.

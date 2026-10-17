@@ -492,16 +492,21 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte) int {
 			MaxResults int    `json:"maxResults"`
 		}
 		_ = json.Unmarshal(body, &in)
-		label := ""
-		if rest, ok := strings.CutPrefix(in.JQL, `labels = "`); ok {
-			label, _, _ = strings.Cut(rest, `"`)
+		quoted := func(field string) string {
+			_, rest, ok := strings.Cut(in.JQL, field+` = "`)
+			if !ok {
+				return ""
+			}
+			v, _, _ := strings.Cut(rest, `"`)
+			return v
 		}
+		label, project := quoted("labels"), quoted("project")
 		list := append([]*issue(nil), s.issues...)
 		sort.SliceStable(list, func(i, j int) bool { return list[i].Created.Before(list[j].Created) })
 		out := []map[string]interface{}{}
 		for _, is := range list {
 			for _, l := range is.Labels {
-				if l == label && (in.MaxResults == 0 || len(out) < in.MaxResults) {
+				if l == label && (project == "" || is.Project == project) && (in.MaxResults == 0 || len(out) < in.MaxResults) {
 					out = append(out, jiraJSON(is, r.Host, version))
 				}
 			}
@@ -522,8 +527,10 @@ func (s *server) jira(w http.ResponseWriter, r *http.Request, body []byte) int {
 // jiraJSON is is as the REST API answers it.
 func jiraJSON(is *issue, host, version string) map[string]interface{} {
 	fields := map[string]interface{}{
-		"status": map[string]interface{}{"name": is.Status, "statusCategory": map[string]string{"key": is.Category}},
-		"labels": is.Labels,
+		"status":  map[string]interface{}{"name": is.Status, "statusCategory": map[string]string{"key": is.Category}},
+		"labels":  is.Labels,
+		"project": map[string]string{"key": is.Project},
+		"created": is.Created.UTC().Format("2006-01-02T15:04:05.000-0700"),
 	}
 	if is.Resolution != "" {
 		fields["resolution"] = map[string]string{"name": is.Resolution}
