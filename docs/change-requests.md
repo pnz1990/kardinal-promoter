@@ -225,21 +225,29 @@ spec:
 ```
 
 ```text
-POST https://<controller webhook address>/webhook/changerequests/<namespace>/<template>/<token>
+POST https://<controller webhook address>/webhook/changerequests/<namespace>/<template>
+X-Kardinal-Token: <token>
 ```
+
+Send the token in the `X-Kardinal-Token` header. A sender that cannot set headers can put it in the
+last path segment instead (`.../<template>/<token>`), but proxies and access logs record paths, so
+prefer the header.
 
 The request makes every instance of the template read its ticket at once (the
 `kardinal.io/refresh` annotation; `status.observedRefresh` records the trigger it answered). Its
 body is never read for state: the state always comes from the ticketing system's API, so a forged
 or replayed body changes nothing, and a lost trigger only means the next poll reads the change.
 A wrong token, a template without `webhook`, and a template that does not exist all get the same
-`401`. A trigger never overrides a provider's Retry-After (`status.retryAt`), and the receiver
-answers `429` past five requests a second per template.
+`401`; the token is compared in constant time and never logged. A trigger never overrides a
+provider's Retry-After (`status.retryAt`). The receiver answers `429` past a coarse limit of 50
+requests a second across all templates, checked before anything is read, and past five valid
+triggers a second per template; requests with a wrong token never use up a template's budget.
 
 - **ServiceNow**: a business rule on `change_request` (after update, when `approval` or `state`
-  changes) that sends an outbound REST message to the URL. Restrict it to the changes kardinal
+  changes) that sends an outbound REST message to the URL with the `X-Kardinal-Token` header. Restrict it to the changes kardinal
   opened with the condition `correlation_display` is `kardinal`.
-- **Jira**: a webhook (Settings, System, WebHooks) on "Issue updated" with the URL, filtered by
+- **Jira**: a webhook (Settings, System, WebHooks) on "Issue updated" with the URL (Jira webhooks
+  set no custom headers, so the token goes in the path), filtered by
   JQL to the project, for example `project = CHG AND labels ~ "kardinal-*"`.
 
 The URL carries the token, so expose the controller's webhook port only over TLS, as for

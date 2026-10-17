@@ -371,10 +371,15 @@ func TestGate_ChangeRequestWebhook(t *testing.T) {
 		return cr.Status.Ticket != nil && cr.Status.State == "pending", fmt.Sprintf("%v", cr.Status.Conditions)
 	})
 	number := inst.Status.Ticket.Key
+	// The token in the X-Kardinal-Token header, as the docs recommend.
 	post := func(tok, body string) int {
 		t.Helper()
-		resp, err := http.Post(framework.ControllerURL(t)+"/webhook/changerequests/"+a.ns+"/prod-change/"+tok,
-			"application/json", strings.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, framework.ControllerURL(t)+"/webhook/changerequests/"+a.ns+"/prod-change",
+			strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Kardinal-Token", tok)
+		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
 		_ = resp.Body.Close()
 		return resp.StatusCode

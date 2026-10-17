@@ -100,7 +100,8 @@ type ChangeRequestSpec struct {
 
 	// Webhook, on a template, lets the ticketing system trigger a read of
 	// its instances' tickets at once:
-	// POST /webhook/changerequests/<namespace>/<name>/<token>. The request
+	// POST /webhook/changerequests/<namespace>/<name> with the token in the
+	// X-Kardinal-Token header (or as a last path segment). The request
 	// only sets the instances' kardinal.io/refresh annotation; its body is
 	// never read for state. Polling stays correct without it.
 	// +optional
@@ -111,7 +112,8 @@ type ChangeRequestSpec struct {
 type ChangeRequestWebhook struct {
 	// SecretRef names a Secret in the ChangeRequest's namespace, labelled
 	// kardinal.io/referenceable=true, whose key "token" (at least 16
-	// characters) is the last path segment of the webhook URL.
+	// characters) authenticates a trigger: the X-Kardinal-Token header, or the
+	// last path segment of the webhook URL.
 	SecretRef SubscriptionSecretRef `json:"secretRef"`
 }
 

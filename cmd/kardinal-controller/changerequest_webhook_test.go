@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +108,9 @@ func TestChangeRequestWebhook(t *testing.T) {
 	}
 	assert.Equal(t, before, crRefresh(t, c, "i1"), "a refused request writes nothing")
 
-	for name, p := range map[string]string{"no token": "/webhook/changerequests/team/prod-change", "extra": path + "/x"} {
+	assert.Equal(t, http.StatusUnauthorized, postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change", "", nil).Code,
+		"no token in the header or the path")
+	for name, p := range map[string]string{"extra": path + "/x", "no name": "/webhook/changerequests/team"} {
 		assert.Equal(t, http.StatusNotFound, postHook(t, h.Handler(), p, "", nil).Code, name)
 	}
 	req, _ := http.NewRequest(http.MethodGet, path, nil)
@@ -159,8 +162,10 @@ func TestChangeRequestWebhook_NotATemplateAndLargeBody(t *testing.T) {
 	assert.Empty(t, crRefresh(t, c, "j"))
 }
 
-// TestChangeRequestWebhook_RateLimit: past the per-template burst the
-// receiver answers 429 before it reads anything.
+// TestChangeRequestWebhook_RateLimit (#2139 QA): wrong tokens are refused
+// one by one and never use up the template's budget; past its burst, valid
+// triggers get 429; the coarse global limit answers 429 before anything is
+// read.
 func TestChangeRequestWebhook_RateLimit(t *testing.T) {
 	c := crHookClient(t, crTemplateWithHook("prod-change"), hookSecret(testWebhookToken))
 	h := newChangeRequestWebhook(c, zerolog.Nop())
@@ -170,6 +175,97 @@ func TestChangeRequestWebhook_RateLimit(t *testing.T) {
 	for range webhookPerSubBurst + 3 {
 		codes[postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change/wrong-token-xxxxxxxx", "", nil).Code]++
 	}
-	assert.Equal(t, webhookPerSubBurst, codes[http.StatusUnauthorized])
-	assert.Equal(t, 3, codes[http.StatusTooManyRequests])
+	assert.Equal(t, map[int]int{http.StatusUnauthorized: webhookPerSubBurst + 3}, codes, "a wrong token is never rate limited per template")
+	codes = map[int]int{}
+	for range webhookPerSubBurst + 3 {
+		codes[postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change", "",
+			map[string]string{changeRequestTokenHeader: testWebhookToken}).Code]++
+	}
+	assert.Equal(t, map[int]int{http.StatusAccepted: webhookPerSubBurst, http.StatusTooManyRequests: 3}, codes,
+		"wrong tokens left the budget whole")
+
+	lists := 0
+	c2 := crHookClient(t, crTemplateWithHook("prod-change"), hookSecret(testWebhookToken))
+	h2 := newChangeRequestWebhook(&countingClient{Client: c2, gets: &lists}, zerolog.Nop())
+	h2.now = func() time.Time { return t0 }
+	codes = map[int]int{}
+	for range changeRequestGlobalBurst + 5 {
+		codes[postHook(t, h2.Handler(), "/webhook/changerequests/team/other/wrong-token-xxxxxxxx", "", nil).Code]++
+	}
+	assert.Equal(t, 5, codes[http.StatusTooManyRequests], "the global limit")
+	assert.Equal(t, 2*changeRequestGlobalBurst, lists, "a globally limited request reads nothing (a request reads a template and a Secret)")
+}
+
+// countingClient counts Get calls.
+type countingClient struct {
+	client.Client
+	gets *int
+}
+
+func (c *countingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	*c.gets++
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+// TestChangeRequestWebhook_HeaderToken (#2139 QA): the X-Kardinal-Token
+// header carries the token and is preferred to the path segment.
+func TestChangeRequestWebhook_HeaderToken(t *testing.T) {
+	c := crHookClient(t, crTemplateWithHook("prod-change"), hookSecret(testWebhookToken), crInstanceOf("i1", "prod-change"))
+	h := newChangeRequestWebhook(c, zerolog.Nop())
+	rec := postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change", "", map[string]string{changeRequestTokenHeader: testWebhookToken})
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.NotEmpty(t, crRefresh(t, c, "i1"))
+
+	c = crHookClient(t, crTemplateWithHook("prod-change"), hookSecret(testWebhookToken), crInstanceOf("i1", "prod-change"))
+	h = newChangeRequestWebhook(c, zerolog.Nop())
+	rec = postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change/"+testWebhookToken, "",
+		map[string]string{changeRequestTokenHeader: "wrong-token-xxxxxxxx"})
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "the header wins over the path")
+	assert.Empty(t, crRefresh(t, c, "i1"))
+}
+
+// TestChangeRequestWebhook_NamespaceScope (#2139 QA): a template's token
+// triggers only its own namespace's instances: the same template name and
+// token in another namespace is another template, and instances of this
+// template's name elsewhere are not touched.
+func TestChangeRequestWebhook_NamespaceScope(t *testing.T) {
+	otherTmpl := crTemplateWithHook("prod-change")
+	otherTmpl.Namespace = "team-b"
+	otherSecret := hookSecret("team-b-token-0123456789")
+	otherSecret.Namespace = "team-b"
+	otherInst := crInstanceOf("b1", "prod-change")
+	otherInst.Namespace = "team-b"
+	c := crHookClient(t, crTemplateWithHook("prod-change"), hookSecret(testWebhookToken), crInstanceOf("a1", "prod-change"),
+		otherTmpl, otherSecret, otherInst)
+	h := newChangeRequestWebhook(c, zerolog.Nop())
+	tok := map[string]string{changeRequestTokenHeader: testWebhookToken}
+
+	assert.Equal(t, http.StatusAccepted, postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change", "", tok).Code)
+	assert.NotEmpty(t, crRefresh(t, c, "a1"))
+	var b1 v1alpha1.ChangeRequest
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-b", Name: "b1"}, &b1))
+	assert.Empty(t, b1.Annotations[v1alpha1.RefreshAnnotation], "another namespace's instance of the same template name")
+
+	assert.Equal(t, http.StatusUnauthorized, postHook(t, h.Handler(), "/webhook/changerequests/team-b/prod-change", "", tok).Code,
+		"team's token is not team-b's")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-b", Name: "b1"}, &b1))
+	assert.Empty(t, b1.Annotations[v1alpha1.RefreshAnnotation])
+}
+
+// TestChangeRequestWebhook_LogsNoToken (#2139 QA): neither a refused nor an
+// accepted trigger logs the token, from the header or the path.
+func TestChangeRequestWebhook_LogsNoToken(t *testing.T) {
+	var logs bytes.Buffer
+	c := crHookClient(t, crTemplateWithHook("prod-change"), hookSecret(testWebhookToken), crInstanceOf("i1", "prod-change"))
+	h := newChangeRequestWebhook(c, zerolog.New(&logs))
+	wrong := "wrong-token-SECRET-1234"
+	postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change/"+wrong, "", nil)
+	postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change", "", map[string]string{changeRequestTokenHeader: wrong})
+	postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change/"+testWebhookToken, "", nil)
+	postHook(t, h.Handler(), "/webhook/changerequests/team/prod-change", "", map[string]string{changeRequestTokenHeader: testWebhookToken})
+	out := logs.String()
+	assert.Contains(t, out, "change request webhook refused")
+	assert.Contains(t, out, "change request webhook received")
+	assert.NotContains(t, out, wrong)
+	assert.NotContains(t, out, testWebhookToken)
 }

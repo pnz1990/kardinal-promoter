@@ -9,12 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,8 +25,18 @@ import (
 )
 
 // changeRequestWebhookPrefix is where the change request trigger is
-// mounted: /webhook/changerequests/<namespace>/<name>/<token>.
+// mounted: /webhook/changerequests/<namespace>/<name>[/<token>].
 const changeRequestWebhookPrefix = "/webhook/changerequests/"
+
+// changeRequestTokenHeader carries the trigger's token; it is preferred to
+// the last path segment, which proxies and access logs record.
+const changeRequestTokenHeader = "X-Kardinal-Token"
+
+// The receiver's coarse limit across every template and sender, checked
+// before anything is read: each request costs a ChangeRequest and a Secret
+// read. The per-template limit applies only to requests with a valid token,
+// so a sender without it cannot use up a template's budget.
+const changeRequestGlobalRate, changeRequestGlobalBurst = 50, 100
 
 // changeRequestWebhook receives "a ticket changed" triggers from a
 // ticketing system (a ServiceNow business rule or flow, a Jira webhook) for
@@ -47,49 +57,53 @@ const changeRequestWebhookPrefix = "/webhook/changerequests/"
 type changeRequestWebhook struct {
 	client client.Client
 	log    zerolog.Logger
-	perIP  *keyedLimiter
+	global *rate.Limiter
 	perCR  *keyedLimiter
 	now    func() time.Time
 }
 
 func newChangeRequestWebhook(c client.Client, log zerolog.Logger) *changeRequestWebhook {
 	return &changeRequestWebhook{client: c, log: log,
-		perIP: newKeyedLimiter(webhookPerIPRate, webhookPerIPBurst, webhookLimiterEntries),
-		perCR: newKeyedLimiter(webhookPerSubRate, webhookPerSubBurst, webhookLimiterEntries),
-		now:   time.Now}
+		global: rate.NewLimiter(changeRequestGlobalRate, changeRequestGlobalBurst),
+		perCR:  newKeyedLimiter(webhookPerSubRate, webhookPerSubBurst, webhookLimiterEntries),
+		now:    time.Now}
 }
 
-// parseChangeRequestWebhookPath splits /webhook/changerequests/<namespace>/<name>/<token>.
+// parseChangeRequestWebhookPath splits
+// /webhook/changerequests/<namespace>/<name>[/<token>].
 func parseChangeRequestWebhookPath(p string) (ns, name, token string, ok bool) {
 	rest, found := strings.CutPrefix(p, changeRequestWebhookPrefix)
 	if !found {
 		return "", "", "", false
 	}
 	parts := strings.Split(strings.TrimSuffix(rest, "/"), "/")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" || (len(parts) == 3 && parts[2] == "") {
 		return "", "", "", false
 	}
-	return parts[0], parts[1], parts[2], true
+	if len(parts) == 3 {
+		token = parts[2]
+	}
+	return parts[0], parts[1], token, true
 }
 
-// Handler serves POST /webhook/changerequests/<namespace>/<name>/<token>.
+// Handler serves POST /webhook/changerequests/<namespace>/<name>[/<token>],
+// the token in the X-Kardinal-Token header (preferred) or the last path
+// segment. In order: the coarse global limit; the token, checked in
+// constant time; the per-template limit, for valid tokens only; the
+// refresh. Nothing that is logged carries the token.
 func (h *changeRequestWebhook) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeWebhookJSON(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		ns, name, token, ok := parseChangeRequestWebhookPath(r.URL.Path)
+		ns, name, pathToken, ok := parseChangeRequestWebhookPath(r.URL.Path)
 		if !ok {
-			writeWebhookJSON(w, http.StatusNotFound, "not found: use /webhook/changerequests/<namespace>/<name>/<token>")
+			writeWebhookJSON(w, http.StatusNotFound, "not found: use /webhook/changerequests/<namespace>/<name> with the X-Kardinal-Token header")
 			return
 		}
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
 		now := h.now()
-		if !h.perCR.allow(ns+"/"+name, now) || !h.perIP.allow(ip, now) {
+		if !h.global.AllowN(now, 1) {
 			w.Header().Set("Retry-After", "1")
 			writeWebhookJSON(w, http.StatusTooManyRequests, "rate limited")
 			return
@@ -104,6 +118,10 @@ func (h *changeRequestWebhook) Handler() http.HandlerFunc {
 			writeWebhookJSON(w, http.StatusBadRequest, "bad request")
 			return
 		}
+		token := r.Header.Get(changeRequestTokenHeader)
+		if token == "" {
+			token = pathToken
+		}
 		log := h.log.With().Str("changerequest", name).Str("namespace", ns).Logger()
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -111,6 +129,11 @@ func (h *changeRequestWebhook) Handler() http.HandlerFunc {
 		if tmpl == nil {
 			log.Warn().Str("reason", reason).Str("remoteAddr", r.RemoteAddr).Msg("change request webhook refused")
 			writeWebhookJSON(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if !h.perCR.allow(ns+"/"+name, now) {
+			w.Header().Set("Retry-After", "1")
+			writeWebhookJSON(w, http.StatusTooManyRequests, "rate limited")
 			return
 		}
 		n, err := h.refresh(ctx, tmpl, now)
@@ -136,6 +159,9 @@ func (h *changeRequestWebhook) authenticate(ctx context.Context, ns, name, token
 		miss = "not a per-promotion template"
 	case cr.Spec.Webhook == nil || cr.Spec.Webhook.SecretRef.Name == "":
 		miss = "the ChangeRequest has no spec.webhook"
+	}
+	if token == "" && miss == "" {
+		miss = "no token (X-Kardinal-Token header or last path segment)"
 	}
 	if miss != "" {
 		var pad corev1.Secret
