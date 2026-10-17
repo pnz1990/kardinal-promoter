@@ -476,6 +476,18 @@ type RewritingGit struct {
 	// drops a push of a dead controller.
 	effect func(what string)
 	dying  func() bool
+	// readFail, when set, is the error the remote reads return
+	// (World.FailGitReads): a branch-heads read (RemoteHeads) when history
+	// is false, a history read (BranchHistory, BranchGraph) when it is true
+	// (World.FailGitHistoryReads).
+	readFail func(history bool) error
+}
+
+func (g *RewritingGit) readErr(history bool) error {
+	if g.readFail == nil {
+		return nil
+	}
+	return g.readFail(history)
 }
 
 // Push is GoGitClient.Push, a side effect of the controller.
@@ -503,14 +515,23 @@ func (g *RewritingGit) CloneAt(ctx context.Context, url, sha, dir string, auth s
 }
 
 func (g *RewritingGit) RemoteHeads(ctx context.Context, url string, auth scm.GitAuth) (map[string]string, error) {
+	if err := g.readErr(false); err != nil {
+		return nil, err
+	}
 	return g.GoGitClient.RemoteHeads(ctx, g.Server.rewrite(url), g.auth(url, auth))
 }
 
 func (g *RewritingGit) BranchHistory(ctx context.Context, url, branch string, auth scm.GitAuth, max int) ([]scm.CommitPaths, error) {
+	if err := g.readErr(true); err != nil {
+		return nil, err
+	}
 	return g.GoGitClient.BranchHistory(ctx, g.Server.rewrite(url), branch, g.auth(url, auth), max)
 }
 
 func (g *RewritingGit) BranchGraph(ctx context.Context, url, branch string, auth scm.GitAuth, max int) (string, map[string]scm.GraphCommit, error) {
+	if err := g.readErr(true); err != nil {
+		return "", nil, err
+	}
 	return g.GoGitClient.BranchGraph(ctx, g.Server.rewrite(url), branch, g.auth(url, auth), max)
 }
 

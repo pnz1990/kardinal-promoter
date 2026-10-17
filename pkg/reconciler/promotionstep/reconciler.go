@@ -2070,6 +2070,43 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, adapter.Name(), result.Reason)
 	}
 
+	// A newer Bundle's step pushed to this environment while this one was
+	// health-checking (#2132): the environment runs the newer version, so
+	// this promotion is superseded, neither Verified (with a
+	// PromotionSucceeded record of a version the environment no longer runs)
+	// nor failed. The Bundle reconciler supersedes the Bundle too, but its
+	// write can come late (an API server throttling it); the step decides
+	// from the newer step's recorded push (newerPushed, read from the API
+	// server), before it passes or times out.
+	//
+	// newerPushed also counts a newer step that has only recorded its push
+	// intent, or (pr-review) pushed its PR branch, without having changed the
+	// environment yet. If that push then fails, this step is Superseded while
+	// the environment still runs this version. That is no wider than the
+	// Bundle reconciler's supersession, which supersedes an older promoting
+	// Bundle as soon as a newer one is in flight, with no push at all.
+	if result.Healthy || expired {
+		newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("check for a newer push to %s: %w", ps.Spec.Environment, err)
+		}
+		if newer != "" {
+			msg := fmt.Sprintf("newer bundle %s pushed to %s while this promotion was health-checking; this promotion is superseded",
+				newer, ps.Spec.Environment)
+			return ctrl.Result{}, r.transitionAudit(ctx, base, ps, StateSuperseded, msg, AuditActionPromotionSuperseded)
+		}
+	}
+	// The resource check passes on availability alone when the workload's
+	// images do not name the version it runs (a renamed image, a config
+	// Bundle): then the environment's branch must still hold this step's
+	// commit with the files it wrote, as the Argo CD and Flux checks require
+	// of the revision they synced (#1575, #2132).
+	if result.Healthy && adapter.Name() == "resource" && !result.TargetUpdated && opts.ExpectedRevision != "" {
+		if why := r.branchMoved(ctx, log, pipeline, env, opts.ExpectedRevision); why != "" {
+			result = health.HealthStatus{Progressing: true, Reason: why, CheckedAt: result.CheckedAt}
+		}
+	}
+
 	// Past the expiry only a healthy environment passes; the timeout's
 	// message has this check's result.
 	if expired && !result.Healthy {

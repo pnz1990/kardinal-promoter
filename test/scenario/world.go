@@ -218,6 +218,14 @@ type World struct {
 	// around kardinal (reviewers, approvers, CI).
 	Actors []func(w *World) error
 
+	// refuse is the API server's throttling of kardinal's writes (Throttle).
+	refuseMu sync.Mutex
+	refuse   func(o client.Object) bool
+	// gitReadFail and gitHistoryFail fail the controller's remote reads of
+	// branch heads and of branch histories (FailGitReads,
+	// FailGitHistoryReads).
+	gitReadFail, gitHistoryFail error
+
 	// admissions are the recorded admission times (RecordAdmissions).
 	admissions map[string][]time.Duration
 
@@ -324,6 +332,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			// the fake client does none of it.
 			Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) (err error) {
 				w.crashCheck()
+				if err := w.throttled(o); err != nil {
+					return err
+				}
 				defer func() {
 					if err == nil {
 						countWrite(o, true)
@@ -351,6 +362,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			},
 			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) (err error) {
 				w.crashCheck()
+				if err := w.throttled(o); err != nil {
+					return err
+				}
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
@@ -376,6 +390,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			},
 			Patch: func(ctx context.Context, c client.WithWatch, o client.Object, p client.Patch, opts ...client.PatchOption) (err error) {
 				w.crashCheck()
+				if err := w.throttled(o); err != nil {
+					return err
+				}
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
@@ -412,6 +429,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			},
 			Delete: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.DeleteOption) (err error) {
 				w.crashCheck()
+				if err := w.throttled(o); err != nil {
+					return err
+				}
 				defer func() {
 					if err == nil {
 						countWrite(o, true)
@@ -430,6 +450,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			},
 			SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, o client.Object, opts ...client.SubResourceUpdateOption) (err error) {
 				w.crashCheck()
+				if err := w.throttled(o); err != nil {
+					return err
+				}
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
@@ -448,6 +471,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 			},
 			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) (err error) {
 				w.crashCheck()
+				if err := w.throttled(o); err != nil {
+					return err
+				}
 				defer func() {
 					if err == nil {
 						countWrite(o, false)
@@ -553,7 +579,7 @@ func (w *World) startManager() {
 	if w.incarnation > 1 {
 		work = filepath.Join(w.Dir, fmt.Sprintf("work-%d", w.incarnation))
 	}
-	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git, effect: w.effect, dying: w.dying}
+	w.gitClient = &RewritingGit{GoGitClient: scm.NewGoGitClient(), Server: w.Git, effect: w.effect, dying: w.dying, readFail: w.gitReadErr}
 	w.bundles = &bundlerec.Reconciler{Client: rc, APIReader: c, Translator: tr, GraphChecker: graph.NewGraphClient(dyn, logger),
 		PolicyNamespaces: m.policyNS, NowFn: now}
 	w.pipelines = &pipelinerec.Reconciler{Client: rc, Reader: c, CompactAbove: &compactAbove, Now: now}
