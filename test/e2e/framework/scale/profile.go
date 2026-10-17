@@ -78,6 +78,14 @@ type Profile struct {
 	ChaosFor       time.Duration
 	ChaosPipelines int
 
+	// PackEvents AuditEvents TestScale_EvidencePack exports with kardinal
+	// audit evidence-pack, which must take at most PackMaxRSSMiB of resident
+	// memory (the CLI reads them a page at a time, so the bound does not
+	// grow with the count) and PackMaxTime (#2047).
+	PackEvents    int
+	PackMaxRSSMiB int
+	PackMaxTime   time.Duration
+
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
 	Settle time.Duration
@@ -126,6 +134,10 @@ var profiles = map[string]Profile{
 		Pipelines: 20, PipelineEnvs: 3, BurstBundles: 100, BurstPipelines: 10,
 		SustainedRate: 0.5, SustainedFor: 2 * time.Minute, SustainedPipelines: 8,
 		RapidFire: 10, ChaosFor: 3 * time.Minute, ChaosPipelines: 8,
+		// The CLI benchmark (BenchmarkEvidencePack) peaks at about 98 MiB,
+		// test binary included, at 10k and at 100k alike; a pack that held
+		// the events in memory would grow by about 1 KiB each.
+		PackEvents: 10_000, PackMaxRSSMiB: 192, PackMaxTime: 2 * time.Minute,
 		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle: 10 * time.Minute,
 		// Twice the stage time measured on a GitHub runner with the -race
@@ -145,6 +157,7 @@ var profiles = map[string]Profile{
 		Pipelines: 200, PipelineEnvs: 3, BurstBundles: 1000, BurstPipelines: 100,
 		SustainedRate: 2, SustainedFor: 10 * time.Minute, SustainedPipelines: 50,
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
+		PackEvents: 100_000, PackMaxRSSMiB: 192, PackMaxTime: 6 * time.Minute,
 		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
 		SerialStep:   12 * time.Second,

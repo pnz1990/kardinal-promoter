@@ -93,7 +93,7 @@ func (pg *pager) funcs() interceptor.Funcs {
 	}}
 }
 
-func packScheme(t *testing.T) *runtime.Scheme {
+func packScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(s))
