@@ -78,18 +78,64 @@ func TestVerify_StatementPipelineMatchesResource(t *testing.T) {
 	s, pub := keySigner(t)
 	raw, _, err := Build(input("image"))
 	require.NoError(t, err)
-	for name, edit := range map[string]func(*Statement){
-		"another pipeline in the record": func(st *Statement) { st.Predicate.Kardinal.Pipeline = "evil" },
-		"a resourceUri of another shape": func(st *Statement) { st.Predicate.ResourceURI = "kardinal://9b1e/pipelines/checkout" },
+	for name, tc := range map[string]struct {
+		edit func(*Statement)
+		want string
+	}{
+		"another pipeline in the record": {func(st *Statement) { st.Predicate.Kardinal.Pipeline = "evil" }, `pipeline "evil" is not its resourceUri's`},
+		"a resourceUri of another shape": {func(st *Statement) { st.Predicate.ResourceURI = "kardinal://9b1e/pipelines/checkout" }, "is not kardinal://<cluster>/namespaces/"},
 	} {
 		st, err := Parse(raw)
 		require.NoError(t, err)
-		edit(st)
+		tc.edit(st)
 		b, err := json.Marshal(st)
 		require.NoError(t, err)
 		signed, err := s.Sign(context.Background(), b)
 		require.NoError(t, err)
 		_, err = Verify(signed.Bundle, VerifyOptions{Key: pub})
-		assert.Error(t, err, name)
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), tc.want, name)
 	}
+}
+
+// TestVerify_Pins (QA-3): each pin is checked in pkg/receipt on its own,
+// not only through the CLI: a receipt verifies with every pin its
+// resourceUri holds, fails with any one of them wrong, and with
+// RequireCluster fails unless the cluster is pinned.
+func TestVerify_Pins(t *testing.T) {
+	s, pub := keySigner(t)
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	st, err := Parse(raw)
+	require.NoError(t, err)
+	r, err := ParseResourceURI(st.Predicate.ResourceURI)
+	require.NoError(t, err)
+	signed, err := s.Sign(context.Background(), raw)
+	require.NoError(t, err)
+	all := VerifyOptions{Key: pub, ClusterID: r.ClusterID, Namespace: r.Namespace, Pipeline: r.Pipeline, Environment: r.Environment, RequireCluster: true}
+	_, err = Verify(signed.Bundle, all)
+	require.NoError(t, err, "every pin right")
+
+	for name, tc := range map[string]struct {
+		edit func(*VerifyOptions)
+		want string
+	}{
+		"cluster":          {func(o *VerifyOptions) { o.ClusterID = "other" }, "not cluster other"},
+		"namespace":        {func(o *VerifyOptions) { o.Namespace = "other" }, "not namespace other"},
+		"pipeline":         {func(o *VerifyOptions) { o.Pipeline = "other" }, "not pipeline other"},
+		"environment":      {func(o *VerifyOptions) { o.Environment = "other" }, "not environment other"},
+		"cluster unpinned": {func(o *VerifyOptions) { o.ClusterID = "" }, "pin it with --cluster " + r.ClusterID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := all
+			tc.edit(&o)
+			_, err := Verify(signed.Bundle, o)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+	o := all
+	o.ClusterID, o.RequireCluster = "", false
+	_, err = Verify(signed.Bundle, o)
+	require.NoError(t, err, "any cluster, when not required")
 }
