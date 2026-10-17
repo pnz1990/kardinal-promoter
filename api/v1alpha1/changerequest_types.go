@@ -138,9 +138,11 @@ type ServiceNowChangeRequest struct {
 	// +optional
 	Template map[string]string `json:"template,omitempty"`
 
-	// States maps raw state values (the change_request state field) to
-	// kardinal states, over the default Change Management state model.
+	// States maps state values of the change_request state field (the raw
+	// value, -2, or its display name, Scheduled) to kardinal states, before
+	// the default Change Management state model (docs/change-requests.md).
 	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k] in ['pending', 'approved', 'rejected', 'cancelled', 'closed', 'unknown'])",message="a state maps to pending, approved, rejected, cancelled, closed or unknown"
 	// +optional
 	States map[string]string `json:"states,omitempty"`
 }

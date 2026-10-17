@@ -7,4 +7,4 @@ section: Added
   - **Fail closed.** A reading older than two poll intervals is stale, and `state` then reads `unknown`. Provider errors and HTTP 429 back off to `status.retryAt`.
   - **Only kardinal writes an instance.** The graph-objects admission policy refuses anyone else.
   - **Provider calls are capped** by `changeRequest.maxInflight` and `changeRequest.maxInflightPerNamespace`.
-  - The ServiceNow and Jira providers follow in the next changes.
+  - The providers are ServiceNow (#2054) and Jira (#2055).

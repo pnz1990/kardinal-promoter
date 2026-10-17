@@ -264,6 +264,9 @@ spec:
             - --metriccheck-namespace-slots={{ .Values.metricCheck.querySlots.perNamespace }}
             - --change-request-max-inflight={{ .Values.changeRequest.maxInflight }}
             - --change-request-max-inflight-per-namespace={{ .Values.changeRequest.maxInflightPerNamespace }}
+            {{- with .Values.changeRequest.caBundle.configMap }}
+            - --change-request-ca-file=/etc/kardinal/change-request-ca/{{ $.Values.changeRequest.caBundle.key }}
+            {{- end }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}
@@ -397,6 +400,11 @@ spec:
               mountPath: /var/run/secrets/sigstore
               readOnly: true
             {{- end }}
+            {{- if .Values.changeRequest.caBundle.configMap }}
+            - name: change-request-ca
+              mountPath: /etc/kardinal/change-request-ca
+              readOnly: true
+            {{- end }}
             {{- with .Values.controller.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -413,6 +421,14 @@ spec:
                   audience: sigstore
                   expirationSeconds: {{ dig "receipts" "signing" "keyless" "tokenExpirationSeconds" 600 .Values.AsMap }}
                   path: token
+        {{- end }}
+        {{- with .Values.changeRequest.caBundle.configMap }}
+        - name: change-request-ca
+          configMap:
+            name: {{ . }}
+            items:
+              - key: {{ $.Values.changeRequest.caBundle.key }}
+                path: {{ $.Values.changeRequest.caBundle.key }}
         {{- end }}
         {{- with .Values.controller.extraVolumes }}
         {{- toYaml . | nindent 8 }}

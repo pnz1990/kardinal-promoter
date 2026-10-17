@@ -159,6 +159,10 @@ if [ "${KARDINAL_E2E_RECEIPTS:-0}" = 1 ]; then
     --set receipts.sinks.oci.enabled=true --set receipts.sinks.oci.insecure=true
     --set "receipts.sinks.oci.repository=${KARDINAL_E2E_REGISTRY#http://}/e2e/receipts")
 fi
+# components/ticketapi.sh: trust the fake ticketing API's CA.
+if "${KUBECTL[@]}" -n "$KARDINAL_NS" get configmap change-request-ca >/dev/null 2>&1; then
+  args+=(--set changeRequest.caBundle.configMap=change-request-ca)
+fi
 # shellcheck disable=SC2206
 args+=(${KARDINAL_E2E_HELM_ARGS:-})
 

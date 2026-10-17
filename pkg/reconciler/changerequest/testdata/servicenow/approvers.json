@@ -1,0 +1,14 @@
+{
+  "result": [
+    {
+      "approver": {"display_value": "Jane Smith", "value": "46d44a23a9fe19810012d100cca80666"},
+      "state": {"display_value": "Approved", "value": "approved"},
+      "sys_updated_on": {"display_value": "2026-10-01 11:00:00", "value": "2026-10-01 09:00:00"}
+    },
+    {
+      "approver": {"display_value": "Bob Lee", "value": "5137153cc611227c000bbd1bd8cd2005"},
+      "state": {"display_value": "Requested", "value": "requested"},
+      "sys_updated_on": {"display_value": "", "value": ""}
+    }
+  ]
+}

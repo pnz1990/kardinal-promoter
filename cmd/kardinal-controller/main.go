@@ -419,6 +419,12 @@ func main() {
 			"The rest wait, first come, first served.")
 	flag.IntVar(&crNamespaceSlots, "change-request-max-inflight-per-namespace", changerequestrecon.DefaultNamespaceSlots,
 		"Most ChangeRequest provider calls of one namespace running at once (at least 1).")
+	// --change-request-ca-file adds CAs a ServiceNow or Jira server's TLS
+	// certificate may chain to (an on-premises instance behind an internal CA).
+	var crCAFile string
+	flag.StringVar(&crCAFile, "change-request-ca-file", "",
+		"PEM file of CA certificates, trusted besides the system roots, for ChangeRequest provider calls "+
+			"(ServiceNow, Jira behind an internal CA). Chart value: changeRequest.caBundle.")
 
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
@@ -602,6 +608,16 @@ func main() {
 	if crGlobalSlots < 1 || crNamespaceSlots < 1 {
 		logger.Fatal().Int("maxInflight", crGlobalSlots).Int("maxInflightPerNamespace", crNamespaceSlots).
 			Msg("--change-request-max-inflight and --change-request-max-inflight-per-namespace must be at least 1")
+	}
+	var crProviderOpts changerequestrecon.ProviderOptions
+	if crCAFile != "" {
+		pemData, err := os.ReadFile(crCAFile)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("--change-request-ca-file")
+		}
+		if crProviderOpts.RootCAs, err = changerequestrecon.LoadRootCAs(pemData); err != nil {
+			logger.Fatal().Err(err).Str("file", crCAFile).Msg("--change-request-ca-file")
+		}
 	}
 	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
 	// zerolog logger in the reconcile context, so without this default every
@@ -1136,7 +1152,7 @@ func main() {
 	// ChangeRequests (docs/change-requests.md): the providers register here.
 	if err := (&changerequestrecon.Reconciler{
 		Client:    mgr.GetClient(),
-		Providers: changerequestrecon.DefaultProviders(),
+		Providers: changerequestrecon.DefaultProviders(crProviderOpts),
 		Limiter:   slots.NewLimiter(crGlobalSlots, crNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ChangeRequestReconciler")

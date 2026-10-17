@@ -28,7 +28,8 @@ import (
 // spec.link, a non-https instance URL, a short-hand state outside the
 // normalised set and a poll interval that is not a duration; it defaults
 // mode, pollInterval, timeout, the ServiceNow change model and the auth
-// scheme, and the AuditEvent CRD accepts the four ChangeRequest actions.
+// scheme; a ServiceNow states map must map to the normalised states; and the
+// AuditEvent CRD accepts the four ChangeRequest actions.
 //
 // Covers CHANGE-REQUEST-01.
 func TestChangeRequestsOnAPIServer(t *testing.T) {
@@ -81,6 +82,11 @@ func TestChangeRequestsOnAPIServer(t *testing.T) {
 		}, "Unsupported value"},
 		{"a poll interval that is not a duration", func(s *v1alpha1.ChangeRequestSpec) { s.PollInterval = "often" }, "should match"},
 		{"timeout 0", func(s *v1alpha1.ChangeRequestSpec) { s.Timeout = "0" }, ""},
+		{"a states map", func(s *v1alpha1.ChangeRequestSpec) {
+			s.ServiceNow.States = map[string]string{"-3": "approved", "Implement": "closed"}
+		}, ""},
+		{"a states map to no state", func(s *v1alpha1.ChangeRequestSpec) { s.ServiceNow.States = map[string]string{"-3": "Scheduled"} },
+			"a state maps to pending, approved, rejected, cancelled, closed or unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := cr(tc.mut)

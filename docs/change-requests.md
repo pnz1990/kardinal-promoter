@@ -21,10 +21,9 @@ spec:
 ```
 
 !!! note "Providers"
-    This release has the `ChangeRequest` kind, the controller and the gate context. The ServiceNow
-    and Jira providers come next: until they are served, a ChangeRequest instance reports the
-    condition `ProviderError` (`provider "servicenow" is not available in this controller`) and a
-    gate that reads it blocks.
+    This release serves ServiceNow. Jira comes next: until it is served, a `provider: jira`
+    instance reports the condition `ProviderError` (`provider "jira" is not available in this
+    controller`) and a gate that reads it blocks.
 
 ## How it works
 
@@ -96,6 +95,53 @@ credential that may create and read changes, not one that may approve them. Ever
 through the controller's egress guard: loopback, link-local and cloud metadata addresses are
 refused (condition `Refused`), and with `--egress-allowlist` only the listed destinations are
 reached.
+
+## ServiceNow
+
+kardinal uses the Table API: it creates and reads `change_request` records, and reads their
+approvals from `sysapproval_approver`.
+
+| Call | Request |
+|---|---|
+| Open | `POST /api/now/table/change_request` with the template's fields, `type` (`spec.servicenow.type`), `correlation_id` and `correlation_display: kardinal` |
+| Find (before every create) | `GET /api/now/table/change_request?sysparm_query=correlation_id=<key>^ORDERBYsys_created_on` |
+| Read | `GET /api/now/table/change_request/<sys_id>`, or by `number` for a linked ticket |
+| Approvers | `GET /api/now/table/sysapproval_approver?sysparm_query=sysapproval=<sys_id>` (a refusal leaves them out) |
+
+The template cannot set `type`, `correlation_id` or `correlation_display`. `correlation_id`
+holds `kardinal-` and 32 hex characters of the promotion's correlation id's SHA-256, because the
+field holds 100 characters. Give the integration user a role that may create and read
+`change_request` and read `sysapproval_approver` (for example `itil`), and no right to approve.
+
+The state is read from `state` and `approval`, mapped with the default Change Management state
+model:
+
+| ServiceNow | `state` |
+|---|---|
+| `approval` is `rejected` | `rejected` |
+| `state` Canceled (`4`) | `cancelled` |
+| `state` Closed (`3`) or Review (`0`) | `closed` |
+| `approval` is `approved` and `state` Scheduled (`-2`) or Implement (`-1`) | `approved` |
+| anything else (New, Assess, Authorize, approval requested) | `pending` |
+
+An instance with its own state model maps its values in `spec.servicenow.states`, by raw value or
+display name, before the defaults:
+
+```yaml
+servicenow:
+  states:
+    "-3": approved        # this instance approves at Authorize
+    "Implement": closed
+```
+
+For a linked ticket, `link.requireField` names a `change_request` field. A reference field such as
+`cmdb_ci` matches by its sys_id or its display value. `providerState` is the state and approval
+as ServiceNow displays them (`Scheduled / Approved`).
+
+**An instance behind an internal CA.** Put the CA certificates (PEM) in a ConfigMap in the release
+namespace and set `changeRequest.caBundle.configMap` (and `.key`, default `ca.crt`). The controller
+then trusts them, besides the system roots, for ChangeRequest calls only
+(`--change-request-ca-file`).
 
 ## The gate
 
@@ -197,8 +243,8 @@ Only kardinal writes an instance: the chart's graph-objects admission policy ref
 
 ## Limits and errors
 
-- **Rate.** An instance makes at most two requests per poll interval (a search and a create, or
-  one read). At most `changeRequest.maxInflight` requests run at once in the cluster and
+- **Rate.** An instance makes at most two requests per poll interval (a search and a create, or a
+  read and its approvers). At most `changeRequest.maxInflight` requests run at once in the cluster and
   `changeRequest.maxInflightPerNamespace` per namespace (controller flags
   `--change-request-max-inflight`, `--change-request-max-inflight-per-namespace`; defaults 8 and
   1); the rest wait, first come, first served.

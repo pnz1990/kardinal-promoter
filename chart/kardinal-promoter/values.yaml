@@ -740,15 +740,24 @@ metricCheck:
     global: 12
     perNamespace: 1
 
-# -- ChangeRequest provider calls (docs/change-requests.md). Every provider
-# dials the ServiceNow or Jira address the ChangeRequest's author chose, so
-# calls are capped: at most `maxInflight` at once in the cluster, at most
-# `maxInflightPerNamespace` per namespace, the rest wait first come, first
-# served. An instance makes at most two calls per poll interval (a search and
-# a create, or one read), and none before a provider's Retry-After.
+# ChangeRequest provider calls (docs/change-requests.md).
 changeRequest:
+  # -- Most ChangeRequest provider calls running at once in the cluster. Every
+  # provider dials the ServiceNow or Jira address the ChangeRequest's author
+  # chose, so calls are capped; the rest wait first come, first served. An
+  # instance makes at most two calls per poll interval (a search and a
+  # create, or a read and its approvers), and none before a provider's
+  # Retry-After.
   maxInflight: 8
+  # -- Most ChangeRequest provider calls of one namespace running at once.
   maxInflightPerNamespace: 1
+  # -- CA certificates (PEM) a ServiceNow or Jira server's TLS certificate may
+  # chain to, besides the system roots: a ConfigMap in the release namespace
+  # and its key, for an on-premises instance behind an internal CA. Empty:
+  # the system roots only.
+  caBundle:
+    configMap: ""
+    key: ca.crt
 
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every
