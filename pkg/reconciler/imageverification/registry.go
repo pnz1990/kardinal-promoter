@@ -31,19 +31,34 @@ const (
 	sigstoreBundlePrefix = "application/vnd.dev.sigstore.bundle"
 	// predicateTypeAnnotation names the in-toto predicate of a Sigstore
 	// bundle referrer (cosign sets it, and so do kardinal's promotion
-	// receipts). A referrer that names another predicate than an image
-	// signature's is skipped before it counts against maxSignatures, so
-	// attestations (receipts, SBOMs, provenance) cannot crowd out the
-	// image's signatures. One that names none is read and checked.
+	// receipts). A referrer that names a predicate the policy does not
+	// verify (an image signature's or a named attestation's) is skipped
+	// before it is counted. One that names none is read and checked.
 	predicateTypeAnnotation = "dev.sigstore.bundle.predicateType"
+	// receiptAnnotation marks kardinal's own promotion receipts
+	// (docs/receipts.md). They are VSAs, the predicate type a policy may
+	// name to raise a build level, and an image gets one per environment it
+	// reaches: they are skipped before they are counted, so they never
+	// crowd out the builder's attestations or a signature.
+	receiptAnnotation = "kardinal.io/receipt"
 	// cosignSignatureAnnotation holds a legacy signature, base64.
 	cosignSignatureAnnotation = "dev.cosignproject.cosign/signature"
 	// cosignCertificateAnnotation holds a legacy keyless certificate.
 	cosignCertificateAnnotation = "dev.sigstore.cosign/certificate"
 	// maxSignatureBytes bounds what is read per signature blob.
 	maxSignatureBytes = 1 << 20
-	// maxSignatures bounds the signatures read per image.
-	maxSignatures = 32
+	// MaxIndexBytes bounds what is read of any registry response that is
+	// not a blob: the referrers index (the OCI referrers API or its tag
+	// fallback) and manifests. go-containerregistry alone would read up to
+	// 100 MiB of an index; an image with more referrers than 4 MiB lists
+	// (tens of thousands) fails its read, and so its verification, closed.
+	MaxIndexBytes = 4 << 20
+	// maxSignatures bounds the signature bundles read per image, and
+	// maxAttestations the attestation bundles. The budgets are separate,
+	// so no number of attestations crowds out a signature. A bundle that
+	// names no predicate counts against each budget it is read for.
+	maxSignatures   = 32
+	maxAttestations = 64
 )
 
 // RegistryOptions say how to reach the registries of one ImageVerification.
@@ -54,6 +69,9 @@ type RegistryOptions struct {
 	Insecure []string
 	// SignatureRepository, when set, is where signatures are looked up.
 	SignatureRepository string
+	// AttestationTypes are the in-toto predicate types whose bundles are
+	// read as attestations (Signatures.Attestations), besides signatures.
+	AttestationTypes []string
 }
 
 // RegistryClient fetches the signatures of an image.
@@ -86,8 +104,56 @@ func (r *OCIRegistry) transport(insecure []string) http.RoundTripper {
 			r.Transport = t
 		}
 	})
-	return httpsOnly{base: r.Transport, insecure: insecure}
+	return httpsOnly{base: boundedIndexes{base: r.Transport}, insecure: insecure}
 }
+
+// errIndexTooLarge is a registry response over MaxIndexBytes.
+var errIndexTooLarge = fmt.Errorf("a referrers index or manifest over %d MiB", MaxIndexBytes>>20)
+
+// boundedIndexes caps every response that is not a blob at MaxIndexBytes:
+// one declared larger is refused before its body is read, and one whose
+// body runs past it fails the read.
+type boundedIndexes struct{ base http.RoundTripper }
+
+func (b boundedIndexes) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := b.base.RoundTrip(req)
+	if err != nil || strings.Contains(req.URL.Path, "/blobs/") {
+		return resp, err
+	}
+	if resp.ContentLength > MaxIndexBytes {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("%s %s: %w (Content-Length %d)", req.Method, req.URL.Path, errIndexTooLarge, resp.ContentLength)
+	}
+	resp.Body = &cappedBody{rc: resp.Body, left: MaxIndexBytes, what: req.URL.Path}
+	return resp, nil
+}
+
+// cappedBody fails a read past its limit, so a truncated index is never
+// parsed as a smaller one.
+type cappedBody struct {
+	rc   io.ReadCloser
+	left int64
+	what string
+}
+
+func (c *cappedBody) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var one [1]byte
+		n, err := c.rc.Read(one[:])
+		if n > 0 {
+			return 0, fmt.Errorf("%s: %w", c.what, errIndexTooLarge)
+		}
+		return 0, err
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.rc.Read(p)
+	c.left -= int64(n)
+	return n, err
+}
+
+func (c *cappedBody) Close() error { return c.rc.Close() }
 
 // httpsOnly refuses plain-HTTP requests to hosts not listed as insecure.
 // go-containerregistry falls back to HTTP for RFC 1918 and localhost
@@ -134,18 +200,33 @@ func (r *OCIRegistry) Signatures(ctx context.Context, repository, digest string,
 		if err != nil {
 			return Signatures{}, fmt.Errorf("referrers of %s: %w", ref, err)
 		}
+		signatures, attestations := 0, 0
 		for _, d := range m.Manifests {
-			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || len(out.Bundles) >= maxSignatures {
+			if !strings.HasPrefix(d.ArtifactType, sigstoreBundlePrefix) || d.Annotations[receiptAnnotation] != "" {
 				continue
 			}
-			if p, ok := d.Annotations[predicateTypeAnnotation]; ok && p != CosignSignPredicate {
+			// A referrer that names its predicate is read only for the
+			// signature or an attestation type the policy names; one that
+			// names none may be either, and verification decides.
+			p, named := d.Annotations[predicateTypeAnnotation]
+			signature := (!named || p == CosignSignPredicate) && signatures < maxSignatures
+			attestation := ((!named && len(opts.AttestationTypes) > 0) || (named && slices.Contains(opts.AttestationTypes, p))) &&
+				attestations < maxAttestations
+			if !signature && !attestation {
 				continue
 			}
 			b, err := firstLayer(ref.Context().Digest(d.Digest.String()), ropts)
 			if err != nil {
 				return Signatures{}, fmt.Errorf("read bundle %s: %w", d.Digest, err)
 			}
-			out.Bundles = append(out.Bundles, b)
+			if signature {
+				signatures++
+				out.Bundles = append(out.Bundles, b)
+			}
+			if attestation {
+				attestations++
+				out.Attestations = append(out.Attestations, b)
+			}
 		}
 	}
 

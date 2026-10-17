@@ -1543,6 +1543,130 @@ spec:
                   into its first environments. Selected images must be pinned by digest.
                   See docs/image-verification.md.
                 properties:
+                  attestations:
+                    description: |-
+                      Attestations are the in-toto attestations each verified image must (or
+                      may) carry, as Sigstore bundles in its OCI referrers: SLSA provenance,
+                      vulnerability scans with VEX, and any other predicate. Each result is
+                      recorded in status.attestations; PolicyGate CEL reads it as
+                      attestations.<name> (docs/image-verification.md#attestations).
+                    items:
+                      description: |-
+                        AttestationPolicy is one attestation an image carries: its predicate
+                        type, who may sign it, and what the ImageVerification decides itself
+                        (required, slsa.minLevel). Everything else is a gate's decision.
+                      properties:
+                        authorities:
+                          description: |-
+                            Authorities name the spec.imageVerification.authorities that may sign
+                            the attestation.
+                          items:
+                            maxLength: 63
+                            type: string
+                          maxItems: 10
+                          minItems: 1
+                          type: array
+                        name:
+                          description: 'Name names the result: a gate reads attestations.<name>.'
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z][a-z0-9]*$
+                          type: string
+                        predicateType:
+                          description: |-
+                            PredicateType is the in-toto predicate type, exactly
+                            ("https://slsa.dev/provenance/v1").
+                          maxLength: 256
+                          minLength: 1
+                          type: string
+                        required:
+                          description: |-
+                            Required holds the version until every image carries a verified
+                            attestation of this type, and fails it at the timeout. False records
+                            the attestation when it is there.
+                          type: boolean
+                        slsa:
+                          description: |-
+                            SLSA grants SLSA build levels to provenance builders, and holds a
+                            version below MinLevel.
+                          properties:
+                            builders:
+                              description: |-
+                                Builders map trusted builder IDs to the level granted to them.
+                                Provenance from a builder not listed is level 1.
+                              items:
+                                description: SLSABuilder is a trusted builder and
+                                  the level granted to it.
+                                properties:
+                                  id:
+                                    description: ID is the builder's runDetails.builder.id,
+                                      exactly.
+                                    maxLength: 512
+                                    minLength: 1
+                                    type: string
+                                  level:
+                                    description: Level is the SLSA build level granted
+                                      (1 to 3).
+                                    maximum: 3
+                                    minimum: 1
+                                    type: integer
+                                required:
+                                - id
+                                - level
+                                type: object
+                              maxItems: 20
+                              type: array
+                            minLevel:
+                              description: |-
+                                MinLevel holds the version (Failed at the timeout) while an image's
+                                level is below it. 0 holds nothing.
+                              maximum: 3
+                              minimum: 0
+                              type: integer
+                          type: object
+                        vex:
+                          description: |-
+                            VEX names who may say, with OpenVEX statements, that a finding of the
+                            scan does not apply.
+                          properties:
+                            authorities:
+                              description: |-
+                                Authorities name the spec.imageVerification.authorities whose OpenVEX
+                                attestations count. A scan's own signer does not suppress its
+                                findings unless it is listed here.
+                              items:
+                                maxLength: 63
+                                type: string
+                              maxItems: 10
+                              minItems: 1
+                              type: array
+                            predicateType:
+                              description: |-
+                                PredicateType is the predicate type of the VEX attestations. Empty
+                                means https://openvex.dev/ns.
+                              maxLength: 256
+                              type: string
+                          required:
+                          - authorities
+                          type: object
+                      required:
+                      - authorities
+                      - name
+                      - predicateType
+                      type: object
+                      x-kubernetes-validations:
+                      - message: vex applies to a vulnerability scan (cosign vuln
+                          or in-toto vulns predicate)
+                        rule: '!has(self.vex) || self.predicateType in [''https://cosign.sigstore.dev/attestation/vuln/v1'',
+                          ''https://in-toto.io/attestation/vulns'']'
+                      - message: slsa applies to SLSA provenance or a SLSA VSA
+                        rule: '!has(self.slsa) || self.predicateType in [''https://slsa.dev/provenance/v1'',
+                          ''https://slsa.dev/verification_summary/v1'']'
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   authorities:
                     description: |-
                       Authorities are the signers an image may be signed by: an image is
@@ -1724,6 +1848,12 @@ spec:
                 - message: set authorities, commits.requireSigned, or both
                   rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
                     && self.commits.requireSigned)
+                - message: an attestation's authorities and vex.authorities must name
+                    spec.imageVerification.authorities
+                  rule: '!has(self.attestations) || self.attestations.all(a, a.authorities.all(n,
+                    has(self.authorities) && self.authorities.exists(x, x.name ==
+                    n)) && (!has(a.vex) || a.vex.authorities.all(n, has(self.authorities)
+                    && self.authorities.exists(x, x.name == n))))'
               lastChange:
                 description: |-
                   LastChange is who made the latest pause, resume or hold release, and

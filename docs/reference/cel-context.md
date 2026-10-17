@@ -22,6 +22,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `verdicts` | map | The Verdicts a verify gate counted (`kardinal verify`, AgentRuns). See [`verdicts.*`](#verdicts) |
 | `actor` | map | Who created the version: its verified actor stamp. See [`actor.*`](#actor) |
 | `agent` | map | The version's agent as the registry says now. See [`agent.*`](#agent) |
+| `attestations` | map | The version's verified attestations: SLSA provenance, vulnerability scans after VEX, any in-toto predicate. See [`attestations.*`](#attestations) |
 
 ---
 
@@ -405,4 +406,56 @@ actor.kind != "agent" || (agent.registered && !agent.suspended)
 
 # Agents with autonomy auto ship here; others wait (pair with approval.requiredWhen)
 actor.kind != "agent" || agent.autonomy == "auto"
+```
+
+## `attestations.*`
+
+What the version's ImageVerification verified ([Attestations](../image-verification.md#attestations)):
+its `status.attestations`, read when the expression names `attestations`. With several images, each
+name is folded over them: verified when every image's verified, the lowest SLSA level, the summed
+counts, the oldest scan, and the first image's signer, source and predicate. A version whose
+Pipeline has no attestation policy has `attestations.verified == false` and no names, so an
+expression that reads a name is an evaluation error and the gate blocks (fail closed).
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `attestations.verified` | bool | `true` | Always; the version's ImageVerification is Verified |
+| `attestations.<name>.verified` | bool | `true` | Each policy name; every image has a verified attestation |
+| `attestations.<name>.signer` | string | `"release"` | The key authority's name or the certificate identity, when every image has the same one |
+| `attestations.<name>.predicateType` | string | `"https://slsa.dev/provenance/v1"` | Each policy name |
+| `attestations.<name>.slsa.buildLevel` | int | `3` | With `slsa`; 0 to 3, the lowest image's |
+| `attestations.<name>.slsa.levelSource` | string | `"builder"` | `builder` or `vsa`, when every image has the same one |
+| `attestations.<name>.slsa.builderID` | string | `"https://github.com/slsa-framework/..."` | SLSA provenance, when every image has the same one |
+| `attestations.<name>.slsa.sourceCommit` | string | `"1a2b3c4d..."` | The provenance's `gitCommit` dependency, when every image has the same one |
+| `attestations.<name>.slsa.sourceURI` | string | `"git+https://github.com/myorg/app"` | Its URI, when every image has the same one |
+| `attestations.<name>.effective.critical` | int | `0` | A scan; also `high`, `medium`, `low`, `unknown`; after VEX |
+| `attestations.<name>.before.critical` | int | `2` | A scan; before VEX |
+| `attestations.<name>.effectiveIDs` | list | `["CVE-2026-1234"]` | A scan; effective critical and high IDs, at most 50 |
+| `attestations.<name>.scannedAt` | string | `"2026-10-14T09:00:00Z"` | A scan; RFC 3339 |
+| `attestations.<name>.scanner` | string | `"trivy"` | A scan, when every image has the same one |
+| `attestations.<name>.predicate` | string | `'{"result":"PASSED"}'` | Canonical JSON, at most 64 KiB; read it with `json.unmarshal(...)`; when every image has the same one |
+| `attestations.<name>.images` | list | `[{"image": "ghcr.io/myorg/app@sha256:...", "verified": true, ...}]` | Each image's own result: `image`, `verified`, and `signer`, `authority`, `digest`, `predicate`, `slsa`, `vulns` as above, when it has them |
+
+A version with several images folds them into one value per name: `verified` when every
+image is, the lowest build level, the summed counts and the oldest scan. A field that names one
+image's attestation (its signer, digest, predicate, builder, source, level source or scanner)
+is set only when every image has the same value. Otherwise it is left out, and an expression
+that reads it fails, so the gate blocks rather than deciding on one image. To check each image,
+use `images`: `attestations.provenance.images.all(i, i.slsa.sourceURI == "git+https://github.com/myorg/app")`.
+
+A scan's fields are also under `attestations.<name>.vulns` (`attestations.vulns.vulns.effective.high`).
+
+```yaml
+# Level-3 provenance built from the version's own commit
+expression: 'attestations.provenance.slsa.buildLevel >= 3 && attestations.provenance.slsa.sourceCommit == bundle.provenance.commitSHA'
+```
+
+```yaml
+# No critical and at most two high vulnerabilities after VEX
+expression: 'attestations.vulns.effective.critical == 0 && attestations.vulns.effective.high <= 2'
+```
+
+```yaml
+# Every image's test-result attestation passed
+expression: 'attestations.tests.images.all(i, has(i.predicate) && json.unmarshal(i.predicate).result == "PASSED")'
 ```

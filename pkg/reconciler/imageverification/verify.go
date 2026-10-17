@@ -28,6 +28,9 @@ type Signatures struct {
 	// Legacy are cosign "simple signing" signatures from the
 	// sha256-<digest>.sig tag (cosign v2 sign --key).
 	Legacy []LegacySignature
+	// Attestations are the Sigstore bundles of the predicate types asked
+	// for (RegistryOptions.AttestationTypes), and those that name none.
+	Attestations [][]byte
 }
 
 // LegacySignature is one cosign simple-signing signature.
@@ -129,8 +132,22 @@ func verifyImage(digest string, sigs Signatures, authorities []authority) verdic
 }
 
 // verifyEntity verifies a Sigstore bundle (or another signed entity) for
-// the artifact digest.
+// the artifact digest as a cosign image signature.
 func (a authority) verifyEntity(b verify.SignedEntity, digest []byte) (string, error) {
+	res, signer, err := a.verifyBundle(b, digest)
+	if err != nil {
+		return "", err
+	}
+	if err := cosignSignature(res); err != nil {
+		return "", err
+	}
+	return signer, nil
+}
+
+// verifyBundle verifies a Sigstore bundle for the artifact digest against
+// the authority, whatever its statement says, and returns the result and
+// the signer: the key authority's name or the certificate identity.
+func (a authority) verifyBundle(b verify.SignedEntity, digest []byte) (*verify.VerificationResult, string, error) {
 	artifact := verify.WithArtifactDigest("sha256", digest)
 	if a.key != nil {
 		keyMaterial := root.NewTrustedPublicKeyMaterial(func(string) (root.TimeConstrainedVerifier, error) {
@@ -140,39 +157,33 @@ func (a authority) verifyEntity(b verify.SignedEntity, digest []byte) (string, e
 		opts := []verify.VerifierOption{verify.WithNoObserverTimestamps()}
 		if a.requireTlog {
 			if a.tlogs == nil {
-				return "", fmt.Errorf("no transparency log keys to check the required Rekor entry")
+				return nil, "", fmt.Errorf("no transparency log keys to check the required Rekor entry")
 			}
 			material = root.TrustedMaterialCollection{keyMaterial, a.tlogs}
 			opts = []verify.VerifierOption{verify.WithTransparencyLog(1), verify.WithIntegratedTimestamps(1)}
 		}
 		v, err := verify.NewVerifier(material, opts...)
 		if err != nil {
-			return "", fmt.Errorf("verifier: %w", err)
+			return nil, "", fmt.Errorf("verifier: %w", err)
 		}
 		res, err := v.Verify(b, verify.NewPolicy(artifact, verify.WithKey()))
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
-		if err := cosignSignature(res); err != nil {
-			return "", err
-		}
-		return a.name, nil
+		return res, a.name, nil
 	}
 	v, err := verify.NewVerifier(a.trusted, verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1))
 	if err != nil {
-		return "", fmt.Errorf("verifier: %w", err)
+		return nil, "", fmt.Errorf("verifier: %w", err)
 	}
 	res, err := v.Verify(b, verify.NewPolicy(artifact, verify.WithCertificateIdentity(*a.identity)))
 	if err != nil {
-		return "", err
-	}
-	if err := cosignSignature(res); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if res.Signature != nil && res.Signature.Certificate != nil {
-		return res.Signature.Certificate.SubjectAlternativeName, nil
+		return res, res.Signature.Certificate.SubjectAlternativeName, nil
 	}
-	return a.name, nil
+	return res, a.name, nil
 }
 
 // cosignSignature checks that a verified bundle is a cosign image
