@@ -1996,6 +1996,44 @@
         ],
         "type": "object"
       },
+      "uiApprovalField": {
+        "additionalProperties": false,
+        "description": "uiApprovalField is one declared approval field (spec.approval.fields).",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "mustBe": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
       "uiApprovalRequest": {
         "additionalProperties": false,
         "description": "uiApprovalRequest is the body of POST /api/v1/ui/approvals.",
@@ -2015,6 +2053,16 @@
           "environment": {
             "description": "Environment is the environment whose approval gates count the decision.",
             "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Fields are the decision's structured values, by name: the ones the gate's approval.fields asks for (Approval spec.fields). An approve that does not satisfy them is refused with 400 before anything is written (lifecycle.RecordApproval, the gate's own rule).",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "namespace": {
             "description": "Namespace of the Bundle. Defaults to \"default\".",
@@ -2352,6 +2400,16 @@
           "excludeAuthor": {
             "type": "boolean"
           },
+          "fields": {
+            "description": "Fields are the structured values an approve must carry (spec.approval.fields): the approval form renders one input each.",
+            "items": {
+              "$ref": "#/components/schemas/uiApprovalField"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "rejected": {
             "type": "boolean"
           },
@@ -2379,6 +2437,16 @@
           },
           "decision": {
             "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Fields are the decision's values of the declared fields.",
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "firstSeenAt": {
             "type": "string"
