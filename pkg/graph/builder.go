@@ -50,6 +50,11 @@ type BuildInput struct {
 	// with spec.perPromotion that a gate of an environment reads gets an
 	// instance node for that environment (buildMetricCheckNode).
 	MetricChecks []kardinalv1alpha1.MetricCheck
+	// ChangeRequests are the ChangeRequests of the Pipeline namespace. Each
+	// one with spec.perPromotion that applies to an environment and that a
+	// gate of it reads gets an instance node for that environment
+	// (buildChangeRequestNode).
+	ChangeRequests []kardinalv1alpha1.ChangeRequest
 }
 
 // BuildResult is the output of the graph builder.
@@ -200,7 +205,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 		}
 	}
 	nodes, instances, upstreams, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates,
-		input.MetricChecks, input.PolicyNamespaces, input.Analyses, input.ScmProvider, compact, members)
+		input.MetricChecks, input.ChangeRequests, input.PolicyNamespaces, input.Analyses, input.ScmProvider, compact, members)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +687,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
 	skipGates map[string][]skipPermissionGate,
-	metricChecks []kardinalv1alpha1.MetricCheck, policyNamespaces []string, analyses AnalysisInput,
+	metricChecks []kardinalv1alpha1.MetricCheck, changeRequests []kardinalv1alpha1.ChangeRequest,
+	policyNamespaces []string, analyses AnalysisInput,
 	provider *kardinalv1alpha1.ScmProviderIdentity, compact bool,
 	members map[string]fleetMember) ([]GraphNode, []kardinalv1alpha1.PolicyGate, map[string][]string, error) {
 	pipelineName := pipeline.Name
@@ -732,7 +738,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	agentRuns := newAgentRunPlan()
 	var prItems []interface{}
 	var compactSteps []compactStep
-	var compactMetrics []compactMetric
+	var compactMetrics, compactChangeRequests []compactMetric
 	upstreamEnvs := make(map[string][]string, len(filteredEnvs))
 	var mirrorSteps []interface{} // pr-review steps with gates (mirror.go)
 
@@ -793,6 +799,28 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			}
 			node, err := buildMetricCheckNode(metricNodeName(bundleSlug, mc.Name, envName), k8sName,
 				mc, vars, pipelineName, bundle.Name, envName, upstreams)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			nodes = append(nodes, node)
+		}
+
+		// Per-promotion ChangeRequest instances the gates of this environment
+		// read and whose template applies to it.
+		for _, cr := range changeRequestTemplatesFor(gatesByEnv[envName], changeRequests, pipeline.Namespace,
+			policyNamespaces, envName, members[envName].fleet) {
+			k8sName := changeRequestK8sName(bundle.Name, cr.Name, envName)
+			if compact {
+				spec, err := changeRequestSpec(cr, vars)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				compactChangeRequests = append(compactChangeRequests, compactMetric{name: k8sName, env: envName,
+					template: cr.Name, upstreams: rawUpstreams, spec: spec})
+				continue
+			}
+			node, err := buildChangeRequestNode(changeRequestNodeName(bundleSlug, cr.Name, envName), k8sName,
+				cr, vars, pipelineName, bundle.Name, string(bundle.UID), envName, upstreams)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -896,6 +924,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	if compact {
 		nodes = append(nodes, compactNodes(pipeline, bundle, compactSteps, gates.collectionIDs())...)
 		nodes = append(nodes, compactMetricNodes(pipelineName, bundle.Name, compactMetrics)...)
+		nodes = append(nodes, compactChangeRequestNodes(pipelineName, bundle.Name, string(bundle.UID), compactChangeRequests)...)
 		var hooks []compactHook
 		var runs []compactRun
 		for _, s := range compactSteps {

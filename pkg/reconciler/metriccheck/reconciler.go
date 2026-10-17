@@ -40,6 +40,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/slots"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
 )
 
@@ -79,6 +80,14 @@ const (
 	// into reconciles.
 	wakeBuffer = 1024
 )
+
+// Limiter shares the MetricCheck query slots fairly between namespaces
+// (slots.Limiter, --metriccheck-global-slots and --metriccheck-namespace-slots).
+type Limiter = slots.Limiter
+
+// NewLimiter returns a Limiter with global slots in all and perNamespace
+// slots per namespace.
+func NewLimiter(global, perNamespace int) *Limiter { return slots.NewLimiter(global, perNamespace) }
 
 // MetricsProvider queries a Prometheus-compatible backend and returns a
 // scalar value for the given query.

@@ -1,7 +1,11 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-package metriccheck
+// Package slots shares a budget of outbound calls fairly between
+// namespaces: MetricCheck queries (pkg/reconciler/metriccheck) and
+// ChangeRequest provider calls (pkg/reconciler/changerequest) each have a
+// Limiter of their own (docs/design/23-change-requests.md section 7.2).
+package slots
 
 import (
 	"container/heap"
@@ -12,8 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// Limiter shares the outbound query slots fairly between namespaces. Every
-// provider dials an address a MetricCheck's author chose, and a blackhole
+// Limiter shares the outbound call slots fairly between namespaces. Every
+// provider dials an address the author of the object (a MetricCheck, a
+// ChangeRequest) chose, and a blackhole
 // endpoint holds a slot until its timeout, so:
 //
 //   - at most Global queries run at once;

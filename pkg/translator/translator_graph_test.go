@@ -361,3 +361,40 @@ func TestTranslate_ShapeIsPinned(t *testing.T) {
 		})
 	}
 }
+
+// TestTranslate_ChangeRequestTemplates (spec 23 §4): the translator reads
+// the per-promotion ChangeRequests of the Pipeline namespace, so a gate that
+// reads one gets its instance, labelled with the Bundle's UID; a
+// ChangeRequest without spec.perPromotion is not a template.
+func TestTranslate_ChangeRequestTemplates(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	gate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "cab", Namespace: "team-a", Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
+		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: `changeRequests["prod-change"].state == "approved" && ` +
+			`changeRequests["by-hand"].state == "approved"`},
+	}
+	cr := func(name string, perPromotion bool) *kardinalv1alpha1.ChangeRequest {
+		return &kardinalv1alpha1.ChangeRequest{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
+			Spec: kardinalv1alpha1.ChangeRequestSpec{PerPromotion: perPromotion, Provider: "servicenow", Mode: "open",
+				ServiceNow: &kardinalv1alpha1.ServiceNowChangeRequest{InstanceURL: "https://example.service-now.com"}}}
+	}
+	c := fake.NewClientBuilder().WithScheme(translateScheme(t)).WithObjects(gate, cr("prod-change", true), cr("by-hand", false)).Build()
+	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+	gc := graph.NewGraphClient(dyn, zerolog.Nop())
+	tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop())
+	p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "test"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+	name, err := tr.Translate(ctx, p, teamBundle(nil))
+	require.NoError(t, err)
+	g, err := gc.Get(ctx, "team-a", name)
+	require.NoError(t, err)
+	var instances []string
+	for _, n := range g.Spec.Nodes {
+		if n.Template["kind"] == "ChangeRequest" {
+			md := n.Template["metadata"].(map[string]interface{})
+			instances = append(instances, md["name"].(string))
+			assert.Equal(t, "uid-x7k2m", md["labels"].(map[string]interface{})[graph.LabelBundleUID])
+		}
+	}
+	assert.Equal(t, []string{"prod-change-prod--payments-x7k2m"}, instances)
+}

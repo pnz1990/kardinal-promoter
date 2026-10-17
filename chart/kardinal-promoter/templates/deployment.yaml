@@ -262,6 +262,8 @@ spec:
             {{- end }}
             - --metriccheck-global-slots={{ .Values.metricCheck.querySlots.global }}
             - --metriccheck-namespace-slots={{ .Values.metricCheck.querySlots.perNamespace }}
+            - --change-request-max-inflight={{ .Values.changeRequest.maxInflight }}
+            - --change-request-max-inflight-per-namespace={{ .Values.changeRequest.maxInflightPerNamespace }}
             {{- with .Values.ui.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," . }}
             {{- end }}

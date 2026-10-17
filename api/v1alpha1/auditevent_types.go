@@ -39,7 +39,12 @@ type AuditEventSpec struct {
 	//               "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
 	//               "HoldBundleMissing", "BundleRejected", "APIWrite", "VerdictRecorded",
 	//               "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
-	//               "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed".
+	//               "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed",
+	//               "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved",
+	//               "ChangeRequestRejected".
+	// The ChangeRequest actions are written by a per-promotion ChangeRequest
+	// when it opens or links its ticket, and when the ticket is first read
+	// approved or rejected (docs/design/23-change-requests.md section 9).
 	// ReceiptFailed is written by a promotion step that reached Verified
 	// without a PromotionReceipt, because its receipt could not be built
 	// (status.receiptError).
@@ -63,7 +68,7 @@ type AuditEventSpec struct {
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed;ChangeRequestOpened;ChangeRequestLinked;ChangeRequestApproved;ChangeRequestRejected
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -143,7 +148,7 @@ var AuditActions = []string{
 	"GateOverridden", "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased", "HoldBundleMissing",
 	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked", "FreezeExempted",
 	"PipelinePaused", "PipelineResumed", "FreezeStarted", "FreezeLifted",
-	"PRMerged", "ReceiptFailed",
+	"PRMerged", "ReceiptFailed", "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved", "ChangeRequestRejected",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

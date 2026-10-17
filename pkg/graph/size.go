@@ -53,10 +53,11 @@ func EstimateSize(g *Graph) (int, error) {
 // nodes they filter: a collection over an admission creates at most every
 // item of the data.
 var admissionData = map[string]string{
-	NodePromotionMetrics:  NodeMetricCheckData,
-	NodePromotionHooks:    NodeHookRunData,
-	NodePromotionAnalyses: NodeAnalysisRunData,
-	NodePromotionRenders:  NodeRenderRunData,
+	NodePromotionMetrics:        NodeMetricCheckData,
+	NodePromotionChangeRequests: NodeChangeRequestData,
+	NodePromotionHooks:          NodeHookRunData,
+	NodePromotionAnalyses:       NodeAnalysisRunData,
+	NodePromotionRenders:        NodeRenderRunData,
 }
 
 // reDefList matches a forEach expression that reads a def node's list field.

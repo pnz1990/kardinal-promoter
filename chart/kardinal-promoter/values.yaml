@@ -740,6 +740,16 @@ metricCheck:
     global: 12
     perNamespace: 1
 
+# -- ChangeRequest provider calls (docs/change-requests.md). Every provider
+# dials the ServiceNow or Jira address the ChangeRequest's author chose, so
+# calls are capped: at most `maxInflight` at once in the cluster, at most
+# `maxInflightPerNamespace` per namespace, the rest wait first come, first
+# served. An instance makes at most two calls per poll interval (a search and
+# a create, or one read), and none before a provider's Retry-After.
+changeRequest:
+  maxInflight: 8
+  maxInflightPerNamespace: 1
+
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every
 # PolicyGate instance, so schedule.* expressions follow the interval; each

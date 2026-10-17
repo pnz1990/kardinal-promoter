@@ -2842,7 +2842,12 @@ spec:
                                           "ApprovalRecorded", "ApprovalRevoked", "HoldCreated", "HoldReleased",
                                           "HoldBundleMissing", "BundleRejected", "APIWrite", "VerdictRecorded",
                                           "VerdictRevoked", "FreezeExempted", "PipelinePaused", "PipelineResumed",
-                                          "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed".
+                                          "FreezeStarted", "FreezeLifted", "PRMerged", "ReceiptFailed",
+                                          "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved",
+                                          "ChangeRequestRejected".
+                            The ChangeRequest actions are written by a per-promotion ChangeRequest
+                            when it opens or links its ticket, and when the ticket is first read
+                            approved or rejected (docs/design/23-change-requests.md section 9).
                             ReceiptFailed is written by a promotion step that reached Verified
                             without a PromotionReceipt, because its receipt could not be built
                             (status.receiptError).
@@ -2894,6 +2899,10 @@ spec:
                           - FreezeLifted
                           - PRMerged
                           - ReceiptFailed
+                          - ChangeRequestOpened
+                          - ChangeRequestLinked
+                          - ChangeRequestApproved
+                          - ChangeRequestRejected
                           type: string
                         actor:
                           description: |-

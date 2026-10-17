@@ -678,6 +678,22 @@
         }
       }
     },
+    "changeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxInflight": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maxInflightPerNamespace": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
     "metricCheck": {
       "type": "object",
       "additionalProperties": false,

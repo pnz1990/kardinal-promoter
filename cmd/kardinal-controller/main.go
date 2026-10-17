@@ -58,6 +58,7 @@ import (
 	agentrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/auditretention"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
+	changerequestrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changerequest"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
 	hookrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
@@ -78,6 +79,7 @@ import (
 	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/slots"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
@@ -408,6 +410,16 @@ func main() {
 	flag.IntVar(&metricNamespaceSlots, "metriccheck-namespace-slots", metriccheckrecon.DefaultNamespaceSlots,
 		"Most MetricCheck queries of one namespace running at once (at least 1).")
 
+	// --change-request-max-inflight and --change-request-max-inflight-per-namespace
+	// cap the outbound ChangeRequest provider calls (spec 23 section 7.2), a
+	// budget of their own.
+	var crGlobalSlots, crNamespaceSlots int
+	flag.IntVar(&crGlobalSlots, "change-request-max-inflight", changerequestrecon.DefaultGlobalSlots,
+		"Most ChangeRequest provider calls (ServiceNow, Jira) running at once in the cluster (at least 1). "+
+			"The rest wait, first come, first served.")
+	flag.IntVar(&crNamespaceSlots, "change-request-max-inflight-per-namespace", changerequestrecon.DefaultNamespaceSlots,
+		"Most ChangeRequest provider calls of one namespace running at once (at least 1).")
+
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
 		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
@@ -586,6 +598,10 @@ func main() {
 	if metricGlobalSlots < 1 || metricNamespaceSlots < 1 {
 		logger.Fatal().Int("globalSlots", metricGlobalSlots).Int("namespaceSlots", metricNamespaceSlots).
 			Msg("--metriccheck-global-slots and --metriccheck-namespace-slots must be at least 1")
+	}
+	if crGlobalSlots < 1 || crNamespaceSlots < 1 {
+		logger.Fatal().Int("maxInflight", crGlobalSlots).Int("maxInflightPerNamespace", crNamespaceSlots).
+			Msg("--change-request-max-inflight and --change-request-max-inflight-per-namespace must be at least 1")
 	}
 	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
 	// zerolog logger in the reconcile context, so without this default every
@@ -1115,6 +1131,15 @@ func main() {
 		Limiter:  metriccheckrecon.NewLimiter(metricGlobalSlots, metricNamespaceSlots),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
+	}
+
+	// ChangeRequests (docs/change-requests.md): the providers register here.
+	if err := (&changerequestrecon.Reconciler{
+		Client:    mgr.GetClient(),
+		Providers: changerequestrecon.DefaultProviders(),
+		Limiter:   slots.NewLimiter(crGlobalSlots, crNamespaceSlots),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up ChangeRequestReconciler")
 	}
 
 	if err := (&prstatusrecon.Reconciler{

@@ -534,12 +534,13 @@ spec:
         apiVersions: ["*"]
         operations: ["DELETE"]
         resources: ["hookruns", "agentruns"]
-      # Per-promotion MetricCheck instances (label kardinal.io/bundle); a
-      # MetricCheck people write (no such label) is not checked.
+      # Per-promotion MetricCheck and ChangeRequest instances (label
+      # kardinal.io/bundle); a MetricCheck or ChangeRequest people write (no
+      # such label, a template) is not checked.
       - apiGroups: ["kardinal.io"]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["metricchecks", "metricchecks/status"]
+        resources: ["metricchecks", "metricchecks/status", "changerequests", "changerequests/status"]
       # Argo Rollouts AnalysisRuns kardinal creates (label kardinal.io/bundle):
       # only their creation, since the Rollouts controller writes them after.
       - apiGroups: ["argoproj.io"]
@@ -576,10 +577,12 @@ spec:
       expression: >-
         request.resource.group == 'argoproj.io' && object != null &&
         !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels)
-    # A MetricCheck is a Graph's when it has, or had, kardinal.io/bundle.
+    # A MetricCheck or ChangeRequest is a Graph's when it has, or had,
+    # kardinal.io/bundle. A ChangeRequest instance's status says whether its
+    # ticket is approved: only the controller writes it.
     - name: userMetricCheck
       expression: >-
-        request.resource.resource == 'metricchecks' && object != null &&
+        request.resource.resource in ['metricchecks', 'changerequests'] && object != null &&
         !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels) &&
         !(oldObject != null && has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels)
     # Anyone who may patch the object may set kardinal.io/force-recheck to
@@ -618,15 +621,15 @@ spec:
         the namespace controller), and AgentRuns that an agent ran. Promote a new Bundle to run it again
       reason: Forbidden
     # As for gate instances: kro adopts an existing object of the name it
-    # applies, so no one may turn an existing MetricCheck into a
-    # per-promotion instance.
+    # applies, so no one may turn an existing MetricCheck or ChangeRequest
+    # into a per-promotion instance.
     - expression: >-
-        request.resource.resource != 'metricchecks' || oldObject == null ||
+        !(request.resource.resource in ['metricchecks', 'changerequests']) || oldObject == null ||
         (has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels) ||
         !(has(object.metadata.labels) && 'kardinal.io/bundle' in object.metadata.labels)
       message: >-
-        a MetricCheck made without the kardinal.io/bundle label cannot become a per-promotion
-        instance; delete it, and the promotion Graph creates the instance under that name
+        a MetricCheck or ChangeRequest made without the kardinal.io/bundle label cannot become a
+        per-promotion instance; delete it, and the promotion Graph creates the instance under that name
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "graph-objects") }}
