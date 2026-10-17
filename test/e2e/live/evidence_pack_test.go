@@ -105,7 +105,8 @@ func ndjson(t *testing.T, dir, name string) []map[string]interface{} {
 // of the approval, the override and the promotion, the chart's admission
 // policies, and names the auditor; nothing is forbidden or missing. The
 // same role bound in one namespace reads that namespace's records, and the
-// cluster-scoped kinds are listed in coverage.forbidden.
+// cluster-scoped kinds it cannot read (ChangeWindows, admission policies;
+// the agent directory is public) are listed in coverage.forbidden.
 //
 // Covers EVIDENCE-PACK-LIVE-01.
 func TestAudit_EvidencePack(t *testing.T) {
@@ -201,11 +202,15 @@ func TestAudit_EvidencePack(t *testing.T) {
 		c.Args(a.ns, "audit", "evidence-pack", "--since", "1h", "-o", pack)...)
 	require.Zero(t, r.Code, r.Output())
 	dir, m = packOf(t, pack)
-	assert.ElementsMatch(t, []interface{}{"AgentIdentity", "ChangeWindow", "ValidatingAdmissionPolicy"},
+	// AgentIdentities stay readable: the chart's agent directory binding
+	// lets every authenticated user read them (actors.directory.public).
+	assert.ElementsMatch(t, []interface{}{"ChangeWindow", "ValidatingAdmissionPolicy"},
 		m["coverage"].(map[string]interface{})["forbidden"])
 	assert.Equal(t, []string{a.ns + "/" + bundle}, names(ndjson(t, dir, "bundles.ndjson")))
-	_, err = os.Stat(filepath.Join(dir, "agentidentities.ndjson"))
+	_, err = os.Stat(filepath.Join(dir, "changewindows.ndjson"))
 	assert.True(t, os.IsNotExist(err), "a forbidden kind's file is left out")
+	_, err = os.Stat(filepath.Join(dir, "agentidentities.ndjson"))
+	assert.NoError(t, err, "the public agent directory is in the pack")
 }
 
 // names are the namespace/name of each record.
