@@ -126,6 +126,7 @@ pattern of its tests.
 | `sso` | Forgejo, Argo CD, Dex with TLS from a CA made before the cluster, and an API server that trusts it (structured `AuthenticationConfiguration` through kind's kubeadm config patches); the test adds oauth2-proxy with the page's flags | `TestSSO_*`: [single sign-on through an OIDC proxy](../../docs/guides/security.md#option-3-single-sign-on-through-an-oidc-proxy), signed in as Dex's users through the proxy. Runs on 1.35 and 1.37 |
 | `multi-cluster` | Forgejo, Argo CD, Flux and Argo Rollouts in the hub, and a second kind cluster (`<cluster>-spoke`, Argo Rollouts) registered with the hub's Argo CD and Flux | `TestMultiCluster_*` |
 | `shard` | Forgejo, Argo CD, and two controllers splitting the namespaces: the main release as shard `default`, `components/shard.sh`'s release as shard `b` | `TestShard_*` |
+| `evidence-airgap` | Forgejo, Argo CD, the in-cluster registry, key-signed receipts (as the receipts suite), and `components/airgap.sh`'s NetworkPolicy: the controller namespace reaches the cluster and the API server only. Image signatures, keyless attestations from a private Sigstore, receipts and the evidence pack are verified with no egress, and `verify-receipt` runs in a network namespace with only a loopback | `TestAirgap_*` |
 | `scale` | Forgejo behind Toxiproxy, Prometheus Operator and Prometheus, two controller replicas built with `-race` | `TestScale_*` (see [Scale suite](#scale-suite)) |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
