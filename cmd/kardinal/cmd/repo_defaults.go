@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -87,31 +88,63 @@ func exists(p string) bool {
 	return err == nil || !errors.Is(err, fs.ErrNotExist)
 }
 
+// ignoreRepoFile turns .kardinal.yaml off: the MCP server's tools run in the
+// agent's working directory, a repository it may not trust, so a file there
+// must not pick their namespace (the environment variables still apply;
+// whoever started the server set them).
+var ignoreRepoFile bool
+
+// noticed are the defaults the running command said it uses (useStyle
+// starts it empty): each is said once, on stderr.
+var noticed = map[string]bool{}
+
+// noticeDefault says on stderr, once per command, that what (pipeline or
+// namespace) is v, taken from source: a default the command line does not
+// show, which a repository someone else wrote may have set.
+func noticeDefault(what, v, source string) {
+	if v == "" || noticed[what] {
+		return
+	}
+	noticed[what] = true
+	_, _ = fmt.Fprintf(errOut, "using %s %s (from %s)\n", what, v, source)
+}
+
+// errBadRepoFile is the error of a .kardinal.yaml that cannot be used.
+func errBadRepoFile(path string, err error) error {
+	return fmt.Errorf("%s: %w (give -n or set %s, and the pipeline as an argument or %s, to go without the file)",
+		path, err, namespaceEnvVar, pipelineEnvVar)
+}
+
 // loadRepoDefaults reads the .kardinal.yaml that applies (findRepoDefaults),
-// or none. Only pipeline and namespace may be set, each a DNS-1123 label.
-func loadRepoDefaults() (repoDefaults, error) {
+// or none, and its path. Only pipeline and namespace may be set, each a
+// DNS-1123 label.
+func loadRepoDefaults() (repoDefaults, string, error) {
 	var d repoDefaults
+	if ignoreRepoFile {
+		return d, "", nil
+	}
 	path, err := findRepoDefaults()
 	if err != nil || path == "" {
-		return d, err
+		return d, "", err
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return d, fmt.Errorf("read %s: %w", path, err)
+		return d, "", errBadRepoFile(path, err)
 	}
 	if err := yaml.UnmarshalStrict(b, &d); err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "unknown field") {
 			msg += ": it may set pipeline and namespace only (a repository file never picks a cluster)"
 		}
-		return d, fmt.Errorf("%s: %s", path, msg)
+		return d, "", errBadRepoFile(path, errors.New(msg))
 	}
-	for key, v := range map[string]string{"pipeline": d.Pipeline, "namespace": d.Namespace} {
+	for _, key := range []string{"pipeline", "namespace"} {
+		v := map[string]string{"pipeline": d.Pipeline, "namespace": d.Namespace}[key]
 		if err := checkDefaultName(key, v); err != nil {
-			return d, fmt.Errorf("%s: %w", path, err)
+			return d, "", errBadRepoFile(path, err)
 		}
 	}
-	return d, nil
+	return d, path, nil
 }
 
 // checkDefaultName checks a default named what is a DNS-1123 label (or
@@ -127,27 +160,28 @@ func checkDefaultName(what, v string) error {
 }
 
 // repoDefault is the default of key: environment variable envVar, else the
-// file's value (field).
-func repoDefault(envVar string, field func(repoDefaults) string) (string, error) {
+// file's value (field), and where it comes from (the variable, or the
+// file's path).
+func repoDefault(envVar string, field func(repoDefaults) string) (string, string, error) {
 	if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
-		return v, checkDefaultName(envVar, v)
+		return v, envVar, checkDefaultName(envVar, v)
 	}
-	d, err := loadRepoDefaults()
+	d, path, err := loadRepoDefaults()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return field(d), nil
+	return field(d), path, nil
 }
 
 // defaultPipeline is the pipeline a command takes when none is given:
-// KARDINAL_PIPELINE, else .kardinal.yaml's, else "".
-func defaultPipeline() (string, error) {
+// KARDINAL_PIPELINE, else .kardinal.yaml's, else "", and its source.
+func defaultPipeline() (string, string, error) {
 	return repoDefault(pipelineEnvVar, func(d repoDefaults) string { return d.Pipeline })
 }
 
 // defaultNamespace is the namespace when -n is not given: KARDINAL_NAMESPACE,
-// else .kardinal.yaml's, else "" (the kubeconfig's).
-func defaultNamespace() (string, error) {
+// else .kardinal.yaml's, else "" (the kubeconfig's), and its source.
+func defaultNamespace() (string, string, error) {
 	return repoDefault(namespaceEnvVar, func(d repoDefaults) string { return d.Namespace })
 }
 
@@ -170,33 +204,49 @@ func withDefaultPipeline(args []string, flagEnv string) ([]string, error) {
 	if len(args) > 1 || (len(args) == 1 && flagEnv != "") {
 		return args, nil
 	}
-	def, err := defaultPipeline()
+	def, source, err := defaultPipeline()
 	if err != nil || def == "" {
 		return args, err
 	}
 	if len(args) == 0 {
+		noticeDefault("pipeline", def, source)
 		return []string{def}, nil
 	}
-	if args[0] != def && slices.Contains(pipelineEnvironments(def), args[0]) {
+	if args[0] == def {
+		return args, nil
+	}
+	// One argument: an environment of the default pipeline, or another
+	// pipeline. Only the cluster can tell; when it cannot be read, guessing
+	// could act on the wrong pipeline.
+	envs, found, err := pipelineEnvironments(def)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("cannot tell whether %q is an environment of the default pipeline %s (from %s): %w; "+
+			"give both, <pipeline> <env>, or the pipeline alone with --env", args[0], def, source, err)
+	case found && slices.Contains(envs, args[0]):
+		noticeDefault("pipeline", def, source)
 		return []string{def, args[0]}, nil
 	}
 	return args, nil
 }
 
-// pipelineEnvironments is the environments of pipeline in the cluster, or
-// none when it cannot be read.
-func pipelineEnvironments(pipeline string) []string {
+// pipelineEnvironments is the environments of pipeline in the cluster, and
+// whether it exists; an error when it cannot be read.
+func pipelineEnvironments(pipeline string) ([]string, bool, error) {
 	c, ns, err := hintClient()
 	if err != nil {
-		return nil
+		return nil, false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, sigs_client.ObjectKey{Namespace: ns, Name: pipeline}, &p); err != nil {
-		return nil
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read pipeline %s/%s: %w", ns, pipeline, err)
 	}
-	return envNames(&p)
+	return envNames(&p), true, nil
 }
 
 // pipelineArgs is the Args check of a <pipeline> [<env>...] command taking
@@ -209,7 +259,7 @@ func pipelineArgs(maxArgs int) cobra.PositionalArgs {
 		if len(args) > 0 {
 			return nil
 		}
-		def, err := defaultPipeline()
+		def, _, err := defaultPipeline()
 		if err != nil {
 			return err
 		}
@@ -226,5 +276,7 @@ func pipelineOf(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	return defaultPipeline()
+	def, source, err := defaultPipeline()
+	noticeDefault("pipeline", def, source)
+	return def, err
 }

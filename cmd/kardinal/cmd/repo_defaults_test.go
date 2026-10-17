@@ -15,6 +15,9 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,9 +25,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -81,8 +87,8 @@ func TestRepoDefaults_Precedence(t *testing.T) {
 			root := inRepo(t, tc.file, tc.sub)
 			t.Setenv("KARDINAL_PIPELINE", tc.envPipe)
 			t.Setenv("KARDINAL_NAMESPACE", tc.envNS)
-			p, perr := defaultPipeline()
-			ns, nerr := defaultNamespace()
+			p, psrc, perr := defaultPipeline()
+			ns, nsrc, nerr := defaultNamespace()
 			if tc.wantErr != "" {
 				err := perr
 				if err == nil {
@@ -92,6 +98,8 @@ func TestRepoDefaults_Precedence(t *testing.T) {
 				assert.Contains(t, err.Error(), tc.wantErr)
 				if tc.file != "" {
 					assert.Contains(t, err.Error(), filepath.Join(root, ".kardinal.yaml"), "the error names the file")
+					assert.Contains(t, err.Error(), "(give -n or set KARDINAL_NAMESPACE, and the pipeline as an argument or "+
+						"KARDINAL_PIPELINE, to go without the file)", "and how to go without it")
 				}
 				return
 			}
@@ -99,6 +107,16 @@ func TestRepoDefaults_Precedence(t *testing.T) {
 			require.NoError(t, nerr)
 			assert.Equal(t, tc.wantPipe, p)
 			assert.Equal(t, tc.wantNS, ns)
+			// The source says where each came from.
+			for _, c := range []struct{ v, src, env, envVal string }{{p, psrc, "KARDINAL_PIPELINE", tc.envPipe}, {ns, nsrc, "KARDINAL_NAMESPACE", tc.envNS}} {
+				switch {
+				case c.v == "":
+				case c.envVal != "":
+					assert.Equal(t, c.env, c.src)
+				default:
+					assert.Equal(t, filepath.Join(root, ".kardinal.yaml"), c.src)
+				}
+			}
 		})
 	}
 }
@@ -115,7 +133,7 @@ func TestRepoDefaults_StopsAtTheRepository(t *testing.T) {
 	repo := filepath.Join(outer, "repo")
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
 	t.Chdir(repo)
-	p, err := defaultPipeline()
+	p, _, err := defaultPipeline()
 	require.NoError(t, err)
 	assert.Empty(t, p, "a file above the repository is not read")
 
@@ -123,11 +141,11 @@ func TestRepoDefaults_StopsAtTheRepository(t *testing.T) {
 	require.NoError(t, os.MkdirAll(plain, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(plain), ".kardinal.yaml"), []byte("pipeline: up\n"), 0o600))
 	t.Chdir(plain)
-	p, err = defaultPipeline()
+	p, _, err = defaultPipeline()
 	require.NoError(t, err)
 	assert.Empty(t, p, "outside a repository, only the working directory")
 	require.NoError(t, os.WriteFile(filepath.Join(plain, ".kardinal.yaml"), []byte("pipeline: here\n"), 0o600))
-	p, err = defaultPipeline()
+	p, _, err = defaultPipeline()
 	require.NoError(t, err)
 	assert.Equal(t, "here", p)
 }
@@ -145,8 +163,8 @@ func TestRepoDefaults_Args(t *testing.T) {
 	web := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}}}
 	c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(web).Build()
-	setForTest(t, &buildClient, func() (sigs_client.Client, string, error) { return c, "default", nil })
-	inRepo(t, "pipeline: web\n", ".")
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return c, "default", nil })
+	root := inRepo(t, "pipeline: web\n", ".")
 	t.Setenv("KARDINAL_PIPELINE", "")
 	why := &cobra.Command{Use: "why"}
 	addEnvFlag(why, new(string), "")
@@ -166,15 +184,48 @@ func TestRepoDefaults_Args(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			setForTest(t, &errOut, io.Writer(&stderr))
+			setForTest(t, &noticed, map[string]bool{})
 			p, env, err := envArgs(why, tc.args, tc.flagEnv)
 			require.NoError(t, err)
 			assert.Equal(t, tc.pipeline, p)
 			assert.Equal(t, tc.env, env)
+			// A default the command line does not show is said, once.
+			if p == "web" && (len(tc.args) == 0 || tc.args[0] != "web") {
+				assert.Equal(t, "using pipeline web (from "+filepath.Join(root, ".kardinal.yaml")+")\n", stderr.String())
+			} else {
+				assert.Empty(t, stderr.String())
+			}
 		})
 	}
 
+	// The cluster cannot say whether "prod" is an environment of web: no
+	// guess (QA on #2179).
+	t.Run("the lookup fails", func(t *testing.T) {
+		forbidden := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(web).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectKey, sigs_client.Object, ...sigs_client.GetOption) error {
+				return apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "pipelines"}, "web", errors.New("no"))
+			}}).Build()
+		setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return forbidden, "default", nil })
+		_, _, err := envArgs(why, []string{"prod"}, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `cannot tell whether "prod" is an environment of the default pipeline web (from `+
+			filepath.Join(root, ".kardinal.yaml")+"): read pipeline default/web: ")
+		assert.Contains(t, err.Error(), "give both, <pipeline> <env>, or the pipeline alone with --env")
+	})
+	t.Run("the default pipeline does not exist", func(t *testing.T) {
+		empty := fake.NewClientBuilder().WithScheme(rootScheme).Build()
+		setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return empty, "default", nil })
+		p, env, err := envArgs(why, []string{"prod"}, "")
+		require.NoError(t, err)
+		assert.Equal(t, "prod", p, "then the argument is a pipeline")
+		assert.Empty(t, env)
+	})
+
 	t.Run("no default", func(t *testing.T) {
 		inRepo(t, "", ".")
+		setForTest(t, &errOut, io.Discard)
 		_, _, err := envArgs(why, nil, "")
 		require.EqualError(t, err, `a pipeline name is required: give it as an argument (why <pipeline>), `+
 			`set KARDINAL_PIPELINE, or write "pipeline: <name>" in .kardinal.yaml at the repository's root`)
@@ -190,7 +241,10 @@ func TestRepoDefaults_Commands(t *testing.T) {
 	keepStyle(t)
 	t.Setenv("KARDINAL_PIPELINE", "")
 	t.Setenv("KARDINAL_NAMESPACE", "")
-	inRepo(t, "pipeline: web\nnamespace: team-a\n", ".")
+	root := inRepo(t, "pipeline: web\nnamespace: team-a\n", ".")
+	// No cluster, ever: the commands reach the client and stop there (QA
+	// on #2179: the real client would use the ambient kubeconfig).
+	setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return nil, "", errors.New("no cluster in this test") })
 	run := func(args ...string) (string, error) {
 		t.Helper()
 		t.Cleanup(func() { globalOutput, globalNamespace = "", "" })
@@ -202,12 +256,17 @@ func TestRepoDefaults_Commands(t *testing.T) {
 		err := root.Execute()
 		return out.String(), err
 	}
-	for _, args := range [][]string{{"promote"}, {"pause"}, {"ship", "--image", "app:1"}, {"why", "prod"}} {
-		_, err := run(args...)
-		require.Error(t, err, "no cluster in unit tests: the args are accepted, the client fails")
+	for _, args := range [][]string{{"promote"}, {"pause"}, {"ship", "--image", "app:1"}} {
+		out, err := run(args...)
+		require.Error(t, err, "the args are accepted; then promote asks for the environment, the others reach the client")
 		assert.NotContains(t, err.Error(), "accepts", args)
 		assert.NotContains(t, err.Error(), "a pipeline name is required", args)
+		assert.Contains(t, out, "using pipeline web (from "+filepath.Join(root, ".kardinal.yaml")+")\n", args)
 	}
+	// One argument with no cluster to tell: refused, not guessed.
+	_, err := run("why", "prod")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `cannot tell whether "prod" is an environment of the default pipeline web`)
 
 	// -n > KARDINAL_NAMESPACE > .kardinal.yaml > the kubeconfig's namespace.
 	kubeconfig := filepath.Join(t.TempDir(), "config")
@@ -219,15 +278,31 @@ contexts: [{name: k, context: {cluster: c, user: u, namespace: from-context}}]
 current-context: k
 `), 0o600))
 	setForTest(t, &globalKubeconfig, kubeconfig)
+	var stderr bytes.Buffer
+	setForTest(t, &errOut, io.Writer(&stderr))
+	setForTest(t, &noticed, map[string]bool{})
 	_, ns, err := buildRestConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "team-a", ns, "the file over the kubeconfig")
+	_, _, err = buildRestConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "using namespace team-a (from "+filepath.Join(root, ".kardinal.yaml")+")\n", stderr.String(), "said once")
+	// The MCP server's tools ignore the file (the agent's working directory).
+	setForTest(t, &ignoreRepoFile, true)
+	_, ns, err = buildRestConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "from-context", ns, "the file is not read")
+	ignoreRepoFile = false
 	t.Setenv("KARDINAL_NAMESPACE", "team-b")
+	noticed = map[string]bool{}
 	_, ns, err = buildRestConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "team-b", ns, "the environment over the file")
+	assert.Contains(t, stderr.String(), "using namespace team-b (from KARDINAL_NAMESPACE)\n")
+	stderr.Reset()
 	setForTest(t, &globalNamespace, "team-c")
 	_, ns, err = buildRestConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "team-c", ns, "-n over everything")
+	assert.Empty(t, stderr.String(), "-n is on the command line: nothing to say")
 }

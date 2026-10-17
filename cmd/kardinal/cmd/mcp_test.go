@@ -524,6 +524,7 @@ func TestMCP_PersistentFlags(t *testing.T) {
 	var seen []string
 	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
 		seen = append(seen, globalKubeconfig+"|"+globalContext+"|"+globalNamespace)
+		assert.True(t, ignoreRepoFile, "a tool reads no .kardinal.yaml (#1759)")
 		return nil, "", errors.New("no cluster")
 	})
 	k := &mcpServer{opts: mcpOptions{maxBytes: defaultMCPMaxBytes, base: persistentArgs()}}
@@ -535,6 +536,7 @@ func TestMCP_PersistentFlags(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []string{"/tmp/kc|kind-kp|team-a", "/tmp/kc|kind-kp|team-b"}, seen)
 	assert.Empty(t, globalNamespace, "put back")
+	assert.False(t, ignoreRepoFile, "put back")
 }
 
 // mcpHostile are values an agent (or text it read) may put in a tool's
