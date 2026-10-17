@@ -62,6 +62,15 @@ func agentIdentity(name string, ready, suspended bool, ids ...v1alpha1.AgentSign
 	}
 }
 
+// guardedGitLab is a GitLab provider behind the repository guard, as the
+// controller wires one: it implements CommitPayloadReader, unsupported.
+func guardedGitLab(t *testing.T) scm.SCMProvider {
+	t.Helper()
+	allow, err := scm.ParseRepositoryAllowlist([]string{"github.com/org/config"})
+	require.NoError(t, err)
+	return allow.Guard(scm.NewGitLabProvider("t", "http://127.0.0.1:1", ""), "github.com")
+}
+
 // editedAgent is a ready AgentIdentity whose status describes generation 1
 // of a spec now at generation 2.
 func editedAgent(name string, ids ...v1alpha1.AgentSigningIdentity) *v1alpha1.AgentIdentity {
@@ -159,6 +168,12 @@ func TestImageVerification_GitsignCommit(t *testing.T) {
 			phase: v1alpha1.ImageVerificationFailed, msg: "a GPG signature, not a gitsign"},
 		{name: "a provider without payloads", scm: verifyOnlySCM{},
 			phase: v1alpha1.ImageVerificationFailed, msg: "does not return a commit's signed payload"},
+		// In production GitLab, Bitbucket and Azure DevOps reach the
+		// reconciler through the repository guard (or DynamicProvider),
+		// which implements CommitPayloadReader and returns
+		// ErrCommitPayloadUnsupported: that fails at once, it does not wait.
+		{name: "a guarded provider without payloads", scm: guardedGitLab(t),
+			phase: v1alpha1.ImageVerificationFailed, msg: "does not return a commit's signed payload"},
 		{name: "an SCM outage", scm: &payloadSCM{err: errors.New("502 bad gateway")},
 			phase: v1alpha1.ImageVerificationPending, msg: "SCM: 502"},
 		{name: "a missing commit", scm: &payloadSCM{err: &scm.APIError{Provider: "GitHub", StatusCode: 404}},
@@ -188,6 +203,22 @@ func TestImageVerification_GitsignCommit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestImageVerification_GitsignCommitSHA256: a commit of a SHA-256
+// repository (a 64-character SHA) is hashed as one, with gpgsig-sha256.
+func TestImageVerification_GitsignCommitSHA256(t *testing.T) {
+	vs, err := ca.NewVirtualSigstore()
+	require.NoError(t, err)
+	payload := strings.Replace(testPayload, "tree 3cced1b431769cf16b530b25162e23bb7545d79c", "tree "+strings.Repeat("3c", 32), 1)
+	payload = strings.Replace(payload, "parent 4638d83b00e1119b9aab39ff747802a8ff63f530\n", "", 1)
+	sig := signCommit(t, vs, gitsignIdentity, gitsignIssuer, []byte(payload), signOpts{Proof: true})
+	sha, err := commitObjectID([]byte(payload), sig, true)
+	require.NoError(t, err)
+	require.Len(t, sha, 64)
+	got := reconcileGitsign(t, &payloadSCM{p: scm.CommitPayload{SHA: sha, Payload: payload, Signature: string(sig)}}, vs, gitsignIV(sha))
+	assert.Equal(t, v1alpha1.ImageVerificationVerified, got.Status.Phase, got.Status.Message)
+	assert.True(t, got.Status.Commit.Verified)
 }
 
 // TestImageVerification_SCMCommitMethod: a commit the SCM verified records
