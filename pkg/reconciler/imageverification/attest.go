@@ -8,13 +8,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"math"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openvex/go-vex/pkg/vex"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
