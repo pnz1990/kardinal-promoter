@@ -233,6 +233,8 @@ func TestGateChanged_FullOutboxMergesBeforeDropping(t *testing.T) {
 	assert.Equal(t, int64(1), hold.OldGeneration)
 	assert.Greater(t, hold.NewGeneration, int64(2), "later edits merged in")
 	assert.Greater(t, len(merged.Gates), 2, "the other templates of the merged edits are listed")
+	assert.Greater(t, merged.MergedRecords, int32(2), "the merged record counts the records it replaces")
+	assert.Contains(t, merged.Message, "records merged, left unwritten during an audit write outage")
 }
 
 // Records of different versions are not merged.
@@ -259,4 +261,54 @@ func TestCoalesceGateChanges_SameVersionOnly(t *testing.T) {
 	assert.Equal(t, "sha256:old", m.Spec.Gates[0].OldDigest)
 	assert.Equal(t, graph.TemplateDigest(added), m.Spec.Gates[0].NewDigest)
 	assert.Equal(t, "*", m.Spec.Environment, "the deletion names every environment")
+}
+
+// QA-2 on #2160: a merge is deterministic (the gates sorted, whatever order
+// the newer record lists them in, and the same name), adds both records'
+// omitted counts, merges test and prod into "*", and says how many
+// records it replaces.
+func TestCoalesceGateChanges_Properties(t *testing.T) {
+	change := func(name string, gen int64) kardinalv1alpha1.AuditGateChange {
+		return kardinalv1alpha1.AuditGateChange{Template: name, Namespace: "platform-policies",
+			OldDigest: fmt.Sprintf("sha256:%s-%d", name, gen), OldGeneration: gen,
+			NewDigest: fmt.Sprintf("sha256:%s-%d", name, gen+1), NewGeneration: gen + 1}
+	}
+	record := func(env string, omitted int, gates ...kardinalv1alpha1.AuditGateChange) kardinalv1alpha1.PendingAuditEvent {
+		return gateChangeRecord("app-v1", "app", env, gates, omitted, 0, metav1.NewTime(time.Unix(300, 0)))
+	}
+	older := record("test", 2, change("charlie", 1), change("alpha", 1))
+	newer := record("prod", 3, change("delta", 4), change("bravo", 2), change("echo", 7))
+	shuffled := newer
+	shuffled.Spec.Gates = []kardinalv1alpha1.AuditGateChange{change("echo", 7), change("delta", 4), change("bravo", 2)}
+
+	a, ok := coalesceGateChanges(older, newer)
+	require.True(t, ok)
+	b, ok := coalesceGateChanges(older, shuffled)
+	require.True(t, ok)
+	again, ok := coalesceGateChanges(older, newer)
+	require.True(t, ok)
+	var names []string
+	for _, gc := range a.Spec.Gates {
+		names = append(names, gc.Template)
+	}
+	assert.Equal(t, []string{"alpha", "bravo", "charlie", "delta", "echo"}, names, "sorted by template")
+	assert.Equal(t, a.Spec.Gates, b.Spec.Gates, "the newer record's order does not matter")
+	assert.Equal(t, a.Name, b.Name)
+	assert.Equal(t, a.Name, again.Name, "the same merge, the same name")
+
+	assert.Equal(t, int32(5), a.Spec.GatesOmitted, "both records' omitted counts")
+	assert.Contains(t, a.Spec.Message, "10 PolicyGate templates changed")
+	assert.Contains(t, a.Spec.Message, "; and 5 more")
+
+	assert.Equal(t, "*", a.Spec.Environment, "test and prod merge into every environment")
+	same, ok := coalesceGateChanges(record("prod", 0, change("alpha", 1)), record("prod", 0, change("bravo", 1)))
+	require.True(t, ok)
+	assert.Equal(t, "prod", same.Spec.Environment, "one environment stays")
+
+	assert.Equal(t, int32(2), a.Spec.MergedRecords)
+	assert.Contains(t, a.Spec.Message, "(2 records merged, left unwritten during an audit write outage)")
+	three, ok := coalesceGateChanges(a, record("prod", 0, change("foxtrot", 1)))
+	require.True(t, ok)
+	assert.Equal(t, int32(3), three.Spec.MergedRecords, "a merged record counts what it replaced")
+	assert.Zero(t, record("prod", 0, change("alpha", 1)).Spec.MergedRecords, "a record as recorded has none")
 }

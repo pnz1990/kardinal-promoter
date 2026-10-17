@@ -82,7 +82,7 @@ func gateChangeEntry(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipe
 		}
 		all = append(all, c.gate)
 	}
-	return gateChangeRecord(b.Name, b.Spec.Pipeline, env, all, 0, metav1.NewTime(now)), true
+	return gateChangeRecord(b.Name, b.Spec.Pipeline, env, all, 0, 0, metav1.NewTime(now)), true
 }
 
 // gateChangeRecord is the GateChanged outbox entry for changes (in template
@@ -91,7 +91,7 @@ func gateChangeEntry(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipe
 // named after the version and every change, so the same changes are
 // written once.
 func gateChangeRecord(bundle, pipeline, env string, changes []kardinalv1alpha1.AuditGateChange, omitted int,
-	at metav1.Time) kardinalv1alpha1.PendingAuditEvent {
+	merged int32, at metav1.Time) kardinalv1alpha1.PendingAuditEvent {
 	h := sha256.New()
 	listed := make([]kardinalv1alpha1.AuditGateChange, 0, min(len(changes), kardinalv1alpha1.MaxAuditGateChanges))
 	for i, gc := range changes {
@@ -107,14 +107,15 @@ func gateChangeRecord(bundle, pipeline, env string, changes []kardinalv1alpha1.A
 		lifecycle.LabelBundle:   bundle,
 		"kardinal.io/action":    AuditActionGateChanged,
 	}, kardinalv1alpha1.AuditEventSpec{
-		BundleName:   bundle,
-		PipelineName: pipeline,
-		Environment:  env,
-		Action:       AuditActionGateChanged,
-		Outcome:      "Success",
-		Message:      gateChangeMessage(bundle, listed, omitted),
-		Gates:        listed,
-		GatesOmitted: int32(omitted),
+		BundleName:    bundle,
+		PipelineName:  pipeline,
+		Environment:   env,
+		Action:        AuditActionGateChanged,
+		Outcome:       "Success",
+		Message:       gateChangeMessage(bundle, listed, omitted, merged),
+		Gates:         listed,
+		GatesOmitted:  int32(omitted),
+		MergedRecords: merged,
 	}, at)
 }
 
@@ -128,7 +129,11 @@ func init() {
 // stamp in the newer, so a long write outage under repeated gate edits
 // takes one outbox slot and never pushes out the version's other records.
 // A template edited and edited back to the same stamp is no change. The
-// counts of changes neither record listed add up.
+// counts of changes neither record listed add up. Past MaxAuditGateChanges
+// a template can be omitted from the older record and listed in the newer:
+// it then also stays in the older record's omitted count, and its first
+// stamp is the newer record's old one. The bound makes this rare; the
+// omitted count is then an upper bound.
 func coalesceGateChanges(older, newer kardinalv1alpha1.PendingAuditEvent) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	o, n := older.Spec, newer.Spec
 	if o.BundleName != n.BundleName || o.PipelineName != n.PipelineName {
@@ -165,7 +170,10 @@ func coalesceGateChanges(older, newer kardinalv1alpha1.PendingAuditEvent) (kardi
 	if n.Environment != env {
 		env = rejectionEnvironment
 	}
-	return gateChangeRecord(n.BundleName, n.PipelineName, env, changes, int(o.GatesOmitted+n.GatesOmitted), n.Timestamp), true
+	// audit.Enqueue sets the same count in spec.mergedRecords; the message
+	// says it too, for a reader of the record alone.
+	merged := max(o.MergedRecords, 1) + max(n.MergedRecords, 1)
+	return gateChangeRecord(n.BundleName, n.PipelineName, env, changes, int(o.GatesOmitted+n.GatesOmitted), merged, n.Timestamp), true
 }
 
 // gateEnvironment is the environment a GateChanged record names: the
@@ -207,7 +215,7 @@ const gateMessageChanges = 5
 // gateChangeMessage is the sentence of a GateChanged record: the first
 // gateMessageChanges changes, then how many more there were. The digests
 // are in spec.gates, not here, so the sentence stays short.
-func gateChangeMessage(bundle string, listed []kardinalv1alpha1.AuditGateChange, omitted int) string {
+func gateChangeMessage(bundle string, listed []kardinalv1alpha1.AuditGateChange, omitted int, merged int32) string {
 	n := len(listed) + omitted
 	parts := make([]string, 0, gateMessageChanges)
 	for i, gc := range listed {
@@ -224,10 +232,15 @@ func gateChangeMessage(bundle string, listed []kardinalv1alpha1.AuditGateChange,
 	if n != 1 {
 		noun = "templates"
 	}
-	if len(parts) == 0 {
-		return fmt.Sprintf("%d PolicyGate %s changed under version %s", n, noun, bundle)
+	head := fmt.Sprintf("%d PolicyGate %s changed under version %s", n, noun, bundle)
+	if merged > 1 {
+		// Before the changes, so a cut message keeps it.
+		head += fmt.Sprintf(" (%d records merged, left unwritten during an audit write outage)", merged)
 	}
-	return fmt.Sprintf("%d PolicyGate %s changed under version %s: %s%s", n, noun, bundle, strings.Join(parts, "; "), more)
+	if len(parts) == 0 {
+		return head
+	}
+	return head + ": " + strings.Join(parts, "; ") + more
 }
 
 // gateChangeClause says what change gc did to its template.

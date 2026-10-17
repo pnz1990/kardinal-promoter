@@ -64,10 +64,17 @@ var (
 		Name: "kardinal_audit_events_dropped_total",
 		Help: "Audit records never written: the outbox was full (reason overflow) or the record was invalid (reason invalid); for kind APIWrite, over the per-second budget (rate), the queue was full (queue) or the create failed (error).",
 	}, []string{"kind", "reason"})
+
+	// Coalesced counts the outbox entries merged into another of the same
+	// kind when the outbox was full (RegisterCoalescer).
+	Coalesced = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardinal_audit_events_coalesced_total",
+		Help: "Unwritten audit records merged into another record of the same action because the outbox was full (spec.mergedRecords on the merged record).",
+	}, []string{"kind"})
 )
 
 func init() {
-	ctrlmetrics.Registry.MustRegister(WriteFailures, Dropped)
+	ctrlmetrics.Registry.MustRegister(WriteFailures, Dropped, Coalesced)
 }
 
 // MaxMessageBytes bounds an entry's spec.message: the outbox lives in the
@@ -114,6 +121,7 @@ func Enqueue(ctx context.Context, kind string, pending []v1alpha1.PendingAuditEv
 	for len(pending) > v1alpha1.MaxPendingAuditEvents {
 		if merged, ok := coalesceOldest(pending); ok {
 			pending = merged
+			Coalesced.WithLabelValues(kind).Inc()
 			zerolog.Ctx(ctx).Warn().Str("kind", kind).
 				Msg("audit outbox full; two unwritten AuditEvents of the same kind merged into one")
 			continue
@@ -142,6 +150,11 @@ func RegisterCoalescer(action string, fn Coalesce) {
 	coalescers[action] = fn
 }
 
+// mergedCount is how many recorded entries e stands for.
+func mergedCount(e v1alpha1.PendingAuditEvent) int32 {
+	return max(e.Spec.MergedRecords, 1)
+}
+
 // coalesceOldest merges the oldest pair of entries that a registered
 // Coalesce accepts, in place: the merged entry takes the newer one's place
 // and the older is removed. It reports false when no pair merges.
@@ -156,7 +169,11 @@ func coalesceOldest(pending []v1alpha1.PendingAuditEvent) ([]v1alpha1.PendingAud
 				continue
 			}
 			merged, ok := fn(pending[i], pending[j])
-			if !ok || Validate(merged) != nil {
+			if !ok {
+				continue
+			}
+			merged.Spec.MergedRecords = mergedCount(pending[i]) + mergedCount(pending[j])
+			if Validate(merged) != nil {
 				continue
 			}
 			pending[j] = merged

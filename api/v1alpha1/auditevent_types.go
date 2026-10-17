@@ -113,6 +113,14 @@ type AuditEventSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	GatesOmitted int32 `json:"gatesOmitted,omitempty"`
+
+	// MergedRecords is how many unwritten records this one replaces: a full
+	// audit outbox merges records of the same kind (GateChanged) before it
+	// drops any, during an AuditEvent write outage. Absent for a record
+	// written as it was recorded.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MergedRecords int32 `json:"mergedRecords,omitempty"`
 }
 
 // MaxAuditGateChanges bounds AuditEventSpec.Gates.

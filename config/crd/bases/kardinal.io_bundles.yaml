@@ -866,6 +866,15 @@ spec:
                           format: int32
                           minimum: 0
                           type: integer
+                        mergedRecords:
+                          description: |-
+                            MergedRecords is how many unwritten records this one replaces: a full
+                            audit outbox merges records of the same kind (GateChanged) before it
+                            drops any, during an AuditEvent write outage. Absent for a record
+                            written as it was recorded.
+                          format: int32
+                          minimum: 0
+                          type: integer
                         message:
                           description: Message is a human-readable description of
                             the event.

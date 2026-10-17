@@ -194,6 +194,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | `spec.gates[].oldGeneration` | integer (int64) |  | OldGeneration is the template generation the instances had. |
 | `spec.gates[].template` | string | yes | Template is the PolicyGate template's name. |
 | `spec.gatesOmitted` | integer (int32) |  | GatesOmitted counts the changes of the same rebuild that Gates leaves out, past its first MaxAuditGateChanges. |
+| `spec.mergedRecords` | integer (int32) |  | MergedRecords is how many unwritten records this one replaces: a full audit outbox merges records of the same kind (GateChanged) before it drops any, during an AuditEvent write outage. Absent for a record written as it was recorded. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
 | `spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -307,6 +308,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.pendingAuditEvents[].spec.gates[].oldGeneration` | integer (int64) |  | OldGeneration is the template generation the instances had. |
 | `status.pendingAuditEvents[].spec.gates[].template` | string | yes | Template is the PolicyGate template's name. |
 | `status.pendingAuditEvents[].spec.gatesOmitted` | integer (int32) |  | GatesOmitted counts the changes of the same rebuild that Gates leaves out, past its first MaxAuditGateChanges. |
+| `status.pendingAuditEvents[].spec.mergedRecords` | integer (int32) |  | MergedRecords is how many unwritten records this one replaces: a full audit outbox merges records of the same kind (GateChanged) before it drops any, during an AuditEvent write outage. Absent for a record written as it was recorded. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -437,6 +439,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `status.pendingAuditEvents[].spec.gates[].oldGeneration` | integer (int64) |  | OldGeneration is the template generation the instances had. |
 | `status.pendingAuditEvents[].spec.gates[].template` | string | yes | Template is the PolicyGate template's name. |
 | `status.pendingAuditEvents[].spec.gatesOmitted` | integer (int32) |  | GatesOmitted counts the changes of the same rebuild that Gates leaves out, past its first MaxAuditGateChanges. |
+| `status.pendingAuditEvents[].spec.mergedRecords` | integer (int32) |  | MergedRecords is how many unwritten records this one replaces: a full audit outbox merges records of the same kind (GateChanged) before it drops any, during an AuditEvent write outage. Absent for a record written as it was recorded. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -1279,6 +1282,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.pendingAuditEvents[].spec.gates[].oldGeneration` | integer (int64) |  | OldGeneration is the template generation the instances had. |
 | `status.pendingAuditEvents[].spec.gates[].template` | string | yes | Template is the PolicyGate template's name. |
 | `status.pendingAuditEvents[].spec.gatesOmitted` | integer (int32) |  | GatesOmitted counts the changes of the same rebuild that Gates leaves out, past its first MaxAuditGateChanges. |
+| `status.pendingAuditEvents[].spec.mergedRecords` | integer (int32) |  | MergedRecords is how many unwritten records this one replaces: a full audit outbox merges records of the same kind (GateChanged) before it drops any, during an AuditEvent write outage. Absent for a record written as it was recorded. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -1463,6 +1467,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.gates[].oldGeneration` | integer (int64) |  | OldGeneration is the template generation the instances had. |
 | `status.pendingAuditEvents[].spec.gates[].template` | string | yes | Template is the PolicyGate template's name. |
 | `status.pendingAuditEvents[].spec.gatesOmitted` | integer (int32) |  | GatesOmitted counts the changes of the same rebuild that Gates leaves out, past its first MaxAuditGateChanges. |
+| `status.pendingAuditEvents[].spec.mergedRecords` | integer (int32) |  | MergedRecords is how many unwritten records this one replaces: a full audit outbox merges records of the same kind (GateChanged) before it drops any, during an AuditEvent write outage. Absent for a record written as it was recorded. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
@@ -1726,6 +1731,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].spec.gates[].oldGeneration` | integer (int64) |  | OldGeneration is the template generation the instances had. |
 | `status.pendingAuditEvents[].spec.gates[].template` | string | yes | Template is the PolicyGate template's name. |
 | `status.pendingAuditEvents[].spec.gatesOmitted` | integer (int32) |  | GatesOmitted counts the changes of the same rebuild that Gates leaves out, past its first MaxAuditGateChanges. |
+| `status.pendingAuditEvents[].spec.mergedRecords` | integer (int32) |  | MergedRecords is how many unwritten records this one replaces: a full audit outbox merges records of the same kind (GateChanged) before it drops any, during an AuditEvent write outage. Absent for a record written as it was recorded. |
 | `status.pendingAuditEvents[].spec.message` | string |  | Message is a human-readable description of the event. |
 | `status.pendingAuditEvents[].spec.outcome` | string | yes | Outcome describes the result of the action. Valid values: "Success", "Failure", "Pending". One of: `Success`, `Failure`, `Pending`. |
 | `status.pendingAuditEvents[].spec.pipelineName` | string |  | PipelineName is the name of the Pipeline the Bundle is promoting through. |
