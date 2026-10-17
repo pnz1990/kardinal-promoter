@@ -42,6 +42,9 @@ const (
 	// EnvV0110CLI is the kardinal CLI of v0.11.0, the release the
 	// upgrade-v0110 suite upgrades from (components/kardinal-v0110.sh).
 	EnvV0110CLI = "KARDINAL_E2E_V0110_CLI"
+	// EnvV0120CLI is the kardinal CLI of v0.12.0, the release the
+	// upgrade-v0120 suite upgrades from (components/kardinal-v0120.sh).
+	EnvV0120CLI = "KARDINAL_E2E_V0120_CLI"
 )
 
 // KrocodileGraphGVR is v0.8.1's Graph, reconciled by the krocodile Graph
@@ -343,6 +346,13 @@ func (e *Env) KardinalV0100(t *testing.T, namespace string, args ...string) (str
 func (e *Env) KardinalV0110(t *testing.T, namespace string, args ...string) (string, error) {
 	t.Helper()
 	return e.releasedKardinal(t, EnvV0110CLI, "v0.11.0", "upgrade-v0110", namespace, args...)
+}
+
+// KardinalV0120 runs the v0.12.0 CLI against the test cluster (--context is
+// always set) and returns its combined output. It never fails the test.
+func (e *Env) KardinalV0120(t *testing.T, namespace string, args ...string) (string, error) {
+	t.Helper()
+	return e.releasedKardinal(t, EnvV0120CLI, "v0.12.0", "upgrade-v0120", namespace, args...)
 }
 
 // releasedKardinal runs the released CLI that the env variable env names
