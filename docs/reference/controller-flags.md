@@ -43,8 +43,8 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--github-token` | string |  | SCM token for API operations (a GitHub, GitLab, Forgejo/Gitea, Bitbucket or Azure DevOps token). |
 | `--graph-applier-clusterrole` | string | `"kardinal-graph-applier"` | ClusterRole bound to the Graph ServiceAccount in the Pipeline namespace. |
 | `--graph-compact-above` | int | `100` | Environment count above which a Bundle's Graph uses the compact shape (one PromotionStep collection) when the Pipeline's kardinal.io/graph-shape annotation does not choose one. 0 makes every Graph compact. |
-| `--graph-reader-clusterrole` | string | `"kardinal-graph-reader"` | ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read. |
-| `--graph-reader-namespaces` | string | `"argocd,flux-system"` | Comma-separated namespaces, besides a Graph's own namespace, where the Graph ServiceAccount may be bound to the reader ClusterRole for health checks. "*" allows every namespace except kube-system, kube-public and kube-node-lease. Health checks in other namespaces get no Graph ref. |
+| `--graph-reader-clusterrole` | string |  | Removed (#1283): Graphs have no health ref nodes, so kardinal binds no reader RoleBindings. Setting it fails; remove it. |
+| `--graph-reader-namespaces` | string |  | Removed (#1283): Graphs have no health ref nodes, so kardinal binds no reader RoleBindings. Setting it fails; remove it. |
 | `--graph-retire-failed-after` | duration | `24h0m0s` | How long the Graph of a Failed Bundle is kept before it is retired. A retired Failed Bundle does not recover. 0 keeps it. |
 | `--graph-retire-superseded-after` | duration | `1m0s` | How long the Graph of a Superseded Bundle, or of a Verified one a newer Bundle replaced in every environment, is kept before it is retired (deleted; the Bundle keeps its PromotionSteps in status.retiredSteps). 0 keeps it. |
 | `--graph-retire-verified-after` | duration | `1h0m0s` | How long the Graph of a Verified Bundle that is still deployed in an environment is kept before it is retired. 0 keeps it. |

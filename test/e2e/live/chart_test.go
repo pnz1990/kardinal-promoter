@@ -178,7 +178,6 @@ func TestChart_DefaultInstall(t *testing.T) {
 	}
 
 	a := newArgoApp(t, e, "test", "prod")
-	deleteReaderBindingAtEnd(t, e, "kardinal-promoter-graph-reader-"+a.ns)
 	r := e.InstallChart(t, "kardinal-promoter", framework.ControllerNamespace, framework.Values{"logLevel": "info"})
 	r.CleansUp(a.ns)
 	require.Equal(t, "kardinal-promoter", r.Fullname)
@@ -290,16 +289,16 @@ func TestChart_DefaultInstall(t *testing.T) {
 	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), fixtures.Image+":"+fixtures.V3, syncTimeout)
 
 	// The Graph identity: a ServiceAccount and the applier binding in the
-	// Graph namespace, the reader binding where the health refs point.
+	// Graph namespace, and no binding anywhere else (#1283).
 	var graphSA corev1.ServiceAccount
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: "kardinal-graph"}, &graphSA))
 	applier, err := e.Kube.RbacV1().RoleBindings(a.ns).Get(ctx, "kardinal-promoter-graph-applier", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "kardinal-promoter", applier.Labels["app.kubernetes.io/managed-by"])
 	assert.Equal(t, rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "kardinal-promoter-graph-applier"}, applier.RoleRef)
-	reader, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, "kardinal-promoter-graph-reader-"+a.ns, metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, "kardinal-promoter-graph-reader", reader.RoleRef.Name)
+	assert.NotContains(t, applier.Annotations, "kardinal.io/reader-namespaces")
+	_, err = e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, "kardinal-promoter-graph-reader-"+a.ns, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no reader binding in argocd: %v", err)
 
 	other := framework.ControllerNamespace
 	controller := framework.ServiceAccountUser(framework.ControllerNamespace, r.Fullname)
@@ -346,8 +345,10 @@ func TestChart_DefaultInstall(t *testing.T) {
 		{Verb: "create", Group: "kardinal.io", Resource: "hookruns", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "metricchecks", Namespace: a.ns},
 		{Verb: "get", Group: "kardinal.io", Resource: "bundles", Namespace: a.ns},
-		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
 	}, []framework.Access{
+		// No reader role since #1283: the Graph reads nothing outside its namespace.
+		{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace},
+		{Verb: "get", Group: "apps", Resource: "deployments", Namespace: a.ns},
 		{Verb: "create", Group: "kardinal.io", Resource: "promotionsteps", Namespace: other},
 		{Verb: "update", Group: "kardinal.io", Resource: "bundles", Namespace: a.ns},
 		{Verb: "get", Resource: "secrets", Namespace: a.ns},
@@ -1015,7 +1016,6 @@ func TestChart_PolicyNamespaces(t *testing.T) {
 	a := newArgoApp(t, e, "test", "prod")
 	listed, unlisted := e.Namespace(t), e.Namespace(t)
 
-	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(releaseName(a.ns))+"-graph-reader-"+a.ns)
 	r := e.InstallChart(t, releaseName(a.ns), a.ns, framework.Values{
 		"controller": framework.Values{"policyNamespaces": []string{listed}},
 	})
@@ -1094,7 +1094,6 @@ func TestChart_GateStatusHeartbeat(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newArgoApp(t, e, "test", "prod")
-	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(releaseName(a.ns))+"-graph-reader-"+a.ns)
 	r := e.InstallChart(t, releaseName(a.ns), a.ns, framework.Values{})
 	assert.NotContains(t, strings.Join(r.Deployment(t).Spec.Template.Spec.Containers[0].Args, " "),
 		"--gate-status-heartbeat", "the chart leaves the controller default")
@@ -1549,29 +1548,6 @@ func hasAppRef(g *unstructured.Unstructured, ns string) bool {
 		}
 	}
 	return false
-}
-
-// deleteReaderBindingAtEnd deletes, when the test ends, the Graph reader
-// RoleBinding name in argocd that a cluster-mode release's controller made.
-// Nothing deletes it when the release and the Graph namespace go (see
-// docs/guides/security.md, RBAC requirements), so each run would leave one. Call it before
-// installing the release, so it runs after the uninstall.
-func deleteReaderBindingAtEnd(t *testing.T, e *framework.Env, name string) {
-	t.Helper()
-	t.Cleanup(func() {
-		if os.Getenv(framework.EnvKeep) == "1" {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Delete(ctx, name, metav1.DeleteOptions{})
-		switch {
-		case err == nil:
-			t.Logf("reader binding %s/%s was left after uninstall; deleted it", framework.ArgoCDNamespace, name)
-		case !apierrors.IsNotFound(err):
-			t.Errorf("delete reader binding %s/%s: %v", framework.ArgoCDNamespace, name, err)
-		}
-	})
 }
 
 // kroPodIP is the IP of the running kro controller Pod.
@@ -2063,9 +2039,10 @@ func preStopCommand(t *testing.T, pod corev1.Pod) []string {
 // TestChart_GraphIdentity checks the graph values. aggregateToKro grants
 // kro's controller watch on the kinds kro creates, and without it kro has
 // none. serviceAccountName is the identity the controller provisions and
-// kro applies each Graph as. readerNamespaces is where that identity may
-// read a health ref: a ref elsewhere is dropped from the Graph with a
-// warning, and the promotion still checks health. kroNamespace is the
+// kro applies each Graph as, bound in the Graph namespace only: a health
+// check in argocd puts no ref node in the Graph and binds nothing there
+// (#1283), and the promotion still checks health. Setting the removed
+// readerNamespaces fails the upgrade, saying why. kroNamespace is the
 // NetworkPolicy egress rule to kro.
 //
 // Covers CHART-GRAPH-01.
@@ -2077,15 +2054,13 @@ func TestChart_GraphIdentity(t *testing.T) {
 	a := newArgoApp(t, e, "test")
 	name := releaseName(a.ns)
 	fullname := framework.ChartFullname(name)
-	readerBinding := fullname + "-graph-reader-" + a.ns
-	deleteReaderBindingAtEnd(t, e, readerBinding)
 	kro := framework.ServiceAccountUser("kro-system", "kro")
 	watchSteps := framework.Access{Verb: "watch", Group: "kardinal.io", Resource: "promotionsteps"}
 	teamGraph := framework.ServiceAccountUser(a.ns, "team-graph")
 	readApps := framework.Access{Verb: "get", Group: "argoproj.io", Resource: "applications", Namespace: framework.ArgoCDNamespace}
-	values := func(readers []string, over framework.Values) framework.Values {
+	values := func(over framework.Values) framework.Values {
 		return framework.MergeValues(framework.Values{"graph": framework.Values{
-			"serviceAccountName": "team-graph", "readerNamespaces": readers, "aggregateToKro": true,
+			"serviceAccountName": "team-graph", "aggregateToKro": true,
 		}}, over)
 	}
 
@@ -2096,18 +2071,19 @@ func TestChart_GraphIdentity(t *testing.T) {
 		return !e.Can(t, kro, watchSteps), "kro may watch promotionsteps"
 	})
 
-	r.Upgrade(t, values([]string{"flux-system"}, nil))
+	r.Upgrade(t, values(nil))
 	role, err := e.Kube.RbacV1().ClusterRoles().Get(ctx, fullname+"-kro-watch", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "true", role.Labels["rbac.kro.run/aggregate-to-controller"])
 	framework.Eventually(t, time.Minute, "kro may watch PromotionSteps through the aggregated role", func(context.Context) (bool, string) {
 		return e.Can(t, kro, watchSteps), "not yet"
 	})
+	_, err = e.Kube.RbacV1().ClusterRoles().Get(ctx, fullname+"-graph-reader", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no reader ClusterRole: %v", err)
 	pod := runningPod(t, r)
 	args := pod.Spec.Containers[0].Args
 	assert.Contains(t, args, "--graph-service-account=team-graph")
-	assert.Contains(t, args, "--graph-reader-namespaces=flux-system")
-	logs := r.FollowLogs(t, pod.Name)
+	assert.NotContains(t, strings.Join(args, " "), "--graph-reader-")
 	a.apply(t, a.pipeline(nil))
 	v2 := promote(t, a, fixtures.V2, nil)
 
@@ -2120,30 +2096,17 @@ func TestChart_GraphIdentity(t *testing.T) {
 	require.Len(t, applier.Subjects, 1)
 	assert.Equal(t, [3]string{"ServiceAccount", "team-graph", a.ns},
 		[3]string{applier.Subjects[0].Kind, applier.Subjects[0].Name, applier.Subjects[0].Namespace})
-	_, err = e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, readerBinding, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "argocd is not a reader namespace, so no reader binding there: %v", err)
-	line, ok := logs.Find("no health ref node: namespace not in --graph-reader-namespaces")
-	assert.True(t, ok, "the dropped health ref is logged")
-	assert.Contains(t, line.Text, `"namespace":"argocd"`)
-	assert.False(t, hasAppRef(g, framework.ArgoCDNamespace), "the Argo CD health ref is dropped from the Graph")
+	_, err = e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, fullname+"-graph-reader-"+a.ns, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "no reader binding in argocd: %v", err)
+	assert.False(t, hasAppRef(g, framework.ArgoCDNamespace), "the Argo CD health check puts no ref in the Graph")
 	assert.False(t, e.Can(t, teamGraph, readApps), "team-graph may not read Applications in argocd")
 
-	r.Upgrade(t, values([]string{framework.ArgoCDNamespace}, nil))
-	assert.Contains(t, runningPod(t, r).Spec.Containers[0].Args, "--graph-reader-namespaces="+framework.ArgoCDNamespace)
-	v3 := promote(t, a, fixtures.V3, nil)
-	reader, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, readerBinding, metav1.GetOptions{})
-	require.NoError(t, err, "a reader binding in argocd")
-	assert.Equal(t, fullname+"-graph-reader", reader.RoleRef.Name)
-	require.Len(t, reader.Subjects, 1)
-	assert.Equal(t, [2]string{"team-graph", a.ns}, [2]string{reader.Subjects[0].Name, reader.Subjects[0].Namespace})
-	applier, err = e.Kube.RbacV1().RoleBindings(a.ns).Get(ctx, fullname+"-graph-applier", metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Contains(t, strings.Split(applier.Annotations["kardinal.io/reader-namespaces"], ","), framework.ArgoCDNamespace)
-	assert.True(t, hasAppRef(bundleGraph(t, e, a.ns, v3), framework.ArgoCDNamespace), "the Argo CD health ref is in the Graph")
-	assert.True(t, e.Can(t, teamGraph, readApps), "team-graph may read Applications in argocd")
+	out, err := r.TryUpgrade(t, values(framework.Values{"graph": framework.Values{"readerNamespaces": []string{"argocd"}}}), false)
+	require.Error(t, err, "the removed graph.readerNamespaces fails the upgrade")
+	assert.Contains(t, out, "graph.readerNamespaces was removed (#1283)")
 
 	netpol := framework.Values{"networkPolicy": framework.Values{"enabled": true}}
-	r.Upgrade(t, values([]string{framework.ArgoCDNamespace}, netpol))
+	r.Upgrade(t, values(netpol))
 	runningPod(t, r)
 	kroMetrics := fmt.Sprintf("http://%s:8078/metrics", kroPodIP(t, e))
 	other := e.Probe(t, a.ns, "other", nil)
@@ -2154,7 +2117,7 @@ func TestChart_GraphIdentity(t *testing.T) {
 		res := asController.Curl(t, 5*time.Second, kroMetrics)
 		return res.Code != 0, brief(res)
 	})
-	r.Upgrade(t, values([]string{framework.ArgoCDNamespace}, framework.MergeValues(netpol,
+	r.Upgrade(t, values(framework.MergeValues(netpol,
 		framework.Values{"graph": framework.Values{"kroNamespace": ""}})))
 	framework.Eventually(t, time.Minute, `graph.kroNamespace "" drops the egress rule to kro`, func(context.Context) (bool, string) {
 		res := asController.Curl(t, 3*time.Second, kroMetrics)
@@ -2327,7 +2290,6 @@ func TestChart_Demo(t *testing.T) {
 		e.WaitDeploymentImage(t, ns, fixtures.Workload(env), fixtures.Image+":"+fixtures.V1, syncTimeout)
 	}
 	name := releaseName(ns)
-	deleteReaderBindingAtEnd(t, e, framework.ChartFullname(name)+"-graph-reader-"+ns)
 	// The demo Pipeline's own git Secret, never the controller's
 	// (#1725): a labelled copy of the suite's token.
 	var token corev1.Secret

@@ -313,8 +313,7 @@ health:
   is in the controller log only. During a `bake` an unreachable check stops the window like a
   waiting result: the time the cluster could not be read is not healthy time, and `health.timeout`
   bounds the wait for the next healthy check again.
-- Remote health is polled, not watched, and the Bundle's Graph has no health ref node for the
-  environment (kro reads only the cluster it runs in; see the
+- Remote health is polled, not watched (kro reads only the cluster it runs in; see the
   [Graph capability ledger](design/16-graph-capability-ledger.md#g8-logic-still-outside-the-graph)).
 
 **2. Read the GitOps hub's object.** Run kardinal next to the GitOps hub that manages the cluster:

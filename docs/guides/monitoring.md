@@ -152,6 +152,20 @@ policy refuses the writes it checks. Only the leader sets these gauges; other re
 max by (namespace) (kardinal_agent_index_bytes) / max by (namespace) (kardinal_agent_index_max_bytes)
 ```
 
+### Health ref cleanup after an upgrade
+
+After an upgrade from a release with Graph health ref nodes, the leader removes those nodes from
+existing Graphs and deletes the reader RoleBindings of earlier releases
+([RBAC requirements](security.md#rbac-requirements)). It skips what it cannot clean and retries,
+waiting 10 seconds and doubling up to 5 minutes, until nothing is left.
+`kardinal_health_ref_cleanup_pending` is what its last pass left: `0` once done, `-1` while it
+cannot list the Graphs or Pipelines. A value that stays above `0` names a Graph kro cannot read,
+whose promotion waits; the controller's warning `health ref cleanup left work undone` carries the error.
+
+```promql
+max(kardinal_health_ref_cleanup_pending) != 0
+```
+
 ### Work queue depth (are we falling behind?)
 
 ```promql

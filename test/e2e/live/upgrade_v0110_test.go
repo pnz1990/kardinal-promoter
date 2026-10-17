@@ -14,8 +14,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -364,6 +366,14 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 		assert.NotZero(t, sp[state], "the estate has a %s step at the upgrade: %v", state, sp)
 	}
 
+	// v0.12 bound the reader ClusterRole in every Graph namespace for the
+	// health ref nodes, and recorded it on the applier RoleBinding (#1283).
+	readerRole := framework.ChartFullname(upgradeRelease) + "-graph-reader"
+	for _, f := range s.fleets() {
+		_, err := e.Kube.RbacV1().RoleBindings(f.NS).Get(context.Background(), readerRole+"-"+f.NS, metav1.GetOptions{})
+		require.NoError(t, err, "v0.12 has a reader RoleBinding in %s", f.NS)
+	}
+
 	// ── 2. Apply the new CRDs ───────────────────────────────────────────
 	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, "0.11.0", "helm show crds"), guideChartV0110, `"$KARDINAL_E2E_CHART"`))
 
@@ -393,6 +403,45 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 				}
 			}
 			return len(not) == 0, strings.Join(not, "; ")
+		})
+	}
+
+	// #1283: the reader ClusterRole is gone; the controller deletes the
+	// reader RoleBindings v0.12 recorded, and their record, and removes the
+	// health ref nodes and reader labels from every Graph.
+	_, err = e.Kube.RbacV1().ClusterRoles().Get(context.Background(), readerRole, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "the upgrade deletes ClusterRole %s: %v", readerRole, err)
+	for _, f := range s.fleets() {
+		ns := f.NS
+		framework.Eventually(t, 2*time.Minute, "the reader RoleBinding of "+ns+" deleted, and its record", func(ctx context.Context) (bool, string) {
+			if _, err := e.Kube.RbacV1().RoleBindings(ns).Get(ctx, readerRole+"-"+ns, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				return false, fmt.Sprintf("reader RoleBinding: %v", err)
+			}
+			applier, err := e.Kube.RbacV1().RoleBindings(ns).Get(ctx, framework.ChartFullname(upgradeRelease)+"-graph-applier", metav1.GetOptions{})
+			if err != nil {
+				return false, err.Error()
+			}
+			rec, ok := applier.Annotations["kardinal.io/reader-namespaces"]
+			return !ok, "record: " + rec
+		})
+		framework.Eventually(t, 2*time.Minute, "the Graphs of "+ns+" without health ref nodes", func(ctx context.Context) (bool, string) {
+			list, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return false, err.Error()
+			}
+			var left []string
+			for _, g := range list.Items {
+				nodes, _, _ := unstructured.NestedSlice(g.Object, "spec", "nodes")
+				for _, n := range nodes {
+					if id, _ := n.(map[string]interface{})["id"].(string); strings.HasPrefix(id, "health") && len(id) > 6 && id[6] >= 'A' && id[6] <= 'Z' {
+						left = append(left, g.GetName()+"/"+id)
+					}
+				}
+				if _, ok := g.GetLabels()["kardinal.io/reader-labels"]; ok {
+					left = append(left, g.GetName()+" reader label")
+				}
+			}
+			return len(left) == 0, strings.Join(left, ", ")
 		})
 	}
 

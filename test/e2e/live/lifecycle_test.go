@@ -87,9 +87,9 @@ func TestCLI_DeleteBundleClosesPR(t *testing.T) {
 // Graphs in a terminating namespace once the applier RoleBinding is gone, and
 // the namespace controller deletes the children. The prod step's close-pr
 // finalizer must not stall the namespace either: the controller closes the PR,
-// with one comment naming the namespace, and lets the step go. The reader RoleBinding in argocd goes with the
-// namespace's last Graph. Covers GRAPH-NSDELETE-01, STEP-DELETE-PR-02,
-// GRAPH-READER-PRUNE-02.
+// with one comment naming the namespace, and lets the step go.
+//
+// Covers GRAPH-NSDELETE-01, STEP-DELETE-PR-02.
 func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -102,13 +102,6 @@ func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
 	assert.Contains(t, stepFinalizers(t, e, a.ns, b, "prod"), closePRFinalizer, "the step with the open PR")
 	graph := a.bundle(t, b).Status.GraphRef
 	require.NotEmpty(t, graph, "the Bundle has a Graph")
-	// A compact Graph (the controller run with graph.compactAbove=0) has no
-	// health ref, so no reader binding: the namespace deletion is checked
-	// either way.
-	compact := bundleGraph(t, e, a.ns, b).GetLabels()["kardinal.io/graph-shape"] == "compact"
-	if !compact {
-		require.NotEmpty(t, readerBindings(t, e, a.ns), "the Graph reads argocd through a reader binding")
-	}
 
 	// Runs before the namespace cleanup e.Namespace registered: on failure it
 	// lets a stuck namespace go.
@@ -130,15 +123,10 @@ func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
 	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Minute)
 	assert.Len(t, e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR: namespace "+a.ns+" was deleted"), 1,
 		"one comment says why kardinal closed the PR")
-	framework.Eventually(t, time.Minute, "no reader binding for "+a.ns+" in argocd", func(context.Context) (bool, string) {
-		left := readerBindings(t, e, a.ns)
-		return len(left) == 0, fmt.Sprintf("left: %v", left)
-	})
 }
 
-// nodesShape pins p to the nodes Graph shape. Reader RoleBindings exist only
-// for health ref nodes, which a compact Graph does not have, so the reader
-// binding tests pin the shape whatever the controller's --graph-compact-above.
+// nodesShape pins p to the nodes Graph shape, whatever the controller's
+// --graph-compact-above.
 func nodesShape(p *v1alpha1.Pipeline) *v1alpha1.Pipeline {
 	if p.Annotations == nil {
 		p.Annotations = map[string]string{}
@@ -147,100 +135,59 @@ func nodesShape(p *v1alpha1.Pipeline) *v1alpha1.Pipeline {
 	return p
 }
 
-// TestGraph_ReaderBindingPruned deletes the only Bundle of a namespace whose
-// Graph read an Argo CD Application. For that read the controller created a
-// RoleBinding in argocd granting the namespace's kardinal-graph service
-// account the reader role. Prune used to run only while a Bundle was
-// translated, so after the last Bundle was deleted the binding stayed in
-// argocd for good. Now the controller prunes when a Graph is deleted.
-// Covers GRAPH-READER-PRUNE-01.
-func TestGraph_ReaderBindingPruned(t *testing.T) {
-	t.Parallel()
-	e := framework.New(t)
-	a := newArgoApp(t, e, "test")
-	a.apply(t, nodesShape(a.pipeline(nil)))
-	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
-	graph := a.bundle(t, bundle).Status.GraphRef
-	require.NotEmpty(t, graph, "the Bundle has a Graph")
-	require.NotEmpty(t, readerBindings(t, e, a.ns), "the Graph reads argocd through a reader binding")
+// healthRefCleanupMessage is what the controller logs when it has removed
+// the health ref nodes an earlier release left in Graphs.
+const healthRefCleanupMessage = "removed the health ref nodes of an earlier release from Graphs (#1283)"
 
-	e.MustKardinal(t, a.ns, "delete", "bundle", bundle)
-	framework.Eventually(t, 2*time.Minute, "Graph "+graph+" is gone", func(ctx context.Context) (bool, string) {
-		_, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(a.ns).Get(ctx, graph, metav1.GetOptions{})
-		return apierrors.IsNotFound(err), fmt.Sprintf("err=%v", err)
-	})
-	framework.Eventually(t, time.Minute, "no reader binding for "+a.ns+" in argocd", func(context.Context) (bool, string) {
-		left := readerBindings(t, e, a.ns)
-		return len(left) == 0, fmt.Sprintf("left: %v", left)
-	})
-}
-
-// sweptMessage is what the controller logs for each reader RoleBinding it
-// deletes.
-const sweptMessage = "graph identity: deleted a reader rolebinding no Graph reads through"
-
-// readerRecord is the annotation on the applier RoleBinding that records the
-// namespaces the controller bound the reader role in.
-const readerRecord = "kardinal.io/reader-namespaces"
-
-// TestGraph_ReaderBindingSweep stops the controller and leaves behind, in
-// argocd, two reader RoleBindings that no Graph reads through. One is of a
-// namespace whose only Bundle, and so its Graph, is deleted while the
-// controller is down; its record on the applier RoleBinding is removed too, as
-// the versions that did not record their bindings left it. The other, made as
-// the controller makes them, is of a namespace that is gone. The Graph-delete
-// prune never sees either Graph go. When the controller starts, its startup
-// sweep deletes exactly those two (the next sweep is 10 minutes away), and
-// keeps the binding a live Graph reads through and an unlabeled binding of the
-// same shape. An upgrade restarts the controller the same way, but the
-// upgrade suite cannot leave such bindings: v0.8.1 made no RoleBindings.
-// Not parallel: it stops the controller.
+// TestGraph_HealthRefCleanup stops the controller and leaves what a release
+// before #1283 left: a health ref node and the reader labels in a Graph, a
+// reader RoleBinding in argocd recorded on the applier RoleBinding, and an
+// unrecorded one of the same shape for another namespace. When the
+// controller starts, it removes the health ref node and the labels, keeps
+// every other node, deletes the recorded binding and the record, and keeps
+// the unrecorded binding (the upgrade notes list those). The promotion goes
+// on. Not parallel: it stops the controller.
 //
-// Covers GRAPH-READER-SWEEP-01.
-func TestGraph_ReaderBindingSweep(t *testing.T) {
+// Covers GRAPH-HEALTHREF-CLEANUP-01.
+func TestGraph_HealthRefCleanup(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
-	live, emptied := newArgoApp(t, e, "test"), newArgoApp(t, e, "test")
-	var bundles []string
-	for _, a := range []*app{live, emptied} {
-		a.apply(t, nodesShape(a.pipeline(nil)))
-		bundles = append(bundles, e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2))
-	}
-	for i, a := range []*app{live, emptied} {
-		e.WaitStepState(t, a.ns, pipelineName, bundles[i], "test", "Verified", promoteTimeout)
-	}
-	liveRB, emptiedRB := readerBinding(t, e, live.ns), readerBinding(t, e, emptied.ns)
-	assert.Equal(t, liveRB.RoleRef.Name+"-"+live.ns, liveRB.Name, "a reader binding is named after its Graph namespace")
-	graph := emptied.bundle(t, bundles[1]).Status.GraphRef
-	require.NotEmpty(t, graph, "the Bundle has a Graph")
-	gone, goneUnlabeled := e.Namespace(t), e.Namespace(t)
-	for _, ns := range []string{gone, goneUnlabeled} {
-		require.NoError(t, e.Kube.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{}))
-	}
-	framework.Eventually(t, 2*time.Minute, "namespaces "+gone+" and "+goneUnlabeled+" are gone", func(ctx context.Context) (bool, string) {
-		for _, ns := range []string{gone, goneUnlabeled} {
-			if _, err := e.Kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-				return false, fmt.Sprintf("%s: err=%v", ns, err)
-			}
-		}
-		return true, ""
-	})
+	a := newArgoApp(t, e, "test", "prod")
+	a.apply(t, nodesShape(a.pipeline(map[string]string{"prod": "pr-review"})))
+	b := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, b, "prod", "WaitingForMerge", promoteTimeout)
+	graph := a.bundle(t, b).Status.GraphRef
+	require.NotEmpty(t, graph)
+	applier := applierBinding(t, e, a.ns)
+	readerRole := strings.TrimSuffix(applier.RoleRef.Name, "-graph-applier") + "-graph-reader"
+	sa := applier.Subjects[0]
 
 	start := e.StopController(t)
-	require.NoError(t, e.Client.Delete(ctx, emptied.bundle(t, bundles[1])))
-	framework.Eventually(t, 2*time.Minute, "Graph "+graph+" is gone", func(ctx context.Context) (bool, string) {
-		_, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(emptied.ns).Get(ctx, graph, metav1.GetOptions{})
-		return apierrors.IsNotFound(err), describeGraph(ctx, e, emptied.ns, graph)
-	})
-	applier := applierBinding(t, e, emptied.ns)
-	require.Contains(t, strings.Split(applier.Annotations[readerRecord], ","), framework.ArgoCDNamespace, "the record lists argocd")
-	delete(applier.Annotations, readerRecord)
-	_, err := e.Kube.RbacV1().RoleBindings(emptied.ns).Update(ctx, applier, metav1.UpdateOptions{})
-	require.NoError(t, err, "remove the record")
-	stale := sameShape(liveRB, gone, liveRB.Labels)
-	unlabeled := sameShape(liveRB, goneUnlabeled, nil)
-	for _, rb := range []*rbacv1.RoleBinding{stale, unlabeled} {
+	g, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(a.ns).Get(ctx, graph, metav1.GetOptions{})
+	require.NoError(t, err)
+	nodes, _, _ := unstructured.NestedSlice(g.Object, "spec", "nodes")
+	want := len(nodes)
+	nodes = append(nodes, map[string]interface{}{"id": "healthProd", "ref": map[string]interface{}{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]interface{}{"name": fixtures.Workload("prod"), "namespace": a.ns}}})
+	require.NoError(t, unstructured.SetNestedSlice(g.Object, nodes, "spec", "nodes"))
+	labels := g.GetLabels()
+	labels["kardinal.io/reader-labels"], labels["reads.kardinal.io/"+a.ns] = "true", "true"
+	g.SetLabels(labels)
+	_, err = e.Dynamic.Resource(framework.GraphGVR).Namespace(a.ns).Update(ctx, g, metav1.UpdateOptions{})
+	require.NoError(t, err, "put back a health ref node, as an earlier release built the Graph")
+
+	other := e.Namespace(t)
+	old := func(graphNS string) *rbacv1.RoleBinding {
+		return &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: readerRole + "-" + graphNS, Namespace: framework.ArgoCDNamespace,
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}},
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: readerRole},
+			Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: sa.Name, Namespace: graphNS}},
+		}
+	}
+	recorded, unrecorded := old(a.ns), old(other)
+	for _, rb := range []*rbacv1.RoleBinding{recorded, unrecorded} {
 		created, err := e.Kube.RbacV1().RoleBindings(rb.Namespace).Create(ctx, rb, metav1.CreateOptions{})
 		require.NoError(t, err, "create RoleBinding %s", rb.Name)
 		*rb = *created
@@ -251,44 +198,40 @@ func TestGraph_ReaderBindingSweep(t *testing.T) {
 			}
 		})
 	}
-	assert.Equal(t, []string{emptiedRB.Name}, readerBindings(t, e, emptied.ns), "the Graph went while the controller was down")
+	applier = applierBinding(t, e, a.ns)
+	if applier.Annotations == nil {
+		applier.Annotations = map[string]string{}
+	}
+	applier.Annotations["kardinal.io/reader-namespaces"] = framework.ArgoCDNamespace + "," + a.ns
+	_, err = e.Kube.RbacV1().RoleBindings(a.ns).Update(ctx, applier, metav1.UpdateOptions{})
+	require.NoError(t, err, "record the reader binding, as an earlier release did")
 
 	started := time.Now()
 	start()
-	for _, s := range []struct{ name, graphNS string }{{emptiedRB.Name, emptied.ns}, {stale.Name, gone}} {
-		e.WaitControllerLog(t, started, time.Minute, "the startup sweep deletes "+s.name, framework.LogMessage(sweptMessage,
-			"runnable", "graph-reader-sweep", "rolebinding", framework.ArgoCDNamespace+"/"+s.name, "graphNamespace", s.graphNS))
-		_, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, s.name, metav1.GetOptions{})
-		assert.True(t, apierrors.IsNotFound(err), "%s is deleted: err=%v", s.name, err)
-	}
-	for _, rb := range []*rbacv1.RoleBinding{liveRB, unlabeled} {
-		got, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, rb.Name, metav1.GetOptions{})
-		if assert.NoError(t, err, "%s is kept", rb.Name) {
-			assert.Equal(t, rb.UID, got.UID, "%s is the same binding", rb.Name)
-		}
-	}
-	assert.Empty(t, e.ControllerLogLines(t, started, framework.LogMessage(sweptMessage,
-		"rolebinding", framework.ArgoCDNamespace+"/"+liveRB.Name)), "the live binding is not deleted")
-}
-
-// readerBinding returns the one reader RoleBinding in argocd for ns.
-func readerBinding(t *testing.T, e *framework.Env, ns string) *rbacv1.RoleBinding {
-	t.Helper()
-	names := readerBindings(t, e, ns)
-	require.Len(t, names, 1, "one reader binding for %s in argocd", ns)
-	rb, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(context.Background(), names[0], metav1.GetOptions{})
+	e.WaitControllerLog(t, started, 2*time.Minute, "the cleanup removes the health ref node",
+		framework.LogMessage(healthRefCleanupMessage, "runnable", "health-ref-cleanup"))
+	g, err = e.Dynamic.Resource(framework.GraphGVR).Namespace(a.ns).Get(ctx, graph, metav1.GetOptions{})
 	require.NoError(t, err)
-	return rb
-}
-
-// sameShape is a reader RoleBinding like rb, with labels, for the
-// kardinal-graph service account of graphNS.
-func sameShape(rb *rbacv1.RoleBinding, graphNS string, labels map[string]string) *rbacv1.RoleBinding {
-	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: rb.RoleRef.Name + "-" + graphNS, Namespace: rb.Namespace, Labels: labels},
-		RoleRef:    rb.RoleRef,
-		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: rb.Subjects[0].Name, Namespace: graphNS}},
+	nodes, _, _ = unstructured.NestedSlice(g.Object, "spec", "nodes")
+	assert.Len(t, nodes, want, "only the health ref node goes")
+	assert.NotContains(t, g.GetLabels(), "kardinal.io/reader-labels")
+	assert.NotContains(t, g.GetLabels(), "reads.kardinal.io/"+a.ns)
+	framework.Eventually(t, time.Minute, "the recorded reader binding and the record deleted", func(ctx context.Context) (bool, string) {
+		_, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, recorded.Name, metav1.GetOptions{})
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf("recorded binding: %v", err)
+		}
+		_, ok := applierBinding(t, e, a.ns).Annotations["kardinal.io/reader-namespaces"]
+		return !ok, "the record is still there"
+	})
+	got, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).Get(ctx, unrecorded.Name, metav1.GetOptions{})
+	if assert.NoError(t, err, "the unrecorded binding is kept") {
+		assert.Equal(t, unrecorded.UID, got.UID)
 	}
+
+	pr := a.openPR(t, b, "prod")
+	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr.Number))
+	e.WaitStepState(t, a.ns, pipelineName, b, "prod", "Verified", promoteTimeout)
 }
 
 // stepFinalizers returns the finalizers of the step of bundle for env.
@@ -314,24 +257,6 @@ func applierBinding(t *testing.T, e *framework.Env, ns string) *rbacv1.RoleBindi
 	}
 	t.Fatalf("no Graph applier RoleBinding in %s", ns)
 	return nil
-}
-
-// readerBindings lists the RoleBindings in argocd that the controller created
-// for the kardinal-graph service account of ns.
-func readerBindings(t *testing.T, e *framework.Env, ns string) []string {
-	t.Helper()
-	list, err := e.Kube.RbacV1().RoleBindings(framework.ArgoCDNamespace).List(context.Background(), metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/managed-by=kardinal-promoter"})
-	require.NoError(t, err)
-	var out []string
-	for _, rb := range list.Items {
-		for _, s := range rb.Subjects {
-			if s.Kind == "ServiceAccount" && s.Namespace == ns {
-				out = append(out, rb.Name)
-			}
-		}
-	}
-	return out
 }
 
 // describeGraph reports the finalizers and conditions of Graph name in ns.

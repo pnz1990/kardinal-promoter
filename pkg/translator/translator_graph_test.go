@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clienttesting "k8s.io/client-go/testing"
@@ -52,94 +51,6 @@ func teamBundle(intent *kardinalv1alpha1.BundleIntent) *kardinalv1alpha1.Bundle 
 	}
 }
 
-// buildWithHealth builds the Graph for p and bundle and injects health nodes
-// for the environments it promotes, with mayRead as the namespace filter.
-func buildWithHealth(t *testing.T, p *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle,
-	mayRead func(string) bool) (*graph.Graph, map[string]string) {
-	t.Helper()
-	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
-	require.NoError(t, err)
-	injected := healthInjector{log: zerolog.Nop(), mayRead: mayRead}.inject(p, res.Graph, res.Environments)
-	require.NoError(t, graph.ValidateNodeIDs(res.Graph.Spec.Nodes))
-	return res.Graph, injected
-}
-
-// TestHealthInjector_OnlyGraphEnvironments verifies that health refs are added
-// only for environments the Bundle promotes, not for those its intent filters
-// out (C01-graph-17).
-func TestHealthInjector_OnlyGraphEnvironments(t *testing.T) {
-	tests := []struct {
-		name   string
-		intent *kardinalv1alpha1.BundleIntent
-		want   []string
-	}{
-		{name: "all environments", want: []string{"healthProd", "healthStaging", "healthTest"}},
-		{name: "target environment", intent: &kardinalv1alpha1.BundleIntent{TargetEnvironment: "test"},
-			want: []string{"healthTest"}},
-		{name: "skipped environment", intent: &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"staging"}},
-			want: []string{"healthProd", "healthTest"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := teamPipeline(
-				kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("test")},
-				kardinalv1alpha1.EnvironmentSpec{Name: "staging", Health: resourceHealth("staging")},
-				kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("prod")},
-			)
-			_, injected := buildWithHealth(t, p, teamBundle(tt.intent), nil)
-			got := make([]string, 0, len(injected))
-			for id := range injected {
-				got = append(got, id)
-			}
-			assert.ElementsMatch(t, tt.want, got)
-		})
-	}
-}
-
-// TestHealthInjector_NodeIDCollision verifies that a health node never takes
-// the node ID of an environment named health-<env> (C01-graph-18).
-func TestHealthInjector_NodeIDCollision(t *testing.T) {
-	p := teamPipeline(
-		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("prod")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "health-prod", Health: resourceHealth("health-prod")},
-	)
-	g, injected := buildWithHealth(t, p, teamBundle(nil), nil)
-	assert.Equal(t, map[string]string{"healthProd2": "prod", "healthHealthProd": "health-prod"}, injected)
-	nodes := map[string]bool{}
-	for _, n := range g.Spec.Nodes {
-		nodes[n.ID] = true
-	}
-	assert.True(t, nodes["healthProd"], "the environment health-prod keeps its step node id")
-}
-
-// TestHealthInjector_NamespaceFilter verifies that no health ref is added for
-// a namespace the Graph identity may not read (C01-graph-04).
-func TestHealthInjector_NamespaceFilter(t *testing.T) {
-	p := teamPipeline(
-		kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("test")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("kube-system")},
-	)
-	prov := &graph.IdentityProvisioner{ReaderNamespaces: []string{"test"}}
-	g, injected := buildWithHealth(t, p, teamBundle(nil), func(ns string) bool { return prov.MayRead("team-a", ns) })
-	assert.Equal(t, map[string]string{"healthTest": "test"}, injected)
-	assert.Equal(t, []string{"team-a", "test"}, graph.RefNamespaces(g), "team-a is the Bundle ref")
-}
-
-// TestDropHealthNodes verifies that only injected health nodes in the given
-// namespaces are removed.
-func TestDropHealthNodes(t *testing.T) {
-	p := teamPipeline(
-		kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("test")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("prod")},
-	)
-	g, injected := buildWithHealth(t, p, teamBundle(nil), nil)
-	before := len(g.Spec.Nodes)
-	assert.Nil(t, dropHealthNodes(g, injected, nil))
-	assert.Equal(t, []string{"healthProd"}, dropHealthNodes(g, injected, []string{"prod", "team-a"}))
-	assert.Len(t, g.Spec.Nodes, before-1)
-	assert.Equal(t, []string{"team-a", "test"}, graph.RefNamespaces(g), "team-a is the Bundle ref")
-}
-
 func translateScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -148,94 +59,69 @@ func translateScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// readerBindingNamespaces returns the namespaces that hold the reader
-// RoleBinding of the team-a Graph identity.
-func readerBindingNamespaces(t *testing.T, c client.Reader) []string {
-	t.Helper()
-	var list rbacv1.RoleBindingList
-	require.NoError(t, c.List(context.Background(), &list))
-	var out []string
-	for _, rb := range list.Items {
-		if rb.Name == graph.DefaultReaderClusterRole+"-team-a" {
-			out = append(out, rb.Namespace)
-		}
+// makePipeline builds a minimal Pipeline with the given environments.
+func makePipeline(name string, envs []kardinalv1alpha1.EnvironmentSpec) *kardinalv1alpha1.Pipeline {
+	return &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: envs},
 	}
-	return out
 }
 
 // TestTranslate_EndToEnd runs Translate against fake clients: org gates are
-// kept when the Pipeline sets spec.policyNamespaces, reader RoleBindings go
-// only into allowed namespaces, refs into other namespaces are dropped, and a
-// binding no Graph needs any more is deleted (C01-graph-02, C01-graph-04,
-// C01-graph-19, C01-graph-31).
+// kept when the Pipeline sets spec.policyNamespaces (C01-graph-02), and in
+// either Graph shape no environment's health check, whatever namespace it
+// reads, puts a ref node in the Graph or a RoleBinding outside the Graph's
+// namespace: the Graph ServiceAccount gets the applier binding only (#1283).
 func TestTranslate_EndToEnd(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
-	orgGate := &kardinalv1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploys", Namespace: "platform-policies",
-			Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
-		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
-	}
-	c := fake.NewClientBuilder().WithScheme(translateScheme(t)).WithObjects(orgGate).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Create: func(ctx context.Context, w client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-				if obj.GetNamespace() == "locked" {
-					return apierrors.NewForbidden(schema.GroupResource{Group: "rbac.authorization.k8s.io",
-						Resource: "rolebindings"}, obj.GetName(), nil)
-				}
-				return w.Create(ctx, obj, opts...)
-			},
-		}).Build()
-	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
-	gc := graph.NewGraphClient(dyn, zerolog.Nop())
-	tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop()).
-		WithIdentity(&graph.IdentityProvisioner{Writer: c, Reader: c,
-			ReaderNamespaces: []string{"argocd", "test", "locked"}})
-
-	p := teamPipeline(
-		kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("test")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "uat", Health: resourceHealth("kube-system")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "staging", Health: resourceHealth("team-b")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "canary", Health: resourceHealth("locked")},
-		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},
-	)
-	p.Spec.PolicyNamespaces = []string{"team-a-extra"}
-	b := teamBundle(nil)
-
-	name, err := tr.Translate(ctx, p, b)
-	require.NoError(t, err)
-	g, err := gc.Get(ctx, "team-a", name)
-	require.NoError(t, err)
-
-	var gateTemplates, health []string
-	for _, n := range g.Spec.Nodes {
-		if n.ID == graph.NodePolicyGateData {
-			templates, _ := n.Def["templates"].([]interface{})
-			for _, tmpl := range templates {
-				gateTemplates = append(gateTemplates, tmpl.(map[string]interface{})["template"].(string))
+	for _, shape := range []string{graph.GraphShapeCompact, graph.GraphShapeNodes} {
+		t.Run(shape, func(t *testing.T) {
+			orgGate := &kardinalv1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploys", Namespace: "platform-policies",
+					Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
+				Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 			}
-		}
-		if n.Ref != nil && n.ID != "bundle" {
-			health = append(health, n.ID)
-		}
+			c := fake.NewClientBuilder().WithScheme(translateScheme(t)).WithObjects(orgGate).Build()
+			dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+			gc := graph.NewGraphClient(dyn, zerolog.Nop())
+			tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop()).
+				WithIdentity(&graph.IdentityProvisioner{Writer: c, Reader: c})
+			p := teamPipeline(
+				kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("test")},
+				kardinalv1alpha1.EnvironmentSpec{Name: "uat", Health: resourceHealth("team-a")},
+				kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},
+			)
+			p.Spec.PolicyNamespaces = []string{"team-a-extra"}
+			p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
+
+			name, err := tr.Translate(ctx, p, teamBundle(nil))
+			require.NoError(t, err)
+			g, err := gc.Get(ctx, "team-a", name)
+			require.NoError(t, err)
+			var gateTemplates []string
+			for _, n := range g.Spec.Nodes {
+				if n.ID == graph.NodePolicyGateData {
+					templates, _ := n.Def["templates"].([]interface{})
+					for _, tmpl := range templates {
+						gateTemplates = append(gateTemplates, tmpl.(map[string]interface{})["template"].(string))
+					}
+				}
+				assert.False(t, graph.IsHealthRef(n), "health ref node %s", n.ID)
+				if n.Ref != nil {
+					assert.Equal(t, "kardinal.io/v1alpha1", n.Ref["apiVersion"], "ref node %s reads a kardinal object", n.ID)
+				}
+			}
+			assert.Equal(t, []string{"no-weekend-deploys"}, gateTemplates,
+				"spec.policyNamespaces must not drop the org gate")
+
+			var bindings rbacv1.RoleBindingList
+			require.NoError(t, c.List(ctx, &bindings))
+			require.Len(t, bindings.Items, 1)
+			assert.Equal(t, "team-a", bindings.Items[0].Namespace)
+			assert.Equal(t, graph.DefaultApplierClusterRole, bindings.Items[0].RoleRef.Name)
+		})
 	}
-	assert.Equal(t, []string{"no-weekend-deploys"}, gateTemplates,
-		"spec.policyNamespaces must not drop the org gate")
-	assert.ElementsMatch(t, []string{"healthTest", "healthProd"}, health,
-		"refs into kube-system, team-b (not allowed) and locked (bind forbidden) must be dropped")
-	// team-a is the Graph's own namespace, read through the Bundle ref.
-	assert.ElementsMatch(t, []string{"argocd", "team-a", "test"}, readerBindingNamespaces(t, c))
-
-	// The next translation no longer reads argocd: its binding is pruned.
-	p.Spec.Environments[4].Health = kardinalv1alpha1.HealthConfig{}
-	_, err = tr.Translate(ctx, p, b)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"team-a", "test"}, readerBindingNamespaces(t, c))
-
-	var applier rbacv1.RoleBinding
-	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "team-a",
-		Name: graph.DefaultApplierClusterRole}, &applier))
-	assert.Equal(t, "team-a,test", applier.Annotations[graph.AnnotationReaderNamespaces])
 }
 
 // TestTranslate_PermanentErrors verifies that Translate errors caused by the
@@ -396,42 +282,6 @@ func TestTranslate_ErrorPrefixes(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, tc.want, err.Error())
 			assert.Equal(t, 1, strings.Count(err.Error(), tc.once), "%q appears once: %v", tc.once, err)
-		})
-	}
-}
-
-// TestTranslate_CompactHasNoHealthNodes: a compact Graph gets no health ref
-// nodes (they only feed Graph readiness, ledger G3), so it stays one node per
-// kind instead of one per environment; the node shape keeps them.
-func TestTranslate_CompactHasNoHealthNodes(t *testing.T) {
-	ctx := zerolog.Nop().WithContext(context.Background())
-	for _, shape := range []string{graph.GraphShapeCompact, graph.GraphShapeNodes} {
-		t.Run(shape, func(t *testing.T) {
-			c := fake.NewClientBuilder().WithScheme(translateScheme(t)).Build()
-			dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-				map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
-			gc := graph.NewGraphClient(dyn, zerolog.Nop())
-			tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop())
-			p := teamPipeline(
-				kardinalv1alpha1.EnvironmentSpec{Name: "test", Health: resourceHealth("team-a")},
-				kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("team-a")},
-			)
-			p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
-			name, err := tr.Translate(ctx, p, teamBundle(nil))
-			require.NoError(t, err)
-			g, err := gc.Get(ctx, "team-a", name)
-			require.NoError(t, err)
-			var health []string
-			for _, n := range g.Spec.Nodes {
-				if strings.HasPrefix(n.ID, "health") {
-					health = append(health, n.ID)
-				}
-			}
-			if shape == graph.GraphShapeCompact {
-				assert.Empty(t, health)
-			} else {
-				assert.ElementsMatch(t, []string{"healthTest", "healthProd"}, health)
-			}
 		})
 	}
 }

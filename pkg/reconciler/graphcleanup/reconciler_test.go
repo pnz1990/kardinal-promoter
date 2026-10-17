@@ -6,11 +6,11 @@ package graphcleanup_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -30,6 +29,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 var managed = map[string]string{"app.kubernetes.io/managed-by": "kardinal-promoter"}
@@ -78,7 +78,7 @@ func applierBinding(ns string, deleting bool, readers string) *rbacv1.RoleBindin
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: graph.DefaultGraphServiceAccount, Namespace: ns}},
 	}
 	if readers != "" {
-		rb.Annotations = map[string]string{graph.AnnotationReaderNamespaces: readers}
+		rb.Annotations = map[string]string{graphcleanup.AnnotationReaderNamespaces: readers}
 	}
 	if deleting {
 		now := metav1.Now()
@@ -88,39 +88,17 @@ func applierBinding(ns string, deleting bool, readers string) *rbacv1.RoleBindin
 	return rb
 }
 
+// oldReaderRole is the reader ClusterRole of releases before #1283, as the
+// controller named it by default.
+const oldReaderRole = "kardinal-graph-reader"
+
 // readerBinding is the reader RoleBinding in ns for the Graphs of graphNS.
 func readerBinding(ns, graphNS string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: graph.DefaultReaderClusterRole + "-" + graphNS, Namespace: ns, Labels: managed},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: graph.DefaultReaderClusterRole},
+		ObjectMeta: metav1.ObjectMeta{Name: oldReaderRole + "-" + graphNS, Namespace: ns, Labels: managed},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: oldReaderRole},
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: graph.DefaultGraphServiceAccount, Namespace: graphNS}},
 	}
-}
-
-// readsGraph is a Graph in ns with a ref into each of refNamespaces.
-func readsGraph(ns string, refNamespaces ...string) *graph.Graph {
-	g := &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: ns}}
-	for _, rns := range refNamespaces {
-		g.Spec.Nodes = append(g.Spec.Nodes, graph.GraphNode{ID: "ref" + rns, Ref: map[string]interface{}{
-			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
-			"metadata": map[string]interface{}{"name": "app", "namespace": rns}}})
-	}
-	return g
-}
-
-// graphLister serves Graphs by namespace.
-type graphLister struct {
-	graphs map[string][]*graph.Graph
-	err    error
-	calls  int
-}
-
-func (l *graphLister) Readers(_ context.Context, ns string) (graph.Readers, error) {
-	l.calls++
-	if l.err != nil {
-		return nil, l.err
-	}
-	return graph.ReadersOf(l.graphs[ns]), nil
 }
 
 func reconcile(t *testing.T, r *graphcleanup.Reconciler, ns string) (ctrl.Result, error) {
@@ -217,7 +195,7 @@ func TestReconciler_NamespaceDeletion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(append(tt.objs, tt.graph)...).Build()
-			r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{},
+			r := &graphcleanup.Reconciler{Client: c, APIReader: c,
 				Identity: &graph.IdentityProvisioner{Writer: c, Reader: c}}
 
 			res, err := reconcile(t, r, "team-a")
@@ -253,7 +231,7 @@ func TestReconciler_StuckBeforeNamespaceDeletion(t *testing.T) {
 	ns := namespace("team-a", false)
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).
 		WithObjects(ns, kardinalGraph("team-a", true, graphcleanup.KroFinalizer)).Build()
-	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{},
+	r := &graphcleanup.Reconciler{Client: c, APIReader: c,
 		Identity: &graph.IdentityProvisioner{Writer: c, Reader: c}}
 
 	res, err := reconcile(t, r, "team-a")
@@ -294,7 +272,7 @@ func TestReconciler_DeletesResourcesOutsideNamespace(t *testing.T) {
 						return nil
 					},
 				}).Build()
-			r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{},
+			r := &graphcleanup.Reconciler{Client: c, APIReader: c,
 				Identity: &graph.IdentityProvisioner{Writer: c, Reader: c}}
 
 			_, err := reconcile(t, r, "team-a")
@@ -306,60 +284,6 @@ func TestReconciler_DeletesResourcesOutsideNamespace(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Nil(t, getGraph(t, c, "team-a"))
-		})
-	}
-}
-
-// TestReconciler_PrunesOnGraphDelete covers B46: when a Graph is gone, the
-// reader RoleBindings of its namespace that no remaining Graph reads through
-// are deleted, even when the applier RoleBinding (and its record) went with
-// the namespace.
-func TestReconciler_PrunesOnGraphDelete(t *testing.T) {
-	tests := []struct {
-		name     string
-		objs     []client.Object
-		graphs   []*graph.Graph
-		wantLeft []string
-	}{
-		{
-			name:     "the namespace's last Graph",
-			objs:     []client.Object{applierBinding("team-a", false, "argocd"), readerBinding("argocd", "team-a")},
-			wantLeft: nil,
-		},
-		{
-			name:     "the namespace is gone with its applier binding",
-			objs:     []client.Object{readerBinding("argocd", "team-a"), readerBinding("flux-system", "team-a")},
-			wantLeft: nil,
-		},
-		{
-			name:     "another Graph still reads argocd",
-			objs:     []client.Object{applierBinding("team-a", false, "argocd"), readerBinding("argocd", "team-a")},
-			graphs:   []*graph.Graph{readsGraph("team-a", "argocd")},
-			wantLeft: []string{"argocd/" + graph.DefaultReaderClusterRole + "-team-a"},
-		},
-		{
-			name:     "another namespace's binding stays",
-			objs:     []client.Object{readerBinding("argocd", "team-b")},
-			wantLeft: []string{"argocd/" + graph.DefaultReaderClusterRole + "-team-b"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(tt.objs...).Build()
-			lister := &graphLister{graphs: map[string][]*graph.Graph{"team-a": tt.graphs}}
-			r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: lister,
-				Identity: &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}}
-
-			// The deleted Graph itself, by name: its delete event queued the
-			// prune, so the gone Graph does not prune again.
-			_, err := reconcile(t, r, "team-a")
-			require.NoError(t, err)
-			assert.Zero(t, lister.calls, "a gone Graph's own request does not prune")
-
-			_, err = r.Reconcile(context.Background(), graphcleanup.PruneRequest("team-a"))
-			require.NoError(t, err)
-			assert.Equal(t, 1, lister.calls, "the remaining Graphs are listed")
-			assert.ElementsMatch(t, tt.wantLeft, readerBindingKeys(t, c))
 		})
 	}
 }
@@ -427,7 +351,7 @@ func TestReconciler_FinalizerConflict(t *testing.T) {
 						return w.Patch(ctx, obj, p, opts...)
 					},
 				}).Build()
-			r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{},
+			r := &graphcleanup.Reconciler{Client: c, APIReader: c,
 				Identity: &graph.IdentityProvisioner{Writer: c, Reader: c}}
 
 			res, err := reconcile(t, r, "team-a")
@@ -449,19 +373,10 @@ func TestReconciler_FinalizerConflict(t *testing.T) {
 	}
 }
 
-func TestReconciler_PruneListError(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(readerBinding("argocd", "team-a")).Build()
-	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{err: errors.New("boom")},
-		Identity: &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}}
-	_, err := r.Reconcile(context.Background(), graphcleanup.PruneRequest("team-a"))
-	require.ErrorContains(t, err, "boom")
-	assert.Len(t, readerBindingKeys(t, c), 1, "nothing is pruned without the Graph list")
-}
-
 func TestReconciler_NilIdentity(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).
 		WithObjects(kardinalGraph("team-a", true, graphcleanup.KroFinalizer)).Build()
-	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{}}
+	r := &graphcleanup.Reconciler{Client: c, APIReader: c}
 	res, err := reconcile(t, r, "team-a")
 	require.NoError(t, err)
 	assert.Zero(t, res)
@@ -492,44 +407,154 @@ func readerBindingKeys(t *testing.T, c client.Client) []string {
 	require.NoError(t, c.List(context.Background(), &list))
 	var out []string
 	for _, rb := range list.Items {
-		if rb.RoleRef.Name == graph.DefaultReaderClusterRole {
+		if rb.RoleRef.Name == oldReaderRole {
 			out = append(out, rb.Namespace+"/"+rb.Name)
 		}
 	}
 	return out
 }
 
-// TestReconciler_PruneIsCoalesced (PERF-GRAPHCLEANUP-01): every deleted Graph of a namespace maps to
-// the namespace's one prune request, so the work queue holds one prune
-// however many Graphs Graph retirement deletes at once, and that request
-// prunes like a deleted Graph's did. Before, each deleted Graph was its own
-// prune, each listing the namespace's Graphs from the API server, and the
-// queue reached 676 in the scale suite's chaos tests.
-//
-// Covers PERF-GRAPHCLEANUP-01.
-func TestReconciler_PruneIsCoalesced(t *testing.T) {
-	q := workqueue.NewTypedRateLimitingQueue[ctrl.Request](workqueue.DefaultTypedControllerRateLimiter[ctrl.Request]())
-	defer q.ShutDown()
-	for i := 0; i < 50; i++ {
-		g := kardinalGraph("team-a", false)
-		g.SetName(fmt.Sprintf("g-%d", i))
-		for _, req := range graphcleanup.PruneOnDelete(context.Background(), g) {
-			q.Add(req)
-		}
-	}
-	other := kardinalGraph("team-b", false)
-	for _, req := range graphcleanup.PruneOnDelete(context.Background(), other) {
-		q.Add(req)
-	}
-	assert.Equal(t, 2, q.Len(), "one prune per namespace")
+// fakeGraphs records the namespaces of its RemoveAllHealthRefs calls. The
+// first len(failing) calls report failing[i] Graphs it could not clean
+// (and an error); later calls report none, unless always is set.
+type fakeGraphs struct {
+	namespaces []string
+	failing    []int
+	always     bool
+	// listErrors is how many first calls fail to list at all; gauge, when
+	// set, records the pending gauge at each of them.
+	listErrors int
+	gauge      *[]float64
+}
 
-	c := fake.NewClientBuilder().WithScheme(newScheme(t)).
-		WithObjects(applierBinding("team-a", false, "argocd"), readerBinding("argocd", "team-a")).Build()
-	lister := &graphLister{graphs: map[string][]*graph.Graph{}}
-	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: lister,
-		Identity: &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: graph.DefaultReaderNamespaces}}
-	_, err := r.Reconcile(context.Background(), graphcleanup.PruneRequest("team-a"))
-	require.NoError(t, err)
-	assert.Equal(t, 1, lister.calls)
-	assert.Empty(t, readerBindingKeys(t, c), "the namespace's last Graph is gone: its reader binding is pruned")
+func (f *fakeGraphs) RemoveAllHealthRefs(_ context.Context, ns string) (int, int, error) {
+	f.namespaces = append(f.namespaces, ns)
+	n := len(f.namespaces) - 1
+	if n < f.listErrors {
+		if f.gauge != nil {
+			*f.gauge = append(*f.gauge, testutil.ToFloat64(observability.HealthRefCleanupPending))
+		}
+		return 0, 0, errors.New("list graphs: the server is unavailable")
+	}
+	if f.always || n < len(f.failing) {
+		failed := 1
+		if n < len(f.failing) {
+			failed = f.failing[n]
+		}
+		return 1, failed, errors.New("graph team-a/g2: forbidden")
+	}
+	return 1, 0, nil
+}
+
+// TestHealthRefCleanup (#1283): at startup the leader removes the health
+// ref nodes from the Graphs and deletes the reader RoleBindings the applier
+// bindings record, then the record. A binding that is not the controller's
+// (unmanaged, another role, another subject) stays, and so does one in a
+// namespace that is not recorded. A failure does not stop the manager.
+func TestHealthRefCleanup(t *testing.T) {
+	ctx := context.Background()
+	foreignSubject := readerBinding("flux-system", "team-a")
+	foreignSubject.Subjects[0].Name = "someone-else"
+	unmanaged := readerBinding("monitoring", "team-a")
+	unmanaged.Labels = nil
+	pipeline := func(ns string) *v1alpha1.Pipeline {
+		return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ns}}
+	}
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		pipeline("team-a"), pipeline("team-b"),
+		applierBinding("team-a", false, "argocd,team-a,flux-system,monitoring"),
+		applierBinding("team-b", false, ""),
+		readerBinding("argocd", "team-a"), readerBinding("team-a", "team-a"),
+		foreignSubject, unmanaged,
+		readerBinding("argocd", "team-b"), // not recorded: from a release before #1244
+	).Build()
+	graphs := &fakeGraphs{}
+	cl := &graphcleanup.HealthRefCleanup{Graphs: graphs, Client: c, APIReader: c, Identity: &graph.IdentityProvisioner{}}
+	assert.True(t, cl.NeedLeaderElection())
+	require.NoError(t, cl.Start(ctx))
+
+	assert.Equal(t, []string{""}, graphs.namespaces, "every namespace's Graphs")
+	assert.ElementsMatch(t, []string{"flux-system/" + oldReaderRole + "-team-a", "monitoring/" + oldReaderRole + "-team-a",
+		"argocd/" + oldReaderRole + "-team-b"}, readerBindingKeys(t, c))
+	var applier rbacv1.RoleBinding
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: graph.DefaultApplierClusterRole}, &applier))
+	assert.NotContains(t, applier.Annotations, graphcleanup.AnnotationReaderNamespaces, "the record goes")
+
+	assert.Zero(t, testutil.ToFloat64(observability.HealthRefCleanupPending), "nothing left")
+
+	// Idempotent; namespace mode looks at the watched namespace only.
+	require.NoError(t, cl.Start(ctx))
+	cl.Namespace = "team-b"
+	cl.Graphs = &fakeGraphs{}
+	require.NoError(t, cl.Start(ctx))
+	assert.Equal(t, []string{"team-b"}, cl.Graphs.(*fakeGraphs).namespaces)
+}
+
+// TestHealthRefCleanup_RetriesUntilClean (QA on #2124): a pass that cannot
+// clean a Graph does not end the cleanup. It retries, with a backoff, until
+// a pass leaves nothing, and the metric says what is left meanwhile. Against
+// a refusal that never ends it keeps trying until the manager stops, with
+// the metric at what is left; a failure never stops the manager.
+//
+// Covers GRAPH-HEALTHREF-CLEANUP-02.
+func TestHealthRefCleanup_RetriesUntilClean(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	graphs := &fakeGraphs{failing: []int{2, 1}}
+	cl := &graphcleanup.HealthRefCleanup{Graphs: graphs, Client: c, APIReader: c,
+		Identity: &graph.IdentityProvisioner{}, Backoff: time.Millisecond}
+	require.NoError(t, cl.Start(context.Background()))
+	assert.Len(t, graphs.namespaces, 3, "two passes left a Graph, the third cleaned it")
+	assert.Zero(t, testutil.ToFloat64(observability.HealthRefCleanupPending))
+
+	refused := &fakeGraphs{always: true}
+	cl.Graphs = refused
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	require.NoError(t, cl.Start(ctx), "returns when the manager stops")
+	assert.Greater(t, len(refused.namespaces), 2, "it kept retrying")
+	assert.Equal(t, 1.0, testutil.ToFloat64(observability.HealthRefCleanupPending), "the refused Graph is pending")
+}
+
+// TestHealthRefCleanup_CustomRoleNames: the reader role is named after the
+// applier role the chart named <fullname>-graph-applier; an applier role of
+// another name leaves the bindings, as the reader role cannot be told.
+func TestHealthRefCleanup_CustomRoleNames(t *testing.T) {
+	ctx := context.Background()
+	applier := applierBinding("team-a", false, "argocd")
+	applier.Name, applier.RoleRef.Name = "rel-kardinal-graph-applier", "rel-kardinal-graph-applier"
+	reader := readerBinding("argocd", "team-a")
+	reader.Name, reader.RoleRef.Name = "rel-kardinal-graph-reader-team-a", "rel-kardinal-graph-reader"
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}}, applier, reader).Build()
+	cl := &graphcleanup.HealthRefCleanup{Client: c, APIReader: c,
+		Identity: &graph.IdentityProvisioner{ApplierClusterRole: "rel-kardinal-graph-applier"}}
+	require.NoError(t, cl.Start(ctx))
+	var got rbacv1.RoleBinding
+	assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKeyFromObject(reader), &got)))
+
+	odd := applierBinding("team-a", false, "argocd")
+	odd.Name, odd.RoleRef.Name = "graph-writer", "graph-writer"
+	c = fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}}, odd, readerBinding("argocd", "team-a")).Build()
+	cl = &graphcleanup.HealthRefCleanup{Client: c, APIReader: c, Identity: &graph.IdentityProvisioner{ApplierClusterRole: "graph-writer"}}
+	require.NoError(t, cl.Start(ctx))
+	assert.Len(t, readerBindingKeys(t, c), 1, "left alone")
+}
+
+// QA on #2124: a pass that cannot even list the Graphs is not done: the
+// gauge says unknown (-1) and the pass is retried, so one list failure at
+// startup does not end the migration with health refs left in Graphs.
+//
+// Covers GRAPH-HEALTHREF-CLEANUP-02.
+func TestHealthRefCleanup_ListFailureIsNotDone(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	var seen []float64
+	graphs := &fakeGraphs{listErrors: 2, gauge: &seen}
+	cl := &graphcleanup.HealthRefCleanup{Graphs: graphs, Client: c, APIReader: c,
+		Identity: &graph.IdentityProvisioner{}, Backoff: time.Millisecond}
+	require.NoError(t, cl.Start(context.Background()))
+	assert.Len(t, graphs.namespaces, 3, "two failed lists, then a pass that lists and cleans")
+	require.Len(t, seen, 2)
+	assert.Equal(t, -1.0, seen[1], "after a failed list the gauge says unknown, not done")
+	assert.Zero(t, testutil.ToFloat64(observability.HealthRefCleanupPending))
 }

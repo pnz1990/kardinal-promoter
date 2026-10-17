@@ -42,7 +42,6 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -469,10 +468,9 @@ func main() {
 			"Also readable from KARDINAL_NAMESPACE_SHARD.")
 
 	// Graph identity: kro applies each Graph as this ServiceAccount in the
-	// Pipeline's namespace. The controller creates it and binds it to the two
-	// ClusterRoles the chart ships (templates/graph-rbac.yaml). The translator,
-	// the Graph cleanup reconciler and the reader binding sweep share it (and
-	// its lock).
+	// Pipeline's namespace. The controller creates it and binds it to the
+	// applier ClusterRole the chart ships (templates/graph-rbac.yaml). The
+	// translator and the Graph cleanup share it.
 	graphIdentity := &graphpkg.IdentityProvisioner{}
 	flag.StringVar(&graphIdentity.ServiceAccountName, "graph-service-account",
 		graphpkg.DefaultGraphServiceAccount,
@@ -480,22 +478,13 @@ func main() {
 	flag.StringVar(&graphIdentity.ApplierClusterRole, "graph-applier-clusterrole",
 		graphpkg.DefaultApplierClusterRole,
 		"ClusterRole bound to the Graph ServiceAccount in the Pipeline namespace.")
-	flag.StringVar(&graphIdentity.ReaderClusterRole, "graph-reader-clusterrole",
-		graphpkg.DefaultReaderClusterRole,
-		"ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read.")
+	removedFlags := removedReaderFlags(flag.CommandLine)
 	var fleetApplicationNamespaces, fleetClusterProfileNamespaces string
 	flag.StringVar(&fleetApplicationNamespaces, "fleet-application-namespaces", "argocd",
 		"Comma-separated namespaces a fleet selector of kind Application may read Argo CD Applications from. "+
 			"A selector naming another namespace is refused.")
 	flag.StringVar(&fleetClusterProfileNamespaces, "fleet-clusterprofile-namespaces", "",
 		"Comma-separated namespaces, besides the Pipeline's own, a fleet selector of kind ClusterProfile may read.")
-	var graphReaderNamespaces string
-	flag.StringVar(&graphReaderNamespaces, "graph-reader-namespaces",
-		strings.Join(graphpkg.DefaultReaderNamespaces, ","),
-		"Comma-separated namespaces, besides a Graph's own namespace, where the Graph ServiceAccount "+
-			"may be bound to the reader ClusterRole for health checks. \"*\" allows every namespace "+
-			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
-			"get no Graph ref.")
 
 	var scmInstanceSigners string
 	flag.StringVar(&scmInstanceSigners, "scm-instance-signers", "",
@@ -573,8 +562,10 @@ func main() {
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-	graphIdentity.ReaderNamespaces = splitCSV(graphReaderNamespaces)
-	graphIdentity.OnlyNamespace = watchNamespace
+	if err := removedFlags(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	// Configure zerolog level
 	level, err := zerolog.ParseLevel(zerologLevel)
@@ -862,29 +853,28 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
 
-	// Graph cleanup: prunes reader RoleBindings when a Graph is deleted, and
-	// lets kardinal's Graphs in a terminating namespace go once kro can no
-	// longer tear them down (its applier RoleBinding is gone).
-	graphLister := newGraphClient(mgr.GetConfig(), logger)
+	// Graph cleanup: lets kardinal's Graphs in a terminating namespace go
+	// once kro can no longer tear them down (its applier RoleBinding is gone).
 	if err := (&graphcleanup.Reconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),
-		Graphs:    graphLister,
 		Identity:  graphIdentity,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up GraphCleanupReconciler")
 	}
-	// The sweep lists RoleBindings cluster-wide, which namespace mode does not
-	// grant; there the controller binds the reader role only in the watched
-	// namespace, and the reconciler's prune covers it.
-	// The sweep lists cluster-wide; in a sharded cluster the default shard runs it.
-	if watchNamespace == "" && gate.OwnsClusterScoped() {
-		if err := mgr.Add(&graphcleanup.Sweep{
+	// Once at startup, the leader removes the health ref nodes earlier
+	// releases put in Graphs, and the reader RoleBindings they recorded
+	// (#1283). In a sharded cluster the default shard, which owns the
+	// cluster-scoped work, does it.
+	if gate.OwnsClusterScoped() {
+		if err := mgr.Add(&graphcleanup.HealthRefCleanup{
+			Graphs:    newGraphClient(mgr.GetConfig(), logger),
+			Client:    mgr.GetClient(),
 			APIReader: mgr.GetAPIReader(),
-			Graphs:    graphLister,
 			Identity:  graphIdentity,
+			Namespace: watchNamespace,
 		}); err != nil {
-			logger.Fatal().Err(err).Msg("unable to register the reader RoleBinding sweep")
+			logger.Fatal().Err(err).Msg("unable to register the health ref cleanup")
 		}
 	}
 
@@ -1390,11 +1380,7 @@ func newGraphClient(cfg *rest.Config, log zerolog.Logger) *graphpkg.GraphClient 
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph checker")
 	}
-	metaClient, err := metadata.NewForConfig(cfg)
-	if err != nil {
-		log.Fatal().Err(err).Msg("unable to create metadata client for graph checker")
-	}
-	return graphpkg.NewGraphClient(dynClient, log).WithMetadata(metaClient)
+	return graphpkg.NewGraphClient(dynClient, log)
 }
 
 // splitCSV splits a comma-separated string into a trimmed slice.

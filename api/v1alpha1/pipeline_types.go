@@ -885,10 +885,10 @@ type HealthConfig struct {
 	// +optional
 	RefreshTarget *RefreshTarget `json:"refreshTarget,omitempty"`
 
-	// LabelSelector enables WatchKind mode for health.type=resource.
-	// When set, the health node watches ALL Deployments in the environment namespace
-	// that match the given labels (a kro Graph collection ref node).
-	// When unset, a single named Deployment is watched (a kro Graph ref node).
+	// LabelSelector, for health.type=resource, checks every Deployment in
+	// the environment namespace that matches these labels instead of one
+	// named Deployment: the environment is healthy when all of them are, and
+	// unhealthy when none matches.
 	//
 	// Example: {"app": "my-service", "kardinal.io/pipeline": "nginx-demo"}
 	//

@@ -130,12 +130,11 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kro.run"]
   resources: ["graphs/status"]
   verbs: ["get"]
-# Graph identity: the ServiceAccount kro impersonates and its RoleBindings.
-# bind is limited to the two Graph ClusterRoles, so the controller cannot
-# grant anything else. delete prunes reader RoleBindings no Graph reads
-# through any more (C01-graph-04): after a translation, when a Graph is
-# deleted, and in the leader's sweep, which lists the RoleBindings carrying
-# the controller's managed-by label (cluster mode only).
+# Graph identity: the ServiceAccount kro impersonates and its RoleBinding.
+# bind is limited to the Graph applier ClusterRole, so the controller cannot
+# grant anything else. delete removes, once at startup, the reader
+# RoleBindings releases before #1283 created, which the applier RoleBindings
+# record (graphcleanup.HealthRefCleanup).
 # The render Jobs' ServiceAccount (kardinal-render, no role, no token) is
 # created the same way in a namespace that has none.
 - apiGroups: [""]
@@ -149,7 +148,6 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["bind"]
   resourceNames:
     - {{ include "kardinal-promoter.graphApplierRole" . }}
-    - {{ include "kardinal-promoter.graphReaderRole" . }}
 # Health adapters (pkg/health): resource, argocd, argoRollouts, flux, flagger.
 - apiGroups: ["apps"]
   resources: ["deployments"]

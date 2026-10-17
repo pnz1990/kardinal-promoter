@@ -707,7 +707,7 @@ spec:
 	// AgentIndex (v0.12): no other workload or binding appears with the
 	// upgrade (#1560: listing each policy broke on every feature).
 	assert.Subset(t, added, []string{
-		"ClusterRole /kardinal-promoter-graph-applier", "ClusterRole /kardinal-promoter-graph-reader",
+		"ClusterRole /kardinal-promoter-graph-applier",
 		"ClusterRole /kardinal-promoter-kro-watch",
 		leaderElectionFlowSchema,
 		"Role kardinal-system/kardinal-promoter-leader-election", "RoleBinding kardinal-system/kardinal-promoter-leader-election",

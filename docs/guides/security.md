@@ -16,7 +16,7 @@ Object names come from the chart's full name, which is `kardinal-promoter` for a
 | ClusterRole `kardinal-promoter-manager-role`, ClusterRoleBinding `kardinal-promoter-manager-rolebinding` | Cluster (default) | The namespaced rules in every namespace, plus the cluster-scoped rules |
 | Role and RoleBinding `kardinal-promoter-manager-role` / `-manager-rolebinding`, ClusterRole and binding `kardinal-promoter-cluster-scoped` | Namespace mode (`controller.watchNamespace`) | The namespaced rules in the watched namespace; the cluster-scoped rules |
 | Role and RoleBinding `kardinal-promoter-leader-election` | Release namespace | The leader-election Lease, the `kardinal-version` ConfigMap, and `get` on the SCM token Secret by name |
-| ClusterRoles `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` | Cluster | Bound (with RoleBindings only) to the ServiceAccount kro impersonates for each Graph (`graph.serviceAccountName`, default `kardinal-graph`) |
+| ClusterRole `kardinal-promoter-graph-applier` | Cluster | Bound (with a RoleBinding in each Graph namespace) to the ServiceAccount kro impersonates for each Graph (`graph.serviceAccountName`, default `kardinal-graph`) |
 | ClusterRole `kardinal-promoter-kro-watch` | Cluster | Lets kro watch the kinds a Graph renders; aggregated into kro's role when kro uses `rbac.mode=aggregation`. Rendered only when `graph.aggregateToKro=true` (the default) |
 
 What the namespaced rules grant:
@@ -29,7 +29,7 @@ What the namespaced rules grant:
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
 | `auditevents` | get, list, watch, create; delete with `audit.retention.enabled: true` (the default) | Records are never changed; retention (on by default) deletes old ones |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
-| `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
+| `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the Graph applier ClusterRole) | get, create; get, list, create, update, delete; bind | The Graph identity, and the AgentRun RoleBindings. `delete` also removes, once at startup, the reader bindings earlier releases recorded |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `health.refresh.enabled: true` (the default) adds `patch` on Applications and Kustomizations, and on `source.toolkit.fluxcd.io` `gitrepositories`, to set the refresh annotation when a promotion's commit lands; RBAC cannot limit `patch` to an annotation, so the `<fullname>-gitops-writes` admission policy denies the controller any other change to those objects (and HelmReleases) unless it may also `update` them ([Sync on promotion](../health-adapters.md#sync-on-promotion)). `rbac.argocdApplicationsWrite=true` adds `patch` and `update` on Applications for `update.strategy: argocd` |
 | `replicasets` | get | The `resource` and `flux` health adapters read, by name, the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names, to tell whether the rollout of the current pod template stalled |
 | `pods` | list | While a Deployment's replicas are unavailable, the `resource` health adapter lists, uncached, the pods of its new ReplicaSet (by label selector) to name why one is not ready (`ErrImagePull`, `CrashLoopBackOff`). In cluster mode `list` reaches **every pod in the cluster**, which includes pod specs and their literal `env` values (not Secret contents). Use `controller.watchNamespace` to limit it, or remove the rule in RBAC of your own: the health messages then leave the pod out and nothing else changes |
@@ -107,9 +107,9 @@ The controller's RBAC, in summary:
 |---|---|
 | All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create, and delete with `audit.retention.enabled: true`, the default) `approvals` (get, list, watch, create, delete) and `changewindows`, `scmproviders` and `clusterscmproviders` (get, list, watch; get, update, patch on `/status`; `patch` on `changewindows` for the freeze audit finalizer, and create, update, delete with `ui.freezeControls`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
-| `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
+| `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity and AgentRuns; `delete` also removes the reader bindings earlier releases recorded) |
 | `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
-| `clusterroles` | `bind`, limited to `<fullname>-graph-applier` and `<fullname>-graph-reader` |
+| `clusterroles` | `bind`, limited to `<fullname>-graph-applier` (and the AgentRun ClusterRoles) |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `replicasets` | get only: the `resource` and `flux` adapters read the ReplicaSet a Deployment's `ProgressDeadlineExceeded` names |
 | `pods` | list only: while a Deployment's replicas are unavailable, the `resource` adapter lists the pods of its new ReplicaSet to name why one is not ready. In the default cluster mode `list` covers **every pod in the cluster** (pod specs, including literal `env` values, not Secrets); `controller.watchNamespace` limits it to one namespace. Without it, health messages leave the pod out |
@@ -128,16 +128,25 @@ to turn the namespaced rules into a Role in one namespace.
 
 kro does not apply a Graph's children with its own identity. It impersonates the Graph's
 `spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
-controller creates that ServiceAccount and binds it with RoleBindings to `<fullname>-graph-applier`
-(in the Graph namespace) and `<fullname>-graph-reader` (in each namespace a health `ref` node reads,
-limited to the Graph's own namespace and `graph.readerNamespaces`). Each reader binding is named
-`<fullname>-graph-reader-<graph namespace>`: with release `kp`, `kp-kardinal-promoter-graph-reader-<graph namespace>`.
-`<fullname>` is the chart's full name: `fullnameOverride` if set, else the release name, plus
-`-kardinal-promoter` unless the release name contains it. Reader bindings that no Graph
-in the namespace needs any more are deleted: when a Bundle is translated, when a Graph is deleted,
-and, in cluster mode, by a sweep at controller startup and every 10 minutes that also catches the
-bindings of namespaces that are gone. The sweep lists only RoleBindings labeled
-`app.kubernetes.io/managed-by=kardinal-promoter`.
+controller creates that ServiceAccount and binds it with one RoleBinding, in the Graph namespace, to
+`<fullname>-graph-applier`. `<fullname>` is the chart's full name: `fullnameOverride` if set, else
+the release name, plus `-kardinal-promoter` unless the release name contains it. A Graph reads nothing
+outside its namespace: health is checked by the controller (the PromotionStep reconciler), not by
+the Graph, so the Graph identity has no access to Argo CD, Flux or any other namespace.
+
+Earlier releases also bound `<fullname>-graph-reader` in each namespace a Graph's health ref
+node read (`<fullname>-graph-reader-<graph namespace>`), and recorded those bindings on the applier
+binding (`kardinal.io/reader-namespaces`). The chart no longer ships that ClusterRole, so the
+bindings grant nothing. At startup the controller deletes the bindings it recorded, and removes the
+health ref nodes from existing Graphs, retrying what it cannot clean until nothing is left
+([Monitoring](monitoring.md#health-ref-cleanup-after-an-upgrade)). Bindings from v0.8.1 and earlier, which kept no record,
+stay; list them, and delete the ones you do not want, with:
+
+```bash
+kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter -o json \
+  | jq -r '.items[] | select(.roleRef.name | endswith("-graph-reader")) | "\(.metadata.namespace) \(.metadata.name)"'
+# then, for each: kubectl delete rolebinding -n <namespace> <name>
+```
 See G5 in the [Graph capability ledger](../design/16-graph-capability-ledger.md).
 
 The Helm chart creates all of these ClusterRoles, Roles and bindings.
@@ -212,8 +221,7 @@ outside kardinal (an External Secrets generator, a CronJob) refreshes the Secret
 
 The controller runs in `kardinal-system` by default. It watches CRDs across all namespaces and
 writes to the namespaces where Pipelines are deployed. It also writes its leader-election Lease
-and the `kardinal-version` ConfigMap in its own namespace, and reader RoleBindings in the
-`graph.readerNamespaces` namespaces. With `update.strategy: argocd` it patches Argo CD
+and the `kardinal-version` ConfigMap in its own namespace. With `update.strategy: argocd` it patches Argo CD
 Applications.
 
 ### Policy gate scoping

@@ -132,6 +132,14 @@ var (
 		Help: "The agent index's size bound: past it the index is not Ready and the actor policy refuses the writes it checks.",
 	})
 
+	// HealthRefCleanupPending is what the startup cleanup of the Graph
+	// health ref nodes and reader RoleBindings (#1283) left undone in its
+	// last pass: 0 once done, -1 while it could not list what to clean.
+	HealthRefCleanupPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kardinal_health_ref_cleanup_pending",
+		Help: "Graphs and namespaces the health ref cleanup could not clean in its last pass (0 when done, -1 when it could not list them).",
+	})
+
 	// AuditEventsPrunedTotal counts the AuditEvents the retention pruner
 	// deleted (--audit-retention-max-age, --audit-retention-max-per-pipeline).
 	AuditEventsPrunedTotal = prometheus.NewCounter(
@@ -205,6 +213,7 @@ func init() {
 	ctrlmetrics.Registry.MustRegister(
 		AgentIndexBytes,
 		AgentIndexMaxBytes,
+		HealthRefCleanupPending,
 		AuditEventsPrunedTotal,
 		VerdictsTotal,
 		AgentRunsTotal,

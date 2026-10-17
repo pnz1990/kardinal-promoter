@@ -1,0 +1,5 @@
+---
+section: Upgrade
+---
+
+- **Remove `graph.readerNamespaces` from your values before you upgrade** (#1283) — it was removed, and setting it fails the upgrade. With `--reset-then-reuse-values` a value you never set is dropped for you. At its first start the new controller removes the health ref nodes from the Graphs of earlier releases and deletes the reader RoleBindings earlier releases recorded on each namespace's applier RoleBinding. Bindings from v0.8.1 and earlier were not recorded and are left; they grant nothing without the ClusterRole, and [RBAC requirements](guides/security.md#rbac-requirements) shows how to list and delete them. Between the chart upgrade, which deletes the reader ClusterRole, and the new controller's start, kro cannot read those health ref nodes and may hold the Graphs that have them; their promotions go on once the nodes are removed, within about a minute. A Graph or RoleBinding it cannot clean is skipped and retried, with a backoff up to 5 minutes, until none is left; `kardinal_health_ref_cleanup_pending` shows what is left ([Monitoring](guides/monitoring.md#health-ref-cleanup-after-an-upgrade)).

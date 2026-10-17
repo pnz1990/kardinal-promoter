@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,7 +17,6 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -34,9 +32,9 @@ type Translator struct {
 	// identity provisions the ServiceAccount kro impersonates for the Graph.
 	// Nil skips provisioning (unit tests, or an operator-managed identity).
 	identity *graph.IdentityProvisioner
-	// mapper, when set, drops health ref nodes whose kind is not served by
-	// the cluster. kro resolves the CRD schema of every static-GVK node when
-	// it compiles a Graph, so one missing CRD would reject the whole Graph.
+	// mapper, when set, says which kinds the cluster serves (servedKind): kro
+	// resolves the CRD schema of every static-GVK node when it compiles a
+	// Graph, so one missing CRD would reject the whole Graph.
 	mapper meta.RESTMapper
 	// providers checks a Pipeline's spec.git.providerRef (WithProviders).
 	providers *scm.Registry
@@ -83,8 +81,8 @@ func (t *Translator) WithIdentity(p *graph.IdentityProvisioner) *Translator {
 	return t
 }
 
-// WithRESTMapper sets the mapper used to skip health ref nodes for kinds the
-// cluster does not serve (for example Argo CD Applications without Argo CD).
+// WithRESTMapper sets the mapper servedKind asks which kinds the cluster
+// serves (for example AnalysisRuns without Argo Rollouts).
 func (t *Translator) WithRESTMapper(m meta.RESTMapper) *Translator {
 	t.mapper = m
 	return t
@@ -173,24 +171,8 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("graph", result.Graph.Name).
 		Msg("graph spec built")
 
-	// Health ref nodes for the environments in this Graph (ledger gaps G3,
-	// G4). Namespaces the Graph identity may not read get no ref.
-	h := healthInjector{
-		log:    log,
-		served: t.servedKind,
-		mayRead: func(ns string) bool {
-			return t.identity.MayRead(result.Graph.Namespace, ns)
-		},
-	}
-	// A compact Graph gets no health ref nodes: they only feed Graph
-	// readiness (G3), and one scalar node per environment would undo the
-	// compact shape. The PromotionStep reconciler checks health either way.
-	var injected map[string]string
-	if !result.Compact {
-		injected = h.inject(pipeline, result.Graph, result.Environments)
-	}
 	if err := graph.ValidateNodeIDs(result.Graph.Spec.Nodes); err != nil {
-		return "", fmt.Errorf("translator.Translate: health nodes: %w", err)
+		return "", fmt.Errorf("translator.Translate: %w", err)
 	}
 	// A Graph is one etcd object (1.5 MiB). Refuse it here, with a reason on
 	// the Bundle, instead of letting the API server fail every write
@@ -200,36 +182,16 @@ func (t *Translator) Translate(ctx context.Context,
 	}
 
 	// kro applies the Graph as spec.serviceAccountName; it must exist and be
-	// bound before kro's first reconcile or every apply is forbidden. A ref
-	// into a namespace the reader role could not be bound in would be a hard
-	// kro error, so those health refs are dropped for this Graph. The lock
-	// keeps a concurrent Prune (Graph cleanup, sweep) from deleting a reader
-	// binding before the Graph that needs it is created.
-	defer t.identity.LockNamespace(result.Graph.Namespace)()
-	unbound, err := t.identity.Ensure(ctx, result.Graph)
-	if err != nil {
+	// bound before kro's first reconcile or every apply is forbidden. A Graph
+	// reads nothing outside its own namespace (the health ref nodes and their
+	// reader RoleBindings are gone, #1283), so the applier binding is all it
+	// needs.
+	if err := t.identity.Ensure(ctx, result.Graph); err != nil {
 		return "", fmt.Errorf("translator.Translate: %w", err)
-	}
-	if dropped := dropHealthNodes(result.Graph, injected, unbound); len(dropped) > 0 {
-		log.Warn().Strs("nodes", dropped).Strs("namespaces", unbound).
-			Msg("health ref nodes dropped: the Graph identity cannot read their namespaces")
 	}
 
 	if err := t.graphClient.Create(ctx, result.Graph); err != nil {
 		return "", fmt.Errorf("translator.Translate: %w", err)
-	}
-
-	// Remove reader RoleBindings no Graph in the namespace reads through any
-	// more: a Graph updated in place may read fewer namespaces. Best effort:
-	// a failure leaves a binding for a later translation. When this Graph
-	// still reads every recorded namespace, nothing can go and the
-	// namespace's Graphs are not listed (MayNeedPrune).
-	if t.identity != nil && t.identity.MayNeedPrune(ctx, result.Graph.Namespace, result.Graph) {
-		if reads, err := t.graphClient.Readers(ctx, result.Graph.Namespace); err != nil {
-			log.Warn().Err(err).Msg("graph identity: read graphs for prune")
-		} else if err := t.identity.Prune(ctx, result.Graph.Namespace, reads); err != nil {
-			log.Warn().Err(err).Msg("graph identity: prune reader rolebindings")
-		}
 	}
 
 	log.Info().
@@ -294,164 +256,6 @@ func (t *Translator) servedKind(apiVersion, kind string) bool {
 	}
 	_, err = t.mapper.RESTMapping(gv.WithKind(kind).GroupKind(), gv.Version)
 	return err == nil
-}
-
-// healthInjector adds read-only health ref nodes to a Graph.
-//
-// The health condition is not added
-// to the PromotionStep node's readyWhen: kro only lets readyWhen reference the
-// node itself (ledger gap G3).
-type healthInjector struct {
-	log zerolog.Logger
-	// served, when non-nil, filters out kinds the cluster does not serve
-	// (ledger gap G4).
-	served func(apiVersion, kind string) bool
-	// mayRead, when non-nil, filters out refs into namespaces the Graph
-	// identity may not read.
-	mayRead func(namespace string) bool
-}
-
-// inject adds a ref node for each of envs (the environments the Graph
-// promotes) that configures health (healthConfigured). The node reads the
-// object health.OptionsForEnv selects, which is the one the PromotionStep
-// reconciler checks: metadata.name for a single object, metadata.selector for
-// a collection. The node ID is "health" plus the
-// camelCase environment name, with a number appended if another node already
-// has that ID. It returns the namespace of each added node by node ID.
-func (h healthInjector) inject(pipeline *kardinalv1alpha1.Pipeline, g *graph.Graph,
-	envs []string) map[string]string {
-	if pipeline == nil || g == nil {
-		return nil
-	}
-	inGraph := make(map[string]bool, len(envs))
-	for _, e := range envs {
-		inGraph[e] = true
-	}
-	taken := make(map[string]bool, len(g.Spec.Nodes))
-	for _, n := range g.Spec.Nodes {
-		taken[n.ID] = true
-	}
-
-	injected := map[string]string{}
-	for _, env := range pipeline.Spec.Environments {
-		if !healthConfigured(env) || !inGraph[env.Name] {
-			continue
-		}
-		// A remote cluster's object is not in this cluster: a ref node would
-		// wait for an object that never appears here (ledger G8). The step
-		// reads it through health.kubeconfigSecretRef.
-		if env.Health.KubeconfigSecretRef != nil {
-			continue
-		}
-		// The same type and target the PromotionStep reconciler checks.
-		opts := health.OptionsForEnv(pipeline.Name, env)
-		log := h.log.With().Str("environment", env.Name).Str("healthType", opts.Type).Logger()
-
-		spec, err := health.WatchNodeTemplate(opts.Type, opts)
-		if err != nil {
-			log.Warn().Err(err).Msg("no health ref node")
-			continue
-		}
-		if h.served != nil && !h.served(spec.APIVersion, spec.Kind) {
-			log.Info().Str("kind", spec.Kind).Msg("no health ref node: kind not served by the cluster")
-			continue
-		}
-		ns := spec.Namespace
-		if ns == "" {
-			// An empty namespace on a selector ref lists every namespace.
-			ns = g.Namespace
-		}
-		if h.mayRead != nil && !h.mayRead(ns) {
-			log.Warn().Str("namespace", ns).
-				Msg("no health ref node: namespace not in --graph-reader-namespaces")
-			continue
-		}
-
-		base := "health" + upperFirst(graph.CELSafeSlug(env.Name))
-		nodeID := base
-		for i := 2; taken[nodeID]; i++ {
-			nodeID = fmt.Sprintf("%s%d", base, i)
-		}
-		taken[nodeID] = true
-
-		metadata := map[string]interface{}{"namespace": ns}
-		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
-		if spec.UseWatchKind {
-			// Collection ref: kro evaluates readyWhen per element with the
-			// element bound to "each".
-			metadata["selector"] = map[string]interface{}{
-				"matchLabels": stringMapToInterface(spec.LabelSelector),
-			}
-			readyWhen = strings.ReplaceAll(spec.ReadyWhen, "healthNode", "each")
-		} else {
-			metadata["name"] = spec.Name
-		}
-		g.Spec.Nodes = append(g.Spec.Nodes, graph.GraphNode{
-			ID: nodeID,
-			Ref: map[string]interface{}{
-				"apiVersion": spec.APIVersion,
-				"kind":       spec.Kind,
-				"metadata":   metadata,
-			},
-			ReadyWhen: []string{"${" + readyWhen + "}"},
-		})
-		injected[nodeID] = ns
-	}
-	if len(injected) > 0 {
-		h.log.Debug().Int("healthNodes", len(injected)).Msg("health ref nodes injected into Graph")
-	}
-	return injected
-}
-
-// dropHealthNodes removes the injected health nodes whose namespace is in
-// namespaces and returns their IDs. Nothing references a health node, so
-// removing one leaves a valid Graph.
-func dropHealthNodes(g *graph.Graph, injected map[string]string, namespaces []string) []string {
-	if len(namespaces) == 0 {
-		return nil
-	}
-	drop := make(map[string]bool, len(namespaces))
-	for _, ns := range namespaces {
-		drop[ns] = true
-	}
-	var dropped []string
-	kept := g.Spec.Nodes[:0]
-	for _, n := range g.Spec.Nodes {
-		if ns, ok := injected[n.ID]; ok && drop[ns] {
-			dropped = append(dropped, n.ID)
-			continue
-		}
-		kept = append(kept, n)
-	}
-	g.Spec.Nodes = kept
-	return dropped
-}
-
-func upperFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-func stringMapToInterface(in map[string]string) map[string]interface{} {
-	out := make(map[string]interface{}, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-// healthConfigured reports whether env selects a health adapter itself
-// (health.type, or a delivery.delegate other than "none"). Only those
-// environments get a health ref node. An environment that sets neither is
-// still verified by the PromotionStep reconciler with the default adapter
-// (health.DefaultType); the Graph node is observational only (ledger gap G3),
-// and a default Deployment ref for every environment of every Pipeline would
-// mostly be dropped by the --graph-reader-namespaces filter.
-func healthConfigured(env kardinalv1alpha1.EnvironmentSpec) bool {
-	d := env.Delivery.Delegate
-	return env.Health.Type != "" || (d != "" && d != "none")
 }
 
 // collectGates lists PolicyGate templates from the org policy namespaces

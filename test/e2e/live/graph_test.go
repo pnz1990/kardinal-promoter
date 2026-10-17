@@ -297,7 +297,7 @@ func TestGraph_GateAndPRStatusCollections(t *testing.T) {
 		ids = append(ids, fmt.Sprint(n.(map[string]interface{})["id"]))
 	}
 	assert.ElementsMatch(t, []string{"bundle", "test", "prod", "PolicyGateData", "PolicyGates",
-		"PRStatusData", "PRStatuses", "healthTest", "healthProd"}, ids, "Graph nodes")
+		"PRStatusData", "PRStatuses"}, ids, "Graph nodes: no health ref nodes (#1283)")
 
 	// Both gate instances exist, made by the PolicyGates collection.
 	for _, tmpl := range []string{"needs-open-label", "always-open"} {
