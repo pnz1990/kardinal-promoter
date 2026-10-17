@@ -525,6 +525,11 @@ func TestGraph_FleetTargetRolledBackFirst(t *testing.T) {
 	e.CreateGate(t, framework.Gate(ns, "hold-t02", "prod-t02", holdExpr, recheck))
 	b := e.CreateBundle(t, ns, pipelineName, "--image", imageV1)
 	e.WaitGateReady(t, ns, b, "prod-t02", "hold-t02", false, holdExpr+" = false", gateTimeout)
+	// The rollback pushes every environment on its way to prod-t02, test
+	// too: B is Verified in test first, or the rollback replaces B's
+	// version there while B is health-checking it, and B is Superseded in
+	// test (#2137). (On main, #2175 sends it to prod-t02 only.)
+	e.WaitStepState(t, ns, pipelineName, b, "test", "Verified", promoteTimeout)
 	_, rb := rbRollback(t, a, "prod-t02")
 	rbStep := e.WaitStepState(t, ns, pipelineName, rb, "prod-t02", "Verified", promoteTimeout)
 	e.MustKardinal(t, ns, "override", pipelineName, "--stage", "prod-t02", "--gate", "hold-t02",
