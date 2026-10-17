@@ -217,6 +217,9 @@ spec:
             {{- with (dig "health" "refresh" "namespaces" list .Values.AsMap) }}
             - --health-refresh-namespaces={{ join "," . }}
             {{- end }}
+            {{- with (dig "health" "eks" "allowedRoleARNs" list .Values.AsMap) }}
+            - --health-eks-role-arns={{ join "," . }}
+            {{- end }}
             {{- with .Values.scm.gatesCommitStatus }}
             {{- if eq (toString .enabled) "false" }}
             - --gates-commit-status=false

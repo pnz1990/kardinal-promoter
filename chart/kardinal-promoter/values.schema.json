@@ -492,6 +492,17 @@
               "description": "--health-refresh-namespaces: pipelineNamespace=namespace rules for the GitOps objects a Pipeline may have the controller refresh, besides its own namespace's."
             }
           }
+        },
+        "eks": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowedRoleARNs": {
+              "type": "array",
+              "items": {"type": "string", "pattern": "^arn:aws[a-z-]*:iam::([0-9]{12}|\\*):role/.+$"},
+              "description": "--health-eks-role-arns: the IAM role ARN patterns a Pipeline's health.kubeconfigSecretRef.eks.roleARN may name; empty allows none."
+            }
+          }
         }
       }
     },
