@@ -5,14 +5,15 @@
 // front of each sigstore service (components/sigstore.sh): the controller's
 // Fulcio, Rekor and timestamp authority URLs point at it, and a test sets
 // how each route answers: pass (proxy), down (the connection is closed
-// before any answer), slow (proxy after a delay) or status (answer that
-// status, such as 503 or 429), and reads how many requests each route
+// before any answer), slow (proxy after a delay), status (answer that
+// status, such as 503 or 429) or ratelimit (proxy at most rps requests a
+// second, answer the rest 429 with Retry-After: 1), and reads how many requests each route
 // answered, by status. Standard library only.
 //
 //	faultproxy -admin :9000 -route fulcio=:8081=http://fulcio.fulcio-system.svc.cluster.local ...
 //
 // Admin API: GET /routes (every route's mode and counts), POST
-// /set?route=R&mode=pass|down|slow|status[&delay=30s][&code=503], POST
+// /set?route=R&mode=pass|down|slow|status|ratelimit[&delay=30s][&code=503][&rps=10], POST
 // /reset?route=R (zero the counts).
 package main
 
@@ -37,11 +38,34 @@ type route struct {
 	Mode   string         `json:"mode"`
 	Delay  string         `json:"delay,omitempty"`
 	Code   int            `json:"code,omitempty"`
+	RPS    int            `json:"rps,omitempty"`
 	Counts map[string]int `json:"counts"` // by status ("200", "503", "down")
 
 	mu    sync.Mutex
 	delay time.Duration
 	proxy *httputil.ReverseProxy
+	// window and inWindow count ratelimit's requests in the current second.
+	window   time.Time
+	inWindow int
+	now      func() time.Time
+}
+
+// admit reports whether ratelimit lets one more request through now.
+func (r *route) admit() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	if sec := now.Truncate(time.Second); !sec.Equal(r.window) {
+		r.window, r.inWindow = sec, 0
+	}
+	if r.inWindow >= r.RPS {
+		return false
+	}
+	r.inWindow++
+	return true
 }
 
 func (r *route) count(key string) {
@@ -63,7 +87,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 
 func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
-	mode, delay, code := r.Mode, r.delay, r.Code
+	mode, delay, code, rps := r.Mode, r.delay, r.Code, r.RPS
 	r.mu.Unlock()
 	switch mode {
 	case "down":
@@ -79,6 +103,13 @@ func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.count(strconv.Itoa(code))
 		http.Error(w, fmt.Sprintf("faultproxy: %s answers %d", r.Name, code), code)
 		return
+	case "ratelimit":
+		if !r.admit() {
+			r.count("429")
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, fmt.Sprintf("faultproxy: %s allows %d requests a second", r.Name, rps), http.StatusTooManyRequests)
+			return
+		}
 	case "slow":
 		select {
 		case <-time.After(delay):
@@ -131,7 +162,7 @@ func (rs routes) admin() http.Handler {
 				counts[k] = v
 			}
 			out = append(out, map[string]interface{}{"name": r.Name, "target": r.Target, "mode": r.Mode,
-				"delay": r.Delay, "code": r.Code, "counts": counts})
+				"delay": r.Delay, "code": r.Code, "rps": r.RPS, "counts": counts})
 			r.mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -146,7 +177,7 @@ func (rs routes) admin() http.Handler {
 		}
 		mode := q.Get("mode")
 		var delay time.Duration
-		var code int
+		var code, rps int
 		switch mode {
 		case "pass", "down":
 		case "slow":
@@ -163,12 +194,19 @@ func (rs routes) admin() http.Handler {
 				return
 			}
 			code = c
+		case "ratelimit":
+			n, err := strconv.Atoi(q.Get("rps"))
+			if err != nil || n < 1 {
+				http.Error(w, "ratelimit needs rps of at least 1", http.StatusBadRequest)
+				return
+			}
+			rps = n
 		default:
-			http.Error(w, "mode is pass, down, slow or status", http.StatusBadRequest)
+			http.Error(w, "mode is pass, down, slow, status or ratelimit", http.StatusBadRequest)
 			return
 		}
 		r.mu.Lock()
-		r.Mode, r.delay, r.Code, r.Delay = mode, delay, code, ""
+		r.Mode, r.delay, r.Code, r.Delay, r.RPS = mode, delay, code, "", rps
 		if delay > 0 {
 			r.Delay = delay.String()
 		}
