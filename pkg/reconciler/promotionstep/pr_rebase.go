@@ -140,6 +140,15 @@ func (r *Reconciler) revisionContains(ctx context.Context, log zerolog.Logger, p
 // not descend from want, or a later commit changed the environment's
 // paths), or "" when it does or the history cannot be read by this git
 // client. A read that fails says so: the check waits rather than passes.
+//
+// The branch is the one the step pushed to (targetBranch: a layout: branch
+// environment's rendered branch, whose every file is the environment's).
+// It runs only when the resource check would pass, and costs the shared
+// remote cache's reads (one ls-remote per repository per remoteHeadsTTL,
+// one graph read per head, shared by every check at that head). A cached
+// head can predate want (another step read the heads before this one
+// pushed): a head that does not hold want is read again, once, before the
+// check says the branch moved (#2137: 300 environments on one branch).
 func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeline *v1alpha1.Pipeline,
 	env v1alpha1.EnvironmentSpec, want string) string {
 	rh, ok := r.GitClient.(scm.RemoteHeadReader)
@@ -147,26 +156,49 @@ func (r *Reconciler) branchMoved(ctx context.Context, log zerolog.Logger, pipeli
 	if !ok || !gok || pipeline == nil {
 		return ""
 	}
+	unreadable := func(why string) string {
+		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + why
+	}
 	cred := r.resolveGitCredential(ctx, log, pipeline)
 	if cred.refused != nil {
-		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + cred.refused.Error()
+		return unreadable(cred.refused.Error())
 	}
 	if cred.reason == reasonSecretNotReferenceable {
-		return "the environment's branch could not be read to check it still holds commit " + short(want) + ": " + cred.notReferenceable()
+		return unreadable(cred.notReferenceable())
 	}
-	branch := baseBranch(pipeline)
+	url, auth := pipeline.Spec.Git.URL, cred.auth()
+	branch, paths := targetBranch(pipeline, env), prPaths(env)
+	if v1alpha1.RendersToBranch(pipeline.Spec, env) {
+		paths = []string{"."}
+	}
 	hctx, cancel := context.WithTimeout(ctx, historyTimeout)
 	defer cancel()
-	heads, err := r.remotes.remoteHeads(hctx, rh, pipeline.Spec.Git.URL, cred.auth(), r.now())
+	heads, err := r.remotes.remoteHeads(hctx, rh, url, auth, r.now())
 	if err != nil {
-		return fmt.Sprintf("the environment's branch could not be read to check it still holds commit %s: %v", short(want), err)
+		return unreadable(err.Error())
 	}
 	head := heads[branch]
-	holds, err := r.descends(ctx, rh, gr, pipeline.Spec.Git.URL, branch, cred.auth(), head, want, prPaths(env))
-	switch {
-	case err != nil:
-		return fmt.Sprintf("the environment's branch could not be read to check it still holds commit %s: %v", short(want), err)
-	case !holds:
+	holds := head != "" && head == want
+	if !holds {
+		if holds, err = r.descends(ctx, rh, gr, url, branch, auth, head, want, paths); err != nil {
+			return unreadable(err.Error())
+		}
+	}
+	if !holds {
+		fresh, err := r.remotes.readHeads(hctx, rh, url, auth, r.now())
+		if err != nil {
+			return unreadable(err.Error())
+		}
+		if now := fresh[branch]; now != head {
+			head = now
+			if holds = head != "" && head == want; !holds {
+				if holds, err = r.descends(ctx, rh, gr, url, branch, auth, head, want, paths); err != nil {
+					return unreadable(err.Error())
+				}
+			}
+		}
+	}
+	if !holds {
 		return fmt.Sprintf("branch %s no longer holds this promotion's commit %s with the files it wrote for %s (head %s): "+
 			"the workload's images do not say which version runs, so its health does not verify this promotion",
 			branch, short(want), env.Name, short(head))

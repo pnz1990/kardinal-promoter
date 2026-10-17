@@ -20,8 +20,14 @@ import (
 // check cannot tell from the images which version runs (#2132).
 func staleWorld(t *testing.T) (*World, *Plan) {
 	t.Helper()
+	return staleWorldOf(t, "kustomize", "linear")
+}
+
+// staleWorldOf is staleWorld with the combo's update strategy and topology.
+func staleWorldOf(t *testing.T, update, topology string) (*World, *Plan) {
+	t.Helper()
 	ns := "team-a"
-	c := Combo{Update: "kustomize", Health: "deployment", Gate: "cel", Topology: "linear", Delivery: "direct", SCM: SCMGitHub,
+	c := Combo{Update: update, Health: "deployment", Gate: "cel", Topology: topology, Delivery: "direct", SCM: SCMGitHub,
 		Outcome: "success", Actor: "human"}
 	w := NewWorld(t, Options{SCM: c.SCM, PolicyNamespaces: []string{PolicyNS}, Actors: true})
 	p := BuildPlan(c, ns, w.Now(), false)
@@ -187,6 +193,10 @@ func TestHealth_BranchHistoryUnreadableWaits(t *testing.T) {
 		s, ok := w.Steps(ns, a.Name)["staging"]
 		return ok && s.Status.State == "HealthChecking"
 	}), "1.1.0 is health-checking staging")
+	// Another commit, outside staging's files, moves the head past the
+	// step's commit: whether it still holds them takes the history.
+	require.NoError(t, w.Git.Commit(p.Pipeline.Spec.Git.URL, "main", "an unrelated commit",
+		map[string]string{"notes/unrelated.txt": "unrelated\n"}, nil))
 	w.FailGitHistoryReads(errors.New("HTTP 503: the git host is unavailable"))
 	w.GitOps.Heal(ns, "staging", "1.1.0") // the Deployment is available now
 	for i := 0; i < 2*BlockRounds; i++ {
@@ -237,4 +247,60 @@ func TestHealth_TimeoutAfterANewerPushIsSuperseded(t *testing.T) {
 	assert.Equal(t, 1, got["PromotionSuperseded"])
 	assert.Zero(t, got["PromotionFailed"]+got["HealthCheckFailed"]+got["PromotionSucceeded"], "%v", got)
 	w.Throttle(nil)
+}
+
+// TestHealth_FleetTargetRollbackSupersedesUpstream (#2137 live:
+// TestGraph_FleetTargetRolledBackFirst): a rollback of one fleet target
+// pushes every environment on its way there. When it pushes dev while an
+// older version is health-checking dev, dev runs the rollback's version:
+// the older version's dev step is Superseded, not Verified on availability
+// and not Failed at its timeout (no health alarm).
+// Covers HEALTH-STALE-01.
+func TestHealth_FleetTargetRollbackSupersedesUpstream(t *testing.T) {
+	w, p := staleWorldOf(t, "kustomize", "fleet")
+	ns := p.NS
+	w.GitOps.Fail(ns, "dev", "1.1.0")
+	w.GitOps.Fail(ns, "dev", BaseTag)
+	a := ImageBundle(ns, PipelineName, "1.1.0")
+	p.Ship(t, w, a)
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		s, ok := w.Steps(ns, a.Name)["dev"]
+		return ok && s.Status.State == "HealthChecking"
+	}), "1.1.0 is health-checking dev")
+
+	rb := ImageBundle(ns, PipelineName, "1.0.5")
+	rb.Name = PipelineName + "-rollback-eu"
+	rb.Labels = map[string]string{"kardinal.io/rollback": "true"}
+	rb.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}
+	p.Ship(t, w, rb)
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		s, ok := w.Steps(ns, rb.Name)["dev"]
+		return ok && s.Status.State == "Verified"
+	}), "the rollback pushed dev and is Verified there")
+	require.True(t, w.RunUntil(MaxRounds, func() bool {
+		return w.Steps(ns, a.Name)["dev"].Status.State != "HealthChecking"
+	}), "1.1.0's dev check ends")
+	s := w.Steps(ns, a.Name)["dev"]
+	assert.Equal(t, "Superseded", s.Status.State, "1.1.0's dev step: %s", s.Status.Message)
+	assert.Contains(t, s.Status.Message, rb.Name)
+	got := auditOf(t, w, ns, a.Name, "dev")
+	assert.Zero(t, got["PromotionSucceeded"]+got["PromotionFailed"]+got["HealthCheckFailed"], "%v", got)
+	assert.Equal(t, 1, got["PromotionSuperseded"])
+}
+
+// TestHealth_RenderedBranchIsVerified (#2137 live:
+// TestGraph_FleetRenderedBranches): a layout: branch environment's step
+// pushes its rendered branch; the check reads that branch, not the base
+// branch, and the step is Verified.
+// Covers HEALTH-STALE-02.
+func TestHealth_RenderedBranchIsVerified(t *testing.T) {
+	w, p := staleWorldOf(t, "rendered", "linear")
+	ns := p.NS
+	a := ImageBundle(ns, PipelineName, "1.1.0")
+	p.Ship(t, w, a)
+	require.True(t, w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[a.Name] == "Verified" }),
+		"every rendered environment is Verified")
+	for env, s := range w.Steps(ns, a.Name) {
+		assert.Equal(t, "Verified", s.Status.State, "%s: %s", env, s.Status.Message)
+	}
 }

@@ -2113,7 +2113,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// Bundle reconciler's supersession, which supersedes an older promoting
 	// Bundle as soon as a newer one is in flight, with no push at all.
 	if result.Healthy || expired {
-		newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle)
+		newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle, false)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("check for a newer push to %s: %w", ps.Spec.Environment, err)
 		}
@@ -2130,6 +2130,19 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	// of the revision they synced (#1575, #2132).
 	if result.Healthy && adapter.Name() == "resource" && !result.TargetUpdated && opts.ExpectedRevision != "" {
 		if why := r.branchMoved(ctx, log, pipeline, env, opts.ExpectedRevision); why != "" {
+			// A newer rollback of another fleet target pushes this
+			// environment on its way there: when one has, the branch moved
+			// under the newer version, and this promotion is superseded,
+			// not failed at its timeout (#2137, FLEET-09).
+			newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle, true)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("check for a newer push to %s: %w", ps.Spec.Environment, err)
+			}
+			if newer != "" {
+				msg := fmt.Sprintf("newer bundle %s pushed to %s while this promotion was health-checking; this promotion is superseded",
+					newer, ps.Spec.Environment)
+				return ctrl.Result{}, r.transitionAudit(ctx, base, ps, StateSuperseded, msg, AuditActionPromotionSuperseded)
+			}
 			result = health.HealthStatus{Progressing: true, Reason: why, CheckedAt: result.CheckedAt}
 		}
 	}
