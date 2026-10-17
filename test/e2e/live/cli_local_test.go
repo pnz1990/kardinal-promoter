@@ -616,15 +616,16 @@ type validateCase struct {
 // TestCLI_Validate runs kardinal validate on files the API server rejects,
 // on files it accepts but the controller refuses, and on valid ones, and
 // compares each verdict with kubectl apply --dry-run=server (what the help
-// points to for the schema) and with the controller. Every file the API
-// server rejects, validate rejects, except a schema-only error the help says
-// validate does not check. For a file the API accepts, validate's error is
+// points to for the CRD's CEL rules) and with the controller. Every file the
+// API server rejects, validate rejects; a schema error (enum, pattern, type,
+// required, on any kardinal.io kind) with the API server's own message
+// (#1287). For a file the API accepts, validate's error is
 // the controller's: the Pipeline's Ready=False message, or the template
 // PolicyGate's CEL error. Deprecated fields warn and still pass. Other kinds
 // are skipped, and the exit code is 1 on any error. A reserved environment
 // name, bundle included, gets the API server's message and nothing about
 // the Bundle validate builds internally (#1358).
-// Covers CLI-VALIDATE-01, CLI-VALIDATE-02.
+// Covers CLI-VALIDATE-01, CLI-VALIDATE-02, CLI-VALIDATE-SCHEMA-02.
 func TestCLI_Validate(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -645,7 +646,7 @@ func TestCLI_Validate(t *testing.T) {
 	cases := []validateCase{
 		{name: "valid", doc: pipeline("ok", "", envs) + "---\n" + gate("ok", "  expression: \"!schedule.isWeekend\"\n") +
 			"---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: other\n  namespace: " + ns + "\n",
-			valid: true, want: "- skipped ConfigMap/other: validate checks only kardinal.io Pipelines and PolicyGates\n"},
+			valid: true, want: "- skipped ConfigMap/other: validate checks only kardinal.io objects\n"},
 		{name: "empty git url", doc: strings.Replace(pipeline("nourl", "", envs), "https://git.example/o/r", `""`, 1),
 			want: "  - spec.git.url is required\n", apiRejects: true},
 		{name: "no environments", doc: strings.Replace(pipeline("noenv", "", ""), "environments:\n", "environments: []\n", 1),
@@ -686,9 +687,22 @@ func TestCLI_Validate(t *testing.T) {
 				`reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed; ` +
 				"rename the environment\n",
 			apiRejects: true, apiSays: reservedMsg},
-		// The help: "This is not full CRD schema validation".
-		{name: "schema enum", doc: pipeline("enum", "", "  - name: test\n    approval: sometimes\n"), valid: true,
-			apiRejects: true},
+		// The CRD's OpenAPI schema, embedded (#1287): the API server's own
+		// messages, word for word.
+		{name: "schema enum", doc: pipeline("enum", "", "  - name: test\n    approval: sometimes\n"),
+			want:       `  - spec.environments[0].approval: Unsupported value: "sometimes": supported values: "auto", "pr-review"`,
+			apiRejects: true, apiSays: `spec.environments[0].approval: Unsupported value: "sometimes": supported values: "auto", "pr-review"`},
+		{name: "schema pattern", doc: pipeline("pattern", "", "  - name: Prod\n"),
+			want:       `  - spec.environments[0].name: Invalid value: "Prod": spec.environments[0].name in body should match`,
+			apiRejects: true, apiSays: `spec.environments[0].name: Invalid value: "Prod": spec.environments[0].name in body should match`},
+		{name: "schema type", doc: pipeline("type", "", envs) + "    dependsOn: test\n",
+			want:       `  - spec.environments[1].dependsOn: Invalid value: "string": spec.environments[1].dependsOn in body must be of type array`,
+			apiRejects: true, apiSays: `spec.environments[1].dependsOn: Invalid value: "string": spec.environments[1].dependsOn in body must be of type array`},
+		{name: "another kind, required", doc: "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: sub\n  namespace: " + ns +
+			"\nspec:\n  image: {registry: ghcr.io/o/app}\n",
+			want: "  - spec.pipeline: Required value\n  - spec.type: Required value\n", apiRejects: true, apiSays: "spec.pipeline: Required value"},
+		{name: "another kind, valid", doc: "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: sub\n  namespace: " + ns +
+			"\nspec:\n  pipeline: web\n  type: image\n  image: {registry: ghcr.io/o/app}\n", valid: true, want: "is valid\n"},
 	}
 	// The API server accepts these; the controller refuses them. reason and
 	// message are the Pipeline's Ready=False condition; a PolicyGate case is

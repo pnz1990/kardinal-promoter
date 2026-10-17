@@ -1,22 +1,26 @@
 ## kardinal validate
 
-Validate Pipeline and PolicyGate YAML before applying to the cluster
+Validate kardinal YAML before applying to the cluster
 
 ### Synopsis
 
-Check Pipeline and PolicyGate YAML offline: environments, the dependency
-graph, fields the controller does not implement, and every gate expression
-compiles. It exits 1 with the errors when the file is not valid; kubectl apply
---dry-run=server checks the full schema.
+Check kardinal.io YAML offline: every object against its CRD's schema (built
+into the CLI); Pipelines and PolicyGates also for their environments, the
+dependency graph, unimplemented fields and gate expressions. It exits 1
+with the errors; kubectl apply --dry-run=server also runs the CRDs' CEL
+rules.
 
-Validate Pipeline and PolicyGate YAML without connecting to the cluster.
-The file may hold several documents; each kardinal.io Pipeline and PolicyGate
-is checked. Other objects (a Namespace, another API group's Pipeline) are
-skipped with a note.
+Validate kardinal.io YAML without connecting to the cluster. The file may
+hold several documents; each kardinal.io object is checked. Other objects (a
+Namespace, another API group's Pipeline) are skipped with a note.
 
 Checks:
-  - Every document: no field the CRD does not define (kubectl apply's strict
-    field validation refuses it), named with its path.
+  - Every kardinal.io document, against the OpenAPI schema of its CRD, which
+    the CLI embeds (the CRDs of its own version, config/crd/bases): no field
+    the CRD does not define (kubectl apply's strict field validation refuses
+    it), and the schema's types, enums, patterns, formats, bounds and
+    required fields, each with its path and the API server's message. A
+    kind kardinal.io does not have is an error.
   - Pipeline: at least one environment, every environment named, spec.git.url
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set
@@ -35,8 +39,11 @@ Checks:
     PolicyGate CEL environment, and a name of at most 63 characters (the API
     server rejects a longer one); spec.when is a warning (it is ignored)
 
-This is not full CRD schema validation; 'kubectl apply --dry-run=server'
-checks the schema.
+The CRDs' CEL rules (x-kubernetes-validations) are not run offline, beyond
+the ones the checks above repeat (the PolicyGate name length, a reserved
+environment name, the removed fields); 'kubectl apply --dry-run=server' runs
+them all. The schema is the CLI's version's: use the CLI of the controller's
+version.
 
 Exit codes:
   0: file is valid

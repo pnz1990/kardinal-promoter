@@ -19,15 +19,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
-	kjson "sigs.k8s.io/json"
 	"sigs.k8s.io/yaml"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	crdbases "github.com/kardinal-promoter/kardinal-promoter/config/crd/bases"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/crdschema"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/display"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -40,11 +44,12 @@ func newValidateCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "validate",
-		Short: "Validate Pipeline and PolicyGate YAML before applying to the cluster",
-		Long: `Check Pipeline and PolicyGate YAML offline: environments, the dependency
-graph, fields the controller does not implement, and every gate expression
-compiles. It exits 1 with the errors when the file is not valid; kubectl apply
---dry-run=server checks the full schema.`,
+		Short: "Validate kardinal YAML before applying to the cluster",
+		Long: `Check kardinal.io YAML offline: every object against its CRD's schema (built
+into the CLI); Pipelines and PolicyGates also for their environments, the
+dependency graph, unimplemented fields and gate expressions. It exits 1
+with the errors; kubectl apply --dry-run=server also runs the CRDs' CEL
+rules.`,
 		Example: `  kardinal validate -f pipeline.yaml
   kardinal validate -f examples/ --allowed-repositories github.com/acme/*`,
 		Annotations: map[string]string{ReferenceAnnotation: validateReference},
@@ -109,16 +114,19 @@ func runValidate(cmd *cobra.Command, file string, allowedRepos []string, scmProv
 		group, _, _ := strings.Cut(meta.APIVersion, "/")
 		ours := meta.APIVersion == "" || group == kardinalv1alpha1.GroupVersion.Group
 		switch {
-		case ours && meta.Kind == "Pipeline":
-			err = validatePipeline(out, file, raw, allowed)
-		case ours && meta.Kind == "PolicyGate":
-			err = validatePolicyGate(out, file, raw)
-		default:
-			// kubectl apply takes the whole file; only the objects this
-			// command knows are checked (E2E-R01).
-			_, _ = fmt.Fprintf(out, "- skipped %s/%s: validate checks only kardinal.io Pipelines and PolicyGates\n",
+		case !ours:
+			// kubectl apply takes the whole file; only kardinal.io objects
+			// are checked (E2E-R01).
+			_, _ = fmt.Fprintf(out, "- skipped %s/%s: validate checks only kardinal.io objects\n",
 				meta.Kind, meta.Metadata.Name)
 			continue
+		case meta.Kind == "Pipeline":
+			err = validatePipeline(out, file, raw, allowed)
+		case meta.Kind == "PolicyGate":
+			err = validatePolicyGate(out, file, raw)
+		default:
+			// Any other kardinal.io kind: its CRD schema (#1287).
+			err = reportValidation(out, file, schemaErrors(meta.Kind, raw, nil), nil)
 		}
 		checked++
 		if err != nil {
@@ -129,7 +137,7 @@ func runValidate(cmd *cobra.Command, file string, allowedRepos []string, scmProv
 		return fmt.Errorf("%s: no documents found", file)
 	}
 	if checked == 0 {
-		return fmt.Errorf("%s: no kardinal.io Pipeline or PolicyGate found", file)
+		return fmt.Errorf("%s: no kardinal.io object found", file)
 	}
 	if failed > 0 {
 		return fmt.Errorf("validation failed")
@@ -140,22 +148,25 @@ func runValidate(cmd *cobra.Command, file string, allowedRepos []string, scmProv
 func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.RepositoryAllowlist) error {
 	var pipeline kardinalv1alpha1.Pipeline
 	if err := yaml.Unmarshal(data, &pipeline); err != nil {
-		return fmt.Errorf("%s: YAML parse error: %w", file, err)
+		// A value of the wrong type: the schema says which, with its path.
+		errs := schemaErrors("Pipeline", data, nil)
+		if len(errs) == 0 {
+			errs = []string{fmt.Sprintf("YAML parse error: %v", err)}
+		}
+		return reportValidation(out, file, errs, nil)
 	}
 
-	// The API server refuses a field the CRD does not define (kubectl
-	// apply's strict field validation), so the file would not apply.
-	errs := unknownFields(data, &kardinalv1alpha1.Pipeline{})
+	var errs []string
 
-	// Schema: at least one environment.
+	// At least one environment.
 	if len(pipeline.Spec.Environments) == 0 {
 		errs = append(errs, "spec.environments must contain at least one environment")
 	}
 
 	reserved := false
-	for _, env := range pipeline.Spec.Environments {
+	for i, env := range pipeline.Spec.Environments {
 		if env.Name == "" {
-			errs = append(errs, "each environment must have a non-empty name")
+			errs = append(errs, fmt.Sprintf("spec.environments[%d].name is required", i))
 		}
 		// The API server refuses it with this message (#1358); the Graph build
 		// below would report it again, naming validate's own Bundle.
@@ -165,7 +176,7 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		}
 	}
 
-	// Schema: the CRD requires spec.git.url (minLength 1).
+	// The CRD requires spec.git.url (minLength 1); said plainly.
 	if pipeline.Spec.Git.URL == "" {
 		errs = append(errs, "spec.git.url is required")
 	}
@@ -256,29 +267,23 @@ func validatePipeline(out io.Writer, file string, data []byte, allowed *scm.Repo
 		}
 	}
 
-	if len(errs) > 0 {
-		_, _ = fmt.Fprintf(out, "%s%s is invalid:\n", sty.Paint(display.ToneDegraded, sty.Sym("✗ ", "")), file)
-		for _, e := range errs {
-			_, _ = fmt.Fprintf(out, "  - %s\n", e)
-		}
-		printValidateWarnings(out, warnings)
-		return fmt.Errorf("validation failed")
-	}
-
-	_, _ = fmt.Fprintf(out, "%s%s is valid\n", sty.Paint(display.ToneVerified, sty.Sym("✓ ", "")), file)
-	printValidateWarnings(out, warnings)
-	return nil
+	return reportValidation(out, file, append(errs, schemaErrors("Pipeline", data, errs)...), warnings)
 }
 
 func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	var gate kardinalv1alpha1.PolicyGate
 	if err := yaml.Unmarshal(data, &gate); err != nil {
-		return fmt.Errorf("%s: YAML parse error: %w", file, err)
+		// A value of the wrong type: the schema says which, with its path.
+		errs := schemaErrors("PolicyGate", data, nil)
+		if len(errs) == 0 {
+			errs = []string{fmt.Sprintf("YAML parse error: %v", err)}
+		}
+		return reportValidation(out, file, errs, nil)
 	}
 
-	errs := unknownFields(data, &kardinalv1alpha1.PolicyGate{})
+	var errs []string
 
-	// Schema: expression required.
+	// Expression required.
 	if gate.Spec.Expression == "" {
 		errs = append(errs, "spec.expression is required")
 	}
@@ -304,6 +309,12 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 			"starts; remove it")
 	}
 
+	return reportValidation(out, file, append(errs, schemaErrors("PolicyGate", data, errs)...), warnings)
+}
+
+// reportValidation prints file's result: invalid with each error, or
+// valid; then the warnings.
+func reportValidation(out io.Writer, file string, errs, warnings []string) error {
 	if len(errs) > 0 {
 		_, _ = fmt.Fprintf(out, "%s%s is invalid:\n", sty.Paint(display.ToneDegraded, sty.Sym("✗ ", "")), file)
 		for _, e := range errs {
@@ -312,10 +323,49 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 		printValidateWarnings(out, warnings)
 		return fmt.Errorf("validation failed")
 	}
-
 	_, _ = fmt.Fprintf(out, "%s%s is valid\n", sty.Paint(display.ToneVerified, sty.Sym("✓ ", "")), file)
 	printValidateWarnings(out, warnings)
 	return nil
+}
+
+// crdSchemas are the schemas of the CRDs the CLI embeds (config/crd/bases),
+// by kind, loaded once.
+var crdSchemas = sync.OnceValues(func() (map[string]crdschema.Schema, error) {
+	return crdschema.Load(crdbases.FS, kardinalv1alpha1.GroupVersion.Version)
+})
+
+// schemaErrors checks the document data of kind against its CRD's schema
+// (#1287), as the API server does before the CRD's CEL rules: the fields it
+// would drop, each with its path, then the schema's errors (types, enums,
+// patterns, required fields). An error on a field one of reported already
+// names ("spec.git.url is required") is left out, so a problem is said once.
+func schemaErrors(kind string, data []byte, reported []string) []string {
+	schemas, err := crdSchemas()
+	if err != nil {
+		return []string{fmt.Sprintf("the CLI's embedded CRDs: %v", err)}
+	}
+	s, ok := schemas[kind]
+	if !ok {
+		return []string{fmt.Sprintf("kind %q is not a kardinal.io kind (the CLI knows: %s)", kind, strings.Join(slices.Sorted(maps.Keys(schemas)), ", "))}
+	}
+	var obj map[string]any
+	if err := yaml.Unmarshal(data, &obj); err != nil {
+		return []string{fmt.Sprintf("YAML parse error: %v", err)}
+	}
+	unknown, invalid, err := s.Check(obj)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	var out []string
+	for _, p := range unknown {
+		out = append(out, fmt.Sprintf("unknown field %q: the API server refuses a field the CRD does not define; remove it", p))
+	}
+	for _, e := range invalid {
+		if !slices.ContainsFunc(reported, func(r string) bool { return strings.HasPrefix(r, e.Field+" ") }) {
+			out = append(out, e.Error())
+		}
+	}
+	return out
 }
 
 // maxPolicyGateNameLength is the longest PolicyGate name the CRD accepts.
@@ -371,14 +421,17 @@ func validateCELExpression(expr string) error {
 }
 
 // validateReference is the detail of the command for its reference page.
-const validateReference = `Validate Pipeline and PolicyGate YAML without connecting to the cluster.
-The file may hold several documents; each kardinal.io Pipeline and PolicyGate
-is checked. Other objects (a Namespace, another API group's Pipeline) are
-skipped with a note.
+const validateReference = `Validate kardinal.io YAML without connecting to the cluster. The file may
+hold several documents; each kardinal.io object is checked. Other objects (a
+Namespace, another API group's Pipeline) are skipped with a note.
 
 Checks:
-  - Every document: no field the CRD does not define (kubectl apply's strict
-    field validation refuses it), named with its path.
+  - Every kardinal.io document, against the OpenAPI schema of its CRD, which
+    the CLI embeds (the CRDs of its own version, config/crd/bases): no field
+    the CRD does not define (kubectl apply's strict field validation refuses
+    it), and the schema's types, enums, patterns, formats, bounds and
+    required fields, each with its path and the API server's message. A
+    kind kardinal.io does not have is an error.
   - Pipeline: at least one environment, every environment named, spec.git.url
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set
@@ -397,30 +450,12 @@ Checks:
     PolicyGate CEL environment, and a name of at most 63 characters (the API
     server rejects a longer one); spec.when is a warning (it is ignored)
 
-This is not full CRD schema validation; 'kubectl apply --dry-run=server'
-checks the schema.
+The CRDs' CEL rules (x-kubernetes-validations) are not run offline, beyond
+the ones the checks above repeat (the PolicyGate name length, a reserved
+environment name, the removed fields); 'kubectl apply --dry-run=server' runs
+them all. The schema is the CLI's version's: use the CLI of the controller's
+version.
 
 Exit codes:
   0: file is valid
   1: validation failed (actionable errors printed)`
-
-// unknownFields lists the fields of a YAML document that obj's type does not
-// define, with their paths, as kubectl apply's strict field validation
-// refuses them: `unknown field "spec.policyGates"`. It returns nil for a
-// document that decodes strictly, or that does not parse (the caller reports
-// that).
-func unknownFields(data []byte, obj interface{}) []string {
-	js, err := yaml.YAMLToJSON(data)
-	if err != nil {
-		return nil
-	}
-	strictErrs, err := kjson.UnmarshalStrict(js, obj)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range strictErrs {
-		out = append(out, e.Error()+": the API server refuses a field the CRD does not define; remove it")
-	}
-	return out
-}

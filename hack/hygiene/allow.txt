@@ -6,6 +6,7 @@
 
 deadcode github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style.Terminal  # cmd/kardinal/cmd tests build a terminal Styler with it
 deadcode github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style.Strip  # cmd/kardinal/cmd tests compare output without colour
+deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/crdschema.Schema.Structural  # test/examples checks the field paths the docs name against the CRD schemas with it
 deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/display.ValueOf  # test/e2e reads display labels with it
 deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/graph.RegisterCompactUnsupported  # the hook a feature without a compact Graph registers; pkg/reconciler/pipeline tests use it
 deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook.Verify  # the reference receiver check docs/notifications.md#signed-requests describes, tested against Sign

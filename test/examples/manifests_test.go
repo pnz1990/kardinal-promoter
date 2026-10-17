@@ -24,17 +24,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
-	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
-	apivalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	sigyaml "sigs.k8s.io/yaml"
 
 	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/crdschema"
 )
 
 // manifestDirs are the trees whose YAML files are checked.
@@ -232,56 +227,27 @@ func TestEveryExampleChartIsRendered(t *testing.T) {
 	}
 }
 
-type crdSchema struct {
-	structural *structuralschema.Structural
-	validator  apivalidation.SchemaValidator
-}
-
-// loadCRDSchemas reads the v1alpha1 schemas from config/crd/bases, keyed by kind.
-func loadCRDSchemas(t *testing.T) map[string]crdSchema {
+// loadCRDSchemas reads the v1alpha1 schemas from config/crd/bases, keyed by
+// kind, the CRDs kardinal validate embeds.
+func loadCRDSchemas(t *testing.T) map[string]crdschema.Schema {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(repoRoot(t), "config/crd/bases/*.yaml"))
+	out, err := crdschema.Load(os.DirFS(filepath.Join(repoRoot(t), "config/crd/bases")), v1alpha1.GroupVersion.Version)
 	require.NoError(t, err)
-	require.NotEmpty(t, files)
-	out := map[string]crdSchema{}
-	for _, f := range files {
-		raw, err := os.ReadFile(f)
-		require.NoError(t, err)
-		var crd apiextv1.CustomResourceDefinition
-		require.NoError(t, sigyaml.Unmarshal(raw, &crd), f)
-		for _, ver := range crd.Spec.Versions {
-			if ver.Name != v1alpha1.GroupVersion.Version || ver.Schema == nil {
-				continue
-			}
-			internal := &apiext.JSONSchemaProps{}
-			require.NoError(t, apiextv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(
-				ver.Schema.OpenAPIV3Schema, internal, nil), f)
-			s, err := structuralschema.NewStructural(internal)
-			require.NoError(t, err, f)
-			val, _, err := apivalidation.NewSchemaValidator(internal)
-			require.NoError(t, err, f)
-			out[crd.Spec.Names.Kind] = crdSchema{structural: s, validator: val}
-		}
-	}
+	require.NotEmpty(t, out)
 	return out
 }
 
 // schemaProblems returns what the API server would do to obj beyond accepting
 // it: fields it would drop, and validation errors it would reject it with.
-func schemaProblems(t *testing.T, s crdSchema, obj map[string]interface{}) []string {
+func schemaProblems(t *testing.T, s crdschema.Schema, obj map[string]interface{}) []string {
 	t.Helper()
-	b, err := sigyaml.Marshal(obj)
+	unknown, invalid, err := s.Check(obj)
 	require.NoError(t, err)
-	var cp map[string]interface{}
-	require.NoError(t, sigyaml.Unmarshal(b, &cp))
-
 	var problems []string
-	pruned := pruning.PruneWithOptions(cp, s.structural, true,
-		structuralschema.UnknownFieldPathOptions{TrackUnknownFieldPaths: true})
-	for _, p := range pruned {
+	for _, p := range unknown {
 		problems = append(problems, "unknown field, dropped by the API server: "+p)
 	}
-	for _, e := range apivalidation.ValidateCustomResource(field.NewPath(""), cp, s.validator) {
+	for _, e := range invalid {
 		problems = append(problems, "rejected by the CRD schema: "+e.Error())
 	}
 	return problems
