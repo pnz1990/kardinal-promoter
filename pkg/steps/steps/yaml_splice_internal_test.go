@@ -32,6 +32,20 @@ func TestEncode_WritesOnlyTheEdit(t *testing.T) {
 		{name: "an item of a block sequence", in: "spec:\n  containers:\n    - name: app\n      image: old # set by CI\n    - name: side\n      image: >-\n        keep\n",
 			path: "spec.containers[name=app].image", value: "new",
 			want: "spec:\n  containers:\n    - name: app\n      image: new # set by CI\n    - name: side\n      image: >-\n        keep\n"},
+		// yaml.v3 counts columns in characters: after a key of non-ASCII
+		// characters a value's column is not its byte offset (#2080).
+		{name: "keep chomping after a non-ASCII key, before a comment (#2080, keepChomping)", in: "n:\n    k: v\nƸƸƸ: |+\n  a\n\n# end\n", path: "images", value: "x",
+			want: "n:\n    k: v\nƸƸƸ: |+\n  a\n\nimages: x\n# end\n"},
+		{name: "keep chomping after a non-ASCII key, before a document end (#2080, keepChomping)", in: "n:\n    k: v\nƸƸƸ: |+\n  a\n\n...\n", path: "images", value: "x",
+			want: "n:\n    k: v\nƸƸƸ: |+\n  a\n\nimages: x\n...\n"},
+		{name: "an indentation indicator |2 after a non-ASCII key (#2080, blockIndent)", in: "n:\n    k: v\nƸƸ: |2\n   a\n   \n# end\n", path: "images", value: "x",
+			want: "n:\n    k: v\nƸƸ: |2\n   a\n   \nimages: x\n# end\n"},
+		{name: "an indentation indicator >1 after a non-ASCII key (#2080, blockIndent)", in: "n:\n    k: v\nƸƸƸƸƸ: >1\n  a\n  \n# end\n", path: "images", value: "x",
+			want: "n:\n    k: v\nƸƸƸƸƸ: >1\n  a\n  \nimages: x\n# end\n"},
+		{name: "an indentation indicator |2- after a non-ASCII key (#2080, blockIndent)", in: "n:\n    k: v\nƸ: |2-\n    a\n   \n# end\n", path: "images", value: "x",
+			want: "n:\n    k: v\nƸ: |2-\n    a\n   \nimages: x\n# end\n"},
+		{name: "a two-line quoted scalar after a non-ASCII key (#2080)", in: "Ƹ: \"\n#\"\n", path: "images", value: "x",
+			want: "Ƹ: \"\n#\"\nimages: x\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, err := parseYAMLMapping([]byte(tc.in))
@@ -55,4 +69,12 @@ func TestEncode_WritesOnlyTheEdit(t *testing.T) {
 	setMapScalar(d.root(), "b", "x")
 	_, err = d.encode()
 	assert.ErrorIs(t, err, errReencodeChanges)
+}
+
+// TestByteOffset: a 1-based character column as a byte offset in its line.
+func TestByteOffset(t *testing.T) {
+	assert.Equal(t, 0, byteOffset("a: 1", 1))
+	assert.Equal(t, 3, byteOffset("a: 1", 4))
+	assert.Equal(t, 4, byteOffset("Ƹ: \"", 4), "Ƹ is two bytes")
+	assert.Equal(t, len("é"), byteOffset("é", 5), "past the end")
 }
