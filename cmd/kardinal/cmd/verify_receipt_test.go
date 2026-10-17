@@ -334,6 +334,7 @@ func TestVerifyReceipt_ClusterBindsPipeline(t *testing.T) {
 // SLSA build level 3 and shows the level; one at level 1 is refused, and
 // --require SLSA_BUILD_LEVEL_1 admits both (a VSA lists the highest level).
 func TestVerifyReceipt_RequireSLSABuildLevel(t *testing.T) {
+	keepStyle(t)
 	ivAt := func(level int) *v1alpha1.ImageVerification {
 		img := "ghcr.io/acme/checkout@" + receiptDigest
 		return &v1alpha1.ImageVerification{Status: v1alpha1.ImageVerificationStatus{Phase: v1alpha1.ImageVerificationVerified,
