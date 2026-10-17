@@ -503,8 +503,14 @@ update:
 with one grammar:
 
 - Keys separated by `.`; a leading `.` is optional (`image.tag` and `.image.tag` are the same).
-  A key is letters, digits, `_` and `-`. A key that contains `.` or `/` (an annotation such as
-  `app.kubernetes.io/version`) cannot be addressed.
+  A key is letters, digits, `_` and `-`.
+- `["key"]` quotes a mapping key that contains `.` or `/`, such as an annotation or a label:
+  `metadata.annotations["app.oam.dev/publishVersion"]` (KubeVela re-renders an Application when
+  it changes), `metadata.labels["app.kubernetes.io/version"]`. It follows a key, or starts the
+  path (`["a.b"].c`); after a `.` comes a plain key. The quoted key is letters, digits and
+  `_ - . / : @` in double quotes, and is always a mapping key, even all digits
+  (`ports["8080"]`). It is created when missing, as any key. In the Pipeline YAML, quote the
+  whole path: `path: 'metadata.annotations["app.oam.dev/publishVersion"]'`.
 - `[N]` after a key picks a list element by position: `spec.template.spec.containers[0].image`.
   A digits-only key does the same when it reaches a list (`.dependencies.0.version`); in a
   mapping it is a key. An index has at most 9 digits.

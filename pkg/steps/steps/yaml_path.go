@@ -15,26 +15,31 @@ import (
 // The YAML path grammar of update.yaml.updates[].path and
 // update.helm.chartVersionPath (one grammar, one parser):
 //
-//	path     = ["."] segment *("." segment)
-//	segment  = key *("[" (index | selector) "]")
+//	path     = ["."] (key / "[" quoted "]") *("[" (index / selector / quoted) "]") *("." segment)
+//	segment  = key *("[" (index / selector / quoted) "]")
 //	key      = 1*(ALPHA / DIGIT / "_" / "-")
 //	index    = 1*9DIGIT                     ; a list element by position, no leading 0
 //	selector = key "=" value                ; the list element whose field key is value
+//	quoted   = DQUOTE value DQUOTE          ; a mapping key with "." or "/" (#1932)
 //	value    = 1*(ALPHA / DIGIT / "_" / "-" / "." / "/" / ":" / "@")
 //
 // for example "image.tag", "spec.template.spec.containers[0].image",
 // "spec.template.spec.containers[name=app].image" or
-// ".dependencies[name=podinfo].version". A key that is all digits is a
+// ".dependencies[name=podinfo].version", and a quoted key for a mapping key
+// that contains "." or "/": metadata.annotations["app.oam.dev/publishVersion"].
+// A quoted key is always a mapping key, even all digits. A key that is all digits is a
 // mapping key in a mapping and a list index in a list, so ".dependencies.0.version"
 // and ".dependencies[0].version" are the same path; a missing or null value
 // before one is not created (it is an error), so a digits key never turns a
 // missing list into a mapping. The CRD patterns of both
 // fields accept exactly this grammar.
 
-// yamlPathSeg is one step of a parsed path: a mapping key, a list index, or
-// the list element whose field matchField has the value matchValue.
+// yamlPathSeg is one step of a parsed path: a mapping key (quoted when the
+// path wrote it ["..."]), a list index, or the list element whose field
+// matchField has the value matchValue.
 type yamlPathSeg struct {
 	key        string
+	quoted     bool
 	index      int // >= 0 for a list index
 	matchField string
 	matchValue string
@@ -42,6 +47,8 @@ type yamlPathSeg struct {
 
 func (g yamlPathSeg) String() string {
 	switch {
+	case g.quoted:
+		return `["` + g.key + `"]`
 	case g.matchField != "":
 		return "[" + g.matchField + "=" + g.matchValue + "]"
 	case g.index >= 0:
@@ -67,23 +74,34 @@ func parseYAMLPath(path string) ([]yamlPathSeg, error) {
 	}
 	var segs []yamlPathSeg
 	for {
-		end := strings.IndexAny(p, ".[")
-		if end < 0 {
-			end = len(p)
+		// The first step may be a quoted key; after a "." it is a key.
+		if len(segs) > 0 || !strings.HasPrefix(p, "[") {
+			end := strings.IndexAny(p, ".[")
+			if end < 0 {
+				end = len(p)
+			}
+			key := p[:end]
+			if !yamlPathKey.MatchString(key) {
+				return nil, invalid(fmt.Sprintf("bad key %q", key))
+			}
+			segs = append(segs, yamlPathSeg{key: key, index: -1})
+			p = p[end:]
+		} else if !strings.HasPrefix(p, `["`) {
+			return nil, invalid("a path starts with a key")
 		}
-		key := p[:end]
-		if !yamlPathKey.MatchString(key) {
-			return nil, invalid(fmt.Sprintf("bad key %q", key))
-		}
-		segs = append(segs, yamlPathSeg{key: key, index: -1})
-		p = p[end:]
 		for strings.HasPrefix(p, "[") {
 			rb := strings.IndexByte(p, ']')
 			if rb < 0 {
 				return nil, invalid("unclosed [")
 			}
 			inner := p[1:rb]
-			if field, value, ok := strings.Cut(inner, "="); ok {
+			if q, ok := strings.CutPrefix(inner, `"`); ok {
+				key, closed := strings.CutSuffix(q, `"`)
+				if !closed || !yamlPathValue.MatchString(key) {
+					return nil, invalid(fmt.Sprintf("bad quoted key [%s]; a quoted key is letters, digits and _ - . / : @ in double quotes", inner))
+				}
+				segs = append(segs, yamlPathSeg{key: key, quoted: true, index: -1})
+			} else if field, value, ok := strings.Cut(inner, "="); ok {
 				if !yamlPathKey.MatchString(field) || !yamlPathValue.MatchString(value) {
 					return nil, invalid(fmt.Sprintf("bad selector [%s]", inner))
 				}
@@ -110,6 +128,9 @@ func parseYAMLPath(path string) ([]yamlPathSeg, error) {
 // asIndex turns a digits-only key into a list index, for a path step that
 // reaches a list.
 func asIndex(g yamlPathSeg) (yamlPathSeg, bool) {
+	if g.quoted {
+		return g, false // a quoted key is a mapping key
+	}
 	if g.key == "" {
 		return g, true
 	}
@@ -124,7 +145,7 @@ func asIndex(g yamlPathSeg) (yamlPathSeg, bool) {
 func pathString(segs []yamlPathSeg, n int) string {
 	var b strings.Builder
 	for i, g := range segs[:n] {
-		if g.key != "" && i > 0 {
+		if g.key != "" && !g.quoted && i > 0 {
 			b.WriteByte('.')
 		}
 		b.WriteString(g.String())
