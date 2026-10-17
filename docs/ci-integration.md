@@ -426,16 +426,23 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
 | `commitTime` | When the commit was made (RFC 3339); the lead time metrics start at it, else at the version's creation, which leaves out the build. The Bundle API and `kardinal create bundle` refuse a zero time, one more than 5 minutes in the future, and one more than a year old; a commit time after the version's creation or more than a year before it (set with kubectl) is ignored | `2026-04-09T09:52:13Z` |
 
-The PR body and the UI link `ciRunURL`, so it is checked when a version is created. It must be
-empty or an absolute `http://` or `https://` URL with a host, without user info
-(`https://user@host/...`), spaces or control characters.
+The PR body and the UI link `ciRunURL`, and a [promotion receipt](receipts.md) signs it, so it is
+checked when a version is created. It must be empty or an absolute `http://` or `https://` URL
+with a host, without user info (`https://user@host/...`), without a credential query or fragment
+parameter (`token`, `access_token`, `private_token`, `password`, `api_key`, `apikey`, `key`,
+`client_secret`, `refresh_token`, `sig`, `x-amz-signature`, `x-amz-credential`,
+`x-amz-security-token`, in any case), and without spaces or control characters.
 
 - The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value, and
   `kardinal create bundle --ci-run-url` returns an error.
-- Versions created directly (`kubectl apply`, your own client) and existing versions are not
-  checked. Where such a version's `ciRunURL` fails the check, the PR body and the UI show `—`
-  instead of a link, and promote and rollback (CLI, UI and automatic) leave it out of the
-  version they create.
+- The Bundle CRD refuses user info and a credential parameter for a version created directly
+  (`kubectl apply`, your own client) too. It does not decode a percent-encoded parameter name
+  (`%74oken=`), which the Bundle API does, and a version stored before the rule keeps its URL.
+  A receipt redacts every credential either way ([Credentials are
+  redacted](receipts.md#credentials-are-redacted)).
+- The other checks do not apply to a version created directly or to an existing one. Where such
+  a version's `ciRunURL` fails the check, the PR body and the UI show `—` instead of a link, and
+  promote and rollback (CLI, UI and automatic) leave it out of the version they create.
 
 kardinal records provenance as the caller gives it, whichever way the version is created (version
 API, `kardinal create bundle`, kubectl): it does not check `commitSHA`, `author` or `ciRunURL`

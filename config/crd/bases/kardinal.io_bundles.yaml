@@ -273,10 +273,22 @@ spec:
                     maxLength: 256
                     type: string
                   ciRunURL:
-                    description: CIRunURL is the URL of the CI run that built this
-                      Bundle.
+                    description: |-
+                      CIRunURL is the URL of the CI run that built this Bundle. It must not
+                      carry credentials, user info or a credential query or fragment
+                      parameter (token, access_token, sig, ...): the PR body publishes it,
+                      and a promotion receipt signs it (its Rekor sink publishes it for
+                      good). The Bundle API also refuses a percent-encoded parameter name.
                     maxLength: 2048
                     type: string
+                    x-kubernetes-validations:
+                    - message: provenance.ciRunURL must not contain user info
+                      rule: '!self.matches(''^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@'')'
+                    - message: provenance.ciRunURL must not contain a credential parameter
+                        (access_token, api_key, apikey, client_secret, key, password,
+                        private_token, refresh_token, sig, token, x-amz-credential,
+                        x-amz-security-token, x-amz-signature)
+                      rule: '!self.matches(''(?i)[?&;#](access_token|api_key|apikey|client_secret|key|password|private_token|refresh_token|sig|token|x-amz-credential|x-amz-security-token|x-amz-signature)='')'
                   commitSHA:
                     description: |-
                       CommitSHA is the application source commit that produced this Bundle:

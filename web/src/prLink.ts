@@ -24,15 +24,37 @@ const HTTP_AUTHORITY = /^https?:\/\/([^/?#]*)/i
 // Whitespace (including a no-break space) or a control character.
 const SPACE_OR_CONTROL = /[\s\p{Cc}]/u
 
+// A credential query or fragment parameter (pkg/urlsecret's names, any
+// case, the name possibly percent-encoded).
+const CREDENTIAL_PARAM = /[?&;#]([^=&;#\s"']+)=/g
+const CREDENTIAL_NAMES = new Set([
+  'access_token', 'api_key', 'apikey', 'client_secret', 'key', 'password', 'private_token',
+  'refresh_token', 'sig', 'token', 'x-amz-credential', 'x-amz-security-token', 'x-amz-signature',
+])
+
+function hasCredentialParam(url: string): boolean {
+  for (const m of url.matchAll(CREDENTIAL_PARAM)) {
+    let name = m[1]
+    try {
+      name = decodeURIComponent(name.replace(/\+/g, ' '))
+    } catch {
+      // not percent-encoded as a whole: compare it as written
+    }
+    if (CREDENTIAL_NAMES.has(name.toLowerCase())) return true
+  }
+  return false
+}
+
 /**
  * True when a Bundle's provenance.ciRunURL may be linked. Mirrors
  * graph.ValidateCIRunURL, which the controller applies to new Bundles: an
  * absolute http(s) URL with a host, no user info (https://github.com@evil.example
- * goes to evil.example), and no whitespace or control characters. Bundles
- * created before that check can hold any string.
+ * goes to evil.example), no credential parameter (?token=, #sig=, ...), and
+ * no whitespace or control characters. Bundles created before that check
+ * can hold any string.
  */
 export function isCIRunURL(url: string | undefined): boolean {
-  if (!isHttpURL(url) || SPACE_OR_CONTROL.test(url)) return false
+  if (!isHttpURL(url) || SPACE_OR_CONTROL.test(url) || hasCredentialParam(url)) return false
   const authority = HTTP_AUTHORITY.exec(url)?.[1]
   return !!authority && !authority.includes('@')
 }

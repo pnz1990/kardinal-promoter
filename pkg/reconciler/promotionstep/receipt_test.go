@@ -17,6 +17,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt/receipttest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
@@ -512,4 +514,38 @@ func TestReceiptJourney_OneHugeGate(t *testing.T) {
 	var list v1alpha1.PromotionReceiptList
 	require.NoError(t, f.c.List(ctx, &list))
 	assert.Empty(t, list.Items, "no receipt")
+}
+
+// TestReceiptJourney_TokenInProvenance (#2158): a Bundle written to the API
+// server directly (kubectl apply, not the Bundle API), whose
+// provenance.ciRunURL carries a token, yields a receipt without it: the
+// statement has token=REDACTED and records the redaction, its digest is the
+// stored statement's, and it signs and verifies.
+//
+// Covers RECEIPT-REDACT-01.
+func TestReceiptJourney_TokenInProvenance(t *testing.T) {
+	f := newReceiptFixture(t, true, func(b *v1alpha1.Bundle, _ *v1alpha1.PromotionStep) {
+		b.Spec.Provenance = &v1alpha1.BundleProvenance{Author: "ci",
+			CIRunURL: "https://ci.example.com/run/7?%74oken=ghp_s3cretvalue&attempt=1"}
+	})
+	f.toVerified(t)
+	rc, st := f.receipt(t)
+	assert.NotContains(t, rc.Spec.Statement, "ghp_s3cretvalue")
+	assert.Equal(t, "https://ci.example.com/run/7?%74oken=REDACTED&attempt=1", st.Predicate.Kardinal.Version.Provenance.CIRunURL)
+	assert.Equal(t, []string{"kardinalPromotion.version.provenance.ciRunURL"}, st.Predicate.Kardinal.Redacted)
+
+	var b v1alpha1.Bundle
+	require.NoError(t, f.c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "bundle-1"}, &b))
+	assert.Contains(t, b.Spec.Provenance.CIRunURL, "ghp_s3cretvalue", "the Bundle itself is not changed")
+
+	priv, pub, err := receipttest.Key()
+	require.NoError(t, err)
+	s := &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(context.Context) (crypto.Signer, string, error) {
+		k, err := receipt.ParsePrivateKey(priv)
+		return k, "kardinal-system/receipt-key", err
+	}}
+	signed, err := s.Sign(context.Background(), []byte(rc.Spec.Statement))
+	require.NoError(t, err)
+	_, err = receipt.Verify(signed.Bundle, receipt.VerifyOptions{Key: pub, Statement: []byte(rc.Spec.Statement)})
+	require.NoError(t, err)
 }

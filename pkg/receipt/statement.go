@@ -34,6 +34,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // The statement's fixed values.
@@ -119,6 +120,11 @@ type Record struct {
 	Controller       string   `json:"controller,omitempty"`
 	Chart            string   `json:"chart,omitempty"`
 	Truncated        bool     `json:"truncated"`
+	// Redacted are the JSON paths of the strings redacted before signing
+	// (the userinfo of a URL, the value of a credential parameter such as
+	// ?token=): a receipt is signed and may be published for good, so a
+	// credential a Bundle carried is never in it.
+	Redacted []string `json:"redacted,omitempty"`
 }
 
 // Version is the promoted Bundle.
@@ -331,7 +337,10 @@ func Build(in Input) ([]byte, string, error) {
 	if in.Bundle == nil || in.Step == nil {
 		return nil, "", errors.New("receipt input needs the Bundle and the PromotionStep")
 	}
-	st := statement(in)
+	st, err := statement(in)
+	if err != nil {
+		return nil, "", err
+	}
 	b, err := fit(&st)
 	if err != nil {
 		return nil, "", err
@@ -339,7 +348,7 @@ func Build(in Input) ([]byte, string, error) {
 	return b, Digest(b), nil
 }
 
-func statement(in Input) Statement {
+func statement(in Input) (Statement, error) {
 	b, ps := in.Bundle, in.Step
 	ns := ps.Namespace
 	rec := Record{
@@ -368,13 +377,28 @@ func statement(in Input) Statement {
 			rec.Gates = append(rec.Gates, gate(&d.Gates[i]))
 		}
 	}
+	// Every string of the record and every subject name, redacted before
+	// signing: the paths changed are recorded in kardinalPromotion.redacted.
+	redacted, paths, err := redactRecord(rec)
+	if err != nil {
+		return Statement{}, err
+	}
+	rec = redacted
+	subj := subjects(in)
+	for i := range subj {
+		if r := scm.RedactText(subj[i].Name); r != subj[i].Name {
+			subj[i].Name = r
+			paths = append(paths, fmt.Sprintf("subject[%d].name", i))
+		}
+	}
+	rec.Redacted = paths
 	versionMap := map[string]string{}
 	if in.ControllerVersion != "" {
 		versionMap["kardinal-promoter"] = in.ControllerVersion
 	}
 	return Statement{
 		Type:          StatementType,
-		Subject:       subjects(in),
+		Subject:       subj,
 		PredicateType: PredicateVSA,
 		Predicate: Predicate{
 			Verifier:           Verifier{ID: VerifierID, Version: versionMap},
@@ -386,7 +410,7 @@ func statement(in Input) Statement {
 			SlsaVersion:        slsaVersion,
 			Kardinal:           rec,
 		},
-	}
+	}, nil
 }
 
 func version(b *v1alpha1.Bundle) Version {

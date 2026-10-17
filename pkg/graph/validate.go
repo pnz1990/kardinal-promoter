@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/urlsecret"
 )
 
 // nodeIDPattern is kro's node ID grammar
@@ -494,7 +495,10 @@ func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardina
 // ValidateCIRunURL checks a Bundle's spec.provenance.ciRunURL, which CI sets
 // and the PR body and the UI render as a link. It must be empty or an absolute
 // http or https URL with a host, without user info (credentials would be
-// published in every PR body) and without whitespace or control characters.
+// published in every PR body), without a credential query or fragment
+// parameter (urlsecret: token, access_token, sig, ...; a receipt signs the
+// URL, and its Rekor sink publishes it for good) and without whitespace or
+// control characters.
 // The bundle API refuses to create a Bundle that fails it. Bundles created
 // another way, or before this check, can still hold such a URL: promote and
 // rollback drop it when they copy provenance, and the PR body and the UI do
@@ -517,6 +521,10 @@ func ValidateCIRunURL(raw string) error {
 	}
 	if u.User != nil {
 		return fmt.Errorf("provenance.ciRunURL must not contain user info")
+	}
+	if urlsecret.Has(raw) {
+		return fmt.Errorf("provenance.ciRunURL must not contain a credential parameter (%s): "+
+			"it is published in PR bodies and signed into promotion receipts", strings.Join(urlsecret.Params(), ", "))
 	}
 	return nil
 }

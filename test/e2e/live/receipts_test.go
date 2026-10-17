@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -246,4 +247,78 @@ func TestReceipts_TamperedReceiptFails(t *testing.T) {
 	out, err := e.Kardinal(t, a.ns, "verify-receipt", pipelineName, "test", "--key", pub)
 	require.Error(t, err, out)
 	assert.Contains(t, out, "the receipt was changed")
+}
+
+// TestReceipts_TokenInProvenanceRedacted (#2158): the API server refuses a
+// Bundle whose provenance.ciRunURL carries a credential parameter, however
+// it is created; one that slips past the CRD's rule (a percent-encoded
+// parameter name, applied with kubectl) is promoted, and its receipt holds
+// no token: the signed statement has %74oken=REDACTED and records the
+// redaction, and kardinal verify-receipt passes from the cluster and from
+// the registry copy.
+//
+// Covers RECEIPT-REDACT-03.
+func TestReceipts_TokenInProvenanceRedacted(t *testing.T) {
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+	pub := receiptPublicKey(t, e)
+	const secret = "ghp_e2es3cretvalue"
+	byDigest := fixtures.Image + "@" + fixtures.V2Digest
+	repo, digest, _ := strings.Cut(byDigest, "@")
+
+	refused := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "with-token", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+			Images:     []v1alpha1.ImageRef{{Repository: repo, Digest: digest}},
+			Provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run/7?token=" + secret}}}
+	err := e.Client.Create(ctx, refused)
+	require.Error(t, err, "the CRD refuses a token in ciRunURL")
+	assert.True(t, apierrors.IsInvalid(err), "%v", err)
+	assert.Contains(t, err.Error(), "credential parameter")
+
+	e.Kubectl(t, a.ns, fmt.Sprintf(`apiVersion: kardinal.io/v1alpha1
+kind: Bundle
+metadata:
+  name: encoded-token
+spec:
+  type: image
+  pipeline: %s
+  images:
+  - repository: %s
+    digest: %s
+  provenance:
+    author: ci
+    ciRunURL: "https://ci.example.com/run/7?%%74oken=%s&attempt=1"
+`, pipelineName, repo, digest, secret), "apply", "-f", "-")
+	e.WaitStepState(t, a.ns, pipelineName, "encoded-token", "test", "Verified", promoteTimeout)
+	rc := promotionReceipt(t, e, a.ns, "encoded-token", "test", v1alpha1.ReceiptStored)
+	assert.NotContains(t, rc.Spec.Statement, secret)
+	st, err := receipt.Parse([]byte(rc.Spec.Statement))
+	require.NoError(t, err)
+	assert.Equal(t, "https://ci.example.com/run/7?%74oken=REDACTED&attempt=1", st.Predicate.Kardinal.Version.Provenance.CIRunURL)
+	assert.Equal(t, []string{"kardinalPromotion.version.provenance.ciRunURL"}, st.Predicate.Kardinal.Redacted)
+
+	verified := func(out string) *receipt.Statement {
+		t.Helper()
+		assert.NotContains(t, out, secret)
+		var res struct {
+			Verified  bool               `json:"verified"`
+			Statement *receipt.Statement `json:"statement"`
+		}
+		start := strings.Index(out, "{")
+		require.GreaterOrEqual(t, start, 0, out)
+		require.NoError(t, json.Unmarshal([]byte(out[start:]), &res), out)
+		require.True(t, res.Verified, out)
+		require.NotNil(t, res.Statement)
+		return res.Statement
+	}
+	got := verified(e.MustKardinal(t, a.ns, "verify-receipt", pipelineName, "test", "--bundle", "encoded-token", "--key", pub, "-o", "json"))
+	assert.Equal(t, st.Predicate.Kardinal.Redacted, got.Predicate.Kardinal.Redacted, "the signed statement records the redaction")
+	reg := framework.NewRegistry(t)
+	got = verified(e.MustKardinal(t, a.ns, "verify-receipt", "--image", byDigest, "--pipeline", pipelineName, "--env", "test",
+		"--cluster", clusterIdentity(t, e), "--key", pub,
+		"--repository", reg.HostRepository(receiptsRepository), "--insecure-registry", "-o", "json"))
+	assert.Equal(t, "https://ci.example.com/run/7?%74oken=REDACTED&attempt=1", got.Predicate.Kardinal.Version.Provenance.CIRunURL,
+		"the registry copy has no token either")
 }

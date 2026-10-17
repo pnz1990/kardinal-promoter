@@ -80,6 +80,20 @@ A receipt is at most 256 KiB. Past that, the approvals and Verdicts that did not
 first (counted in `approvalsOmitted` and `verdictsOmitted`), then long gate texts are cut, then the gates after the first
 and the metrics. `truncated: true` says so. The levels are those of the full record.
 
+### Credentials are redacted
+
+A receipt is signed, and the Rekor sink publishes it for good: a signed record cannot be redacted
+afterwards without breaking its signature. So before the statement is signed, every string of
+`kardinalPromotion` and every subject name loses the user info of a URL (`https://bot:token@...`)
+and the value of a credential query or fragment parameter (`?token=`, `access_token`, `sig`,
+`X-Amz-Signature`, ..., a percent-encoded name too), which becomes `REDACTED`. The JSON paths of
+the strings changed are listed in `kardinalPromotion.redacted`, for example
+`kardinalPromotion.version.provenance.ciRunURL`. The Bundle is not changed.
+
+The Bundle API, `kardinal create bundle` and the Bundle CRD refuse such a `ciRunURL` in the first
+place ([Provenance](ci-integration.md#provenance)); redaction covers what gets past them: a version
+stored before the check, a percent-encoded name applied with kubectl, a URL in a gate's reason.
+
 ## Turn receipts on
 
 ```yaml

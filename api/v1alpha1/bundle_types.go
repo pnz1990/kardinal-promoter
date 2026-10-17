@@ -199,8 +199,14 @@ type BundleProvenance struct {
 	// +optional
 	CommitSHA string `json:"commitSHA,omitempty"`
 
-	// CIRunURL is the URL of the CI run that built this Bundle.
+	// CIRunURL is the URL of the CI run that built this Bundle. It must not
+	// carry credentials, user info or a credential query or fragment
+	// parameter (token, access_token, sig, ...): the PR body publishes it,
+	// and a promotion receipt signs it (its Rekor sink publishes it for
+	// good). The Bundle API also refuses a percent-encoded parameter name.
 	// +kubebuilder:validation:MaxLength=2048
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@')",message="provenance.ciRunURL must not contain user info"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('(?i)[?&;#](access_token|api_key|apikey|client_secret|key|password|private_token|refresh_token|sig|token|x-amz-credential|x-amz-security-token|x-amz-signature)=')",message="provenance.ciRunURL must not contain a credential parameter (access_token, api_key, apikey, client_secret, key, password, private_token, refresh_token, sig, token, x-amz-credential, x-amz-security-token, x-amz-signature)"
 	// +optional
 	CIRunURL string `json:"ciRunURL,omitempty"`
 

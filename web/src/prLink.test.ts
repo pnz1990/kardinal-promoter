@@ -56,6 +56,11 @@ describe('isCIRunURL', () => {
     { name: 'tab', url: 'https://ci.example.com/\t1', want: false },
     { name: 'NUL', url: 'https://ci.example.com/1\u0000', want: false },
     { name: 'no-break space', url: 'https://ci.example.com/1\u00a0x', want: false },
+    { name: 'token parameter', url: 'https://ci.example.com/1?token=s3cret', want: false },
+    { name: 'second parameter', url: 'https://ci.example.com/1?a=1&Access_Token=s3cret', want: false },
+    { name: 'percent-encoded name', url: 'https://ci.example.com/1?%74oken=s3cret', want: false },
+    { name: 'fragment parameter', url: 'https://ci.example.com/1#sig=s3cret', want: false },
+    { name: 'a longer name', url: 'https://ci.example.com/1?tokens=3&monkey=1', want: true },
   ])('$name', ({ url, want }) => {
     expect(isCIRunURL(url)).toBe(want)
   })
