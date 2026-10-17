@@ -8,7 +8,7 @@ Evaluate the gates of <env> as the controller would, for a Bundle that went
 through every upstream environment, at --time (UTC; default now) with
 --soak-minutes upstream. Nothing is written. The first line is RESULT: PASS or
 RESULT: BLOCKED, then each blocking gate with its message and the next time it
-would pass; it exits 0 either way.
+would pass; it exits 0 either way, unless verification would fail the version.
 
 Selects the PolicyGates the controller attaches to the environment (the
 pipeline's namespace plus the policy namespaces, matched by the
@@ -36,7 +36,12 @@ each blocking gate with its message and next window. Last comes one row per
 gate: its name, PASS or BLOCK, and the reason. The command exits 0 whether the
 result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
 only when it cannot simulate (a bad flag, a pipeline or environment that does
-not exist, or no cluster to read).
+not exist, or no cluster to read), or when spec.verification on the way to the
+environment would fail the version as the controller does: an AnalysisTemplate
+or ClusterAnalysisTemplate that does not exist, Argo Rollouts not installed, or
+an arg it cannot pass. That result is BLOCKED by verification. When the
+AnalysisTemplates cannot be read (RBAC), the gates' result is shown with
+"Verification not checked" and the reason.
 
 ```
 kardinal policy simulate <pipeline> <env> [flags]

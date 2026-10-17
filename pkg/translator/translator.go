@@ -268,18 +268,27 @@ func (t *Translator) collectChangeRequestTemplates(ctx context.Context, ns strin
 	return out, nil
 }
 
-// servedKind reports whether the cluster serves apiVersion/kind. Without a
-// mapper every kind is assumed served.
-func (t *Translator) servedKind(apiVersion, kind string) bool {
-	if t.mapper == nil {
-		return true
+// servedKind reports whether mapper, the cluster's, serves apiVersion's
+// kind. Without a mapper every kind is assumed served. Only a "no match"
+// from discovery means the kind is not served; any other discovery error
+// (a timeout, a refused or forbidden request) is returned, so a discovery
+// outage is retried instead of read as Argo Rollouts not installed (#2171).
+func servedKind(mapper meta.RESTMapper, apiVersion, kind string) (bool, error) {
+	if mapper == nil {
+		return true, nil
 	}
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
-		return false
+		return false, nil
 	}
-	_, err = t.mapper.RESTMapping(gv.WithKind(kind).GroupKind(), gv.Version)
-	return err == nil
+	_, err = mapper.RESTMapping(gv.WithKind(kind).GroupKind(), gv.Version)
+	switch {
+	case err == nil:
+		return true, nil
+	case meta.IsNoMatchError(err):
+		return false, nil
+	}
+	return false, fmt.Errorf("discover %s %s: %w", apiVersion, kind, err)
 }
 
 // collectGates lists PolicyGate templates from the org policy namespaces

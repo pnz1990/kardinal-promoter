@@ -224,17 +224,18 @@ func buildableBundle(b *v1alpha1.Bundle) *v1alpha1.Bundle {
 // the PolicyGate instances it stamps for env, and the environments promoted
 // before env (its upstream path). policyNS is the controller's
 // --policy-namespaces list: only skip-permission gates there let a Bundle skip
-// an org-gated environment, as in the controller.
-func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
-	templates []v1alpha1.PolicyGate, policyNS []string, env string) ([]v1alpha1.PolicyGate, []string, error) {
+// an org-gated environment, as in the controller. It also says what it found
+// out about the Pipeline's verification (buildPreview).
+func gatesForEnv(ctx context.Context, c sigs_client.Client, pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
+	templates []v1alpha1.PolicyGate, policyNS []string, env string) ([]v1alpha1.PolicyGate, []string, previewVerification, error) {
 	// Target env so the Graph holds exactly env and the environments before it.
 	targeted := buildableBundle(bundle)
 	targeted.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: env}
-	res, err := graph.NewBuilder().Build(graph.BuildInput{
+	res, verification, err := buildPreview(ctx, c, graph.NewBuilder(), graph.BuildInput{
 		Pipeline: pipe, Bundle: targeted, PolicyGates: templates, PolicyNamespaces: policyNS,
 	})
 	if err != nil {
-		return nil, nil, err // Build errors start with "build: "
+		return nil, nil, previewVerification{}, err // Build errors start with "build: "
 	}
 
 	var gates []v1alpha1.PolicyGate
@@ -251,7 +252,7 @@ func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
 			gates = append(gates, g)
 		}
 	}
-	return gates, upstreams, nil
+	return gates, upstreams, verification, nil
 }
 
 func containsString(list []string, s string) bool {
