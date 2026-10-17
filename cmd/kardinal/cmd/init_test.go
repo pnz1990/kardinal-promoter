@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -242,6 +243,8 @@ func TestInitCmd_DetectSecretApply(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, errOut, "Found Argo CD Application argocd/web-prod: prod checks health with it\n")
 	assert.Contains(t, errOut, "Found Flux Kustomization flux-system/web-test: test checks health with it\n")
+	assert.Contains(t, errOut, "Found no Argo CD Application argocd/web-uat or Flux Kustomization flux-system/web-uat: uat checks "+
+		"health with the Deployment web in namespace uat", "the environment that found nothing says so")
 	assert.Contains(t, out, "Secret team-a/github-token created from $GITHUB_TOKEN\n")
 	assert.Contains(t, out, "Pipeline team-a/web created\n")
 	assert.NotContains(t, out+errOut, "s3cret-token", "the token is never printed")
@@ -597,4 +600,36 @@ func TestInitCmd_NamespaceAndSSH(t *testing.T) {
 		assert.Empty(t, out)
 		assert.NoFileExists(t, filepath.Join(dir, "pipeline.yaml"), "nothing written")
 	}
+}
+
+// TestDetectHealth_SkipsADeletedApplication: an Application being deleted
+// (an ApplicationSet replaced under the same name) is not found, and the
+// environment says it found nothing; with none found anywhere, nothing is
+// said.
+func TestDetectHealth_SkipsADeletedApplication(t *testing.T) {
+	apps := []sigs_client.Object{}
+	for _, env := range []string{"test", "uat"} {
+		app := &unstructured.Unstructured{}
+		app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
+		app.SetName("web-" + env)
+		app.SetNamespace("argocd")
+		if env == "uat" {
+			now := metav1.Now()
+			app.SetDeletionTimestamp(&now)
+			app.SetFinalizers([]string{"resources-finalizer.argocd.argoproj.io"})
+		}
+		apps = append(apps, app)
+	}
+	c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(apps...).Build()
+	var out bytes.Buffer
+	found := detectHealth(context.Background(), c, "team-a", &InitConfig{AppName: "web", Environments: []string{"test", "uat"}}, &out)
+	assert.Equal(t, map[string]string{"test": "argocd"}, found)
+	assert.Contains(t, out.String(), "Found Argo CD Application argocd/web-test: test checks health with it\n")
+	assert.Contains(t, out.String(), "Found no Argo CD Application argocd/web-uat")
+
+	out.Reset()
+	found = detectHealth(context.Background(), fake.NewClientBuilder().WithScheme(rootScheme).Build(), "team-a",
+		&InitConfig{AppName: "web", Environments: []string{"test", "uat"}}, &out)
+	assert.Empty(t, found)
+	assert.Empty(t, out.String(), "the Deployment default is not news when nothing was found")
 }

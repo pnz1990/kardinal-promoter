@@ -21,6 +21,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -314,6 +316,23 @@ func TestDocs_Walkthrough(t *testing.T) {
 	// A fork of its own: the quickstart's commits already pinned the
 	// digest the page's first version adds, which would change nothing.
 	e.MustKardinal(t, "", "quickstart", "--delete", "--yes")
+	// Argo CD deletes the demo's Applications after their ApplicationSet:
+	// the page creates new ones of the same names, which must not be the
+	// old ones being deleted.
+	framework.Eventually(t, 2*time.Minute, "the quickstart's Applications deleted", func(ctx context.Context) (bool, string) {
+		apps := &unstructured.UnstructuredList{}
+		apps.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "ApplicationList"})
+		if err := e.Client.List(ctx, apps, client.InNamespace("argocd")); err != nil {
+			return false, err.Error()
+		}
+		var left []string
+		for _, a := range apps.Items {
+			if strings.HasPrefix(a.GetName(), "kardinal-test-app-") {
+				left = append(left, a.GetName())
+			}
+		}
+		return len(left) == 0, fmt.Sprintf("left: %v", left)
+	})
 	w.repo = e.Repo(t, e.Namespace(t), kardinalDemoRepo())
 	walkFirstPipeline(t, w)
 }
@@ -447,6 +466,7 @@ func walkFirstPipeline(t *testing.T, w *walkthrough) {
 	const app = "kardinal-test-app"
 	fork := "https://github.com/pnz1990/kardinal-demo"
 	w.must(fp, "kind: ApplicationSet", fork, w.repo.CloneURL)
+	w.must(fp, "kubectl wait --for=create -n argocd")
 	w.must(fp, "--from-literal=token=<your-github-pat>", "<your-github-pat>", `"$GITHUB_TOKEN"`)
 	// kardinal init takes https and ssh URLs only, and the suite's Forgejo
 	// serves http: init gets the fork's https URL, the walkthrough checks
@@ -502,6 +522,12 @@ func walkFirstPipeline(t *testing.T, w *walkthrough) {
 	require.NotEqual(t, bundle, next)
 	weekend := time.Now().UTC().Weekday() == time.Saturday || time.Now().UTC().Weekday() == time.Sunday
 	e.WaitGateReady(t, "default", next, "prod", "no-weekend-deploys", !weekend, "", promoteTimeout)
+	if weekend {
+		// The gate is not ready at once on a weekend, but explain says
+		// Blocking only once it holds prod: once uat, prod's upstream, is
+		// Verified for the version.
+		e.WaitStepState(t, "default", app, next, "uat", "Verified", promoteTimeout)
+	}
 	const explain = "no-weekend-deploys   Blocking"
 	out = w.must(fp, explain)
 	if weekend {
