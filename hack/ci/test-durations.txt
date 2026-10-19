@@ -76,7 +76,7 @@ github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise 44.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/agents/chaos 35.4
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/agents/differential 12.6
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/agents/load 37.9
-github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/agents/scale 35.4
+github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/agents/scale 20.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/day/seeds/part1 32.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/day/seeds/part2 38.0
 github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise/day/seeds/part3 37.0

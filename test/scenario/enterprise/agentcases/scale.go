@@ -37,11 +37,13 @@ import (
 // its scenario-enterprise job gives go test (3 bursts took 14.5), so that
 // job (KARDINAL_SCENARIO_ENTERPRISE=full) runs mediumScale: 2,000
 // AgentIdentities in 20 tenants. quickScale keeps go test ./... under its
-// budget.
+// budget: one burst, half the scenario under -race (#2194); the second
+// burst, which also wakes the Pipelines' earlier versions, runs in medium
+// and full.
 var (
 	fullScale   = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 5000, Agents: 100, Bursts: 2}
 	mediumScale = agentSize{Teams: 20, PipelinesPerTeam: 4, Identities: 2000, Agents: 40, Bursts: 2}
-	quickScale  = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 150, Agents: 6, Bursts: 2}
+	quickScale  = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 150, Agents: 6, Bursts: 1}
 )
 
 // scaleFromEnv is the size and mode (its budgets' prefix) of RunScale.

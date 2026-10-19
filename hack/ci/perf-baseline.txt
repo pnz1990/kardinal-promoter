@@ -2,7 +2,7 @@
 #
 # The budgets of the agent scale scenario (test/scenario/enterprise/agents/
 # scale, agentcases.RunScale): "scale.<mode>.<name> <value>". Mode quick is
-# go test ./... (under -race in CI: 150 AgentIdentities, 3 tenants); mode
+# go test ./... (under -race in CI: 150 AgentIdentities, 3 tenants, 1 burst); mode
 # medium is KARDINAL_SCENARIO_ENTERPRISE=full (CI's scenario-enterprise job,
 # no -race: 2,000 AgentIdentities, 80 Pipelines in 20 tenants); mode full is
 # KARDINAL_SCENARIO_SCALE=full (the release gate, no -race: 5,000
