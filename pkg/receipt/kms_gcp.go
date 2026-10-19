@@ -10,15 +10,17 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"regexp"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	kmsapi "cloud.google.com/go/kms/apiv1"
 	gcpkms "github.com/sigstore/sigstore/pkg/signature/kms/gcp"
 	"google.golang.org/api/option"
+	gtransport "google.golang.org/api/transport/grpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -58,34 +60,22 @@ var gcpDial = egress.DialContext
 // no authentication).
 var gcpTestOptions []option.ClientOption
 
+// gcpEndpoint is the Cloud KMS API (the client library's default).
+const gcpEndpoint = "cloudkms.googleapis.com:443"
+
 // loadGCPKMS loads a gcpkms:// key. Cloud KMS speaks gRPC, so the HTTP
 // transport is not used: its connections go through gcpDial.
 func loadGCPKMS(root context.Context, ref string, _ http.RoundTripper, timeout time.Duration) (kmsSignerFor, func(), error) {
 	// The last dial error: gRPC retries a refused dial until the call's
 	// deadline and reports only that, so a guard refusal is added back.
 	var dialErr atomic.Value
-	// The client's connections, closed with the key (sigstore's client has
-	// no Close).
-	var mu sync.Mutex
-	var conns []net.Conn
-	closeConns := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, c := range conns {
-			_ = c.Close()
-		}
-		conns = nil
-	}
+	dialer := gcpDial
 	dial := func(ctx context.Context, addr string) (net.Conn, error) {
-		c, err := gcpDial(ctx, "tcp", addr)
+		c, err := dialer(ctx, "tcp", addr)
 		if err != nil {
 			dialErr.Store(err)
-			return nil, err
 		}
-		mu.Lock()
-		conns = append(conns, c)
-		mu.Unlock()
-		return c, nil
+		return c, err
 	}
 	// Every call within timeout: sigstore reads the key version with a
 	// background context.
@@ -101,17 +91,29 @@ func loadGCPKMS(root context.Context, ref string, _ http.RoundTripper, timeout t
 		}
 		return err
 	}
-	opts := append([]option.ClientOption{option.WithGRPCDialOption(grpc.WithContextDialer(dial)),
-		option.WithGRPCDialOption(grpc.WithUnaryInterceptor(deadline))}, gcpTestOptions...)
 	withDial := func(err error) error {
 		if d, ok := dialErr.Load().(error); ok {
 			return fmt.Errorf("%w (connecting: %w)", err, d)
 		}
 		return err
 	}
-	sv, err := gcpkms.LoadSignerVerifier(root, ref, opts...)
+	// The gRPC connection is ours, so closing the key closes it: sigstore's
+	// client has no Close, and a connection it dialled itself would go on
+	// redialling (and keep its goroutines) after a key that failed its
+	// first use was dropped.
+	opts := append([]option.ClientOption{option.WithEndpoint(gcpEndpoint),
+		option.WithScopes(kmsapi.DefaultAuthScopes()...),
+		option.WithGRPCDialOption(grpc.WithContextDialer(dial)),
+		option.WithGRPCDialOption(grpc.WithUnaryInterceptor(deadline)),
+		option.WithGRPCDialOption(grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(math.MaxInt32)))}, gcpTestOptions...)
+	conn, err := gtransport.Dial(root, opts...)
 	if err != nil {
-		closeConns()
+		return nil, nil, fmt.Errorf("connect to Cloud KMS: %w", withDial(err))
+	}
+	closeConn := func() { _ = conn.Close() }
+	sv, err := gcpkms.LoadSignerVerifier(root, ref, option.WithGRPCConn(conn))
+	if err != nil {
+		closeConn()
 		return nil, nil, fmt.Errorf("load the Cloud KMS key: %w", withDial(err))
 	}
 	signer := func(ctx context.Context) (crypto.Signer, error) {
@@ -121,5 +123,5 @@ func loadGCPKMS(root context.Context, ref string, _ http.RoundTripper, timeout t
 		}
 		return cs, nil
 	}
-	return signer, closeConns, nil
+	return signer, closeConn, nil
 }

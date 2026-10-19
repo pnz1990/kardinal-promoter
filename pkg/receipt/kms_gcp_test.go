@@ -203,3 +203,31 @@ func TestKMS_GCPCancelledContextNotKept(t *testing.T) {
 	require.NoError(t, err, "a cancelled earlier context does not break later signatures")
 	assert.EqualValues(t, 2, fake.signs.Load())
 }
+
+// TestKMS_GCPFailedKeyClosed (QA-3 #2111): a Cloud KMS key that fails its
+// first use is dropped with its gRPC connection. Twenty failed signatures
+// (the egress guard refuses the endpoint, as for a misconfigured
+// allowlist) leave the goroutines flat; they grew by about 4 a signature
+// when only the raw connections were closed and the client went on
+// redialling.
+func TestKMS_GCPFailedKeyClosed(t *testing.T) {
+	fake := fakeGCP(t)
+	gcpDial = egress.DialContext // the guard refuses the loopback fake
+	s := &Signer{Mode: v1alpha1.ReceiptSigningKMS, KMSRef: "gcpkms://" + gcpKey + "/cryptoKeyVersions/1", Timeout: 2 * time.Second}
+	raw, _, err := Build(input("image"))
+	require.NoError(t, err)
+	_, err = s.Sign(context.Background(), raw)
+	require.ErrorIs(t, err, egress.ErrBlockedAddress)
+	settle := func() int {
+		time.Sleep(50 * time.Millisecond)
+		return runtime.NumGoroutine()
+	}
+	before := settle()
+	for i := 0; i < 20; i++ {
+		_, err := s.Sign(context.Background(), raw)
+		require.ErrorIs(t, err, egress.ErrBlockedAddress)
+	}
+	assert.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+3 }, 5*time.Second, 50*time.Millisecond,
+		"a failed key's connection is closed: %d goroutines before, %d after", before, runtime.NumGoroutine())
+	assert.Zero(t, fake.signs.Load())
+}
