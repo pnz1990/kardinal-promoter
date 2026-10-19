@@ -68,9 +68,36 @@ func (r *Registry) options(ctx context.Context) []remote.Option {
 		opts = append(opts, remote.WithTransport(r.Transport))
 	}
 	if r.Keychain != nil {
-		opts = append(opts, remote.WithAuthFromKeychain(r.Keychain))
+		opts = append(opts, remote.WithAuthFromKeychain(boundedKeychain{r.Keychain}))
 	}
 	return opts
+}
+
+// boundedKeychain resolves credentials within the caller's context: the
+// default keychain may run a docker credential helper, and ignores it, so
+// a helper that never answers would outlast verify-receipt --timeout.
+type boundedKeychain struct{ k authn.Keychain }
+
+func (b boundedKeychain) Resolve(res authn.Resource) (authn.Authenticator, error) {
+	return b.ResolveContext(context.Background(), res)
+}
+
+func (b boundedKeychain) ResolveContext(ctx context.Context, res authn.Resource) (authn.Authenticator, error) {
+	type resolved struct {
+		a   authn.Authenticator
+		err error
+	}
+	done := make(chan resolved, 1)
+	go func() {
+		a, err := authn.Resolve(ctx, b.k, res)
+		done <- resolved{a, err}
+	}()
+	select {
+	case r := <-done:
+		return r.a, r.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("credentials for %s: %w", res, ctx.Err())
+	}
 }
 
 func (r *Registry) nameOptions() []name.Option {

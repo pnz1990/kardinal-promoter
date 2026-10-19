@@ -17,7 +17,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -260,4 +263,42 @@ func TestReferrers_SeventyOthers(t *testing.T) {
 	assert.Equal(t, 71, got.Entries)
 	require.Len(t, got.Bundles, 1, "prod's receipt, whatever the others")
 	assert.False(t, got.Truncated)
+}
+
+// stuckKeychain is a credential helper that never answers.
+type stuckKeychain struct{ release chan struct{} }
+
+func (k stuckKeychain) Resolve(authn.Resource) (authn.Authenticator, error) {
+	<-k.release
+	return authn.Anonymous, nil
+}
+
+// TestReferrers_KeychainBounded (QA-2 #2174): credentials are resolved
+// within the caller's context: a docker credential helper that never
+// answers (the default keychain runs it without the context) is cut off
+// at verify-receipt's --timeout instead of hanging it.
+func TestReferrers_KeychainBounded(t *testing.T) {
+	srv := httptest.NewServer(registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0))))
+	t.Cleanup(srv.Close)
+	k := stuckKeychain{release: make(chan struct{})}
+	t.Cleanup(func() { close(k.release) })
+	r := &Registry{Insecure: true, Keychain: k}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := r.Referrers(ctx, strings.TrimPrefix(srv.URL, "http://")+"/acme/checkout", "sha256:"+strings.Repeat("a", 64), nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 5*time.Second)
+
+	// The registry options (reading a receipt's bundle) are bounded too.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel2()
+	ref, err := name.ParseReference(strings.TrimPrefix(srv.URL, "http://")+"/acme/checkout:1", name.Insecure)
+	require.NoError(t, err)
+	start = time.Now()
+	_, err = remote.Get(ref, r.options(ctx2)...)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 5*time.Second)
 }

@@ -6,7 +6,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -61,8 +63,11 @@ func checkReceiptGrowth(ctx context.Context, client sigs_client.Client, ns, cont
 }
 
 // receiptRetention is the controller's --receipt-retention-max-age, "off"
-// when it is unset or 0, and whether the controller's Deployment could be
-// read.
+// when it is unset or not above 0, and whether the controller's Deployment
+// could be read. The flags are read as the controller's flag set reads
+// them: --flag=value or --flag value, the last one set wins, the duration
+// parsed (0h and 0m are off; a value that does not parse is off too: the
+// warning is the safe side).
 func receiptRetention(ctx context.Context, client sigs_client.Client, controllerNS string) (string, bool) {
 	var deps appsv1.DeploymentList
 	if err := client.List(ctx, &deps, sigs_client.InNamespace(controllerNS)); err != nil {
@@ -72,12 +77,21 @@ func receiptRetention(ctx context.Context, client sigs_client.Client, controller
 		for _, c := range d.Spec.Template.Spec.Containers {
 			receipts := false
 			retention := "off"
-			for _, a := range c.Args {
-				if a == "--receipts=true" || a == "--receipts" {
-					receipts = true
-				}
-				if v, ok := strings.CutPrefix(a, "--receipt-retention-max-age="); ok && v != "0" && v != "0s" && v != "" {
-					retention = v
+			for i := 0; i < len(c.Args); i++ {
+				name, value, hasValue := strings.Cut(c.Args[i], "=")
+				switch name {
+				case "--receipts":
+					on, err := strconv.ParseBool(value)
+					receipts = !hasValue || (err == nil && on)
+				case "--receipt-retention-max-age":
+					if !hasValue && i+1 < len(c.Args) {
+						i++
+						value = c.Args[i]
+					}
+					retention = "off"
+					if age, err := time.ParseDuration(value); err == nil && age > 0 {
+						retention = value
+					}
 				}
 			}
 			if receipts {

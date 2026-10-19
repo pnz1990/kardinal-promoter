@@ -340,10 +340,14 @@ up to 1024 of them. Each receipt referrer carries its `resourceUri` as an annota
 verified), so another environment's receipts are skipped before they are read and cannot crowd
 out the one asked for. An image with more referrers than are read gets a warning, and
 `referrersTruncated: true` with `-o json`; if no receipt of the pinned resource is among those
-read, verify-receipt fails: whether one exists is unknown, which is never a pass. A registry
+read, or none of those read verifies (receipts planted by whoever may push to the repository, say,
+up to the 64 that are read), verify-receipt fails with "cannot verify": the real one may be among
+those not read, so whether one exists is unknown, which is never a pass. A registry
 whose list cannot be read whole fails it too ("cannot verify"): more than 64 pages, a page linked
 twice, or a next page on another host or scheme. The whole command gives up after `--timeout`
-(60 s by default), also with "cannot verify".
+(60 s by default), also with "cannot verify": reading the cluster, the registry and its credentials
+(a docker credential helper that does not answer is cut off), and the public-good trusted root's TUF
+fetch.
 
 ## Where receipts show
 

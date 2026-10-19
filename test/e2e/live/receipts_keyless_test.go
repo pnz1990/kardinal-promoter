@@ -98,7 +98,7 @@ func TestReceiptsKeyless_SignedPromotion(t *testing.T) {
 
 	ok := []string{"--identity", keylessIdentity, "--issuer", keylessIssuer, "--trusted-root", root}
 	out := e.MustKardinal(t, a.ns, append([]string{"verify-receipt", pipelineName, "test"}, ok...)...)
-	assert.Contains(t, out, "VERIFIED receipt "+rc.Name)
+	assert.Contains(t, out, "receipt "+rc.Name+": every check below that was made passed")
 
 	// From the file alone: pinned to its namespace, Pipeline, environment,
 	// subject and cluster (#1961).
@@ -106,7 +106,7 @@ func TestReceiptsKeyless_SignedPromotion(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
 	require.NoError(t, os.WriteFile(file, []byte(rc.Status.Bundle), 0o600))
 	out = e.MustKardinal(t, a.ns, append(append([]string{"verify-receipt", "--file", file}, pins...), ok...)...)
-	assert.Contains(t, out, "VERIFIED receipt "+rc.Name)
+	assert.Contains(t, out, "receipt "+rc.Name+": every check below that was made passed")
 	signedEarly, signedEarlyPins = rc.Status.Bundle, pins
 
 	for name, args := range map[string][]string{
@@ -343,11 +343,11 @@ func TestReceiptsKeyless_VerifiesAfterCertificateExpiry(t *testing.T) {
 	// -n is in the pins: the offline verifier has no cluster to default it.
 	args := append(append([]string{"verify-receipt", "--file", file}, pins...), "--identity", keylessIdentity, "--issuer", keylessIssuer)
 	out := e.MustKardinal(t, "", append(args, "--trusted-root", root)...)
-	assert.Contains(t, out, "VERIFIED receipt", "verified after the certificate expired")
+	assert.Contains(t, out, "every check below that was made passed", "verified after the certificate expired")
 
 	out, err := offline(t, os.Getenv(framework.EnvCLI), append(args, "--trusted-root", root)...)
 	require.NoError(t, err, out)
-	assert.Contains(t, out, "VERIFIED receipt", "verified with no network")
+	assert.Contains(t, out, "every check below that was made passed", "verified with no network")
 	out, err = offline(t, os.Getenv(framework.EnvCLI), args...)
 	require.Error(t, err, "the public-good root cannot be fetched offline")
 	assert.NotEmpty(t, strings.TrimSpace(out), "it says why")

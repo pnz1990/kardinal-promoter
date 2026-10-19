@@ -43,9 +43,15 @@ func TestDoctor_ReceiptGrowth(t *testing.T) {
 	}{
 		"over 1 GiB, retention off": {[]sigs_client.Object{pipeline(2 << 30), controller()}, true, "4000 receipts, 2.0 GiB (all namespaces; retention off)"},
 		"over 1 GiB, retention on":  {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age=2160h")}, false, "retention 2160h"},
-		"under 1 GiB":               {[]sigs_client.Object{pipeline(10 << 20), controller()}, false, "4000 receipts, 10.0 MiB"},
-		"no receipts":               {[]sigs_client.Object{controller()}, false, "no promotion receipts"},
-		"controller unreadable":     {[]sigs_client.Object{pipeline(2 << 30)}, false, "retention unknown"},
+		// QA-2 #2174: the flag as the controller reads it.
+		"retention on, space-separated": {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age", "720h")}, false, "retention 720h"},
+		"retention 0h is off":           {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age=0h")}, true, "retention off"},
+		"retention 0m is off":           {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age", "0m")}, true, "retention off"},
+		"retention unparseable is off":  {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age=30d")}, true, "retention off"},
+		"the last value wins":           {[]sigs_client.Object{pipeline(2 << 30), controller("--receipt-retention-max-age=720h", "--receipt-retention-max-age=0")}, true, "retention off"},
+		"under 1 GiB":                   {[]sigs_client.Object{pipeline(10 << 20), controller()}, false, "4000 receipts, 10.0 MiB"},
+		"no receipts":                   {[]sigs_client.Object{controller()}, false, "no promotion receipts"},
+		"controller unreadable":         {[]sigs_client.Object{pipeline(2 << 30)}, false, "retention unknown"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(tc.objs...).Build()

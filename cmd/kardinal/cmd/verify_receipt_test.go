@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -435,7 +436,55 @@ func TestVerifyReceipt_ImageReferrers(t *testing.T) {
 	args[2] = "ghcr.io/acme/checkout@" + other
 	_, stderr, err := runOutput(t, receiptClient(t), args...)
 	require.Error(t, err, "fails closed")
+	assert.Contains(t, err.Error(), "cannot verify: no receipt of")
 	assert.Contains(t, err.Error(), "whether one exists is unknown")
+	assert.NotContains(t, err.Error(), "NOT VERIFIED", "unknown, not a verdict")
+	assert.Contains(t, stderr, "more receipt referrers than are read")
+}
+
+// TestVerifyReceipt_PlantedReferrers (QA-2 #2174): whoever may push to the
+// repository plants 64 receipts annotated for prod, more than are read:
+// none verifies and the real one may be among those not read, so
+// verify-receipt cannot verify ("more receipt referrers exist"), never
+// NOT VERIFIED.
+func TestVerifyReceipt_PlantedReferrers(t *testing.T) {
+	keepStyle(t)
+	inner := registry.New(registry.WithReferrersSupport(true), registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/referrers/") {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		// The registry's list, and one more prod receipt after it: the
+		// one not read.
+		rec := httptest.NewRecorder()
+		inner.ServeHTTP(rec, r)
+		var idx v1.IndexManifest
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &idx))
+		idx.Manifests = append(idx.Manifests, v1.Descriptor{MediaType: types.OCIManifestSchema1, Size: 1,
+			Digest: v1.Hash{Algorithm: "sha256", Hex: strings.Repeat("f", 64)}, ArtifactType: receipt.BundleMediaType,
+			Annotations: map[string]string{receipt.PredicateTypeAnnotation: receipt.PredicateVSA, receipt.ReceiptAnnotation: "true",
+				receipt.ResourceAnnotation: "kardinal://c1/namespaces/default/pipelines/checkout/environments/prod"}})
+		w.Header().Set("Content-Type", string(types.OCIImageIndex))
+		_ = json.NewEncoder(w).Encode(idx)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	_, _, key := signedReceipt(t)
+	reg := &receipt.Registry{Insecure: true}
+	const prod = "kardinal://c1/namespaces/default/pipelines/checkout/environments/prod"
+	for i := 0; i < 64; i++ {
+		// The image is named on the test registry, which does not have it:
+		// the subject is the digest alone, without a lookup elsewhere.
+		_, err := reg.PushReferrer(context.Background(), host+"/acme/receipts", host+"/acme/checkout", receiptDigest, prod,
+			[]byte(fmt.Sprintf(`{"planted":%d}`, i)))
+		require.NoError(t, err)
+	}
+	_, stderr, err := runOutput(t, receiptClient(t), "verify-receipt", "--image", "ghcr.io/acme/checkout@"+receiptDigest, "-n", "default",
+		"--pipeline", "checkout", "--env", "prod", "--cluster", "c1", "--key", key, "--repository", host+"/acme/receipts", "--insecure-registry")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot verify: none of the 64 receipts read verified, and more receipt referrers exist")
+	assert.NotContains(t, err.Error(), "NOT VERIFIED")
 	assert.Contains(t, stderr, "more receipt referrers than are read")
 }
 
@@ -461,4 +510,38 @@ func TestVerifyReceipt_Timeout(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot verify: no answer within --timeout 500ms")
 	assert.Less(t, time.Since(start), 10*time.Second)
+}
+
+// TestVerifyReceipt_TimeoutTrustedRoot (QA-2 #2174): --timeout bounds the
+// public-good trusted root's TUF fetch, a keyless receipt's default path:
+// a TUF mirror that never answers is "cannot verify" at the deadline, not
+// a hang (go-tuf's default fetcher has no timeout and no context).
+func TestVerifyReceipt_TimeoutTrustedRoot(t *testing.T) {
+	keepStyle(t)
+	release := make(chan struct{})
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	old := tufMirror
+	tufMirror = srv.URL
+	t.Cleanup(func() { tufMirror = old })
+	rc, _, _ := signedReceipt(t)
+	file := filepath.Join(t.TempDir(), "receipt.sigstore.json")
+	require.NoError(t, os.WriteFile(file, []byte(rc.Status.Bundle), 0o600))
+	start := time.Now()
+	_, _, err := runOutput(t, receiptClient(t), "verify-receipt", "--file", file, "-n", "default", "--pipeline", "checkout",
+		"--env", "prod", "--subject", receiptDigest, "--cluster", "c1",
+		"--identity", "https://github.com/acme/deploy/.github/workflows/promote.yml@refs/heads/main",
+		"--issuer", "https://token.actions.githubusercontent.com", "--timeout", "1s")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot verify: no answer within --timeout 1s")
+	assert.Contains(t, err.Error(), "trusted root")
+	assert.Less(t, time.Since(start), 10*time.Second)
+	assert.Positive(t, asked.Load(), "the trusted root was asked for at the mirror")
 }

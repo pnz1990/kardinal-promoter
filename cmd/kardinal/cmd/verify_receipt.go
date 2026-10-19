@@ -88,7 +88,7 @@ trusts any identity). The exit code is 0 only when every check passes.`,
 	f.StringSliceVar(&o.require, "require", nil, "Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, SLSA_BUILD_LEVEL_3, ...); !LEVEL must be absent")
 	f.StringVar(&o.repo, "repository", "", "Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's")
 	f.BoolVar(&o.insecure, "insecure-registry", false, "Read --image over plain HTTP")
-	f.DurationVar(&o.timeout, "timeout", time.Minute, "Give up past this (reading the cluster, the registry, the trusted root): cannot verify, a failure")
+	f.DurationVar(&o.timeout, "timeout", time.Minute, "Give up past this (reading the cluster, the registry and its credentials, the trusted root): cannot verify, a failure")
 	return withStructuredOutput(cmd)
 }
 
@@ -163,7 +163,7 @@ func verifyReceipt(ctx context.Context, cmd *cobra.Command, args []string, o ver
 		vo.Key = raw
 	}
 	if o.trRoot != "" || o.identity != "" {
-		tr, err := trustedRoot(o.trRoot)
+		tr, err := trustedRoot(ctx, o.trRoot)
 		if err != nil {
 			return fmt.Errorf("verify-receipt: %w", err)
 		}
@@ -222,8 +222,8 @@ func verifyReceipt(ctx context.Context, cmd *cobra.Command, args []string, o ver
 		}
 		if len(found.Bundles) == 0 {
 			if truncated {
-				return fmt.Errorf("verify-receipt: %s: NOT VERIFIED: no receipt of %s among the first %d referrers, and the image has more: "+
-					"whether one exists is unknown", o.image, suffix[1:], receipt.MaxReferrerEntries)
+				return fmt.Errorf("verify-receipt: %s: cannot verify: no receipt of %s among the first %d referrers, and more receipt "+
+					"referrers exist: whether one exists is unknown", o.image, suffix[1:], receipt.MaxReferrerEntries)
 			}
 			return fmt.Errorf("verify-receipt: %s: NOT VERIFIED: no receipt referrer of %s", o.image, suffix[1:])
 		}
@@ -258,6 +258,13 @@ func verifyReceipt(ctx context.Context, cmd *cobra.Command, args []string, o ver
 		}
 		printReceipt(out, name, v)
 		return nil
+	}
+	if truncated {
+		// The receipt asked for may be among those not read (receipts
+		// planted to fill the ones read, say): unknown, never a pass, and
+		// not a NOT VERIFIED either.
+		return fmt.Errorf("verify-receipt: %s: cannot verify: none of the %d receipts read verified, and more receipt referrers exist: %w",
+			name, len(bundles), errors.Join(errs...))
 	}
 	return fmt.Errorf("verify-receipt: %s: NOT VERIFIED: %w", name, errors.Join(errs...))
 }
@@ -330,7 +337,7 @@ func phaseOr(p string) string {
 }
 
 // trustedRoot reads path, or fetches the public-good root with TUF.
-func trustedRoot(path string) (sigroot.TrustedMaterial, error) {
+func trustedRoot(ctx context.Context, path string) (sigroot.TrustedMaterial, error) {
 	if path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -342,14 +349,21 @@ func trustedRoot(path string) (sigroot.TrustedMaterial, error) {
 		}
 		return tr, nil
 	}
-	opts := sigtuf.DefaultOptions().WithDisableLocalCache()
-	opts.Fetcher = &tuffetch.Fetcher{} // a 404 ends a download; every download is bounded (#2218)
+	// Every download carries ctx (--timeout) as its parent, and a 404 ends
+	// one at once (#2218): a mirror that never answers is cannot verify at
+	// the deadline, not a hang.
+	opts := sigtuf.DefaultOptions().WithDisableLocalCache().WithRepositoryBaseURL(tufMirror).WithContext(ctx).
+		WithFetcher(&tuffetch.Fetcher{Context: ctx})
 	tr, err := sigroot.FetchTrustedRootWithOptions(opts)
 	if err != nil {
 		return nil, fmt.Errorf("fetch the public-good trusted root (or give --trusted-root): %w", err)
 	}
 	return tr, nil
 }
+
+// tufMirror is the TUF repository the public-good trusted root is read
+// from; tests replace it.
+var tufMirror = sigtuf.DefaultMirror
 
 // printReceipt is the human output: what was promoted, by whom, through
 // which gates, and who signed it.

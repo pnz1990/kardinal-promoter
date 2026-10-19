@@ -111,7 +111,7 @@ func (r *Registry) referrerDescriptors(ctx context.Context, subject name.Digest)
 	}
 	auth := authn.Anonymous
 	if r.Keychain != nil {
-		a, err := r.Keychain.Resolve(repo)
+		a, err := authn.Resolve(ctx, boundedKeychain{r.Keychain}, repo)
 		if err != nil {
 			return nil, false, fmt.Errorf("credentials for %s: %w", repo, err)
 		}
