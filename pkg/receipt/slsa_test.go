@@ -116,6 +116,15 @@ func TestSLSACheck(t *testing.T) {
 		"a tag-only Bundle image is not a subject":                         bundleOf(imgA, "ghcr.io/acme/worker:1.0"),
 		"a Bundle repository named as the ImageVerification normalizes it": bundleOf("nginx@sha256:dddd"),
 	}
+	// QA-2 #2169: the receipt's subjects that are not images.
+	commit := Subject{Name: "https://git.example.com/acme/deploy", Digest: map[string]string{"gitCommit": "3d1e"}}
+	cases["a config commit subject: none, level 0"] = struct {
+		iv   *v1alpha1.ImageVerification
+		want *SLSA
+	}{ivWith(one, slsaResult("provenance", imgA, true, 3, "builder")),
+		&SLSA{BuildLevel: 0, Images: []SLSAImage{verified(imgA, 3, "builder")},
+			OtherSubjects: []SLSASubject{{Name: commit.Name, Digest: commit.Digest, Status: SLSANone}}}}
+	others := map[string][]Subject{"a config commit subject: none, level 0": {commit}}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			bundle, ok := bundles[name]
@@ -124,7 +133,7 @@ func TestSLSACheck(t *testing.T) {
 					bundle = append(bundle, bundleOf(r.Image)...)
 				}
 			}
-			assert.Equal(t, tc.want, slsaCheck(tc.iv, bundle))
+			assert.Equal(t, tc.want, slsaCheck(tc.iv, bundle, others[name]))
 		})
 	}
 }
@@ -187,6 +196,62 @@ func TestBuild_SLSAUnselectedImage(t *testing.T) {
 	require.Len(t, got.Images, 2)
 	assert.Equal(t, SLSAVerified, got.Images[0].Status)
 	assert.Equal(t, SLSAImage{Image: "docker.io/thirdparty/sidecar@" + digest, Status: SLSANone}, got.Images[1])
+	assert.Equal(t, 0, got.BuildLevel)
+	for _, l := range st.Predicate.VerifiedLevels {
+		assert.False(t, strings.HasPrefix(l, "SLSA_"), "no SLSA level claimed: %s", l)
+	}
+}
+
+// TestBuild_SLSAMixedVersionCommit (QA-2 #2169): a mixed version's config
+// commit is a subject of the receipt that no SLSA attestation covers: it is
+// recorded none, the version's level is 0, no SLSA level is claimed, and
+// verify-receipt --subject <the commit> --require SLSA_BUILD_LEVEL_3 fails,
+// however well its image was built.
+func TestBuild_SLSAMixedVersionCommit(t *testing.T) {
+	in := input("mixed")
+	checkout := "ghcr.io/acme/checkout@" + imageDigest
+	in.ImageVerification = ivWith([]string{checkout}, slsaResult("provenance", checkout, true, 3, "builder"))
+	raw, _, err := Build(in)
+	require.NoError(t, err)
+	st, err := Parse(raw)
+	require.NoError(t, err)
+	got := st.Predicate.Kardinal.Checks.SLSA
+	require.NotNil(t, got)
+	require.Len(t, got.Images, 1)
+	assert.Equal(t, SLSAVerified, got.Images[0].Status, "the image's own level is recorded")
+	assert.Equal(t, []SLSASubject{{Name: "https://git.example.com/acme/deploy", Digest: map[string]string{"gitCommit": "3d1e"},
+		Status: SLSANone}}, got.OtherSubjects)
+	assert.Equal(t, 0, got.BuildLevel)
+	for _, l := range st.Predicate.VerifiedLevels {
+		assert.False(t, strings.HasPrefix(l, "SLSA_"), "no SLSA level claimed: %s", l)
+	}
+
+	s, pub := keySigner(t)
+	b, err := s.Sign(context.Background(), raw)
+	require.NoError(t, err)
+	_, err = Verify(b.Bundle, VerifyOptions{Key: pub, Subject: "3d1e"})
+	require.NoError(t, err, "the commit is a subject")
+	_, err = Verify(b.Bundle, VerifyOptions{Key: pub, Subject: "3d1e", Require: []string{"SLSA_BUILD_LEVEL_3"}})
+	require.Error(t, err, "a commit never attested is never level 3")
+	assert.Contains(t, err.Error(), "SLSA_BUILD_LEVEL_3")
+	_, err = Verify(b.Bundle, VerifyOptions{Key: pub, Subject: imageDigest, Require: []string{"SLSA_BUILD_LEVEL_3"}})
+	require.Error(t, err, "the version-level claim covers every subject: none is made")
+}
+
+// TestBuild_SLSABundleSpecSubject (QA-2 #2169): a version named by its
+// Bundle's spec (no image digest, no commit) has a subject no attestation
+// covers: it is none and no level is claimed.
+func TestBuild_SLSABundleSpecSubject(t *testing.T) {
+	in := input("image")
+	in.Bundle.Spec.Images[0].Digest, in.Bundle.Spec.Images[0].Tag = "", "1.5.0"
+	checkout := "ghcr.io/acme/checkout@" + imageDigest
+	in.ImageVerification = ivWith([]string{checkout}, slsaResult("provenance", checkout, true, 3, "builder"))
+	st, _ := build(t, in)
+	got := st.Predicate.Kardinal.Checks.SLSA
+	require.NotNil(t, got)
+	require.Len(t, got.OtherSubjects, 1)
+	assert.True(t, strings.HasPrefix(got.OtherSubjects[0].Name, "kardinal://"), got.OtherSubjects[0].Name)
+	assert.Equal(t, SLSANone, got.OtherSubjects[0].Status)
 	assert.Equal(t, 0, got.BuildLevel)
 	for _, l := range st.Predicate.VerifiedLevels {
 		assert.False(t, strings.HasPrefix(l, "SLSA_"), "no SLSA level claimed: %s", l)

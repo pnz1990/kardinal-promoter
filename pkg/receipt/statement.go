@@ -553,6 +553,18 @@ func subjects(in Input) []Subject {
 	return out
 }
 
+// nonImageSubjects are the subjects of in that are not image digests: the
+// config commit, or the Bundle's spec when it has neither.
+func nonImageSubjects(in Input) []Subject {
+	var out []Subject
+	for _, s := range subjects(in) {
+		if s.Digest[digestGitCommit] != "" || strings.HasPrefix(s.Name, "kardinal://") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func gate(g *v1alpha1.DecisionGate) Gate {
 	out := Gate{
 		Name: g.Name, Template: g.Template, TemplateUID: g.TemplateUID, TemplateGeneration: g.TemplateGeneration,
@@ -619,7 +631,7 @@ func checks(in Input) Checks {
 		for _, r := range iv.Status.Images {
 			c.ImageVerification = append(c.ImageVerification, ImageCheck{Image: r.Image, Verified: r.Verified, By: r.Signer})
 		}
-		c.SLSA = slsaCheck(iv, in.Bundle.Spec.Images)
+		c.SLSA = slsaCheck(iv, in.Bundle.Spec.Images, nonImageSubjects(in))
 	}
 	for _, s := range in.Step.Status.Steps {
 		if s.Name != "health-check" {
