@@ -239,6 +239,16 @@ type BundleProvenance struct {
 	// RollbackOf is the name of the Bundle this Bundle rolls back (if any).
 	// +optional
 	RollbackOf string `json:"rollbackOf,omitempty"`
+
+	// RollbackFrom is, on a rollback Bundle, the Bundle it rolls back from:
+	// the one deployed in the environment when it was planned, which the
+	// kardinal.io/rollback-from annotation also names. spec.provenance is
+	// immutable, so unlike the annotation it cannot be relinked later: the
+	// controller binds an automatic rollback to the failing Bundle on it
+	// (#2225). Rollbacks created before v0.13.0 do not have it.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	RollbackFrom string `json:"rollbackFrom,omitempty"`
 }
 
 // BundleIntent declares optional promotion targeting and skip overrides.

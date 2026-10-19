@@ -315,7 +315,7 @@ func (r *Reconciler) rollbackSucceededMessage(ctx context.Context, ps *v1alpha1.
 	detail := ""
 	if bundle.Spec.Provenance != nil && bundle.Spec.Provenance.RollbackOf != "" {
 		detail = " (artifacts of " + bundle.Spec.Provenance.RollbackOf
-		if from := bundle.Annotations[lifecycle.AnnotationRollbackFrom]; from != "" {
+		if from := lifecycle.RollbackFromOf(&bundle); from != "" {
 			detail += ", rolled back from " + from
 		}
 		detail += ")"

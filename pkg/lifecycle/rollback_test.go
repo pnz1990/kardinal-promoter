@@ -411,6 +411,25 @@ func TestPlanRollback(t *testing.T) {
 			req:        lifecycle.RollbackRequest{FromBundle: "v2", Automatic: true},
 			wantTarget: "v1", wantTag: "1", wantFrom: "v2",
 		},
+		// #2225: what a rollback rolled back from is its immutable
+		// spec.provenance.rollbackFrom; its kardinal.io/rollback-from,
+		// relinked by a patch, does not decide it.
+		{
+			name: "a rollback's recorded rollbackFrom decides, not its relinked annotation",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				func() *v1alpha1.Bundle {
+					b := rollbackOf("r1", "v1", "prod", "1", 30) // the annotation relinked to v1
+					b.Spec.Provenance.RollbackFrom = "v2"
+					return b
+				}(),
+				bundle("v3", "app", "3", 40),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				healthFailed(step("r1", "app", "prod", "Failed", 31)), healthFailed(step("v3", "app", "prod", "Failed", 41)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v3", Automatic: true},
+			wantTarget: "v1", wantTag: "1", wantFrom: "v3",
+		},
 		{
 			name: "a rollback whose change landed marks what it left rolled back from",
 			objs: []client.Object{
@@ -547,6 +566,7 @@ func TestPlanRollback(t *testing.T) {
 			assert.Equal(t, tc.wantTarget, plan.Target.Name)
 			assert.Equal(t, tc.wantTarget, b.Spec.Provenance.RollbackOf, "rollbackOf names the bundle restored")
 			assert.Equal(t, tc.wantFrom, b.Annotations[lifecycle.AnnotationRollbackFrom])
+			assert.Equal(t, tc.wantFrom, b.Spec.Provenance.RollbackFrom, "recorded in the immutable provenance too (#2225)")
 			require.Len(t, b.Spec.Images, len(plan.Target.Spec.Images), "the rollback bundle carries the target's images")
 			assert.Equal(t, tc.wantTag, b.Spec.Images[0].Tag)
 			assert.Equal(t, "prod", b.Spec.Intent.TargetEnvironment)

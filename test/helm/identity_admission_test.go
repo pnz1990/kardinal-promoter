@@ -595,6 +595,99 @@ func TestIdentityAdmission_BundleCreator(t *testing.T) {
 	assert.False(t, admits(t, listed, bundle("bundle-api"), nil, variant+"x"))
 }
 
+// TestIdentityAdmission_RollbackMarkers (#2225): on a Bundle the controller
+// created (spec.actor kind controller, which cannot change), the
+// kardinal.io/rollback-from annotation and the kardinal.io/rollback and
+// kardinal.io/pipeline labels cannot be added, changed or removed by anyone
+// but the controller, so a finished rollback cannot be relinked to another
+// version. Other labels and annotations stay editable, and a Bundle a
+// person created keeps editable markers.
+//
+// Covers RB-AUTO-FORGED-12.
+func TestIdentityAdmission_RollbackMarkers(t *testing.T) {
+	t.Parallel()
+	vap := identityPolicy(t, "bundle-creator")
+	controller := "system:serviceaccount:" + releaseNS + ":kardinal-promoter"
+	bundle := func(kind string, labels, annotations map[string]interface{}) map[string]interface{} {
+		md := map[string]interface{}{"name": "app-v2-rollback-alarm"}
+		if labels != nil {
+			md["labels"] = labels
+		}
+		if annotations != nil {
+			md["annotations"] = annotations
+		}
+		spec := map[string]interface{}{"pipeline": "app"}
+		if kind != "" {
+			spec["actor"] = map[string]interface{}{"kind": kind, "principal": "x", "via": "auto-rollback"}
+		}
+		return map[string]interface{}{"metadata": md, "spec": spec}
+	}
+	labels := func(kv ...string) map[string]interface{} {
+		m := map[string]interface{}{}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	orig := func(kind string) map[string]interface{} {
+		return bundle(kind, labels("kardinal.io/rollback", "true", "kardinal.io/pipeline", "app", "team", "a"),
+			labels("kardinal.io/rollback-from", "app-v2", "note", "x"))
+	}
+	edit := func(kind string, f func(md map[string]interface{})) map[string]interface{} {
+		b := orig(kind)
+		f(b["metadata"].(map[string]interface{}))
+		return b
+	}
+	for _, tc := range []struct {
+		name string
+		cur  map[string]interface{}
+		old  map[string]interface{}
+		user string
+		want bool
+	}{
+		{name: "rollback-from relinked", old: orig("controller"), user: "mallory",
+			cur: edit("controller", func(md map[string]interface{}) {
+				md["annotations"].(map[string]interface{})["kardinal.io/rollback-from"] = "app-v3"
+			})},
+		{name: "rollback-from removed", old: orig("controller"), user: "mallory",
+			cur: edit("controller", func(md map[string]interface{}) {
+				delete(md["annotations"].(map[string]interface{}), "kardinal.io/rollback-from")
+			})},
+		{name: "the rollback label removed", old: orig("controller"), user: "mallory",
+			cur: edit("controller", func(md map[string]interface{}) { delete(md["labels"].(map[string]interface{}), "kardinal.io/rollback") })},
+		{name: "the pipeline label changed", old: orig("controller"), user: "mallory",
+			cur: edit("controller", func(md map[string]interface{}) {
+				md["labels"].(map[string]interface{})["kardinal.io/pipeline"] = "other"
+			})},
+		{name: "all labels removed", old: orig("controller"), user: "mallory",
+			cur: edit("controller", func(md map[string]interface{}) { delete(md, "labels") })},
+		{name: "rollback-from added to a controller Bundle without it", user: "mallory",
+			old: bundle("controller", labels("kardinal.io/pipeline", "app"), nil),
+			cur: bundle("controller", labels("kardinal.io/pipeline", "app"), labels("kardinal.io/rollback-from", "app-v3"))},
+		{name: "the controller changes them", old: orig("controller"), user: controller, want: true,
+			cur: edit("controller", func(md map[string]interface{}) {
+				md["annotations"].(map[string]interface{})["kardinal.io/rollback-from"] = "app-v3"
+			})},
+		{name: "another label or annotation on a controller Bundle", old: orig("controller"), user: "mallory", want: true,
+			cur: edit("controller", func(md map[string]interface{}) {
+				md["labels"].(map[string]interface{})["team"] = "b"
+				md["annotations"].(map[string]interface{})["note"] = "y"
+			})},
+		{name: "unchanged", old: orig("controller"), cur: orig("controller"), user: "mallory", want: true},
+		{name: "a person's Bundle keeps editable markers", old: orig("human"), user: "alice", want: true,
+			cur: edit("human", func(md map[string]interface{}) {
+				md["annotations"].(map[string]interface{})["kardinal.io/rollback-from"] = "app-v3"
+			})},
+		{name: "a Bundle without a stamp keeps editable markers", old: orig(""), user: "alice", want: true,
+			cur: edit("", func(md map[string]interface{}) { delete(md["labels"].(map[string]interface{}), "kardinal.io/rollback") })},
+		{name: "create is not this rule's", cur: orig("controller"), user: controller, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, admits(t, vap, tc.cur, tc.old, tc.user))
+		})
+	}
+}
+
 // TestIdentityAdmission_GraphObjects: the objects a promotion Graph makes
 // (PromotionStep, PRStatus, HookRun, RenderRun, ImageVerification, and
 // kardinal's Argo Rollouts AnalysisRuns) are created and changed only by

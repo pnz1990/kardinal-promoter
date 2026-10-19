@@ -1,0 +1,5 @@
+---
+section: Security
+---
+
+- **A controller rollback is bound to the failing version by an immutable field, and its markers cannot be relinked** (#2225). The controller now records the version a rollback rolls back from in `spec.provenance.rollbackFrom` (new field; `spec.provenance` is immutable) and binds an existing automatic rollback to the failing version on it. Before, a long name's shortened form, a 40-bit hash, was the only binding. Rollbacks created by v0.12.x have no such field and are still found by their name. On a Bundle the controller created, the chart's `bundle-creator` admission policy now lets only the controller add, change or remove `kardinal.io/rollback-from` and the `kardinal.io/rollback` and `kardinal.io/pipeline` labels, and the rollback planner reads what a rollback rolled back from in `spec.provenance.rollbackFrom` when it is set, so a relinked marker no longer steers which version a rollback skips ([What Happens in Git](rollback.md#what-happens-in-git), [Security](guides/security.md)).

@@ -156,7 +156,7 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 	copyArtifacts(&b.Spec, src)
 	if src.Spec.Provenance != nil {
 		prov := *src.Spec.Provenance
-		prov.RollbackOf = ""
+		prov.RollbackOf, prov.RollbackFrom = "", ""
 		prov.CIRunURL = copyableCIRunURL(ctx, src)
 		b.Spec.Provenance = &prov
 	}
