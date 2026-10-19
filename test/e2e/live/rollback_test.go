@@ -853,6 +853,44 @@ func TestRollback_OnHealthFailureForgedRollbackIgnored(t *testing.T) {
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rb.Spec.Images)
 }
 
+// TestRollback_OnHealthFailureRelinkedRollbackIgnored (QA-2 on #2184): the
+// controller's own, finished automatic rollback of an earlier failure,
+// whose kardinal.io/rollback-from someone with Bundle patch relinked to the
+// release failing now, is not taken for that release's rollback: the step
+// creates the release's own, under its own name.
+//
+// Covers RB-AUTO-FORGED-11.
+func TestRollback_OnHealthFailureRelinkedRollbackIgnored(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := rbAlarmPipeline(t, e, nil)
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	rbVerified(t, a, b1, "test")
+	broken := func(name string) string {
+		return e.CreateBundleObject(t, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns},
+			Spec: v1alpha1.BundleSpec{Pipeline: pipelineName, Type: "image",
+				Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.BrokenTag}}}})
+	}
+	b2 := broken(pipelineName + "-broken-a")
+	e.WaitStepState(t, a.ns, pipelineName, b2, "test", "RollingBack", promoteTimeout)
+	earlier := lifecycle.AutoRollbackName(b2, lifecycle.RollbackSourceAlarm)
+	rbVerified(t, a, earlier, "test")
+
+	b3 := broken(pipelineName + "-broken-b")
+	rb := getBundle(t, e, a.ns, earlier)
+	orig := rb.DeepCopy()
+	rb.Annotations[lifecycle.AnnotationRollbackFrom] = b3 // the relink
+	require.NoError(t, e.Client.Patch(ctx, rb, client.MergeFrom(orig)))
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, b3, "test", "RollingBack", promoteTimeout)
+	own := lifecycle.AutoRollbackName(b3, lifecycle.RollbackSourceAlarm)
+	assert.True(t, strings.HasSuffix(ps.Status.Message, " — rollback Bundle "+own+" created"), ps.Status.Message)
+	created := getBundle(t, e, a.ns, own)
+	assert.True(t, lifecycle.IsAutoRollback(created), "the controller's own rollback of b3")
+	rbVerified(t, a, own, "test")
+}
+
 // TestRollback_PersonsRollbackMarksWhatItLeft (QA-3 on #2187): a person's
 // kardinal rollback carries no controller stamp, and still, once it ran, it
 // marks the version it left rolled back from: it ran in the environment (a
