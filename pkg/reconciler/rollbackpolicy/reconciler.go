@@ -347,7 +347,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		return existing, nil, nil
 	}
 
-	rollbackName, err := lifecycle.AutoRollbackNameIn(ctx, r.Client, rp.Namespace, rp.Spec.BundleRef, "policy", rp.Spec.Environment)
+	rollbackName, err := lifecycle.AutoRollbackNameIn(ctx, r.Client, rp.Namespace, rp.Spec.BundleRef, lifecycle.RollbackSourcePolicy, rp.Spec.Environment)
 	if err != nil {
 		return "", nil, fmt.Errorf("name rollback of bundle %s: %w", rp.Spec.BundleRef, err)
 	}
@@ -407,32 +407,12 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 	return rollbackName, nil, nil
 }
 
-// existingRollback returns the name of the rollback Bundle that rolls back
-// spec.bundleRef in spec.environment, or "": one created by either automatic
-// path (this one or onHealthFailure=rollback), or a rollback of the Bundle
-// created before the shared planner existed (no kardinal.io/rollback-from
-// annotation, the failing Bundle in provenance.rollbackOf).
+// existingRollback is the automatic rollback of the policy's Bundle in its
+// environment that already exists (lifecycle.FindRollback), or "". It is
+// found by its name, never by markers anyone who may patch Bundles can
+// rewrite: a stamped rollback whose kardinal.io/rollback-from was removed
+// or relinked is not taken for this one (#2187 QA).
 func (r *Reconciler) existingRollback(ctx context.Context, rp *v1alpha1.RollbackPolicy) (string, error) {
-	// A rollback Bundle belongs to the Pipeline it rolls back: list that
-	// Pipeline's Bundles through the spec.pipeline index (#1654).
-	var bundles v1alpha1.BundleList
-	if rp.Spec.PipelineName != "" {
-		items, err := lifecycle.ListPipelineBundles(ctx, r.Client, rp.Namespace, rp.Spec.PipelineName)
-		if err != nil {
-			return "", err
-		}
-		bundles.Items = items
-	} else if err := r.List(ctx, &bundles, client.InNamespace(rp.Namespace)); err != nil {
-		return "", fmt.Errorf("list bundles: %w", err)
-	}
-	for _, b := range bundles.Items {
-		if b.Labels[lifecycle.LabelRollback] == "true" && lifecycle.IsAutoRollback(&b) &&
-			b.Annotations[lifecycle.AnnotationRollbackFrom] == "" &&
-			b.Spec.Provenance != nil &&
-			b.Spec.Provenance.RollbackOf == rp.Spec.BundleRef {
-			return b.Name, nil
-		}
-	}
 	existing, err := lifecycle.FindRollback(ctx, r.Client, rp.Namespace,
 		rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
 	if err != nil {

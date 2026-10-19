@@ -480,6 +480,12 @@ func TestReconciler_RollbackBundleError_Requeues(t *testing.T) {
 				}
 				return cl.List(ctx, list, opts...)
 			},
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*v1alpha1.Bundle); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
 		}).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}

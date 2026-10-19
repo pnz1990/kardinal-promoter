@@ -187,7 +187,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 	if existing != "" {
 		return existing, nil, nil
 	}
-	name, err = lifecycle.AutoRollbackNameIn(ctx, r.Client, ps.Namespace, ps.Spec.BundleName, "alarm", ps.Spec.Environment)
+	name, err = lifecycle.AutoRollbackNameIn(ctx, r.Client, ps.Namespace, ps.Spec.BundleName, lifecycle.RollbackSourceAlarm, ps.Spec.Environment)
 	if err != nil {
 		return "", nil, fmt.Errorf("name rollback of bundle %s: %w", ps.Spec.BundleName, err)
 	}

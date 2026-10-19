@@ -92,13 +92,6 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 		{name: "reuses the onHealthFailure rollback of the same bundle",
 			history:  []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), alarm()},
 			wantName: lifecycle.AutoRollbackName("bundle-1", "alarm")},
-		{name: "reuses an earlier rollback of another naming scheme, found by its labels",
-			history: []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), func() client.Object {
-				b := alarm()
-				b.SetName("bundle-1-rollback-alarm-0a1b2c3d") // a v0.11 controller's long name
-				return b
-			}()},
-			wantName: "bundle-1-rollback-alarm-0a1b2c3d"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,11 +179,11 @@ func TestRollbackPolicy_RollbackPerEnvironment(t *testing.T) {
 				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 				WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 			plain := lifecycle.AutoRollbackName("bundle-1", "policy")
-			miss := false
+			miss := 0
 			c := interceptor.NewClient(base, interceptor.Funcs{
 				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-					if _, ok := obj.(*v1alpha1.Bundle); ok && key.Name == plain && miss {
-						miss = false
+					if _, ok := obj.(*v1alpha1.Bundle); ok && key.Name == plain && miss > 0 {
+						miss--
 						return apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("bundles").GroupResource(), key.Name)
 					}
 					return cl.Get(ctx, key, obj, opts...)
@@ -202,10 +195,10 @@ func TestRollbackPolicy_RollbackPerEnvironment(t *testing.T) {
 			_, err := r.Reconcile(ctx, req("test"))
 			require.NoError(t, err)
 			if stale {
-				miss = true
+				miss = 2 // FindRollback's read of the name, then AutoRollbackNameIn's
 				res, err := r.Reconcile(ctx, req("prod"))
 				require.NoError(t, err)
-				assert.False(t, miss, "the stale read happened")
+				assert.Zero(t, miss, "the stale reads happened")
 				assert.Positive(t, res.RequeueAfter, "prod's read missed test's rollback: it retries")
 				var rp v1alpha1.RollbackPolicy
 				require.NoError(t, c.Get(ctx, req("prod").NamespacedName, &rp))
