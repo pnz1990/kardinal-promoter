@@ -316,7 +316,7 @@ func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
 	}
 	f.held = record + " ticket=" + name
 	if err := os.WriteFile(filepath.Join(f.lock, "owner"), []byte(f.held+"\n"), 0o644); err != nil {
-		_ = os.RemoveAll(f.lock) // never hold a lock without an owner record
+		_ = os.Remove(f.lock) // never hold a lock without an owner record; only an empty one, as the shell's rmdir
 		return false, fmt.Errorf("write owner: %w", err)
 	}
 	return true, nil

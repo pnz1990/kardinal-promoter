@@ -189,10 +189,10 @@ func TestLoadLock_Races(t *testing.T) {
 		cmd.Env = append(os.Environ(), "LOADLOCK=")
 		return cmd
 	}
-	t.Run("50 locks at once, 8 waiters each on a dead holder: one holder at a time, none wedged", func(t *testing.T) {
+	t.Run("25 locks at once, 8 waiters each on a dead holder: one holder at a time, none wedged", func(t *testing.T) {
 		// Locks in parallel, so reapers overlap (#2226 QA: sequential rounds
 		// never interleaved two, and #2202's script passed them).
-		rounds := 1
+		rounds := 5 // about 13s
 		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
 			n, err := strconv.Atoi(v)
 			require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestLoadLock_Races(t *testing.T) {
 		}
 		gone := exec.Command("true")
 		require.NoError(t, gone.Run())
-		const locks, waiters = 50, 8
+		const locks, waiters = 25, 8
 		for r := 0; r < rounds; r++ {
 			type lockRun struct {
 				dir  string
@@ -240,15 +240,40 @@ func TestLoadLock_Races(t *testing.T) {
 				}
 				close(done)
 			}()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Minute):
+			kill := func() {
 				for _, lr := range runs {
 					for _, c := range lr.cmds {
 						_ = c.Process.Kill()
 					}
 				}
-				t.Fatalf("round %d: waiters never got their lock", r)
+			}
+			// A round takes seconds; a lock with no owner for five looks a
+			// second apart is wedged now, not at the timeout.
+			ownerless := map[string]int{}
+			deadline := time.After(60 * time.Second)
+		wait:
+			for {
+				select {
+				case <-done:
+					break wait
+				case <-deadline:
+					kill()
+					t.Fatalf("round %d: waiters never got their lock", r)
+				case <-time.After(time.Second):
+					for _, lr := range runs {
+						lock := filepath.Join(lr.dir, "LOADLOCK")
+						_, lerr := os.Stat(lock)
+						_, oerr := os.Stat(filepath.Join(lock, "owner"))
+						if lerr == nil && oerr != nil {
+							if ownerless[lock]++; ownerless[lock] >= 5 {
+								kill()
+								t.Fatalf("round %d: %s is left with no owner", r, lock)
+							}
+						} else {
+							delete(ownerless, lock)
+						}
+					}
+				}
 			}
 			var overlaps, notOurs, left int
 			for _, lr := range runs {
