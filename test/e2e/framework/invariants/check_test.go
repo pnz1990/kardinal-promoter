@@ -435,6 +435,17 @@ func TestAuditViolations(t *testing.T) {
 		{name: "one freeze recorded twice",
 			events: []v1alpha1.AuditEvent{freezeEvent("FreezeStarted", 0), freezeEvent("FreezeStarted", 0)},
 			want:   []string{"2 AuditEvents /*/FreezeStarted e2e/release-freeze@2026-10-16T10:00:00Z"}},
+		{name: "one verdict event per Verdict: two verifiers",
+			events: []v1alpha1.AuditEvent{
+				ev("b", "live", "VerdictRecorded", "verdict b-qa-explore-1 pass by carol recorded on gate g (counted): ok"),
+				ev("b", "live", "VerdictRecorded", "verdict b-qa-explore-2 pass by dave recorded on gate g (counted)"),
+			}},
+		{name: "one Verdict recorded twice",
+			events: []v1alpha1.AuditEvent{
+				ev("b", "live", "VerdictRecorded", "verdict b-qa-explore-1 pass by carol recorded on gate g (counted)"),
+				ev("b", "live", "VerdictRecorded", "verdict b-qa-explore-1 pass by carol recorded on gate g (counted)"),
+			},
+			want: []string{"2 AuditEvents b/live/VerdictRecorded b-qa-explore-1"}},
 		{name: "a step action twice",
 			events: []v1alpha1.AuditEvent{ev("b", "prod", "PromotionSucceeded", ""), ev("b", "prod", "PromotionSucceeded", "")},
 			steps:  []v1alpha1.PromotionStep{step("b", "prod", "Verified", "")},

@@ -751,9 +751,20 @@ func changeIdentity(a v1alpha1.AuditEvent) (string, bool) {
 	return "", false
 }
 
+// verdictName is the Verdict a Verdict* AuditEvent's message names
+// ("verdict <name> <result> by <verifier> <verb> on gate <gate> (...)"), or
+// the whole message when it is not in that form.
+func verdictName(msg string) string {
+	if f := strings.Fields(msg); len(f) >= 2 && f[0] == "verdict" {
+		return f[1]
+	}
+	return msg
+}
+
 // auditViolations checks events against steps: at most one event per
-// (Bundle, environment, action), GateEvaluated aside, and one Approval* event
-// per approver and decision; a Verified step has its PromotionSucceeded
+// (Bundle, environment, action), GateEvaluated aside, one Approval* event
+// per approver and decision, and one Verdict* event per Verdict (each
+// verifier writes its own); a Verified step has its PromotionSucceeded
 // event, a Failed one its PromotionFailed, RollbackStarted,
 // PromotionSuperseded or PromotionRejected event, and no other step has a
 // PromotionSucceeded one.
@@ -767,6 +778,9 @@ func auditViolations(events []v1alpha1.AuditEvent, steps []v1alpha1.PromotionSte
 			// A Pipeline or a freeze records each change once; one Pipeline
 			// pausing 80 times records 80 PipelinePaused events.
 			k += " " + id
+		}
+		if strings.HasPrefix(a.Spec.Action, "Verdict") {
+			k += " " + verdictName(a.Spec.Message)
 		}
 		count[k]++
 		if strings.HasPrefix(a.Spec.Action, "Approval") {

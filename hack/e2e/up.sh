@@ -34,6 +34,11 @@
 #           (kardinal-v0110.sh): the TestUpgradeV0110_ test builds an
 #           estate of 30 Pipelines in 5 namespaces and follows "Upgrading
 #           from v0.11.0"; one run per cluster too
+#   upgrade-v0120  Forgejo + kro and kardinal-promoter v0.12.0 as released
+#           (kardinal-v0120.sh), and the test agent image (test-agent.sh):
+#           the TestUpgradeV0120_ test builds an estate with promotions,
+#           a rollback, held gates, an AgentRun and a freeze in flight and
+#           follows "Upgrading from v0.12.0"; one run per cluster too
 #   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
 #           blocks of the getting-started and how-to pages in order
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,
@@ -132,6 +137,10 @@ case "$SUITE" in
   # kardinal-v0110.sh installs v0.11.0's kro and release. The estate's
   # health checks read a Deployment, so no Argo CD.
   upgrade-v0110) COMPONENTS=("giteafamily.sh forgejo" kardinal-v0110.sh) RUN='^TestUpgradeV0110_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  # kardinal-v0120.sh installs v0.12.0's kro and release; the verify gate's
+  # AgentRuns run the test agent (test-agent.sh).
+  upgrade-v0120) COMPONENTS=("giteafamily.sh forgejo" kardinal-v0120.sh test-agent.sh) RUN='^TestUpgradeV0120_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.

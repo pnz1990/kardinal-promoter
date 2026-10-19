@@ -1,8 +1,9 @@
 # Upgrade
 
-**Upgrading from v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
-**From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
-follow [Upgrading from v0.9.0](#upgrading-from-v090).
+**Upgrading from v0.12.0** to v0.12.1: follow [Upgrading from v0.12.0](#upgrading-from-v0120).
+**From v0.11.0:** follow [Upgrading from v0.11.0](#upgrading-from-v0110). **From v0.10.0:**
+follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:** follow
+[Upgrading from v0.9.0](#upgrading-from-v090).
 
 **Requires Kubernetes 1.35 or later.** Check the cluster before you upgrade, and upgrade
 Kubernetes first on an older one: the chart's `kubeVersion` refuses it, and `hack/install-kro.sh`
@@ -58,6 +59,50 @@ name every namespace the Graph reads, and after you upgrade again a reader RoleB
 Graph needs could be pruned until its next translation binds it again. Before you upgrade again
 after a downgrade, remove the marker, so the controller reads those Graphs in full:
 `kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
+
+## Upgrading from v0.12.0
+
+v0.12.1 is a patch release of v0.12.0. It changes no CRD, value or admission policy, and it
+targets the same kro as v0.12.0, so kro is not upgraded. The upgrade suite runs these steps as
+written (`TestUpgradeV0120_Estate`, on the oldest and newest supported Kubernetes minors) while
+versions are in flight. Everything stored under v0.12.0 keeps working:
+
+- Versions in flight keep their Graphs, PromotionSteps, PRStatuses and gate instances, and
+  finish. An open promotion PR stays the same PR.
+- Gates that hold a version keep holding it. Approvals and Verdicts recorded before the upgrade
+  still count, and an AgentRun that is running when you upgrade finishes and its Verdict counts.
+- Freezes stay in force until you lift them, and the versions agents shipped keep their actor.
+- A rollback created before the upgrade finishes as v0.12.0 built it, through the environments
+  upstream of its target.
+
+**1. Read the upgrade notes.** The [changelog](changelog.md)'s v0.12.1 section lists the one
+fix: a version is no longer recorded Verified in an environment a newer version has already
+replaced.
+
+**2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
+v0.12.0 chart installed, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
+new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**4. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check, and every Pipeline is Ready.
 
 ## Upgrading from v0.11.0
 
