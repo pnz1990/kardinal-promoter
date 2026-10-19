@@ -4,8 +4,11 @@
 # The evidence-airgap suite's network: NetworkPolicy airgap in the controller
 # namespace lets its Pods reach only the cluster (the Pod and Service CIDRs:
 # DNS, the git server, the in-cluster registry, Argo CD) and the API server
-# on each node's :6443. Nothing outside the cluster, so the public Sigstore
-# TUF repository, Fulcio and Rekor are out of reach. kindnet enforces it.
+# on each node's :6443. No connection leaves the cluster, so the public
+# Sigstore TUF repository, Fulcio and Rekor are out of reach; names still
+# resolve, through CoreDNS in kube-system, which the policy does not cover.
+# kindnet enforces it, and fails open while it restarts: the tests compare
+# its restart counts around what they prove.
 # Run after components/kardinal.sh. Idempotent.
 #
 # Env file:

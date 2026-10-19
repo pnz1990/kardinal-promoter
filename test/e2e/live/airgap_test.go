@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	iv "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
@@ -101,26 +103,55 @@ func offline(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
-// TestAirgap_EgressBlocked checks the suite's premise: a Pod in the
-// controller namespace cannot reach an address outside the cluster (the
-// node's kubelet, which a Pod elsewhere reaches) but reaches the in-cluster
-// registry. If this fails, the suite's other tests prove nothing.
-//
-// Covers EVIDENCE-AIRGAP-01.
-func TestAirgap_EgressBlocked(t *testing.T) {
-	e := framework.New(t)
+// kindnetRestarts is each kindnet Pod's container restarts. kindnet fails
+// open while it restarts (framework.DiagnoseCNI), so an unchanged count
+// between two probes means the policy held in between.
+func kindnetRestarts(t *testing.T, e *framework.Env) map[string]int32 {
+	t.Helper()
+	var pods corev1.PodList
+	require.NoError(t, e.Client.List(context.Background(), &pods, client.InNamespace("kube-system"), client.MatchingLabels{"app": "kindnet"}))
+	require.NotEmpty(t, pods.Items, "kindnet Pods (kind's CNI, which enforces the suite's NetworkPolicy)")
+	out := map[string]int32{}
+	for _, p := range pods.Items {
+		for _, cs := range p.Status.ContainerStatuses {
+			out[p.Name+"/"+cs.Name] += cs.RestartCount
+		}
+	}
+	return out
+}
+
+// requireAirgapped checks the suite's premise now: a Pod in the controller
+// namespace cannot reach an address outside the cluster (the node's
+// kubelet, which a Pod in another namespace reaches) but reaches the
+// in-cluster registry. It returns the kindnet restart counts it saw.
+func requireAirgapped(t *testing.T, e *framework.Env, label string) map[string]int32 {
+	t.Helper()
 	node := os.Getenv("KARDINAL_E2E_AIRGAP_NODE_IP")
 	require.NotEmpty(t, node, "KARDINAL_E2E_AIRGAP_NODE_IP: components/airgap.sh did not run")
 	kubelet := "https://" + node + ":10250/healthz"
 	reg := "http://" + strings.SplitN(framework.NewRegistry(t).Repository("x"), "/", 2)[0] + "/v2/"
 	ns := e.Namespace(t)
+	restarts := kindnetRestarts(t, e)
+	_, answered := airgapProbe(t, e, ns, label+"-outside-kubelet", kubelet)
+	require.True(t, answered, "%s, the control: a Pod outside the controller namespace reaches the node's kubelet", label)
+	out, answered := airgapProbe(t, e, framework.ControllerNamespace, label+"-airgap-kubelet", kubelet)
+	require.False(t, answered, "%s: the controller namespace cannot reach the node's kubelet:\n%s", label, out)
+	out, answered = airgapProbe(t, e, framework.ControllerNamespace, label+"-airgap-registry", reg)
+	require.True(t, answered, "%s: the controller namespace reaches the in-cluster registry:\n%s", label, out)
+	require.Equal(t, restarts, kindnetRestarts(t, e), "%s: kindnet did not restart during the probes", label)
+	return restarts
+}
 
-	_, answered := airgapProbe(t, e, ns, "outside-kubelet", kubelet)
-	require.True(t, answered, "the control: a Pod outside the controller namespace reaches the node's kubelet")
-	out, answered := airgapProbe(t, e, framework.ControllerNamespace, "airgap-kubelet", kubelet)
-	assert.False(t, answered, "the controller namespace cannot reach the node's kubelet:\n%s", out)
-	out, answered = airgapProbe(t, e, framework.ControllerNamespace, "airgap-registry", reg)
-	assert.True(t, answered, "the controller namespace reaches the in-cluster registry:\n%s", out)
+// publicCall matches a request URL to the public Sigstore or GitHub in a
+// controller log line.
+var publicCall = regexp.MustCompile(`https?://[^\s"]*(sigstore\.dev|github\.com|githubusercontent\.com)`)
+
+// TestAirgap_EgressBlocked checks the suite's premise on its own (see
+// requireAirgapped). If this fails, the suite's other tests prove nothing.
+//
+// Covers EVIDENCE-AIRGAP-01.
+func TestAirgap_EgressBlocked(t *testing.T) {
+	requireAirgapped(t, framework.New(t), "premise")
 }
 
 // TestAirgap_Evidence promotes a version with no way out of the cluster:
@@ -142,6 +173,8 @@ func TestAirgap_EgressBlocked(t *testing.T) {
 func TestAirgap_Evidence(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
+	start := time.Now()
+	restarts := requireAirgapped(t, e, "start")
 	a := newArgoApp(t, e, "test", "prod")
 	sigs := newSignatures(t, a.ns)
 	release, err := signtest.NewKey()
@@ -249,6 +282,19 @@ func TestAirgap_Evidence(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.Contains(t, out, "VERIFIED receipt")
 
+	// Still no way out, and the CNI held throughout: the same kindnet
+	// restarts as at the start, and the controller never called the public
+	// Sigstore or GitHub.
+	assert.Equal(t, restarts, requireAirgapped(t, e, "end"), "kindnet did not restart during the test: it would have failed open")
+	rel := e.ExistingRelease(t, "kardinal-promoter", framework.ControllerNamespace)
+	var called []string
+	for _, line := range strings.Split(rel.AllLogs(t), "\n") {
+		if publicCall.MatchString(line) {
+			called = append(called, line)
+		}
+	}
+	assert.Empty(t, called, "controller log lines naming the public Sigstore or GitHub since %s", start.UTC().Format(time.RFC3339))
+
 	// The public-good root cannot be fetched: fail closed.
 	b := newArgoApp(t, e, "test")
 	pg := keyPolicy(t, e, b.ns, newSignatures(t, b.ns), pem, "1m")
@@ -261,6 +307,7 @@ func TestAirgap_Evidence(t *testing.T) {
 	failed := waitImageVerification(t, e, b.ns, blocked, "Failed")
 	t.Logf("public-good: reason=%s message=%s", failed.Status.Reason, failed.Status.Message)
 	assert.Contains(t, failed.Status.Message, "authority public", "the message names the authority it could not load")
+	assert.Contains(t, failed.Status.Message, "public-good trusted root", "the cause is the root fetch, not another load error")
 	e.NoStep(t, b.ns, pipelineName, blocked, "test", 5*time.Second)
 	e.WaitBundlePhase(t, b.ns, blocked, "Failed", time.Minute)
 	assert.Contains(t, fmt.Sprint(e.DeploymentImage(t, b.ns, fixtures.Workload("test"))), fixtures.V1, "test still runs V1")
