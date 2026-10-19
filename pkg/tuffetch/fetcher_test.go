@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +31,28 @@ import (
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tuffetch"
 )
+
+// within runs download, failing the test after limit: a regression that
+// retries or waits without end fails at once, not at go test's timeout.
+func within(t *testing.T, limit time.Duration, download func() ([]byte, error)) ([]byte, error) {
+	t.Helper()
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data, err := download()
+		done <- result{data, err}
+	}()
+	select {
+	case r := <-done:
+		return r.data, r.err
+	case <-time.After(limit):
+		t.Fatalf("the download did not end within %s", limit)
+		return nil, nil
+	}
+}
 
 // TestFetcher_Retries (#2218): a 404 or another 4xx ends the download at
 // once, with the status as a *metadata.ErrDownloadHTTP for go-tuf's
@@ -64,7 +87,7 @@ func TestFetcher_Retries(t *testing.T) {
 			defer srv.Close()
 			f := &tuffetch.Fetcher{Backoff: time.Millisecond}
 			start := time.Now()
-			data, err := f.DownloadFile(srv.URL+"/2.root.json", 1024, 0)
+			data, err := within(t, 5*time.Second, func() ([]byte, error) { return f.DownloadFile(srv.URL+"/2.root.json", 1024, 0) })
 			assert.Less(t, time.Since(start), 2*time.Second)
 			assert.Equal(t, tc.wantReqs, reqs.Load())
 			if tc.wantCode == 0 {
@@ -89,12 +112,38 @@ func TestFetcher_Retries(t *testing.T) {
 		require.True(t, errors.As(err, &lm), "%v", err)
 		assert.EqualValues(t, 1, reqs.Load())
 	})
+	// QA-2 on #2236: a body without a length, and without an end, is read
+	// only to the limit and refused.
+	t.Run("an endless body stops at the limit", func(t *testing.T) {
+		var sent atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			chunk := []byte(strings.Repeat("x", 4096))
+			for r.Context().Err() == nil {
+				n, err := w.Write(chunk) // chunked: no Content-Length
+				sent.Add(int64(n))
+				if err != nil {
+					return
+				}
+				w.(http.Flusher).Flush()
+			}
+		}))
+		defer srv.Close()
+		const limit = 64 << 10
+		_, err := within(t, 5*time.Second, func() ([]byte, error) {
+			return (&tuffetch.Fetcher{Backoff: time.Millisecond, Deadline: 3 * time.Second}).DownloadFile(srv.URL, limit, 0)
+		})
+		var lm *metadata.ErrDownloadLengthMismatch
+		require.True(t, errors.As(err, &lm), "%v", err)
+		assert.Contains(t, lm.Msg, fmt.Sprintf("length %d is larger than expected %d", limit+1, limit), "read to the limit and one byte more")
+	})
 	t.Run("a transport error is tried again", func(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		url := srv.URL
 		srv.Close() // connection refused from now on
 		start := time.Now()
-		_, err := (&tuffetch.Fetcher{Backoff: 10 * time.Millisecond}).DownloadFile(url, 10, 0)
+		_, err := within(t, 5*time.Second, func() ([]byte, error) {
+			return (&tuffetch.Fetcher{Backoff: 10 * time.Millisecond}).DownloadFile(url, 10, 0)
+		})
 		require.Error(t, err)
 		assert.GreaterOrEqual(t, time.Since(start), 30*time.Millisecond, "two waits: three tries")
 	})
@@ -109,7 +158,9 @@ func TestFetcher_Retries(t *testing.T) {
 		defer srv.Close()
 		defer close(release)
 		start := time.Now()
-		_, err := (&tuffetch.Fetcher{Deadline: 300 * time.Millisecond}).DownloadFile(srv.URL, 10, 0)
+		_, err := within(t, 5*time.Second, func() ([]byte, error) {
+			return (&tuffetch.Fetcher{Deadline: 300 * time.Millisecond}).DownloadFile(srv.URL, 10, 0)
+		})
 		require.Error(t, err)
 		assert.Less(t, time.Since(start), 2*time.Second)
 	})
