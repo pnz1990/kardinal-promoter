@@ -121,7 +121,10 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			failingBundle := arBundle("app-v2", "2", 9)
 			if tc.failingIsRollback {
 				failingBundle.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
-				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v3"}
+				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v3",
+					lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+				failingBundle.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator,
+					Via: v1alpha1.ViaAutoRollback}
 				failingBundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
 			}
 			if tc.sidecar {

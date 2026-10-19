@@ -1035,7 +1035,9 @@ ServiceAccounts, by exact username, in `admission.controllerUsernames`:
 ServiceAccounts and let their holders create legacy ServiceAccount token Secrets, so a user with
 `edit` or `admin` in a namespace can act as its Graph ServiceAccount through either, and is
 trusted as kro there: they can forge a gate instance, a PromotionStep or a PRStatus in that
-namespace. kardinal's user roles (`<fullname>-viewer`, `-promoter` and `-approver`) grant neither `impersonate` nor `create` on Secrets. Give tenants kardinal's roles plus the stock `view` role,
+namespace. Anyone with `impersonate` on the Graph ServiceAccount passes as kro for PromotionStep
+writes, and kardinal's rollbacks read PromotionSteps as the record of what ran, so such a user can
+also steer which Verified version a rollback restores ([Rollback](../rollback.md#how-rollback-works)). kardinal's user roles (`<fullname>-viewer`, `-promoter` and `-approver`) grant neither `impersonate` nor `create` on Secrets. Give tenants kardinal's roles plus the stock `view` role,
 not `edit`, where promotions must not be forged. A namespace's `edit`/`admin` holders are its
 owners as far as kardinal can check (ledger G16 has the upstream ask that would close this).
 

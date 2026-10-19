@@ -216,6 +216,17 @@ func TestActorAdmission(t *testing.T) {
 			object: bundleObj(t, "billing", "checkout", with(fixer, func(a *v1alpha1.Actor) { a.Via = "ui" }))}},
 		{name: "17 only the controller sets via", req: actorReq{resource: "bundles", namespace: "x", user: "alice",
 			object: bundleObj(t, "x", "checkout", with(human("alice"), func(a *v1alpha1.Actor) { a.Via = "ui" }))}, deny: "with no via", stamp: true},
+		// QA-3 on #2184: the stamp kardinal trusts for an automatic rollback
+		// (lifecycle.IsAutoRollback) is the controller's alone.
+		{name: "17b a person forges the automatic rollback's stamp", req: actorReq{resource: "bundles", namespace: "x", user: "mallory",
+			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: "kardinal-controller",
+				Via: v1alpha1.ViaAutoRollback})}, deny: "actor must be {kind: human, principal: mallory}", stamp: true},
+		{name: "17c a person names the controller kind as themselves", req: actorReq{resource: "bundles", namespace: "x", user: "mallory",
+			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: "mallory"})},
+			deny: "actor must be {kind: human, principal: mallory}", stamp: true},
+		{name: "17d the controller's automatic rollback", req: actorReq{resource: "bundles", namespace: "x", user: controllerUser,
+			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: controllerUser,
+				Via: v1alpha1.ViaAutoRollback})}},
 		{name: "18 agent override stamped", req: actorReq{resource: "policygates", namespace: "payments-eu", user: fixerSA,
 			old: gateObj(t, "payments-eu", "uat"), object: gateObj(t, "payments-eu", "uat", override(fixerSA, fixer))},
 			where: where{Namespace: "payments-eu", Pipeline: "checkout", Environment: "uat"}},
