@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/compliance"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -419,6 +420,15 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 	}); err != nil {
 		return nil, err
 	}
+	// Their change request tickets: the ChangeRequest instances.
+	if err := p.kind(ctx, c, "ChangeRequest", &v1alpha1.ChangeRequestList{}, nsOpts, func(o runtime.Object) bool {
+		cr := o.(*v1alpha1.ChangeRequest)
+		_, instance := cr.Labels[graph.LabelChangeRequestTemplate]
+		b, ok := cr.Labels["kardinal.io/bundle"]
+		return instance && ok && ofBundle(cr.Namespace, b) && envOK(cr.Labels["kardinal.io/environment"])
+	}); err != nil {
+		return nil, err
+	}
 	// The procedure and policy in force at export.
 	if err := p.kind(ctx, c, "Pipeline", &v1alpha1.PipelineList{}, nsOpts, func(o runtime.Object) bool {
 		return pipeOK(o.(*v1alpha1.Pipeline).Name)
@@ -429,6 +439,12 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 		g := o.(*v1alpha1.PolicyGate)
 		_, instance := g.Labels["kardinal.io/gate-template"]
 		return !instance && !g.Spec.Generated
+	}); err != nil {
+		return nil, err
+	}
+	if err := p.kindAs(ctx, c, "ChangeRequest", "changerequest-templates.ndjson", "ChangeRequestTemplate", &v1alpha1.ChangeRequestList{}, nsOpts, func(o runtime.Object) bool {
+		_, instance := o.(*v1alpha1.ChangeRequest).Labels[graph.LabelChangeRequestTemplate]
+		return !instance
 	}); err != nil {
 		return nil, err
 	}
@@ -853,9 +869,10 @@ A period that ends before the oldest AuditEvent fails: export continuously
 with kardinal audit export.
 
 The period is the versions (Bundles) created in [--since, --until) and the
-AuditEvents timestamped in it. A version brings its Approvals, gate instances
-and Verdicts. The Pipelines, gate templates, ChangeWindows, AgentIdentities
-and admission policies are the ones in force at export.
+AuditEvents timestamped in it. A version brings its Approvals, gate instances,
+Verdicts, receipts and change request tickets. The Pipelines, gate and change request
+templates, ChangeWindows, AgentIdentities and admission policies are the ones
+in force at export.
 
     manifest.json                format, kardinal version, exporter, period,
                                  filters, each file's records, bytes and
@@ -871,8 +888,12 @@ and admission policies are the ones in force at export.
     receipts.ndjson              their PromotionReceipts, statement and
                                  Sigstore bundle as signed (verify one
                                  with kardinal verify-receipt --file)
+    changerequests.ndjson        their ChangeRequest instances (ticket,
+                                 state, approvers, whether it was verified)
     pipelines.ndjson             the Pipelines
     policygate-templates.ndjson  the gate templates
+    changerequest-templates.ndjson
+                                 the ChangeRequest templates
     changewindows.ndjson         windows and freezes, with exemptions
     agentidentities.ndjson       the agent registry
     admission.yaml               the chart's ValidatingAdmissionPolicies

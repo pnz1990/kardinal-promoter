@@ -75,6 +75,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		BundleName:           state.BundleName,
 		Bundle:               state.Bundle,
 		GateResults:          state.GateResults,
+		ChangeRequests:       state.ChangeRequests,
 		Verifications:        state.Verifications,
 		UpstreamEnvironments: buildPRBodyUpstreamEnvs(state.UpstreamEnvironments),
 		Pipeline:             state.Pipeline,

@@ -41,6 +41,12 @@ const (
 // of an encoded query.
 var snKeyRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
+// snNumberRE is a change number as ServiceNow writes one (a prefix of
+// capitals, then digits: CHG0031337). The number a reading records is shown
+// in the PR body and the receipt, so anything else fails the reading
+// closed.
+var snNumberRE = regexp.MustCompile(`^[A-Z]{1,16}[0-9]{1,32}$`)
+
 // snFieldRE is a field name link.requireField may name.
 var snFieldRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,79}$`)
 
@@ -80,7 +86,10 @@ func (s *ServiceNow) conf(ctx context.Context, req Request) (*kardinalv1alpha1.S
 		return nil, nil, "", errors.New("servicenow: spec.servicenow is not set")
 	}
 	base, err := url.Parse(strings.TrimSuffix(sn.InstanceURL, "/"))
-	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil {
+	// A path, query or fragment would be copied into every ticket URL (the
+	// PR body, the receipt): refused, as the CRD does.
+	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil ||
+		base.Path != "" || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" {
 		return nil, nil, "", errors.New("servicenow: instanceURL must be https://<host>")
 	}
 	auth, err := authHeader(ctx, req, sn.ChangeRequestAuth)
@@ -270,6 +279,9 @@ func (s *ServiceNow) reading(base *url.URL, sn *kardinalv1alpha1.ServiceNowChang
 	number, _ := rec.field("number")
 	if number == "" || sysID == "" {
 		return Reading{}, errors.New("servicenow: the change has no number or sys_id")
+	}
+	if !snNumberRE.MatchString(number) {
+		return Reading{}, errors.New("servicenow: the change number is not capitals then digits (CHG0031337); the change is not read")
 	}
 	state, stateName := rec.field("state")
 	approval, approvalName := rec.field("approval")

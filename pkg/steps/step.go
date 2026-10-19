@@ -161,6 +161,10 @@ type StepState struct {
 	// GateResults holds the PolicyGate evaluations for this environment.
 	GateResults []v1alpha1.GateResult
 
+	// ChangeRequests holds this environment's change request tickets, for
+	// the PR body.
+	ChangeRequests []scm.ChangeRequest
+
 	// Verifications holds this environment's verify gates and their
 	// verdicts, for the PR body.
 	Verifications []scm.Verification

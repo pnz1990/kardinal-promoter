@@ -1,0 +1,650 @@
+[
+ {
+  "url": "https://github.com/acme/app/actions/runs/7",
+  "refused": false,
+  "redacted": "https://github.com/acme/app/actions/runs/7",
+  "why": "a GitHub Actions run"
+ },
+ {
+  "url": "https://github.com/acme/app/actions/runs/7?check_suite_focus=true#step:2:1",
+  "refused": false,
+  "redacted": "https://github.com/acme/app/actions/runs/7?check_suite_focus=true#step:2:1",
+  "why": "a query and a fragment without credentials"
+ },
+ {
+  "url": "https://ci.example.com/run/7?tokens=3&monkey=1&keyboard=us",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?tokens=3&monkey=1&keyboard=us",
+  "why": "names that only contain a credential word"
+ },
+ {
+  "url": "http://jenkins.local:8080/job/app/7/",
+  "refused": false,
+  "redacted": "http://jenkins.local:8080/job/app/7/",
+  "why": "a port"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token=REDACTED&attempt=1",
+  "why": "credential parameter token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?TOKEN=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?TOKEN=REDACTED&attempt=1",
+  "why": "credential parameter TOKEN"
+ },
+ {
+  "url": "https://ci.example.com/run/7?access_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?access_token=REDACTED&attempt=1",
+  "why": "credential parameter access_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?access-token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?access-token=REDACTED&attempt=1",
+  "why": "credential parameter access-token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?accessToken=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?accessToken=REDACTED&attempt=1",
+  "why": "credential parameter accessToken"
+ },
+ {
+  "url": "https://ci.example.com/run/7?private_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?private_token=REDACTED&attempt=1",
+  "why": "credential parameter private_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?refresh_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?refresh_token=REDACTED&attempt=1",
+  "why": "credential parameter refresh_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?id_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?id_token=REDACTED&attempt=1",
+  "why": "credential parameter id_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?session_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?session_token=REDACTED&attempt=1",
+  "why": "credential parameter session_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?job_token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?job_token=REDACTED&attempt=1",
+  "why": "credential parameter job_token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?circle-token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?circle-token=REDACTED&attempt=1",
+  "why": "credential parameter circle-token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?x-amz-security-token=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?x-amz-security-token=REDACTED&attempt=1",
+  "why": "credential parameter x-amz-security-token"
+ },
+ {
+  "url": "https://ci.example.com/run/7?secret=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?secret=REDACTED&attempt=1",
+  "why": "credential parameter secret"
+ },
+ {
+  "url": "https://ci.example.com/run/7?client_secret=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?client_secret=REDACTED&attempt=1",
+  "why": "credential parameter client_secret"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Signature=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Signature=REDACTED&attempt=1",
+  "why": "credential parameter Signature"
+ },
+ {
+  "url": "https://ci.example.com/run/7?X-Amz-Signature=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?X-Amz-Signature=REDACTED&attempt=1",
+  "why": "credential parameter X-Amz-Signature"
+ },
+ {
+  "url": "https://ci.example.com/run/7?X-Goog-Signature=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?X-Goog-Signature=REDACTED&attempt=1",
+  "why": "credential parameter X-Goog-Signature"
+ },
+ {
+  "url": "https://ci.example.com/run/7?X-Goog-Credential=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?X-Goog-Credential=REDACTED&attempt=1",
+  "why": "credential parameter X-Goog-Credential"
+ },
+ {
+  "url": "https://ci.example.com/run/7?x-amz-credential=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?x-amz-credential=REDACTED&attempt=1",
+  "why": "credential parameter x-amz-credential"
+ },
+ {
+  "url": "https://ci.example.com/run/7?password=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?password=REDACTED&attempt=1",
+  "why": "credential parameter password"
+ },
+ {
+  "url": "https://ci.example.com/run/7?passwd=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?passwd=REDACTED&attempt=1",
+  "why": "credential parameter passwd"
+ },
+ {
+  "url": "https://ci.example.com/run/7?api_key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?api_key=REDACTED&attempt=1",
+  "why": "credential parameter api_key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?apikey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?apikey=REDACTED&attempt=1",
+  "why": "credential parameter apikey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?AWSAccessKeyId=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?AWSAccessKeyId=REDACTED&attempt=1",
+  "why": "credential parameter AWSAccessKeyId"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sig=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?sig=REDACTED&attempt=1",
+  "why": "credential parameter sig"
+ },
+ {
+  "url": "https://ci.example.com/run/7?key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?key=REDACTED&attempt=1",
+  "why": "credential parameter key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?auth=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?auth=REDACTED&attempt=1",
+  "why": "credential parameter auth"
+ },
+ {
+  "url": "https://ci.example.com/run/7?jwt=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?jwt=REDACTED&attempt=1",
+  "why": "credential parameter jwt"
+ },
+ {
+  "url": "https://ci.example.com/run/7?code=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?code=REDACTED&attempt=1",
+  "why": "credential parameter code"
+ },
+ {
+  "url": "https://ci.example.com/run/7?a=1&&token=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?a=1&&token=REDACTED",
+  "why": "an empty pair before it"
+ },
+ {
+  "url": "https://ci.example.com/run/7?a=1;key=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?a=1;key=REDACTED",
+  "why": "a ; separator"
+ },
+ {
+  "url": "https://ci.example.com/run/7#sig=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7#sig=REDACTED",
+  "why": "in the fragment"
+ },
+ {
+  "url": "https://ci.example.com/run/7?%74oken=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?%74oken=REDACTED",
+  "why": "a percent-encoded name"
+ },
+ {
+  "url": "https://ci.example.com/run/7?to%6Ben=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?to%6Ben=REDACTED",
+  "why": "a name percent-encoded in the middle"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token=",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token=REDACTED",
+  "why": "an empty value"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token=S3'CRET&x=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token=REDACTED&x=1",
+  "why": "a quote in the value"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Signature=S3CRET&AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Signature=REDACTED&AWSAccessKeyId=REDACTED&Expires=1",
+  "why": "an S3 signed URL"
+ },
+ {
+  "url": "https://bot:S3CRET@ci.example.com/run/7",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7",
+  "why": "user info"
+ },
+ {
+  "url": "https://bot:pa#ss@ci.example.com/run/7",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7",
+  "why": "a raw # in the password"
+ },
+ {
+  "url": "https://bot:pa?ss@ci.example.com/run/7",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7",
+  "why": "a raw ? in the password"
+ },
+ {
+  "url": "https://github.com@evil.example/run/7",
+  "refused": true,
+  "redacted": "https://evil.example/run/7",
+  "why": "a host disguised as user info"
+ },
+ {
+  "url": "https://ci.example.com?run=7@example.org/x",
+  "refused": true,
+  "redacted": "https://example.org/x",
+  "why": "an @ before the first / is read as user info"
+ },
+ {
+  "url": "https://ci.example.com/run/7?authorization=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?authorization=REDACTED&attempt=1",
+  "why": "credential parameter authorization"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Authorization=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Authorization=REDACTED&attempt=1",
+  "why": "credential parameter Authorization"
+ },
+ {
+  "url": "https://ci.example.com/run/7?bearer=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?bearer=REDACTED&attempt=1",
+  "why": "credential parameter bearer"
+ },
+ {
+  "url": "https://ci.example.com/run/7?passphrase=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?passphrase=REDACTED&attempt=1",
+  "why": "credential parameter passphrase"
+ },
+ {
+  "url": "https://ci.example.com/run/7?jsessionid=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?jsessionid=REDACTED&attempt=1",
+  "why": "credential parameter jsessionid"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sessionid=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?sessionid=REDACTED&attempt=1",
+  "why": "credential parameter sessionid"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sid=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?sid=REDACTED&attempt=1",
+  "why": "credential parameter sid"
+ },
+ {
+  "url": "https://ci.example.com/run/7?subscription-key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?subscription-key=REDACTED&attempt=1",
+  "why": "credential parameter subscription-key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Ocp-Apim-Subscription-Key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?Ocp-Apim-Subscription-Key=REDACTED&attempt=1",
+  "why": "credential parameter Ocp-Apim-Subscription-Key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?authkey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?authkey=REDACTED&attempt=1",
+  "why": "credential parameter authkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?appkey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?appkey=REDACTED&attempt=1",
+  "why": "credential parameter appkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?masterkey=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?masterkey=REDACTED&attempt=1",
+  "why": "credential parameter masterkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?key=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?key=REDACTED&attempt=1",
+  "why": "credential parameter key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?token[]=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?token[]=REDACTED&attempt=1",
+  "why": "credential parameter token[]"
+ },
+ {
+  "url": "https://ci.example.com/run/7?api_key[0]=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?api_key[0]=REDACTED&attempt=1",
+  "why": "credential parameter api_key[0]"
+ },
+ {
+  "url": "https://ci.example.com/run/7?ticket=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?ticket=REDACTED&attempt=1",
+  "why": "credential parameter ticket"
+ },
+ {
+  "url": "https://ci.example.com/run/7?client_assertion=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?client_assertion=REDACTED&attempt=1",
+  "why": "credential parameter client_assertion"
+ },
+ {
+  "url": "https://ci.example.com/run/7?session=S3CRET&attempt=1",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7?session=REDACTED&attempt=1",
+  "why": "credential parameter session"
+ },
+ {
+  "url": "https://ci.example.com/run/7;jsessionid=S3CRET",
+  "refused": true,
+  "redacted": "https://ci.example.com/run/7;jsessionid=REDACTED",
+  "why": "a Jenkins ;jsessionid path parameter"
+ },
+ {
+  "url": "https://ci.example.com/run/7?monkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?monkey=1",
+  "why": "harmless name monkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?donkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?donkey=1",
+  "why": "harmless name donkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?turkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?turkey=1",
+  "why": "harmless name turkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?jockey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?jockey=1",
+  "why": "harmless name jockey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?hockey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?hockey=1",
+  "why": "harmless name hockey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?whiskey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?whiskey=1",
+  "why": "harmless name whiskey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?hotkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?hotkey=1",
+  "why": "harmless name hotkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sortkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?sortkey=1",
+  "why": "harmless name sortkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?primarykey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?primarykey=1",
+  "why": "harmless name primarykey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?foreignkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?foreignkey=1",
+  "why": "harmless name foreignkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?partitionkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?partitionkey=1",
+  "why": "harmless name partitionkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?groupkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?groupkey=1",
+  "why": "harmless name groupkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?cachekey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?cachekey=1",
+  "why": "harmless name cachekey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?lookupkey=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?lookupkey=1",
+  "why": "harmless name lookupkey"
+ },
+ {
+  "url": "https://ci.example.com/run/7?sort_key=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?sort_key=1",
+  "why": "harmless name sort_key"
+ },
+ {
+  "url": "https://ci.example.com/run/7?Primary-Key=1",
+  "refused": false,
+  "redacted": "https://ci.example.com/run/7?Primary-Key=1",
+  "why": "harmless name Primary-Key"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?buildKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?buildKey=PROJ-PLAN-42",
+  "why": "CI identifier buildKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?planKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?planKey=PROJ-PLAN-42",
+  "why": "CI identifier planKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?jobKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?jobKey=PROJ-PLAN-42",
+  "why": "CI identifier jobKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?resultKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?resultKey=PROJ-PLAN-42",
+  "why": "CI identifier resultKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?buildResultKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?buildResultKey=PROJ-PLAN-42",
+  "why": "CI identifier buildResultKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?chainKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?chainKey=PROJ-PLAN-42",
+  "why": "CI identifier chainKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?stageKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?stageKey=PROJ-PLAN-42",
+  "why": "CI identifier stageKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?projectKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?projectKey=PROJ-PLAN-42",
+  "why": "CI identifier projectKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?issueKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?issueKey=PROJ-PLAN-42",
+  "why": "CI identifier issueKey"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/x?branchKey=PROJ-PLAN-42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/x?branchKey=PROJ-PLAN-42",
+  "why": "CI identifier branchKey"
+ },
+ {
+  "url": "https://github.com/acme/app/actions/runs/12345678901/job/98765432101?pr=42#step:4:12",
+  "refused": false,
+  "redacted": "https://github.com/acme/app/actions/runs/12345678901/job/98765432101?pr=42#step:4:12",
+  "why": "GitHub Actions run"
+ },
+ {
+  "url": "https://gitlab.com/acme/app/-/pipelines/1234567",
+  "refused": false,
+  "redacted": "https://gitlab.com/acme/app/-/pipelines/1234567",
+  "why": "GitLab pipeline"
+ },
+ {
+  "url": "https://gitlab.example.com/acme/app/-/jobs/987654?ref_type=heads",
+  "refused": false,
+  "redacted": "https://gitlab.example.com/acme/app/-/jobs/987654?ref_type=heads",
+  "why": "GitLab job"
+ },
+ {
+  "url": "https://jenkins.example.com/job/acme/job/app/job/main/42/console",
+  "refused": false,
+  "redacted": "https://jenkins.example.com/job/acme/job/app/job/main/42/console",
+  "why": "Jenkins build"
+ },
+ {
+  "url": "https://jenkins.example.com/blue/organizations/jenkins/app/detail/main/42/pipeline",
+  "refused": false,
+  "redacted": "https://jenkins.example.com/blue/organizations/jenkins/app/detail/main/42/pipeline",
+  "why": "Jenkins Blue Ocean"
+ },
+ {
+  "url": "https://app.circleci.com/pipelines/github/acme/app/1234/workflows/5d0f3c1e-8a2b-4c3d-9e7f-1a2b3c4d5e6f/jobs/5678",
+  "refused": false,
+  "redacted": "https://app.circleci.com/pipelines/github/acme/app/1234/workflows/5d0f3c1e-8a2b-4c3d-9e7f-1a2b3c4d5e6f/jobs/5678",
+  "why": "CircleCI job"
+ },
+ {
+  "url": "https://bamboo.example.com/browse/PROJ-PLAN-JOB1-42/log",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/browse/PROJ-PLAN-JOB1-42/log",
+  "why": "Bamboo job result"
+ },
+ {
+  "url": "https://bamboo.example.com/chain/result/viewChainResult.action?planKey=PROJ-PLAN&buildNumber=42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/chain/result/viewChainResult.action?planKey=PROJ-PLAN&buildNumber=42",
+  "why": "Bamboo chain result"
+ },
+ {
+  "url": "https://bamboo.example.com/build/result/viewBuildResultLogs.action?buildKey=PROJ-PLAN-JOB1&buildNumber=42",
+  "refused": false,
+  "redacted": "https://bamboo.example.com/build/result/viewBuildResultLogs.action?buildKey=PROJ-PLAN-JOB1&buildNumber=42",
+  "why": "Bamboo build logs"
+ },
+ {
+  "url": "https://teamcity.example.com/buildConfiguration/Acme_App_Build/12345?buildTab=log",
+  "refused": false,
+  "redacted": "https://teamcity.example.com/buildConfiguration/Acme_App_Build/12345?buildTab=log",
+  "why": "TeamCity build"
+ },
+ {
+  "url": "https://teamcity.example.com/viewLog.html?buildId=12345&buildTypeId=Acme_App_Build&tab=buildLog",
+  "refused": false,
+  "redacted": "https://teamcity.example.com/viewLog.html?buildId=12345&buildTypeId=Acme_App_Build&tab=buildLog",
+  "why": "TeamCity build log"
+ },
+ {
+  "url": "https://dev.azure.com/acme/app/_build/results?buildId=1234&view=results",
+  "refused": false,
+  "redacted": "https://dev.azure.com/acme/app/_build/results?buildId=1234&view=results",
+  "why": "Azure Pipelines run"
+ },
+ {
+  "url": "https://buildkite.com/acme/app/builds/1234#0189e1a2-3b4c-5d6e-7f80-91a2b3c4d5e6",
+  "refused": false,
+  "redacted": "https://buildkite.com/acme/app/builds/1234#0189e1a2-3b4c-5d6e-7f80-91a2b3c4d5e6",
+  "why": "Buildkite build"
+ },
+ {
+  "url": "https://tekton-dashboard.example.com/#/namespaces/ci/pipelineruns/app-run-x7k2p?pipelineTask=build&step=compile",
+  "refused": false,
+  "redacted": "https://tekton-dashboard.example.com/#/namespaces/ci/pipelineruns/app-run-x7k2p?pipelineTask=build&step=compile",
+  "why": "Tekton PipelineRun"
+ },
+ {
+  "url": "https://console.cloud.google.com/cloud-build/builds;region=global/1234?project=acme",
+  "refused": false,
+  "redacted": "https://console.cloud.google.com/cloud-build/builds;region=global/1234?project=acme",
+  "why": "Google Cloud Build"
+ },
+ {
+  "url": "https://argo.example.com/workflows/ci/app-x7k2p?tab=workflow&nodeId=app-x7k2p-123&uid=6f1e9c2a",
+  "refused": false,
+  "redacted": "https://argo.example.com/workflows/ci/app-x7k2p?tab=workflow&nodeId=app-x7k2p-123&uid=6f1e9c2a",
+  "why": "Argo Workflows run"
+ },
+ {
+  "url": "https://drone.example.com/acme/app/42",
+  "refused": false,
+  "redacted": "https://drone.example.com/acme/app/42",
+  "why": "Drone build"
+ }
+]

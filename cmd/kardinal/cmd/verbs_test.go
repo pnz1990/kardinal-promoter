@@ -713,9 +713,9 @@ func TestApprove_PinAndConfirm(t *testing.T) {
 	p.Status.Environments = []v1alpha1.PipelineEnvironmentStatus{{Name: "prod", Bundle: "app-v1", IncomingBundle: "app-v2", State: "Pending"}}
 	c := fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(b, p).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
-	prevClient, prevPrompt := buildClient, promptable
-	buildClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
-	t.Cleanup(func() { buildClient, promptable = prevClient, prevPrompt })
+	prevClient, prevPrompt := newClient, promptable
+	newClient = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	t.Cleanup(func() { newClient, promptable = prevClient, prevPrompt })
 	run := func(stdin string, tty bool, args ...string) (string, string, error) {
 		promptable = func() bool { return tty }
 		root := NewRootCmd()

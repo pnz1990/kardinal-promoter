@@ -34,10 +34,10 @@ A `ChangeRequest` with `spec.perPromotion: true` is a template, like a
    the instance's status.
 3. The gate reads the instance's status as `changeRequests.<template name>`. It never calls the
    ticketing system itself.
-4. When the Bundle is Verified or Failed the Graph sets `spec.suspend` on the instance and the
-   controller stops reading the ticket. A Superseded Bundle's Graph holds its steps, so its
-   instances are not suspended; they are deleted with the Graph when it is retired
-   (`graph.retire.superseded`, one minute by default). kardinal does not close or cancel the ticket.
+4. When the Bundle stops promoting the controller stops reading the ticket: once it is Verified or
+   Failed the Graph sets `spec.suspend` on the instance, and once it is Superseded or Rejected (or
+   gone, or re-created under the same name) the controller sees that on the Bundle itself and the
+   instance's `Ready` condition says `VersionFinal`. kardinal does not close or cancel the ticket.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -108,6 +108,11 @@ created it (`sys_created_by`), so someone who may create changes cannot plant on
 promotion's correlation id and approve it themselves. With scheme `basic` the integration user is
 the credential's user; with `bearer` set `spec.servicenow.integrationUser` to the user_name the
 token acts as (the CRD requires it).
+
+`instanceURL` is `https://<host>` only: a path, query, fragment or user name is refused (by the
+CRD and by the controller), since every ticket URL kardinal records is built from it. A change
+whose `number` is not capitals then digits (`CHG0031337`) is not read: its number would appear in
+the PR body and the receipt.
 
 The template cannot set `type`, `correlation_id` or `correlation_display`. `correlation_id`
 holds `kardinal-` and 32 hex characters of the promotion's correlation id's SHA-256, because the
@@ -372,6 +377,31 @@ The instance writes AuditEvents `ChangeRequestOpened`, `ChangeRequestLinked`, an
 the ticket is read so, `ChangeRequestApproved` and `ChangeRequestRejected`
 (`kardinal get auditevents --pipeline checkout --env prod`, or
 `kubectl get auditevents -l kardinal.io/action=ChangeRequestApproved`).
+
+### In the PR, the receipt and the evidence pack
+
+- **The PR.** A promotion PR has a `### Change Requests` section after the gate table, with one
+  row for each ticket of the version in that environment: the template, the ticket key linked to
+  its URL, the provider, the state (with the provider's own), whether the ticket is the
+  promotion's (`yes`, or `no:` and the reason a link was not verified), the approvers and when the
+  ticket was last read. The rows are read when the PR is opened, like the gate table. Text from
+  the ticketing system (approver names, states, keys, reasons) is shown as plain text: HTML,
+  images, links, `@` mentions and issue references in it do not render, and directional
+  formatting characters are removed. A custom PR
+  body gets the section with `{{ changeRequestsTable }}`
+  ([Customising the PR](pr-evidence.md#customising-the-pr)).
+- **The receipt.** `kardinalPromotion.changeRequests` records each ticket as the step read it
+  when it started, next to its gates: template, instance, provider, key and URL, state,
+  whether it was verified and why, approvers, `observedAt` and `validUntil`
+  ([Promotion receipts](receipts.md)). A ticket closed after the step started stays as the step
+  saw it. The approvals in the receipt carry their structured fields
+  ([Approval fields](approvals.md#approval-fields)).
+- **The evidence pack.** `changerequests.ndjson` holds the instances of the period's versions, and
+  `changerequest-templates.ndjson` the templates in force at export
+  ([Produce an evidence pack](compliance.md#produce-an-evidence-pack)).
+
+Each record names the template by the instance's `kardinal.io/change-request-template` label.
+A label value is at most 63 characters, so a longer template name appears cut, with a hash suffix.
 
 Only kardinal writes an instance: the chart's graph-objects admission policy refuses anyone else
 (a user with full RBAC, the cluster admin) creating one or changing its status. A template has no

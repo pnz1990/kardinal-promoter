@@ -274,13 +274,23 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	if opts.CompactAbove != nil {
 		b.CompactAbove = *opts.CompactAbove
 	}
-	result, err := b.Build(graph.BuildInput{
+	// The AnalysisTemplates verification names are read as the controller
+	// reads them; when they cannot be, the dry run names them instead of
+	// building their AnalysisRuns (#2011).
+	_, analyses, err := previewPipeline(&pipe)
+	if err != nil {
+		return fmt.Errorf("dry-run: %w", err)
+	}
+	result, verification, err := buildPreview(context.Background(), c, b, graph.BuildInput{
 		Pipeline:    &pipe,
 		Bundle:      bundle,
 		PolicyGates: gates,
 	})
 	if err != nil {
 		return fmt.Errorf("dry-run: %w", err) // Build errors start with "build: "
+	}
+	if verification.Fails != "" {
+		return fmt.Errorf("dry-run: verification: %s; the controller fails the version", verification.Fails)
 	}
 
 	// The gate instances the Graph would create, per environment.
@@ -297,11 +307,12 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	}
 	if structured() {
 		out := dryRunResult{Pipeline: pipelineName, Namespace: ns, Type: spec.Type, Version: scm.BundleVersion(spec),
-			Nodes: result.NodeCount, Compact: result.Compact, Environments: []dryRunEnvironment{}}
+			Nodes: result.NodeCount, Compact: result.Compact, Environments: []dryRunEnvironment{},
+			VerificationNotChecked: verification.NotChecked}
 		for _, env := range order {
 			g := gatesByEnv[env]
 			sort.Strings(g)
-			out.Environments = append(out.Environments, dryRunEnvironment{Name: env, Gates: g})
+			out.Environments = append(out.Environments, dryRunEnvironment{Name: env, Gates: g, Analyses: analyses[env]})
 		}
 		return writeStructured(w, out)
 	}
@@ -320,7 +331,15 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 			sort.Strings(g)
 			line += " (gates: " + strings.Join(g, ", ") + ")"
 		}
+		if a := analyses[env]; len(a) > 0 {
+			line += " (verification: " + strings.Join(a, ", ") + ")"
+		}
 		_, _ = fmt.Fprintln(w, line)
+	}
+	if verification.NotChecked != "" {
+		_, _ = fmt.Fprintf(w, "\nVerification not checked: %s.\nThe node count leaves out verification: the controller "+
+			"reads its AnalysisTemplates and adds their AnalysisRuns after each environment's health check.\n",
+			verification.NotChecked)
 	}
 
 	_, _ = fmt.Fprintf(w, "\nNo resources were created. Remove --dry-run to apply.\n")
@@ -341,12 +360,18 @@ type dryRunResult struct {
 	// Environments are in promotion order, each with the gates the Graph
 	// would create there.
 	Environments []dryRunEnvironment `json:"environments"`
+	// VerificationNotChecked says why the AnalysisTemplates verification
+	// names could not be read; Nodes then leaves out their AnalysisRuns.
+	VerificationNotChecked string `json:"verificationNotChecked,omitempty"`
 }
 
 // dryRunEnvironment is one environment of a dry-run Graph.
 type dryRunEnvironment struct {
 	Name  string   `json:"name"`
 	Gates []string `json:"gates,omitempty"`
+	// Analyses are the AnalysisTemplates its verification names
+	// ("cluster/<name>" for a ClusterAnalysisTemplate).
+	Analyses []string `json:"analyses,omitempty"`
 }
 
 // parseImageRefs turns --image values into ImageRefs. "repo@sha256:..." sets

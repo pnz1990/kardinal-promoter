@@ -101,10 +101,13 @@ func approved(element string) Evidence {
 		Element: element,
 		Record: "approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` " +
 			"(who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit " +
-			"status; an `auto` environment records none",
-		Kinds:   []string{"PolicyGate", "Approval", "Pipeline"},
-		Actions: []string{"ApprovalRecorded", "ApprovalRevoked", "GateEvaluated", "PRMerged"},
-		Status:  Shipped,
+			"status; an `auto` environment records none. A gate that reads `changeRequests` waits for the change request " +
+			"in ServiceNow or Jira: the `ChangeRequest` instance records the ticket, its state and approvers, and whether a " +
+			"linked ticket was verified as the promotion's",
+		Kinds: []string{"PolicyGate", "Approval", "Pipeline", "ChangeRequest"},
+		Actions: []string{"ApprovalRecorded", "ApprovalRevoked", "GateEvaluated", "PRMerged",
+			"ChangeRequestApproved", "ChangeRequestRejected"},
+		Status: Shipped,
 	}
 }
 
@@ -112,10 +115,12 @@ func approved(element string) Evidence {
 func separated(element string) Evidence {
 	return Evidence{
 		Element: element,
-		Record: "`approval.excludeAuthor` (off by default) does not count an approval by the user who created the version " +
+		Record: "`approval.excludeAuthor` (off by default, except on the approval gates kardinal adds for agents' versions in " +
+			"`agents: approve` environments) does not count an approval by the user who created the version " +
 			"(`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom " +
 			"kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. " +
-			"`status.approvals[].reason` says why an approval did not count",
+			"`status.approvals[].reason` says why an approval did not count. A verify gate's `verify.excludeAuthor` is on " +
+			"by default: a verdict from the version's author's party does not count",
 		Kinds:   []string{"PolicyGate", "Approval", "Bundle", "AgentIdentity"},
 		Actions: []string{"ApprovalRecorded"},
 		Status:  Shipped,

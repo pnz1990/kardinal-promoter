@@ -151,6 +151,10 @@ kardinal never promotes past an environment whose analysis it cannot run:
   spec.verification`. Health checks are different: they skip a kind the cluster does not serve.
 - **A template that does not exist**: the version fails the same way, naming the template.
 
+Only discovery's answer that the kind does not exist counts as Argo Rollouts not installed. When
+discovery itself fails (a timeout, a refused request), kardinal does not fail the version: it
+builds the Graph again later.
+
 After installing Argo Rollouts or creating the template, apply the Pipeline again (any change)
 or create a new version.
 
@@ -168,6 +172,27 @@ collection. Each is created once its step entered `Verifying` while the version 
 and kept from then on; `spec.terminate` is set the same way. Each AnalysisRun counts against the
 Graph's size limits. One that kro cannot create holds only its environment, and the version's
 `RunsCreated` condition names it.
+
+## Previews
+
+`kardinal policy simulate`, `kardinal policy list --pipeline` and `kardinal create bundle --dry-run`
+read the AnalysisTemplates and ClusterAnalysisTemplates verification names, as the controller
+does, and fail as it would. Verification is checked for the whole Pipeline, as the controller
+builds a version: a template missing for any environment fails every version, so it blocks a
+preview of an earlier environment too.
+
+- When they are all there, the gates decide the result, and the dry run counts their AnalysisRuns.
+- When one does not exist, or Argo Rollouts is not installed, `policy simulate` prints
+  `RESULT: BLOCKED`, `Blocked by: verification` with the controller's reason, and exits non-zero:
+  the controller fails such a version. `policy list` says `Verification fails:` with the reason,
+  and the dry run fails with it.
+- When the CLI may not read them (RBAC), or discovery fails, the gates decide the result and the output says
+  `Verification not checked:` with the reason. The dry run then names each environment's analyses
+  (`-o json`: `environments[].analyses`, `cluster/<name>` for a ClusterAnalysisTemplate, and
+  `verificationNotChecked`) and leaves their AnalysisRuns out of its node count.
+
+`kardinal validate` does not read the cluster: it checks `verification.timeout`, and the controller
+checks the templates when it builds the version's Graph.
 
 ## What it cannot do
 

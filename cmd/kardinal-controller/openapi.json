@@ -303,7 +303,7 @@
             "type": "string"
           },
           "ciRunURL": {
-            "description": "CIRunURL is the URL of the CI run that built this Bundle.",
+            "description": "CIRunURL is the URL of the CI run that built this Bundle. It must not carry credentials: no user info, no credential query or fragment parameter (a name ending in token, secret, key, signature, password, session, ticket, bearer, ..., except harmless ones such as monkey; or sig, auth, authorization, jwt, code, sid; any case, with or without -, _ or an array index), and no percent-encoded parameter name. The PR body publishes it, and a promotion receipt signs it (its Rekor sink publishes it for good). The rules are pkg/urlsecret's (CRDRules).",
             "type": "string"
           },
           "commitSHA": {

@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -100,6 +101,7 @@ const (
 	ReasonTemplate      = "Template"
 	ReasonNotAnInstance = "NotAnInstance"
 	ReasonSuspended     = "Suspended"
+	ReasonVersionFinal  = "VersionFinal"
 	ReasonWaitingForKey = "WaitingForKey"
 	ReasonWaitingSlot   = "WaitingForSlot"
 	ReasonCreating      = "Creating"
@@ -220,6 +222,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		r.cancelSlot(req.NamespacedName)
 		setCondition(&st, cr.Generation, CondReady, false, ReasonSuspended,
 			"spec.suspend is set (the Bundle stopped promoting): the ticket is no longer read", now)
+		return ctrl.Result{}, r.writeIfChanged(ctx, &cr, st)
+	}
+	if why := r.versionFinal(ctx, &cr, bundle, uid); why != "" {
+		r.cancelSlot(req.NamespacedName)
+		setCondition(&st, cr.Generation, CondReady, false, ReasonVersionFinal,
+			why+": nothing waits on this change request, so the ticket is no longer read", now)
 		return ctrl.Result{}, r.writeIfChanged(ctx, &cr, st)
 	}
 
@@ -384,12 +392,13 @@ func (r *Reconciler) record(ctx context.Context, st *kardinalv1alpha1.ChangeRequ
 	if action != "" {
 		r.enqueue(ctx, st, cr, action, "Success", now, auditMessage(action, cr, st))
 	}
-	if st.State != prevState && (st.State == kardinalv1alpha1.ChangeRequestApproved || st.State == kardinalv1alpha1.ChangeRequestRejected) {
-		a := AuditActionApproved
-		if st.State == kardinalv1alpha1.ChangeRequestRejected {
-			a = AuditActionRejected
+	if st.State != prevState {
+		switch st.State {
+		case kardinalv1alpha1.ChangeRequestApproved:
+			r.enqueue(ctx, st, cr, AuditActionApproved, "Success", now, auditMessage(AuditActionApproved, cr, st))
+		case kardinalv1alpha1.ChangeRequestRejected:
+			r.enqueue(ctx, st, cr, AuditActionRejected, "Success", now, auditMessage(AuditActionRejected, cr, st))
 		}
-		r.enqueue(ctx, st, cr, a, "Success", now, auditMessage(a, cr, st))
 	}
 }
 
@@ -751,6 +760,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.ChangeRequest{}, builder.WithPredicates(predicate.Or(eventfilter.SpecOrAnnotationChanged, auditPending))).
+		// A version that becomes Superseded or Rejected stops its instances
+		// at once (versionFinal), not at their next poll.
+		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleInstances),
+			builder.WithPredicates(becameFinal)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: n, NewQueue: fairqueue.NewFor(mgr)})
 	if r.Limiter != nil {
 		wake := make(chan event.GenericEvent, wakeQueue)
@@ -766,6 +779,61 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		b = b.WatchesRawSource(source.Channel(wake, &handler.EnqueueRequestForObject{}))
 	}
 	return shard.Active().Complete(b, tracing.WrapReconciler("changerequest", r), &kardinalv1alpha1.ChangeRequestList{})
+}
+
+// versionFinal says why the instance's version is final, or "" while it
+// may still promote: its Bundle is Superseded or Rejected (both final), or
+// gone, or re-created under the same name (another UID). Its spec.suspend
+// reads the Bundle phase, but the Graph holds the steps the instance node
+// depends on once the Bundle is Superseded or Rejected, so kro never
+// re-applies it with suspend (#2138, as MetricCheck's versionFinal). A
+// Bundle that cannot be read for another reason is not final: the instance
+// reads its ticket as before.
+func (r *Reconciler) versionFinal(ctx context.Context, cr *kardinalv1alpha1.ChangeRequest, bundle, uid string) string {
+	var b kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: bundle}, &b); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "Bundle " + bundle + " is gone"
+		}
+		return ""
+	}
+	switch {
+	case string(b.UID) != uid:
+		return "Bundle " + bundle + " was re-created"
+	case b.Status.Phase == "Superseded" || b.Status.Phase == "Rejected":
+		return "its version is " + b.Status.Phase
+	}
+	return ""
+}
+
+// becameFinal passes a Bundle update that moved it to Superseded or
+// Rejected, or back out of either: a final instance asks for no requeue, so
+// a version that is promoting again must enqueue its instances to resume.
+var becameFinal = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		final := func(o client.Object) bool {
+			b, ok := o.(*kardinalv1alpha1.Bundle)
+			return ok && (b.Status.Phase == "Superseded" || b.Status.Phase == "Rejected")
+		}
+		return final(e.ObjectNew) != final(e.ObjectOld)
+	},
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
+// bundleInstances maps a Bundle to its ChangeRequest instances.
+func (r *Reconciler) bundleInstances(ctx context.Context, o client.Object) []reconcile.Request {
+	var list kardinalv1alpha1.ChangeRequestList
+	if err := r.List(ctx, &list, client.InNamespace(o.GetNamespace()), client.MatchingLabels{labelBundle: o.GetName()}); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("bundle", o.GetName()).Msg("list the ChangeRequest instances of a finished version")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+	}
+	return reqs
 }
 
 // auditPending passes updates that add audit outbox entries.

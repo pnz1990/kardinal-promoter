@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { isCIRunURL, isHttpURL, prNumberFromURL } from './prLink'
 
 describe('isHttpURL', () => {
@@ -58,5 +60,16 @@ describe('isCIRunURL', () => {
     { name: 'no-break space', url: 'https://ci.example.com/1\u00a0x', want: false },
   ])('$name', ({ url, want }) => {
     expect(isCIRunURL(url)).toBe(want)
+  })
+})
+
+// The table every layer agrees on (pkg/urlsecret/testdata/vectors.json,
+// #2158): a URL the Bundle API and the CRD refuse is never linked.
+describe('isCIRunURL and the credential vectors', () => {
+  const vectors: { url: string; refused: boolean; why: string }[] = JSON.parse(
+    readFileSync(resolve(process.cwd(), '../pkg/urlsecret/testdata/vectors.json'), 'utf8'),
+  )
+  it.each(vectors)('$why', ({ url, refused }) => {
+    expect(isCIRunURL(url)).toBe(!refused)
   })
 })

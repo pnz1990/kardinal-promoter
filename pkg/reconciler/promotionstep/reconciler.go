@@ -1020,7 +1020,11 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	// The decision snapshot: the gates the step starts on, in the same
 	// patch as Promoting (docs/receipts.md).
 	if r.Receipts != nil {
-		ps.Status.Decision = r.decision(ctx, ps, gates, pipeline, bundle)
+		crs, err := r.changeRequestsOf(ctx, ps, bundle)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("decision snapshot: %w", err)
+		}
+		ps.Status.Decision = r.decision(ctx, ps, gates, crs, pipeline, bundle)
 		if ps.Status.Decision == nil {
 			// Too large even cut to one gate: the step starts without one,
 			// and without a receipt, rather than waiting (no promotion waits
@@ -1347,6 +1351,7 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 		K8sClient:            r.Client,
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
 		GateResults:          r.collectGateResults(ctx, log, ps),
+		ChangeRequests:       r.collectChangeRequests(ctx, log, ps, bundle),
 		Verifications:        r.collectVerifications(ctx, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 		Sequence:             seq,
@@ -2095,6 +2100,56 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	if result.Terminal {
 		ps.Status.ConsecutiveHealthFailures++
 		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, adapter.Name(), result.Reason)
+	}
+
+	// A newer Bundle's step pushed to this environment while this one was
+	// health-checking (#2132): the environment runs the newer version, so
+	// this promotion is superseded, neither Verified (with a
+	// PromotionSucceeded record of a version the environment no longer runs)
+	// nor failed. The Bundle reconciler supersedes the Bundle too, but its
+	// write can come late (an API server throttling it); the step decides
+	// from the newer step's recorded push (newerPushed, read from the API
+	// server), before it passes or times out.
+	//
+	// newerPushed also counts a newer step that has only recorded its push
+	// intent, or (pr-review) pushed its PR branch, without having changed the
+	// environment yet. If that push then fails, this step is Superseded while
+	// the environment still runs this version. That is no wider than the
+	// Bundle reconciler's supersession, which supersedes an older promoting
+	// Bundle as soon as a newer one is in flight, with no push at all.
+	if result.Healthy || expired {
+		newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle, false)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("check for a newer push to %s: %w", ps.Spec.Environment, err)
+		}
+		if newer != "" {
+			msg := fmt.Sprintf("newer bundle %s pushed to %s while this promotion was health-checking; this promotion is superseded",
+				newer, ps.Spec.Environment)
+			return ctrl.Result{}, r.transitionAudit(ctx, base, ps, StateSuperseded, msg, AuditActionPromotionSuperseded)
+		}
+	}
+	// The resource check passes on availability alone when the workload's
+	// images do not name the version it runs (a renamed image, a config
+	// Bundle): then the environment's branch must still hold this step's
+	// commit with the files it wrote, as the Argo CD and Flux checks require
+	// of the revision they synced (#1575, #2132).
+	if result.Healthy && adapter.Name() == "resource" && !result.TargetUpdated && opts.ExpectedRevision != "" {
+		if why := r.stepMoved(ctx, log, pipeline, env, ps, opts.ExpectedRevision); why != "" {
+			// A newer rollback of another fleet target pushes this
+			// environment on its way there: when one has, the branch moved
+			// under the newer version, and this promotion is superseded,
+			// not failed at its timeout (#2137, FLEET-09).
+			newer, err := r.newerPushed(ctx, r.apiReader(), ps, bundle, true)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("check for a newer push to %s: %w", ps.Spec.Environment, err)
+			}
+			if newer != "" {
+				msg := fmt.Sprintf("newer bundle %s pushed to %s while this promotion was health-checking; this promotion is superseded",
+					newer, ps.Spec.Environment)
+				return ctrl.Result{}, r.transitionAudit(ctx, base, ps, StateSuperseded, msg, AuditActionPromotionSuperseded)
+			}
+			result = health.HealthStatus{Progressing: true, Reason: why, CheckedAt: result.CheckedAt}
+		}
 	}
 
 	// Past the expiry only a healthy environment passes; the timeout's
@@ -3222,6 +3277,32 @@ func (r *Reconciler) collectVerifications(ctx context.Context, ps *v1alpha1.Prom
 		}
 		out = append(out, scm.Verification{Gate: gate, Check: g.Spec.Verify.Check, Environment: g.Spec.Verify.Environment,
 			Reason: g.Status.Reason, Verdicts: g.Status.Verdicts})
+	}
+	return out
+}
+
+// collectChangeRequests reads the step's ChangeRequest instances so the PR
+// body can show each ticket. Best effort, like collectGateResults: a list
+// that fails is logged and the section left out.
+func (r *Reconciler) collectChangeRequests(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
+	bundle *v1alpha1.Bundle) []scm.ChangeRequest {
+	crs, err := r.changeRequestsOf(ctx, ps, bundle)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not read change requests for PR body")
+		return nil
+	}
+	out := make([]scm.ChangeRequest, 0, len(crs))
+	for i := range crs {
+		c := decisionChangeRequest(&crs[i])
+		e := scm.ChangeRequest{Name: c.Name, Provider: c.Provider, State: c.State, ProviderState: c.ProviderState,
+			Verified: c.Verified, VerifiedReason: c.VerifiedReason, TimedOut: c.TimedOut, ObservedAt: c.ObservedAt}
+		if c.Ticket != nil {
+			e.Ticket, e.URL = c.Ticket.Key, c.Ticket.URL
+		}
+		for _, a := range c.Approvers {
+			e.Approvers = append(e.Approvers, a.Name)
+		}
+		out = append(out, e)
 	}
 	return out
 }

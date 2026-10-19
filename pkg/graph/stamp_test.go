@@ -16,20 +16,31 @@ import (
 // #1360: every gate instance, of every collection, is stamped with the
 // generation of its template and the digest of what it copied, in the Graph
 // kro renders and in the GateInstances mirror. The digest follows the copied
-// fields only.
+// fields only. Both Graph shapes: one node per instance, and the compact
+// shape's collection node (#2134).
 func TestBuild_GateInstancesStampTheirTemplate(t *testing.T) {
+	for _, shape := range []struct {
+		name string
+		b    *graph.Builder
+	}{{"nodes", graph.NewBuilder()}, {"compact", &graph.Builder{CompactAbove: 1}}} {
+		t.Run(shape.name, func(t *testing.T) { testStamps(t, shape.b, shape.name) })
+	}
+}
+
+func testStamps(t *testing.T, b *graph.Builder, shape string) {
 	plain := makePolicyGate("soak", "default", "prod", "upstream.test.soakMinutes >= 30")
 	plain.Generation, plain.UID = 7, "uid-soak"
 	approval := makePolicyGate("sign-off", "default", "prod", "true")
 	approval.Generation, approval.UID = 3, "uid-sign-off"
 	approval.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
-	res, err := graph.NewBuilder().Build(graph.BuildInput{
+	res, err := b.Build(graph.BuildInput{
 		Pipeline:    makeLinearPipeline("app", "test", "prod"),
 		Bundle:      makeBundle("app-v1", "app"),
 		PolicyGates: []kardinalv1alpha1.PolicyGate{plain, approval},
 	})
 	require.NoError(t, err)
 	assertKroValid(t, res.Graph)
+	require.Equal(t, shape == "compact", res.Compact, "the shape under test")
 
 	want := map[string]map[string]string{
 		"soak": {graph.AnnotationGateTemplateGeneration: "7", graph.AnnotationGateTemplateDigest: graph.TemplateDigest(plain),

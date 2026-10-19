@@ -261,14 +261,25 @@ jobs:
           # test/helm renders the chart for every profile and builds the
           # controller with each ldflags mistake; it runs at ~115s of the
           # 120s budget on a runner, so it gets its own 300s (#2156) until
-          # its slow tests are split. Every other package keeps 120s.
+          # its slow tests are split. cmd/kardinal/cmd (the CLI's tests: MCP,
+          # policy simulate, previews, the evidence pack) grew from 75s to
+          # 120s on main in a day and times out next to the shard's other
+          # packages, so it gets 300s too (#2194). Every other package keeps
+          # 120s.
+          cli=github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd
           others=()
-          for p in "${packages[@]}"; do [ "$p" = "$helm" ] || others+=("$p"); done
+          slow=()
+          for p in "${packages[@]}"; do
+            case "$p" in
+              "$helm" | "$cli") slow+=("$p") ;;
+              *) others+=("$p") ;;
+            esac
+          done
           if [ "${#others[@]}" -gt 0 ]; then
             go test -race -count=1 -timeout 120s "${others[@]}"
           fi
-          if [ "${#others[@]}" -ne "${#packages[@]}" ]; then
-            go test -race -count=1 -timeout 300s "$helm"
+          if [ "${#slow[@]}" -gt 0 ]; then
+            go test -race -count=1 -timeout 300s "${slow[@]}"
           fi
 
   # The Go tests that read the docs (hack/ci/docs-tests.txt: generated

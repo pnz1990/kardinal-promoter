@@ -83,7 +83,8 @@ func run() error {
 		report    = flag.Bool("report", false, "write the report from the cached results and run nothing")
 		dirtyOK   = flag.Bool("allow-dirty", false, "run on a tree with uncommitted changes (the report says so)")
 		wait      = flag.Duration("wait", 30*time.Second, "how often to check for a free slot or a ready host")
-		lockRetry = flag.Duration("lock-retry", 5*time.Minute, "how often to retry a heavy-load lock someone else holds")
+		lockRetry = flag.Duration("lock-retry", 10*time.Second, "how often a waiter for the heavy-load lock checks the queue, at the latest (it also wakes on the queue's changes)")
+		priority  = flag.String("priority", "normal", "the heavy-load lock queue class: release (a release gate: served before every other waiter) or normal")
 		slots     = flag.String("slots", os.Getenv("RELEASE_GATE_SLOTS"), "the host's shared cluster slots: a cluster step takes DIR/1..-slot-max with mkdir (default $RELEASE_GATE_SLOTS); cluster steps need it or -no-slots")
 		noSlots   = flag.Bool("no-slots", false, "start clusters without taking the host's cluster slots (a host of your own)")
 		slotMax   = flag.Int("slot-max", 4, "how many cluster slots the host has")
@@ -92,6 +93,9 @@ func run() error {
 		ghRepo    = flag.String("repo", "pnz1990/kardinal-promoter", "with -live ci, the GitHub repository")
 	)
 	flag.Parse()
+	if *priority != "release" && *priority != "normal" {
+		return fmt.Errorf("-priority %q: want release or normal", *priority)
+	}
 
 	root, err := git(".", "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -201,7 +205,7 @@ func run() error {
 		Inputs: fmt.Sprintf("%s\x00count=%d fuzztime=%s image-build=%s live=%s minors=%s",
 			tools, *count, *fuzzTime, *imgBuild, *live, minorsInput(opts)),
 		Host: &machine{maxLoad: *maxLoad, minMemGB: *minMem, slotsDir: *slots, slotMax: *slotMax, lockDir: *lock,
-			owner: fmt.Sprintf("%s pid %d %s", *owner, os.Getpid(), time.Now().UTC().Format(time.RFC3339)), lockRetry: *lockRetry, log: logf},
+			owner: fmt.Sprintf("%s pid %d %s", *owner, os.Getpid(), time.Now().UTC().Format(time.RFC3339)), lockRetry: *lockRetry, lockClass: lockClassOf(*priority), log: logf},
 		Runner: runner,
 	}
 

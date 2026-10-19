@@ -168,8 +168,11 @@ func keyVerifier(pub crypto.PublicKey, trusted root.TrustedMaterial, logged bool
 		return root.NewExpiringKey(sv, time.Time{}, time.Time{}), nil
 	})
 	if logged && trusted != nil {
+		// The entry's inclusion is verified; no signing time is required:
+		// a key is not short-lived like a certificate, and a Rekor v2 entry
+		// has no integrated time.
 		v, err := verify.NewVerifier(root.TrustedMaterialCollection{keyMaterial, trusted},
-			verify.WithTransparencyLog(1), verify.WithIntegratedTimestamps(1))
+			verify.WithTransparencyLog(1), verify.WithNoObserverTimestamps())
 		if err != nil {
 			return nil, fmt.Errorf("verifier: %w", err)
 		}

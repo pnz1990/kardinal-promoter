@@ -42,20 +42,21 @@ func setForTest[T any](t testing.TB, p *T, v T) {
 }
 
 // keepStyle puts back, when t ends, what running the root command sets for
-// the whole package: sty and errOut (useStyle, before every command). A test
+// the whole package: sty, errOut and skewCheck (useStyle, before every command). A test
 // that runs the root command (Execute) calls it, so a later test that calls
 // a function directly does not write to this test's buffer.
 func keepStyle(t testing.TB) {
 	t.Helper()
-	oldSty, oldErr := sty, errOut
-	t.Cleanup(func() { sty, errOut = oldSty, oldErr })
+	oldSty, oldErr, oldSkew := sty, errOut, skewCheck
+	t.Cleanup(func() { sty, errOut, skewCheck = oldSty, oldErr, oldSkew })
 }
 
 // TestPackageVariablesAreRestored: every Test, Benchmark and Fuzz function
 // that changes a package variable of this package puts it back when it
 // ends, so one failing test cannot fail the ones after it. A change is an
 // assignment to the variable (or to a field, element or pointee of it), ++
-// or --, or running the root command (Execute sets errOut and sty). It is
+// or --, or running the root command (Execute sets errOut, sty and
+// skewCheck). It is
 // put back by setForTest or keepStyle, or by a cleanup (the Cleanup of a
 // *testing.T, B, F or testing.TB, or the test's own defer) that assigns it
 // the copy saved from it (prev := v, if prev still holds it when the
@@ -117,8 +118,8 @@ func TestA(t *testing.T) { t.Cleanup(stub()) }`, nil, ""},
 		{"a helper that leaks", `func stub() { x = "a" }
 func TestA(t *testing.T) { stub() }`, []string{"TestA changes x"}, ""},
 		{"running the root command", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }`,
-			[]string{"TestA changes errOut", "TestA changes sty"}, ""},
-		{"keepStyle", `func keepStyle(t *testing.T) { a, b := errOut, sty; t.Cleanup(func() { errOut, sty = a, b }) }
+			[]string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"}, ""},
+		{"keepStyle", `func keepStyle(t *testing.T) { a, b, c := errOut, sty, skewCheck; t.Cleanup(func() { errOut, sty, skewCheck = a, b, c }) }
 func TestA(t *testing.T) { keepStyle(t); root := NewRootCmd(); _ = root.Execute() }`, nil, ""},
 		{"TestMain", `func TestMain(m *testing.M) { x = "a"; m.Run() }`, nil, ""},
 		// #1778: what the check did not see.
@@ -186,7 +187,7 @@ func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; v.f() }`, []string
 		{"a function the package assigns to a field is not run", `func TestA(t *testing.T) { _ = mk() }`, nil,
 			"type c struct{ f func() }\nfunc mk() c { var v c; v.f = func() { x = \"a\" }; return v }\n"},
 		{"Execute stands for what cobra runs", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }`,
-			[]string{"TestA changes errOut", "TestA changes sty"},
+			[]string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"},
 			"func NewRootCmd() *c { return &c{f: func() { y = \"a\" }} }\ntype c struct{ f func() }\nfunc (*c) Execute() error { return nil }\n"},
 		{"a Benchmark", `func BenchmarkA(b *testing.B) { x = "a" }`, []string{"BenchmarkA changes x"}, ""},
 		{"a Fuzz test that restores", `func FuzzA(f *testing.F) { prev := x; f.Cleanup(func() { x = prev }); x = "a" }`, nil, ""},
@@ -194,7 +195,7 @@ func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; v.f() }`, []string
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			leaks, err := restoreLeaks(map[string]string{
-				"x.go":      pkg + "var errOut, sty any\n" + tc.src,
+				"x.go":      pkg + "var errOut, sty, skewCheck any\n" + tc.src,
 				"x_test.go": "package cmd\n\nimport \"testing\"\n\n" + tc.test + "\n",
 			})
 			require.NoError(t, err)
@@ -639,6 +640,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 				case "Execute", "ExecuteContext", "ExecuteC", "ExecuteContextC":
 					write("errOut", n.Pos()) // useStyle, before every command
 					write("sty", n.Pos())
+					write("skewCheck", n.Pos())
 				}
 			}
 			if id, ok := n.Fun.(*ast.Ident); ok && id.Name == "setForTest" && len(n.Args) > 1 {

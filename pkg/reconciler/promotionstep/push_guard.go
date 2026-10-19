@@ -77,7 +77,7 @@ func (r *Reconciler) pushGuard(ps, base *v1alpha1.PromotionStep, state *steps.St
 		if err := r.recordPushIntent(ctx, ps, base, state); err != nil {
 			return err
 		}
-		if newer, err := r.newerPushed(ctx, reader, ps, &b); err != nil {
+		if newer, err := r.newerPushed(ctx, reader, ps, &b, false); err != nil {
 			return err
 		} else if newer != "" {
 			return fmt.Errorf("%w: newer bundle %s already pushed to %s; this promotion is superseded and does not push",
@@ -163,8 +163,16 @@ func (r *Reconciler) recordOutputs(ctx context.Context, ps, base *v1alpha1.Promo
 // rejected artifacts come from the cache: a rejection is final, so the cache
 // can miss one (and refuse a push the newer Bundle would no longer make) but
 // never invent one.
+//
+// landed widens it for a step whose environment's branch no longer holds its
+// commit (the resource check, branchMoved): a newer rollback of one fleet
+// target also pushes every environment on its path to that target
+// (graph.filterByIntent), so when its step here completed git-push, it is
+// what replaced this step's version, whatever target it rolls back. Without
+// landed (the push guard, a check that would pass) such a rollback
+// supersedes nothing outside its target.
 func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *v1alpha1.PromotionStep,
-	b *v1alpha1.Bundle) (string, error) {
+	b *v1alpha1.Bundle, landed bool) (string, error) {
 	var list v1alpha1.PromotionStepList
 	if err := reader.List(ctx, &list, client.InNamespace(ps.Namespace), client.MatchingLabels{
 		"kardinal.io/pipeline":    ps.Spec.PipelineName,
@@ -205,18 +213,48 @@ func (r *Reconciler) newerPushed(ctx context.Context, reader client.Reader, ps *
 		if len(lifecycle.SupersedingSiblings(p, b, []v1alpha1.Bundle{other}, rejected, true, ps.Spec.Environment)) > 0 {
 			return other.Name, nil
 		}
+		if landed && pushCompleted(s) && lifecycle.TargetRollback(p, &other) != "" {
+			// The rollback pushed here: judge it as the Bundle it is,
+			// not as the rollback of another target.
+			o := other.DeepCopy()
+			delete(o.Labels, lifecycle.LabelRollback)
+			if len(lifecycle.SupersedingSiblings(p, b, []v1alpha1.Bundle{*o}, rejected, true, ps.Spec.Environment)) > 0 {
+				return other.Name, nil
+			}
+		}
 	}
 	return "", nil
+}
+
+// stepsLanded is when the last of ps's steps completed: its commit was on
+// the branch by then (git-push, or the merge wait-for-merge saw). Zero when
+// none has completed.
+func stepsLanded(ps *v1alpha1.PromotionStep) time.Time {
+	var at time.Time
+	for _, st := range ps.Status.Steps {
+		if st.CompletedAt != nil && st.CompletedAt.After(at) {
+			at = st.CompletedAt.Time
+		}
+	}
+	return at
+}
+
+// pushCompleted reports whether s completed git-push.
+func pushCompleted(s *v1alpha1.PromotionStep) bool {
+	for _, st := range s.Status.Steps {
+		if st.Name == "git-push" && st.State == v1alpha1.StepExecutionCompleted {
+			return true
+		}
+	}
+	return false
 }
 
 // pushedOrPushing reports whether s completed git-push, or recorded its push
 // intent and has not stopped: a step that failed, was aborted or superseded
 // with only an intent never pushed, and its intent is stale.
 func pushedOrPushing(s *v1alpha1.PromotionStep) bool {
-	for _, st := range s.Status.Steps {
-		if st.Name == "git-push" && st.State == v1alpha1.StepExecutionCompleted {
-			return true
-		}
+	if pushCompleted(s) {
+		return true
 	}
 	if s.Status.Outputs[outputPushIntent] == "" {
 		return false

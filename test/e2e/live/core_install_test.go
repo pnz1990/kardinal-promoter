@@ -44,7 +44,7 @@ var (
 	primaryKinds   = []string{"Pipeline", "Bundle", "PolicyGate", "PromotionStep"}
 	secondaryKinds = []string{"Subscription", "NotificationHook", "MetricCheck", "ChangeWindow",
 		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "Approval", "ImageVerification", "RenderRun", "ScmProvider", "ClusterScmProvider",
-		"AgentIdentity", "AgentIndex", "Verdict", "AgentRun", "StepTemplate", "PromotionReceipt"}
+		"AgentIdentity", "AgentIndex", "Verdict", "AgentRun", "StepTemplate", "PromotionReceipt", "ChangeRequest"}
 )
 
 // TestCore_KroInstalled checks the kro hack/install-kro.sh installs
@@ -305,7 +305,7 @@ func crdFiles(t *testing.T) map[string]*unstructured.Unstructured {
 
 // TestCore_CRDsInstalled checks the kardinal CRDs in config/crd/bases
 // (docs/installation.md: the chart's crds/ and the CRDs an upgrade
-// applies). The directory holds exactly the 24 kardinal.io CRDs. Each of the
+// applies). The directory holds exactly the 25 kardinal.io CRDs. Each of the
 // four core ones (Pipeline, Bundle, PolicyGate, PromotionStep) is accepted by
 // a server-side apply, and the installed CRD is the file: Established, its
 // names accepted, the same group, names, scope and versions (schema, printer

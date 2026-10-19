@@ -34,8 +34,8 @@ var boundedFields = map[string][][]string{
 	"kardinal.io_changewindows.yaml": {{"reason"}},
 }
 
-// loadCRD reads a CRD of config/crd/bases; unbounded drops the maxLength of
-// its boundedFields: the CRD before v0.12.
+// loadCRD reads a CRD of config/crd/bases; unbounded drops the maxLength
+// (and the rules) of its boundedFields: the CRD before v0.12.
 func loadCRD(t *testing.T, file string, unbounded bool) *apiextensionsv1.CustomResourceDefinition {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "config", "crd", "bases", file))
@@ -61,6 +61,9 @@ func loadCRD(t *testing.T, file string, unbounded bool) *apiextensionsv1.CustomR
 				_, has := prop["maxLength"]
 				require.True(t, has, "%s %v has a maxLength", file, path)
 				delete(prop, "maxLength")
+				// The CRD before v0.12 had no rules on these fields either
+				// (ciRunURL's, #2158, cost too much unbounded).
+				delete(prop, "x-kubernetes-validations")
 				require.NoError(t, unstructured.SetNestedMap(v, prop, fields...))
 			}
 			versions[i] = v

@@ -411,6 +411,47 @@ func TestGate_ChangeRequestWebhook(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 }
 
+// TestGate_ChangeRequestSupersededStops (#2138 follow-up): a version
+// superseded while its prod change waits stops reading its ServiceNow change:
+// its instance says VersionFinal and the fake gets no further request for
+// it, while the newer version opens its own change.
+//
+// Covers CHANGE-REQUEST-10.
+func TestGate_ChangeRequestSupersededStops(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	snowTemplate(t, e, a.ns)
+	e.CreateGate(t, framework.Gate(a.ns, "cab", "prod", `changeRequests["prod-change"].state == "approved"`, recheck))
+	a.apply(t, a.pipeline(nil))
+	first := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, first, "test", "Verified", promoteTimeout)
+	name := "prod-change-prod--" + first
+	inst := waitChangeRequest(t, e, a.ns, name, "the first version's change", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		return cr.Status.Ticket != nil, fmt.Sprintf("%v", cr.Status.Conditions)
+	})
+	sysID := inst.Status.Ticket.ID
+
+	second := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	e.WaitBundlePhase(t, a.ns, first, "Superseded", promoteTimeout)
+	waitChangeRequest(t, e, a.ns, name, "the superseded version's instance stops", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		c := meta.FindStatusCondition(cr.Status.Conditions, "Ready")
+		return c != nil && c.Reason == "VersionFinal" && strings.Contains(c.Message, "Superseded"), fmt.Sprintf("%v", c)
+	})
+	before, err := e.FakeTicketRequests(ctx, sysID)
+	require.NoError(t, err)
+	time.Sleep(75 * time.Second) // past two 30s polls
+	after, err := e.FakeTicketRequests(ctx, sysID)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "no request for the superseded version's change")
+
+	e.WaitStepState(t, a.ns, pipelineName, second, "test", "Verified", promoteTimeout)
+	waitChangeRequest(t, e, a.ns, "prod-change-prod--"+second, "the newer version opens its own change", func(cr *v1alpha1.ChangeRequest) (bool, string) {
+		return cr.Status.Ticket != nil && cr.Status.Ticket.ID != sysID, fmt.Sprintf("%v", cr.Status.Ticket)
+	})
+}
+
 // changeRequestLabels is labels without the ones kro adds to the objects it
 // applies.
 func changeRequestLabels(labels map[string]string) map[string]string {

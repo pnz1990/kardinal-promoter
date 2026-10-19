@@ -428,10 +428,12 @@ func TestSigner_Validate(t *testing.T) {
 	}{
 		"keyless without time":   {Signer{Mode: "keyless", FulcioURL: "https://f", TokenFile: "/t"}, "Rekor or a timestamp authority"},
 		"keyless without fulcio": {Signer{Mode: "keyless", TokenFile: "/t", RekorURL: "https://r"}, "Fulcio URL"},
-		"key without key":        {Signer{Mode: "key"}, "key Secret"},
-		"unknown":                {Signer{Mode: "pgp"}, "unknown receipt signing mode"},
-		"kms not built":          {Signer{Mode: "kms", KMSRef: "awskms:///alias/x"}, "not built with the awskms KMS provider"},
-		"kms plugin":             {Signer{Mode: "kms", KMSRef: "myplugin://key"}, "not built with the myplugin KMS provider"},
+		"keyless on rekor v2 without a tsa": {Signer{Mode: "keyless", FulcioURL: "https://f", TokenFile: "/t", RekorURL: "https://r", RekorVersion: 2},
+			"Rekor v2 needs a timestamp authority"},
+		"key without key": {Signer{Mode: "key"}, "key Secret"},
+		"unknown":         {Signer{Mode: "pgp"}, "unknown receipt signing mode"},
+		"kms not built":   {Signer{Mode: "kms", KMSRef: "awskms:///alias/x"}, "not built with the awskms KMS provider"},
+		"kms plugin":      {Signer{Mode: "kms", KMSRef: "myplugin://key"}, "not built with the myplugin KMS provider"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

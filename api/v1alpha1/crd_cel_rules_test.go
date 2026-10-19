@@ -51,7 +51,7 @@ func failingRules(t *testing.T, node map[string]interface{}, self map[string]int
 	t.Helper()
 	rules, _ := node["x-kubernetes-validations"].([]interface{})
 	require.NotEmpty(t, rules, "schema node has no x-kubernetes-validations")
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType))
+	env, err := serverCELEnv(cel.Variable("self", cel.DynType))
 	require.NoError(t, err)
 	var failed []string
 	for _, r := range rules {
@@ -247,7 +247,7 @@ func TestBundleCRDRejectedIsOneWay(t *testing.T) {
 		}
 	}
 	require.Len(t, rules, 2)
-	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	env, err := serverCELEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
 	require.NoError(t, err)
 	failing := func(old, cur map[string]interface{}) []string {
 		var failed []string

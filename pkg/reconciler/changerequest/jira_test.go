@@ -351,7 +351,7 @@ func TestJira_Errors(t *testing.T) {
 	_, err := j.Create(context.Background(), jiraRequestFor(srv.URL))
 	assert.ErrorContains(t, err, "has no key or id")
 	n := len(srv.requests())
-	for _, u := range []string{strings.Replace(srv.URL, "https://", "http://", 1), srv.URL + "?x=1", strings.Replace(srv.URL, "https://", "https://a:b@", 1)} {
+	for _, u := range []string{strings.Replace(srv.URL, "https://", "http://", 1), srv.URL + "?x=1", srv.URL + "?", srv.URL + "/#f", strings.Replace(srv.URL, "https://", "https://a:b@", 1)} {
 		_, err = j.Get(context.Background(), jiraRequestFor(u), v1alpha1.ChangeRequestTicket{Key: "CHG-42"})
 		assert.ErrorContains(t, err, "baseURL must be https://", u)
 	}

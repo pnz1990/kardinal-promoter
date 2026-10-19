@@ -16,6 +16,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -128,11 +129,13 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 		return fmt.Errorf("collect policy gates: %w", err)
 	}
 	attached := map[string]bool{}
+	var verification previewVerification
 	for _, env := range pipelineEnvNames(pipe) { // fleet targets included: their gates are instances of the target
-		instances, _, err := gatesForEnv(pipe, simulatedBundle(pipe, time.Time{}), templates, policyNS, env)
+		instances, _, v, err := gatesForEnv(ctx, c, pipe, simulatedBundle(pipe, time.Time{}), templates, policyNS, env)
 		if err != nil {
 			return err
 		}
+		verification = cmp.Or(verification, v)
 		for _, g := range instances {
 			attached[g.Labels["kardinal.io/gate-template"]] = true
 		}
@@ -150,7 +153,23 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 		sigs_client.HasLabels{"kardinal.io/gate-template"}); err != nil {
 		return fmt.Errorf("list policy gate instances: %w", err)
 	}
-	return formatPolicyGateTable(w, shown, instances.Items, policyNS)
+	if err := formatPolicyGateTable(w, shown, instances.Items, policyNS); err != nil {
+		return err
+	}
+	return writeVerification(w, verification)
+}
+
+// writeVerification adds to a gate preview what it found out about the
+// Pipeline's verification (#2011): the reason the controller would fail
+// the version, or why it was not checked.
+func writeVerification(w io.Writer, v previewVerification) error {
+	switch {
+	case v.Fails != "":
+		return writef(w, "\nVerification fails: %s. The controller fails a version of this pipeline there.\n", v.Fails)
+	case v.NotChecked != "":
+		return writef(w, "\nVerification not checked: %s.\n", v.NotChecked)
+	}
+	return nil
 }
 
 // labelScope is g's kardinal.io/scope label, "team" when it has none: the
@@ -302,7 +321,7 @@ func newPolicySimulateCmd() *cobra.Command {
 through every upstream environment, at --time (UTC; default now) with
 --soak-minutes upstream. Nothing is written. The first line is RESULT: PASS or
 RESULT: BLOCKED, then each blocking gate with its message and the next time it
-would pass; it exits 0 either way.`,
+would pass; it exits 0 either way, unless verification would fail the version.`,
 		Example: `  kardinal policy simulate my-app prod --time "Saturday 3pm"
   # RESULT: BLOCKED
   # Blocked by: no-weekend-deploys
@@ -425,6 +444,10 @@ type simulateReport struct {
 	Time        time.Time      `json:"time"`
 	Blocked     bool           `json:"blocked"`
 	Gates       []simulateGate `json:"gates"`
+	// Verification is what the preview found out about spec.verification
+	// on the way to the environment: Fails (the version fails there, so
+	// Blocked) or NotChecked (#2011).
+	Verification previewVerification `json:"verification,omitzero"`
 }
 
 // policySimulateFn is the testable implementation of policy simulate.
@@ -436,6 +459,9 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 	var out strings.Builder
 	if rep.Blocked {
 		out.WriteString("RESULT: BLOCKED\n")
+		if f := rep.Verification.Fails; f != "" {
+			fmt.Fprintf(&out, "Blocked by: verification\nMessage: %q\n\n", f+"; the controller fails the version")
+		}
 		for _, r := range rep.Gates {
 			if r.Pass {
 				continue
@@ -468,7 +494,19 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 			return fmt.Errorf("write empty: %w", err)
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if n := rep.Verification.NotChecked; n != "" {
+		if err := writef(w, "\nVerification not checked: %s.\n", n); err != nil {
+			return err
+		}
+	}
+	if f := rep.Verification.Fails; f != "" {
+		// Not a gate that waits: the controller fails the version.
+		return fmt.Errorf("verification: %s", f)
+	}
+	return nil
 }
 
 // policySimulate evaluates the gates of opts.Env as the controller would, at
@@ -519,7 +557,7 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	if err != nil {
 		return nil, err
 	}
-	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.PolicyNamespaces, opts.Env)
+	gates, upstreams, verification, err := gatesForEnv(ctx, c, pipe, bundle, templates, opts.PolicyNamespaces, opts.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +588,11 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	// a result is stale only if it is stale now.
 	ev.metricsAt = opts.Now.UTC()
 
-	rep := &simulateReport{Pipeline: pipe.Name, Environment: opts.Env, Time: simTime, Gates: []simulateGate{}}
+	rep := &simulateReport{Pipeline: pipe.Name, Environment: opts.Env, Time: simTime, Gates: []simulateGate{},
+		Verification: verification}
+	if verification.Fails != "" {
+		rep.Blocked = true
+	}
 	candidates := nextWindowCandidates(ctx, c, simTime)
 	if opts.Version != "" {
 		rep.Bundle = bundle.Name
@@ -925,7 +967,12 @@ each blocking gate with its message and next window. Last comes one row per
 gate: its name, PASS or BLOCK, and the reason. The command exits 0 whether the
 result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
 only when it cannot simulate (a bad flag, a pipeline or environment that does
-not exist, or no cluster to read).`
+not exist, or no cluster to read), or when spec.verification on the way to the
+environment would fail the version as the controller does: an AnalysisTemplate
+or ClusterAnalysisTemplate that does not exist, Argo Rollouts not installed, or
+an arg it cannot pass. That result is BLOCKED by verification. When the
+AnalysisTemplates cannot be read (RBAC), the gates' result is shown with
+"Verification not checked" and the reason.`
 
 // policyTestReference is the detail of the command for its reference page.
 const policyTestReference = `Each expression is compiled with the controller's PolicyGate CEL environment,

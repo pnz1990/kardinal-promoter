@@ -208,12 +208,13 @@ func (s *splicer) quotedEnd(n *yaml.Node) int {
 	if n.Style&yaml.SingleQuotedStyle != 0 {
 		q = '\''
 	}
-	line, col := n.Line, n.Column // col is the opening quote (1-based)
+	line := n.Line
 	text := s.lines[line-1]
-	if col-1 >= len(text) || text[col-1] != q {
+	at := byteOffset(text, n.Column) // the opening quote
+	if at >= len(text) || text[at] != q {
 		return 0
 	}
-	i := col // the byte after the opening quote
+	i := at + 1 // the byte after the opening quote
 	for {
 		for ; i < len(text); i++ {
 			switch {
@@ -298,8 +299,8 @@ func (s *splicer) trimEnd(start, end, col int, v *yaml.Node) int {
 // no such line: every line after the header may then be its text.
 func (s *splicer) blockIndent(n *yaml.Node, keyCol int) (int, bool) {
 	header := s.lines[n.Line-1]
-	if n.Column-1 < len(header) {
-		h := header[n.Column-1:]
+	if at := byteOffset(header, n.Column); at < len(header) {
+		h := header[at:]
 		if i := strings.IndexAny(h, " \t#\n"); i >= 0 {
 			h = h[:i]
 		}
@@ -337,13 +338,29 @@ func (s *splicer) trim(start, end int, comments bool) int {
 	return end
 }
 
+// byteOffset is the byte offset in line of the 1-based column col: yaml.v3
+// counts columns in characters, so a key such as "Ƹ" before a value puts
+// the value's column behind its byte offset (#2080). len(line) when col is
+// past the line's end.
+func byteOffset(line string, col int) int {
+	n := 1
+	for i := range line {
+		if n == col {
+			return i
+		}
+		n++
+	}
+	return len(line)
+}
+
 // keepChomping reports whether the block scalar header at column col of
 // line ("|+", ">2+") has the keep indicator.
 func keepChomping(line string, col int) bool {
-	if col-1 >= len(line) {
+	at := byteOffset(line, col)
+	if at >= len(line) {
 		return false
 	}
-	h := line[col-1:]
+	h := line[at:]
 	if i := strings.IndexAny(h, " \t#\n"); i >= 0 {
 		h = h[:i]
 	}
@@ -444,7 +461,8 @@ func (s *splicer) apply() []byte {
 		}
 		prefix := ""
 		if ed.col > 1 {
-			prefix = lines[ed.start-1][:ed.col-1]
+			l := lines[ed.start-1]
+			prefix = l[:min(byteOffset(l, ed.col), len(l))]
 		}
 		var repl []string
 		if ed.text != "" {

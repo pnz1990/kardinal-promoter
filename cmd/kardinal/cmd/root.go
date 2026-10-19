@@ -200,9 +200,20 @@ func requireSubcommand(cmd *cobra.Command) {
 	}
 }
 
-// buildClient constructs a controller-runtime client from the persistent
+// newClient constructs a controller-runtime client from the persistent
 // flags (clusterClient); a test replaces it with a fake one.
-var buildClient = clusterClient
+var newClient = clusterClient
+
+// buildClient is the client of a command that talks to the cluster
+// (newClient); the first one a command builds also checks the controller's
+// version against the CLI's (versionSkew).
+func buildClient() (sigs_client.Client, string, error) {
+	c, ns, err := newClient()
+	if err == nil {
+		skewCheck.check(c)
+	}
+	return c, ns, err
+}
 
 // clusterClient constructs a controller-runtime client from the persistent flags.
 // Returns actionable error messages with hints for common failures (#688).

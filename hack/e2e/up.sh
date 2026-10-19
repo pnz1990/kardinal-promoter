@@ -50,6 +50,10 @@
 #           Dex (sso-pki.sh writes its kind config): the TestSSO_ test puts
 #           oauth2-proxy in front of the UI with docs/guides/security.md's
 #           flags and values, and signs in as Dex's users
+#   receipts  Forgejo + Argo CD + an OCI registry: receipts signed with a
+#           static key, pushed as referrers
+#   receipts-keyless  Forgejo + Argo CD + sigstore scaffolding on Knative
+#           (sigstore.sh): keyless receipts, Rekor v2 and a timestamp
 #   scale   Forgejo behind Toxiproxy (git latency and outages), Prometheus,
 #           and two controller replicas built with -race (KARDINAL_E2E_RACE,
 #           default 1 here): the TestScale_ topology, load, race and chaos
@@ -147,8 +151,14 @@ case "$SUITE" in
   # external Fulcio: components/kardinal.sh generates the key and points the
   # OCI sink at the suite's registry (components/registry.sh). A suite of its
   # own: receipts comment on every PR, which other suites count.
-  receipts) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh) RUN='^TestReceipts_'
+  # The fake ticketing API, for the change request a receipt records.
+  receipts) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh ticketapi.sh) RUN='^TestReceipts_'
     export KARDINAL_E2E_RECEIPTS=1 ;;
+  # Keyless receipts against a private sigstore in the cluster
+  # (components/sigstore.sh: Fulcio trusting the cluster's issuer, Rekor v2,
+  # a timestamp authority, TUF), nightly only (spec 21 section 13).
+  receipts-keyless) COMPONENTS=("giteafamily.sh forgejo" argocd.sh sigstore.sh) RUN='^TestReceiptsKeyless_'
+    export KARDINAL_E2E_RECEIPTS=keyless ;;
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
     HELM_ARGS='--set controller.namespaceShard=default' ;;

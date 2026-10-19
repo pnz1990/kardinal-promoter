@@ -26,6 +26,7 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -65,8 +66,15 @@ const gateOverridden = "OVERRIDDEN by "
 // just read, for a step leaving Pending. It reads each gate's template from
 // the cache; a template it cannot read is recorded without its versions.
 func (r *Reconciler) decision(ctx context.Context, ps *v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate,
-	pipeline *v1alpha1.Pipeline, bundle *v1alpha1.Bundle) *v1alpha1.PromotionDecision {
+	changeRequests []v1alpha1.ChangeRequest, pipeline *v1alpha1.Pipeline, bundle *v1alpha1.Bundle) *v1alpha1.PromotionDecision {
 	d := &v1alpha1.PromotionDecision{TakenAt: metav1.NewTime(r.now().UTC())}
+	for i := range changeRequests {
+		if len(d.ChangeRequests) == v1alpha1.MaxDecisionChangeRequests {
+			d.Truncated = true
+			break
+		}
+		d.ChangeRequests = append(d.ChangeRequests, decisionChangeRequest(&changeRequests[i]))
+	}
 	if pipeline != nil {
 		d.PipelineGeneration = pipeline.Generation
 	}
@@ -89,6 +97,69 @@ func (r *Reconciler) decision(ctx context.Context, ps *v1alpha1.PromotionStep, g
 		return nil
 	}
 	return d
+}
+
+// changeRequestsOf are the ChangeRequest instances of ps's Bundle and
+// environment (the Graph labels each with both, and with the Bundle's UID),
+// from the cache, sorted by template and name. A cluster without the
+// ChangeRequest CRD has none.
+func (r *Reconciler) changeRequestsOf(ctx context.Context, ps *v1alpha1.PromotionStep, bundle *v1alpha1.Bundle) ([]v1alpha1.ChangeRequest, error) {
+	var list v1alpha1.ChangeRequestList
+	err := r.List(ctx, &list, client.InNamespace(ps.Namespace), client.MatchingLabels{
+		"kardinal.io/bundle": ps.Spec.BundleName, "kardinal.io/environment": ps.Spec.Environment,
+	})
+	switch {
+	case meta.IsNoMatchError(err):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("list change requests: %w", err)
+	}
+	out := list.Items[:0]
+	for _, cr := range list.Items {
+		if _, instance := cr.Labels[graph.LabelChangeRequestTemplate]; !instance {
+			continue
+		}
+		// An instance of an earlier Bundle of the same name is not this one's.
+		if uid := cr.Labels[graph.LabelBundleUID]; bundle != nil && uid != "" && uid != string(bundle.UID) {
+			continue
+		}
+		out = append(out, cr)
+	}
+	slices.SortFunc(out, func(a, b v1alpha1.ChangeRequest) int {
+		return strings.Compare(a.Labels[graph.LabelChangeRequestTemplate]+"\x00"+a.Name, b.Labels[graph.LabelChangeRequestTemplate]+"\x00"+b.Name)
+	})
+	return out, nil
+}
+
+// maxDecisionApprovers bounds a change request's approvers in a snapshot,
+// and maxDecisionName an approver's name.
+const (
+	maxDecisionApprovers = 32
+	maxDecisionName      = 256
+)
+
+// decisionChangeRequest is cr as the snapshot records it.
+func decisionChangeRequest(cr *v1alpha1.ChangeRequest) v1alpha1.DecisionChangeRequest {
+	st := &cr.Status
+	out := v1alpha1.DecisionChangeRequest{
+		Name: cr.Labels[graph.LabelChangeRequestTemplate], Instance: cr.Name, Provider: cr.Spec.Provider,
+		State: st.State, ProviderState: cutText(st.ProviderState), Verified: st.TicketVerified(),
+		VerifiedReason: cutText(st.VerifiedReason), TimedOut: st.TimedOut, ObservedAt: st.ObservedAt, ValidUntil: st.ValidUntil,
+	}
+	if t := st.Ticket; t != nil {
+		out.Ticket = &v1alpha1.ChangeRequestTicket{Key: cutText(t.Key), ID: cutText(t.ID), URL: cutText(t.URL)}
+	}
+	for i, a := range st.Approvers {
+		if i == maxDecisionApprovers {
+			out.ApproversOmitted = len(st.Approvers) - i
+			break
+		}
+		if len(a.Name) > maxDecisionName {
+			a.Name = strings.ToValidUTF8(a.Name[:maxDecisionName-3], "") + "..."
+		}
+		out.Approvers = append(out.Approvers, a)
+	}
+	return out
 }
 
 // omit leaves the last n gates of d out, by name.
@@ -116,7 +187,8 @@ func decisionSize(d *v1alpha1.PromotionDecision) int {
 }
 
 // fitDecision cuts d to MaxDecisionBytes, in the statement's order: the
-// approvals and Verdicts that did not count, then long texts, then gates from
+// approvals and Verdicts that did not count, then long texts and the change
+// requests' approvers, then gates from
 // the end (OmittedGates). It reports whether d fits; one that does not even
 // with a single gate is not taken (the step starts without a snapshot).
 func fitDecision(d *v1alpha1.PromotionDecision) bool {
@@ -145,6 +217,11 @@ func fitDecision(d *v1alpha1.PromotionDecision) bool {
 		for j := range g.Verdicts {
 			g.Verdicts[j].Reason, g.Verdicts[j].EvidenceURL = cutText(g.Verdicts[j].Reason), cutText(g.Verdicts[j].EvidenceURL)
 		}
+	}
+	for i := range d.ChangeRequests {
+		c := &d.ChangeRequests[i]
+		c.ApproversOmitted += len(c.Approvers)
+		c.Approvers = nil
 	}
 	for decisionSize(d) > v1alpha1.MaxDecisionBytes && len(d.Gates) > 1 {
 		omit(d, 1)
@@ -257,7 +334,11 @@ func (r *Reconciler) pendingReceipt(ctx context.Context, ps *v1alpha1.PromotionS
 		if err != nil {
 			return nil, err
 		}
-		in.Decision = r.decision(ctx, ps, gates, pipeline, bundle)
+		crs, err := r.changeRequestsOf(ctx, ps, bundle)
+		if err != nil {
+			return nil, err
+		}
+		in.Decision = r.decision(ctx, ps, gates, crs, pipeline, bundle)
 	}
 	var metrics v1alpha1.MetricCheckList
 	if err := r.List(ctx, &metrics, client.InNamespace(ps.Namespace), client.MatchingLabels{
