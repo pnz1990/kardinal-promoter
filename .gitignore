@@ -8,6 +8,9 @@ vendor/
 dist/
 bin/
 out/
+# go build ./hack/release-gate (and the other hack programs) at the root
+/release-gate
+/hygiene
 # Exception: web/dist is committed for go:embed to work during Go builds
 !web/dist/
 !web/dist/**

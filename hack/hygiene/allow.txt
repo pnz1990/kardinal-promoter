@@ -17,3 +17,5 @@ deadcode github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale
 file docs/assets/fonts/Archivo-OFL.txt  # the font's license, shipped with it
 file docs/assets/fonts/AtkinsonHyperlegibleMono-OFL.txt  # the font's license, shipped with it
 file docs/assets/fonts/AtkinsonHyperlegibleNext-OFL.txt  # the font's license, shipped with it
+file docs/assets/demos/fleet.webp  # the fleet demo animation the docs show (1.2 MB)
+file docs/assets/demos/fleet-dark.webp  # the fleet demo animation the docs show, dark theme (1.2 MB)
