@@ -42,7 +42,8 @@ const burstRetryAfter = 3 * time.Second
 // the burst (KARDINAL_E2E_RECEIPT_BURST_RPS, default 1); the rest get 429.
 // The receipts' jitter spreads their retries over at least 30 seconds, so
 // 100 receipts retry at about 3 a second: a 10 rps limit would never engage
-// (the plan's 500 receipts at 10 rps: set both variables).
+// (the plan's 500 receipts at 10 rps: the release gate's soak set runs that,
+// hack/release-gate receipts-burst-full; never a per-PR run).
 func burstFulcioRPS(t *testing.T) int {
 	t.Helper()
 	if v := os.Getenv("KARDINAL_E2E_RECEIPT_BURST_RPS"); v != "" {
