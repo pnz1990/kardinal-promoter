@@ -464,6 +464,12 @@ health:
     # so no long-lived token exists. Empty allows none. See
     # docs/health-adapters.md#remote-clusters-on-eks.
     allowedRoleARNs: []
+    # -- More role ARN patterns, per namespace: the Pipelines of that namespace
+    # only may name them (--health-eks-role-arns-by-namespace), for example
+    # {team-a: ["arn:aws:iam::111122223333:role/kardinal-health-team-a"]}.
+    # Listing each team's roles here, not in allowedRoleARNs, keeps one team
+    # from naming another's role even before its trust policy is checked.
+    allowedRoleARNsByNamespace: {}
 
 # -- Optional controller permissions, off by default.
 rbac:

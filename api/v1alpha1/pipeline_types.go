@@ -958,15 +958,18 @@ type KubeconfigSecretRef struct {
 
 	// EKS authenticates to an Amazon EKS cluster with the controller's own
 	// AWS identity (IRSA or EKS Pod Identity) instead of a credential in the
-	// kubeconfig, which then holds only the server and its
-	// certificate-authority-data (no users[].user credentials). The
-	// controller assumes RoleARN, with the session tags kardinal-namespace
-	// and kardinal-pipeline set to this Pipeline's namespace and name, and
-	// signs a 15-minute EKS token for ClusterName from it, as
-	// aws-iam-authenticator does; no long-lived secret exists. RoleARN must
-	// match the controller's --health-eks-role-arns (Helm
-	// health.eks.allowedRoleARNs), which is empty, so the feature is off, by
-	// default (docs/health-adapters.md, Remote clusters on EKS).
+	// kubeconfig. The controller assumes RoleARN, with the session tags
+	// kardinal-namespace and kardinal-pipeline set to this Pipeline's
+	// namespace and name, reads the cluster's endpoint and CA with
+	// eks:DescribeCluster as that role, and sends a 15-minute EKS token for
+	// ClusterName, signed as the role (as aws-iam-authenticator does), to
+	// that endpoint only; no long-lived secret exists. The Secret's
+	// kubeconfig is then optional and may hold no users[].user credentials;
+	// a server it names must be the cluster's endpoint. RoleARN must match
+	// the controller's --health-eks-role-arns or, for this namespace,
+	// --health-eks-role-arns-by-namespace (Helm health.eks), both empty, so
+	// the feature is off, by default (docs/health-adapters.md, Remote
+	// clusters on EKS).
 	// +optional
 	EKS *EKSCredentials `json:"eks,omitempty"`
 }
@@ -985,9 +988,9 @@ type EKSCredentials struct {
 
 	// RoleARN is the IAM role the controller assumes. Its trust policy
 	// should require aws:RequestTag/kardinal-namespace (and
-	// kardinal-pipeline) to name the Pipelines allowed to use it, and an
-	// EKS access entry maps it to a Kubernetes group bound to read the
-	// health objects.
+	// kardinal-pipeline) to name the Pipelines allowed to use it; it needs
+	// eks:DescribeCluster on the cluster, and an EKS access entry maps it to
+	// a Kubernetes group bound to read the health objects.
 	// +kubebuilder:validation:Pattern=`^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$`
 	RoleARN string `json:"roleARN"`
 }

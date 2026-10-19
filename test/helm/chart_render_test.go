@@ -1965,3 +1965,25 @@ func TestChartHealthEKS(t *testing.T) {
 	out, err := helmTemplate(t, "kardinal-promoter", "--set", "health.eks.allowedRoleARNs={*}")
 	require.Error(t, err, out)
 }
+
+// TestChartHealthEKSByNamespace (#2193): health.eks.allowedRoleARNsByNamespace
+// passes --health-eks-role-arns-by-namespace as namespace=pattern entries,
+// sorted by namespace; nothing when empty (the default); the schema refuses
+// a key that is not a namespace name and an entry that is not a role ARN
+// pattern.
+func TestChartHealthEKSByNamespace(t *testing.T) {
+	assert.NotContains(t, argValues(controllerContainer(t, render(t, "kardinal-promoter"))), "health-eks-role-arns-by-namespace")
+	c := controllerContainer(t, render(t, "kardinal-promoter", "--set-json",
+		`health.eks.allowedRoleARNsByNamespace={"team-b":["arn:aws:iam::111122223333:role/kardinal-health-team-b"],`+
+			`"team-a":["arn:aws:iam::111122223333:role/kardinal-health-team-a","arn:aws:iam::111122223333:role/kardinal-health-team-a-*"]}`))
+	assert.Equal(t, "team-a=arn:aws:iam::111122223333:role/kardinal-health-team-a,"+
+		"team-a=arn:aws:iam::111122223333:role/kardinal-health-team-a-*,"+
+		"team-b=arn:aws:iam::111122223333:role/kardinal-health-team-b",
+		argValues(c)["health-eks-role-arns-by-namespace"])
+	assert.NotContains(t, argValues(c), "health-eks-role-arns", "the global list stays empty")
+	for _, bad := range []string{`{"Team-A":["arn:aws:iam::111122223333:role/a"]}`, `{"team-a":["role/a"]}`,
+		`{"team-a":"arn:aws:iam::111122223333:role/a"}`, `{"team-a":["arn:aws:iam::111122223333:role/a,b"]}`} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set-json", "health.eks.allowedRoleARNsByNamespace="+bad)
+		require.Error(t, err, "%s: %s", bad, out)
+	}
+}

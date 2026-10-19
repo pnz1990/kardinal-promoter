@@ -294,7 +294,8 @@ health:
   `insecure-skip-tls-verify` is refused and the step fails with `kubeconfig not allowed: ... is not
   supported`: these would run a command or read a file inside the controller, or send the
   credentials to a server that is not verified. For EKS, use `kubeconfigSecretRef.eks`
-  ([Remote clusters on EKS](#remote-clusters-on-eks)): no secret exists. For GKE or another
+  ([Remote clusters on EKS](#remote-clusters-on-eks)): no secret exists, and the endpoint comes
+  from EKS. For GKE or another
   cluster, use a ServiceAccount token in the remote cluster (a `kubernetes.io/service-account-token`
   Secret there, or a token an external tool refreshes into the kubeconfig Secret). Either way, bind
   the identity to a role that can `get` and `list` the checked objects, and `list` pods in their
@@ -332,7 +333,7 @@ no command run and no long-lived token anywhere:
 health:
   type: resource
   kubeconfigSecretRef:
-    name: prod-eu                 # server and certificate-authority-data only: no users[].user credentials
+    name: prod-eu                 # labelled kardinal.io/referenceable; its kubeconfig is optional
     eks:
       clusterName: prod-eu
       region: eu-west-1
@@ -343,24 +344,48 @@ For each health check the controller:
 
 1. assumes `roleARN` from its own credentials, with the session tags `kardinal-namespace` and
    `kardinal-pipeline` set to the Pipeline's namespace and name (session name
-   `kardinal-<namespace>-<pipeline>`, in CloudTrail), and keeps the role's credentials for an hour;
-2. signs an `sts:GetCallerIdentity` request for `clusterName` (the `x-k8s-aws-id` header, 60
+   `kardinal-<namespace>-<pipeline>-<hash>`, in CloudTrail: the hash keeps two Pipelines apart when
+   their names run together or are cut to fit 64 characters), and keeps the role's credentials for
+   an hour;
+2. reads the cluster's endpoint and CA with `eks:DescribeCluster`, as that role, and reads them
+   again every hour (a cluster created again under its name has new ones);
+3. signs an `sts:GetCallerIdentity` request for `clusterName` (the `x-k8s-aws-id` header, 60
    seconds) and sends it as the bearer token, signed again every 10 minutes (EKS accepts one for
-   15). EKS verifies it with STS and maps the role through an access entry.
+   15), **to that endpoint only**. EKS verifies it with STS and maps the role through an access
+   entry.
 
-The STS calls go through the egress guard and allowlist (`sts.<region>.amazonaws.com`); the
-credential chain's own requests (Pod Identity, instance metadata) go directly.
+The token authenticates as the role on any cluster where the role has an access entry, so it never
+goes to an address the Pipeline's Secret chooses: a request to any other host, a redirect included,
+is refused before it is sent. The STS and EKS API calls go through the egress guard and allowlist
+(`sts.<region>.amazonaws.com`, `eks.<region>.amazonaws.com`) and do not follow redirects; the
+credential chain's own requests (Pod Identity, instance metadata) go directly. The controller keeps
+a Pipeline's role credentials and token while it checks, and drops them after an hour unused (at
+most 128 at a time).
 
 Setup, once per team:
 
-- **The operator allows the roles** Pipelines may name, in the Helm values:
-  `health.eks.allowedRoleARNs: ["arn:aws:iam::111122223333:role/kardinal-health-*"]`
-  (`--health-eks-role-arns`, path.Match patterns). Empty, the default, allows none: a Pipeline
-  cannot have the controller assume an arbitrary role. Give the controller an AWS identity (for
-  IRSA, `serviceAccount.annotations` with `eks.amazonaws.com/role-arn`) allowed
-  `sts:AssumeRole` and `sts:TagSession` on those roles.
-- **Each role trusts the controller only for its team's Pipelines**, through the session tag
-  (the controller sets it from the Pipeline's real namespace; a Pipeline cannot choose it):
+- **The operator allows the roles** Pipelines may name, in the Helm values. Per namespace is the
+  safer form: a namespace's Pipelines can name only the roles listed for it, so one team cannot name
+  another's role even before IAM is asked:
+
+  ```yaml
+  health:
+    eks:
+      allowedRoleARNsByNamespace:          # --health-eks-role-arns-by-namespace
+        team-a: ["arn:aws:iam::111122223333:role/kardinal-health-team-a"]
+        team-b: ["arn:aws:iam::111122223333:role/kardinal-health-team-b-*"]
+      allowedRoleARNs: []                  # --health-eks-role-arns: patterns any namespace may name
+  ```
+
+  Both take path.Match patterns. Both empty, the default, allows none: a Pipeline cannot have the
+  controller assume an arbitrary role. A role in `allowedRoleARNs` may be named by every namespace,
+  so with it only the role's trust policy (next item) keeps a team to its own roles. Give the
+  controller an AWS identity (for IRSA, `serviceAccount.annotations` with
+  `eks.amazonaws.com/role-arn`) allowed `sts:AssumeRole` and `sts:TagSession` on those roles.
+- **Each role trusts the controller only for its team's Pipelines**, through the session tag (the
+  controller sets it from the Pipeline's real namespace; a Pipeline cannot choose it). The allowlist
+  decides which roles the controller will assume; this condition is what IAM itself enforces, so
+  tenant isolation needs it on every role, whichever allowlist names the role:
 
   ```json
   {
@@ -369,24 +394,42 @@ Setup, once per team:
       "Effect": "Allow",
       "Principal": {"AWS": "arn:aws:iam::111122223333:role/kardinal-controller"},
       "Action": ["sts:AssumeRole", "sts:TagSession"],
-      "Condition": {"StringEquals": {"aws:RequestTag/kardinal-namespace": "team-a"}}
+      "Condition": {
+        "StringEquals": {"aws:RequestTag/kardinal-namespace": "team-a"},
+        "ForAllValues:StringEquals": {"aws:TagKeys": ["kardinal-namespace", "kardinal-pipeline"]}
+      }
     }]
   }
+  ```
+
+  To limit the role to some Pipelines too, add `"aws:RequestTag/kardinal-pipeline": ["web", "api"]`
+  to `StringEquals`.
+- **The role may describe the cluster**, in its permissions policy:
+
+  ```json
+  {"Effect": "Allow", "Action": "eks:DescribeCluster",
+   "Resource": "arn:aws:eks:eu-west-1:111122223333:cluster/prod-eu"}
   ```
 
 - **An EKS access entry maps the role** to a Kubernetes group on the cluster
   (`aws eks create-access-entry --cluster-name prod-eu --principal-arn <roleARN>
   --kubernetes-groups kardinal-health-team-a`), and a Role or ClusterRole bound to that group
   grants the reads above.
-- **The kubeconfig Secret** holds the cluster's `server` and `certificate-authority-data` (from
-  `aws eks describe-cluster`) and a user with no credentials; one with a token, certificate,
-  password or plugin is refused with `eks`.
+- **The kubeconfig Secret** still has to exist with the `kardinal.io/referenceable: "true"` label,
+  but its kubeconfig is optional: the endpoint and CA come from `eks:DescribeCluster`. A kubeconfig
+  in it may name the `server`, which must then be the cluster's endpoint (`kardinal doctor` and the
+  step say so otherwise); its CA is not used. One with a token, certificate, password or plugin is
+  refused with `eks`.
 
-A role outside `allowedRoleARNs`, or `eks` on a controller where it is empty, fails the step
-(`kubeconfig not allowed: ... roleARN ... is not one of the controller's --health-eks-role-arns`). An
-STS error, an expired role session or a missing access entry is `ClusterUnreachable` (`forbidden`,
-`unauthorized`), and the step keeps checking until `health.timeout`. GKE and AKS have no built-in
-source yet.
+A role the Pipeline's namespace may not name, `eks` on a controller where both lists are empty, or a
+`server` that is not the cluster's endpoint fails the step (`kubeconfig not allowed: ... roleARN ...
+is not one of the roles the controller allows for namespace team-a`, `the kubeconfig's server ... is
+not the endpoint of EKS cluster prod-eu`). A failed `eks:DescribeCluster` is `ClusterUnreachable`
+with the call and the AWS error code (`EKS cluster prod-eu: eks:DescribeCluster as <role>: STS
+AssumeRole: AccessDenied` when the trust policy refuses the controller, `EKS DescribeCluster:
+AccessDeniedException` without the permission), as are an expired role session or a missing access
+entry (`forbidden`, `unauthorized`), and the step keeps checking until `health.timeout`. GKE and AKS
+have no built-in source yet.
 
 **2. Read the GitOps hub's object.** Run kardinal next to the GitOps hub that manages the cluster:
 

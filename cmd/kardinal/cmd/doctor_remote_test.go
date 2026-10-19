@@ -144,9 +144,10 @@ func TestCheckRemoteHealthAccess(t *testing.T) {
 
 // TestCheckRemoteHealthAccess_EKS (#2008): an environment with
 // kubeconfigSecretRef.eks is checked for its kubeconfig only (doctor cannot
-// act as the controller's role): one without credentials is a WARN naming
-// the cluster and role and what the role needs, one with a token (which
-// the controller refuses with eks) a FAIL. No request reaches the cluster.
+// act as the controller's role): one without credentials, or none at all,
+// is a WARN naming the cluster and role and what the role needs, one with a
+// token (which the controller refuses with eks) a FAIL. No request reaches
+// the cluster.
 func TestCheckRemoteHealthAccess_EKS(t *testing.T) {
 	srv, seen := fakeSSARServer(t)
 	env := v1alpha1.EnvironmentSpec{Name: "prod", Health: v1alpha1.HealthConfig{Type: "resource",
@@ -161,6 +162,12 @@ func TestCheckRemoteHealthAccess_EKS(t *testing.T) {
 	assert.Equal(t, doctorWarn, r.icon, r.detail)
 	assert.Contains(t, r.detail, "EKS cluster prod-eu (eu-west-1) as arn:aws:iam::111122223333:role/kardinal-health-team-a")
 	assert.Contains(t, r.hint, "kardinal-namespace=team-a")
+	assert.Contains(t, r.hint, "allowedRoleARNsByNamespace.team-a")
+	assert.Contains(t, r.hint, "eks:DescribeCluster")
+	empty := noUser.DeepCopy()
+	empty.Data = nil
+	r = checkRemoteHealthAccess(context.Background(), doctorClient(empty), p)[0]
+	assert.Equal(t, doctorWarn, r.icon, "with eks the kubeconfig is optional: %s", r.detail)
 	r = checkRemoteHealthAccess(context.Background(), doctorClient(withToken), p)[0]
 	assert.Equal(t, doctorFail, r.icon, r.detail)
 	assert.Contains(t, r.detail, "remove users[].user's credentials")

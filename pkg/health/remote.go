@@ -4,6 +4,7 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -83,6 +84,14 @@ func RemoteConfig(kubeconfig []byte, dial func(ctx context.Context, network, add
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrKubeconfigNotAllowed, err)
 	}
+	remoteDefaults(cfg, dial)
+	return cfg, nil
+}
+
+// remoteDefaults sets how cfg reaches a remote API server: directly through
+// dial (nil is the egress guard's dialer), never a proxy, within
+// remoteTimeout, at a low rate.
+func remoteDefaults(cfg *rest.Config, dial func(ctx context.Context, network, address string) (net.Conn, error)) {
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: remoteTimeout, KeepAlive: 30 * time.Second, Control: egress.Control}).DialContext
 	}
@@ -91,7 +100,6 @@ func RemoteConfig(kubeconfig []byte, dial func(ctx context.Context, network, add
 	cfg.Timeout = remoteTimeout
 	cfg.QPS, cfg.Burst = 5, 10
 	cfg.UserAgent = "kardinal-promoter-health"
-	return cfg, nil
 }
 
 // allowedKubeconfig refuses plugins, file references and proxies.
@@ -170,6 +178,11 @@ type remoteEntry struct {
 	version  string
 	detector *AutoDetector
 	lastUsed time.Time
+	// src and builtAt, with eks: the token source the clients use, and when
+	// the cluster's endpoint was read (it is read again eksClusterRefresh
+	// later).
+	src     *EKSTokenSource
+	builtAt time.Time
 }
 
 func (r *RemoteClusters) now() time.Time {
@@ -202,53 +215,68 @@ func (r *RemoteClusters) Len() int {
 // kubeconfig is refused; any other error is a missing key. Errors never
 // list the Secret's keys.
 func (r *RemoteClusters) Detector(secret *corev1.Secret, key string) (*AutoDetector, error) {
-	return r.DetectorWith(secret, key, nil, "")
+	return r.DetectorWith(context.Background(), secret, key, nil, "")
 }
 
-// DetectorWith is Detector for a kubeconfigSecretRef with eks: the
-// kubeconfig holds the server and its CA only, and every request carries
-// an EKS token signed as eks.RoleARN for the Pipeline pipeline (in the
-// Secret's namespace). A role the controller does not allow, or a
-// kubeconfig with credentials, is refused (ErrKubeconfigNotAllowed).
-func (r *RemoteClusters) DetectorWith(secret *corev1.Secret, key string, eks *v1alpha1.EKSCredentials, pipeline string) (*AutoDetector, error) {
+// DetectorWith is Detector, and for a kubeconfigSecretRef with eks the
+// adapters of that EKS cluster for the Pipeline pipeline (in the Secret's
+// namespace): every request carries an EKS token signed as eks.RoleARN, and
+// goes to the endpoint, checked against the CA, that eks:DescribeCluster
+// returns as that role, never to an address the Secret names. The
+// kubeconfig is optional then; when it names a server, that must be the
+// cluster's endpoint. A role the controller does not allow for the
+// namespace, a kubeconfig with credentials or another server is refused
+// (ErrKubeconfigNotAllowed); a failed eks:DescribeCluster is another error
+// (the cluster cannot be checked yet).
+func (r *RemoteClusters) DetectorWith(ctx context.Context, secret *corev1.Secret, key string, eks *v1alpha1.EKSCredentials,
+	pipeline string) (*AutoDetector, error) {
 	if key == "" {
 		key = DefaultKubeconfigKey
 	}
-	data, ok := secret.Data[key]
-	if !ok || len(data) == 0 {
-		return nil, fmt.Errorf("secret %q has no key %q", secret.Name, key)
-	}
+	data := secret.Data[key]
 	id := remoteKey{namespace: secret.Namespace, name: secret.Name, key: key}
 	var src *EKSTokenSource
-	if eks != nil {
+	var server string
+	switch {
+	case eks != nil:
 		if r.EKS == nil {
 			return nil, fmt.Errorf("%w: health.kubeconfigSecretRef.eks: this controller signs no EKS tokens "+
-				"(--health-eks-role-arns, Helm health.eks.allowedRoleARNs, is empty)", ErrKubeconfigNotAllowed)
-		}
-		if err := noCredentials(data); err != nil {
-			return nil, err
+				"(--health-eks-role-arns and --health-eks-role-arns-by-namespace, Helm health.eks, are empty)",
+				ErrKubeconfigNotAllowed)
 		}
 		var err error
+		if server, err = eksKubeconfigServer(data); err != nil {
+			return nil, err
+		}
 		if src, err = r.EKS.TokenSource(eks, secret.Namespace, pipeline); err != nil {
 			return nil, err
 		}
 		id.eks, id.pipeline = *eks, pipeline
+	case len(data) == 0:
+		return nil, fmt.Errorf("secret %q has no key %q", secret.Name, key)
 	}
 	version := string(secret.UID) + "/" + secret.ResourceVersion
 	now := r.now()
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if e, ok := r.entries[id]; ok && e.version == version {
+	if e, ok := r.entries[id]; ok && e.version == version && e.src == src &&
+		(src == nil || now.Sub(e.builtAt) < eksClusterRefresh) {
 		e.lastUsed = now
+		r.mu.Unlock()
 		return e.detector, nil
 	}
-	cfg, err := RemoteConfig(data, r.Dial)
+	r.mu.Unlock()
+
+	// Built without the lock: eks:DescribeCluster is a network call.
+	var cfg *rest.Config
+	var err error
+	if src != nil {
+		cfg, err = r.eksConfig(ctx, src, server)
+	} else {
+		cfg, err = RemoteConfig(data, r.Dial)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if src != nil {
-		cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper { return eksBearer{rt: rt, src: src} }
 	}
 	sch := r.Scheme
 	if sch == nil {
@@ -263,23 +291,73 @@ func (r *RemoteClusters) DetectorWith(secret *corev1.Secret, key string, eks *v1
 		return nil, fmt.Errorf("%w: %v", ErrKubeconfigNotAllowed, err)
 	}
 	d := NewAutoDetector(c, dyn)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.entries == nil {
 		r.entries = map[remoteKey]*remoteEntry{}
 	}
-	r.entries[id] = &remoteEntry{version: version, detector: d, lastUsed: now}
+	r.entries[id] = &remoteEntry{version: version, detector: d, lastUsed: now, src: src, builtAt: now}
 	r.evict(now)
 	return d, nil
 }
 
-// CheckEKSKubeconfig reports whether kubeconfig is usable with
-// health.kubeconfigSecretRef.eks: a usable kubeconfig (RemoteConfig) whose
-// current context's user has no credentials.
-func CheckEKSKubeconfig(kubeconfig []byte) error {
-	if err := noCredentials(kubeconfig); err != nil {
-		return err
+// eksConfig is the REST config of src's cluster: the endpoint and CA
+// eks:DescribeCluster returns, and src's token on every request to that
+// endpoint and no other. server, the kubeconfig's when it names one, must
+// be that endpoint.
+func (r *RemoteClusters) eksConfig(ctx context.Context, src *EKSTokenSource, server string) (*rest.Config, error) {
+	cl, err := src.Cluster(ctx)
+	if err != nil {
+		return nil, err
 	}
-	_, err := RemoteConfig(kubeconfig, nil)
+	endpoint, _ := url.Parse(cl.Endpoint) // Cluster checked it
+	if server != "" {
+		if u, err := url.Parse(server); err != nil || hostKey(u) != hostKey(endpoint) || strings.Trim(u.Path, "/") != "" {
+			return nil, fmt.Errorf("%w: the kubeconfig's server %s is not the endpoint of EKS cluster %s, %s: with eks the "+
+				"token goes only to the endpoint eks:DescribeCluster returns; set server to it or leave it out",
+				ErrKubeconfigNotAllowed, server, src.key.cluster, cl.Endpoint)
+		}
+	}
+	cfg := &rest.Config{Host: cl.Endpoint, TLSClientConfig: rest.TLSClientConfig{CAData: cl.CAData}}
+	remoteDefaults(cfg, r.Dial)
+	host := hostKey(endpoint)
+	cfg.WrapTransport = func(rt http.RoundTripper) http.RoundTripper { return eksBearer{rt: rt, src: src, host: host} }
+	return cfg, nil
+}
+
+// CheckEKSKubeconfig reports whether kubeconfig is usable with
+// health.kubeconfigSecretRef.eks: empty, or a kubeconfig whose current
+// context's user has no credentials and whose server, if any, is https.
+// Whether that server is the cluster's endpoint the controller checks
+// (eks:DescribeCluster).
+func CheckEKSKubeconfig(kubeconfig []byte) error {
+	_, err := eksKubeconfigServer(kubeconfig)
 	return err
+}
+
+// eksKubeconfigServer is the server the kubeconfig of a kubeconfigSecretRef
+// with eks names, "" when it names none or there is no kubeconfig: with eks
+// only the server is read, to be checked against the cluster's endpoint. A
+// kubeconfig with credentials is refused.
+func eksKubeconfigServer(kubeconfig []byte) (string, error) {
+	if len(bytes.TrimSpace(kubeconfig)) == 0 {
+		return "", nil
+	}
+	if err := noCredentials(kubeconfig); err != nil {
+		return "", err
+	}
+	raw, err := clientcmd.Load(kubeconfig)
+	if err != nil {
+		return "", fmt.Errorf("%w: not a kubeconfig", ErrKubeconfigNotAllowed)
+	}
+	c, ok := raw.Clusters[raw.Contexts[raw.CurrentContext].Cluster]
+	if !ok || c.Server == "" {
+		return "", nil
+	}
+	if u, err := url.Parse(c.Server); err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("%w: clusters[].cluster.server must be an https URL", ErrKubeconfigNotAllowed)
+	}
+	return c.Server, nil
 }
 
 // noCredentials refuses a kubeconfig whose current context's user has

@@ -3433,7 +3433,7 @@ func (r *Reconciler) healthDetector(ctx context.Context, log zerolog.Logger, ps 
 	}
 	// With eks the token is signed for this step's Pipeline: the role's
 	// session tags name it.
-	d, err = r.RemoteClusters.DetectorWith(&secret, ref.Key, ref.EKS, ps.Spec.PipelineName)
+	d, err = r.RemoteClusters.DetectorWith(ctx, &secret, ref.Key, ref.EKS, ps.Spec.PipelineName)
 	switch {
 	case errors.Is(err, health.ErrKubeconfigNotAllowed):
 		return nil, true, "", fmt.Errorf("health.kubeconfigSecretRef %q: %w", ref.Name, err)
