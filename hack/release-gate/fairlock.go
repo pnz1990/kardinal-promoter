@@ -200,8 +200,12 @@ type fairLock struct {
 	poll        time.Duration
 	log         func(format string, args ...any)
 	proc        procFS
-	// held is the owner record written when the lock was taken.
-	held string
+	// load, when set, is the host's one-minute load (tests); nil reads
+	// /proc/loadavg.
+	load func() float64
+	// held is the owner record written when the lock was taken, slot the
+	// slot directory it holds.
+	held, slot string
 	// warned are the pre-#2226 tickets already warned about.
 	warned map[string]bool
 }
@@ -234,7 +238,11 @@ func (f *fairLock) acquire(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = os.Remove(ticket) }()
-	wake, closeWake := watchDirs(q, filepath.Dir(f.lock))
+	// A freed slot (LOCK.d), a ticket (the queue) or LOCK itself wakes it.
+	if err := os.MkdirAll(slotsDir(f.lock), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", slotsDir(f.lock), err)
+	}
+	wake, closeWake := watchDirs(q, filepath.Dir(f.lock), slotsDir(f.lock))
 	defer closeWake()
 	logged := ""
 	for {
@@ -294,53 +302,201 @@ func writeTicket(q, name, record string) error {
 	return fmt.Errorf("queue ticket %s: %w", name, err)
 }
 
-// tryHead is the head waiter's turn, under flock on q/.reclaim: it removes
-// the lock of a holder that is gone, then tries mkdir. took reports whether
-// it holds the lock now.
-func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
+// The lock counts: up to maxHolders hold it at once while the host's
+// one-minute load is under loadForTwo, one at or above it. Each holder has a
+// slot directory LOCK.d/<n> with its owner record; LOCK exists while anyone
+// holds it (an older client's mkdir LOCK still waits), with LOCK/owner
+// listing every holder, one record per line, and LOCK/.counting marking it
+// as this view (a LOCK without the marker is an older client's exclusive
+// lock, which counts as full).
+const (
+	maxHolders  = 2
+	loadForTwo  = 32.0
+	viewMarker  = ".counting"
+	slotsSuffix = ".d"
+)
+
+// slotsDir is the directory of lock's holder slots.
+func slotsDir(lock string) string { return lock + slotsSuffix }
+
+// hostLoad is the one-minute load average (/proc/loadavg).
+func hostLoad() float64 {
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(f[0], 64)
+	return v
+}
+
+// capacity is how many may hold the lock at load.
+func capacity(load float64) int {
+	if load < loadForTwo {
+		return maxHolders
+	}
+	return 1
+}
+
+// withLockFlock runs fn under flock on q/.reclaim, which serializes every
+// change to the lock, its slots and its view.
+func withLockFlock(q string, fn func() error) error {
 	rf, err := os.OpenFile(filepath.Join(q, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return false, fmt.Errorf("open reclaim lock: %w", err)
+		return fmt.Errorf("open reclaim lock: %w", err)
 	}
 	defer func() { _ = rf.Close() }()
 	if err := unix.Flock(int(rf.Fd()), unix.LOCK_EX); err != nil {
-		return false, fmt.Errorf("flock reclaim lock: %w", err)
+		return fmt.Errorf("flock reclaim lock: %w", err)
 	}
 	defer func() { _ = unix.Flock(int(rf.Fd()), unix.LOCK_UN) }()
-	f.reclaim()
-	if err := os.Mkdir(f.lock, 0o755); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("mkdir %s: %w", f.lock, err)
-	}
-	f.held = record + " ticket=" + name
-	if err := os.WriteFile(filepath.Join(f.lock, "owner"), []byte(f.held+"\n"), 0o644); err != nil {
-		_ = os.Remove(f.lock) // never hold a lock without an owner record; only an empty one, as the shell's rmdir
-		return false, fmt.Errorf("write owner: %w", err)
-	}
-	return true, nil
+	return fn()
 }
 
-// reclaim removes the lock when its holder is gone (recordDead), or when it
-// has had no owner file for orphanAge. Only the head waiter calls it, under
-// the reclaim flock.
-func (f *fairLock) reclaim() {
-	owner, err := os.ReadFile(filepath.Join(f.lock, "owner"))
-	switch {
-	case err == nil && recordDead(f.proc, string(owner), time.Time{}):
-		f.log("removed heavy-load lock %s of a holder that is gone: %s", f.lock, strings.TrimSpace(string(owner)))
-	case errors.Is(err, os.ErrNotExist):
-		st, serr := os.Stat(f.lock)
-		if serr != nil || time.Since(st.ModTime()) < orphanAge {
-			return
+// tryHead is the head waiter's turn, under the reclaim flock: it removes the
+// slots (and an older client's exclusive lock) of holders that are gone,
+// then takes a free slot when fewer than capacity hold the lock. took
+// reports whether it holds the lock now.
+func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
+	err = withLockFlock(q, func() error {
+		f.reclaim()
+		held, exclusive := holders(f.lock)
+		load := hostLoad()
+		if f.load != nil {
+			load = f.load()
 		}
-		f.log("removed heavy-load lock %s, which has had no owner for %s", f.lock, orphanAge)
-	default:
+		if exclusive || len(held) >= capacity(load) {
+			return nil
+		}
+		sd := slotsDir(f.lock)
+		if err := os.MkdirAll(sd, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", sd, err)
+		}
+		for n := 1; n <= maxHolders; n++ {
+			slot := filepath.Join(sd, strconv.Itoa(n))
+			if err := os.Mkdir(slot, 0o755); err != nil {
+				if errors.Is(err, os.ErrExist) {
+					continue
+				}
+				return fmt.Errorf("mkdir %s: %w", slot, err)
+			}
+			f.held = record + " ticket=" + name
+			if err := os.WriteFile(filepath.Join(slot, "owner"), []byte(f.held+"\n"), 0o644); err != nil {
+				_ = os.Remove(slot) // never hold a slot without an owner record; only an empty one, as the shell's rmdir
+				return fmt.Errorf("write owner: %w", err)
+			}
+			f.slot = slot
+			took = true
+			return writeView(f.lock)
+		}
+		return nil
+	})
+	return took, err
+}
+
+// holders returns the owner records of lock's slots, and whether lock is an
+// older client's exclusive lock (LOCK without the view marker).
+func holders(lock string) (records []string, exclusive bool) {
+	if _, err := os.Stat(lock); err == nil {
+		if _, err := os.Stat(filepath.Join(lock, viewMarker)); errors.Is(err, os.ErrNotExist) {
+			return nil, true
+		}
+	}
+	entries, _ := os.ReadDir(slotsDir(lock))
+	for _, e := range entries {
+		if b, err := os.ReadFile(filepath.Join(slotsDir(lock), e.Name(), "owner")); err == nil {
+			records = append(records, strings.TrimSpace(string(b)))
+		}
+	}
+	return records, false
+}
+
+// writeView makes LOCK the view of the slots: it exists with the marker and
+// LOCK/owner listing every holder while any slot is held, and is gone when
+// none is. The caller holds the reclaim flock.
+func writeView(lock string) error {
+	held, exclusive := holders(lock)
+	if exclusive {
+		return nil
+	}
+	if len(held) == 0 {
+		if err := os.RemoveAll(lock); err != nil {
+			return fmt.Errorf("remove %s: %w", lock, err)
+		}
+		return nil
+	}
+	if err := os.Mkdir(lock, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("mkdir %s: %w", lock, err)
+	}
+	if err := os.WriteFile(filepath.Join(lock, viewMarker), nil, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", viewMarker, err)
+	}
+	tmp := filepath.Join(lock, ".owner.tmp")
+	if err := os.WriteFile(tmp, []byte(strings.Join(held, "\n")+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write view: %w", err)
+	}
+	return os.Rename(tmp, filepath.Join(lock, "owner"))
+}
+
+// release gives up slot, only when its owner is still held, and updates
+// the view.
+func release(lock, slot, held string) (bool, error) {
+	ours := false
+	err := withLockFlock(queueDir(lock), func() error {
+		b, err := os.ReadFile(filepath.Join(slot, "owner"))
+		if err != nil || strings.TrimSpace(string(b)) != held {
+			return nil
+		}
+		ours = true
+		if err := os.RemoveAll(slot); err != nil {
+			return fmt.Errorf("remove %s: %w", slot, err)
+		}
+		return writeView(lock)
+	})
+	return ours, err
+}
+
+// reclaim removes the slots of holders that are gone (recordDead), or that
+// have had no owner file for orphanAge, and an older client's exclusive lock
+// in the same cases; then it refreshes the view. Only the head waiter calls
+// it, under the reclaim flock.
+func (f *fairLock) reclaim() {
+	dead := func(dir string) (bool, string) {
+		owner, err := os.ReadFile(filepath.Join(dir, "owner"))
+		switch {
+		case err == nil && recordDead(f.proc, string(owner), time.Time{}):
+			return true, " of a holder that is gone: " + strings.TrimSpace(string(owner))
+		case errors.Is(err, os.ErrNotExist):
+			if st, serr := os.Stat(dir); serr == nil && time.Since(st.ModTime()) >= orphanAge {
+				return true, fmt.Sprintf(", which has had no owner for %s", orphanAge)
+			}
+		}
+		return false, ""
+	}
+	if _, exclusive := holders(f.lock); exclusive {
+		if ok, why := dead(f.lock); ok {
+			f.log("removed heavy-load lock %s%s", f.lock, why)
+			if err := os.RemoveAll(f.lock); err != nil {
+				f.log("remove heavy-load lock %s: %v", f.lock, err)
+			}
+		}
 		return
 	}
-	if err := os.RemoveAll(f.lock); err != nil {
-		f.log("remove heavy-load lock %s: %v", f.lock, err)
+	entries, _ := os.ReadDir(slotsDir(f.lock))
+	for _, e := range entries {
+		slot := filepath.Join(slotsDir(f.lock), e.Name())
+		if ok, why := dead(slot); ok {
+			f.log("removed heavy-load lock slot %s%s", slot, why)
+			if err := os.RemoveAll(slot); err != nil {
+				f.log("remove heavy-load lock slot %s: %v", slot, err)
+			}
+		}
+	}
+	if err := writeView(f.lock); err != nil {
+		f.log("refresh heavy-load lock %s: %v", f.lock, err)
 	}
 }
 

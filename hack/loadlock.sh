@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # hack/loadlock.sh [-l LOCK] [-o OWNER] [-p release|normal] [-r RETRY] -- CMD [ARG...]
 #
-# Runs CMD holding the shared host's heavy-load lock: a directory that only
-# one holder can create (mkdir is atomic), with an owner file naming who
-# holds it. When CMD ends, however it ends (an error, a signal), the lock is
-# removed only if its owner file is still this run's: a lock another holder
-# created, or put back, is never removed. Exits with CMD's status.
+# Runs CMD holding the shared host's heavy-load lock. When CMD ends, however
+# it ends (an error, a signal), its hold is given up only if its owner record
+# is still this run's. Exits with CMD's status.
+#
+# The lock counts: up to 2 hold it while the host's one-minute load is under
+# 32, one at or above it. Each holder has a slot directory LOCK.d/<n> with
+# its owner record (mkdir is atomic); LOCK exists while anyone holds it, with
+# LOCK/owner listing every holder, one per line, and LOCK/.counting marking
+# it as that view. An older client's mkdir LOCK still waits for it, and a
+# LOCK made by an older client (no marker) holds it alone.
 #
 # The lock is fair. Waiters queue in LOCK.queue, one ticket file each,
 # <class>-<nanoseconds>-<pid>: release gates' tickets (-p release, class 0)
 # before everyone else's (class 1), then the oldest. hack/release-gate
 # (-priority) follows the same protocol (hack/release-gate/fairlock.go):
 #   - Only the waiter whose ticket sorts first tries the lock, and only it may
-#     reclaim the lock of a holder that is gone, under flock(1) on
-#     LOCK.queue/.reclaim; it removes such a lock outright.
+#     reclaim a slot (or an older client's LOCK) of a holder that is gone,
+#     under flock(1) on LOCK.queue/.reclaim; it removes it outright.
 #   - Records (the owner file, tickets) are "<owner> pid <N> <time>" plus
 #     boot=<boot id> start=<the process's start time, /proc/<pid>/stat field
 #     22> (and ticket=<name> in the owner file). One is dead when its boot id
@@ -113,16 +118,66 @@ write_ticket() {
 write_ticket
 record="$tag ticket=$ticket"
 
+slots="$lock.d"
+mkdir -p "$slots"
+slot=
+
+# with_flock CMD... runs CMD under flock on queue/.reclaim, which serializes
+# every change to the lock, its slots and its view.
+with_flock() {
+  local fd rc
+  exec {fd}>"$queue/.reclaim" || return 1
+  flock -x "$fd"
+  "$@"
+  rc=$?
+  flock -u "$fd"
+  exec {fd}>&-
+  return "$rc"
+}
+
+# holders_count prints how many slots are held, or "exclusive" when LOCK is
+# an older client's (no view marker).
+holders_count() {
+  local n=0 d
+  if [ -d "$lock" ] && [ ! -e "$lock/.counting" ]; then
+    echo exclusive
+    return
+  fi
+  for d in "$slots"/*; do
+    [ -f "$d/owner" ] && n=$((n + 1))
+  done
+  echo "$n"
+}
+
+# write_view makes LOCK the view of the slots: with the marker and LOCK/owner
+# listing every holder while any is held, gone when none is. Under the flock.
+write_view() {
+  local d lines=
+  [ "$(holders_count)" != exclusive ] || return 0
+  for d in "$slots"/*; do
+    [ -f "$d/owner" ] && lines="$lines$(cat "$d/owner")"$'\n'
+  done
+  if [ -z "$lines" ]; then
+    [ ! -e "$lock" ] || rm -r "$lock"
+    return 0
+  fi
+  mkdir -p "$lock" && : >"$lock/.counting" && printf '%s' "$lines" >"$lock/.owner.tmp" && mv "$lock/.owner.tmp" "$lock/owner"
+}
+
 held=
 child=
+release_slot() {
+  if [ "$(cat "$slot/owner" 2>/dev/null)" = "$record" ]; then
+    rm -r "$slot"
+    write_view
+  else
+    echo "loadlock: $slot is not ours any more; left as it is" >&2
+  fi
+}
 release() {
   rm -f "$queue/$ticket"
   [ -n "$held" ] || return 0
-  if [ "$(cat "$lock/owner" 2>/dev/null)" = "$record" ]; then
-    rm -r "$lock"
-  else
-    echo "loadlock: $lock is not ours any more; left as it is" >&2
-  fi
+  with_flock release_slot
 }
 trap release EXIT
 # A signal stops CMD first, then releases the lock (EXIT).
@@ -153,34 +208,72 @@ reap_tickets() {
   done
 }
 
-# head_turn is the head waiter's turn, under flock on queue/.reclaim: it
-# removes the lock of a holder that is gone (or a lock with no owner file for
-# a minute), then tries mkdir. It succeeds when this run holds the lock.
+# The lock counts: up to 2 hold it at once while the host's one-minute load
+# is under 32, one at or above it (LOADLOCK_LOAD overrides the load, for
+# tests). Each holder has a slot LOCK.d/<n> with its owner record; LOCK
+# exists while anyone holds it (an older client's mkdir LOCK still waits),
+# LOCK/owner listing every holder and LOCK/.counting marking it as this
+# view. hack/release-gate/fairlock.go counts the same way.
+capacity() {
+  local load
+  load=${LOADLOCK_LOAD:-$(cut -d' ' -f1 /proc/loadavg)}
+  if awk -v l="$load" 'BEGIN { exit !(l < 32) }'; then echo 2; else echo 1; fi
+}
+
+# dead_dir DIR succeeds when DIR's owner is gone, or DIR has had no owner
+# file for a minute; it prints why.
+dead_dir() {
+  local holder
+  if holder=$(cat "$1/owner" 2>/dev/null); then
+    record_dead "$holder" && echo " of a holder that is gone: $holder"
+    return
+  fi
+  [ -d "$1" ] && [ $(($(date +%s) - $(stat -c %Y "$1" 2>/dev/null || date +%s))) -ge 60 ] &&
+    echo ", which has had no owner for a minute"
+}
+
+# take_turn is the head waiter's turn, under the flock: it removes the slots
+# (and an older client's exclusive lock) of holders that are gone, then takes
+# a free slot when fewer than the capacity hold the lock. It succeeds when
+# this run holds a slot.
+take_turn() {
+  local d why held_n n
+  if [ "$(holders_count)" = exclusive ]; then
+    if why=$(dead_dir "$lock"); then
+      rm -r "$lock" && echo "loadlock: removed $lock$why" >&2
+    fi
+  fi
+  for d in "$slots"/*; do
+    [ -d "$d" ] || continue
+    if why=$(dead_dir "$d"); then
+      rm -r "$d" && echo "loadlock: removed lock slot $d$why" >&2
+    fi
+  done
+  write_view
+  held_n=$(holders_count)
+  [ "$held_n" != exclusive ] && [ "$held_n" -lt "$(capacity)" ] || return 1
+  for n in 1 2; do
+    mkdir "$slots/$n" 2>/dev/null || continue
+    if ! echo "$record" >"$slots/$n/owner"; then
+      rmdir "$slots/$n"
+      echo "loadlock: cannot write $slots/$n/owner; gave the lock up" >&2
+      return 2
+    fi
+    # Held from here: a signal from now on gives the slot up (release).
+    slot="$slots/$n"
+    held=1
+    write_view
+    return 0
+  done
+  return 1
+}
+
+# head_turn runs take_turn under the flock; a failed owner write ends the run.
 head_turn() {
-  local fd holder rc=1
-  exec {fd}>"$queue/.reclaim" || return 1
-  flock -x "$fd"
-  if holder=$(cat "$lock/owner" 2>/dev/null); then
-    if record_dead "$holder"; then
-      rm -r "$lock" && echo "loadlock: removed $lock of a holder that is gone: $holder" >&2
-    fi
-  elif [ -d "$lock" ] && [ $(($(date +%s) - $(stat -c %Y "$lock" 2>/dev/null || date +%s))) -ge 60 ]; then
-    rm -r "$lock" && echo "loadlock: removed $lock, which has had no owner for a minute" >&2
-  fi
-  if mkdir "$lock" 2>/dev/null; then
-    if echo "$record" >"$lock/owner"; then
-      # Held from here: a signal from now on releases the lock.
-      held=1
-      rc=0
-    else
-      rmdir "$lock"
-      echo "loadlock: cannot write $lock/owner; gave the lock up" >&2
-      flock -u "$fd"
-      exit 1
-    fi
-  fi
-  flock -u "$fd"
-  exec {fd}>&-
+  local rc=0
+  mkdir -p "$slots"
+  with_flock take_turn || rc=$?
+  [ "$rc" -ne 2 ] || exit 1
   return "$rc"
 }
 
@@ -204,7 +297,7 @@ while :; do
   [ "$why" = "$said" ] || echo "loadlock: $why; checking again on a change or in ${retry}s" >&2
   said=$why
   if [[ $retry =~ ^[1-9][0-9]*$ ]] && command -v inotifywait >/dev/null; then
-    inotifywait -qq -t "$retry" -e create,delete,move "$queue" "$(dirname "$lock")" 2>/dev/null || true
+    inotifywait -qq -t "$retry" -e create,delete,move "$queue" "$(dirname "$lock")" "$slots" 2>/dev/null || true
   else
     sleep "$retry"
   fi

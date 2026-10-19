@@ -21,8 +21,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// busy is a load at which one holder at a time holds the lock.
+func busy() float64 { return 2 * loadForTwo }
+
+// lockAs is a gate on a busy host: the lock admits one holder.
 func lockAs(dir, owner, class string) *machine {
-	return &machine{lockDir: dir, owner: owner, lockClass: class, lockRetry: time.Second, log: func(string, ...any) {}}
+	return &machine{lockDir: dir, owner: owner, lockClass: class, lockRetry: time.Second, log: func(string, ...any) {}, lockLoad: busy}
 }
 
 // order takes the lock with each waiter (started in turn, each queued before
@@ -302,7 +306,8 @@ func TestFairLock_QueueDirRemoved(t *testing.T) {
 func TestFairLock_OwnerWriteFailureGivesUp(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "LOADLOCK")
 	require.NoError(t, os.MkdirAll(queueDir(dir), 0o755))
-	old := unix.Umask(0o277) // the lock directory mkdir makes is read-only
+	require.NoError(t, os.MkdirAll(slotsDir(dir), 0o755))
+	old := unix.Umask(0o277) // the slot directory mkdir makes is read-only
 	defer unix.Umask(old)
 	w := lockAs(dir, "w", classNormal)
 	err := w.Lock(context.Background())
@@ -310,6 +315,7 @@ func TestFairLock_OwnerWriteFailureGivesUp(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "write owner")
 	assert.NoDirExists(t, dir, "no ownerless lock is left")
+	assert.NoDirExists(t, filepath.Join(slotsDir(dir), "1"), "nor an ownerless slot")
 }
 
 // TestFairLock_OldTicketWarned (#2226 QA): a ticket from before #2226 (no
@@ -335,4 +341,187 @@ func TestFairLock_OldTicketWarned(t *testing.T) {
 	assert.Contains(t, joined, "warning: ticket "+old)
 	assert.Contains(t, joined, "ENGINEER-9 old worktree")
 	assert.Equal(t, 1, strings.Count(joined, "warning: ticket "+old), "warned once")
+}
+
+// idleAs is a gate on an idle host: the lock admits two holders.
+func idleAs(dir, owner, class string) *machine {
+	m := lockAs(dir, owner, class)
+	m.lockLoad = func() float64 { return 0 }
+	return m
+}
+
+// viewLines is LOCK/owner's holder records.
+func viewLines(t *testing.T, dir string) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "owner"))
+	require.NoError(t, err)
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+// TestCountingLock_TwoHoldersWhenIdle: under loadForTwo two hold the lock at
+// once, a third waits, LOCK/owner lists both holders, and the lock is gone
+// when the last lets go.
+func TestCountingLock_TwoHoldersWhenIdle(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	a, b, c := idleAs(dir, "a", classNormal), idleAs(dir, "b", classNormal), idleAs(dir, "c", classNormal)
+	require.NoError(t, a.Lock(context.Background()))
+	require.NoError(t, b.Lock(context.Background()), "a second holder while the host is idle")
+	lines := viewLines(t, dir)
+	require.Len(t, lines, 2, "LOCK/owner lists every holder")
+	assert.True(t, strings.HasPrefix(lines[0], "a ") && strings.HasPrefix(lines[1], "b "), "%v", lines)
+
+	got := make(chan error, 1)
+	go func() { got <- c.Lock(context.Background()) }()
+	select {
+	case <-got:
+		t.Fatal("a third holder")
+	case <-time.After(300 * time.Millisecond):
+	}
+	a.Unlock()
+	require.NoError(t, <-got, "the third gets a's slot")
+	assert.Len(t, viewLines(t, dir), 2)
+	b.Unlock()
+	c.Unlock()
+	assert.NoDirExists(t, dir, "no holder, no lock")
+}
+
+// TestCountingLock_OneHolderWhenBusy: at or above loadForTwo the lock admits
+// one holder.
+func TestCountingLock_OneHolderWhenBusy(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	load := loadForTwo
+	a := idleAs(dir, "a", classNormal)
+	b := idleAs(dir, "b", classNormal)
+	b.lockLoad = func() float64 { return load }
+	require.NoError(t, a.Lock(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, b.Lock(ctx), context.DeadlineExceeded, "a second holder at load %v", load)
+	a.Unlock()
+	require.NoError(t, b.Lock(context.Background()))
+	b.Unlock()
+}
+
+// TestCountingLock_ReleaseFirstForAFreedSlot: with both slots held, a
+// release gate's ticket gets the first slot freed, before normal tickets
+// queued ahead of it.
+func TestCountingLock_ReleaseFirstForAFreedSlot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	h1, h2 := idleAs(dir, "h1", classNormal), idleAs(dir, "h2", classNormal)
+	require.NoError(t, h1.Lock(context.Background()))
+	require.NoError(t, h2.Lock(context.Background()))
+	var mu sync.Mutex
+	var order []string
+	var wg sync.WaitGroup
+	for i, w := range []*machine{idleAs(dir, "n1", classNormal), idleAs(dir, "n2", classNormal), idleAs(dir, "rel", classRelease)} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, w.Lock(context.Background()))
+			mu.Lock()
+			order = append(order, w.owner)
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			w.Unlock()
+		}()
+		require.Eventually(t, func() bool { return queued(dir) == i+1 }, 5*time.Second, time.Millisecond)
+	}
+	// h2 keeps its slot: the one h1 frees passes from waiter to waiter.
+	h1.Unlock()
+	wg.Wait()
+	assert.Equal(t, []string{"rel", "n1", "n2"}, order, "the freed slot goes to the release gate first")
+	h2.Unlock()
+}
+
+// TestCountingLock_OlderExclusiveLockIsFull: a LOCK an older client made
+// (no view marker) is exclusive: an idle host's counting waiter still waits.
+func TestCountingLock_OlderExclusiveLockIsFull(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "owner"), []byte(fmt.Sprintf("older client pid %d now\n", os.Getpid())), 0o644))
+	w := idleAs(dir, "w", classNormal)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, w.Lock(ctx), context.DeadlineExceeded)
+	require.NoError(t, os.RemoveAll(dir))
+	require.NoError(t, w.Lock(context.Background()))
+	w.Unlock()
+}
+
+// TestCountingLock_DeadSlotsReclaimed: slots whose holders are gone (pid
+// gone, another boot) are reclaimed, and the view is rebuilt without them.
+func TestCountingLock_DeadSlotsReclaimed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	for n, owner := range map[string]string{
+		"1": fmt.Sprintf("gone pid %d 2026-10-19T00:00:00Z", deadPid(t)),
+		"2": fmt.Sprintf("before the reboot pid %d 2026-10-17T20:00:00Z boot=not-this-boot start=5", os.Getpid()),
+	} {
+		slot := filepath.Join(slotsDir(dir), n)
+		require.NoError(t, os.MkdirAll(slot, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte(owner+"\n"), 0o644))
+	}
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, viewMarker), nil, 0o644))
+	w := idleAs(dir, fmt.Sprintf("me pid %d now", os.Getpid()), classNormal)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, w.Lock(ctx))
+	lines := viewLines(t, dir)
+	require.Len(t, lines, 1, "%v", lines)
+	assert.True(t, strings.HasPrefix(lines[0], "me pid"))
+	w.Unlock()
+	assert.NoDirExists(t, dir)
+}
+
+// TestCountingLock_StressTwoAtMost: 8 waiters on an idle host, every round
+// with dead holders in both slots: never more than two hold it, and none
+// waits forever. FAIRLOCK_STRESS sets the rounds (default 300).
+func TestCountingLock_StressTwoAtMost(t *testing.T) {
+	rounds := 300
+	if v := os.Getenv("FAIRLOCK_STRESS"); v != "" {
+		n, err := strconv.Atoi(v)
+		require.NoError(t, err)
+		rounds = n
+	}
+	dead := deadPid(t)
+	var inside, most, wedged atomic.Int32
+	for r := 0; r < rounds; r++ {
+		dir := filepath.Join(t.TempDir(), "LOADLOCK")
+		for _, n := range []string{"1", "2"} {
+			slot := filepath.Join(slotsDir(dir), n)
+			require.NoError(t, os.MkdirAll(slot, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte(fmt.Sprintf("gone pid %d 2026-10-19T00:00:00Z\n", dead)), 0o644))
+		}
+		require.NoError(t, os.Mkdir(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, viewMarker), nil, 0o644))
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				m := idleAs(dir, fmt.Sprintf("w%d pid %d now", i, os.Getpid()), classNormal)
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				if err := m.Lock(ctx); err != nil {
+					wedged.Add(1)
+					return
+				}
+				n := inside.Add(1)
+				for {
+					old := most.Load()
+					if n <= old || most.CompareAndSwap(old, n) {
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+				inside.Add(-1)
+				m.Unlock()
+			}()
+		}
+		wg.Wait()
+		require.NoDirExists(t, dir, "round %d: the lock is released", r)
+	}
+	assert.LessOrEqual(t, most.Load(), int32(maxHolders), "more than two holders at once")
+	assert.Equal(t, int32(maxHolders), most.Load(), "two did hold it at once")
+	assert.Zero(t, wedged.Load(), "waiters that never got the lock")
 }

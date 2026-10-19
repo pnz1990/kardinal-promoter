@@ -452,7 +452,9 @@ type machine struct {
 	lockClass string // classRelease or classNormal ("": normal)
 	proc      procFS // nil: the host's /proc
 	heldMu    sync.Mutex
-	held      string // the owner record this gate wrote when it took the lock
+	held      string         // the owner record this gate wrote when it took the lock
+	slot      string         // the slot directory of the lock it holds
+	lockLoad  func() float64 // nil: /proc/loadavg (tests set it)
 	log       func(format string, args ...any)
 }
 
@@ -534,30 +536,34 @@ func (m *machine) Lock(ctx context.Context) error {
 	if poll <= 0 {
 		poll = 10 * time.Second
 	}
-	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc}
+	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc, load: m.lockLoad}
 	if err := f.acquire(ctx); err != nil {
 		return err
 	}
 	m.heldMu.Lock()
-	m.held = f.held
+	m.held, m.slot = f.held, f.slot
 	m.heldMu.Unlock()
 	return nil
 }
 
-// Unlock removes the lock, only if this gate holds it.
+// Unlock gives up this gate's slot of the lock, only if it still holds it.
 func (m *machine) Unlock() {
 	if m.lockDir == "" {
 		return
 	}
 	m.heldMu.Lock()
-	held := m.held
+	held, slot := m.held, m.slot
+	m.held, m.slot = "", ""
 	m.heldMu.Unlock()
-	holder, err := os.ReadFile(filepath.Join(m.lockDir, "owner"))
-	if err != nil || held == "" || strings.TrimSpace(string(holder)) != held {
+	if held == "" {
 		m.log("heavy-load lock %s is not ours any more; left as it is", m.lockDir)
 		return
 	}
-	if err := os.RemoveAll(m.lockDir); err != nil {
-		m.log("remove the heavy-load lock: %v", err)
+	ours, err := release(m.lockDir, slot, held)
+	if err != nil {
+		m.log("release the heavy-load lock: %v", err)
+	}
+	if !ours {
+		m.log("heavy-load lock %s is not ours any more; left as it is", m.lockDir)
 	}
 }

@@ -164,7 +164,8 @@ The host rules are on by default:
 - **Heavy steps need the lock.** These are the scale profiles, the
   `-race -count=3` run, the enterprise scenario and fuzzing over a minute.
   They need the host's heavy-load lock: `-lock DIR` or `$RELEASE_GATE_LOCK`,
-  a directory made with mkdir. They take it one at a time, in a fair queue
+  a directory made with mkdir. Two take it at once while the host's
+  one-minute load is under 32, one at or above it, in a fair queue
   that `hack/loadlock.sh` shares: waiters are served in the order they asked,
   and `-priority release` (a release gate; `loadlock.sh -p release`) before
   everyone else. A lock or queued ticket of a process that is gone (another

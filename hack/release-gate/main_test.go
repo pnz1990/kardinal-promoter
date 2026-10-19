@@ -447,8 +447,8 @@ func TestGateRun_Interrupt(t *testing.T) {
 
 func TestMachineLock(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "LOADLOCK")
-	a := &machine{lockDir: dir, owner: "a", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}}
-	b := &machine{lockDir: dir, owner: "b", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}}
+	a := &machine{lockDir: dir, owner: "a", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}, lockLoad: busy}
+	b := &machine{lockDir: dir, owner: "b", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}, lockLoad: busy}
 	require.NoError(t, a.Lock(context.Background()))
 	owner, err := os.ReadFile(filepath.Join(dir, "owner"))
 	require.NoError(t, err)
