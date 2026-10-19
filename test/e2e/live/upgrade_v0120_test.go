@@ -215,13 +215,14 @@ func kroPods(t *testing.T, e *framework.Env) map[types.UID]int32 {
 	return out
 }
 
-// kroLevel matches a kro log line at error level or above: kro logs with
-// controller-runtime's zap in development mode, tab-separated, the level
-// second.
-var kroLevel = regexp.MustCompile(`^\S+\t(ERROR|DPANIC|PANIC|FATAL)\t`)
+// kroLevel matches a kro log line and its level: kro logs with
+// controller-runtime's zap console encoder, tab-separated, the level second.
+var kroLevel = regexp.MustCompile(`^\S+\t([A-Z]+)\t`)
 
-// kroErrors are the error lines of the kro logs the Collector wrote to dir,
-// but the benign ones (invariants.Benign).
+// kroErrors are the lines at error level or above of the kro logs the
+// Collector wrote to dir, but the benign ones (invariants.Benign). lines
+// counts the lines with a level: none means the format is not the one
+// kroLevel reads, and the check would see no error.
 func kroErrors(t *testing.T, dir string) (lines int, errs []string) {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(dir, "kro-system.*.log"))
@@ -234,9 +235,13 @@ func kroErrors(t *testing.T, dir string) (lines int, errs []string) {
 		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	line:
 		for sc.Scan() {
-			lines++
 			text := sc.Text()
-			if !kroLevel.MatchString(text) {
+			m := kroLevel.FindStringSubmatch(text)
+			if m == nil {
+				continue
+			}
+			lines++
+			if !slices.Contains([]string{"ERROR", "DPANIC", "PANIC", "FATAL"}, m[1]) {
 				continue
 			}
 			for _, re := range invariants.Benign {
@@ -299,6 +304,16 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	newFleet := func(name string) *scale.Fleet { return scale.NewFleet(t, e, scale.NewRNG(seed, name)) }
 	s.flow, s.approve, s.held, s.verify, s.frozen = newFleet("flow"), newFleet("approve"), newFleet("held"), newFleet("verify"), newFleet("frozen")
 	bundle := func(f *scale.Fleet, p string, i int) string { return f.MustCreateBundle(t, p, scale.Tag(p, i)).Name }
+	// cliBundle creates version i of p with the v0.12.0 CLI, which stamps
+	// the test's user as its author: a verify gate (excludeAuthor, the
+	// default) holds a version with no verified author.
+	cliBundle := func(f *scale.Fleet, p string, i int) string {
+		out, err := e.KardinalV0120(t, f.NS, "create", "bundle", p, "--image", scale.ImageRepo+":"+scale.Tag(p, i))
+		require.NoError(t, err, out)
+		m := v081BundleCreated.FindStringSubmatch(out)
+		require.Len(t, m, 2, "kardinal create bundle names the Bundle it created:\n%s", out)
+		return m[1]
+	}
 	three := u0120Envs("test", "uat", "prod")
 
 	// ── The estate, under v0.12.0 ───────────────────────────────────────
@@ -389,7 +404,8 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	for _, p := range helds {
 		heldB[p] = add(s.held, p, 1)
 	}
-	byPersonB := add(s.verify, byPerson, 1)
+	byPersonB := cliBundle(s.verify, byPerson, 1)
+	inFlight[s.verify.NS+"/"+byPersonB] = byPerson
 
 	// The freeze, then the agent ships: its version waits at test.
 	out, err := e.KardinalV0120(t, s.frozen.NS, "freeze", "--agents", "--reason", "INC-0120 agents paused", "--yes")
@@ -442,7 +458,8 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	for _, p := range bakes {
 		add(s.flow, p, 1)
 	}
-	byRunB := add(s.verify, byRun, 1)
+	byRunB := cliBundle(s.verify, byRun, 1)
+	inFlight[s.verify.NS+"/"+byRunB] = byRun
 	var runBefore v1alpha1.AgentRun
 	framework.Eventually(t, promoteTimeout, "the AgentRun of "+byRunB+" running", func(ctx context.Context) (bool, string) {
 		runs, err := agentRuns(ctx, e, s.verify.NS, byRunB)
@@ -826,6 +843,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	logs.Stop()
 	lines, kroErrs := kroErrors(t, invariants.Dir(t))
 	t.Logf("kro: %d log lines since the upgrade", lines)
+	assert.NotZero(t, lines, "kro's log lines have a level the check reads")
 	assert.Empty(t, kroErrs, "kro logged no error from the upgrade on")
 	assert.Equal(t, kroBefore, kroPods(t, e), "kro's Pods did not restart")
 }
