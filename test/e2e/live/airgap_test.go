@@ -152,8 +152,9 @@ func TestAirgap_EgressBlocked(t *testing.T) {
 //     cluster), and kardinal audit evidence-pack's receipts.ndjson holds the
 //     receipt, which verifies there too, with the pack's checksums;
 //   - a keyless authority with no trustedRootRef (the public-good root,
-//     fetched through TUF) cannot be loaded: its version never starts and
-//     fails at its timeout.
+//     fetched through TUF) cannot be loaded: its version's first step waits
+//     for the verification and fails with it at its timeout, nothing
+//     promoted.
 //
 // Covers EVIDENCE-AIRGAP-02, EVIDENCE-AIRGAP-03, EVIDENCE-AIRGAP-04.
 func TestAirgap_Evidence(t *testing.T) {
@@ -303,7 +304,10 @@ func TestAirgap_Evidence(t *testing.T) {
 	t.Logf("public-good: reason=%s message=%s", failed.Status.Reason, failed.Status.Message)
 	assert.Contains(t, failed.Status.Message, "authority public", "the message names the authority it could not load")
 	assert.Contains(t, failed.Status.Message, "public-good trusted root", "the cause is the root fetch, not another load error")
-	e.NoStep(t, b.ns, pipelineName, blocked, "test", 5*time.Second)
+	// The root step waited for the verification and failed with it: nothing
+	// was promoted.
+	st := e.WaitStepState(t, b.ns, pipelineName, blocked, "test", "Failed", time.Minute)
+	assert.Contains(t, st.Status.Message, "image verification", "the step failed on the verification")
 	e.WaitBundlePhase(t, b.ns, blocked, "Failed", time.Minute)
 	assert.Contains(t, fmt.Sprint(e.DeploymentImage(t, b.ns, fixtures.Workload("test"))), fixtures.V1, "test still runs V1")
 }
