@@ -1501,6 +1501,80 @@ func (g *graphGitClient) Push(context.Context, string, string, string, scm.GitAu
 // against its retry budget. A head with commits on top of kardinal's is
 // adopted. Without a recorded push there is no lookup: open-pr opens
 // its PR as before.
+// tipGraphGitClient is a graphGitClient whose branch tip is tip.
+type tipGraphGitClient struct {
+	graphGitClient
+	tip string
+}
+
+func (g *tipGraphGitClient) BranchGraph(context.Context, string, string, scm.GitAuth, int) (string, map[string]scm.GraphCommit, error) {
+	return g.tip, g.graph, nil
+}
+
+// TestOpenPR_RefusedDuplicateAdoptedOnlyIfOwn (#2079): a PR someone opened
+// from kardinal's branch between open-pr's lookup and its create, which
+// the SCM then refused to duplicate (*scm.ExistingPRError), is adopted on
+// the same rule as one the lookup found: its head is kardinal's pushed
+// commit, or has it among its parents. A foreign head is a
+// ForeignPRHeadError, not adopted. Without a recorded commit nothing can be
+// compared, and the PR is taken as before.
+//
+// Covers SCM-DUP-PR-02.
+func TestOpenPR_RefusedDuplicateAdoptedOnlyIfOwn(t *testing.T) {
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+	refused := func(head string) *finderSCM {
+		return &finderSCM{mockSCMProvider: &mockSCMProvider{openPRErr: &scm.ExistingPRError{
+			PR:    scm.FoundPR{Number: 9, URL: "https://github.com/owner/repo/pull/9", HeadSHA: head},
+			Cause: errors.New("status 422: A pull request already exists for owner:kardinal/b/prod."),
+		}}}
+	}
+	run := func(t *testing.T, s scm.SCMProvider, outputs map[string]string, git scm.GitClient) (parentsteps.StepResult, error) {
+		t.Helper()
+		state := makeState(t, &mockGitClient{}, &mockSCMProvider{})
+		if git != nil {
+			state.GitClient = git
+		}
+		state.SCM = s
+		state.Environment.Approval = "pr-review"
+		state.Outputs = outputs
+		return step.Execute(context.Background(), state)
+	}
+	const fixup, foreign = "f1x0000000000000000000000000000000000000", "deadbeefcafe0000000000000000000000000000"
+	// The branch held kardinal's commit when open-pr checked it before the
+	// create; the PR the SCM names has the head the case gives it.
+	graph := &tipGraphGitClient{tip: testPushed, graphGitClient: graphGitClient{graph: map[string]scm.GraphCommit{
+		fixup:      {Parents: []string{testPushed}},
+		testPushed: {Parents: []string{"base000000000000000000000000000000000000"}},
+		foreign:    {Parents: []string{"base000000000000000000000000000000000000"}},
+	}}}
+	t.Run("its head is kardinal's commit: adopted", func(t *testing.T) {
+		m := refused(testPushed)
+		res, err := run(t, m, map[string]string{steps.OutputPushedSHA: testPushed}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "9", res.Outputs["prNumber"])
+		assert.Equal(t, 1, m.openPRCalls)
+	})
+	t.Run("a head on top of kardinal's commit: adopted", func(t *testing.T) {
+		res, err := run(t, refused(fixup), map[string]string{steps.OutputPushedSHA: testPushed}, graph)
+		require.NoError(t, err)
+		assert.Equal(t, "9", res.Outputs["prNumber"])
+	})
+	t.Run("a foreign head: not adopted", func(t *testing.T) {
+		res, err := run(t, refused(foreign), map[string]string{steps.OutputPushedSHA: testPushed}, graph)
+		var fe *parentsteps.ForeignPRHeadError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, 9, fe.PR)
+		assert.Equal(t, foreign, fe.Head)
+		assert.Empty(t, res.Outputs["prNumber"])
+	})
+	t.Run("no recorded commit: taken, as before", func(t *testing.T) {
+		res, err := run(t, refused(foreign), map[string]string{}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "9", res.Outputs["prNumber"])
+	})
+}
+
 func TestOpenPR_AdoptsOnlyItsOwnOpenPR(t *testing.T) {
 	step, err := parentsteps.Lookup("open-pr")
 	require.NoError(t, err)

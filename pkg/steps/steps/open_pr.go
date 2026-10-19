@@ -225,15 +225,23 @@ const prHistoryDepth = 50
 // commits on top of kardinal's are accepted, as wait-for-merge accepts them.
 // An open PR of the branch whose head does not contain it (someone else
 // committed to the branch, replacing kardinal's commit) is not adopted, the
-// branch is not rebuilt over their commit, and it is never handed to
-// OpenPR, whose refused duplicate would adopt it: it is a
-// ForeignPRHeadError, which fails the step against its retry budget.
+// branch is not rebuilt over their commit, and no create is sent: it is a
+// ForeignPRHeadError, which fails the step against its retry budget. A PR
+// opened between the lookup and the create, which the SCM then refuses to
+// duplicate (*scm.ExistingPRError), is adopted on the same rule
+// (adoptIfOwn, #2079).
 // Without a recorded commit (a git client that cannot read HEAD) nothing is
 // adopted and OpenPR runs, as before.
 func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, title, body, branch string) (string, int, adoption, error) {
 	pushed := state.Outputs[OutputPushedSHA]
 	if pushed == "" {
 		prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+		// Without a recorded commit nothing can be compared: the PR the
+		// SCM refused to duplicate is taken, as before #2079.
+		var ex *scm.ExistingPRError
+		if errors.As(err, &ex) {
+			return ex.PR.URL, ex.PR.Number, opened, nil
+		}
 		return prURL, prNum, opened, err
 	}
 	if finder, ok := state.SCM.(scm.OpenPRFinder); ok {
@@ -242,19 +250,8 @@ func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, titl
 		case errors.Is(err, errors.ErrUnsupported):
 		case err != nil:
 			return "", 0, opened, fmt.Errorf("look up an open PR of %s: %w", branch, err)
-		case pr != nil && scm.SameCommit(pr.HeadSHA, pushed):
-			return pr.URL, pr.Number, adoptedOwnHead, nil
 		case pr != nil:
-			contains, _, err := branchContains(ctx, state, branch, pr.HeadSHA, pushed)
-			switch {
-			case errors.Is(err, errNoHistory):
-			case err != nil:
-				return "", 0, opened, fmt.Errorf("PR #%d's head %s is not kardinal's commit %s, and reading branch %s failed: %w",
-					pr.Number, pr.HeadSHA, pushed, branch, err)
-			case contains:
-				return pr.URL, pr.Number, adoptedOnTop, nil
-			}
-			return "", 0, opened, &parentsteps.ForeignPRHeadError{PR: pr.Number, URL: pr.URL, Branch: branch, Head: pr.HeadSHA, Pushed: pushed}
+			return adoptIfOwn(ctx, state, branch, pr, pushed)
 		}
 	}
 	// No PR of the branch: before opening one, its head must contain
@@ -272,7 +269,36 @@ func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, titl
 		return "", 0, opened, &parentsteps.ForeignPRHeadError{Branch: branch, Head: head, Pushed: pushed}
 	}
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
+	// Someone opened a PR of kardinal's branch between the lookup and the
+	// create, and the SCM refused a second: it is adopted only on the same
+	// rule as one the lookup found (#2079).
+	var ex *scm.ExistingPRError
+	if errors.As(err, &ex) {
+		return adoptIfOwn(ctx, state, branch, &ex.PR, pushed)
+	}
 	return prURL, prNum, opened, err
+}
+
+// adoptIfOwn adopts pr, the open PR of kardinal's branch, when it is
+// kardinal's: its head is the commit git-push pushed (pushed), or has it
+// among its parents (commits on top of kardinal's). Otherwise someone else
+// committed to the branch, replacing kardinal's commit: a
+// ForeignPRHeadError. A git client that cannot read the branch's history
+// adopts only the PR whose head is pushed.
+func adoptIfOwn(ctx context.Context, state *parentsteps.StepState, branch string, pr *scm.FoundPR, pushed string) (string, int, adoption, error) {
+	if scm.SameCommit(pr.HeadSHA, pushed) {
+		return pr.URL, pr.Number, adoptedOwnHead, nil
+	}
+	contains, _, err := branchContains(ctx, state, branch, pr.HeadSHA, pushed)
+	switch {
+	case errors.Is(err, errNoHistory):
+	case err != nil:
+		return "", 0, opened, fmt.Errorf("PR #%d's head %s is not kardinal's commit %s, and reading branch %s failed: %w",
+			pr.Number, pr.HeadSHA, pushed, branch, err)
+	case contains:
+		return pr.URL, pr.Number, adoptedOnTop, nil
+	}
+	return "", 0, opened, &parentsteps.ForeignPRHeadError{PR: pr.Number, URL: pr.URL, Branch: branch, Head: pr.HeadSHA, Pushed: pushed}
 }
 
 // errNoHistory is a git client that cannot read a branch's head or history.

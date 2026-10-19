@@ -99,7 +99,7 @@ func TestBitbucketDCContract_OpenPR(t *testing.T) {
 		f.queue("GET "+dcPRs,
 			apiReply{200, `{"values":[` + other + `],"isLastPage":false,"nextPageStart":1}`},
 			apiReply{200, `{"values":[` + dcPRJSON(t, "OPEN", 2) + `],"isLastPage":true}`})
-		url, num, err := dcProvider(t, f, "").OpenPR(context.Background(), "PLAT/web-app", "t", "b", dcBranch, "main")
+		url, num, err := existing(dcProvider(t, f, "").OpenPR(context.Background(), "PLAT/web-app", "t", "b", dcBranch, "main"))
 		require.NoError(t, err)
 		assert.Equal(t, 12, num)
 		assert.Equal(t, dcPRHTML, url)

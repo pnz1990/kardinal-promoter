@@ -571,7 +571,7 @@ func TestBitbucketCloudContract_OpenPRReusesExisting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			api := newFakeAPI(t, map[string]apiReply{"POST " + bbPRPath: tt.create, "GET " + bbPRPath: tt.list})
-			prURL, n, err := newBitbucket(t, api.URL, "").OpenPR(context.Background(), "acme/web-app", "t", "b", bbBranch, "main")
+			prURL, n, err := existing(newBitbucket(t, api.URL, "").OpenPR(context.Background(), "acme/web-app", "t", "b", bbBranch, "main"))
 			calls := api.Calls()
 			require.Len(t, calls, tt.wantCalls)
 			if tt.wantErr != "" {

@@ -114,7 +114,7 @@ func (b *BitbucketProvider) OpenPR(ctx context.Context, repo, title, body, head,
 	if err := b.do(ctx, http.MethodPost, path, payload, &result); err != nil {
 		// Bitbucket returns 400 with "There are already open pull requests" when a PR exists.
 		if isBitbucketExistingPRErr(err) {
-			return b.adoptRefused(ctx, repo, head, base, err)
+			return b.refusedExisting(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open Bitbucket PR %s: %w", repo, err)
 	}

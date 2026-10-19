@@ -122,7 +122,7 @@ func (a *AzureDevOpsProvider) OpenPR(ctx context.Context, repo, title, body, hea
 		org, project, repoName, azureDevOpsAPIVersion)
 	if err := a.do(ctx, http.MethodPost, path, payload, &result); err != nil {
 		if isADOExistingPRErr(err) {
-			return a.adoptRefused(ctx, repo, head, base, err)
+			return a.refusedExisting(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open Azure DevOps PR %s: %w", repo, err)
 	}
@@ -140,17 +140,13 @@ func (a *AzureDevOpsProvider) prWebURL(webURL, org, project, repoName string, id
 	return fmt.Sprintf("%s/%s/%s/_git/%s/pullrequest/%d", a.APIURL, org, project, repoName, id)
 }
 
-// isADOExistingPRErr returns true when ADO rejected PR creation because one already exists.
-// TF401179: "An active pull request for the source and target branch already exists."
+// isADOExistingPRErr reports whether Azure DevOps refused the PR creation as
+// a duplicate: a 409 whose body names TF401179 ("An active pull request for
+// the source and target branch already exists.") or its
+// GitPullRequestExistsException. Any other 409 keeps its own reason (#2079).
 func isADOExistingPRErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "TF401179") ||
-		strings.Contains(msg, "already exists") ||
-		strings.Contains(msg, "active pull request") ||
-		strings.Contains(msg, "status 409")
+	apiErr, ok := statusIs(err, http.StatusConflict)
+	return ok && (strings.Contains(apiErr.Body, "TF401179") || strings.Contains(apiErr.Body, "GitPullRequestExistsException"))
 }
 
 // ClosePR abandons (closes) the Azure DevOps pull request without merging.
