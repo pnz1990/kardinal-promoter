@@ -29,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"slices"
 	"strings"
@@ -175,6 +176,9 @@ type Reconciler struct {
 	Providers *scm.Registry
 	// NowFn overrides the clock in tests.
 	NowFn func() time.Time
+	// JitterFn is the random part added to a retry's delay d, in [0, d]
+	// (nil: random); tests fix it.
+	JitterFn func(d time.Duration) time.Duration
 }
 
 func (r *Reconciler) now() time.Time {
@@ -293,7 +297,7 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 		observability.ReceiptsFailedTotal.WithLabelValues(metricSigning).Inc()
 		rc.Status.Phase = v1alpha1.ReceiptPending
 		setCondition(rc, ConditionSigned, metav1.ConditionFalse, "SignFailed", err.Error(), now)
-		return r.retry(ctx, base, rc, now)
+		return r.retry(ctx, base, rc, now, err)
 	}
 	at := metav1.NewTime(now.UTC())
 	record := func(rc *v1alpha1.PromotionReceipt) bool {
@@ -429,7 +433,7 @@ func (r *Reconciler) sinkFailed(ctx context.Context, base, rc *v1alpha1.Promotio
 	now time.Time) (ctrlruntime.Result, error) {
 	observability.ReceiptsFailedTotal.WithLabelValues(metricOCI).Inc()
 	setCondition(rc, ConditionStored, metav1.ConditionFalse, reason, err.Error(), now)
-	return r.retry(ctx, base, rc, now)
+	return r.retry(ctx, base, rc, now, err)
 }
 
 // comment posts the PR comment once: status.prComment is written after a
@@ -465,7 +469,7 @@ func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionRe
 			return ctrlruntime.Result{}, r.patch(ctx, base, rc)
 		}
 		setCondition(rc, ConditionPRCommented, metav1.ConditionFalse, "CommentFailed", err.Error(), now)
-		return r.retry(ctx, base, rc, now)
+		return r.retry(ctx, base, rc, now, err)
 	}
 	msg := fmt.Sprintf("commented on PR #%d", pr.Number)
 	if found {
@@ -573,16 +577,36 @@ func (r *Reconciler) failed(ctx context.Context, base, rc *v1alpha1.PromotionRec
 	return ctrlruntime.Result{}, r.patch(ctx, base, rc)
 }
 
-// retry records a failed attempt and when the next runs.
-func (r *Reconciler) retry(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, now time.Time) (ctrlruntime.Result, error) {
+// retry records a failed attempt and when the next runs: after the
+// backoff for its count, or, when the server answered a Retry-After
+// (receipt.RetryAfterError), after that wait, at most
+// receipt.MaxRetryAfter; plus a random part up to the same again, so the
+// receipts of a burst do not all retry at once.
+func (r *Reconciler) retry(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, now time.Time, cause error) (ctrlruntime.Result, error) {
 	rc.Status.Attempts++
 	d := backoff(rc.Status.Attempts)
-	next := metav1.NewTime(now.Add(d).UTC())
-	rc.Status.NextRetryAt = &next
+	var ra *receipt.RetryAfterError
+	if errors.As(cause, &ra) && ra.After > 0 {
+		d = min(ra.After, receipt.MaxRetryAfter)
+	}
+	d += r.jitter(d)
+	at, next := metav1.NewTime(now.UTC()), metav1.NewTime(now.Add(d).UTC())
+	rc.Status.NextRetryAt, rc.Status.LastAttemptAt = &next, &at
 	if err := r.patch(ctx, base, rc); err != nil {
 		return ctrlruntime.Result{}, err
 	}
 	return ctrlruntime.Result{RequeueAfter: d}, nil
+}
+
+// jitter is a random duration in [0, d].
+func (r *Reconciler) jitter(d time.Duration) time.Duration {
+	if r.JitterFn != nil {
+		return r.JitterFn(d)
+	}
+	if d <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(d) + 1))
 }
 
 func backoff(attempts int) time.Duration {

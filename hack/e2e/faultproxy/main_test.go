@@ -96,7 +96,7 @@ func TestFaultProxyRateLimit(t *testing.T) {
 	admin := httptest.NewServer(routes{r}.admin())
 	defer admin.Close()
 	for q, want := range map[string]int{"mode=ratelimit": http.StatusBadRequest, "mode=ratelimit&rps=0": http.StatusBadRequest,
-		"mode=ratelimit&rps=3": http.StatusNoContent} {
+		"mode=ratelimit&rps=3&ra=0": http.StatusBadRequest, "mode=ratelimit&rps=3&ra=3": http.StatusNoContent} {
 		resp, err := http.Post(admin.URL+"/set?route=fulcio&"+q, "", nil)
 		require.NoError(t, err)
 		assert.Equal(t, want, resp.StatusCode, q)
@@ -111,7 +111,7 @@ func TestFaultProxyRateLimit(t *testing.T) {
 			case http.StatusOK:
 				ok++
 			case http.StatusTooManyRequests:
-				assert.Equal(t, "1", resp.Header.Get("Retry-After"))
+				assert.Equal(t, "3", resp.Header.Get("Retry-After"))
 				limited++
 			}
 		}

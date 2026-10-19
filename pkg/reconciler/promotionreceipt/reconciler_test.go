@@ -122,7 +122,7 @@ func newHarness(t *testing.T, objs ...client.Object) harness {
 		WithStatusSubresource(&v1alpha1.PromotionReceipt{}).Build()
 	s := &commentSCM{}
 	r := &Reconciler{
-		Client: c, SCM: s, NowFn: func() time.Time { return now },
+		Client: c, SCM: s, NowFn: func() time.Time { return now }, JitterFn: noJitter,
 		Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: SecretKey(c, "kardinal-system", "receipt-key", "cosign.key")},
 	}
 	return harness{c: c, r: r, scm: s}
@@ -439,7 +439,7 @@ func TestReconcile_OnceDespiteConflicts(t *testing.T) {
 	signs := 0
 	key := SecretKey(inner, "kardinal-system", "receipt-key", "cosign.key")
 	s := &findingSCM{}
-	r := &Reconciler{Client: inner, SCM: s, NowFn: func() time.Time { return now },
+	r := &Reconciler{Client: inner, SCM: s, NowFn: func() time.Time { return now }, JitterFn: noJitter,
 		Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
 			signs++
 			return key(ctx)
@@ -532,3 +532,6 @@ func TestCacheTransform(t *testing.T) {
 
 // bundlesOf is the bundles of a Referrers result.
 func bundlesOf(f receipt.Found, err error) ([][]byte, error) { return f.Bundles, err }
+
+// noJitter keeps the tests' retry times exact.
+func noJitter(time.Duration) time.Duration { return 0 }
