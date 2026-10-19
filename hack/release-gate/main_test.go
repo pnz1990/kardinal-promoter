@@ -452,7 +452,7 @@ func TestMachineLock(t *testing.T) {
 	require.NoError(t, a.Lock(context.Background()))
 	owner, err := os.ReadFile(filepath.Join(dir, "owner"))
 	require.NoError(t, err)
-	assert.Equal(t, "a\n", string(owner))
+	assert.Regexp(t, `^a boot=\S+ start=\d+ ticket=1-\d{19}-\d+\n$`, string(owner), "the owner, with its process and ticket")
 
 	got := make(chan error, 1)
 	go func() { got <- b.Lock(context.Background()) }()
@@ -464,12 +464,12 @@ func TestMachineLock(t *testing.T) {
 	b.Unlock() // not b's: a's lock stays
 	owner, err = os.ReadFile(filepath.Join(dir, "owner"))
 	require.NoError(t, err, "a's lock is still there")
-	assert.Equal(t, "a\n", string(owner))
+	assert.True(t, strings.HasPrefix(string(owner), "a "), "%s", owner)
 	a.Unlock()
 	require.NoError(t, <-got, "b gets it once a lets go")
 	owner, err = os.ReadFile(filepath.Join(dir, "owner"))
 	require.NoError(t, err)
-	assert.Equal(t, "b\n", string(owner))
+	assert.True(t, strings.HasPrefix(string(owner), "b "), "%s", owner)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

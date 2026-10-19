@@ -450,6 +450,9 @@ type machine struct {
 	owner     string
 	lockRetry time.Duration
 	lockClass string // classRelease or classNormal ("": normal)
+	proc      procFS // nil: the host's /proc
+	heldMu    sync.Mutex
+	held      string // the owner record this gate wrote when it took the lock
 	log       func(format string, args ...any)
 }
 
@@ -531,7 +534,14 @@ func (m *machine) Lock(ctx context.Context) error {
 	if poll <= 0 {
 		poll = 10 * time.Second
 	}
-	return (&fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log}).acquire(ctx)
+	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc}
+	if err := f.acquire(ctx); err != nil {
+		return err
+	}
+	m.heldMu.Lock()
+	m.held = f.held
+	m.heldMu.Unlock()
+	return nil
 }
 
 // Unlock removes the lock, only if this gate holds it.
@@ -539,8 +549,11 @@ func (m *machine) Unlock() {
 	if m.lockDir == "" {
 		return
 	}
+	m.heldMu.Lock()
+	held := m.held
+	m.heldMu.Unlock()
 	holder, err := os.ReadFile(filepath.Join(m.lockDir, "owner"))
-	if err != nil || strings.TrimSpace(string(holder)) != m.owner {
+	if err != nil || held == "" || strings.TrimSpace(string(holder)) != held {
 		m.log("heavy-load lock %s is not ours any more; left as it is", m.lockDir)
 		return
 	}

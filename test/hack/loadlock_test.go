@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -176,4 +177,110 @@ func TestLoadLock_Fair(t *testing.T) {
 		assert.Equal(t, 2, exitCode(err), "%s", out)
 		assert.Contains(t, string(out), "usage:")
 	})
+}
+
+// TestLoadLock_Races (#2202 QA): the reclaim and liveness races of the
+// first fair lock.
+func TestLoadLock_Races(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
+	run := func(t *testing.T, lock, owner string, args ...string) *exec.Cmd {
+		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
+		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		return cmd
+	}
+	t.Run("eight waiters on a dead holder's lock: one holder at a time, none wedged", func(t *testing.T) {
+		rounds := 20
+		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
+			n, err := strconv.Atoi(v)
+			require.NoError(t, err)
+			rounds = n
+		}
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		for r := 0; r < rounds; r++ {
+			dir := t.TempDir()
+			lock := filepath.Join(dir, "LOADLOCK")
+			inside, overlap := filepath.Join(dir, "inside"), filepath.Join(dir, "overlap")
+			require.NoError(t, os.Mkdir(lock, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"),
+				[]byte(fmt.Sprintf("gone pid %d 2026-10-19T00:00:00Z\n", gone.Process.Pid)), 0o644))
+			var cmds []*exec.Cmd
+			outs := make([]*strings.Builder, 8)
+			for i := 0; i < 8; i++ {
+				// The critical section: mkdir fails when another holder is in it.
+				cmd := run(t, lock, fmt.Sprintf("w%d", i), "sh", "-c",
+					`mkdir "$0" 2>/dev/null || touch "$1"; sleep 0.01; rmdir "$0" 2>/dev/null; true`, inside, overlap)
+				outs[i] = &strings.Builder{}
+				cmd.Stdout, cmd.Stderr = outs[i], outs[i]
+				require.NoError(t, cmd.Start())
+				cmds = append(cmds, cmd)
+			}
+			done := make(chan struct{})
+			go func() {
+				for _, c := range cmds {
+					_ = c.Wait()
+				}
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(60 * time.Second):
+				for _, c := range cmds {
+					_ = c.Process.Kill()
+				}
+				t.Fatalf("round %d: a waiter never got the lock", r)
+			}
+			require.NoFileExists(t, overlap, "round %d: two holders at once", r)
+			for i, o := range outs {
+				require.NotContains(t, o.String(), "not ours any more", "round %d: w%d's lock was taken from it", r, i)
+			}
+			require.NoDirExists(t, lock, "round %d: the lock is released", r)
+		}
+	})
+	t.Run("a reused pid: another boot's or another start's record is dead", func(t *testing.T) {
+		live := os.Getpid() // a pid that runs, as a reused one does
+		for _, owner := range []string{
+			fmt.Sprintf("before the reboot pid %d 2026-10-17T20:00:00Z boot=not-this-boot start=5", live),
+			fmt.Sprintf("this boot pid %d 2026-10-19T00:00:00Z boot=%s start=1", live, strings.TrimSpace(readFile(t, "/proc/sys/kernel/random/boot_id"))),
+			fmt.Sprintf("an older client pid %d 2020-01-01T00:00:00Z", live), // this test started long after
+		} {
+			lock := filepath.Join(t.TempDir(), "LOADLOCK")
+			require.NoError(t, os.Mkdir(lock, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte(owner+"\n"), 0o644))
+			cmd := run(t, lock, "me", "true")
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			assert.Contains(t, string(out), "of a holder that is gone", owner)
+		}
+	})
+	t.Run("a waiter whose ticket is removed queues it again", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		require.NoError(t, os.Mkdir(lock, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
+		ran := filepath.Join(t.TempDir(), "ran")
+		cmd := run(t, lock, "waiter", "touch", ran)
+		var out strings.Builder
+		cmd.Stdout, cmd.Stderr = &out, &out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond)
+		entries, err := os.ReadDir(lock + ".queue")
+		require.NoError(t, err)
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), ".") {
+				require.NoError(t, os.Remove(filepath.Join(lock+".queue", e.Name())))
+			}
+		}
+		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond, "queued again")
+		require.NoError(t, os.RemoveAll(lock))
+		require.NoError(t, cmd.Wait())
+		assert.FileExists(t, ran)
+		assert.Contains(t, out.String(), "queued it again in its place")
+	})
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	require.NoError(t, err)
+	return string(b)
 }
