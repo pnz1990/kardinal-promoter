@@ -137,8 +137,13 @@ var (
 )
 
 // selfRecord is the key=value pairs this process appends to its records.
+// Never start=0: a process that cannot read its own start time writes
+// start=unknown, and the others judge its records by boot id and pid only.
 func selfRecord(p procFS) string {
-	start, _ := p.Start(os.Getpid())
+	start, ok := p.Start(os.Getpid())
+	if !ok {
+		return fmt.Sprintf("boot=%s start=unknown", p.BootID())
+	}
 	return fmt.Sprintf("boot=%s start=%d", p.BootID(), start)
 }
 
@@ -166,6 +171,9 @@ func recordDead(p procFS, record string, at time.Time) bool {
 		return true
 	}
 	if s, ok := keys["start"]; ok {
+		if s == "unknown" {
+			return false // boot id and pid only
+		}
 		return s != strconv.FormatUint(start, 10)
 	}
 	// An older client's record: a pid that started after the record was
@@ -194,6 +202,8 @@ type fairLock struct {
 	proc        procFS
 	// held is the owner record written when the lock was taken.
 	held string
+	// warned are the pre-#2226 tickets already warned about.
+	warned map[string]bool
 }
 
 // acquire queues a ticket and takes the lock when it is the first ticket and
@@ -202,6 +212,7 @@ func (f *fairLock) acquire(ctx context.Context) error {
 	if f.proc == nil {
 		f.proc = hostProc{}
 	}
+	f.warned = map[string]bool{}
 	q := queueDir(f.lock)
 	if err := os.MkdirAll(q, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", q, err)
@@ -233,7 +244,7 @@ func (f *fairLock) acquire(ctx context.Context) error {
 			}
 			f.log("ticket %s was gone; queued it again in its place", name)
 		}
-		reapTickets(f.proc, q, f.log)
+		reapTickets(f.proc, q, f.log, f.warned)
 		first := firstTicket(q)
 		if first == name {
 			took, err := f.tryHead(q, name, record)
@@ -263,16 +274,24 @@ func (f *fairLock) acquire(ctx context.Context) error {
 	}
 }
 
-// writeTicket writes ticket name in q (a temporary name, then a rename).
+// writeTicket writes ticket name in q (a temporary name, then a rename),
+// making q again when it was removed. A removal racing the write is
+// retried; a write that keeps failing is an error.
 func writeTicket(q, name, record string) error {
-	tmp := filepath.Join(q, "."+name)
-	if err := os.WriteFile(tmp, []byte(record+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write ticket: %w", err)
+	var err error
+	for try := 0; try < 3; try++ {
+		if err = os.MkdirAll(q, 0o755); err != nil {
+			continue
+		}
+		tmp := filepath.Join(q, "."+name)
+		if err = os.WriteFile(tmp, []byte(record+"\n"), 0o644); err != nil {
+			continue
+		}
+		if err = os.Rename(tmp, filepath.Join(q, name)); err == nil {
+			return nil
+		}
 	}
-	if err := os.Rename(tmp, filepath.Join(q, name)); err != nil {
-		return fmt.Errorf("queue ticket: %w", err)
-	}
-	return nil
+	return fmt.Errorf("queue ticket %s: %w", name, err)
 }
 
 // tryHead is the head waiter's turn, under flock on q/.reclaim: it removes
@@ -297,6 +316,7 @@ func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
 	}
 	f.held = record + " ticket=" + name
 	if err := os.WriteFile(filepath.Join(f.lock, "owner"), []byte(f.held+"\n"), 0o644); err != nil {
+		_ = os.RemoveAll(f.lock) // never hold a lock without an owner record
 		return false, fmt.Errorf("write owner: %w", err)
 	}
 	return true, nil
@@ -325,7 +345,9 @@ func (f *fairLock) reclaim() {
 }
 
 // reapTickets removes the tickets of waiters that are gone.
-func reapTickets(p procFS, q string, log func(string, ...any)) {
+// It warns once (warned) about each ticket of a waiter on code from before
+// #2226 (no boot id): its reaper can move the lock from under its holder.
+func reapTickets(p procFS, q string, log func(string, ...any), warned map[string]bool) {
 	entries, err := os.ReadDir(q)
 	if err != nil {
 		return
@@ -344,6 +366,11 @@ func reapTickets(p procFS, q string, log func(string, ...any)) {
 			continue
 		}
 		record := string(text)
+		if !strings.Contains(record, "boot=") && warned != nil && !warned[e.Name()] {
+			warned[e.Name()] = true
+			log("warning: ticket %s is a waiter on code from before #2226 (%s); it can move the lock from under its holder: rebase it onto main",
+				e.Name(), strings.TrimSpace(record))
+		}
 		if !recordPid.MatchString(record) {
 			record += " pid " + parts[2] // an older client's ticket text has no pid
 		}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -188,8 +189,10 @@ func TestLoadLock_Races(t *testing.T) {
 		cmd.Env = append(os.Environ(), "LOADLOCK=")
 		return cmd
 	}
-	t.Run("eight waiters on a dead holder's lock: one holder at a time, none wedged", func(t *testing.T) {
-		rounds := 20
+	t.Run("50 locks at once, 8 waiters each on a dead holder: one holder at a time, none wedged", func(t *testing.T) {
+		// Locks in parallel, so reapers overlap (#2226 QA: sequential rounds
+		// never interleaved two, and #2202's script passed them).
+		rounds := 1
 		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
 			n, err := strconv.Atoi(v)
 			require.NoError(t, err)
@@ -197,44 +200,73 @@ func TestLoadLock_Races(t *testing.T) {
 		}
 		gone := exec.Command("true")
 		require.NoError(t, gone.Run())
+		const locks, waiters = 50, 8
 		for r := 0; r < rounds; r++ {
-			dir := t.TempDir()
-			lock := filepath.Join(dir, "LOADLOCK")
-			inside, overlap := filepath.Join(dir, "inside"), filepath.Join(dir, "overlap")
-			require.NoError(t, os.Mkdir(lock, 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"),
-				[]byte(fmt.Sprintf("gone pid %d 2026-10-19T00:00:00Z\n", gone.Process.Pid)), 0o644))
-			var cmds []*exec.Cmd
-			outs := make([]*strings.Builder, 8)
-			for i := 0; i < 8; i++ {
-				// The critical section: mkdir fails when another holder is in it.
-				cmd := run(t, lock, fmt.Sprintf("w%d", i), "sh", "-c",
-					`mkdir "$0" 2>/dev/null || touch "$1"; sleep 0.01; rmdir "$0" 2>/dev/null; true`, inside, overlap)
-				outs[i] = &strings.Builder{}
-				cmd.Stdout, cmd.Stderr = outs[i], outs[i]
-				require.NoError(t, cmd.Start())
-				cmds = append(cmds, cmd)
+			type lockRun struct {
+				dir  string
+				cmds []*exec.Cmd
+				outs []*strings.Builder
+			}
+			var runs []lockRun
+			for l := 0; l < locks; l++ {
+				dir := t.TempDir()
+				lock := filepath.Join(dir, "LOADLOCK")
+				require.NoError(t, os.Mkdir(lock, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"),
+					[]byte(fmt.Sprintf("gone pid %d 2026-10-19T00:00:00Z\n", gone.Process.Pid)), 0o644))
+				lr := lockRun{dir: dir}
+				for i := 0; i < waiters; i++ {
+					// The critical section: mkdir fails when another holder is in it.
+					cmd := run(t, lock, fmt.Sprintf("w%d", i), "sh", "-c",
+						`mkdir "$0" 2>/dev/null || touch "$1"; sleep 0.05; rmdir "$0" 2>/dev/null; true`,
+						filepath.Join(dir, "inside"), filepath.Join(dir, "overlap"))
+					o := &strings.Builder{}
+					cmd.Stdout, cmd.Stderr = o, o
+					lr.cmds, lr.outs = append(lr.cmds, cmd), append(lr.outs, o)
+				}
+				runs = append(runs, lr)
+			}
+			for _, lr := range runs {
+				for _, c := range lr.cmds {
+					require.NoError(t, c.Start())
+				}
 			}
 			done := make(chan struct{})
 			go func() {
-				for _, c := range cmds {
-					_ = c.Wait()
+				for _, lr := range runs {
+					for _, c := range lr.cmds {
+						_ = c.Wait()
+					}
 				}
 				close(done)
 			}()
 			select {
 			case <-done:
-			case <-time.After(60 * time.Second):
-				for _, c := range cmds {
-					_ = c.Process.Kill()
+			case <-time.After(5 * time.Minute):
+				for _, lr := range runs {
+					for _, c := range lr.cmds {
+						_ = c.Process.Kill()
+					}
 				}
-				t.Fatalf("round %d: a waiter never got the lock", r)
+				t.Fatalf("round %d: waiters never got their lock", r)
 			}
-			require.NoFileExists(t, overlap, "round %d: two holders at once", r)
-			for i, o := range outs {
-				require.NotContains(t, o.String(), "not ours any more", "round %d: w%d's lock was taken from it", r, i)
+			var overlaps, notOurs, left int
+			for _, lr := range runs {
+				if _, err := os.Stat(filepath.Join(lr.dir, "overlap")); err == nil {
+					overlaps++
+				}
+				if _, err := os.Stat(filepath.Join(lr.dir, "LOADLOCK")); err == nil {
+					left++
+				}
+				for _, o := range lr.outs {
+					if strings.Contains(o.String(), "not ours any more") {
+						notOurs++
+					}
+				}
 			}
-			require.NoDirExists(t, lock, "round %d: the lock is released", r)
+			assert.Zero(t, overlaps, "round %d: locks with two holders at once", r)
+			assert.Zero(t, notOurs, "round %d: holders whose lock was taken from them", r)
+			assert.Zero(t, left, "round %d: locks left behind", r)
 		}
 	})
 	t.Run("a reused pid: another boot's or another start's record is dead", func(t *testing.T) {
@@ -253,14 +285,103 @@ func TestLoadLock_Races(t *testing.T) {
 			assert.Contains(t, string(out), "of a holder that is gone", owner)
 		}
 	})
+	t.Run("a waiter whose queue directory is removed re-creates it and runs", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		require.NoError(t, os.Mkdir(lock, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
+		ran := filepath.Join(t.TempDir(), "ran")
+		cmd := run(t, lock, "waiter", "touch", ran)
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond)
+		// The queue cleaned by hand, as after a reboot (renamed away at once, as
+		// rm -rf ends; the waiter may queue again before RemoveAll ends).
+		require.NoError(t, os.Rename(lock+".queue", lock+".queue.gone"))
+		require.NoError(t, os.RemoveAll(lock+".queue.gone"))
+		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond, "queued again for real")
+		require.NoError(t, os.RemoveAll(lock))
+		require.NoError(t, cmd.Wait(), "%s", out.String())
+		assert.FileExists(t, ran)
+	})
+	t.Run("an owner file that cannot be written gives the lock up and fails", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		require.NoError(t, os.Mkdir(lock+".queue", 0o755))
+		ran := filepath.Join(t.TempDir(), "ran")
+		// umask 277: the lock directory mkdir makes is read-only to its owner.
+		cmd := exec.Command("sh", "-c", `umask 277; exec bash "$@"`, "sh", script, "-l", lock, "-o", "me", "-r", "0.05", "--", "touch", ran)
+		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		out, err := cmd.CombinedOutput()
+		assert.Equal(t, 1, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), "cannot write "+lock+"/owner; gave the lock up")
+		assert.NoDirExists(t, lock, "no ownerless lock is left")
+		assert.NoFileExists(t, ran, "the command did not run")
+	})
+	t.Run("a holder whose start time is unknown is judged by boot id and pid", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		require.NoError(t, os.Mkdir(lock, 0o755))
+		boot := strings.TrimSpace(readFile(t, "/proc/sys/kernel/random/boot_id"))
+		require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"),
+			[]byte(fmt.Sprintf("live pid %d 2026-10-19T00:00:00Z boot=%s start=unknown\n", os.Getpid(), boot)), 0o644))
+		cmd := run(t, lock, "me", "true")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		time.Sleep(time.Second)
+		assert.DirExists(t, lock, "a live holder of this boot is not reclaimed: %s", out.String())
+		require.NoError(t, os.RemoveAll(lock))
+		require.NoError(t, cmd.Wait())
+	})
+	t.Run("an ownerless lock is reclaimed after a minute, not before", func(t *testing.T) {
+		for _, tc := range []struct {
+			age     time.Duration
+			reclaim bool
+		}{{50 * time.Second, false}, {61 * time.Second, true}} {
+			lock := filepath.Join(t.TempDir(), "LOADLOCK")
+			require.NoError(t, os.Mkdir(lock, 0o755))
+			old := time.Now().Add(-tc.age)
+			require.NoError(t, os.Chtimes(lock, old, old))
+			cmd := run(t, lock, "me", "true")
+			out := &syncBuf{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			if tc.reclaim {
+				require.NoError(t, cmd.Wait(), "%s", out.String())
+				assert.Contains(t, out.String(), "which has had no owner for a minute")
+				continue
+			}
+			time.Sleep(time.Second)
+			assert.NotContains(t, out.String(), "no owner for a minute", "at %s", tc.age)
+			require.NoError(t, os.RemoveAll(lock))
+			require.NoError(t, cmd.Wait())
+		}
+	})
+	t.Run("a ticket from before #2226 is warned about", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		require.NoError(t, os.Mkdir(lock, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
+		require.NoError(t, os.Mkdir(lock+".queue", 0o755))
+		old := fmt.Sprintf("1-%019d-%d", time.Now().Add(time.Hour).UnixNano(), os.Getpid())
+		require.NoError(t, os.WriteFile(filepath.Join(lock+".queue", old),
+			[]byte(fmt.Sprintf("ENGINEER-9 old worktree pid %d %s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))), 0o644))
+		cmd := run(t, lock, "me", "true")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "warning: ticket "+old) }, 10*time.Second, 20*time.Millisecond)
+		assert.Contains(t, out.String(), "ENGINEER-9 old worktree")
+		require.NoError(t, os.Remove(filepath.Join(lock+".queue", old)))
+		require.NoError(t, os.RemoveAll(lock))
+		require.NoError(t, cmd.Wait())
+	})
 	t.Run("a waiter whose ticket is removed queues it again", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		require.NoError(t, os.Mkdir(lock, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
 		ran := filepath.Join(t.TempDir(), "ran")
 		cmd := run(t, lock, "waiter", "touch", ran)
-		var out strings.Builder
-		cmd.Stdout, cmd.Stderr = &out, &out
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
 		require.NoError(t, cmd.Start())
 		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond)
 		entries, err := os.ReadDir(lock + ".queue")
@@ -283,4 +404,22 @@ func readFile(t *testing.T, p string) string {
 	b, err := os.ReadFile(p)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// syncBuf is a buffer a command writes while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

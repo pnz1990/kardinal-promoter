@@ -77,6 +77,8 @@ record_dead() {
     return 0
   fi
   start=$(start_of "$pid") || return 0
+  # A holder that could not read its own start time: boot id and pid only.
+  [[ $r =~ (^|[[:space:]])start=unknown([[:space:]]|$) ]] && return 1
   if [[ $r =~ (^|[[:space:]])start=([0-9]+) ]]; then
     [ "${BASH_REMATCH[2]}" != "$start" ]
     return
@@ -91,12 +93,23 @@ record_dead() {
   [ $((btime + start / hz)) -gt $((at + 1)) ]
 }
 
-self_start=$(start_of $$ || echo 0)
+# Never start=0: a holder whose start time is unknown says so, and the others
+# judge it by its boot id and pid only.
+self_start=$(start_of $$) || self_start=unknown
 tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$(boot_id) start=$self_start"
 queue="$lock.queue"
 mkdir -p "$queue"
 ticket=$(printf '%s-%019d-%d' "$class" "$(date +%s%N)" "$$")
-write_ticket() { printf '%s\n' "$tag" >"$queue/.$ticket" && mv "$queue/.$ticket" "$queue/$ticket"; }
+# write_ticket (re)writes this run's ticket, the queue directory too when it
+# was removed; a failure ends the run, as hack/release-gate's does.
+write_ticket() {
+  for _ in 1 2 3; do
+    mkdir -p "$queue" && printf '%s\n' "$tag" >"$queue/.$ticket" 2>/dev/null &&
+      mv "$queue/.$ticket" "$queue/$ticket" 2>/dev/null && return 0
+  done
+  echo "loadlock: cannot write ticket $queue/$ticket" >&2
+  exit 1
+}
 write_ticket
 record="$tag ticket=$ticket"
 
@@ -127,6 +140,10 @@ reap_tickets() {
     [ -e "$t" ] || continue
     name=${t##*/}
     text=$(cat "$t" 2>/dev/null) || continue
+    if [[ $text != *boot=* ]] && [[ " $warned " != *" $name "* ]]; then
+      warned="$warned $name"
+      echo "loadlock: warning: ticket $name is a waiter on code from before #2226 ($text); it can move the lock from under its holder: rebase it onto main" >&2
+    fi
     [[ $text =~ (^|[[:space:]])pid\ [0-9]+ ]] || text="$text pid ${name##*-}"
     ns=${name#*-}
     ns=${ns%-*}
@@ -141,18 +158,24 @@ reap_tickets() {
 # a minute), then tries mkdir. It succeeds when this run holds the lock.
 head_turn() {
   local fd holder rc=1
-  exec {fd}>"$queue/.reclaim"
+  exec {fd}>"$queue/.reclaim" || return 1
   flock -x "$fd"
   if holder=$(cat "$lock/owner" 2>/dev/null); then
     if record_dead "$holder"; then
       rm -r "$lock" && echo "loadlock: removed $lock of a holder that is gone: $holder" >&2
     fi
-  elif [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+  elif [ -d "$lock" ] && [ $(($(date +%s) - $(stat -c %Y "$lock" 2>/dev/null || date +%s))) -ge 60 ]; then
     rm -r "$lock" && echo "loadlock: removed $lock, which has had no owner for a minute" >&2
   fi
   if mkdir "$lock" 2>/dev/null; then
-    echo "$record" >"$lock/owner"
-    rc=0
+    if echo "$record" >"$lock/owner"; then
+      rc=0
+    else
+      rmdir "$lock"
+      echo "loadlock: cannot write $lock/owner; gave the lock up" >&2
+      flock -u "$fd"
+      exit 1
+    fi
   fi
   flock -u "$fd"
   exec {fd}>&-
@@ -160,6 +183,7 @@ head_turn() {
 }
 
 said=
+warned=
 while :; do
   if [ ! -e "$queue/$ticket" ]; then
     write_ticket

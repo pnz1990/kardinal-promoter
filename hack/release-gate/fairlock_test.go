@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func lockAs(dir, owner, class string) *machine {
@@ -159,6 +160,8 @@ func TestRecordDead(t *testing.T) {
 		{"an older client's record, its pid reused later", "x pid 43 2026-10-19T00:30:00Z", time.Time{}, true},
 		{"an older client's ticket, by its name's time", "ghost pid 43", booted.Add(time.Hour), true},
 		{"no pid: never dead", "a person, by hand", time.Time{}, false},
+		{"start unknown: boot id and pid only", "x pid 42 2026-10-19T00:00:10Z boot=b-now start=unknown", time.Time{}, false},
+		{"start unknown, another boot", "x pid 42 2026-10-19T00:00:10Z boot=b-old start=unknown", time.Time{}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.dead, recordDead(p, tc.record, tc.at))
@@ -266,4 +269,70 @@ func TestFairLock_ConcurrentReclaimIsExclusive(t *testing.T) {
 	}
 	assert.Zero(t, overlaps.Load(), "two holders at once")
 	assert.Zero(t, wedged.Load(), "waiters that never got the lock")
+}
+
+// TestFairLock_QueueDirRemoved (#2226 QA): the queue directory removed by
+// hand (rm -rf LOCK.queue) is made again, the waiter's ticket with it, and
+// the waiter gets the lock.
+func TestFairLock_QueueDirRemoved(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	holder := lockAs(dir, "holder", classNormal)
+	require.NoError(t, holder.Lock(context.Background()))
+	w := lockAs(dir, "waiter", classNormal)
+	got := make(chan error, 1)
+	go func() { got <- w.Lock(context.Background()) }()
+	require.Eventually(t, func() bool { return queued(dir) == 1 }, 5*time.Second, time.Millisecond)
+	// Removed at once, as rm -rf ends; the waiter may queue again before
+	// RemoveAll of the old directory ends.
+	require.NoError(t, os.Rename(queueDir(dir), queueDir(dir)+".gone"))
+	require.NoError(t, os.RemoveAll(queueDir(dir)+".gone"))
+	require.Eventually(t, func() bool { return queued(dir) == 1 }, 15*time.Second, 5*time.Millisecond, "queued again")
+	holder.Unlock()
+	select {
+	case err := <-got:
+		require.NoError(t, err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("never got the lock")
+	}
+	w.Unlock()
+}
+
+// TestFairLock_OwnerWriteFailureGivesUp (#2226 QA): when the owner record
+// cannot be written, the lock is given up, not held without an owner.
+func TestFairLock_OwnerWriteFailureGivesUp(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	require.NoError(t, os.MkdirAll(queueDir(dir), 0o755))
+	old := unix.Umask(0o277) // the lock directory mkdir makes is read-only
+	defer unix.Umask(old)
+	w := lockAs(dir, "w", classNormal)
+	err := w.Lock(context.Background())
+	unix.Umask(old)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write owner")
+	assert.NoDirExists(t, dir, "no ownerless lock is left")
+}
+
+// TestFairLock_OldTicketWarned (#2226 QA): a ticket from before #2226 (no
+// boot id) is named in a warning: its reaper can move the lock.
+func TestFairLock_OldTicketWarned(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	holder := lockAs(dir, "holder", classNormal)
+	require.NoError(t, holder.Lock(context.Background()))
+	old := fmt.Sprintf("1-%019d-%d", time.Now().Add(time.Hour).UnixNano(), os.Getpid())
+	require.NoError(t, os.WriteFile(filepath.Join(queueDir(dir), old),
+		[]byte(fmt.Sprintf("ENGINEER-9 old worktree pid %d %s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))), 0o644))
+	var mu sync.Mutex
+	var logs []string
+	w := lockAs(dir, "w", classNormal)
+	w.log = func(f string, a ...any) { mu.Lock(); logs = append(logs, fmt.Sprintf(f, a...)); mu.Unlock() }
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = w.Lock(ctx)
+	holder.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(logs, "\n")
+	assert.Contains(t, joined, "warning: ticket "+old)
+	assert.Contains(t, joined, "ENGINEER-9 old worktree")
+	assert.Equal(t, 1, strings.Count(joined, "warning: ticket "+old), "warned once")
 }
