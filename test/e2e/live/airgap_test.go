@@ -274,9 +274,18 @@ func TestAirgap_Evidence(t *testing.T) {
 	assert.Equal(t, restarts, requireAirgapped(t, e, "end"), "kindnet did not restart during the test: it would have failed open")
 	rel := e.ExistingRelease(t, "kardinal-promoter", framework.ControllerNamespace)
 	var called []string
-	for _, line := range strings.Split(rel.AllLogs(t), "\n") {
-		if publicCall.MatchString(line) {
-			called = append(called, line)
+	// Only the lines since the test began: a rerun on a reused cluster
+	// must not fail on an earlier run's.
+	since := metav1.NewTime(start)
+	for _, p := range rel.Pods(t) {
+		for _, c := range p.Spec.Containers {
+			raw, err := e.Kube.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{Container: c.Name, SinceTime: &since}).DoRaw(ctx)
+			require.NoError(t, err, "logs of %s/%s", p.Name, c.Name)
+			for _, line := range strings.Split(string(raw), "\n") {
+				if publicCall.MatchString(line) {
+					called = append(called, p.Name+": "+line)
+				}
+			}
 		}
 	}
 	assert.Empty(t, called, "controller log lines naming the public Sigstore or GitHub since %s", start.UTC().Format(time.RFC3339))
