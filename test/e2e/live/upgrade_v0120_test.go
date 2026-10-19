@@ -6,7 +6,6 @@
 package live
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -219,42 +218,49 @@ func kroPods(t *testing.T, e *framework.Env) map[types.UID]int32 {
 // controller-runtime's zap console encoder, tab-separated, the level second.
 var kroLevel = regexp.MustCompile(`^\S+\t([A-Z]+)\t`)
 
-// kroErrors are the lines at error level or above of the kro logs the
-// Collector wrote to dir, but the benign ones (invariants.Benign). lines
-// counts the lines with a level: none means the format is not the one
-// kroLevel reads, and the check would see no error.
-func kroErrors(t *testing.T, dir string) (lines int, errs []string) {
+// kroErrors reads the whole log of each kro container, with the kubelet's
+// timestamps (kind nodes share the host's clock; kro's Pods do not restart,
+// which the test checks). leveled counts the lines kroLevel reads, over the
+// whole log: kro logs its start at info and little after it, so none means
+// another format, which the check cannot read. errs are the lines at error
+// level or above written from since on, but the benign ones
+// (invariants.Benign).
+func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, errs []string) {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "kro-system.*.log"))
-	require.NoError(t, err)
-	require.NotEmpty(t, files, "no kro log was read from %s: nothing was checked", dir)
-	for _, name := range files {
-		f, err := os.Open(name)
-		require.NoError(t, err)
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	line:
-		for sc.Scan() {
-			text := sc.Text()
-			m := kroLevel.FindStringSubmatch(text)
-			if m == nil {
-				continue
-			}
-			lines++
-			if !slices.Contains([]string{"ERROR", "DPANIC", "PANIC", "FATAL"}, m[1]) {
-				continue
-			}
-			for _, re := range invariants.Benign {
-				if re.MatchString(text) {
-					continue line
+	ctx := context.Background()
+	var pods corev1.PodList
+	require.NoError(t, e.Client.List(ctx, &pods, client.InNamespace("kro-system"),
+		client.MatchingLabels{"app.kubernetes.io/name": "kro"}))
+	require.NotEmpty(t, pods.Items, "kro's Pods")
+	for _, p := range pods.Items {
+		for _, c := range p.Spec.Containers {
+			raw, err := e.Kube.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{
+				Container: c.Name, Timestamps: true,
+			}).DoRaw(ctx)
+			require.NoError(t, err, "the log of %s/%s", p.Name, c.Name)
+		line:
+			for _, l := range strings.Split(string(raw), "\n") {
+				ts, text, ok := strings.Cut(l, " ")
+				m := kroLevel.FindStringSubmatch(text)
+				if !ok || m == nil {
+					continue
 				}
+				leveled++
+				at, err := time.Parse(time.RFC3339Nano, ts)
+				require.NoError(t, err, "kubelet timestamp of %q", l)
+				if at.Before(since) || !slices.Contains([]string{"ERROR", "DPANIC", "PANIC", "FATAL"}, m[1]) {
+					continue
+				}
+				for _, re := range invariants.Benign {
+					if re.MatchString(text) {
+						continue line
+					}
+				}
+				errs = append(errs, p.Name+"/"+c.Name+": "+text)
 			}
-			errs = append(errs, filepath.Base(name)+": "+text)
 		}
-		require.NoError(t, sc.Err())
-		require.NoError(t, f.Close())
 	}
-	return lines, errs
+	return leveled, errs
 }
 
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
@@ -841,9 +847,9 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		SeedTag: scale.SeedTag, Start: testStart, AllowEmpty: false, Logs: logs,
 		Skip: map[string]string{"env-content": "the rollbacks restore older versions on purpose; their content is checked above"}})
 	logs.Stop()
-	lines, kroErrs := kroErrors(t, invariants.Dir(t))
-	t.Logf("kro: %d log lines since the upgrade", lines)
-	assert.NotZero(t, lines, "kro's log lines have a level the check reads")
+	leveled, kroErrs := kroErrors(t, e, upgradeStart)
+	t.Logf("kro: %d log lines with a level", leveled)
+	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")
 	assert.Empty(t, kroErrs, "kro logged no error from the upgrade on")
 	assert.Equal(t, kroBefore, kroPods(t, e), "kro's Pods did not restart")
 }
