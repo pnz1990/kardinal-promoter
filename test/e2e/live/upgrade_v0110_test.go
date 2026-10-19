@@ -28,7 +28,7 @@ import (
 
 // guideChartV0110 is the chart reference of the "Upgrading from v0.11.0"
 // guide: the test replaces it with the checkout's chart.
-const guideChartV0110 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1"
+const guideChartV0110 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.2"
 
 // u0110Pipelines is how many Pipelines each estate namespace has.
 const u0110Pipelines = 6

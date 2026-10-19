@@ -119,7 +119,7 @@ Application it may not `update` ([Sync on promotion](health-adapters.md#sync-on-
 strategy's patch is denied. Grant `patch` and `update` on every Application with:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.2 \
   --namespace kardinal-system --reset-then-reuse-values \
   --set rbac.argocdApplicationsWrite=true
 ```
