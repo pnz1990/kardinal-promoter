@@ -28,7 +28,12 @@ make hygiene
 
 `make hygiene` fails on a Go function no main or test reaches, a docs page that is neither in
 `mkdocs.yml` nor linked, a docs asset or a script under `hack/` or `scripts/` that nothing names,
-and an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`). A helper only
+an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`), and a Go package
+whose tests can reach code that loads the ambient kubeconfig (client-go's default loading rules,
+controller-runtime's `GetConfig`, the in-cluster config) without `TestMain` calling
+`kubetest.Main` (`test/kubetest`). That guard points `KUBECONFIG` at a path that does not exist
+and unsets `KUBERNETES_SERVICE_HOST` before any test runs, so a unit test can never reach the
+cluster your machine points at; a test that needs one gives its kubeconfig explicitly. A helper only
 tests call belongs in an `export_test.go` of its package. Intentional exceptions go in
 `hack/hygiene/allow.txt` with a reason.
 

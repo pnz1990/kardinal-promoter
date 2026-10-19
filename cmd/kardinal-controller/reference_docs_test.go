@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kardinal-promoter/kardinal-promoter/hack/gen-reference-docs/refdocs"
+	"github.com/kardinal-promoter/kardinal-promoter/test/kubetest"
 )
 
 // printHelpEnv makes this test binary run the controller's main with -help
@@ -23,6 +24,9 @@ import (
 const printHelpEnv = "KARDINAL_TEST_PRINT_CONTROLLER_HELP"
 
 func TestMain(m *testing.M) {
+	// No test reaches the ambient kubeconfig or the in-cluster config
+	// (test/kubetest; make hygiene checks it is here).
+	kubetest.Isolate()
 	if os.Getenv(printHelpEnv) == "1" {
 		printControllerHelp()
 	}
