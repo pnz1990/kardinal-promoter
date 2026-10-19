@@ -96,6 +96,7 @@ func TestAuditSummary_SuccessRateOverCompleted(t *testing.T) {
 // window. A RollbackStarted event (onHealthFailure=rollback, one per region)
 // counts only when its rollback Bundle is gone.
 func TestAuditSummary_CountsRollbackBundles(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)
 	event := func(name, pipeline, bundle, action string) *v1alpha1.AuditEvent {
 		return &v1alpha1.AuditEvent{

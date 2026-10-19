@@ -29,7 +29,8 @@ import (
 
 // completionTimeout bounds the cluster reads of one Tab press: a slow or
 // unreachable cluster completes nothing rather than hang the shell.
-const completionTimeout = 3 * time.Second
+// A var so that a test of a hung server need not wait it out.
+var completionTimeout = 3 * time.Second
 
 // argKind is what a positional argument or flag names, for completion.
 type argKind int

@@ -157,10 +157,14 @@ func TestMCP_HostileInputs(t *testing.T) {
 	calls, refused, fresh := 0, 0, 0
 	snap := w.Snapshot()
 	accepted := map[string]int{}
+	hostile := scenario.HostileInputs()
 	for _, name := range slices.Sorted(maps.Keys(tools)) {
 		spec := tools[name]
-		for _, arg := range slices.Sorted(maps.Keys(spec.args)) {
-			for _, h := range scenario.HostileInputs() {
+		for argN, arg := range slices.Sorted(maps.Keys(spec.args)) {
+			for _, h := range hostile {
+				if !hostileCalled(h, argN) {
+					continue
+				}
 				args := baseArgs(name)
 				switch name {
 				case "ship":
@@ -219,6 +223,16 @@ func TestMCP_HostileInputs(t *testing.T) {
 		_, body := call(t, cs, name, baseArgs(name))
 		assertOnlyLabelled(t, name, body, scenario.HostileInjection)
 	}
+}
+
+// hostileCalled reports whether a tool's argument number argN (in name
+// order) is called with h. Under -race an oversized value goes to each
+// tool's first argument only: decoding it is the MCP SDK's slowest path,
+// about 170ms a call there, and it was this package's slowest test (#2194).
+// Without -race (go test -count=3 in CI, and locally) every argument gets
+// every value.
+func hostileCalled(h scenario.Hostile, argN int) bool {
+	return !raceEnabled || h.Kind != "oversized" || argN == 0
 }
 
 // checkStamped checks that every Bundle, Approval and Verdict changed
