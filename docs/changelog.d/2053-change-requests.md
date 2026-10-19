@@ -7,4 +7,5 @@ section: Added
   - **Fail closed.** A reading older than two poll intervals is stale, and `state` then reads `unknown`. Provider errors and HTTP 429 back off to `status.retryAt`.
   - **Only kardinal writes an instance.** The graph-objects admission policy refuses anyone else.
   - **Provider calls are capped** by `changeRequest.maxInflight` and `changeRequest.maxInflightPerNamespace`.
+  - **A version that stops promoting stops the reads.** The instances of a Verified or Failed version are suspended, and those of a Superseded, Rejected or gone version stop reading their tickets, with the `Ready` condition `VersionFinal` (#2167). kardinal never closes or cancels a ticket.
   - The providers are ServiceNow (#2054) and Jira (#2055).
