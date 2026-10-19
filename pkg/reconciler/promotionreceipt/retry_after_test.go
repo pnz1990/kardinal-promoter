@@ -19,10 +19,10 @@ import (
 )
 
 // TestReconcile_SignRetryAfter (#2062, the receipt burst): when Rekor answers
-// 429 with Retry-After, the receipt is tried again after that wait, not the
-// 30s backoff; a Retry-After over receipt.MaxRetryAfter waits that long at
-// most; the jitter is added on top; the attempt's time is recorded; and no
-// request is sent before nextRetryAt.
+// 429 with Retry-After, the receipt waits the longer of that wait and its
+// backoff (30s at the first attempt); a Retry-After over
+// receipt.MaxRetryAfter counts as that; the jitter is added on top; the
+// attempt's time is recorded; and no request is sent before nextRetryAt.
 //
 // Covers RECEIPT-RETRY-AFTER-01.
 func TestReconcile_SignRetryAfter(t *testing.T) {
@@ -31,9 +31,10 @@ func TestReconcile_SignRetryAfter(t *testing.T) {
 		jitter           func(time.Duration) time.Duration
 		want             time.Duration
 	}{
-		{"seconds", "7", noJitter, 7 * time.Second},
+		{"longer than the backoff", "45", noJitter, 45 * time.Second},
+		{"shorter than the backoff: the backoff", "1", noJitter, retryBase},
 		{"capped", "3600", noJitter, receipt.MaxRetryAfter},
-		{"with jitter", "8", func(d time.Duration) time.Duration { return d / 2 }, 12 * time.Second},
+		{"with jitter", "40", func(d time.Duration) time.Duration { return d / 2 }, time.Minute},
 		{"none: the backoff", "", noJitter, retryBase},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,6 +72,34 @@ func TestReconcile_SignRetryAfter(t *testing.T) {
 			assert.Greater(t, calls.Load(), sent)
 		})
 	}
+}
+
+// TestReconcile_SignRetryAfterGrows (QA-2 on #2192): an endpoint that
+// always answers 503 with Retry-After: 1 does not make the receipt retry
+// every second: the waits follow the backoff, doubling.
+func TestReconcile_SignRetryAfterGrows(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	secret, _ := keySecret(t)
+	h := newHarness(t, secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64)))
+	h.r.Signer.RekorURL, h.r.Signer.RekorVersion = srv.URL, 2
+	at := now
+	var waits []time.Duration
+	for range 5 {
+		h.r.NowFn = func() time.Time { return at }
+		rc := h.run(t, 1)
+		require.NotNil(t, rc.Status.NextRetryAt)
+		waits = append(waits, rc.Status.NextRetryAt.Sub(at))
+		at = rc.Status.NextRetryAt.Time
+	}
+	assert.Equal(t, []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute}, waits,
+		"the waits grow, whatever the short Retry-After")
+	assert.Positive(t, calls.Load())
 }
 
 // TestJitter: the default jitter is in [0, d], and not always the same.

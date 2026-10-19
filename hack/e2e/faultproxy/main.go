@@ -6,7 +6,7 @@
 // Fulcio, Rekor and timestamp authority URLs point at it, and a test sets
 // how each route answers: pass (proxy), down (the connection is closed
 // before any answer), slow (proxy after a delay), status (answer that
-// status, such as 503 or 429) or ratelimit (proxy at most rps requests in
+// status, such as 503 or 429, with Retry-After: ra when ra is set) or ratelimit (proxy at most rps requests in
 // each calendar second, answer the rest 429 with Retry-After: ra, default
 // 1), and reads how many requests each route
 // answered, by status. Standard library only.
@@ -103,6 +103,9 @@ func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		panic(http.ErrAbortHandler)
 	case "status":
 		r.count(strconv.Itoa(code))
+		if ra > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(ra))
+		}
 		http.Error(w, fmt.Sprintf("faultproxy: %s answers %d", r.Name, code), code)
 		return
 	case "ratelimit":
@@ -196,6 +199,12 @@ func (rs routes) admin() http.Handler {
 				return
 			}
 			code = c
+			if v := q.Get("ra"); v != "" {
+				if ra, err = strconv.Atoi(v); err != nil || ra < 1 {
+					http.Error(w, "ra is a whole number of seconds, at least 1", http.StatusBadRequest)
+					return
+				}
+			}
 		case "ratelimit":
 			n, err := strconv.Atoi(q.Get("rps"))
 			if err != nil || n < 1 {

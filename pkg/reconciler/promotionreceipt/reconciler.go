@@ -578,16 +578,18 @@ func (r *Reconciler) failed(ctx context.Context, base, rc *v1alpha1.PromotionRec
 }
 
 // retry records a failed attempt and when the next runs: after the
-// backoff for its count, or, when the server answered a Retry-After
-// (receipt.RetryAfterError), after that wait, at most
-// receipt.MaxRetryAfter; plus a random part up to the same again, so the
-// receipts of a burst do not all retry at once.
+// backoff for its count, or, when the server answered a longer Retry-After
+// (receipt.RetryAfterError, itself at most receipt.MaxRetryAfter), after
+// that: the longer of the two, so the waits keep growing however short a
+// server's Retry-After is. A random part up to the same again is added, so
+// the receipts of a burst do not all retry at once: a wait d is between d
+// and 2d, at most two hours at the backoff's one-hour cap.
 func (r *Reconciler) retry(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, now time.Time, cause error) (ctrlruntime.Result, error) {
 	rc.Status.Attempts++
 	d := backoff(rc.Status.Attempts)
 	var ra *receipt.RetryAfterError
-	if errors.As(cause, &ra) && ra.After > 0 {
-		d = min(ra.After, receipt.MaxRetryAfter)
+	if errors.As(cause, &ra) {
+		d = max(d, min(ra.After, receipt.MaxRetryAfter))
 	}
 	d += r.jitter(d)
 	at, next := metav1.NewTime(now.UTC()), metav1.NewTime(now.Add(d).UTC())

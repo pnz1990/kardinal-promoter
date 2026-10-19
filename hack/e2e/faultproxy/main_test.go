@@ -126,3 +126,27 @@ func TestFaultProxyRateLimit(t *testing.T) {
 	assert.Equal(t, 2, limited)
 	assert.Equal(t, map[string]int{"200": 6, "429": 9}, r.Counts)
 }
+
+// TestFaultProxyStatusRetryAfter: status answers its code, with Retry-After
+// when ra is set and none otherwise.
+func TestFaultProxyStatusRetryAfter(t *testing.T) {
+	r, _, err := newRoute("fulcio=:0=http://127.0.0.1:1")
+	require.NoError(t, err)
+	proxy := httptest.NewServer(r)
+	defer proxy.Close()
+	admin := httptest.NewServer(routes{r}.admin())
+	defer admin.Close()
+	for _, tc := range []struct{ q, want string }{{"mode=status&code=503&ra=1", "1"}, {"mode=status&code=503", ""}} {
+		resp, err := http.Post(admin.URL+"/set?route=fulcio&"+tc.q, "", nil)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusNoContent, resp.StatusCode)
+		resp, err = http.Get(proxy.URL + "/api/v2/signingCert")
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+		assert.Equal(t, tc.want, resp.Header.Get("Retry-After"), tc.q)
+	}
+	resp, err := http.Post(admin.URL+"/set?route=fulcio&mode=status&code=503&ra=0", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}

@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// MaxRetryAfter caps how long a server's Retry-After is honoured: a
-// receipt is tried again no later than this after the answer, whatever the
-// server asked.
+// MaxRetryAfter caps the Retry-After honoured: a server that asks for a
+// longer wait gets this one. The reconciler waits the longer of it and its
+// own backoff.
 const MaxRetryAfter = 5 * time.Minute
 
 // RetryAfterError is a signing error after which Fulcio, Rekor or the
