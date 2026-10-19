@@ -169,6 +169,8 @@ head_turn() {
   fi
   if mkdir "$lock" 2>/dev/null; then
     if echo "$record" >"$lock/owner"; then
+      # Held from here: a signal from now on releases the lock.
+      held=1
       rc=0
     else
       rmdir "$lock"
