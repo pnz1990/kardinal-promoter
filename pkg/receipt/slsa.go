@@ -34,14 +34,14 @@ type SLSA struct {
 	// receipt's image subjects) in its order, then any other image the
 	// ImageVerification names.
 	Images []SLSAImage `json:"images"`
-	// OtherSubjects are the receipt's subjects that are not images (the
-	// config commit, or the Bundle's spec), each "none": with one, the
-	// version's level is 0.
+	// OtherSubjects are the receipt's subjects that are not checked images
+	// (the config commit, the Bundle's spec, any other kind), each "none":
+	// with one, the version's level is 0.
 	OtherSubjects []SLSASubject `json:"otherSubjects,omitempty"`
 }
 
-// SLSASubject is a receipt subject that is not an image, and its SLSA
-// build level status: always none.
+// SLSASubject is a receipt subject that is not a checked image, and its
+// SLSA build level status: always none.
 type SLSASubject struct {
 	Name   string            `json:"name"`
 	Digest map[string]string `json:"digest"`
@@ -70,8 +70,8 @@ const (
 // slsaCheck is the SLSA build level of iv, subject by subject, over every
 // digest-pinned image of the Bundle (the receipt's image subjects: an
 // in-toto VSA's verifiedLevels hold for every subject), every image iv
-// names, and others, the receipt's subjects that are not images (none
-// each); nil when no attestation of iv decides a level (its policy has no
+// names, and others, the receipt's subjects it does not check (none
+// each: uncovered); nil when no attestation of iv decides a level (its policy has no
 // slsa): then the receipt claims no level. Only verified attestations
 // count: a level an attestation claims that did not verify is never the
 // receipt's.

@@ -258,6 +258,34 @@ func TestBuild_SLSABundleSpecSubject(t *testing.T) {
 	}
 }
 
+// TestUncoveredSubjects (QA-2 #2169): a subject is uncovered unless it is
+// one of the Bundle's digest-pinned images, the ones the SLSA fold checks:
+// the config commit, the Bundle's spec, and a kind of subject kardinal
+// does not know (a future one) are all uncovered, so a new kind fails
+// closed; an image digest the Bundle does not pin is uncovered too.
+func TestUncoveredSubjects(t *testing.T) {
+	images := bundleOf("ghcr.io/acme/checkout@sha256:aaaa", "ghcr.io/acme/worker:1.0")
+	image := Subject{Name: "ghcr.io/acme/checkout", Digest: map[string]string{"sha256": "aaaa"}}
+	commit := Subject{Name: "https://git.example.com/acme/deploy", Digest: map[string]string{"gitCommit": "3d1e"}}
+	spec := Subject{Name: "kardinal://c1/namespaces/default/bundles/b", Digest: map[string]string{"sha256": "bbbb"}}
+	future := Subject{Name: "oci://charts.example.com/checkout", Digest: map[string]string{"sha512": "cccc"}}
+	otherDigest := Subject{Name: "ghcr.io/acme/checkout", Digest: map[string]string{"sha256": "dddd"}}
+	twoDigests := Subject{Name: "ghcr.io/acme/checkout", Digest: map[string]string{"sha256": "aaaa", "sha512": "eeee"}}
+	got := uncovered([]Subject{image, commit, spec, future, otherDigest, twoDigests}, images)
+	assert.Equal(t, []Subject{commit, spec, future, otherDigest, twoDigests}, got)
+	assert.Empty(t, uncovered([]Subject{image}, images), "a checked image is covered")
+
+	// A version with a subject of a kind kardinal does not know claims no
+	// level, however well its image was built.
+	checkout := "ghcr.io/acme/checkout@sha256:aaaa"
+	s := slsaCheck(ivWith([]string{checkout}, slsaResult("provenance", checkout, true, 3, "builder")),
+		bundleOf(checkout), uncovered([]Subject{image, future}, bundleOf(checkout)))
+	require.NotNil(t, s)
+	assert.Equal(t, 0, s.BuildLevel)
+	assert.Equal(t, []SLSASubject{{Name: future.Name, Digest: future.Digest, Status: SLSANone}}, s.OtherSubjects)
+	assert.Empty(t, slsaLevels(Record{Checks: Checks{SLSA: s}}))
+}
+
 // slsaInput is the test promotion with an ImageVerification whose images
 // have these build levels from their builder.
 func slsaInput(levels ...int) Input {

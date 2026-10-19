@@ -553,14 +553,24 @@ func subjects(in Input) []Subject {
 	return out
 }
 
-// nonImageSubjects are the subjects of in that are not image digests: the
-// config commit, or the Bundle's spec when it has neither.
-func nonImageSubjects(in Input) []Subject {
-	var out []Subject
-	for _, s := range subjects(in) {
-		if s.Digest[digestGitCommit] != "" || strings.HasPrefix(s.Name, "kardinal://") {
-			out = append(out, s)
+// uncovered are the subjects the SLSA fold does not check: every subject
+// that is not a digest-pinned image of the Bundle (the config commit, the
+// Bundle's spec, and any kind of subject added later), so that a subject
+// is uncovered unless it is shown to be a checked image: a new kind fails
+// closed.
+func uncovered(subj []Subject, images []v1alpha1.ImageRef) []Subject {
+	checked := map[string]bool{}
+	for _, img := range images {
+		if digestMap(img.Digest) != nil {
+			checked[img.Repository+"@"+img.Digest] = true
 		}
+	}
+	var out []Subject
+	for _, s := range subj {
+		if hexPart := s.Digest[digestSHA256]; len(s.Digest) == 1 && hexPart != "" && checked[s.Name+"@sha256:"+hexPart] {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -631,7 +641,7 @@ func checks(in Input) Checks {
 		for _, r := range iv.Status.Images {
 			c.ImageVerification = append(c.ImageVerification, ImageCheck{Image: r.Image, Verified: r.Verified, By: r.Signer})
 		}
-		c.SLSA = slsaCheck(iv, in.Bundle.Spec.Images, nonImageSubjects(in))
+		c.SLSA = slsaCheck(iv, in.Bundle.Spec.Images, uncovered(subjects(in), in.Bundle.Spec.Images))
 	}
 	for _, s := range in.Step.Status.Steps {
 		if s.Name != "health-check" {
