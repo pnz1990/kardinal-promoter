@@ -237,9 +237,17 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 
 	// Versions that finish under v0.12.0: two on steady (the rollback after
 	// the upgrade returns prod to the first), and rollback-pre's.
-	steady1 := bundle(s.flow, steady, 1)
+	// steady's versions are pinned by digest, so a rollback changes prod
+	// alone (#1311); a tag-only one goes through test and uat (#2175).
+	pinned := func(i int) string {
+		b := s.flow.BundleSpec(steady, scale.Tag(steady, i))
+		b.Spec.Images[0].Digest = fmt.Sprintf("sha256:%064x", i)
+		require.NoError(t, e.Client.Create(ctx, b))
+		return b.Name
+	}
+	steady1 := pinned(1)
 	e.WaitBundlePhase(t, s.flow.NS, steady1, "Verified", promoteTimeout)
-	steady2 := bundle(s.flow, steady, 2)
+	steady2 := pinned(2)
 	rbPre1 := bundle(s.flow, rbPre, 1)
 	e.WaitBundlePhase(t, s.flow.NS, steady2, "Verified", promoteTimeout)
 	e.WaitBundlePhase(t, s.flow.NS, rbPre1, "Verified", promoteTimeout)
@@ -666,9 +674,9 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	e.WaitBundlePhase(t, s.flow.NS, rb, "Verified", time.Minute)
 	e.NoStep(t, s.flow.NS, steady, rb, "test", 5*time.Second)
 	e.NoStep(t, s.flow.NS, steady, rb, "uat", 5*time.Second)
-	assert.Contains(t, s.envFile(t, s.flow, steady, "prod"), scale.Tag(steady, 1), "prod runs the first version again")
+	assert.Contains(t, s.envFile(t, s.flow, steady, "prod"), fmt.Sprintf("sha256:%064x", 1), "prod runs the first version again")
 	for _, env := range []string{"test", "uat"} {
-		assert.Contains(t, s.envFile(t, s.flow, steady, env), scale.Tag(steady, 2), "%s keeps the second version", env)
+		assert.Contains(t, s.envFile(t, s.flow, steady, env), fmt.Sprintf("sha256:%064x", 2), "%s keeps the second version", env)
 	}
 
 	// ── Receipts, enabled while versions are in flight ──────────────────
