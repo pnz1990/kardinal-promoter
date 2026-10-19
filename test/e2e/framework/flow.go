@@ -566,11 +566,13 @@ func (e *Env) RecordStepStates(t *testing.T, ns string) *StateLog {
 func JoinStates(states []string) string { return strings.Join(states, " -> ") }
 
 // NudgeGraph annotates the Bundle's Graph, so kro reconciles it now. kro
-// wakes a Graph on events from the objects it applies, but its watch router
-// drops events when its buffer is full ("event buffer full; dropping
-// enqueue", kro pkg/graphengine/watchrouter), and a Graph whose applies kept
-// failing waits out controller-runtime's error backoff (up to 1000s) until
-// the next event. A Graph update event is never dropped (#2159).
+// watches each object it applies, but when an apply fails hard (an admission
+// refusal) it aborts that reconcile's watches (Done(false): kro
+// pkg/watch/coordinator abort), so a change to the refused object never
+// wakes the Graph, under any load. The Graph applies again only at its next
+// controller-runtime error-backoff retry, up to 1000s later; load only makes
+// the backoff longer, as more events mean more failed reconciles. A Graph
+// update event always wakes it (#2159, #2201).
 func (e *Env) NudgeGraph(t *testing.T, ns, bundle string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
