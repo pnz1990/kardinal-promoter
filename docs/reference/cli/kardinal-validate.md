@@ -19,8 +19,11 @@ Checks:
     the CLI embeds (the CRDs of its own version, config/crd/bases): no field
     the CRD does not define (kubectl apply's strict field validation refuses
     it), and the schema's types, enums, patterns, formats, bounds and
-    required fields, each with its path and the API server's message. A
-    kind kardinal.io does not have is an error.
+    required fields, each with its path and the API server's message. As
+    the API server does on create, a required field with a default may be
+    left out (MetricCheck spec.provider) and a status is ignored (kubectl
+    get -o yaml output validates). A kind kardinal.io does not have is an
+    error.
   - Pipeline: at least one environment, every environment named, spec.git.url
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set

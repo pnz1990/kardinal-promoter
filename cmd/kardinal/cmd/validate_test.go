@@ -400,6 +400,16 @@ func TestValidate_Schema(t *testing.T) {
 		{name: "reported once: no expression", wantErr: true,
 			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\nspec: {}\n",
 			want:    []string{"  - spec.expression is required\n"}, notWant: []string{"spec.expression: Required value"}},
+		// QA on #2183: as the API server does on create, a required field
+		// with a default is defaulted, and a status is dropped.
+		{name: "a defaulted required field",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: MetricCheck\nmetadata:\n  name: m\n" +
+				"spec:\n  query: up\n  threshold: {operator: gt, value: 1}\n",
+			want: []string{"f.yaml is valid\n"}},
+		{name: "an exported status",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\nspec:\n  expression: \"true\"\n" +
+				"status:\n  reason: exported with kubectl get -o yaml\n",
+			want: []string{"f.yaml is valid\n"}},
 		{name: "another group is skipped",
 			content: "apiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: t\nspec:\n  tasks: oops\n---\n" + validPipelineDoc,
 			want:    []string{"- skipped Pipeline/t: validate checks only kardinal.io objects\n", "f.yaml is valid\n"}},

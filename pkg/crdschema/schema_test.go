@@ -80,6 +80,37 @@ spec:
 	assert.Equal(t, "spec.environments[0].approval", invalid[0].Field)
 	assert.Contains(t, obj["spec"], "policyGates", "the caller's document is not pruned")
 
+	// QA on #2183: what the API server does before it validates. A
+	// required field with a default is defaulted (MetricCheck
+	// spec.provider, Approval spec.decision), and the status of a CRD with
+	// a status subresource is dropped on create, however wrong it is.
+	for _, tc := range []struct{ kind, doc string }{
+		{"MetricCheck", "apiVersion: kardinal.io/v1alpha1\nkind: MetricCheck\nmetadata: {name: m}\n" +
+			"spec: {query: up, threshold: {operator: gt, value: 1}}\n"},
+		{"Approval", "apiVersion: kardinal.io/v1alpha1\nkind: Approval\nmetadata: {name: a}\n" +
+			"spec: {bundle: b, bundleUID: u, environment: prod, user: alice}\n"},
+		{"PolicyGate", "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata: {name: g}\n" +
+			"spec: {expression: 'true'}\nstatus: {reason: exported with kubectl get -o yaml}\n"},
+		{"PolicyGate", "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata: {name: g}\n" +
+			"spec: {expression: 'true'}\nstatus: {ready: not-a-bool, lastEvaluatedAt: 7, bogus: 1}\n"},
+	} {
+		var doc map[string]any
+		require.NoError(t, yaml.Unmarshal([]byte(tc.doc), &doc))
+		unknown, invalid, err := schemas[tc.kind].Check(doc)
+		require.NoError(t, err)
+		assert.Empty(t, unknown, tc.doc)
+		assert.Empty(t, invalid, tc.doc)
+	}
+	// A default never hides a wrong value, and a CRD without a status
+	// subresource keeps its status validated.
+	var bad map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte("apiVersion: kardinal.io/v1alpha1\nkind: MetricCheck\nmetadata: {name: m}\n"+
+		"spec: {provider: graphite, query: up, threshold: {operator: gt, value: 1}}\n"), &bad))
+	_, invalid, err = schemas["MetricCheck"].Check(bad)
+	require.NoError(t, err)
+	require.Len(t, invalid, 1)
+	assert.Equal(t, "spec.provider", invalid[0].Field)
+
 	require.NoError(t, yaml.Unmarshal([]byte("apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata: {name: web}\n"+
 		"spec: {git: {url: https://github.com/o/r}, environments: [{name: test}]}\n"), &obj))
 	unknown, invalid, err = schemas["Pipeline"].Check(obj)

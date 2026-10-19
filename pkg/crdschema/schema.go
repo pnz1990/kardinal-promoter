@@ -12,10 +12,11 @@
 // limitations under the License.
 
 // Package crdschema checks objects against the OpenAPI schemas of the
-// kardinal.io CRDs offline, as the API server does before it runs a CRD's
-// CEL rules (x-kubernetes-validations): the fields it would drop (pruning)
-// and the structural schema's types, enums, patterns, formats, bounds and
-// required fields.
+// kardinal.io CRDs offline, as the API server does on create before it runs
+// a CRD's CEL rules (x-kubernetes-validations): the fields it would drop
+// (pruning), the status it drops (a CRD with a status subresource), the
+// defaults it sets, then the structural schema's types, enums, patterns,
+// formats, bounds and required fields.
 package crdschema
 
 import (
@@ -27,6 +28,7 @@ import (
 	apiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	structuraldefaulting "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
 	apivalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -37,6 +39,7 @@ import (
 type Schema struct {
 	structural *structuralschema.Structural
 	validator  apivalidation.SchemaValidator
+	status     bool // the version has a status subresource
 }
 
 // Load reads every CRD (*.yaml) in fsys and returns the schema of version
@@ -72,16 +75,19 @@ func Load(fsys fs.FS, version string) (map[string]Schema, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s: schema validator: %w", f, err)
 			}
-			out[crd.Spec.Names.Kind] = Schema{structural: s, validator: val}
+			out[crd.Spec.Names.Kind] = Schema{structural: s, validator: val,
+				status: v.Subresources != nil && v.Subresources.Status != nil}
 		}
 	}
 	return out, nil
 }
 
 // Check returns what the API server would do to obj (a decoded document)
-// beyond accepting it: the paths of the fields pruning would drop, and the
-// schema's validation errors on what is left, as the API server validates
-// the pruned object. obj is not changed.
+// beyond accepting it on create: the paths of the fields pruning would
+// drop, and the schema's validation errors on what is left once it drops
+// the status of a CRD with a status subresource (it ignores status on
+// create) and sets the schema's defaults (a required field with a default
+// may be left out). obj is not changed.
 func (s Schema) Check(obj map[string]any) (unknown []string, invalid field.ErrorList, err error) {
 	b, err := json.Marshal(obj)
 	if err != nil {
@@ -91,8 +97,12 @@ func (s Schema) Check(obj map[string]any) (unknown []string, invalid field.Error
 	if err := json.Unmarshal(b, &cp); err != nil {
 		return nil, nil, fmt.Errorf("decode the document: %w", err)
 	}
+	if s.status {
+		delete(cp, "status")
+	}
 	unknown = pruning.PruneWithOptions(cp, s.structural, true,
 		structuralschema.UnknownFieldPathOptions{TrackUnknownFieldPaths: true})
+	structuraldefaulting.Default(cp, s.structural)
 	return unknown, apivalidation.ValidateCustomResource(nil, cp, s.validator), nil
 }
 
