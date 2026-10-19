@@ -57,8 +57,33 @@ At about **5,000** AgentIdentities of that size, the index is full.
 - Watch the index's Ready condition:
   `kubectl get agentindex kardinal-promoter -o jsonpath='{.status.conditions}'`.
 
-The index does not yet report its own size (#2076). An index per namespace, which would
-lift the bound, is planned for v0.13 (#2071).
+The index reports how full it is: `status.bytes`, `status.maxBytes` and a `NearFull`
+condition from 80% ([Register an agent](actors.md#register-an-agent)).
+
+#### Why the bound stays at 4,000 until v0.14
+
+For each request a policy matches, the API server turns the policy's parameter into a CEL
+value before any expression runs. It does that for the matchConditions too. For a custom
+resource such as the agent index, it copies the whole object each time. For a built-in kind
+such as a ConfigMap, it reads lazily and the cost doesn't grow with size. So admission cost
+grows with the index, whatever the policy reads from it. Measured on its own at 5,000
+AgentIdentities, that conversion takes about 22 to 27 ms per request.
+
+Three ways to lift the bound were checked (#2071) and none ships in v0.13:
+
+- **An index per namespace.** Absence from the index means "not an agent". An agent writing
+  outside its own namespace would be absent from that namespace's index and pass as a person,
+  so every index would still have to list every agent.
+- **Shards routed by a match condition.** Each shard's policy converts its own shard before
+  its match condition runs. A request still pays for the whole index, split N ways.
+- **ConfigMap shards.** These are cheap per request, about 1 µs at 5,000 entries. But a
+  ConfigMap parameter makes the API server watch every ConfigMap in the cluster, not only
+  kardinal's. With 20,000 ConfigMaps of 1 KiB, kube-apiserver's memory grew by 48 MiB or more.
+  On a cluster with larger ConfigMaps it would grow further, and kardinal can't bound that.
+
+A lazy conversion for custom-resource parameters in the API server would let a sharded index
+pay only for the shard a request reads. Until then, plan for up to 4,000 AgentIdentities
+per cluster.
 
 ## Sizing kro
 
