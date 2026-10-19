@@ -6,6 +6,8 @@ package steps_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,8 +151,15 @@ func TestGitPushStep_AdoptsAHeadWithTheSameContent(t *testing.T) {
 			var recorded []string
 			if !tc.noRecorder {
 				state.RecordPushed = func(_ context.Context, out map[string]string) error {
-					events = append(events, "record "+out[steps.OutputPushedSHAs])
-					recorded = append(recorded, out[steps.OutputPushedSHAs])
+					keys := make([]string, 0, len(out))
+					for k, v := range out {
+						if k == steps.OutputPushedSHAs || k == steps.OutputAdoptedSHAs {
+							keys = append(keys, k+"="+v)
+						}
+					}
+					slices.Sort(keys)
+					events = append(events, "record "+strings.Join(keys, " "))
+					recorded = append(recorded, strings.Join(keys, " "))
 					return tc.recordErr
 				}
 			}
@@ -169,12 +178,13 @@ func TestGitPushStep_AdoptsAHeadWithTheSameContent(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, []string{"compare " + prev, "record " + prev, "record " + prev + "," + push,
-				"push leased on " + prev, "record " + prev + "," + push}, events,
-				"the adopted head is recorded before anything else, and the push is leased on it")
+			assert.Equal(t, []string{"compare " + prev, "record adoptedSHAs=" + prev, "record pushedSHAs=" + push,
+				"push leased on " + prev, "record pushedSHAs=" + push}, events,
+				"the adopted head is recorded before anything else, as adopted, and the push is leased on it")
 			assert.Equal(t, push, git.remote)
 			assert.Equal(t, push, res.Outputs[steps.OutputPushedSHA])
-			assert.Equal(t, prev+","+push, res.Outputs[steps.OutputPushedSHAs])
+			assert.Equal(t, push, res.Outputs[steps.OutputPushedSHAs], "the push history holds only kardinal's own pushes")
+			assert.False(t, steps.OwnPush(res.Outputs, prev), "an adopted head is not kardinal's push")
 		})
 	}
 }

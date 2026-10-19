@@ -389,10 +389,14 @@ What the retry does:
   either. Otherwise it pushes nothing. A push is recorded before it is made, so a controller that
   dies right after one finds it again. A head that is not one of those commits but holds exactly
   what kardinal is about to push (its commit has the same tree and the same parents, as when a
-  deleted PromotionStep's own push is found by the step created again) is taken as the
-  promotion's own: kardinal records it with its pushes and force-pushes with a lease on it. Any
-  other content, or another parent (the base branch moved since), is refused: delete the branch
-  (`git push origin :refs/heads/<branch>`) and the step pushes again.
+  deleted PromotionStep's own push is found by the step created again) is pushed over:
+  kardinal records it in `status.outputs.adoptedSHAs` (not with its own pushes, since someone
+  else may have made it) and force-pushes with a lease on it. To compare, kardinal fetches the
+  head's commit object alone (partial clone, `filter=tree:0`, where the git server supports it)
+  and never keeps its files; without partial clone it reads at most 64 MiB of the head and refuses
+  a larger one. Any other content, another parent (the base branch moved since), or a head too
+  large to compare is refused: delete the branch (`git push origin :refs/heads/<branch>`) and the
+  step pushes again.
 
 In each case the step fails against its normal retry budget, about 4.5 minutes, and then is
 Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message names the head

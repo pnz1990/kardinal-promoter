@@ -225,8 +225,9 @@ func prBranchLease(ctx context.Context, state *parentsteps.StepState, branch str
 // to be pushed (scm.HeadContentComparer): the branch already holds exactly
 // what kardinal would push, as when a deleted PromotionStep's own push is
 // found by the step kro created again (STEP-DELETE-PR-04), so pushing over
-// it loses nothing. head joins the step's push history (RecordPushed)
-// before anything else, and the push is then leased on it. Without a
+// it loses nothing. head is recorded as adopted (OutputAdoptedSHAs, not the
+// push history: it is not kardinal's provenance) before anything else, and
+// the push is then leased on it. Without a
 // comparer or a recorder nothing is adopted (#2095).
 func adoptSameContent(ctx context.Context, state *parentsteps.StepState, branch, head string) (bool, parentsteps.StepResult, error) {
 	cmp, ok := state.GitClient.(scm.HeadContentComparer)
@@ -241,16 +242,35 @@ func adoptSameContent(ctx context.Context, state *parentsteps.StepState, branch,
 	if !same {
 		return false, parentsteps.StepResult{}, nil
 	}
-	history := strings.Join(appendPushed(PushedSHAs(state.Outputs), head), ",")
-	if err := state.RecordPushed(ctx, map[string]string{OutputPushedSHAs: history}); err != nil {
+	adopted := strings.Join(appendPushed(splitSHAs(state.Outputs[OutputAdoptedSHAs]), head), ",")
+	if err := state.RecordPushed(ctx, map[string]string{OutputAdoptedSHAs: adopted}); err != nil {
 		return false, parentsteps.StepResult{Status: parentsteps.StepFailed,
 			Message: fmt.Sprintf("recording the head %s of %s, which holds this promotion's change, failed: %v", head, branch, err)}, err
 	}
 	if state.Outputs == nil {
 		state.Outputs = map[string]string{}
 	}
-	state.Outputs[OutputPushedSHAs] = history
+	state.Outputs[OutputAdoptedSHAs] = adopted
 	return true, parentsteps.StepResult{}, nil
+}
+
+// OutputAdoptedSHAs (status.outputs.adoptedSHAs) lists, oldest first, the
+// last maxPushedSHAs heads of the step's PR branch that git-push found with
+// the content it was about to push and pushed over (adoptSameContent,
+// #2095). They are not provenance: someone else may have made them, so
+// nothing that trusts pushedSHAs (an adopted merged PR, a signed commit's
+// record, #2114) reads them.
+const OutputAdoptedSHAs = "adoptedSHAs"
+
+// splitSHAs is a comma-separated list of commits.
+func splitSHAs(list string) []string {
+	var out []string
+	for _, sha := range strings.Split(list, ",") {
+		if sha != "" {
+			out = append(out, sha)
+		}
+	}
+	return out
 }
 
 // OwnPush reports whether commit sha is one the step pushed (PushedSHAs):
@@ -316,12 +336,7 @@ const maxPushedSHAs = 8
 // pushedSHAs history, and pushedSHA (a step from before the history, or
 // its latest push).
 func PushedSHAs(outputs map[string]string) []string {
-	var out []string
-	for _, sha := range strings.Split(outputs[OutputPushedSHAs], ",") {
-		if sha != "" {
-			out = append(out, sha)
-		}
-	}
+	out := splitSHAs(outputs[OutputPushedSHAs])
 	if sha := outputs[OutputPushedSHA]; sha != "" && !slices.Contains(out, sha) {
 		out = append(out, sha)
 	}
