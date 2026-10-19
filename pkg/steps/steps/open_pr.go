@@ -236,11 +236,13 @@ func openOrAdoptPR(ctx context.Context, state *parentsteps.StepState, repo, titl
 	pushed := state.Outputs[OutputPushedSHA]
 	if pushed == "" {
 		prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
-		// Without a recorded commit nothing can be compared: the PR the
-		// SCM refused to duplicate is taken, as before #2079.
+		// Without a recorded commit, the PR the SCM refused to duplicate
+		// cannot be compared with kardinal's: it is not adopted (QA-4 on
+		// #2240). The step fails against its retry budget, naming the PR.
 		var ex *scm.ExistingPRError
 		if errors.As(err, &ex) {
-			return ex.PR.URL, ex.PR.Number, opened, nil
+			return "", 0, opened, fmt.Errorf("PR #%d of %s is open already and kardinal recorded no pushed commit to compare its head %s with, so it does not adopt it: %w",
+				ex.PR.Number, branch, ex.PR.HeadSHA, ex)
 		}
 		return prURL, prNum, opened, err
 	}

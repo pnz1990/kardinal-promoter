@@ -1517,7 +1517,7 @@ func (g *tipGraphGitClient) BranchGraph(context.Context, string, string, scm.Git
 // the same rule as one the lookup found: its head is kardinal's pushed
 // commit, or has it among its parents. A foreign head is a
 // ForeignPRHeadError, not adopted. Without a recorded commit nothing can be
-// compared, and the PR is taken as before.
+// compared, and the PR is not adopted either (fail closed).
 //
 // Covers SCM-DUP-PR-02.
 func TestOpenPR_RefusedDuplicateAdoptedOnlyIfOwn(t *testing.T) {
@@ -1568,10 +1568,15 @@ func TestOpenPR_RefusedDuplicateAdoptedOnlyIfOwn(t *testing.T) {
 		assert.Equal(t, foreign, fe.Head)
 		assert.Empty(t, res.Outputs["prNumber"])
 	})
-	t.Run("no recorded commit: taken, as before", func(t *testing.T) {
-		res, err := run(t, refused(foreign), map[string]string{}, nil)
-		require.NoError(t, err)
-		assert.Equal(t, "9", res.Outputs["prNumber"])
+	// QA-4 on #2240: nothing to compare the head with, so it fails closed.
+	t.Run("no recorded commit: not adopted", func(t *testing.T) {
+		res, err := run(t, refused(testPushed), map[string]string{}, nil)
+		var ex *scm.ExistingPRError
+		require.ErrorAs(t, err, &ex)
+		assert.NotErrorIs(t, err, parentsteps.ErrPermanent, "retried, against the budget")
+		assert.Equal(t, parentsteps.StepFailed, res.Status)
+		assert.Contains(t, res.Message, "recorded no pushed commit")
+		assert.Empty(t, res.Outputs["prNumber"])
 	})
 }
 
