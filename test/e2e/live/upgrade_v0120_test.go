@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +317,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		add(s.flow, p, 1)
 	}
 	byRunB := add(s.verify, byRun, 1)
+	var runBefore v1alpha1.AgentRun
 	framework.Eventually(t, promoteTimeout, "the AgentRun of "+byRunB+" running", func(ctx context.Context) (bool, string) {
 		runs, err := agentRuns(ctx, e, s.verify.NS, byRunB)
 		if err != nil {
@@ -324,6 +326,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		if len(runs) != 1 {
 			return false, fmt.Sprintf("%d AgentRuns", len(runs))
 		}
+		runBefore = runs[0]
 		return runs[0].Status.Phase == v1alpha1.AgentRunRunning, "phase " + runs[0].Status.Phase
 	})
 	framework.Eventually(t, 3*time.Minute, "a step HealthChecking (baking) in "+s.flow.NS, func(ctx context.Context) (bool, string) {
@@ -363,6 +366,23 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		require.NoError(t, err, "v0.12 has a reader RoleBinding in %s", f.NS)
 	}
 
+	// Every in-flight version has its Graph at the snapshot, and each
+	// review version its prod PR: the checks after the upgrade compare
+	// these, so none may be missing.
+	for k := range inFlight {
+		_, ok := before.graphs[k]
+		require.True(t, ok, "%s has a Graph at the upgrade", k)
+	}
+	for k, p := range inFlight {
+		if !slices.Contains(reviews, p) {
+			continue
+		}
+		ns, b, _ := strings.Cut(k, "/")
+		_, ok := before.prs[ns+"/"+b+"/prod"]
+		require.True(t, ok, "%s has its prod PR at the upgrade", k)
+	}
+	upgradeStart := time.Now()
+
 	// ── 2. Apply the new CRDs ───────────────────────────────────────────
 	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, "0.12.0", "helm show crds"), guideChartV0120, `"$KARDINAL_E2E_CHART"`))
 	for _, crd := range []string{"promotionreceipts.kardinal.io", "changerequests.kardinal.io"} {
@@ -383,6 +403,11 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	up := e.Shell(t, upgradeCmd)
 	require.Zero(t, up.Code, up.Output)
 	rel.WaitRolledOut(t, 3*time.Minute)
+	for _, c := range rel.Deployment(t).Spec.Template.Spec.Containers {
+		if c.Name == "controller" {
+			assert.Equal(t, os.Getenv(framework.EnvImage), c.Image, "the controller runs this checkout's image after the upgrade")
+		}
+	}
 
 	// ── 4. Check the result ─────────────────────────────────────────────
 	check := e.MustShell(t, framework.GuideBlockFrom(t, "0.12.0", "kardinal doctor"))
@@ -432,9 +457,8 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	// steps and its PRs.
 	after := s.snapshot(t)
 	for k := range inFlight {
-		if uid, ok := before.graphs[k]; ok {
-			assert.Equal(t, uid, after.graphs[k], "%s keeps its Graph (same uid)", k)
-		}
+		assert.Equal(t, before.graphs[k], after.graphs[k], "%s keeps its Graph (same uid)", k)
+		assert.Equal(t, before.bundles[k].UID, after.bundles[k].UID, "%s is the same Bundle", k)
 	}
 	for k, st := range before.steps {
 		ns, _, _ := strings.Cut(k, "/")
@@ -560,8 +584,13 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		if len(runs) != 1 {
 			return false, fmt.Sprintf("%d AgentRuns", len(runs))
 		}
+		if runs[0].UID != runBefore.UID {
+			t.Fatalf("AgentRun %s (uid %s) is not the run that was running at the upgrade (%s, uid %s)",
+				runs[0].Name, runs[0].UID, runBefore.Name, runBefore.UID)
+		}
 		return runs[0].Status.Phase == v1alpha1.AgentRunSucceeded, fmt.Sprintf("phase %s: %s", runs[0].Status.Phase, runs[0].Status.Message)
 	})
+	assert.True(t, runBefore.CreationTimestamp.Time.Before(upgradeStart), "the AgentRun was created before the upgrade began")
 	e.WaitGateReady(t, s.verify.NS, byRunB, "prod", "agent-check", true, "verified: 1 of 1", gateTimeout)
 	r := c.Exec(framework.CLIOptions{Kubeconfig: dave}, c.Args(s.verify.NS, "verify", byPerson, "qa", "--check", "explore",
 		"--pass", "--summary", "checked after the upgrade")...)

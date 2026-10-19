@@ -28,6 +28,13 @@ chart=$("${HELM[@]}" -n "$KARDINAL_NS" list --filter "^$KARDINAL_RELEASE\$" -o j
 
 KUBE_CONTEXT="$CTX" KRO_VERSION="$V0120_KRO_VERSION" bash "$REPO_ROOT/hack/install-kro.sh" >/dev/null
 pull_images "$V0120_CONTROLLER_IMAGE"
+# The tag is pinned: the pulled image must be the released index digest.
+digests=$(docker exec "$KIND_CLUSTER-control-plane" crictl inspecti -o json "$V0120_CONTROLLER_IMAGE" |
+  python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["status"].get("repoDigests", [])))')
+case " $digests " in
+  *"@$V0120_CONTROLLER_DIGEST "*) ;;
+  *) die "$V0120_CONTROLLER_IMAGE is $digests, not the released $V0120_CONTROLLER_DIGEST" ;;
+esac
 
 args=(
   --set "image.repository=${V0120_CONTROLLER_IMAGE%:*}" --set "image.tag=${V0120_CONTROLLER_IMAGE##*:}"
