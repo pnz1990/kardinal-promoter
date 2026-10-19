@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -282,7 +283,9 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	out, err = e.KardinalV0120(t, s.frozen.NS, "--kubeconfig", fixer.Kubeconfig, "create", "bundle", shipped,
 		"--image", scale.ImageRepo+":"+scale.Tag(shipped, 1))
 	require.NoError(t, err, out)
-	agentB := bundleCreatedName(t, out)
+	created := regexp.MustCompile(`Bundle (\S+) created for pipeline ` + shipped).FindStringSubmatch(out)
+	require.Len(t, created, 2, "kardinal create bundle names the Bundle:\n%s", out)
+	agentB := created[1]
 	inFlight[s.frozen.NS+"/"+agentB] = shipped
 	e.WaitStepMessage(t, s.frozen.NS, shipped, agentB, "test", "Pending", "frozen by "+freeze, promoteTimeout)
 
