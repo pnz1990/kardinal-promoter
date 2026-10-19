@@ -656,7 +656,7 @@ const statusReference = `When called without arguments, across every namespace (
 may not list every namespace it shows the kubeconfig's, with a note on
 stderr; with -A, which asks for every namespace, it fails and says to use -n:
 
-  Controller:  v0.10.1 in kardinal-system, 1/1 ready
+  Controller:  v0.12.0 in kardinal-system, 1/1 ready
   Pipelines:   3 (1 degraded: team-b/api)
   Versions:    5 (3 in flight)
 

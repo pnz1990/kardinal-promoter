@@ -1,5 +1,10 @@
 # Map kardinal's records to compliance controls
 
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.0 and earlier have no `kardinal audit evidence-pack`, auditor roles, promotion receipts
+    or change requests; the other records this page names exist there too. The
+    [changelog](changelog.md) lists every change since v0.12.0.
+
 An auditor asks a team that promotes with kardinal two things: show that every production
 change was authorised, reviewed by someone other than its author, and recorded; and show the
 records. This page says which kardinal record answers which control of SOC 2, ISO/IEC 27001,
@@ -161,11 +166,18 @@ bytes.
 - **Changes that bypass it.** A direct push to the GitOps branch or a `kubectl apply` on the
   workload is invisible to kardinal. Protect the branches and require the `kardinal/gates`
   commit status.
-- **A record lost before it was written.** Writing audit records is best-effort under overload: a
-  reconciler's audit outbox drops its oldest entry when full, a record the API server rejects as
-  invalid is dropped, and `APIWrite` records over their rate budget are dropped. Each is counted
-  in `kardinal_audit_events_dropped_total`; alert when it rises
-  ([Audit outbox](guides/security.md#audit-outbox)).
+- **A record lost before it was written.** Writing audit records is best-effort under overload:
+  - a reconciler's audit outbox (32 records) that is still full after merging a version's unwritten
+    `GateChanged` records into one drops its oldest entry;
+  - a record that fails validation, or that the API server rejects as invalid, is dropped;
+  - an `APIWrite` record over the per-second budget, with its queue full, or whose create fails is
+    dropped.
+
+  Each is counted in `kardinal_audit_events_dropped_total`; alert when it rises
+  ([Audit outbox](guides/security.md#audit-outbox)). Merges are counted in
+  `kardinal_audit_events_coalesced_total`, and the merged record's `spec.mergedRecords` says how many
+  it replaces. A record for a namespace that is being deleted is not written, and not counted: that
+  namespace's AuditEvents are deleted with it.
 - **Changes kardinal does not record.** A direct write with kubectl, or by an agent through
   `kardinal mcp` with its own kubeconfig, to a Pipeline, a PolicyGate or a ChangeWindow is in the
   Kubernetes API server's audit log only.

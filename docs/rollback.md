@@ -440,6 +440,11 @@ The `historyLimit` field on the Pipeline (default: 50) determines how many versi
 
 ## Multi-Environment Rollback
 
+!!! info "Changed in v0.13.0 (unreleased)"
+    v0.12.0 and earlier promote every rollback, `kardinal promote` and automatic rollback through
+    each environment upstream of its target first. The target-only path below is new in v0.13.0;
+    the [changelog](changelog.md) lists every change since v0.12.0.
+
 When a PromotionStep fails, the Graph stops the environments downstream of it. A rollback targets one environment (`spec.intent.targetEnvironment`, with `spec.intent.targetOnly`). The restored artifacts were verified in every environment upstream of it when they were promoted the first time, so the rollback does not promote them there again: its Graph has only the target, which starts at once, with its own gates, PR flow and health check. The upstream environments keep what they run, and their gates and soak do not hold the rollback.
 
 The controller checks that first. The rollback's images, and its chart, must be pinned by digest (`repo:tag@sha256:...`): a tag can be pushed again with other bytes, so a verification of the same tag proves nothing about these. When it builds the rollback's Graph, it looks for another version of the Pipeline with the same images, config commit and chart, not rejected, that was Verified in each upstream environment, and copies the newest such verification into the rollback's `status.upstreamEvidence` (environment, version, `verifiedAt`, `replacedAt` and `soakMinutes`). The soak counts only while those artifacts ran there: from `verifiedAt` until another version started promoting to that environment (`replacedAt`), or until now while none has. kardinal finds that version through its PromotionSteps, or, once its Graph is retired, through the time it was Verified there. If you delete the version that replaced them, and its steps, by hand, kardinal cannot see the replacement, and the carried soak counts until now. A gate on the target that reads `bundle.upstreamSoakMinutes` or `upstream.<env>.soakMinutes` reads that soak, so a soak gate still holds a version that soaked too short upstream. The PR body's [Upstream Verification](pr-evidence.md#upstream-verification) table lists those verifications. The Bundle's `UpstreamEvidence` condition is `True` with the versions it names.

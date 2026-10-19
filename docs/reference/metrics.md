@@ -17,7 +17,7 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 | `controller_runtime_max_concurrent_reconciles` | Gauge | Configured max concurrent reconciles per controller |
 | `controller_runtime_active_workers` | Gauge | Active reconcile goroutines per controller |
 
-**Controller labels**: `bundle`, `bundle-retire`, `changewindow`, `clusterscmprovider`, `graphcleanup`, `hookrun`, `imageverification`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `renderrun`, `rollbackpolicy`, `scheduleclock`, `scmprovider`, `subscription`
+**Controller labels**: `agentindex`, `agentrun`, `bundle`, `bundle-retire`, `changerequest`, `changewindow`, `clusterscmprovider`, `graphcleanup`, `hookrun`, `imageverification`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionreceipt` (with `receipts.enabled`), `promotionstep`, `prstatus`, `renderrun`, `rollbackpolicy`, `scheduleclock`, `scmprovider`, `steptemplate`, `subscription`
 
 ### Work queue metrics
 
@@ -50,8 +50,10 @@ The controller registers these on the same `/metrics` endpoint (`pkg/reconciler/
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 | `kardinal_auditevents_pruned_total` | Counter | — | AuditEvents deleted by retention (`audit.retention`) |
+| `kardinal_receipts_failed_total` | Counter | `sink` (`signing`, `oci`, `pr-comment`, `build`) | Failed promotion receipt attempts, retried with backoff; `build` once per step whose receipt can never be built. A failing sink never holds a promotion ([Signed promotion receipts](../receipts.md); new in v0.13.0, unreleased) |
 | `kardinal_agent_index_bytes` | Gauge | — | Size of the agent index's entries, as its 1 MiB bound counts them (blocked entries included); set by the leader only, 0 on other replicas ([Agent identities](../actors.md)) |
 | `kardinal_agent_index_max_bytes` | Gauge | — | The agent index's size bound: past it the index is not Ready and the actor policy refuses the writes it checks |
+| `kardinal_health_ref_cleanup_pending` | Gauge | — | Graphs and namespaces the startup cleanup of earlier releases' health ref nodes and reader RoleBindings could not clean in its last pass: `0` once done, `-1` while it cannot list them ([Health ref cleanup after an upgrade](../guides/monitoring.md#health-ref-cleanup-after-an-upgrade); new in v0.13.0, unreleased) |
 | `kardinal_events_dropped_total` | Counter | `recorder`, `type` | Kubernetes Events not written because the controller was over its rate: `type="Normal"` over `--event-qps`/`--event-burst`, `type="Warning"` over a namespace's `--event-warning-qps`/`--event-warning-burst` ([Kubernetes Events](../operate.md#kubernetes-events) lists each Warning's durable record) |
 | `kardinal_pr_cleanup_failures_total` | Counter | `reason` | Deleted PromotionSteps whose PR the controller left open (`PRLeftOpen`) or could not close (`ClosePRFailed`): close those PRs by hand, since merging one changes an environment with no step tracking it ([Troubleshooting](../troubleshooting.md)) |
 | `kardinal_hold_bundle_missing_total` | Counter | `pipeline_namespace`, `pipeline` | Holds whose rollback Bundle has been missing for `--hold-bundle-grace`, at most once per hold (the `HoldBundleMissing` AuditEvent is the durable record). The hold stays in effect until released ([A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |

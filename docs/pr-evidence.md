@@ -65,7 +65,8 @@ Created by: alice
 ```
 
 When the version has [change request](change-requests.md) tickets in the environment, a
-`### Change Requests` section follows the gate table, one row per ticket:
+`### Change Requests` section follows the gate table, one row per ticket (new in v0.13.0,
+unreleased):
 
 ```markdown
 ### Change Requests

@@ -126,6 +126,12 @@ and GitRepositories to ask for a sync, confined to the refresh annotation by the
 [Security: Controller RBAC](security.md#controller-rbac). Set `controller.watchNamespace`
 to turn the namespaced rules into a Role in one namespace.
 
+!!! info "Changed in v0.13.0 (unreleased)"
+    This section describes main. v0.12.0 and earlier also bind the Graph identity to
+    `<fullname>-graph-reader` in each namespace a health check names (the Graph's own and
+    `graph.readerNamespaces`, by default `argocd` and `flux-system`), for the Graph's health ref
+    nodes.
+
 kro does not apply a Graph's children with its own identity. It impersonates the Graph's
 `spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
 controller creates that ServiceAccount and binds it with one RoleBinding, in the Graph namespace, to
@@ -134,9 +140,9 @@ the release name, plus `-kardinal-promoter` unless the release name contains it.
 outside its namespace: health is checked by the controller (the PromotionStep reconciler), not by
 the Graph, so the Graph identity has no access to Argo CD, Flux or any other namespace.
 
-Earlier releases also bound `<fullname>-graph-reader` in each namespace a Graph's health ref
+Releases before v0.13.0 also bound `<fullname>-graph-reader` in each namespace a Graph's health ref
 node read (`<fullname>-graph-reader-<graph namespace>`), and recorded those bindings on the applier
-binding (`kardinal.io/reader-namespaces`). The chart no longer ships that ClusterRole, so the
+binding (`kardinal.io/reader-namespaces`). The v0.13.0 chart no longer ships that ClusterRole, so the
 bindings grant nothing. At startup the controller deletes the bindings it recorded, and removes the
 health ref nodes from existing Graphs, retrying what it cannot clean until nothing is left
 ([Monitoring](monitoring.md#health-ref-cleanup-after-an-upgrade)). Bindings from v0.8.1 and earlier, which kept no record,
@@ -569,15 +575,19 @@ and turn it on after the export.
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion (a step that had not started writes none) |
 | `PromotionRejected` | `kardinal reject` cancelled an in-flight promotion (its Bundle was [rejected](../reject.md); a step that had not started writes none) |
 | `BundleRejected` | A Bundle is rejected (`kardinal reject` or the UI), once, naming who rejected it and why; its environment is `*` (the whole Bundle) |
-| `GateChanged` | A PolicyGate that applies to a version in flight was created, edited or deleted, and the version's gates got the change. One record per version and rebuild, however many templates the rebuild changed: `spec.gates` lists the first 20 changes in template order, each with the template, the old and new digest and generation the version's gate copies carry and the field manager the template's last writer declared, and `spec.gatesOmitted` counts the rest; the message names the first five. An edit made and reverted before the version saw it is recorded as the same rule with a new generation. Gate copies of a version built before v0.13.0 have no digest: they are the baseline, so the first rebuild after the upgrade records only templates that are new, and later changes are measured from the digests it writes. Kubernetes keeps no record of who edited an object, so the record has no actor; the API server's audit log has the user |
+| `GateChanged` | (new in v0.13.0, unreleased) A PolicyGate that applies to a version in flight was created, edited or deleted, and the version's gates got the change. One record per version and rebuild, however many templates the rebuild changed: `spec.gates` lists the first 20 changes in template order, each with the template, the old and new digest and generation the version's gate copies carry and the field manager the template's last writer declared, and `spec.gatesOmitted` counts the rest; the message names the first five. An edit made and reverted before the version saw it is recorded as the same rule with a new generation. Gate copies of a version built before v0.13.0 have no digest: they are the baseline, so the first rebuild after the upgrade records only templates that are new, and later changes are measured from the digests it writes. Kubernetes keeps no record of who edited an object, so the record has no actor; the API server's audit log has the user |
 | `GateOverridden` | An entry in a gate instance's `spec.overrides[]` (`kardinal override` or the UI), written once per entry with its verified `createdBy`, stage, expiry and reason |
 | `ApprovalRecorded` / `ApprovalRevoked` | An approval gate saw a decision (`kardinal approve`) appear, or its Approval deleted, with the approver, the decision and whether it counts |
+| `VerdictRecorded` / `VerdictRevoked` | (since v0.12.0) A verify gate saw a Verdict appear in, or leave, its verdicts: the verifier, its result, whether it counts (and why not) and its summary, with the Verdict's actor ([Verify with agents](../agentic/verify-with-agents.md)) |
+| `ChangeRequestOpened` / `ChangeRequestLinked` | (new in v0.13.0, unreleased) A ChangeRequest instance opened its ticket (also when its search finds a ticket a lost create response left), or linked one by its key: the template, the provider, the ticket key and URL and the provider's state; a linked ticket not verified as the promotion's says why ([Change Requests](../change-requests.md#status-and-records)) |
+| `ChangeRequestApproved` / `ChangeRequestRejected` | (new in v0.13.0, unreleased) The instance first read its ticket approved, or rejected, once per ticket |
 | `HoldCreated` / `HoldReleased` / `HoldBundleMissing` | A hold (`kardinal hold`, `kardinal rollback --hold`) appeared in, or left, `spec.holds`, naming who held and who released it (`kardinal unhold --reason`); or its rollback Bundle has been missing for `--hold-bundle-grace` (the hold stays in effect: [A hold whose rollback Bundle does not exist](../rollback.md#a-hold-whose-rollback-bundle-does-not-exist)) |
 | `PipelinePaused` / `PipelineResumed` | (since v0.12.0) A Pipeline, or one fleet of it (environment set), was paused or resumed (`kardinal pause` / `resume`, the UI, or a `spec.paused` / `spec.pausedFleets` edit), naming who and why (`--reason`); the environment is `*` for the whole Pipeline |
 | `FreezeStarted` / `FreezeLifted` | (since v0.12.0) A freeze (`kardinal freeze`, the UI) started or was lifted (`kardinal unfreeze`, the UI, or a delete), naming who; in the freeze's namespace, or the controller's for a freeze of several or every namespace |
 | `FreezeExempted` | A step went on through a freeze under an exemption (`kardinal override --freeze`), once per freeze, naming who made it |
 | `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `PRMerged` | (since v0.12.0) A promotion step's pull request (a `pr-review` environment's) was merged: who merged it, asked of the SCM API once the merge is confirmed (never taken from a webhook payload, which anyone holding the webhook secret could write), whether the webhook or polling saw the merge, and the merge commit. The step waits for the name for at most 5 minutes; if the SCM cannot give it, the record says the merger is unknown. The step's `status.outputs.prMergedBy` names the merger too. On GitLab the merger is the API's `merge_user`: with "merge when pipeline succeeds", the user who set it |
+| `ReceiptFailed` | (new in v0.13.0, unreleased) A step reached Verified without a [promotion receipt](../receipts.md) because its receipt can never be built (its statement is over the size cap after every cut, or the version's Bundle or Pipeline is gone); outcome `Failure`, and the message gives the step's `status.receiptError` |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 | `RollbackSucceeded` | A PromotionStep of a rollback Bundle (from `kardinal rollback`, the UI, a RollbackPolicy or `onHealthFailure: rollback`) reached Verified; written besides `PromotionSucceeded`, one record per step |
 | `APIWrite` | A write through the UI API or the Bundle API (promote, roll back, create a version, approve, override, pause, resume, reject, release a hold), refused ones included (outcome `Failure`), naming the caller and the route ([API writes](#api-writes)) |
@@ -678,6 +688,8 @@ An event names at least one of the Pipeline, the Bundle and the environment.
 |---|---|
 | Promotion and rollback events | The version's actor (its Bundle's `spec.actor`): the change belongs to whoever made the version |
 | `ApprovalRecorded`, `ApprovalRevoked` | The Approval's actor |
+| `VerdictRecorded`, `VerdictRevoked` | The Verdict's actor |
+| `ChangeRequestOpened`, `ChangeRequestLinked`, `ChangeRequestApproved`, `ChangeRequestRejected` | None: the controller records what the ticketing system says; the ticket's approvers are in the instance's `status.approvers` |
 | `GateOverridden` | The override's actor, when the identity admission policy checked it |
 | `GateChanged` | None. `spec.gates[].manager` is the field manager the writing client declared (`kubectl --field-manager` sets any name): it is not verified and does not say who wrote the template |
 | `APIWrite` | The caller, as the UI API or the Bundle API authenticated them |
@@ -1337,8 +1349,8 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | `<fullname>-approver` | viewer, `update` on `policygates/override` and `bundles/reject`, `create` and `delete` on `approvals` | Gate overrides and Bundle rejection in the UI, approvals |
 | `<fullname>-verifier` | `get`, `list`, `watch`, `create` and `delete` on `verdicts` (admission lets a verifier delete only its own), and `get`, `list`, `watch` on `bundles`, `policygates` and `pipelines` | The agents and CI that verify versions ([Verify with agents](../agentic/verify-with-agents.md)) |
 | `<fullname>-freezer` | every verb on `changewindows`, `update` on `changewindows/freeze`; bind it with a ClusterRoleBinding | Incident commanders ([Freezes](../agentic/freezes.md)) |
-| `<fullname>-auditor` | `get` and `list` on the namespaced kinds `kardinal audit evidence-pack` reads: `auditevents`, `approvals`, `policygates`, `bundles`, `pipelines`, `verdicts`, `promotionreceipts`, `changerequests`; no write. Bind it with a RoleBinding in each namespace an auditor may read, or a ClusterRoleBinding for all. Not part of the admin role | Auditors ([Produce an evidence pack](../compliance.md#produce-an-evidence-pack)) |
-| `<fullname>-auditor-cluster` | `get` and `list` on the cluster-scoped kinds of the pack, `changewindows` and `agentidentities`, and on `validatingadmissionpolicies` and their bindings; no write and no namespace's records. Always a ClusterRoleBinding, next to `<fullname>-auditor`. Not part of the admin role | Auditors |
+| `<fullname>-auditor` | (new in v0.13.0, unreleased) `get` and `list` on the namespaced kinds `kardinal audit evidence-pack` reads: `auditevents`, `approvals`, `policygates`, `bundles`, `pipelines`, `verdicts`, `promotionreceipts`, `changerequests`; no write. Bind it with a RoleBinding in each namespace an auditor may read, or a ClusterRoleBinding for all. Not part of the admin role | Auditors ([Produce an evidence pack](../compliance.md#produce-an-evidence-pack)) |
+| `<fullname>-auditor-cluster` | (new in v0.13.0, unreleased) `get` and `list` on the cluster-scoped kinds of the pack, `changewindows` and `agentidentities`, and on `validatingadmissionpolicies` and their bindings; no write and no namespace's records. Always a ClusterRoleBinding, next to `<fullname>-auditor`. Not part of the admin role | Auditors |
 | `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
 
 AgentIdentities are public to every authenticated user by default (`actors.directory.public: true`, the `<fullname>-agent-directory-reader` binding), so a namespace auditor and everyone else can read the agent registry whatever their roles; set it to `false` to limit that ([Who can read the registry](../actors.md#who-can-read-the-registry)).
