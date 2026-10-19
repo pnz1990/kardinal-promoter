@@ -6,7 +6,6 @@
 package live
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -81,26 +80,13 @@ func airgapProbe(t *testing.T, e *framework.Env, ns, name, url string) (string, 
 	return logs, strings.HasPrefix(logs, "ANSWERED")
 }
 
-// offline runs the kardinal CLI with args in a network namespace of its own
-// (only a loopback): no address outside the host process is reachable. It
-// uses an unprivileged user namespace, or sudo where those are refused (a
-// GitHub runner's AppArmor).
-func offline(t *testing.T, args ...string) (string, error) {
+// airgapCLI is the kardinal CLI under test, for offline (the receipts-keyless
+// suite's network-namespace runner).
+func airgapCLI(t *testing.T) string {
 	t.Helper()
 	cli := os.Getenv(framework.EnvCLI)
 	require.NotEmpty(t, cli, framework.EnvCLI)
-	var cmd *exec.Cmd
-	if exec.Command("unshare", "-rn", "true").Run() == nil {
-		cmd = exec.Command("unshare", append([]string{"-rn", cli}, args...)...)
-	} else {
-		require.NoError(t, exec.Command("sudo", "-n", "unshare", "-n", "true").Run(), "neither unshare -rn nor sudo unshare -n works here")
-		cmd = exec.Command("sudo", append([]string{"-n", "--preserve-env=HOME", "unshare", "-n", cli}, args...)...)
-	}
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
-	t.Logf("$ (offline) kardinal %s\n%s", strings.Join(args, " "), out.String())
-	return out.String(), err
+	return cli
 }
 
 // kindnetRestarts is each kindnet Pod's container restarts. kindnet fails
@@ -239,18 +225,18 @@ func TestAirgap_Evidence(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte(rc.Status.Bundle), 0o600))
 	pinned := []string{"verify-receipt", "--file", file, "-n", a.ns, "--pipeline", pipelineName, "--env", "prod",
 		"--subject", fixtures.V2Digest, "--cluster", cluster, "--key", pub}
-	out, err := offline(t, pinned...)
+	out, err := offline(t, airgapCLI(t), pinned...)
 	require.NoError(t, err, out)
 	assert.Contains(t, out, "VERIFIED receipt")
 	// The namespace really is offline: the CLI cannot reach the cluster.
 	kubeconfig := filepath.Join(dir, "kubeconfig")
 	e.WriteKubeconfig(t, kubeconfig, map[string]string{e.Context: a.ns}, e.Context)
-	out, err = offline(t, "--kubeconfig", kubeconfig, "--context", e.Context, "-n", a.ns, "verify-receipt", pipelineName, "prod", "--key", pub)
+	out, err = offline(t, airgapCLI(t), "--kubeconfig", kubeconfig, "--context", e.Context, "-n", a.ns, "verify-receipt", pipelineName, "prod", "--key", pub)
 	require.Error(t, err, "from the cluster, offline, verify-receipt fails:\n%s", out)
 	// The same pins with another environment fail offline too.
 	wrong := append([]string(nil), pinned...)
 	wrong[8] = "test"
-	out, err = offline(t, wrong...)
+	out, err = offline(t, airgapCLI(t), wrong...)
 	require.Error(t, err, "a prod receipt presented as test's fails:\n%s", out)
 
 	// The evidence pack, exported online, checked offline.
@@ -278,7 +264,7 @@ func TestAirgap_Evidence(t *testing.T) {
 	fromPack := filepath.Join(dir, "from-pack.sigstore.json")
 	require.NoError(t, os.WriteFile(fromPack, []byte(packed), 0o600))
 	pinned[2] = fromPack
-	out, err = offline(t, pinned...)
+	out, err = offline(t, airgapCLI(t), pinned...)
 	require.NoError(t, err, out)
 	assert.Contains(t, out, "VERIFIED receipt")
 
