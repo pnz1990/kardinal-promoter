@@ -816,10 +816,13 @@ const (
 	// is fetched again.
 	PublicGoodRootTTL = 24 * time.Hour
 	// publicGoodWait bounds how long a reconcile waits for a fetch; the
-	// fetch itself is bounded by its HTTP client (PublicGoodFetchTimeout).
+	// fetch itself is bounded by PublicGoodFetchDeadline.
 	publicGoodWait = 30 * time.Second
 	// PublicGoodFetchTimeout bounds each TUF HTTP request.
 	PublicGoodFetchTimeout = 20 * time.Second
+	// PublicGoodFetchDeadline bounds a whole fetch of the trusted root: its
+	// root update and its target, retries included (pkg/tuffetch, #2218).
+	PublicGoodFetchDeadline = 2 * time.Minute
 	// publicGoodRetry spaces fetch attempts after one failed.
 	publicGoodRetry = 5 * time.Minute
 )
