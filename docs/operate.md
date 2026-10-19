@@ -35,8 +35,9 @@ The actor policies read one object per installation, the
 [agent index](actors.md#how-the-actor-is-verified), as their parameter.
 
 - **Admission cost.** Admitting a Bundle or an Approval reads the whole index, so its cost
-  grows with the number of AgentIdentities (44 ms at 4,200 on kube-apiserver, #1959; 47 ms at
-  5,000 above). kro's gate writes do not read it.
+  grows with the number of AgentIdentities. The p99 of the whole admission was 44 ms at 4,200 on
+  kube-apiserver (#1959), and 47 ms at 5,000 in the scale scenario (the table under
+  [Scale and limits](#scale-and-limits)). kro's gate writes do not read it.
 - **The size bound.** The index is bounded at **1 MiB** of entries. An AgentIdentity takes
   about 210 bytes: one ServiceAccount or user subject, a namespace scope and a sponsor. One
   that lists more subjects, namespaces, Pipelines or environments takes more.
@@ -67,7 +68,11 @@ value before any expression runs. It does that for the matchConditions too. For 
 resource such as the agent index, it copies the whole object each time. For a built-in kind
 such as a ConfigMap, it reads lazily and the cost doesn't grow with size. So admission cost
 grows with the index, whatever the policy reads from it. Measured on its own at 5,000
-AgentIdentities, that conversion takes about 22 to 27 ms per request.
+AgentIdentities, that conversion takes about 22 to 27 ms per request: 21.7 ms and 27.1 ms in
+the two benchmarks of the conversion alone on #2071. It is part of the 42 to
+47 ms that the whole admission of a Bundle or an Approval takes at 5,000 (the table under
+[Scale and limits](#scale-and-limits)), about half of it. The rest is the policies' own work and
+the API server's. The two were measured on different hosts, so compare them only roughly.
 
 Three ways to lift the bound were checked (#2071) and none ships in v0.13:
 

@@ -16,6 +16,9 @@ curl -s http://localhost:8082/api/v1/openapi.json -o kardinal-openapi.json
 | UI API | `--ui-listen-address`, port `8082` | `/api/v1/ui/*` | The UI auth mode: none (loopback only), the shared UI token, or a Kubernetes token with TokenReview |
 | Bundle API | `--webhook-bind-address`, port `8083` | `POST /api/v1/bundles` | The Bundle API token, or with `bundleAPI.tokenReview` a Kubernetes token with TokenReview |
 | SCM webhooks | port `8083` | `POST /webhook/scm`, `GET /webhook/scm/health` | The webhook secret (signature header), see [SCM providers](../scm-providers.md) |
+| SCM webhooks per provider | port `8083` | `POST /webhook/scm/namespaces/<namespace>/<name>` (an ScmProvider), `POST /webhook/scm/cluster/<name>` (a ClusterScmProvider) | The provider's `webhookSecretRef` (signature header), see [Webhooks per provider](../scm-providers.md#webhooks-per-provider) |
+| Subscription webhooks | port `8083` | `POST /webhook/subscriptions/<namespace>/<subscription>/<provider>[/<token>]` | The Subscription's own token (`spec.webhook.secretRef`): the sender's signature or auth header, or the last path segment, by provider; see [Subscription webhooks](../subscription.md#webhooks) |
+| Change request webhooks | port `8083` | `POST /webhook/changerequests/<namespace>/<template>[/<token>]` (new in v0.13.0, unreleased) | The ChangeRequest template's own token (`spec.webhook.secretRef`), in the `X-Kardinal-Token` header or the last path segment; see [Webhook trigger](../change-requests.md#webhook-trigger) |
 
 With controller TLS set (`controller.tlsCertFile`), both listeners use `https://`.
 

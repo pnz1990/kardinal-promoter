@@ -1,5 +1,8 @@
 # Change Requests
 
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.0 and earlier do not have ChangeRequests. The [changelog](changelog.md) lists every change since v0.12.0.
+
 Many teams may not change production without an approved change request: a ticket in ServiceNow
 or Jira that a change advisory board (CAB) or a release manager approves. A `ChangeRequest` lets
 kardinal open that ticket for a promotion, or track one someone already opened, and lets a

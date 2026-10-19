@@ -131,6 +131,9 @@ was verified is the one deployed. The kustomize and Helm strategies write the di
 
 ## Attestations
 
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.0 and earlier verify signatures and signed commits only. The [changelog](changelog.md) lists every change since v0.12.0.
+
 A signature says who signed an image. Attestations say how it was built and what is in it: SLSA
 provenance, a vulnerability scan with VEX statements, test results, or any other in-toto
 predicate. With `attestations`, the ImageVerification also reads each image's attestations from

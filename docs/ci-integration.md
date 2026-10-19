@@ -429,7 +429,8 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 The PR body and the UI link `ciRunURL`, and a [promotion receipt](receipts.md) signs it, so it is
 checked when a version is created. It must be empty or an absolute `http://` or `https://` URL
 with a host, without user info (an `@` anywhere before the first `/` after `://`), without spaces
-or control characters, and without a credential query or fragment parameter. A parameter is a
+or control characters, and without a credential query or fragment parameter (from v0.13.0, unreleased:
+v0.12.0 does not check parameters). A parameter is a
 credential when its name is normalized (percent-decoded, a trailing array index such as `[]` or
 `[0]` removed, lower-cased, `-` and `_` removed) and then either:
 

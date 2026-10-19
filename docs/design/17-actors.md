@@ -241,7 +241,7 @@ compares them with the stamp.
   object.
 - Con: a derived copy. A registry change takes effect when the index is rewritten (one
   reconcile, sub-second normally; stale while the controller is down). It is one object, so
-  about 4,000 subjects at most (section 5.4). Clients must read the index to write the stamp.
+  about 5,000 subjects at most, and kardinal supports 4,000 (section 5.4). Clients must read the index to write the stamp.
 
 **(b) The controller stamps the actor after admission, from managedFields.** Not possible.
 managedFields record a client-chosen manager name, not the authenticated user (5.1). After
@@ -393,8 +393,11 @@ status:
   2. Admission freshness would depend on kro's single Graph queue, which every promotion Graph
      shares (G13). A suspension would then wait behind promotion backlog.
   The row is added to ledger G8.
-- **Size.** etcd stores at most 1.5 MiB per object. An entry is about 250 bytes, so the builder
-  stops at 1 MiB, about 4,000 subjects. Past that the index is `IndexFull`: new AgentIdentities
+- **Size.** etcd stores at most 1.5 MiB per object. An entry is about 210 bytes (one subject, a
+  namespace scope and a sponsor, as measured at 5,000 AgentIdentities), so the builder stops at
+  1 MiB (`actor.MaxIndexBytes`), about 5,000 such subjects. kardinal supports up to 4,000
+  AgentIdentities: about 80% of the bound, where admission stays under 50 ms
+  ([Scale and limits](../operate.md#scale-and-limits)). Past the bound the index is `IndexFull`: new AgentIdentities
   get `status.ready: false` with reason `IndexFull`, and their subjects are blocked. Existing
   entries keep working. The scale suite registers 2,000 AgentIdentities.
 - **Writers.** Only the controller has `update` on `agentindexes/status`. Nothing else writes the

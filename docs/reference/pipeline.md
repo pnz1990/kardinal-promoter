@@ -235,6 +235,9 @@ Default: `0`.
 Requires the Bundle's images (selected by `images`, by digest) to carry a signature from one of
 `authorities` (a cosign key or a Sigstore keyless identity), and a config Bundle's commit to be
 signed when `commits.requireSigned`, before the Bundle is promoted into its first environments.
+With `attestations` (new in v0.13.0, unreleased) it also verifies each image's in-toto attestations
+(SLSA provenance, vulnerability scans with VEX, any predicate) and records them for gates to read
+as `attestations.*`: [Attestations](../image-verification.md#attestations).
 See [Image Signature Verification](../image-verification.md).
 
 ### spec.policyNamespaces
@@ -264,7 +267,7 @@ my-app-x7k2p  1.5.0     image   my-app     Promoting   12m
 | Field | Meaning |
 |---|---|
 | `status.summary` | One sentence: each version, its state in words (the labels the CLI and UI use) and the environments it is in. A fleet's targets are counted under the fleet's name, and so are the environments of a wave of more than six (`7 of 9 in wave 2`): `7.2.0 live in canary and 27 of 42 pops; promoting in 5 pops; queued in 10 pops` (the first count of a group gives its size, `all 42 pops` when that is all of it). Other environments are named, at most six per clause, then `N more` before any group (`e1, …, e6, 2 more and 4 of 10 pops`), and so are a clause's PRs. It starts with `Not ready (<reason>)` when the spec is invalid, and says `paused` when the Pipeline is paused. A sentence that starts with a version keeps the version's case (`sha-9349a3f live in test`, `main live in test`); one that starts with words is capitalised. |
-| `status.environments[]` | Per environment, in spec order (a fleet environment lists its targets): `bundle` and `version`, what runs there (the newest Bundle whose change landed); `incomingBundle` and `incomingVersion`, a newer Bundle on its way in; `state`, the PromotionStep state of the newest Bundle there (an API value: `Verified`, `WaitingForMerge`, …); `since`, when that state began; `blockedBy`, the gates holding the newest Bundle back; `held`, a rollback hold keeps the environment on `bundle`; `prURL`, the PR waiting for its merge. |
+| `status.environments[]` | Per environment, in spec order (a fleet environment lists its targets): `bundle` and `version`, what runs there (the newest Bundle whose change landed); `incomingBundle` and `incomingVersion`, a newer Bundle on its way in; `state`, the PromotionStep state of the newest Bundle there (an API value: `Verified`, `WaitingForMerge`, …); `since`, when that state began; `blockedBy`, the gates holding the newest Bundle back; `held`, a rollback hold keeps the environment on `bundle`; `frozenBy`, the freeze (ChangeWindow name) that holds the newest Bundle's step there (new in v0.13.0, unreleased); `prURL`, the PR waiting for its merge. |
 | `status.environmentSummary` | `env=version` per environment, `-` where nothing runs yet: the `ENVS` column. |
 | `status.failedVersion` | When the newest version failed: its `bundle` and `version`, the `reason` and `message` of the Bundle's `InvalidSpec` or `Failed` condition (`GraphBuildFailed`, `GraphRejected`, `InvalidIntent`, `StepFailed`, …; the message says what fixes it where known), the `environment` whose step failed (empty when it failed before any step) and `since`. Cleared once a newer version exists. `status.summary` adds `<version> failed before it started (<reason>)` when no environment shows it; `kardinal why` leads with it and `kardinal status <pipeline>` prints it as an `ERROR` line. |
 | `status.phase` | The newest Bundle's progress: `Ready` (Verified everywhere it went), `Promoting`, `Degraded` (a version failed) or `Unknown` (no Bundle yet). |
