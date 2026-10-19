@@ -68,6 +68,7 @@ func keepStyle(t testing.TB) {
 // does not restore; helpers that are methods, function values or in non-test
 // files.
 func TestPackageVariablesAreRestored(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 	srcs := map[string]string{}
@@ -79,6 +80,57 @@ func TestPackageVariablesAreRestored(t *testing.T) {
 	leaks, err := restoreLeaks(srcs)
 	require.NoError(t, err)
 	assert.Empty(t, leaks, "put each back with setForTest(t, &v, value), keepStyle(t) (for Execute), or save it and restore it in t.Cleanup")
+}
+
+// TestParallelTestsChangeNoPackageVariable (#2194): a test that calls
+// t.Parallel runs next to the other parallel tests, so it must not change a
+// package variable even if it puts it back: another one would see the
+// change. Found as TestPackageVariablesAreRestored finds changes (helpers
+// one call deep, Execute, setForTest).
+func TestParallelTestsChangeNoPackageVariable(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	srcs := map[string]string{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		require.NoError(t, err)
+		srcs[f] = string(b)
+	}
+	changes, err := parallelChanges(srcs)
+	require.NoError(t, err)
+	assert.Empty(t, changes, "a parallel test may not change package variables: drop t.Parallel, or pass the value in")
+}
+
+// TestParallelChanges: the check on small packages: a parallel test that
+// changes a package variable is named even when it puts it back (directly,
+// through setForTest, keepStyle or a helper); a serial one, or a parallel
+// one that only reads, is not.
+func TestParallelChanges(t *testing.T) {
+	const pkg = "package cmd\n\nvar x string\nvar errOut, sty, skewCheck any\n"
+	cases := []struct {
+		name, test string
+		changes    []string
+	}{
+		{"setForTest", `func TestA(t *testing.T) { t.Parallel(); setForTest(t, &x, "a") }`, []string{"TestA changes x"}},
+		{"restored in a Cleanup", `func TestA(t *testing.T) { t.Parallel(); prev := x; t.Cleanup(func() { x = prev }); x = "a" }`,
+			[]string{"TestA changes x"}},
+		{"a helper", `func stub(t *testing.T) { prev := x; t.Cleanup(func() { x = prev }); x = "a" }
+func TestA(t *testing.T) { t.Parallel(); stub(t) }`, []string{"TestA changes x"}},
+		{"keepStyle", `func keepStyle(t *testing.T) { a, b, c := errOut, sty, skewCheck; t.Cleanup(func() { errOut, sty, skewCheck = a, b, c }) }
+func TestA(t *testing.T) { t.Parallel(); keepStyle(t) }`, []string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"}},
+		{"serial", `func TestA(t *testing.T) { setForTest(t, &x, "a") }`, nil},
+		{"reads only", `func TestA(t *testing.T) { t.Parallel(); _ = x }`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parallelChanges(map[string]string{
+				"x.go":      pkg,
+				"x_test.go": "package cmd\n\nimport \"testing\"\n\nfunc setForTest[T any](t *testing.T, p *T, v T) {}\n\n" + tc.test + "\n",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.changes, got)
+		})
+	}
 }
 
 // TestRestoreLeaks: the check on small packages, a leak and a safe form of
@@ -129,12 +181,11 @@ func TestA(t *testing.T) { keepStyle(t); root := NewRootCmd(); _ = root.Execute(
 	}
 }
 
-// restoreLeaks are the changes to package variables that the Test
-// functions of the package in srcs (file name to source) do not put back,
-// each as "file:line:col: TestX changes v", sorted.
-func restoreLeaks(srcs map[string]string) ([]string, error) {
+// newRestoreCheck parses and type-checks the package in srcs and returns
+// its Test functions.
+func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, error) {
 	fset := token.NewFileSet()
-	a := &restoreCheck{info: &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}},
+	a := &restoreCheck{fset: fset, info: &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}},
 		scopes: map[*types.Scope]bool{}, funcs: map[string]*ast.FuncDecl{}, done: map[string]*restoreSummary{}}
 	var tests []*ast.FuncDecl
 	names := make([]string, 0, len(srcs))
@@ -146,7 +197,7 @@ func restoreLeaks(srcs map[string]string) ([]string, error) {
 	for _, f := range names {
 		file, err := parser.ParseFile(fset, f, srcs[f], parser.SkipObjectResolution)
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", f, err)
+			return nil, nil, fmt.Errorf("parse %s: %w", f, err)
 		}
 		byPkg[file.Name.Name] = append(byPkg[file.Name.Name], file)
 		for _, d := range file.Decls {
@@ -165,17 +216,69 @@ func restoreLeaks(srcs map[string]string) ([]string, error) {
 		pkg, _ := conf.Check(name, fset, files, a.info)
 		a.scopes[pkg.Scope()] = true
 	}
+	return a, tests, nil
+}
+
+// restoreLeaks are the changes to package variables that the Test
+// functions of the package in srcs (file name to source) do not put back,
+// each as "file:line:col: TestX changes v", sorted.
+func restoreLeaks(srcs map[string]string) ([]string, error) {
+	a, tests, err := newRestoreCheck(srcs)
+	if err != nil {
+		return nil, err
+	}
 	var leaks []string
 	for _, fn := range tests {
 		sum := a.summary(fn.Name.Name)
 		for v, pos := range sum.writes {
 			if !sum.restored[v] {
-				leaks = append(leaks, fmt.Sprintf("%s: %s changes %s", fset.Position(pos), fn.Name.Name, v))
+				leaks = append(leaks, fmt.Sprintf("%s: %s changes %s", a.fset.Position(pos), fn.Name.Name, v))
 			}
 		}
 	}
 	slices.Sort(leaks)
 	return leaks, nil
+}
+
+// parallelChanges are the package variables the Test functions that call
+// t.Parallel change (restored or not), each as "TestX changes v", sorted.
+func parallelChanges(srcs map[string]string) ([]string, error) {
+	a, tests, err := newRestoreCheck(srcs)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, fn := range tests {
+		parallel := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Parallel" && len(c.Args) == 0 {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "t" {
+						parallel = true
+					}
+				}
+			}
+			return !parallel
+		})
+		if !parallel {
+			continue
+		}
+		sum := a.summary(fn.Name.Name)
+		vars := map[string]bool{}
+		for v := range sum.writes {
+			vars[v] = true
+		}
+		for v := range sum.restored {
+			if v != "" {
+				vars[v] = true
+			}
+		}
+		for v := range vars {
+			out = append(out, fmt.Sprintf("%s changes %s", fn.Name.Name, v))
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // emptyImporter imports every package as an empty one: the check needs the
@@ -190,6 +293,7 @@ func (emptyImporter) Import(path string) (*types.Package, error) {
 
 // restoreCheck is TestPackageVariablesAreRestored's view of the package.
 type restoreCheck struct {
+	fset   *token.FileSet
 	info   *types.Info              // what each name refers to
 	scopes map[*types.Scope]bool    // the package scopes
 	funcs  map[string]*ast.FuncDecl // the functions of the test files

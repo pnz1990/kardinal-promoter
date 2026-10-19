@@ -128,9 +128,11 @@ current-context: hung
 	oldK := globalKubeconfig
 	globalKubeconfig = path
 	t.Cleanup(func() { globalKubeconfig = oldK })
+	// The bound, shortened so that the test does not wait three seconds.
+	setForTest(t, &completionTimeout, 300*time.Millisecond)
 	start := time.Now()
 	out := complete(t, "--kubeconfig", path, "why", "")
-	assert.Less(t, time.Since(start), 4*time.Second, "Tab gives up in time")
+	assert.Less(t, time.Since(start), completionTimeout+time.Second, "Tab gives up in time")
 	assert.Equal(t, ":36\n", out, "no names; no file names, order kept")
 }
 

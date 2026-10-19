@@ -268,6 +268,7 @@ var packPeriodOpts = evidencePackOptions{
 //
 // Covers EVIDENCE-PACK-01.
 func TestEvidencePack(t *testing.T) {
+	t.Parallel()
 	objs := packWorld(t, 1200)
 	pg := &pager{}
 	b, stderr, err := buildPack(t, objs, pg, packPeriodOpts)
@@ -358,6 +359,7 @@ func TestEvidencePack(t *testing.T) {
 // records; the procedure and policy kinds are filtered by namespace and
 // pipeline only.
 func TestEvidencePack_Filters(t *testing.T) {
+	t.Parallel()
 	opts := packPeriodOpts
 	opts.Namespace, opts.Pipeline, opts.Environment = "pay", "app", "prod"
 	b, _, err := buildPack(t, packWorld(t, 400), &pager{}, opts)
@@ -385,6 +387,7 @@ func TestEvidencePack_Filters(t *testing.T) {
 // period starting before the oldest AuditEvent warns, and one ending before
 // it fails with the export advice and writes nothing.
 func TestEvidencePack_Coverage(t *testing.T) {
+	t.Parallel()
 	t.Run("forbidden", func(t *testing.T) {
 		b, stderr, err := buildPack(t, packWorld(t, 400), &pager{forbidden: map[string]bool{"Verdict": true, "ValidatingAdmissionPolicy": true}}, packPeriodOpts)
 		require.NoError(t, err)
@@ -597,6 +600,7 @@ func (p redactProbe) export(t *testing.T, includeCommands bool) (map[string][]by
 //
 // Covers EVIDENCE-PACK-REDACT-01.
 func TestEvidencePack_Redacts(t *testing.T) {
+	t.Parallel()
 	p := newRedactProbe(t)
 	files, app, container, m := p.export(t, false)
 	for name, content := range files {
@@ -647,6 +651,7 @@ func TestEvidencePack_Redacts(t *testing.T) {
 // string, and the Authorization header's token; --path and --author stay.
 // The manifest records the mode.
 func TestEvidencePack_IncludeCommands(t *testing.T) {
+	t.Parallel()
 	p := newRedactProbe(t)
 	files, _, container, m := p.export(t, true)
 	for name, content := range files {

@@ -102,6 +102,7 @@ var updateShipOutcomes = flag.Bool("update-ship-outcomes", false, "rewrite testd
 //
 // Covers CLI-VERBS-01.
 func TestShipOutcome(t *testing.T) {
+	t.Parallel()
 	at := time.Now().Add(-time.Hour)
 	withEnvs := func(envs ...v1alpha1.PipelineEnvironmentStatus) *v1alpha1.Pipeline {
 		p := policyPipeline("demo", "test", "prod")

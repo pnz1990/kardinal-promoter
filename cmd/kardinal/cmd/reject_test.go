@@ -52,6 +52,7 @@ func rejectScheme(t *testing.T) *runtime.Scheme {
 }
 
 func TestReject(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 8, 12, 30, 15, 500, time.UTC)
 	fresh := func() *v1alpha1.Bundle {
 		return &v1alpha1.Bundle{

@@ -93,31 +93,11 @@ func verifyCluster(t *testing.T, rollouts bool, getErr error, objs ...sigs_clien
 //
 // Covers CLI-PREVIEW-VERIFY-01.
 func TestPreview_Verification(t *testing.T) {
-	forbidden := apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "analysistemplates"}, "smoke",
-		assert.AnError)
-	both := []sigs_client.Object{analysisTemplate("smoke", "default"), analysisTemplate("org-slo", "")}
-	gate := policyGate("block-prod", "default", "prod", "false")
-	for _, tc := range []struct {
-		name       string
-		rollouts   bool
-		getErr     error
-		templates  []sigs_client.Object
-		fails      string // "" when it does not
-		notChecked string
-	}{
-		{name: "the templates are there", rollouts: true, templates: both},
-		{name: "a template is missing", rollouts: true, templates: both[1:],
-			fails: `environment "test" verification: AnalysisTemplate "smoke" not found in namespace "default"`},
-		{name: "a ClusterAnalysisTemplate is missing", rollouts: true, templates: both[:1],
-			fails: `environment "test" verification: ClusterAnalysisTemplate "org-slo" not found`},
-		{name: "Argo Rollouts is not installed", templates: both,
-			fails: `environment "test" verification: argoproj.io/v1alpha1 AnalysisRun is not served by the cluster: install Argo Rollouts`},
-		{name: "the templates cannot be read", rollouts: true, getErr: forbidden, templates: both,
-			notChecked: "the AnalysisTemplates could not be read: get AnalysisTemplate default/smoke"},
-	} {
+	t.Parallel()
+	for _, tc := range previewVerificationCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			objs := append([]sigs_client.Object{verifiedPipeline(), gate}, tc.templates...)
-			c := verifyCluster(t, tc.rollouts, tc.getErr, objs...)
+			t.Parallel()
+			c := verifyCluster(t, tc.rollouts, tc.getErr, tc.objs()...)
 
 			// policy simulate of prod: the version goes through test first.
 			out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
@@ -154,10 +134,23 @@ func TestPreview_Verification(t *testing.T) {
 			if tc.notChecked != "" {
 				assert.Contains(t, list.String(), "Verification not checked: "+tc.notChecked)
 			}
+		})
+	}
+}
 
-			keepStyle(t)
+// TestPreview_VerificationDryRun: create bundle --dry-run of the cases of
+// TestPreview_Verification fails as the controller does, or names the
+// analyses it builds and counts. It runs the command's code, which uses the
+// output style, so it is not parallel.
+//
+// Covers CLI-PREVIEW-VERIFY-01.
+func TestPreview_VerificationDryRun(t *testing.T) {
+	keepStyle(t)
+	for _, tc := range previewVerificationCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			c := verifyCluster(t, tc.rollouts, tc.getErr, tc.objs()...)
 			var dry bytes.Buffer
-			err = createBundleDryRun(&dry, c, "default", "demo",
+			err := createBundleDryRun(&dry, c, "default", "demo",
 				createBundleOptions{Images: []string{"ghcr.io/org/app:1.0.0"}, Type: "image"})
 			if tc.fails != "" {
 				require.Error(t, err)
@@ -173,6 +166,45 @@ func TestPreview_Verification(t *testing.T) {
 				assert.NotContains(t, dry.String(), "leaves out verification", "the AnalysisRuns are built and counted")
 			}
 		})
+	}
+}
+
+// previewVerificationCase is one case of the verification previews.
+type previewVerificationCase struct {
+	name       string
+	rollouts   bool
+	getErr     error
+	templates  []sigs_client.Object
+	fails      string // "" when it does not
+	notChecked string
+}
+
+// objs are the case's cluster: the verified Pipeline, a blocking prod gate
+// and the case's templates.
+// The templates are copied: the fake client writes to the objects it is
+// built from, and the cases run in parallel.
+func (tc previewVerificationCase) objs() []sigs_client.Object {
+	out := []sigs_client.Object{verifiedPipeline(), policyGate("block-prod", "default", "prod", "false")}
+	for _, o := range tc.templates {
+		out = append(out, o.DeepCopyObject().(sigs_client.Object))
+	}
+	return out
+}
+
+func previewVerificationCases() []previewVerificationCase {
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "analysistemplates"}, "smoke",
+		assert.AnError)
+	both := []sigs_client.Object{analysisTemplate("smoke", "default"), analysisTemplate("org-slo", "")}
+	return []previewVerificationCase{
+		{name: "the templates are there", rollouts: true, templates: both},
+		{name: "a template is missing", rollouts: true, templates: both[1:],
+			fails: `environment "test" verification: AnalysisTemplate "smoke" not found in namespace "default"`},
+		{name: "a ClusterAnalysisTemplate is missing", rollouts: true, templates: both[:1],
+			fails: `environment "test" verification: ClusterAnalysisTemplate "org-slo" not found`},
+		{name: "Argo Rollouts is not installed", templates: both,
+			fails: `environment "test" verification: argoproj.io/v1alpha1 AnalysisRun is not served by the cluster: install Argo Rollouts`},
+		{name: "the templates cannot be read", rollouts: true, getErr: forbidden, templates: both,
+			notChecked: "the AnalysisTemplates could not be read: get AnalysisTemplate default/smoke"},
 	}
 }
 
@@ -267,6 +299,7 @@ func (m erringMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*met
 // installed. A discovery error of another kind is "Verification not
 // checked", with the gates' result.
 func TestPreview_DiscoveryErrorIsNotChecked(t *testing.T) {
+	t.Parallel()
 	base := verifyCluster(t, true, nil)
 	s := base.Scheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithRESTMapper(erringMapper{RESTMapper: base.RESTMapper(), err: context.DeadlineExceeded}).
