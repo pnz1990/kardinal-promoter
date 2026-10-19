@@ -1,5 +1,6 @@
 # Upgrade
 
+**Upgrading from v0.12.1** to the next patch release: follow [Upgrading from v0.12.1](#upgrading-from-v0121).
 **Upgrading from v0.12.0** to v0.12.1: follow [Upgrading from v0.12.0](#upgrading-from-v0120).
 **From v0.11.0:** follow [Upgrading from v0.11.0](#upgrading-from-v0110). **From v0.10.0:**
 follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:** follow
@@ -59,6 +60,49 @@ name every namespace the Graph reads, and after you upgrade again a reader RoleB
 Graph needs could be pruned until its next translation binds it again. Before you upgrade again
 after a downgrade, remove the marker, so the controller reads those Graphs in full:
 `kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
+
+## Upgrading from v0.12.1
+
+!!! note "v0.12.2 is not released yet"
+    These steps take a v0.12.1 installation to the next patch release, v0.12.2, once it is
+    released: `<version>` in the commands is its chart version. Until then v0.12.1 is the latest
+    release, and there is nothing to upgrade to.
+
+v0.12.2 is a patch release of v0.12.1. It changes no CRD, value or admission policy, and it
+targets the same kro as v0.12.1, so kro is not upgraded. The upgrade suite runs these steps as
+written (`TestUpgradeV0121_Estate`, on the oldest and newest supported Kubernetes minors) while
+versions are in flight, with the same checks as the upgrade from v0.12.0: versions in flight,
+the gates that hold them, approvals, Verdicts, a running AgentRun, freezes and a rollback all
+carry over and finish.
+
+**1. Read the upgrade notes.** The [changelog](changelog.md)'s v0.12.2 section lists its
+security fix: kardinal adopts an existing automatic rollback only when the controller created it,
+found by its name.
+
+**2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
+v0.12.1 chart installed, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
+new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**4. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check, and every Pipeline is Ready.
 
 ## Upgrading from v0.12.0
 

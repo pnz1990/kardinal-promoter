@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,12 +39,33 @@ import (
 // guide: the test replaces it with the checkout's chart.
 const guideChartV0120 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1"
 
-// The release the suite upgrades from, as components/kardinal-v0120.sh
-// installs it (hack/e2e/versions.env).
-const (
-	v0120Image = "ghcr.io/pnz1990/kardinal-promoter/controller:v0.12.0"
-	v0120Chart = "kardinal-promoter-0.12.0"
-)
+// u012From is the v0.12 release an upgrade-v012x suite upgrades from: the
+// prefix of its pins in hack/e2e/versions.env (V0120 for v0.12.0), which its
+// component installs it by, the CLI that runs it (Env.KardinalV0120, …) and
+// the chart reference its "Upgrading from" guide names.
+type u012From struct {
+	pins       string
+	cli        func(e *framework.Env, t *testing.T, ns string, args ...string) (string, error)
+	guideChart string
+}
+
+// u012Pins is the release from installs: its chart version ("0.12.0"),
+// controller image and helm.sh/chart label, read from hack/e2e/versions.env.
+func u012Pins(t *testing.T, from u012From) (version, image, chart string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(framework.RepoRoot(t), "hack", "e2e", "versions.env"))
+	require.NoError(t, err)
+	pins := map[string]string{}
+	for _, l := range strings.Split(string(data), "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(l), "="); ok && strings.HasPrefix(k, from.pins+"_") {
+			pins[strings.TrimPrefix(k, from.pins+"_")] = v
+		}
+	}
+	version, image = pins["CHART_VERSION"], pins["CONTROLLER_IMAGE"]
+	require.NotEmpty(t, version, "hack/e2e/versions.env %s_CHART_VERSION", from.pins)
+	require.NotEmpty(t, image, "hack/e2e/versions.env %s_CONTROLLER_IMAGE", from.pins)
+	return version, image, "kardinal-promoter-" + version
+}
 
 // u0120AgentRunDelay is how long the verify gate's AgentRun works before it
 // writes its Verdict: long enough to be running when the upgrade starts.
@@ -145,17 +167,31 @@ func u0120Envs(names ...string) []v1alpha1.EnvironmentSpec {
 }
 
 // u0120Running is what says which release runs: the controller
-// Deployment's image and chart label, its Pods' images by uid, and the
-// kardinal CRDs a server-side apply (the guide's step 2) owns fields of.
+// Deployment's image and chart label, its Pods' images by uid, the helm
+// release's newest revision and its status, and the kardinal CRDs a
+// server-side apply (the guide's step 2) owns fields of.
 type u0120Running struct {
 	image, chart string
 	pods         map[types.UID]string
+	revision     int
+	status       string
 	applied      map[string]bool // CRD name → kubectl owns fields of it by Apply
 }
 
 func u0120Release(t *testing.T, e *framework.Env, rel *framework.Release) u0120Running {
 	t.Helper()
 	r := u0120Running{pods: map[types.UID]string{}, applied: map[string]bool{}}
+	// helm keeps each revision in a Secret labelled with its number and status.
+	var secrets corev1.SecretList
+	require.NoError(t, e.Client.List(context.Background(), &secrets, client.InNamespace(rel.Namespace),
+		client.MatchingLabels{"owner": "helm", "name": rel.Name}))
+	for _, sec := range secrets.Items {
+		n, err := strconv.Atoi(sec.Labels["version"])
+		require.NoError(t, err, "helm release Secret %s", sec.Name)
+		if n > r.revision {
+			r.revision, r.status = n, sec.Labels["status"]
+		}
+	}
 	d := rel.Deployment(t)
 	r.chart = d.Labels["helm.sh/chart"]
 	for _, c := range d.Spec.Template.Spec.Containers {
@@ -300,8 +336,16 @@ func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, er
 //
 // Covers UPG-V0120-01, UPG-V0120-02, UPG-V0120-03, UPG-V0120-04, UPG-V0120-05.
 func TestUpgradeV0120_Estate(t *testing.T) {
+	u012Upgrade(t, u012From{pins: "V0120", cli: (*framework.Env).KardinalV0120, guideChart: guideChartV0120})
+}
+
+// u012Upgrade is TestUpgradeV0120_Estate's estate, upgrade and checks, from
+// the v0.12 release from (TestUpgradeV0121_Estate runs it from v0.12.1).
+func u012Upgrade(t *testing.T, from u012From) {
 	testStart := time.Now()
 	e := framework.New(t)
+	fromVersion, fromImage, fromChart := u012Pins(t, from)
+	t.Logf("upgrading from v%s (%s, %s)", fromVersion, fromImage, fromChart)
 	ctx := context.Background()
 	t.Logf("Kubernetes 1.%d", serverMinor(t, e))
 	seed, err := scale.Seed()
@@ -310,11 +354,11 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	newFleet := func(name string) *scale.Fleet { return scale.NewFleet(t, e, scale.NewRNG(seed, name)) }
 	s.flow, s.approve, s.held, s.verify, s.frozen = newFleet("flow"), newFleet("approve"), newFleet("held"), newFleet("verify"), newFleet("frozen")
 	bundle := func(f *scale.Fleet, p string, i int) string { return f.MustCreateBundle(t, p, scale.Tag(p, i)).Name }
-	// cliBundle creates version i of p with the v0.12.0 CLI, which stamps
+	// cliBundle creates version i of p with the released CLI, which stamps
 	// the test's user as its author: a verify gate (excludeAuthor, the
 	// default) holds a version with no verified author.
 	cliBundle := func(f *scale.Fleet, p string, i int) string {
-		out, err := e.KardinalV0120(t, f.NS, "create", "bundle", p, "--image", scale.ImageRepo+":"+scale.Tag(p, i))
+		out, err := from.cli(e, t, f.NS, "create", "bundle", p, "--image", scale.ImageRepo+":"+scale.Tag(p, i))
 		require.NoError(t, err, out)
 		m := v081BundleCreated.FindStringSubmatch(out)
 		require.Len(t, m, 2, "kardinal create bundle names the Bundle it created:\n%s", out)
@@ -322,7 +366,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	}
 	three := u0120Envs("test", "uat", "prod")
 
-	// ── The estate, under v0.12.0 ───────────────────────────────────────
+	// ── The estate, under the release it upgrades from ──────────────────
 	var bakes, reviews []string
 	for i := range 3 {
 		bakes = append(bakes, s.pipeline(t, s.flow, u0110Name("bake", i), three, u0110Bake("uat", "prod")))
@@ -381,7 +425,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	fixer := policyAgent(t, e, s.frozen.NS, "fixer", "sponsor-"+s.frozen.NS+"@example.com", v1alpha1.AutonomyAuto)
 	t.Logf("estate: %d Pipelines in %d namespaces", len(s.repos), len(s.fleets()))
 
-	// Versions that finish under v0.12.0: two on steady (the rollback after
+	// Versions that finish before the upgrade: two on steady (the rollback after
 	// the upgrade returns prod to the first), and rollback-pre's two.
 	steady1 := bundle(s.flow, steady, 1)
 	e.WaitBundlePhase(t, s.flow.NS, steady1, "Verified", promoteTimeout)
@@ -414,11 +458,11 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	inFlight[s.verify.NS+"/"+byPersonB] = byPerson
 
 	// The freeze, then the agent ships: its version waits at test.
-	out, err := e.KardinalV0120(t, s.frozen.NS, "freeze", "--agents", "--reason", "INC-0120 agents paused", "--yes")
+	out, err := from.cli(e, t, s.frozen.NS, "freeze", "--agents", "--reason", "INC-0120 agents paused", "--yes")
 	require.NoError(t, err, out)
 	freeze := "kardinal-freeze-agents-" + s.frozen.NS
 	e.WaitChangeWindow(t, freeze, gateTimeout, "active", func(w *v1alpha1.ChangeWindow) bool { return w.Status.Active })
-	out, err = e.KardinalV0120(t, s.frozen.NS, "--kubeconfig", fixer.Kubeconfig, "create", "bundle", shipped,
+	out, err = from.cli(e, t, s.frozen.NS, "--kubeconfig", fixer.Kubeconfig, "create", "bundle", shipped,
 		"--image", scale.ImageRepo+":"+scale.Tag(shipped, 1))
 	require.NoError(t, err, out)
 	m := v081BundleCreated.FindStringSubmatch(out)
@@ -431,7 +475,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		b := approveB[p]
 		e.WaitGateReady(t, s.approve.NS, b, "prod", "two-approvers", false, "waiting for approvals: 0 of 2", gateTimeout)
 		if p == approves[0] {
-			out, err := e.KardinalV0120(t, s.approve.NS, "--kubeconfig", alice, "approve", b, "--env", "prod")
+			out, err := from.cli(e, t, s.approve.NS, "--kubeconfig", alice, "approve", b, "--env", "prod")
 			require.NoError(t, err, out)
 			e.WaitGateReady(t, s.approve.NS, b, "prod", "two-approvers", false, "waiting for approvals: 1 of 2 (alice@example.com)", gateTimeout)
 		}
@@ -440,7 +484,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		e.WaitGateReady(t, s.held.NS, b, "prod", "release-window", false, "= false", gateTimeout)
 	}
 	e.WaitStepState(t, s.verify.NS, byPerson, byPersonB, "qa", "Verified", promoteTimeout)
-	out, err = e.KardinalV0120(t, s.verify.NS, "--kubeconfig", carol, "verify", byPerson, "qa", "--check", "explore",
+	out, err = from.cli(e, t, s.verify.NS, "--kubeconfig", carol, "verify", byPerson, "qa", "--check", "explore",
 		"--pass", "--summary", "checked before the upgrade")
 	require.NoError(t, err, out)
 	e.WaitGateReady(t, s.verify.NS, byPersonB, "live", "people-check", false, "1 of 2", gateTimeout)
@@ -452,9 +496,9 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	}
 
 	// Last, so they are mid-way at the upgrade: the rollback, the bakes and
-	// the AgentRun. v0.12.0 rolls rollback-pre's prod back through test and
+	// the AgentRun. The release rolls rollback-pre's prod back through test and
 	// uat, with a bake on each.
-	out, err = e.KardinalV0120(t, s.flow.NS, "rollback", rbPre, "--env", "prod")
+	out, err = from.cli(e, t, s.flow.NS, "rollback", rbPre, "--env", "prod")
 	require.NoError(t, err, out)
 	m = rbCreated.FindStringSubmatch(out)
 	require.Len(t, m, 3, "kardinal rollback names the Bundle it created:\n%s", out)
@@ -557,20 +601,20 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	}
 	var stored v1alpha1.Bundle
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: s.frozen.NS, Name: agentB}, &stored))
-	require.NotNil(t, stored.Spec.Actor, "v0.12.0 stamped the agent's version")
+	require.NotNil(t, stored.Spec.Actor, "v%s stamped the agent's version", fromVersion)
 	agentActor := *stored.Spec.Actor
 	assert.Equal(t, v1alpha1.ActorAgent, agentActor.Kind)
 
-	// The release before the upgrade: v0.12.0's, so each check below that
+	// The release before the upgrade: from's, so each check below that
 	// the upgrade happened fails on a cluster the upgrade skipped.
 	rel := e.ExistingRelease(t, upgradeRelease, framework.ControllerNamespace)
 	checkoutImage, checkoutChart := os.Getenv(framework.EnvImage), u0120CheckoutChart(t)
 	old := u0120Release(t, e, rel)
-	require.Equal(t, v0120Image, old.image, "the controller runs v0.12.0 before the upgrade")
-	require.Equal(t, v0120Chart, old.chart, "the release is v0.12.0's chart before the upgrade")
-	require.NotEqual(t, old.image, checkoutImage, "the checkout's image is not v0.12.0's")
-	require.NotEqual(t, old.chart, checkoutChart, "the checkout's chart is not v0.12.0's")
-	require.NotEmpty(t, old.pods, "v0.12.0's controller Pods")
+	require.Equal(t, fromImage, old.image, "the controller runs v%s before the upgrade", fromVersion)
+	require.Equal(t, fromChart, old.chart, "the release is v%s's chart before the upgrade", fromVersion)
+	require.NotEqual(t, old.image, checkoutImage, "the checkout's image is not v%s's", fromVersion)
+	require.NotEmpty(t, old.pods, "v%s's controller Pods", fromVersion)
+	require.Equal(t, "deployed", old.status, "helm revision %d of the release is deployed", old.revision)
 	require.NotEmpty(t, old.applied, "the kardinal CRDs")
 	for crd, applied := range old.applied {
 		require.False(t, applied, "%s: nothing server-side applied it before the guide's step 2", crd)
@@ -580,7 +624,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	upgradeStart := time.Now()
 
 	// ── 2. Apply the new CRDs ───────────────────────────────────────────
-	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, "0.12.0", "helm show crds"), guideChartV0120, `"$KARDINAL_E2E_CHART"`))
+	e.MustShell(t, framework.Fill(t, framework.GuideBlockFrom(t, fromVersion, "helm show crds"), from.guideChart, `"$KARDINAL_E2E_CHART"`))
 	for crd := range old.applied {
 		framework.Eventually(t, time.Minute, "CRD "+crd+" established", func(ctx context.Context) (bool, string) {
 			u, err := e.Dynamic.Resource(crdGVR).Get(ctx, crd, metav1.GetOptions{})
@@ -592,7 +636,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	}
 
 	// ── 3. Upgrade the chart ────────────────────────────────────────────
-	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlockFrom(t, "0.12.0", "helm upgrade"), guideChartV0120, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
+	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlockFrom(t, fromVersion, "helm upgrade"), from.guideChart, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
   --set image.repository="${KARDINAL_E2E_IMAGE%:*}" --set image.tag="${KARDINAL_E2E_IMAGE##*:}" --set image.pullPolicy=Never
 `
 	up := e.Shell(t, upgradeCmd)
@@ -606,6 +650,11 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	now := u0120Release(t, e, rel)
 	assert.Equal(t, checkoutImage, now.image, "the controller Deployment runs the checkout's image")
 	assert.Equal(t, checkoutChart, now.chart, "the release is the checkout's chart")
+	// The chart version alone does not tell a skipped helm upgrade (a patch
+	// release's checkout may still carry the version it upgrades from):
+	// the upgrade is a new deployed revision.
+	assert.Equal(t, old.revision+1, now.revision, "the guide's helm upgrade made one new revision")
+	assert.Equal(t, "deployed", now.status, "helm revision %d of the release is deployed", now.revision)
 	require.NotEmpty(t, now.pods, "the controller's Pods")
 	for uid, image := range now.pods {
 		assert.NotContains(t, old.pods, uid, "Pod %s is new", uid)
@@ -619,7 +668,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	assert.Equal(t, kroBefore, kroNow, "kro is not upgraded: the same Pods, no restart")
 
 	// ── 4. Check the result ─────────────────────────────────────────────
-	check := e.MustShell(t, framework.GuideBlockFrom(t, "0.12.0", "kardinal doctor"))
+	check := e.MustShell(t, framework.GuideBlockFrom(t, fromVersion, "kardinal doctor"))
 	assert.Regexp(t, `(?m)^\d+ check\(s\) passed$`, check, "kardinal doctor passes every check")
 	for _, f := range s.fleets() {
 		ns := f.NS
@@ -722,7 +771,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 		out := e.MustKardinal(t, s.held.NS, "override", p, "--stage", "prod", "--gate", "release-window", "--reason", "e2e: upgrade window over")
 		assert.Contains(t, out, "Created by: "+me)
 		g := e.WaitGateReady(t, s.held.NS, heldB[p], "prod", "release-window", true, "OVERRIDDEN by "+me+": e2e: upgrade window over", gateTimeout)
-		assert.Equal(t, gates[heldB[p]], "PolicyGate "+s.held.NS+"/"+g.Name, "the override lands on the instance v0.12.0's Graph made")
+		assert.Equal(t, gates[heldB[p]], "PolicyGate "+s.held.NS+"/"+g.Name, "the override lands on the instance v%s's Graph made", fromVersion)
 	}
 	// The verify gates: the AgentRun that was running finishes and counts;
 	// dave's Verdict joins carol's.
@@ -755,7 +804,7 @@ func TestUpgradeV0120_Estate(t *testing.T) {
 	}
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: s.frozen.NS, Name: agentB}, &stored))
 	assert.Equal(t, &agentActor, stored.Spec.Actor, "the agent's version keeps its actor")
-	// The rollback v0.12.0 created went through test and uat.
+	// The rollback the release created went through test and uat.
 	for _, env := range []string{"test", "uat", "prod"} {
 		e.WaitStepState(t, s.flow.NS, rbPre, rbPreB, env, "Verified", time.Minute)
 		assert.Contains(t, s.envFile(t, s.flow, rbPre, env), scale.Tag(rbPre, 1), "rollback-pre's %s runs its first version again", env)
