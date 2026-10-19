@@ -37,8 +37,9 @@ import (
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
-// publicRekor is the public-good Rekor: a receipt logged there publishes
-// its statement's names, emails and pipeline names.
+// publicRekor is the public-good Rekor (and, under it, its Rekor v2 log
+// shards): a receipt logged there publishes its statement's names, emails
+// and pipeline names.
 const publicRekor = "rekor.sigstore.dev"
 
 // receiptFlags configure promotion receipts (docs/receipts.md). Chart
@@ -53,6 +54,7 @@ type receiptFlags struct {
 	tokenFile   string
 	rekorURL    string
 	rekorPublic bool
+	rekorVer    uint
 	tsaURL      string
 	ociSecret   string
 	ociRepo     string
@@ -77,6 +79,8 @@ func bindReceiptFlags(fs *flag.FlagSet) *receiptFlags {
 	fs.StringVar(&f.tokenFile, "receipt-token-file", "/var/run/secrets/sigstore/token",
 		"Projected ServiceAccount token (audience sigstore) keyless mode presents to Fulcio.")
 	fs.StringVar(&f.rekorURL, "receipt-rekor-url", "", "Rekor that logs every receipt signature; empty logs nothing.")
+	fs.UintVar(&f.rekorVer, "receipt-rekor-version", 1,
+		"API version of --receipt-rekor-url: 1 (rekor.sigstore.dev, Rekor with Trillian) or 2 (rekor-tiles: the log20xx shards, sigstore scaffolding).")
 	fs.BoolVar(&f.rekorPublic, "receipt-rekor-public", false,
 		"Allow --receipt-rekor-url to be the public-good Rekor, which publishes each receipt's names, emails and pipeline names.")
 	fs.StringVar(&f.tsaURL, "receipt-tsa-url", "", "RFC 3161 timestamp authority that timestamps every receipt signature.")
@@ -112,13 +116,17 @@ func (f *receiptFlags) signer(c sigs_client.Reader, ns string, transport http.Ro
 		if err != nil || u.Host == "" {
 			return nil, fmt.Errorf("--receipt-rekor-url %q is not a URL", f.rekorURL)
 		}
-		if strings.EqualFold(u.Hostname(), publicRekor) && !f.rekorPublic {
+		if f.rekorVer != 1 && f.rekorVer != 2 {
+			return nil, fmt.Errorf("--receipt-rekor-version %d: 1 or 2", f.rekorVer)
+		}
+		host := strings.ToLower(u.Hostname())
+		if (host == publicRekor || strings.HasSuffix(host, "."+publicRekor)) && !f.rekorPublic {
 			return nil, errors.New("--receipt-rekor-url is the public-good Rekor, which publishes every receipt's names, " +
 				"emails and pipeline names: set --receipt-rekor-public (receipts.sinks.rekor.public) to allow it")
 		}
 	}
 	s := &receipt.Signer{Mode: f.mode, KMSRef: f.kmsKey, FulcioURL: f.fulcioURL, TokenFile: f.tokenFile,
-		RekorURL: f.rekorURL, TSAURL: f.tsaURL, Transport: transport}
+		RekorURL: f.rekorURL, RekorVersion: uint32(f.rekorVer), TSAURL: f.tsaURL, Transport: transport}
 	if f.mode == v1alpha1.ReceiptSigningKey && f.keySecret != "" {
 		s.Key = receiptrecon.SecretKey(c, ns, f.keySecret, f.keyKey)
 	}
