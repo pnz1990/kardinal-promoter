@@ -476,3 +476,24 @@ func TestName(t *testing.T) {
 	assert.NotEqual(t, long, Name(strings.Repeat("b", 250), "prod-eu", "u"))
 	assert.Regexp(t, `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`, Name("Bundle.", "-env-", "u"), "a DNS subdomain")
 }
+
+// TestBuild_PRStatementGolden (QA-2 on #2195): the statement of a promotion
+// whose PR kardinal opened is byte for byte what it was before adopted PRs
+// were recorded (#2092): testdata/statement-pr.golden.json was built by
+// main's code before that change from this Input. A new key, even an empty
+// "adopted":{}, changes the bytes and the digest.
+//
+// Covers RECEIPT-STATEMENT-04.
+func TestBuild_PRStatementGolden(t *testing.T) {
+	in := input("image")
+	in.PR.MergedAt = "2026-10-14T10:20:00Z"
+	_, b := build(t, in)
+	want, err := os.ReadFile(filepath.Join("testdata", "statement-pr.golden.json"))
+	require.NoError(t, err)
+	assert.Equal(t, string(want), string(b))
+
+	in.PR.Adopted = &AdoptedPR{}
+	_, adopted := build(t, in)
+	assert.NotEqual(t, string(want), string(adopted), "the golden test sees an empty adopted record")
+	assert.Contains(t, string(adopted), `"adopted":{}`)
+}

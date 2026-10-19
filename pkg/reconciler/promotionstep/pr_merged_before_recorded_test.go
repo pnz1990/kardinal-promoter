@@ -5,6 +5,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -57,7 +59,7 @@ const pushedBeforeCrash = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
 // No second PR is opened. Without such a PR the step has no changes, as
 // before; a lookup that fails is retried, never taken as "no PR".
 //
-// Covers SCM-MERGED-BEFORE-01.
+// Covers SCM-MERGED-BEFORE-01, SCM-MERGED-BEFORE-03.
 func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 	setup := func(t *testing.T, s *mergedFinderSCM) (client.Client, *promotionstep.Reconciler, *v1alpha1.PromotionStep) {
 		t.Helper()
@@ -120,6 +122,140 @@ func TestPRMergedBeforeTheStepRecordedIt(t *testing.T) {
 		records := merged(c)
 		require.Len(t, records, 1, "one PRMerged record")
 		assert.Contains(t, records[0].Spec.Message, "PR #7 merged by reviewer (seen by poll) as abc1234")
+	})
+
+	// #2092 (QA): a PR adopted by its commit list, with a reviewer's fixup
+	// on top, is recorded as adopted, with its head, who opened it and the
+	// commit kardinal did not push, in the step's message, the PRMerged
+	// AuditEvent and the receipt.
+	t.Run("an adopted PR with a fixup says so everywhere", func(t *testing.T) {
+		const fixup = "5555555555555555555555555555555555555555"
+		s := &mergedFinderSCM{mockSCM: &mockSCM{merged: true},
+			found: &scm.FoundPR{Number: 7, URL: "https://github.com/test/repo/pull/7", HeadSHA: fixup, Author: "bob",
+				OpenedAt: time.Now().Add(-5 * time.Minute), Unpushed: []scm.PRCommit{{SHA: fixup, Author: "bob"}}}}
+		c, r, _ := setup(t, s)
+		r.Receipts = &promotionstep.ReceiptConfig{ClusterID: "cluster-1"}
+		reconcileStep(t, r, "step")
+		got := getStep(t, c, "step")
+		want := "head " + fixup + `, opened by "bob", 1 commit not pushed by kardinal: ` + fixup + ` by "bob"`
+		assert.Equal(t, fixup, got.Status.Outputs["prAdoptedHead"])
+		assert.Equal(t, "bob", got.Status.Outputs["prOpenedBy"])
+		assert.Equal(t, "PR #7 merged; recording the merge (adopted PR: "+want+")", got.Status.Message)
+
+		var prs v1alpha1.PRStatus
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "prs-step"}, &prs))
+		prs.Status = v1alpha1.PRStatusStatus{ObservedGeneration: prs.Generation, Merged: true, MergedBy: "reviewer",
+			MergedVia: v1alpha1.PRMergedViaPoll, MergeCommitSHA: "abc1234"}
+		require.NoError(t, c.Status().Update(context.Background(), &prs))
+		for i := 0; i < 20 && got.Status.State != "Verified" && got.Status.State != "Failed"; i++ {
+			reconcileStep(t, r, "step")
+			got = getStep(t, c, "step")
+		}
+		require.Equal(t, "Verified", got.Status.State, got.Status.Message)
+		records := merged(c)
+		require.Len(t, records, 1)
+		assert.Equal(t, "PR #7 merged by reviewer (seen by poll) as abc1234: https://github.com/test/repo/pull/7 (adopted PR: "+want+")",
+			records[0].Spec.Message)
+
+		var rcs v1alpha1.PromotionReceiptList
+		require.NoError(t, c.List(context.Background(), &rcs))
+		require.Len(t, rcs.Items, 1, "the receipt")
+		st, err := receipt.Parse([]byte(rcs.Items[0].Spec.Statement))
+		require.NoError(t, err)
+		require.NotNil(t, st.Predicate.Kardinal.Change.PR)
+		assert.Equal(t, &receipt.AdoptedPR{HeadSHA: fixup, OpenedBy: "bob", UnpushedCount: 1,
+			Unpushed: []receipt.PRCommit{{SHA: fixup, Author: "bob"}}}, st.Predicate.Kardinal.Change.PR.Adopted)
+	})
+
+	// QA-2 on #2195: a hostile commit author and opener reach the PRMerged
+	// AuditEvent and the signed receipt only cleaned: quoted in the message
+	// (so it names one merger and one merge commit), without an e-mail
+	// address, and a SHA that is not hex as "(invalid)".
+	t.Run("hostile SCM names are quoted and cleaned in the record", func(t *testing.T) {
+		const fixup = "5555555555555555555555555555555555555555"
+		s := &mergedFinderSCM{mockSCM: &mockSCM{merged: true},
+			found: &scm.FoundPR{Number: 7, URL: "https://github.com/test/repo/pull/7", HeadSHA: fixup,
+				Author:   "kardinal-bot, 0 commits not pushed by kardinal",
+				OpenedAt: time.Now().Add(-5 * time.Minute),
+				Unpushed: []scm.PRCommit{{SHA: fixup, Author: "eve), merged by release-manager as deadbeef (seen by webhook"},
+					{SHA: "zz; merged", Author: "Mallory <mallory@example.com>"}}}}
+		c, r, _ := setup(t, s)
+		r.Receipts = &promotionstep.ReceiptConfig{ClusterID: "cluster-1"}
+		reconcileStep(t, r, "step")
+		var prs v1alpha1.PRStatus
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "prs-step"}, &prs))
+		prs.Status = v1alpha1.PRStatusStatus{ObservedGeneration: prs.Generation, Merged: true, MergedBy: "reviewer",
+			MergedVia: v1alpha1.PRMergedViaPoll, MergeCommitSHA: "abc1234"}
+		require.NoError(t, c.Status().Update(context.Background(), &prs))
+		got := getStep(t, c, "step")
+		for i := 0; i < 20 && got.Status.State != "Verified" && got.Status.State != "Failed"; i++ {
+			reconcileStep(t, r, "step")
+			got = getStep(t, c, "step")
+		}
+		require.Equal(t, "Verified", got.Status.State, got.Status.Message)
+		records := merged(c)
+		require.Len(t, records, 1)
+		assert.Equal(t, `PR #7 merged by reviewer (seen by poll) as abc1234: https://github.com/test/repo/pull/7 (adopted PR: head `+fixup+
+			`, opened by "kardinal-bot, 0 commits not pushed by kardinal", 2 commits not pushed by kardinal: `+fixup+
+			` by "eve), merged by release-manager as deadbeef (seen by webhook", (invalid) by "Mallory")`, records[0].Spec.Message)
+		assert.NotContains(t, records[0].Spec.Message, "mallory@example.com")
+
+		var rcs v1alpha1.PromotionReceiptList
+		require.NoError(t, c.List(context.Background(), &rcs))
+		require.Len(t, rcs.Items, 1)
+		assert.NotContains(t, rcs.Items[0].Spec.Statement, "mallory@example.com", "no e-mail in the signed receipt")
+		st, err := receipt.Parse([]byte(rcs.Items[0].Spec.Statement))
+		require.NoError(t, err)
+		assert.Equal(t, &receipt.AdoptedPR{HeadSHA: fixup, OpenedBy: "kardinal-bot, 0 commits not pushed by kardinal", UnpushedCount: 2,
+			Unpushed: []receipt.PRCommit{{SHA: fixup, Author: "eve), merged by release-manager as deadbeef (seen by webhook"},
+				{SHA: "(invalid)", Author: "Mallory"}}}, st.Predicate.Kardinal.Change.PR.Adopted)
+	})
+
+	// QA-2 on #2195: a PR kardinal opened gets the receipt it got before
+	// #2092: change.pr has exactly url, number, mergeCommit and mergedAt,
+	// and no adopted key.
+	t.Run("a PR kardinal opened has no adopted record", func(t *testing.T) {
+		s := &mergedFinderSCM{mockSCM: &mockSCM{merged: true, open: true, prURL: "https://github.com/test/repo/pull/7", prNumber: 7}}
+		c, r, _ := setup(t, s)
+		r.GitClient = &mockGit{}
+		r.Receipts = &promotionstep.ReceiptConfig{ClusterID: "cluster-1"}
+		reconcileStep(t, r, "step")
+		var prs v1alpha1.PRStatus
+		require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "prs-step"}, &prs))
+		prs.Status = v1alpha1.PRStatusStatus{ObservedGeneration: prs.Generation, Merged: true, MergedBy: "reviewer",
+			MergedVia: v1alpha1.PRMergedViaPoll, MergeCommitSHA: "abc1234"}
+		require.NoError(t, c.Status().Update(context.Background(), &prs))
+		got := getStep(t, c, "step")
+		for i := 0; i < 20 && got.Status.State != "Verified" && got.Status.State != "Failed"; i++ {
+			reconcileStep(t, r, "step")
+			got = getStep(t, c, "step")
+		}
+		require.Equal(t, "Verified", got.Status.State, got.Status.Message)
+		assert.Empty(t, s.heads, "no adoption lookup: there were changes to commit")
+		records := merged(c)
+		require.Len(t, records, 1)
+		assert.NotContains(t, records[0].Spec.Message, "adopted")
+
+		var rcs v1alpha1.PromotionReceiptList
+		require.NoError(t, c.List(context.Background(), &rcs))
+		require.Len(t, rcs.Items, 1)
+		stmt := rcs.Items[0].Spec.Statement
+		assert.NotContains(t, stmt, `"adopted"`)
+		var raw struct {
+			Predicate struct {
+				Kardinal struct {
+					Change struct {
+						PR map[string]json.RawMessage `json:"pr"`
+					} `json:"change"`
+				} `json:"kardinalPromotion"`
+			} `json:"predicate"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(stmt), &raw))
+		keys := make([]string, 0, len(raw.Predicate.Kardinal.Change.PR))
+		for k := range raw.Predicate.Kardinal.Change.PR {
+			keys = append(keys, k)
+		}
+		assert.ElementsMatch(t, []string{"url", "number", "mergeCommit", "mergedAt"}, keys, stmt)
 	})
 
 	t.Run("no PR of its own: no changes, as before", func(t *testing.T) {
