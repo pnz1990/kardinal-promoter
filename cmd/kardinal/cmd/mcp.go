@@ -178,7 +178,20 @@ type mcpError struct {
 	Message string `json:"message"`
 }
 
-// toolError is the result of a tool that failed with err.
+// humanizedError is an error of a command a tool ran (direct), with its
+// HumanError rewrite, made while the call held the server's lock: the
+// rewrite reads the cluster with the client the persistent flags build
+// (hintClient), so it must see the call's namespace, and no other call may
+// change the flags while it runs (#2229).
+type humanizedError struct{ orig, human error }
+
+func (e humanizedError) Error() string { return e.human.Error() }
+func (e humanizedError) Unwrap() error { return e.orig }
+
+// toolError is the result of a tool that failed with err. It reads no
+// package variable and no cluster: it runs outside the server's lock, next
+// to other calls. A command's error was already rewritten (humanizedError,
+// in direct); an argument error is shown as it is.
 func toolError(err error) *mcp.CallToolResult {
 	kind := "Failed"
 	switch {
@@ -187,7 +200,11 @@ func toolError(err error) *mcp.CallToolResult {
 	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
 		kind = "Forbidden"
 	}
-	msg := HumanError(err).Error()
+	msg := err.Error()
+	var h humanizedError
+	if errors.As(err, &h) {
+		err = h.orig
+	}
 	if kind == "Forbidden" {
 		msg += "\n(kardinal mcp acts as the kubeconfig identity it runs with and has no rights of its own)"
 	}
