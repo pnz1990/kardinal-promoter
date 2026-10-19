@@ -60,7 +60,7 @@ At about **5,000** AgentIdentities of that size, the index is full.
 The index reports how full it is: `status.bytes`, `status.maxBytes` and a `NearFull`
 condition from 80% ([Register an agent](actors.md#register-an-agent)).
 
-#### Why the bound stays at 4,000 until v0.14
+#### Why the bound stays at 4,000 for now
 
 For each request a policy matches, the API server turns the policy's parameter into a CEL
 value before any expression runs. It does that for the matchConditions too. For a custom
