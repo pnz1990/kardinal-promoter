@@ -68,10 +68,12 @@ func keepStyle(t testing.TB) {
 // the package's, and the functions followed are every function and method
 // of the package, test files or not, called directly, through a local (f :=
 // stub; f()) or passed by name (t.Run("s", sub), taken to be called). A
-// function literal stored in a value or a field (cobra.Command{RunE: ...})
-// is not run where it is built. TestMain is exempt: it sets up the whole
-// run. Not seen: writes through a pointer or a method of another package
-// (other than Execute), and a function value called through a struct field
+// function literal that the package's own code (not a test file) stores in
+// a value or a field (cobra.Command{RunE: ...}) is not run where it is
+// built; in a test file one is taken to be called (a table's setup func,
+// interceptor.Funcs). TestMain is exempt: it sets up the whole run. Not
+// seen: writes through a pointer or a method of another package (other
+// than Execute), and a function value called through a struct field
 // or a parameter.
 func TestPackageVariablesAreRestored(t *testing.T) {
 	files, err := filepath.Glob("*.go")
@@ -168,15 +170,24 @@ func TestA(t *testing.T) { defer reset(); x = "a" }`, nil, ""},
 func TestA(t *testing.T) { t.Cleanup(reset); x = "a" }`, []string{"TestA changes y"}, ""},
 		{"a deferred reset by name with another change", `func reset() { x = ""; y = "zz" }
 func TestA(t *testing.T) { defer reset(); x = "a" }`, []string{"TestA changes y"}, ""},
-		{"a function stored in a value is not run", `type c struct{ f func() }
-func mk() c { return c{f: func() { x = "a" }} }
-func TestA(t *testing.T) { _ = mk() }`, nil, ""},
-		{"a function assigned to a field is not run", `type c struct{ f func() }
-func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; _ = v }`, nil, ""},
-		{"Execute stands for what cobra runs", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }
-func NewRootCmd() *c { return &c{f: func() { y = "a" }} }
-type c struct{ f func() }
-func (*c) Execute() error { return nil }`, []string{"TestA changes errOut", "TestA changes sty"}, ""},
+		// QA on #2186: in a test file a stored function literal counts as
+		// called (table-driven setup funcs, interceptor.Funcs); only the
+		// package's own code (a cobra command tree) stores what something
+		// else runs later.
+		{"a table-driven setup func", `func TestA(t *testing.T) { cases := []struct{ setup func() }{{setup: func() { x = "a" }}}; for _, tc := range cases { tc.setup() } }`,
+			[]string{"TestA changes x"}, ""},
+		{"a map of funcs", `func TestA(t *testing.T) { m := map[string]func(){"a": func() { x = "a" }}; m["a"]() }`, []string{"TestA changes x"}, ""},
+		{"a func in a struct value", `type c struct{ f func() }
+func TestA(t *testing.T) { v := c{f: func() { x = "a" }}; v.f() }`, []string{"TestA changes x"}, ""},
+		{"a func assigned to a field, in a test", `type c struct{ f func() }
+func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; v.f() }`, []string{"TestA changes x"}, ""},
+		{"a function the package stores in a value is not run", `func TestA(t *testing.T) { _ = mk() }`, nil,
+			"type c struct{ f func() }\nfunc mk() c { return c{f: func() { x = \"a\" }} }\n"},
+		{"a function the package assigns to a field is not run", `func TestA(t *testing.T) { _ = mk() }`, nil,
+			"type c struct{ f func() }\nfunc mk() c { var v c; v.f = func() { x = \"a\" }; return v }\n"},
+		{"Execute stands for what cobra runs", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }`,
+			[]string{"TestA changes errOut", "TestA changes sty"},
+			"func NewRootCmd() *c { return &c{f: func() { y = \"a\" }} }\ntype c struct{ f func() }\nfunc (*c) Execute() error { return nil }\n"},
 		{"a Benchmark", `func BenchmarkA(b *testing.B) { x = "a" }`, []string{"BenchmarkA changes x"}, ""},
 		{"a Fuzz test that restores", `func FuzzA(f *testing.F) { prev := x; f.Cleanup(func() { x = prev }); x = "a" }`, nil, ""},
 	}
@@ -203,7 +214,8 @@ func restoreLeaks(srcs map[string]string) ([]string, error) {
 	fset := token.NewFileSet()
 	a := &restoreCheck{info: &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}},
 		scopes: map[*types.Scope]bool{}, decls: map[types.Object]*ast.FuncDecl{}, byName: map[string]*ast.FuncDecl{},
-		testing: map[types.Object]bool{}, inits: map[string]string{}, done: map[*ast.FuncDecl]*restoreSummary{}}
+		testing: map[types.Object]bool{}, inits: map[string]string{}, done: map[*ast.FuncDecl]*restoreSummary{},
+		inTest: map[*ast.FuncDecl]bool{}}
 	var tests []*ast.FuncDecl
 	names := make([]string, 0, len(srcs))
 	for f := range srcs {
@@ -239,6 +251,7 @@ func restoreLeaks(srcs map[string]string) ([]string, error) {
 				if obj := a.info.Defs[d.Name]; obj != nil {
 					a.decls[obj] = d
 				}
+				a.inTest[d] = testFile[file]
 				if d.Recv == nil && file.Name.Name == "cmd" {
 					a.byName[d.Name.Name] = d
 				}
@@ -311,6 +324,7 @@ type restoreCheck struct {
 	byName  map[string]*ast.FuncDecl       // package cmd's functions, for cmd.X from package cmd_test
 	testing map[types.Object]bool          // the *testing.T, B, F and testing.TB parameters
 	inits   map[string]string              // a package variable's initializer ("" for the zero value)
+	inTest  map[*ast.FuncDecl]bool         // the functions of the test files
 	done    map[*ast.FuncDecl]*restoreSummary
 }
 
@@ -522,9 +536,13 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 	visit = func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CompositeLit:
-			// A function stored in a value (cobra.Command{RunE: func...})
-			// runs when something calls it later, not here; Execute stands
-			// for cobra's.
+			// The package's own code stores functions that something else
+			// runs later (cobra.Command{RunE: func...}; Execute stands for
+			// cobra's). In a test, a stored function is taken to be called
+			// (a table's setup func, interceptor.Funcs).
+			if a.inTest[fn] {
+				return true
+			}
 			for _, e := range n.Elts {
 				if kv, ok := e.(*ast.KeyValueExpr); ok {
 					if _, isLit := kv.Value.(*ast.FuncLit); isLit {
@@ -535,7 +553,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			}
 			return false
 		case *ast.AssignStmt:
-			// So is one assigned to a field (cmd.RunE = func...).
+			// So is one it assigns to a field (cmd.RunE = func...).
 			stored := false
 			for i, l := range n.Lhs {
 				if _, isSel := l.(*ast.SelectorExpr); isSel && len(n.Rhs) == len(n.Lhs) {
@@ -544,7 +562,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 					}
 				}
 			}
-			if stored {
+			if stored && !a.inTest[fn] {
 				for i, l := range n.Lhs {
 					if _, isLit := n.Rhs[i].(*ast.FuncLit); !isLit {
 						ast.Inspect(n.Rhs[i], visit)
