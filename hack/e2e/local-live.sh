@@ -55,7 +55,8 @@
 #                host's shared directory; test/e2e/results with -no-lock)
 #   SLOT_MAX     the host's cluster slots (default 4)
 #   OWNER        who holds the lock and slot (default $AGENT_ID or $USER)
-#   RETRY        seconds between tries for the lock and a slot (default 30)
+#   RETRY        seconds between tries for a slot, and the longest a lock
+#                waiter sleeps (default 10; hack/loadlock.sh wakes sooner)
 #
 # Exits with the suite's status (the comment, when asked for, is posted
 # either way).
@@ -133,7 +134,7 @@ owner_part=$(printf '%s' "$owner_part" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z
 export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$owner_part-$SUITE-${MINOR#1.}}
 case $KIND_CLUSTER in kardinal-e2e-*) ;; *) die "KIND_CLUSTER=$KIND_CLUSTER must start with kardinal-e2e-" ;; esac
 COUNT=${COUNT:-1}
-RETRY=${RETRY:-30}
+RETRY=${RETRY:-10}
 SLOT_MAX=${SLOT_MAX:-4}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
 need_slots=1

@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -450,6 +449,7 @@ type machine struct {
 	lockDir   string // "" for no lock
 	owner     string
 	lockRetry time.Duration
+	lockClass string // classRelease or classNormal ("": normal)
 	log       func(format string, args ...any)
 }
 
@@ -515,29 +515,23 @@ func memAvailableGB() (float64, bool) {
 	return 0, false
 }
 
-// Lock makes lockDir, the host's heavy-load lock (mkdir is atomic), and
-// writes who holds it; while someone else holds it, it waits lockRetry and
-// tries again.
+// Lock takes lockDir, the host's heavy-load lock, in its fair queue
+// (fairlock.go): a ticket of lockClass, served release tickets first, then
+// in order. While it waits it wakes on the queue's changes, or every
+// lockRetry.
 func (m *machine) Lock(ctx context.Context) error {
 	if m.lockDir == "" {
 		return nil
 	}
-	for {
-		err := os.Mkdir(m.lockDir, 0o755)
-		if err == nil {
-			return os.WriteFile(filepath.Join(m.lockDir, "owner"), []byte(m.owner+"\n"), 0o644)
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("mkdir %s: %w", m.lockDir, err)
-		}
-		holder, _ := os.ReadFile(filepath.Join(m.lockDir, "owner"))
-		m.log("heavy-load lock %s is held by %s; retrying in %s", m.lockDir, strings.TrimSpace(string(holder)), m.lockRetry)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(m.lockRetry):
-		}
+	class := m.lockClass
+	if class == "" {
+		class = classNormal
 	}
+	poll := m.lockRetry
+	if poll <= 0 {
+		poll = 10 * time.Second
+	}
+	return (&fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log}).acquire(ctx)
 }
 
 // Unlock removes the lock, only if this gate holds it.
