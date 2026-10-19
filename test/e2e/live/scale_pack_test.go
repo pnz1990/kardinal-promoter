@@ -47,17 +47,24 @@ func TestScale_EvidencePack(t *testing.T) {
 	n := r.P.PackEvents
 	since := time.Now().Add(-time.Hour).Truncate(time.Second)
 	start := time.Now()
-	createAuditEvents(t, r, n, since)
+	createAuditEvents(t, r, r.Fleet.NS, n, since)
+	// A namespace of a tenth as many events: the export of r.Fleet.NS may
+	// take only PackMaxRSSGrowthMiB more memory than its export. Exporting
+	// a shorter period would not tell: the CLI lists every event of the
+	// namespace whatever the period, so a pack that stopped paging would
+	// hold them all in both exports.
+	small := r.E.Namespace(t)
+	createAuditEvents(t, r, small, n/10, since)
 	r.Note("packEvents", n)
 	r.Note("packSetupSeconds", int(time.Since(start).Seconds()))
 
 	until := time.Now().Add(time.Minute).Truncate(time.Second)
-	export := func(name string) ([]byte, time.Duration, int64) {
+	export := func(name, ns string) ([]byte, time.Duration, int64) {
 		t.Helper()
 		out := filepath.Join(t.TempDir(), name)
 		kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
 		r.E.WriteKubeconfig(t, kubeconfig, map[string]string{r.E.Context: ""}, r.E.Context)
-		cmd := exec.CommandContext(ctx, os.Getenv(framework.EnvCLI), "-n", r.Fleet.NS, "--context", r.E.Context,
+		cmd := exec.CommandContext(ctx, os.Getenv(framework.EnvCLI), "-n", ns, "--context", r.E.Context,
 			"audit", "evidence-pack", "--since", since.Format(time.RFC3339), "--until", until.Format(time.RFC3339), "-o", out)
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 		var stderr bytes.Buffer
@@ -70,11 +77,14 @@ func TestScale_EvidencePack(t *testing.T) {
 		require.NoError(t, err)
 		return b, took, rss
 	}
-	pack, took, rss := export("pack.tar.gz")
+	_, smallTook, smallRSS := export("small.tar.gz", small)
+	pack, took, rss := export("pack.tar.gz", r.Fleet.NS)
 	r.Note("packSeconds", took.Seconds())
 	r.Note("packPeakRSSMiB", rss)
+	r.Note("packSmallPeakRSSMiB", smallRSS)
 	r.Note("packMiB", float64(len(pack))/(1<<20))
-	t.Logf("evidence pack of %d AuditEvents: %s, peak RSS %d MiB, %d bytes", n, took.Round(time.Millisecond), rss, len(pack))
+	t.Logf("evidence pack of %d AuditEvents: %s, peak RSS %d MiB, %d bytes; of %d: %s, peak RSS %d MiB",
+		n, took.Round(time.Millisecond), rss, len(pack), n/10, smallTook.Round(time.Millisecond), smallRSS)
 
 	dir := t.TempDir()
 	path := filepath.Join(t.TempDir(), "pack.tar.gz")
@@ -97,10 +107,15 @@ func TestScale_EvidencePack(t *testing.T) {
 	assert.Equal(t, n, records["auditevents.ndjson"], "every AuditEvent of the period is in the pack")
 	assert.Equal(t, n, records["auditevents.ocsf.ndjson"])
 
+	assert.LessOrEqual(t, rss-smallRSS, int64(r.P.PackMaxRSSGrowthMiB),
+		"peak RSS of the export of %d events against %d, MiB (PackMaxRSSGrowthMiB): the pack must stream", n, n/10)
 	assert.LessOrEqual(t, rss, int64(r.P.PackMaxRSSMiB), "peak RSS of the export, MiB (PackMaxRSSMiB)")
 	assert.LessOrEqual(t, took, r.P.PackMaxTime, "time of the export (PackMaxTime)")
 
-	again, _, _ := export("again.tar.gz")
+	// The pack also holds cluster-scoped kinds (ChangeWindows,
+	// AgentIdentities, the admission policies): the scale suite runs one
+	// test at a time (LOADLOCK), so nothing changes them between the two.
+	again, _, _ := export("again.tar.gz", r.Fleet.NS)
 	assert.True(t, bytes.Equal(pack, again), "a second export of the same period is the same bytes")
 	// The test promotes nothing: it writes AuditEvents and exports them.
 	r.Finish(func(o *invariants.Options) {
@@ -109,10 +124,10 @@ func TestScale_EvidencePack(t *testing.T) {
 	})
 }
 
-// createAuditEvents creates n AuditEvents in the test's namespace, one
-// second apart from since, spread over Pipelines of packEventsPerPipeline
-// events each, with 16 writers.
-func createAuditEvents(t *testing.T, r *scale.Run, n int, since time.Time) {
+// createAuditEvents creates n AuditEvents in ns, 10 ms apart from since,
+// spread over Pipelines of packEventsPerPipeline events each, with 16
+// writers.
+func createAuditEvents(t *testing.T, r *scale.Run, ns string, n int, since time.Time) {
 	t.Helper()
 	ctx := context.Background()
 	work := make(chan int)
@@ -126,7 +141,7 @@ func createAuditEvents(t *testing.T, r *scale.Run, n int, since time.Time) {
 			for i := range work {
 				pipeline := fmt.Sprintf("pack-%04d", i/packEventsPerPipeline)
 				ev := &v1alpha1.AuditEvent{
-					ObjectMeta: metav1.ObjectMeta{Namespace: r.Fleet.NS, Name: fmt.Sprintf("pack-%07d", i),
+					ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: fmt.Sprintf("pack-%07d", i),
 						Labels: map[string]string{"kardinal.io/pipeline": pipeline}},
 					// APIWrite records (the UI API's writes), each naming a
 					// Bundle of its own: the audit-consistent invariant

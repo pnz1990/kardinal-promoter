@@ -16,7 +16,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"math"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -246,11 +249,34 @@ func buildRestConfig() (*rest.Config, string, error) {
 		globalKubeconfig != "", globalNamespace)
 }
 
-// cliQPS and cliBurst are the CLI's client rate limit (resolveRestConfig).
+// cliQPS and cliBurst are the CLI's client rate limit (resolveRestConfig),
+// unless KARDINAL_KUBE_QPS and KARDINAL_KUBE_BURST set it.
 const (
 	cliQPS   = 50
 	cliBurst = 300
 )
+
+// cliRateLimit is the CLI's client rate limit: cliQPS and cliBurst, or the
+// positive numbers of KARDINAL_KUBE_QPS (requests a second, may have a
+// fraction) and KARDINAL_KUBE_BURST (requests) in getenv.
+func cliRateLimit(getenv func(string) string) (float32, int, error) {
+	qps, burst := float32(cliQPS), cliBurst
+	if v := getenv("KARDINAL_KUBE_QPS"); v != "" {
+		f, err := strconv.ParseFloat(v, 32)
+		if err != nil || !(f > 0) || math.IsInf(f, 0) {
+			return 0, 0, fmt.Errorf("KARDINAL_KUBE_QPS=%q: want the requests a second the CLI may send, a positive number such as 20", v)
+		}
+		qps = float32(f)
+	}
+	if v := getenv("KARDINAL_KUBE_BURST"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return 0, 0, fmt.Errorf("KARDINAL_KUBE_BURST=%q: want the most requests the CLI may send at once, a whole number from 1", v)
+		}
+		burst = n
+	}
+	return qps, burst, nil
+}
 
 func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig bool,
 	namespace string) (*rest.Config, string, error) {
@@ -274,9 +300,14 @@ func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig b
 	// AuditEvents lists 200 pages of 500, at least 38 s at 5 a second, and
 	// took 39.6 s live (#2047). The API server's priority and fairness
 	// protects it from clients; 50 a second with bursts of 300 lets a CLI
-	// page at the server's pace.
+	// page at the server's pace. KARDINAL_KUBE_QPS and KARDINAL_KUBE_BURST
+	// set another limit, for a small or busy control plane.
 	if cfg.QPS == 0 && cfg.RateLimiter == nil {
-		cfg.QPS, cfg.Burst = cliQPS, cliBurst
+		qps, burst, err := cliRateLimit(os.Getenv)
+		if err != nil {
+			return nil, "", err
+		}
+		cfg.QPS, cfg.Burst = qps, burst
 	}
 
 	// Namespace: the flag, else the context's namespace, else default.
@@ -356,6 +387,10 @@ when empty):
   ship:
     the create bundle fields and exitCode, with --wait also [result,
     message, environments]
+
+The CLI sends at most 50 requests a second to the API server, in bursts of
+up to 300; KARDINAL_KUBE_QPS and KARDINAL_KUBE_BURST set other numbers, for
+a small or busy control plane (KARDINAL_KUBE_QPS=10 KARDINAL_KUBE_BURST=20).
 
 url is the pipeline in the UI: KARDINAL_UI_URL, else the address kardinal
 dashboard opens (http://localhost:8082/ui/). For example
