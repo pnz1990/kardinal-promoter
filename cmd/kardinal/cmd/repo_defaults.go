@@ -199,13 +199,19 @@ func errNoPipeline(cmd *cobra.Command) error {
 // default pipeline filled in: no argument is the default pipeline, and one
 // argument (with no environment flag) is an environment when the default
 // pipeline has one of that name and is not itself called that; otherwise
-// args are unchanged. Explicit arguments always win.
+// args are unchanged. Explicit arguments always win, also over a
+// .kardinal.yaml that cannot be read.
 func withDefaultPipeline(args []string, flagEnv string) ([]string, error) {
 	if len(args) > 1 || (len(args) == 1 && flagEnv != "") {
 		return args, nil
 	}
 	def, source, err := defaultPipeline()
-	if err != nil || def == "" {
+	switch {
+	case err != nil && len(args) == 1:
+		// A file that cannot be read has no default pipeline for the one
+		// argument to be an environment of: it is the pipeline.
+		return args, nil
+	case err != nil || def == "":
 		return args, err
 	}
 	if len(args) == 0 {

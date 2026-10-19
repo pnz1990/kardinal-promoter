@@ -262,6 +262,9 @@ func TestCLI_RepoDefaults(t *testing.T) {
 	r = cli.Exec(framework.CLIOptions{Dir: repo("pipeline: web\ncontext: prod\n")}, "--context", e.Context, "-n", ns, "history")
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stderr, "a repository file never picks a cluster")
+	// The pipeline as the one argument, and -n, go without that file.
+	r = cli.Exec(framework.CLIOptions{Dir: repo("pipeline: web\ncontext: prod\n")}, "--context", e.Context, "-n", ns, "history", "web")
+	require.Equal(t, 0, r.Code, r.Output())
 }
 
 // TestCLI_GlobalFlags checks how the global flags pick the cluster and the

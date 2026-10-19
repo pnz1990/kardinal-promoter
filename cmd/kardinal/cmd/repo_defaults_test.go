@@ -214,6 +214,23 @@ func TestRepoDefaults_Args(t *testing.T) {
 			filepath.Join(root, ".kardinal.yaml")+"): read pipeline default/web: ")
 		assert.Contains(t, err.Error(), "give both, <pipeline> <env>, or the pipeline alone with --env")
 	})
+	// QA on #2179: a broken file gives no default, so it cannot stop an
+	// explicit pipeline; with no pipeline at all its error is the answer.
+	t.Run("a broken file and an explicit pipeline", func(t *testing.T) {
+		broken := inRepo(t, "pipeline: web\ncontext: prod\n", ".")
+		for _, tc := range []struct {
+			args    []string
+			flagEnv string
+		}{{[]string{"my-app"}, ""}, {[]string{"my-app"}, "prod"}, {[]string{"my-app", "prod"}, ""}} {
+			p, _, err := envArgs(why, tc.args, tc.flagEnv)
+			require.NoError(t, err, tc.args)
+			assert.Equal(t, "my-app", p, tc.args)
+		}
+		_, _, err := envArgs(why, nil, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), filepath.Join(broken, ".kardinal.yaml"))
+		assert.Contains(t, err.Error(), "a repository file never picks a cluster")
+	})
 	t.Run("the default pipeline does not exist", func(t *testing.T) {
 		empty := fake.NewClientBuilder().WithScheme(rootScheme).Build()
 		setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return empty, "default", nil })
