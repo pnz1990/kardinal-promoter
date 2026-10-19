@@ -619,7 +619,7 @@ func checks(in Input) Checks {
 		for _, r := range iv.Status.Images {
 			c.ImageVerification = append(c.ImageVerification, ImageCheck{Image: r.Image, Verified: r.Verified, By: r.Signer})
 		}
-		c.SLSA = slsaCheck(iv)
+		c.SLSA = slsaCheck(iv, in.Bundle.Spec.Images)
 	}
 	for _, s := range in.Step.Status.Steps {
 		if s.Name != "health-check" {

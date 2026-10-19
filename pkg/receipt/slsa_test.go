@@ -49,6 +49,21 @@ const (
 	imgB = "ghcr.io/acme/worker@sha256:bbbb"
 )
 
+// bundleOf are the Bundle images of these repo@digest (or repo:tag)
+// references.
+func bundleOf(refs ...string) []v1alpha1.ImageRef {
+	var out []v1alpha1.ImageRef
+	for _, r := range refs {
+		if repo, digest, ok := strings.Cut(r, "@"); ok {
+			out = append(out, v1alpha1.ImageRef{Repository: repo, Digest: digest})
+			continue
+		}
+		i := strings.LastIndexByte(r, ':')
+		out = append(out, v1alpha1.ImageRef{Repository: r[:i], Tag: r[i+1:]})
+	}
+	return out
+}
+
 // TestSLSACheck (#2061): the receipt's SLSA build level is the lowest of
 // its images', as #1963 folds attestations.<name>.slsa.buildLevel; an
 // image's level is its highest verified one, 0 without one; an attestation
@@ -82,10 +97,34 @@ func TestSLSACheck(t *testing.T) {
 			&SLSA{BuildLevel: 3, LevelSource: "vsa", Images: []SLSAImage{verified(imgA, 3, "vsa")}}},
 		"sources that differ are left out": {ivWith(two, slsaResult("provenance", imgA, true, 2, "builder"), slsaResult("vsa", imgB, true, 2, "vsa")),
 			&SLSA{BuildLevel: 2, Images: []SLSAImage{verified(imgA, 2, "builder"), verified(imgB, 2, "vsa")}}},
+		// QA-2 #2169: a Bundle image the policy's images do not select is
+		// never in the ImageVerification, and is a subject all the same.
+		"a Bundle image the policy does not select: none, level 0": {ivWith(one, slsaResult("provenance", imgA, true, 3, "builder")),
+			&SLSA{BuildLevel: 0, Images: []SLSAImage{verified(imgA, 3, "builder"), none(imgB)}}},
+		"the same repository at another digest: none": {ivWith(one, slsaResult("provenance", imgA, true, 3, "builder")),
+			&SLSA{BuildLevel: 0, Images: []SLSAImage{verified(imgA, 3, "builder"), none("ghcr.io/acme/checkout@sha256:cccc")}}},
+		"a tag-only Bundle image is not a subject": {ivWith(one, slsaResult("provenance", imgA, true, 3, "builder")),
+			&SLSA{BuildLevel: 3, LevelSource: "builder", Images: []SLSAImage{verified(imgA, 3, "builder")}}},
+		"a Bundle repository named as the ImageVerification normalizes it": {
+			ivWith([]string{"docker.io/library/nginx@sha256:dddd"}, slsaResult("provenance", "docker.io/library/nginx@sha256:dddd", true, 2, "builder")),
+			&SLSA{BuildLevel: 2, LevelSource: "builder", Images: []SLSAImage{verified("docker.io/library/nginx@sha256:dddd", 2, "builder")}}},
+	}
+	// The Bundle's images, when not the ImageVerification's.
+	bundles := map[string][]v1alpha1.ImageRef{
+		"a Bundle image the policy does not select: none, level 0":         bundleOf(imgA, imgB),
+		"the same repository at another digest: none":                      bundleOf(imgA, "ghcr.io/acme/checkout@sha256:cccc"),
+		"a tag-only Bundle image is not a subject":                         bundleOf(imgA, "ghcr.io/acme/worker:1.0"),
+		"a Bundle repository named as the ImageVerification normalizes it": bundleOf("nginx@sha256:dddd"),
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tc.want, slsaCheck(tc.iv))
+			bundle, ok := bundles[name]
+			if !ok && tc.iv != nil {
+				for _, r := range tc.iv.Status.Images {
+					bundle = append(bundle, bundleOf(r.Image)...)
+				}
+			}
+			assert.Equal(t, tc.want, slsaCheck(tc.iv, bundle))
 		})
 	}
 }
@@ -97,6 +136,7 @@ func TestSLSACheck(t *testing.T) {
 func TestBuild_SLSAMixedBundle(t *testing.T) {
 	in := input("image")
 	sidecar := "ghcr.io/acme/sidecar@sha256:" + strings.Repeat("b", 64)
+	in.Bundle.Spec.Images = append(in.Bundle.Spec.Images, bundleOf(sidecar)...)
 	in.ImageVerification = ivWith([]string{"ghcr.io/acme/checkout@" + imageDigest, sidecar},
 		slsaResult("provenance", "ghcr.io/acme/checkout@"+imageDigest, true, 3, "builder"),
 		slsaResult("provenance", sidecar, false, 3, "builder"))
@@ -118,6 +158,41 @@ func TestBuild_SLSAMixedBundle(t *testing.T) {
 	assert.Contains(t, string(raw), `"status":"none"`)
 }
 
+// unselectedInput is the test promotion whose Bundle also has
+// docker.io/thirdparty/sidecar, an image the Pipeline's
+// imageVerification.images does not select: the ImageVerification holds
+// checkout only, whose provenance verified at level 3.
+func unselectedInput() (Input, string) {
+	in := input("image")
+	digest := "sha256:" + strings.Repeat("c", 64)
+	in.Bundle.Spec.Images = append(in.Bundle.Spec.Images, v1alpha1.ImageRef{Repository: "docker.io/thirdparty/sidecar", Digest: digest})
+	checkout := "ghcr.io/acme/checkout@" + imageDigest
+	in.ImageVerification = ivWith([]string{checkout}, slsaResult("provenance", checkout, true, 3, "builder"))
+	return in, digest
+}
+
+// TestBuild_SLSAUnselectedImage (QA-2 #2169): a Bundle image the policy
+// does not select is a subject of the receipt but never in the
+// ImageVerification: it is recorded none, the version's level is 0, and no
+// SLSA level is claimed (verifiedLevels hold for every subject).
+func TestBuild_SLSAUnselectedImage(t *testing.T) {
+	in, digest := unselectedInput()
+	raw, _, err := Build(in)
+	require.NoError(t, err)
+	st, err := Parse(raw)
+	require.NoError(t, err)
+	require.Len(t, st.Subject, 2, "the sidecar is a subject")
+	got := st.Predicate.Kardinal.Checks.SLSA
+	require.NotNil(t, got)
+	require.Len(t, got.Images, 2)
+	assert.Equal(t, SLSAVerified, got.Images[0].Status)
+	assert.Equal(t, SLSAImage{Image: "docker.io/thirdparty/sidecar@" + digest, Status: SLSANone}, got.Images[1])
+	assert.Equal(t, 0, got.BuildLevel)
+	for _, l := range st.Predicate.VerifiedLevels {
+		assert.False(t, strings.HasPrefix(l, "SLSA_"), "no SLSA level claimed: %s", l)
+	}
+}
+
 // slsaInput is the test promotion with an ImageVerification whose images
 // have these build levels from their builder.
 func slsaInput(levels ...int) Input {
@@ -128,6 +203,7 @@ func slsaInput(levels ...int) Input {
 		img := "ghcr.io/acme/checkout@" + imageDigest
 		if i > 0 {
 			img = fmt.Sprintf("ghcr.io/acme/sidecar-%d@sha256:%064d", i, i)
+			in.Bundle.Spec.Images = append(in.Bundle.Spec.Images, bundleOf(img)...)
 		}
 		images = append(images, img)
 		results = append(results, slsaResult("provenance", img, true, l, "builder"))
@@ -233,6 +309,21 @@ func TestVerify_RequireSLSA(t *testing.T) {
 			}
 		})
 	}
+	// QA-2 #2169: verify-receipt --image <an image the policy does not
+	// select> --require SLSA_BUILD_LEVEL_1 fails; checkout's level 3 is not
+	// the sidecar's.
+	t.Run("an unselected image require SLSA_BUILD_LEVEL_1", func(t *testing.T) {
+		in, digest := unselectedInput()
+		raw, _, err := Build(in)
+		require.NoError(t, err)
+		b, err := s.Sign(context.Background(), raw)
+		require.NoError(t, err)
+		_, err = Verify(b.Bundle, VerifyOptions{Key: pub, Subject: digest})
+		require.NoError(t, err, "the sidecar is a subject")
+		_, err = Verify(b.Bundle, VerifyOptions{Key: pub, Subject: digest, Require: []string{"SLSA_BUILD_LEVEL_1"}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "SLSA_BUILD_LEVEL_1")
+	})
 }
 
 // TestHasLevel: a SLSA track level verifies the lower levels of its track

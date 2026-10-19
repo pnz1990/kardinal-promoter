@@ -9,15 +9,17 @@ import (
 	"strconv"
 
 	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // SLSA is the SLSA build level of the promoted version, from its newest
 // Verified ImageVerification (docs/design/20-attestations.md), image by
 // image: an image's level is recorded only when one of its attestations
-// that decide a level verified; every other image is recorded "none". The
-// version's level is the lowest of its images' and is claimed only when
-// every image has one: a receipt never claims a level for an image whose
-// level was not checked.
+// that decide a level verified; every other image is recorded "none",
+// including a Bundle image the policy's images do not select (it is a
+// subject of the receipt all the same). The version's level is the lowest
+// of its images' and is claimed only when every image has one: a receipt
+// never claims a level for an image whose level was not checked.
 type SLSA struct {
 	// BuildLevel is 0 to 3: the lowest image's level, 0 when an image has
 	// none.
@@ -25,7 +27,9 @@ type SLSA struct {
 	// LevelSource is builder or vsa: what decided the level, when every
 	// image's level was decided the same way; left out otherwise.
 	LevelSource string `json:"levelSource,omitempty"`
-	// Images is each image's level, in the ImageVerification's order.
+	// Images is each image's level: the Bundle's digest-pinned images (the
+	// receipt's image subjects) in its order, then any other image the
+	// ImageVerification names.
 	Images []SLSAImage `json:"images"`
 }
 
@@ -48,15 +52,26 @@ const (
 	SLSANone     = "none"
 )
 
-// slsaCheck is the SLSA build level of iv, image by image; nil when no
-// attestation of iv decides one (its policy has no slsa): then the receipt
-// claims no level. Only verified attestations count: a level an
-// attestation claims that did not verify is never the receipt's.
-func slsaCheck(iv *v1alpha1.ImageVerification) *SLSA {
+// slsaCheck is the SLSA build level of iv, image by image, over every
+// digest-pinned image of the Bundle (the receipt's image subjects: an
+// in-toto VSA's verifiedLevels hold for every subject) and every image iv
+// names; nil when no attestation of iv decides a level (its policy has no
+// slsa): then the receipt claims no level. Only verified attestations
+// count: a level an attestation claims that did not verify is never the
+// receipt's.
+func slsaCheck(iv *v1alpha1.ImageVerification, bundle []v1alpha1.ImageRef) *SLSA {
 	if iv == nil {
 		return nil
 	}
 	decides := false
+	for _, r := range iv.Status.Attestations {
+		if r.SLSA != nil {
+			decides = true
+		}
+	}
+	if !decides {
+		return nil
+	}
 	var images []string
 	seen := map[string]bool{}
 	add := func(image string) {
@@ -65,17 +80,16 @@ func slsaCheck(iv *v1alpha1.ImageVerification) *SLSA {
 			images = append(images, image)
 		}
 	}
+	for _, img := range bundle {
+		if digestMap(img.Digest) != nil {
+			add(verifiedRef(img))
+		}
+	}
 	for _, r := range iv.Status.Images {
 		add(r.Image)
 	}
 	for _, r := range iv.Status.Attestations {
-		if r.SLSA != nil {
-			decides = true
-		}
 		add(r.Image)
-	}
-	if !decides || len(images) == 0 {
-		return nil
 	}
 	out := &SLSA{BuildLevel: -1}
 	sources := map[string]bool{}
@@ -111,6 +125,16 @@ func slsaCheck(iv *v1alpha1.ImageVerification) *SLSA {
 		}
 	}
 	return out
+}
+
+// verifiedRef is a Bundle image as an ImageVerification names it: the
+// normalized repository (docker.io/library/nginx for nginx) and the digest.
+func verifiedRef(img v1alpha1.ImageRef) string {
+	repo, err := graph.NormalizeRepository(img.Repository)
+	if err != nil {
+		repo = img.Repository // never in an ImageVerification: none
+	}
+	return repo + "@" + img.Digest
 }
 
 // slsaLevels are the SLSA verifiedLevels of a record: SLSA_BUILD_LEVEL_<n>
