@@ -1,7 +1,7 @@
 # Upgrade
 
 **Upgrading from v0.12.0** to the next release: follow [Upgrading from v0.12.0](#upgrading-from-v0120).
-**From v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
+**From v0.11.0** to v0.12.1: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
 **From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
@@ -16,7 +16,7 @@ kubectl version | grep Server
 Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   | kubectl apply --server-side --force-conflicts -f -
 ```
 
@@ -28,7 +28,7 @@ after the install anyway.
 Then upgrade the release:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   --namespace kardinal-system \
   --reset-then-reuse-values
 ```
@@ -70,8 +70,10 @@ RoleBindings at startup.
 
 !!! note "v0.13.0 is not released yet"
     These steps take a v0.12.0 installation to the next release, v0.13.0, once it is released:
-    `<version>` in the commands is that release's chart version. Until then v0.12.0 is the latest
+    `<version>` in the commands is that release's chart version. Until then v0.12.1 is the latest
     release, and there is nothing to upgrade to.
+
+The same steps take a v0.12.1 installation: v0.12.1 changes no CRD, value or admission policy.
 
 What v0.12.0 stored keeps working. Versions in flight keep their Graphs, PromotionSteps,
 PRStatuses and gate instances: at its first start the new controller removes the health ref nodes
@@ -196,14 +198,14 @@ what can change for you, and its v0.12.0 section every change since v0.11.0:
 v0.11.0 chart installed, so `--force-conflicts` is required:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
 new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -277,14 +279,14 @@ owns their fields: `--force-conflicts` is required, or the apply stops with
 `conflict with "helm" ... .spec.versions`.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **6. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
 takes every new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -354,7 +356,7 @@ The v0.9.0 chart installed them, so Helm owns their fields: `--force-conflicts` 
 the apply stops with `conflict with "helm" ... .spec.versions`.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **6. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
@@ -368,7 +370,7 @@ KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
 takes every new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -511,13 +513,13 @@ On Kubernetes older than 1.35 the script exits 1 and installs nothing (see [Kube
 **7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 18 by hand; this adds the CRDs v0.8.1 did not have. Apply them before the new controller starts. `--force-conflicts` takes over fields another field manager (Helm, or an earlier `kubectl apply`) set.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **8. Upgrade the chart.** Use `--reset-then-reuse-values`, not `--reuse-values`. With `--reuse-values`, the v0.8.1 `krocodile` default is carried over and fails the new schema.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
