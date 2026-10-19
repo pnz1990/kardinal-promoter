@@ -92,23 +92,44 @@ func IsAutoRollback(b *v1alpha1.Bundle) bool {
 		b.Annotations[AnnotationCreatedBy] == ControllerCreator
 }
 
+// The sources of the automatic rollbacks (AutoRollbackName): the step's
+// onHealthFailure=rollback and a RollbackPolicy.
+const (
+	RollbackSourceAlarm  = "alarm"
+	RollbackSourcePolicy = "policy"
+)
+
 // FindRollback returns the name of an existing automatic rollback Bundle
-// (IsAutoRollback) that rolls the environment env of pipeline back from the
-// Bundle from, or "" when there is none. Automatic rollback paths (onHealthFailure=rollback and RollbackPolicy)
-// call it first, so one failing Bundle gets one rollback in an environment.
+// (IsAutoRollback) of pipeline that rolls the environment env back from the
+// Bundle from, or "" when there is none. Automatic rollback paths
+// (onHealthFailure=rollback and RollbackPolicy) call it first, so one
+// failing Bundle gets one rollback in an environment.
+//
+// It is bound to from by its name: the controller creates the automatic
+// rollback of from only at AutoRollbackNameIn's names for the alarm and
+// policy sources (the plain name, or the environment's own), and a name
+// never changes. The kardinal.io/rollback-from annotation and the labels do
+// not decide it: anyone who may patch Bundles can rewrite them, also on a
+// stamped rollback of an earlier failure, which would then pass for this
+// one's and leave the environment on the failing version (#2187 QA). The
+// pipeline is the immutable spec.pipeline.
 func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from string) (string, error) {
-	var list v1alpha1.BundleList
-	if err := c.List(ctx, &list, client.InNamespace(ns),
-		client.MatchingLabels{LabelRollback: "true", LabelPipeline: pipeline}); err != nil {
-		return "", fmt.Errorf("list rollback bundles of pipeline %s: %w", pipeline, err)
-	}
-	for i := range list.Items {
-		b := &list.Items[i]
-		if b.Annotations[AnnotationRollbackFrom] != from || !IsAutoRollback(b) {
-			continue
-		}
-		if b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == env {
-			return b.Name, nil
+	for _, src := range []string{RollbackSourceAlarm, RollbackSourcePolicy} {
+		for _, name := range []string{AutoRollbackName(from, src), AutoRollbackName(from, src+"-"+env)} {
+			var b v1alpha1.Bundle
+			err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b)
+			switch {
+			case apierrors.IsNotFound(err):
+				continue
+			case err != nil:
+				return "", fmt.Errorf("get bundle %s: %w", name, err)
+			}
+			if !IsAutoRollback(&b) || b.Spec.Pipeline != pipeline {
+				continue
+			}
+			if b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == env {
+				return name, nil
+			}
 		}
 	}
 	return "", nil

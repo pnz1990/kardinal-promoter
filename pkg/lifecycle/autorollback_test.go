@@ -49,30 +49,63 @@ func TestAutoRollbackName_FitsBundleLabel(t *testing.T) {
 		"shortened names stay distinct")
 }
 
-// TestFindRollback: FindRollback matches on the rolled-back Bundle and the environment.
+// TestFindRollback: FindRollback finds the controller's automatic rollback
+// of the failing Bundle in the environment by its name: one of the names the
+// controller creates it at (the alarm or policy source, plain or the
+// environment's own), stamped, of the pipeline by spec.pipeline, and for the
+// environment.
+//
+// QA-2 on #2184: a stamped rollback of an earlier failure whose
+// kardinal.io/rollback-from (or labels) someone relinked to the failing
+// Bundle is not found: the markers are anyone's to patch, the name is not.
+//
+// Covers RB-AUTO-FORGED-10.
 func TestFindRollback(t *testing.T) {
-	rb := func(name, from, env string) client.Object {
-		return &v1alpha1.Bundle{
+	rb := func(name, from, env string) *v1alpha1.Bundle {
+		return stampAuto(&v1alpha1.Bundle{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: "default",
-				Labels: map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
-				Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: from,
-					lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator},
+				Labels:      map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
+				Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: from},
 			},
-			Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: env},
-				Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}},
-		}
+			Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: env}},
+		})
 	}
-	c := newClient(t, rb("rb-uat", "app-v2", "uat"), rb("rb-other", "app-v1", "prod"))
 	ctx := context.Background()
+	find := func(c client.Reader, env, from string) string {
+		t.Helper()
+		got, err := lifecycle.FindRollback(ctx, c, "default", "app", env, from)
+		require.NoError(t, err)
+		return got
+	}
+	for _, name := range []string{
+		lifecycle.AutoRollbackName("app-v2", "alarm"), lifecycle.AutoRollbackName("app-v2", "alarm-uat"),
+		lifecycle.AutoRollbackName("app-v2", "policy"), lifecycle.AutoRollbackName("app-v2", "policy-uat"),
+	} {
+		assert.Equal(t, name, find(newClient(t, rb(name, "app-v2", "uat")), "uat", "app-v2"), "found at the controller's name")
+	}
+	c := newClient(t, rb(lifecycle.AutoRollbackName("app-v2", "alarm"), "app-v2", "uat"))
+	assert.Empty(t, find(c, "prod", "app-v2"), "a rollback in another environment does not count")
 
-	got, err := lifecycle.FindRollback(ctx, c, "default", "app", "uat", "app-v2")
-	require.NoError(t, err)
-	assert.Equal(t, "rb-uat", got)
-
-	got, err = lifecycle.FindRollback(ctx, c, "default", "app", "prod", "app-v2")
-	require.NoError(t, err)
-	assert.Empty(t, got, "a rollback in another environment does not count")
+	t.Run("relinked", func(t *testing.T) {
+		// app-v1's real, finished rollback in prod, patched to name app-v3.
+		relinked := rb(lifecycle.AutoRollbackName("app-v1", "alarm"), "app-v3", "prod")
+		assert.Empty(t, find(newClient(t, relinked), "prod", "app-v3"), "an earlier failure's rollback is not app-v3's")
+		elsewhere := rb("totally-unrelated-name", "app-v3", "prod")
+		assert.Empty(t, find(newClient(t, elsewhere), "prod", "app-v3"), "not at a name the controller creates")
+	})
+	t.Run("the name decides, not the markers", func(t *testing.T) {
+		own := rb(lifecycle.AutoRollbackName("app-v3", "alarm"), "app-v1", "prod")
+		own.Labels = nil // someone stripped the labels and relinked the annotation
+		assert.Equal(t, own.Name, find(newClient(t, own), "prod", "app-v3"), "app-v3's own is still found")
+		other := rb(lifecycle.AutoRollbackName("app-v3", "alarm"), "app-v3", "prod")
+		other.Spec.Pipeline = "other" // the label still says app
+		assert.Empty(t, find(newClient(t, other), "prod", "app-v3"), "spec.pipeline, not the label")
+		forged := rb(lifecycle.AutoRollbackName("app-v3", "alarm"), "app-v3", "prod")
+		forged.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}
+		forged.Annotations[lifecycle.AnnotationCreatedBy] = "mallory"
+		assert.Empty(t, find(newClient(t, forged), "prod", "app-v3"), "at the name but not the controller's")
+	})
 }
 
 // TestAutoRollbackName_LongEnvironment (#2082 QA): the rollback of a Bundle

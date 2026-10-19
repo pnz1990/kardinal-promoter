@@ -325,8 +325,8 @@ func TestRollbackPerEnvironmentRace(t *testing.T) {
 	stale := 0
 	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
 		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, ok := obj.(*v1alpha1.Bundle); ok && key.Name == "b1-rollback-alarm" && stale == 1 {
-				stale++
+			if _, ok := obj.(*v1alpha1.Bundle); ok && key.Name == "b1-rollback-alarm" && stale > 0 {
+				stale--
 				return apierrors.NewNotFound(v1alpha1.GroupVersion.WithResource("bundles").GroupResource(), key.Name)
 			}
 			return cl.Get(ctx, key, obj, opts...)
@@ -335,10 +335,12 @@ func TestRollbackPerEnvironmentRace(t *testing.T) {
 		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
 	_, err := r.Reconcile(context.Background(), reqFor("step-prod-eu"))
 	require.NoError(t, err)
-	stale = 1 // prod-us's next read of the name misses prod-eu's rollback
+	// prod-us's next reads of the name (FindRollback's, then
+	// AutoRollbackNameIn's) miss prod-eu's rollback.
+	stale = 2
 	_, err = r.Reconcile(context.Background(), reqFor("step-prod-us"))
 	require.Error(t, err, "the name is another environment's: retry")
-	assert.Equal(t, 2, stale, "the stale read happened")
+	assert.Zero(t, stale, "the stale reads happened")
 	assert.NotEqual(t, "RollingBack", getStep(t, c, "step-prod-us").Status.State, "prod-us did not take prod-eu's rollback")
 	_, err = r.Reconcile(context.Background(), reqFor("step-prod-us"))
 	require.NoError(t, err)
@@ -390,22 +392,44 @@ func failingEnvironments(envs ...string) []client.Object {
 }
 
 // TestRollbackFindsAnEarlierRollback: a rollback of the failing Bundle in
-// the environment that exists already, under a name of another scheme (one
-// a v0.11 controller gave a long name), is found by its labels, annotation
-// and intent and reused: the step names it and nothing more is created.
+// the environment that exists already is found by its name and reused: a
+// RollbackPolicy's, at the name the controller gives it, so the step names
+// it and nothing more is created. A stamped rollback of an earlier failure
+// whose kardinal.io/rollback-from someone relinked to the failing Bundle
+// (QA-2 on #2184) is not reused: the step creates its own.
+//
+// Covers RB-AUTO-FORGED-10.
 func TestRollbackFindsAnEarlierRollback(t *testing.T) {
-	legacy := makeBundle("b1-rollback-alarm-0a1b2c3d", "p")
-	legacy.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "p"}
-	legacy.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "b1", lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
-	legacy.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
-	legacy.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}
-	c := newClient(t, append(failingEnvironments("prod-eu"), legacy)...)
-	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
-		HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
-	_, err := r.Reconcile(context.Background(), reqFor("step-prod-eu"))
-	require.NoError(t, err)
-	got := getStep(t, c, "step-prod-eu")
-	assert.Equal(t, "RollingBack", got.Status.State, got.Status.Message)
-	assert.Contains(t, got.Status.Message, "rollback Bundle b1-rollback-alarm-0a1b2c3d created")
-	assert.Equal(t, map[string]string{"prod-eu": "b1-rollback-alarm-0a1b2c3d"}, rollbackTargets(t, c), "no second rollback")
+	stamped := func(name, from string) *v1alpha1.Bundle {
+		b := makeBundle(name, "p")
+		b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "p"}
+		b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: from, lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+		b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
+		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod-eu"}
+		return b
+	}
+	for _, tc := range []struct {
+		name     string
+		existing *v1alpha1.Bundle
+		want     string
+	}{
+		{name: "a RollbackPolicy's rollback of it", existing: stamped(lifecycle.AutoRollbackName("b1", lifecycle.RollbackSourcePolicy), "b1"),
+			want: lifecycle.AutoRollbackName("b1", lifecycle.RollbackSourcePolicy)},
+		{name: "an earlier failure's rollback relinked to it", existing: stamped(lifecycle.AutoRollbackName("b0", lifecycle.RollbackSourceAlarm), "b1"),
+			want: "b1-rollback-alarm"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newClient(t, append(failingEnvironments("prod-eu"), tc.existing)...)
+			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+				HealthDetector: health.NewAutoDetector(c, dynfake.NewSimpleDynamicClient(runtime.NewScheme()))}
+			_, err := r.Reconcile(context.Background(), reqFor("step-prod-eu"))
+			require.NoError(t, err)
+			got := getStep(t, c, "step-prod-eu")
+			assert.Equal(t, "RollingBack", got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, "rollback Bundle "+tc.want+" created")
+			var rb v1alpha1.Bundle
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: got.Namespace, Name: tc.want}, &rb))
+			assert.True(t, lifecycle.IsAutoRollback(&rb))
+		})
+	}
 }
