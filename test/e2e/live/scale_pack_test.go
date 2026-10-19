@@ -102,7 +102,11 @@ func TestScale_EvidencePack(t *testing.T) {
 
 	again, _, _ := export("again.tar.gz")
 	assert.True(t, bytes.Equal(pack, again), "a second export of the same period is the same bytes")
-	r.Finish(func(o *invariants.Options) { o.AllowEmpty = true }) // the test promotes no Bundle
+	// The test promotes nothing: it writes AuditEvents and exports them.
+	r.Finish(func(o *invariants.Options) {
+		o.AllowEmpty = true
+		o.Skip = map[string]string{"not-empty": "the test creates no Pipeline: it measures the evidence pack over the AuditEvents it writes"}
+	})
 }
 
 // createAuditEvents creates n AuditEvents in the test's namespace, one
