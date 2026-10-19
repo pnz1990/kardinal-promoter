@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -814,6 +815,69 @@ func assertEarlierRollout(t *testing.T, msg string) {
 		assert.Equal(t, m[1], m[2], "the ReplicaSet the condition names: %s", msg)
 		assert.NotEqual(t, m[3], m[4], "its revision and the Deployment's: %s", msg)
 	}
+}
+
+// TestRollback_OnHealthFailureForgedRollbackIgnored (QA-3 on #2184): a
+// Bundle someone who may create Bundles made with every rollback marker they
+// can write (the rollback and pipeline labels, kardinal.io/rollback-from the
+// failing release, intent test), at the automatic rollback's name and at
+// another, is not taken for the automatic rollback: the controller creates
+// its own, under test's own name, of the version Verified before.
+//
+// Covers RB-AUTO-FORGED-03.
+func TestRollback_OnHealthFailureForgedRollbackIgnored(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := rbAlarmPipeline(t, e, nil)
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	rbVerified(t, a, b1, "test")
+
+	b2 := e.CreateBundleObject(t, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: pipelineName + "-broken", Namespace: a.ns},
+		Spec: v1alpha1.BundleSpec{Pipeline: pipelineName, Type: "image",
+			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.BrokenTag}}}})
+	for _, name := range []string{lifecycle.AutoRollbackName(b2, "alarm"), "totally-unrelated-name"} {
+		// Of another pipeline by spec, so it promotes nothing; the markers
+		// are the failing release's pipeline's.
+		e.CreateBundleObject(t, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns,
+			Labels:      map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: pipelineName},
+			Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: b2}},
+			Spec: v1alpha1.BundleSpec{Pipeline: "not-" + pipelineName, Type: "image", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "test"},
+				Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V3}}}})
+	}
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, b2, "test", "RollingBack", promoteTimeout)
+	own := lifecycle.AutoRollbackName(b2, "alarm-test")
+	assert.True(t, strings.HasSuffix(ps.Status.Message, " — rollback Bundle "+own+" created"), ps.Status.Message)
+	rb := getBundle(t, e, a.ns, own)
+	assert.True(t, lifecycle.IsAutoRollback(rb), "the controller's own rollback")
+	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rb.Spec.Images)
+}
+
+// TestRollback_PersonsRollbackMarksWhatItLeft (QA-3 on #2187): a person's
+// kardinal rollback carries no controller stamp, and still, once it ran, it
+// marks the version it left rolled back from: it ran in the environment (a
+// PromotionStep there) and deploys its rollbackOf's artifacts. So rolling
+// back again does not bring the version it left back.
+//
+// Covers RB-AUTO-FORGED-07.
+func TestRollback_PersonsRollbackMarksWhatItLeft(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := rbAlarmPipeline(t, e, nil)
+	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	rbVerified(t, a, b1, "test")
+	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV3)
+	rbVerified(t, a, b2, "test")
+
+	_, r1 := rbRollback(t, a, "test")
+	rb := getBundle(t, e, a.ns, r1)
+	require.False(t, lifecycle.IsControllerRollback(rb), "a person's rollback: %+v", rb.Spec.Actor)
+	rbVerified(t, a, r1, "test")
+
+	out := rbRefused(t, a, "--env", "test")
+	assert.Equal(t, "rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in test (deployed now: "+
+		r1+"); pick one with --to: conflict", out)
+	rbOnlyBundles(t, e, a.ns, b1, b2, r1)
 }
 
 var earlierReplicaSet = regexp.MustCompile(`ProgressDeadlineExceeded \(ReplicaSet "([a-z0-9.-]+)" has timed out progressing\.\) ` +

@@ -39,8 +39,10 @@ func (c *bundleCounter) List(ctx context.Context, list client.ObjectList, opts .
 func TestExistingRollbackListsOnlyItsBundles(t *testing.T) {
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
-	legacy := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-rb", Namespace: "ns", Labels: map[string]string{lifecycle.LabelRollback: "true"}},
-		Spec: v1alpha1.BundleSpec{Pipeline: "app", Provenance: &v1alpha1.BundleProvenance{RollbackOf: "app-bad"}}}
+	legacy := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-rb", Namespace: "ns", Labels: map[string]string{lifecycle.LabelRollback: "true"},
+		Annotations: map[string]string{lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}},
+		Spec: v1alpha1.BundleSpec{Pipeline: "app", Provenance: &v1alpha1.BundleProvenance{RollbackOf: "app-bad"},
+			Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}}}
 	objs := []client.Object{legacy, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-bad", Namespace: "ns"}, Spec: v1alpha1.BundleSpec{Pipeline: "app"}}}
 	for i := 0; i < 40; i++ {
 		objs = append(objs, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("other-%d", i), Namespace: "ns"}, Spec: v1alpha1.BundleSpec{Pipeline: "other"}})

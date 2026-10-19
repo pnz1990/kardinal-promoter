@@ -426,7 +426,7 @@ func (r *Reconciler) existingRollback(ctx context.Context, rp *v1alpha1.Rollback
 		return "", fmt.Errorf("list bundles: %w", err)
 	}
 	for _, b := range bundles.Items {
-		if b.Labels[lifecycle.LabelRollback] == "true" &&
+		if b.Labels[lifecycle.LabelRollback] == "true" && lifecycle.IsAutoRollback(&b) &&
 			b.Annotations[lifecycle.AnnotationRollbackFrom] == "" &&
 			b.Spec.Provenance != nil &&
 			b.Spec.Provenance.RollbackOf == rp.Spec.BundleRef {

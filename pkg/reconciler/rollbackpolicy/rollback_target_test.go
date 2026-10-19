@@ -62,8 +62,9 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 	alarm := func() client.Object {
 		b := rtBundle(lifecycle.AutoRollbackName("bundle-1", "alarm"), "1.24.0", 55)
 		b.Labels[lifecycle.LabelRollback] = "true"
-		b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1"}
+		b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1", lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
 		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+		b.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator, Via: v1alpha1.ViaAutoRollback}
 		return b
 	}
 	tests := []struct {
@@ -108,7 +109,10 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 			failingBundle := rtBundle("bundle-1", "1.25.0", 30)
 			if tc.failingIsRollback {
 				failingBundle.Labels[lifecycle.LabelRollback] = "true"
-				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-2"}
+				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-2",
+					lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+				failingBundle.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator,
+					Via: v1alpha1.ViaAutoRollback}
 				failingBundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
 			}
 			objs := append([]client.Object{rp, failing, rtPipeline(), failingBundle}, tc.history...)
@@ -226,6 +230,48 @@ func TestRollbackPolicy_RollbackPerEnvironment(t *testing.T) {
 				require.NotNil(t, rp.Status.RollbackBundleName, env)
 				assert.Equal(t, name, *rp.Status.RollbackBundleName, "%s's policy names its own rollback", env)
 			}
+		})
+	}
+}
+
+// QA-3 on #2184 (High): a RollbackPolicy never takes a Bundle with forged
+// rollback markers (labels, rollback-from, provenance.rollbackOf, intent)
+// for its rollback, at its name or any other; it creates its own.
+//
+// Covers RB-AUTO-FORGED-02.
+func TestRollbackPolicy_ForgedMarkersAreNotAdopted(t *testing.T) {
+	for _, name := range []string{lifecycle.AutoRollbackName("bundle-1", "policy"), "totally-unrelated-name"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			forged := rtBundle(name, "6.6.6", 50)
+			forged.Labels[lifecycle.LabelRollback] = "true"
+			forged.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-1", lifecycle.AnnotationCreatedBy: "mallory"}
+			forged.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+			forged.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "bundle-1"}
+			forged.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}
+			legacyShape := forged.DeepCopy() // the pre-check's shape: no rollback-from
+			legacyShape.Name, legacyShape.Annotations = name+"-legacy", map[string]string{lifecycle.AnnotationCreatedBy: "mallory"}
+			rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+			failing := makePromotionStep("a-bundle-1-prod", "nginx-demo", "prod", 3)
+			failing.Labels["kardinal.io/bundle"] = "bundle-1"
+			objs := []client.Object{rp, failing, rtPipeline(), rtBundle("bundle-1", "1.25.0", 30),
+				rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), forged, legacyShape}
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(objs...).
+				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+				WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
+			r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+			_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}})
+			require.NoError(t, err)
+			var updated v1alpha1.RollbackPolicy
+			require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "rp-1", Namespace: "default"}, &updated))
+			require.NotNil(t, updated.Status.RollbackBundleName)
+			got := *updated.Status.RollbackBundleName
+			assert.NotEqual(t, name, got)
+			assert.NotEqual(t, name+"-legacy", got)
+			var rb v1alpha1.Bundle
+			require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "default", Name: got}, &rb))
+			assert.True(t, lifecycle.IsAutoRollback(&rb), "the policy's own rollback")
+			assert.Equal(t, "1.24.0", rb.Spec.Images[0].Tag, "of the version Verified before")
 		})
 	}
 }

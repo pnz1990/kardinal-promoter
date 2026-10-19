@@ -172,7 +172,10 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		}
 		plan.Current = cur
 	}
-	if req.Automatic && plan.Current != nil && plan.Current.Labels[LabelRollback] == "true" {
+	// The controller's own automatic rollback, or one that deploys only
+	// what was Verified here: a label the failing release's author wrote
+	// does not exempt new artifacts (#2187).
+	if req.Automatic && plan.Current != nil && isRollbackIn(ctx, c, req.Namespace, req.Pipeline, req.Environment, plan.Current, h) {
 		return nil, fmt.Errorf("rollback: %s is itself a rollback; a failing rollback is not rolled back automatically, roll back by hand with kardinal rollback: %w",
 			plan.CurrentName, ErrConflict)
 	}
@@ -181,7 +184,7 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 	if graph.HasFleets(&p) {
 		fleet = graph.FleetOf(&p, req.Environment)
 	}
-	rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment, fleet)
+	rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment, fleet, h)
 	if rbErr != nil {
 		return nil, fmt.Errorf("rollback: %w", rbErr)
 	}
@@ -811,8 +814,24 @@ func rolledBackFromByEnv(ctx context.Context, c client.Reader, ns, pipeline, fle
 	if err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{LabelRollback: "true"}); err != nil {
 		return nil, fmt.Errorf("list rollback bundles of pipeline %s: %w", pipeline, err)
 	}
+	steps, err := ListPromotionSteps(ctx, c, ns, client.MatchingLabels{LabelPipeline: pipeline})
+	if err != nil {
+		return nil, fmt.Errorf("steps of pipeline %s: %w", pipeline, err)
+	}
+	hist := map[string]*envHistory{}
+	histOf := func(env string) *envHistory {
+		if hist[env] == nil {
+			hist[env] = historyOf(steps, pipeline, env)
+		}
+		return hist[env]
+	}
 	out := map[string]map[string]bool{}
-	var all []string
+	mark := func(env, bf string) {
+		if out[env] == nil {
+			out[env] = map[string]bool{}
+		}
+		out[env][bf] = true
+	}
 	for i := range list.Items {
 		b := &list.Items[i]
 		bf := b.Annotations[AnnotationRollbackFrom]
@@ -820,26 +839,40 @@ func rolledBackFromByEnv(ctx context.Context, c client.Reader, ns, pipeline, fle
 			continue
 		}
 		env := b.Spec.Intent.TargetEnvironment
-		if env == fleet {
-			all = append(all, bf)
+		if env != fleet {
+			if rolledBackIn(ctx, c, ns, env, b, histOf(env)) {
+				mark(env, bf)
+			}
 			continue
 		}
-		if out[env] == nil {
-			out[env] = map[string]bool{}
-		}
-		out[env][bf] = true
-	}
-	if len(all) > 0 {
+		// A rollback of the whole fleet counts for each target it ran in.
 		for _, t := range targets {
-			if out[t] == nil {
-				out[t] = map[string]bool{}
-			}
-			for _, bf := range all {
-				out[t][bf] = true
+			if rolledBackIn(ctx, c, ns, t, b, histOf(t)) {
+				mark(t, bf)
 			}
 		}
 	}
 	return out, nil
+}
+
+// rolledBackIn reports whether rollback Bundle b says what env was rolled
+// back from (its kardinal.io/rollback-from annotation): b is a rollback the
+// controller wrote (IsControllerRollback), or b's change landed in env (a
+// PromotionStep there, which only a promotion Graph makes, past its gates
+// and its merge or push: stepLanded) and b deploys its rollbackOf's
+// artifacts and only what was Verified there (restoresVerified). A step
+// that exists, Pending at a gate, is not enough: the Graph creates it
+// before the gates decide. Anyone who may create
+// Bundles can write the label and the annotation, so they count only with
+// those facts (#2187); a person's kardinal rollback that ran counts.
+func rolledBackIn(ctx context.Context, c client.Reader, ns, env string, b *v1alpha1.Bundle, hist *envHistory) bool {
+	if IsControllerRollback(b) {
+		return true
+	}
+	if !hist.landedIn(b.Name) {
+		return false
+	}
+	return restoresVerified(ctx, c, ns, env, b, hist, looseImage) == ""
 }
 
 // FleetTargetRollback is one target of a fleet rollback (RollbackPlan.Fleet).
@@ -904,6 +937,11 @@ func oldestRunning(ctx context.Context, c client.Reader, ns string, deployedIn [
 			// followed while each Bundle exists.
 			for i := 0; i < 4 && b.Labels[LabelRollback] == "true" && b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != ""; i++ {
 				of, err := get(b.Spec.Provenance.RollbackOf)
+				if err == nil && !IsControllerRollback(b) && !SameArtifacts(b, of) {
+					// A client's own rollback markers: followed only when it
+					// deploys what it says it restored (#2187).
+					break
+				}
 				if err != nil {
 					// The restored version is gone (history cleanup): the
 					// rollback cannot be ordered, and taking its own creation
@@ -979,9 +1017,10 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 // rolledBackFrom returns the Bundles that a rollback in the environment has
 // rolled back from: the kardinal.io/rollback-from annotation of every rollback
 // Bundle of the pipeline that targets env, or fleet (the fleet env is a
-// target of; "" when none). Rollback Bundles created before the
-// annotation existed are not counted.
-func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fleet string) (map[string]bool, error) {
+// target of; "" when none), and that rolledBackIn env (hist is env's
+// history). Rollback Bundles created before the annotation existed are not
+// counted.
+func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fleet string, hist *envHistory) (map[string]bool, error) {
 	var list v1alpha1.BundleList
 	if err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{LabelRollback: "true"}); err != nil {
 		return nil, fmt.Errorf("list rollback bundles of pipeline %s: %w", pipeline, err)
@@ -998,7 +1037,9 @@ func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fle
 			(fleet == "" || t.TargetEnvironment != fleet) {
 			continue
 		}
-		out[from] = true
+		if rolledBackIn(ctx, c, ns, env, b, hist) {
+			out[from] = true
+		}
 	}
 	return out, nil
 }
@@ -1098,6 +1139,17 @@ func (h *envHistory) verifiedIn(bundle string) bool {
 		}
 	}
 	return true
+}
+
+// landedIn reports whether a step of bundle in the environment landed
+// (stepLanded): past its gates and its merge or push.
+func (h *envHistory) landedIn(bundle string) bool {
+	for i := range h.byBundle[bundle] {
+		if stepLanded(&h.byBundle[bundle][i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // inFlight reports whether bundle has a step in the environment that has not

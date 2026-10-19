@@ -77,7 +77,10 @@ func TestRollbackPolicy_RefusalIsVisible(t *testing.T) {
 			failingBundle := rtBundle("bundle-1", "1.25.0", 30)
 			if tc.failingIsRollback {
 				failingBundle.Labels[lifecycle.LabelRollback] = "true"
-				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-2"}
+				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-2",
+					lifecycle.AnnotationCreatedBy: lifecycle.ControllerCreator}
+				failingBundle.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorController, Principal: lifecycle.ControllerCreator,
+					Via: v1alpha1.ViaAutoRollback}
 				failingBundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
 			}
 			objs := []client.Object{makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3), failing, failingBundle}
