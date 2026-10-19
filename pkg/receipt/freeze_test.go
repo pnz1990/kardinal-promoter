@@ -40,7 +40,7 @@ func exempted() Input {
 // why and until when, and claims KARDINAL_FREEZE_EXEMPTED; the other has
 // neither.
 //
-// Covers RECEIPT-STATEMENT-04.
+// Covers RECEIPT-STATEMENT-06.
 func TestBuild_GoldenStatements(t *testing.T) {
 	for name, in := range map[string]Input{"statement": input("image"), "statement-freeze-exempted": exempted()} {
 		t.Run(name, func(t *testing.T) {
