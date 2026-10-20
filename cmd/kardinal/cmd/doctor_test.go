@@ -407,9 +407,29 @@ func TestResolveRestConfig(t *testing.T) {
 	cfg.Contexts["team-a"] = &clientcmdapi.Context{Cluster: "c", AuthInfo: "u", Namespace: "team-a"}
 	cfg.CurrentContext = "team-a"
 
-	_, ns, err := resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "")
+	rc, ns, err := resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "")
 	require.NoError(t, err)
 	assert.Equal(t, "team-a", ns)
+	// Not client-go's 5 a second (#2047): a paged export waited on it.
+	assert.EqualValues(t, cliQPS, rc.QPS)
+	assert.Equal(t, cliBurst, rc.Burst)
+	t.Setenv("KARDINAL_KUBE_QPS", "7.5")
+	t.Setenv("KARDINAL_KUBE_BURST", "15")
+	rc, _, err = resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "")
+	require.NoError(t, err)
+	assert.EqualValues(t, 7.5, rc.QPS)
+	assert.Equal(t, 15, rc.Burst)
+	for _, bad := range [][2]string{{"KARDINAL_KUBE_QPS", "0"}, {"KARDINAL_KUBE_QPS", "fast"}, {"KARDINAL_KUBE_QPS", "-3"},
+		{"KARDINAL_KUBE_QPS", "+Inf"}, {"KARDINAL_KUBE_BURST", "0"}, {"KARDINAL_KUBE_BURST", "2.5"}} {
+		t.Setenv("KARDINAL_KUBE_QPS", "")
+		t.Setenv("KARDINAL_KUBE_BURST", "")
+		t.Setenv(bad[0], bad[1])
+		_, _, err = resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "")
+		require.Error(t, err, "%s=%s", bad[0], bad[1])
+		assert.Contains(t, err.Error(), bad[0]+"=")
+	}
+	t.Setenv("KARDINAL_KUBE_QPS", "")
+	t.Setenv("KARDINAL_KUBE_BURST", "")
 
 	_, ns, err = resolveRestConfig(clientcmd.NewDefaultClientConfig(*cfg, &clientcmd.ConfigOverrides{}), false, "flag-ns")
 	require.NoError(t, err)

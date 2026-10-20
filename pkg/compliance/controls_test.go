@@ -258,8 +258,10 @@ func scanWrites(files []*ast.File) map[string]bool {
 			// The function's locals that hold an action: every :=, = or var
 			// that gives a name of it an action (a literal, a const, another
 			// such local), whatever the branch (a := Approved; if … { a =
-			// Rejected }). The union is flow-insensitive: an over-count,
-			// never a missed writer.
+			// Rejected }). The union is flow-insensitive, so a := X; a = Y;
+			// write(a) counts X too: an over-count, the unsafe direction for
+			// this guard (an action whose only "write" is overwritten reads
+			// as written). No such code is in the tree (QA-2, #2178).
 			locals := map[string]map[string]bool{}
 			bind := func(lhs ast.Expr, rhs ast.Expr) bool {
 				id, ok := lhs.(*ast.Ident)
@@ -358,7 +360,8 @@ func writeAudit(ctx any, action string) {}
 // A call passes an action to be written only at those positions; a log
 // field, strings.EqualFold or fmt.Sprintf naming an action does not write
 // it (#2154). Functions are matched by name, so two functions of one name
-// share their positions: an over-count, never a missed writer.
+// share their positions: an over-count, which can keep an action
+// "written" after its writer is gone (the unsafe direction).
 func actionParams(files []*ast.File) map[string]map[int]bool {
 	takers := map[string]map[int]bool{}
 	add := func(name string, ft *ast.FuncType) {
