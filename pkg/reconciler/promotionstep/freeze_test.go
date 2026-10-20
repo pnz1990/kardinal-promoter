@@ -252,6 +252,15 @@ func TestFreeze_ExemptionAuditedOnce(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, n)
+	// The exemption is recorded on the step once, for its receipt (#2060).
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	require.Len(t, got.Status.FreezeExemptions, 1)
+	x := got.Status.FreezeExemptions[0]
+	assert.Equal(t, "everyone", x.Actors)
+	assert.Equal(t, "carol", x.Exemption.CreatedBy)
+	assert.Equal(t, "hotfix", x.Exemption.Reason)
+	assert.Equal(t, ex.ExpiresAt.UTC(), x.Until.UTC())
 }
 
 // TestFreeze_EveryExemptingFreezeAudited covers the QA finding on #1869
@@ -297,4 +306,52 @@ func TestFreeze_EveryExemptingFreezeAudited(t *testing.T) {
 	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
 	assert.NotEqual(t, "", got.Status.State, "the step went on: %s", got.Status.Message)
 	assert.False(t, strings.HasPrefix(got.Status.Message, "frozen by"), got.Status.Message)
+}
+
+// TestFreeze_V012StepBackfilled (QA-3 #2115, upgrade): a step let through
+// by v0.12 has the FreezeExempted condition (and its AuditEvent) but no
+// status.freezeExemptions. At its next reconcile under the same freeze the
+// record is written, and the exemption is not audited again.
+//
+// Covers RECEIPT-FREEZE-01.
+func TestFreeze_V012StepBackfilled(t *testing.T) {
+	ctx := context.Background()
+	ex := v1alpha1.FreezeExemption{Namespace: "default", Pipeline: "nginx-demo", Reason: "hotfix", CreatedBy: "carol",
+		ExpiresAt: metav1.NewTime(time.Date(2026, 10, 14, 11, 0, 0, 0, time.UTC))}
+	step := makeStep("step-test", "nginx-demo", "bundle-1", "test")
+	step.Labels = map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": "bundle-1",
+		"kardinal.io/environment": "test"}
+	asPromoting(step, makePipeline("nginx-demo"))
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.ChangeWindow{}).
+		WithObjects(step, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo"), activeFreeze("everyone", ex)).Build()
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+		NowFn:     func() time.Time { return time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"}}
+	_, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	require.Len(t, got.Status.FreezeExemptions, 1)
+	require.NotNil(t, meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionFreezeExempted))
+
+	// As v0.12 left it: the condition, no record.
+	got.Status.FreezeExemptions = nil
+	require.NoError(t, c.Status().Update(ctx, &got))
+	for range 2 {
+		_, err := r.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &got))
+	assert.Len(t, got.Status.FreezeExemptions, 1, "backfilled")
+	var events v1alpha1.AuditEventList
+	require.NoError(t, c.List(ctx, &events))
+	n := 0
+	for _, e := range events.Items {
+		if e.Spec.Action == promotionstep.AuditActionFreezeExempted {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "not audited again")
 }
