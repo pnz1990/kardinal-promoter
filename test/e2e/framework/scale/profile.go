@@ -120,6 +120,11 @@ type Profile struct {
 	// for their first reconcile (#1577).
 	TenantWave        int
 	TenantStartWithin time.Duration
+	// TenantRepos five-environment Pipelines, each on its own repository,
+	// are tenant A's load in TestScale_TenantFairnessManyRepos, all
+	// promoted at once: as many of A's steps due at a time, the backlog
+	// the fair queue must serve B ahead of (#2252).
+	TenantRepos int
 	// TenantBBundles three-environment Pipelines are what tenant B
 	// promotes in TestScale_TenantFairness*: a Bundle on each, 2 s apart,
 	// alone, then another while A's load runs (JudgeFairness, #2252);
@@ -157,7 +162,7 @@ var profiles = map[string]Profile{
 		// 10k. The export takes 1.2 s live.
 		PackEvents: 10_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 15 * time.Second,
 		PackVersions: 500, PackNamespaces: 10, PackVersionsMaxTime: 10 * time.Second, ReceiptDrainVersions: 5 * time.Minute,
-		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
+		TenantWave: 30, TenantRepos: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle: 10 * time.Minute,
 		// Twice the stage time measured on a GitHub runner with the -race
 		// controller (LongChain 2026-10-12: 120 stages in 11m12s, ~5.6 s).
@@ -179,7 +184,7 @@ var profiles = map[string]Profile{
 		// 12.5 s live at 100k.
 		PackEvents: 100_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 2 * time.Minute,
 		PackVersions: 5_000, PackNamespaces: 50, PackVersionsMaxTime: 100 * time.Second, ReceiptDrainVersions: 20 * time.Minute,
-		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
+		TenantWave: 149, TenantRepos: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
 		SerialStep:   12 * time.Second,
 		SLOPipelines: 200,
@@ -233,7 +238,7 @@ func overrides(p *Profile) []override {
 		"SHARED_PIPELINES": &p.SharedPipelines, "PIPELINES": &p.Pipelines, "PIPELINE_ENVS": &p.PipelineEnvs,
 		"BURST_BUNDLES": &p.BurstBundles, "BURST_PIPELINES": &p.BurstPipelines,
 		"SUSTAINED_PIPELINES": &p.SustainedPipelines, "RAPID_FIRE": &p.RapidFire,
-		"CHAOS_PIPELINES": &p.ChaosPipelines, "SLO_PIPELINES": &p.SLOPipelines, "TENANT_WAVE": &p.TenantWave,
+		"CHAOS_PIPELINES": &p.ChaosPipelines, "SLO_PIPELINES": &p.SLOPipelines, "TENANT_WAVE": &p.TenantWave, "TENANT_REPOS": &p.TenantRepos,
 	}
 	durations := map[string]*time.Duration{
 		"SUSTAINED_FOR": &p.SustainedFor, "CHAOS_FOR": &p.ChaosFor, "SETTLE": &p.Settle, "SERIAL_STEP": &p.SerialStep,
@@ -283,6 +288,6 @@ func (p Profile) String() string {
 		fmt.Sprintf("burst %d Bundles over %d Pipelines", p.BurstBundles, p.BurstPipelines),
 		fmt.Sprintf("sustained %.2f/s for %s over %d Pipelines", p.SustainedRate, p.SustainedFor, p.SustainedPipelines),
 		fmt.Sprintf("chaos %s over %d Pipelines", p.ChaosFor, p.ChaosPipelines),
-		fmt.Sprintf("tenant wave %d", p.TenantWave),
+		fmt.Sprintf("tenant wave %d (repos %d)", p.TenantWave, p.TenantRepos),
 	}, ", ")
 }

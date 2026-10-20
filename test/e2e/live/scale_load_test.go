@@ -210,7 +210,7 @@ func TestScale_TenantFairness(t *testing.T) {
 }
 
 // TestScale_TenantFairnessManyRepos is TestScale_TenantFairness with tenant
-// A's load spread over TenantWave five-environment Pipelines, each on its
+// A's load spread over TenantRepos five-environment Pipelines, each on its
 // own repository, all promoted at once: no branch turns order them, so all
 // of A's steps clone and push at normal priority, and only the work queue's
 // fairness between namespaces lets B's steps through (#1577).
@@ -218,7 +218,8 @@ func TestScale_TenantFairness(t *testing.T) {
 // Covers SCALE-LOAD-FAIR-01.
 func TestScale_TenantFairnessManyRepos(t *testing.T) {
 	r := scale.Begin(t)
-	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantWave, scale.Chain(5))
+	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantRepos, scale.Chain(5))
+	r.Note("tenantRepos", r.P.TenantRepos)
 	tenantFairness(t, r, func() {
 		r.Fleet.Burst(t, names, len(names), 50)
 	})
