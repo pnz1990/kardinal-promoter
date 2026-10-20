@@ -93,23 +93,34 @@ var Isolated = []EnvRule{
 	{Name: "GNUPGHOME", Unset: true, Why: "git's signing keys"},
 	{Name: "GIT_ASKPASS", Unset: true, Why: "a credential prompt program"},
 	{Name: "SSH_ASKPASS", Unset: true, Why: "a credential prompt program"},
-	{Name: "GIT_SSH_COMMAND", Unset: true, Why: "an ssh command with the developer's keys"},
+	{Name: "GIT_SSH_COMMAND", Value: "ssh -F /dev/null -o IdentityFile=/dev/null -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes",
+		Why: "an ssh command with the developer's keys; and plain ssh, which reads ~/.ssh from the password database's home whatever $HOME says: this one reads no ssh config, offers no key and asks for nothing"},
 	{Name: "GIT_SSH", Unset: true, Why: "an ssh command with the developer's keys"},
 	{Name: "SSH_AUTH_SOCK", Unset: true, Why: "the ssh agent's keys (go-git falls back to it when no key is given)"},
 	// Registries: docker's config, and podman's, which go-containerregistry
 	// falls back to when there is no docker config.json.
 	{Name: "DOCKER_CONFIG", Value: "~/.docker", Why: "docker's registry logins and credential helpers (its config.json is {})"},
+	{Name: "DOCKER_AUTH_CONFIG", Unset: true, Why: "registry logins as JSON (GitLab CI)"},
 	{Name: "REGISTRY_AUTH_FILE", Unset: true, Why: "podman's and skopeo's registry logins"},
 	{Name: "XDG_RUNTIME_DIR", Value: "~/.xdg-runtime", Why: "containers/auth.json registry logins (podman, skopeo, buildah)"},
 	{Name: "XDG_CONFIG_HOME", Value: "~/.config", Why: "containers/auth.json registry logins, and other tools' config"},
+	{Name: "HELM_CONFIG_HOME", Value: "~/.config/helm", Why: "helm's config"},
+	{Name: "HELM_REGISTRY_CONFIG", Value: "~/.config/helm/registry/config.json", Why: "helm's OCI registry logins"},
+	{Name: "HELM_REPOSITORY_CONFIG", Value: "~/.config/helm/repositories.yaml", Why: "helm's chart repository credentials"},
 	// Cloud and forge credentials.
 	{Name: "AWS_*", Unset: true, Why: "AWS credentials, profiles, config and credentials files, container credentials"},
 	{Name: "AWS_EC2_METADATA_DISABLED", Value: "true", Why: "the instance metadata service's role credentials (on an EC2 host)"},
 	{Name: "GOOGLE_APPLICATION_CREDENTIALS", Unset: true, Why: "a Google service account key"},
+	{Name: "GOOGLE_CREDENTIALS", Unset: true, Why: "a Google service account key (Terraform)"},
+	{Name: "GOOGLE_OAUTH_ACCESS_TOKEN", Unset: true, Why: "a Google access token (Terraform)"},
 	{Name: "CLOUDSDK_*", Unset: true, Why: "gcloud's config and access tokens"},
 	{Name: "AZURE_*", Unset: true, Why: "Azure client secrets and certificates"},
 	{Name: "GH_TOKEN", Unset: true, Why: "the gh CLI's and GitHub clients' token"},
 	{Name: "GITHUB_TOKEN", Unset: true, Why: "a GitHub token"},
+	{Name: "GH_ENTERPRISE_TOKEN", Unset: true, Why: "the gh CLI's GitHub Enterprise token"},
+	{Name: "GITHUB_ENTERPRISE_TOKEN", Unset: true, Why: "a GitHub Enterprise token"},
+	{Name: "GH_CONFIG_DIR", Unset: true, Why: "the gh CLI's logins (kardinal init runs gh auth token); without it gh reads the scratch XDG_CONFIG_HOME"},
+	{Name: "GITLAB_TOKEN", Unset: true, Why: "a GitLab token (glab)"},
 	{Name: "NETRC", Unset: true, Why: "a .netrc of logins (the go command reads it)"},
 }
 
@@ -129,8 +140,9 @@ var Isolated = []EnvRule{
 //   - git, registries, the clouds and GitHub given nothing of the
 //     developer's (#2321): a scratch gitconfig with a commit identity and
 //     no system config, repository credential helpers reset, an empty
-//     docker config, no podman logins, no AWS, Google, Azure or GitHub
-//     credentials, no instance metadata and no ssh agent.
+//     docker config, no podman or helm logins, no AWS, Google, Azure,
+//     GitHub or GitLab credentials, no instance metadata, no ssh agent, and
+//     an ssh command that offers no key.
 //
 // Go's module and build caches and its env file, under the real $HOME, are
 // passed by path, as hack/e2e/local-live.sh does. The scratch $HOME is the

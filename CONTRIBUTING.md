@@ -45,9 +45,11 @@ at, not even one that clears `KUBECONFIG`; a test that needs a cluster gives its
 explicitly. The guard also keeps your credentials from the tests: `kubetest.Isolated` is the one
 list of what it sets and clears, and why. git gets a global config with a commit identity and
 nothing else, no system config, and a repository's own `credential.helper` and
-`http.extraheader` reset; docker an empty config (`{}`), and no podman logins; no AWS (and no
-instance metadata), Google, Azure or GitHub credentials, no netrc, ssh agent or ssh command. A test
-that needs one writes its own and sets the variable (`t.Setenv`). Go's caches and env file are
+`http.extraheader` reset; docker an empty config (`{}`), and no podman or helm logins; no AWS (and
+no instance metadata), Google, Azure, GitHub or GitLab credentials, no netrc or ssh agent, and an
+ssh command that reads no ssh config and offers no key. A test that needs one writes its own and
+sets the variable (`t.Setenv`). A rule added to the table needs a fake in
+`TestIsolate_NoCredentials` (`TestIsolated_EveryRuleProbed` fails otherwise). Go's caches and env file are
 kept by path. A child test binary handed a home by its parent (`kubetest.HomeEnv`) uses it, so one
 that exits early leaves no scratch home behind.
 `clientcmd.RecommendedHomeFile` is refused outside the e2e builds, a loader in a package-level var
