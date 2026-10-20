@@ -247,6 +247,11 @@ allowed. An image outside the list gets no referrer: its receipt is still signed
 `Stored` condition is `False` with reason `RepositoryNotAllowed`, naming the repository. Left
 empty, the sink pushes to every image's repository its Secret reaches.
 
+If `receipts.sinks.oci.repository` changes while a receipt is still being stored, the
+referrers it already pushed to the old repository no longer count: every image's referrer is
+pushed to the new one, and each replaces its image's entry in `status.stored`, which keeps
+one entry per image. Receipts already Stored are not pushed again.
+
 Both values are the controller's, not a namespace's. If one tenant's Bundle names an image in
 a repository the list allows for another tenant, the referrer is pushed there: a write into
 the other tenant's repository. `verify-receipt` pins the namespace, so it does not take that
