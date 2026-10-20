@@ -198,6 +198,8 @@ type fakeHost struct {
 	mu     sync.Mutex
 	ready  func() bool
 	locked bool
+	// exclusive counts the LockExclusive calls.
+	exclusive int
 	// slots, when set, is how many cluster slots the host has.
 	slots *int
 }
@@ -232,7 +234,12 @@ func (h *fakeHost) Lock(context.Context) error {
 	return nil
 }
 
-func (h *fakeHost) LockExclusive(ctx context.Context) error { return h.Lock(ctx) }
+func (h *fakeHost) LockExclusive(ctx context.Context) error {
+	h.mu.Lock()
+	h.exclusive++
+	h.mu.Unlock()
+	return h.Lock(ctx)
+}
 
 func (h *fakeHost) Unlock() {
 	h.mu.Lock()
@@ -377,17 +384,19 @@ func TestGateRun_Budget(t *testing.T) {
 func TestGateRun_HeavyGroup(t *testing.T) {
 	r := &fakeRunner{}
 	steps := []Step{
-		{ID: "full-1", Clusters: 2, Heavy: true, HeavyGroup: "scale-full", Script: "x", Cleanup: "y"},
-		{ID: "full-2", Clusters: 2, Heavy: true, HeavyGroup: "scale-full", Script: "x", Cleanup: "y"},
-		{ID: "soak", Clusters: 2, Heavy: true, HeavyGroup: "scale-soak", Script: "x", Cleanup: "y"},
+		{ID: "full-1", Clusters: 2, Heavy: true, Exclusive: true, HeavyGroup: "scale-full", Script: "x", Cleanup: "y"},
+		{ID: "full-2", Clusters: 2, Heavy: true, Exclusive: true, HeavyGroup: "scale-full", Script: "x", Cleanup: "y"},
+		{ID: "soak", Clusters: 2, Heavy: true, Exclusive: true, HeavyGroup: "scale-soak", Script: "x", Cleanup: "y"},
 		{ID: "unit-race", Heavy: true, Script: "x"},
 	}
-	results, err := newGate(t, 4, &fakeHost{}, r).Run(context.Background(), steps)
+	host := &fakeHost{}
+	results, err := newGate(t, 4, host, r).Run(context.Background(), steps)
 	require.NoError(t, err)
 	for _, res := range results {
 		assert.Equal(t, statusPass, res.Status, "%s: %s (the fake host refuses a second Lock)", res.ID, res.Reason)
 	}
 	assert.Equal(t, 2, r.maxHeavy, "the group's two parts at once, nothing else heavy with them")
+	assert.Equal(t, 2, host.exclusive, "the lock held alone once per group (full's two parts share one hold), soak's once")
 }
 
 // With budget 2, a big step never overlaps another cluster step.
