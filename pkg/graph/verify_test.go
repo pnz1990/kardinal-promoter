@@ -5,7 +5,6 @@ package graph_test
 
 import (
 	"fmt"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -174,7 +173,7 @@ func TestBuilder_VerifyGateWithApprovalPolicy(t *testing.T) {
 	assert.EqualValues(t, 1, policy["required"])
 	assert.NotNil(t, got["explore"].Object["spec"].(map[string]interface{})["verify"])
 
-	assert.Equal(t, strconv.Itoa(graph.RenderVersion), res.Graph.Labels[graph.LabelRenderVersion],
+	assert.Equal(t, graph.RenderLabel, res.Graph.Labels[graph.LabelRenderVersion],
 		"the Graph carries the render version it was built with (#2271)")
 
 	// No gate with a policy: every verify gate stays in VerifyGates, as before.
@@ -403,4 +402,13 @@ func TestTemplateRules(t *testing.T) {
 	edited.Spec.Expression = "false"
 	got = rules(verify, *edited)
 	assert.NotEqual(t, base[plain.Namespace+"/"+plain.Name], got[plain.Namespace+"/"+plain.Name], "an edit of the expression")
+}
+
+// #2346: on main the render label is RenderVersion in decimal. A
+// release-branch backport that changes the rendering sets RenderLabel to a
+// value main never uses ("3-v0.12.4") and changes this test there; main never
+// reuses a release branch's label.
+func TestRenderLabel(t *testing.T) {
+	assert.Equal(t, fmt.Sprint(graph.RenderVersion), graph.RenderLabel)
+	assert.Equal(t, 3, graph.RenderVersion, "v0.12.3 labels its Graphs 2: main renders differently, so it is past 2 (#2346)")
 }

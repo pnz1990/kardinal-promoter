@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,7 +149,7 @@ func (m *graphStatusReader) Get(_ context.Context, _, name string) (*graph.Graph
 		if m.g.Labels == nil {
 			m.g.Labels = map[string]string{}
 		}
-		m.g.Labels[graph.LabelRenderVersion] = strconv.Itoa(graph.RenderVersion)
+		m.g.Labels[graph.LabelRenderVersion] = graph.RenderLabel
 	}
 	return m.g, nil
 }

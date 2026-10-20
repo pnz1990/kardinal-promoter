@@ -57,23 +57,39 @@ const (
 )
 
 // RenderVersion is the version of how the builder renders a Graph from the
-// same inputs. Every Graph carries it (LabelRenderVersion), and the Bundle
-// reconciler re-translates a Promoting Bundle's Graph that carries another
-// (or none) once: a version stuck under a rendering bug picks up the fix on
-// upgrade. A Graph whose rendering did not change re-renders identically,
-// which kro applies as a no-op. Verified, failed and superseded Bundles keep
-// the Graph they were promoted with. The check is equality, not "older
-// than": a controller downgraded to an earlier RenderVersion re-renders a
-// newer controller's Graph once with its own rendering, which is right,
-// since the running controller owns the rendering of the Graphs it serves.
+// same inputs. Every Graph carries it (LabelRenderVersion, with the value
+// RenderLabel), and the Bundle reconciler re-translates a Promoting Bundle's
+// Graph that carries another (or none) once: a version stuck under a
+// rendering bug picks up the fix on upgrade. A Graph whose rendering did not
+// change re-renders identically, which kro applies as a no-op. Verified,
+// failed and superseded Bundles keep the Graph they were promoted with. The
+// check is equality, not "older than": a controller downgraded to an earlier
+// RenderVersion re-renders a newer controller's Graph once with its own
+// rendering, which is right, since the running controller owns the
+// rendering of the Graphs it serves.
 //
 // Bump it with every change that renders an existing Bundle's Graph
 // differently (node IDs, templates, data), and say so in the changelog
 // fragment; a change that leaves every existing Graph identical needs none.
+// Release branches: see RenderLabel.
 //
 //   - 2: the gate collections render spec.approval for all their items or
 //     for none (#2271). Graphs before it carry no label.
-const RenderVersion = 2
+//   - 3: v0.12.3 (release/v0.12's #2271 backport) labels its Graphs 2, and
+//     main renders differently from it: the upgrade from v0.12.3 re-renders
+//     them once too, as from v0.12.0 to v0.12.2 (#2346).
+const RenderVersion = 3
+
+// RenderLabel is the LabelRenderVersion value this controller writes on every
+// Graph and compares, for equality, with the one a Graph carries. On main it
+// is RenderVersion in decimal (TestRenderLabel).
+//
+// A release-branch backport that changes the rendering must set a value main
+// never uses: main's RenderVersion at the branch's release with the patch
+// release, for example "3-v0.12.4". It must never take main's next integer.
+// v0.12.3 did, labelling its Graphs 2 while main rendered differently under
+// 2, and so the upgrade from it to main re-rendered nothing (#2346).
+const RenderLabel = "3"
 
 // LabelRenderVersion is the label of a Graph that holds the RenderVersion it
 // was rendered with.
