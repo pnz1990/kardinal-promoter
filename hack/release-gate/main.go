@@ -88,7 +88,7 @@ func run() error {
 		priority  = flag.String("priority", "normal", "the heavy-load lock queue class: release (a release gate: served before every other waiter) or normal")
 		slots     = flag.String("slots", os.Getenv("RELEASE_GATE_SLOTS"), "the host's shared cluster slots: a cluster step takes DIR/1..-slot-max with mkdir (default $RELEASE_GATE_SLOTS); cluster steps need it or -no-slots")
 		noSlots   = flag.Bool("no-slots", false, "start clusters without taking the host's cluster slots (a host of your own)")
-		slotMax   = flag.Int("slot-max", slotMaxDefault(), "how many cluster slots the host has (default $SLOT_MAX, else 2, as hack/e2e/local-live.sh): no cluster starts while that many slot directories are held, one above it too")
+		slotMax   = flag.Int("slot-max", slotMaxDefault(), "how many cluster slots the host has (default $SLOT_MAX, else 2, as hack/e2e/local-live.sh): no cluster starts while that many slot directories are held, one above it too. More than the host's 2 (e.g. -slot-max 4 for the two-cluster scale profile, #2107) is for an exclusive heavy run only: under the heavy-load lock held alone, with the host drained and its load under 16")
 		live      = flag.String("live", "local", "where the live suites run: local (kind on this host) or ci (one e2e-live.yml dispatch; scale stays local)")
 		ref       = flag.String("ref", "", "with -live ci, the pushed branch at this commit (default the current branch)")
 		ghRepo    = flag.String("repo", "pnz1990/kardinal-promoter", "with -live ci, the GitHub repository")
