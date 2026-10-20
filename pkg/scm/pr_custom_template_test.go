@@ -443,22 +443,34 @@ func TestRenderPR_EvidenceRenderedOnce(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		body.Bundle.Images = append(body.Bundle.Images, v1alpha1.ImageRef{Repository: fmt.Sprintf("ghcr.io/acme/svc-%03d", i), Tag: "1.0.0"})
 	}
-	cfg := &v1alpha1.PRConfig{BodyTemplate: "{{ evidence }}{{ provenanceTable }}"}
-	for i := 0; i < 80; i++ {
-		// 80 templates, 40 of them rendering one entry each, under the
-		// list cap of 50.
-		cfg.Labels = append(cfg.Labels, fmt.Sprintf("{{ if provenanceTable }}l%d{{ end }}", i%40))
+	withLabels := func(n int) *v1alpha1.PRConfig {
+		cfg := &v1alpha1.PRConfig{BodyTemplate: "{{ evidence }}{{ provenanceTable }}"}
+		for i := 0; i < n; i++ {
+			// Up to 80 templates, 40 of them rendering one entry each, under
+			// the list cap of 50.
+			cfg.Labels = append(cfg.Labels, fmt.Sprintf("{{ if provenanceTable }}l%d{{ end }}", i%40))
+		}
+		return cfg
 	}
+	cfg := withLabels(80)
 	counts, restore := scm.CountEvidenceRendersForTest()
-	defer restore()
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
 	_, err := scm.RenderPR(cfg, "t", body)
-	runtime.ReadMemStats(&after)
-	require.NoError(t, err)
 	bodies, sections := counts()
+	restore()
+	require.NoError(t, err)
 	assert.Equal(t, 1, bodies, "the evidence body is rendered once, however many templates use it")
 	assert.Equal(t, 1, sections, "provenanceTable is rendered once for the body and 80 label templates")
-	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(8<<20), "one render of the evidence, not one per template")
+
+	// The cost follows: each extra template allocates far less than one
+	// render of the evidence. Allocation counts of RenderPR itself
+	// (testing.AllocsPerRun), relative to one template, so neither another
+	// goroutine's allocations nor the runtime version moves the bound (#2247;
+	// it was a byte count from process-wide MemStats). A render per template
+	// would add about one whole render per template.
+	oneCfg := withLabels(1)
+	one := testing.AllocsPerRun(5, func() { _, _ = scm.RenderPR(oneCfg, "t", body) })
+	many := testing.AllocsPerRun(5, func() { _, _ = scm.RenderPR(cfg, "t", body) })
+	perTemplate := (many - one) / 79
+	assert.Less(t, perTemplate, one/4, "an extra template costs %.0f allocations, one render %.0f: one render of the evidence, not one per template",
+		perTemplate, one)
 }
