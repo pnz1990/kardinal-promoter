@@ -53,7 +53,10 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	// A version that waits at prod for an approval the agent's does not
 	// give (anyone may approve, an agent counts only with allowAgents), so
 	// approve records an Approval, the gate records it as not counted, and
-	// the version still waits for the next call (#2277).
+	// the version still waits for the next call (#2277). The gate lists no
+	// allowedUsers: the Graph copies only allowed approvers' Approvals into
+	// it, so an outside one would never be recorded at all
+	// (TestGate_ApprovalQuorum, GATE-APPROVAL-02, covers that refusal).
 	w.MustApply(&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: p.PolicyNS, Name: "approval-gate",
 		Labels: map[string]string{"kardinal.io/scope": "team", "kardinal.io/applies-to": p.GateEnv}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "true", Message: "prod waits for a person's approval",
@@ -244,7 +247,7 @@ func hostileInputs(t *testing.T, admission bool) {
 	require.Len(t, gate.Status.Approvals, 1, "the gate's approvals")
 	got := gate.Status.Approvals[0]
 	assert.Equal(t, agent.Username, got.User)
-	assert.False(t, got.Counted, "the agent's approval counts for a gate that counts alice's (%s)", got.Reason)
+	assert.False(t, got.Counted, "the agent's approval counts for a gate that counts an agent only with allowAgents (%s)", got.Reason)
 	assert.NotEmpty(t, got.Reason, "why it does not count")
 	assert.False(t, gate.Status.Ready, "the gate opened: %s", gate.Status.Reason)
 	assert.Equal(t, waiting, incomingAt(t, w, "team-a", "prod"), "the version still waits at prod")
