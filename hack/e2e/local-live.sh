@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
+# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-run REGEX] [-count N] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
 #
 # Runs one live e2e suite on this host as its CI job does (e2e-live.yml:
 # hack/e2e/tools.sh's pinned kind, kubectl and helm, a kind cluster on
@@ -54,6 +54,12 @@
 #              in hack/tool-versions.env
 #   -pr N      post the summary on pull request N (gh pr comment; the
 #              repository is $GH_REPO, default pnz1990/kardinal-promoter)
+#   -run R     run only the suite's tests matching go test -run R (run.sh
+#              RUN): a targeted run (a single test's proof, a flake check
+#              with -count). It takes the lock and slot the suite does, and
+#              its summary and comment say "targeted": never a proof of the
+#              whole suite
+#   -count N   go test -count N (1 to 100; default $COUNT, else 1)
 #   -shard i/n run only the ith of n parts of the suite (run.sh SHARD);
 #              default the whole suite
 #   -badge B   the first line of the comment, e.g. "[🔨 ENGINEER-4]"
@@ -171,13 +177,15 @@ if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
   test_mode=1
   LOAD_RETRY=${LOCAL_LIVE_TEST_LOAD_RETRY:-$LOAD_RETRY}
 fi
-usage() { die "usage: $0 [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
+usage() { die "usage: $0 [-pr N] [-shard i/n] [-run REGEX] [-count N] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
 
-pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse=''
+pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse='' run_re='' count=''
 while [ $# -gt 0 ]; do
   case $1 in
     -pr | --pr) [ $# -ge 2 ] || usage; pr=$2; shift 2 ;;
     -shard | --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
+    -run | --run) [ $# -ge 2 ] || usage; run_re=$2; shift 2 ;;
+    -count | --count) [ $# -ge 2 ] || usage; count=$2; shift 2 ;;
     -reuse | --reuse) [ $# -ge 2 ] || usage; reuse=$2; shift 2 ;;
     -badge | --badge) [ $# -ge 2 ] || usage; badge=$2; shift 2 ;;
     -o) [ $# -ge 2 ] || usage; OWNER=$2; shift 2 ;;
@@ -192,6 +200,10 @@ done
 SUITE=$1 MINOR=${2:-}
 [ -z "$pr" ] || [[ "$pr" =~ ^[1-9][0-9]*$ ]] || die "-pr $pr: want a pull request number"
 [ -z "$shard" ] || [[ "$shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || die "-shard $shard: want i/n"
+[ -z "$count" ] || { [[ $count =~ ^[1-9][0-9]?$|^100$ ]] || die "-count $count: want 1 to 100"; }
+# A targeted run says so wherever its result is shown.
+targeted=''
+[ -z "$run_re" ] || targeted=" (targeted: -run $run_re)"
 
 # The suite and its minors come from matrix.txt, the pins from
 # tool-versions.env: the same files CI's matrix and tools come from.
@@ -235,7 +247,8 @@ owner_part=$(printf '%s' "$owner_part" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z
 [ -n "$owner_part" ] || owner_part=unknown
 export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$owner_part-$SUITE-${MINOR#1.}}
 case $KIND_CLUSTER in kardinal-e2e-*) ;; *) die "KIND_CLUSTER=$KIND_CLUSTER must start with kardinal-e2e-" ;; esac
-COUNT=${COUNT:-1}
+COUNT=${count:-${COUNT:-1}}
+[[ $COUNT =~ ^[1-9][0-9]?$|^100$ ]] || die "COUNT=$COUNT: want 1 to 100"
 RETRY=${RETRY:-10}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
 # The host's cluster slots: $SLOT_MAX, else SLOT_MAX=N in the host's
@@ -285,6 +298,7 @@ cluster  $KIND_CLUSTER${reuse:+ (reused: only the controller is rebuilt)}
 state    $STATE/$KIND_CLUSTER
 build    $KARDINAL_E2E_BUILD
 count    $COUNT
+run      ${run_re:-the whole suite}${run_re:+ (targeted: not a proof of the whole suite)}
 lock     $lock_d
 slots    $slots_d
 comment  $pr_d
@@ -849,7 +863,7 @@ rm -f "$E2E_OUT/test.json" "$E2E_OUT/summary.json" "$E2E_OUT/summary.md"
 head_sha=$(git -C "$REPO_ROOT" rev-parse HEAD)
 dirty=$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no | head -1)
 start=$(date +%s)
-log "suite $SUITE${shard:+ shard $shard} on Kubernetes $MINOR, cluster $KIND_CLUSTER, build $KARDINAL_E2E_BUILD; log $LOG"
+log "suite $SUITE${shard:+ shard $shard}$targeted on Kubernetes $MINOR, cluster $KIND_CLUSTER, build $KARDINAL_E2E_BUILD; log $LOG"
 
 # The suite runs in a process group of its own (set -m), so a signal stops
 # up.sh's kind and run.sh's go test with it.
@@ -859,6 +873,7 @@ set -m
 (
   [ "$SUITE" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
   unset RUN
+  [ -z "$run_re" ] || export RUN=$run_re
   export KIND_K8S=$MINOR SHARD=$shard COUNT
   [ -z "$reuse" ] || export KARDINAL_E2E_REUSE=1
   # run.sh's report writes its Markdown summary here, as CI's job summary.
@@ -883,8 +898,12 @@ fi
 body=$RUN_DIR/comment.md
 {
   [ -z "$badge" ] || echo "$badge"
-  echo "## local live: $SUITE${shard:+ shard $shard} on Kubernetes $MINOR: $result"
+  echo "## local live: $SUITE${shard:+ shard $shard}$targeted on Kubernetes $MINOR: $result"
   echo
+  if [ -n "$run_re" ]; then
+    echo "**Targeted run**: only the tests matching \`-run $run_re\`; this is not a proof of the whole $SUITE suite."
+    echo
+  fi
   echo "| | |"
   echo "|---|---|"
   echo "| commit | \`$head_sha\`${dirty:+ plus uncommitted changes (not a proof of this commit)} |"
@@ -895,7 +914,11 @@ body=$RUN_DIR/comment.md
   echo "| build | KARDINAL_E2E_BUILD=$KARDINAL_E2E_BUILD, COUNT=$COUNT${reuse:+, on reused cluster $KIND_CLUSTER (controller rebuilt)} |"
   echo "| host | $(hostname -s 2>/dev/null || echo ?), load $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo ?) |"
   echo
-  echo "Re-run: \`hack/e2e/local-live.sh${shard:+ -shard $shard} $SUITE $MINOR\`"
+  rerun=hack/e2e/local-live.sh
+  [ -z "$shard" ] || rerun="$rerun -shard $shard"
+  [ -z "$run_re" ] || rerun="$rerun -run $(printf '%q' "$run_re")"
+  [ "$COUNT" = 1 ] || rerun="$rerun -count $COUNT"
+  echo "Re-run: \`$rerun $SUITE $MINOR\`"
   if [ -s "$E2E_OUT/summary.md" ]; then
     echo
     echo "<details><summary>run.sh's report</summary>"
@@ -915,7 +938,7 @@ body=$RUN_DIR/comment.md
 
 printf '\n'
 cat "$body"
-printf '\nlocal-live: %s %s (log %s, results %s)\n' "$result" "$SUITE" "$LOG" "$RUN_DIR"
+printf '\nlocal-live: %s %s%s (log %s, results %s)\n' "$result" "$SUITE" "$targeted" "$LOG" "$RUN_DIR"
 
 if [ -n "$pr" ]; then
   if gh pr comment "$pr" --repo "${GH_REPO:-pnz1990/kardinal-promoter}" --body-file "$body" >>"$LOG" 2>&1; then

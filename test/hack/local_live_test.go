@@ -83,7 +83,7 @@ fi
 `
 
 const localLiveRun = `#!/usr/bin/env bash
-{ echo "RUN_KUBECONFIG=$KUBECONFIG"; echo "RUN_HOME=$HOME"; [ -e "$HOME/.kube/config" ] && echo "RUN_HOMEKUBE=yes"; } >>"$FAKE/run"
+{ echo "RUN_KUBECONFIG=$KUBECONFIG"; echo "RUN_HOME=$HOME"; [ -e "$HOME/.kube/config" ] && echo "RUN_HOMEKUBE=yes"; echo "RUN_RE=${RUN:-}"; echo "RUN_COUNT=${COUNT:-}"; } >>"$FAKE/run"
 echo '{"suite":"'"$1"'","results":[{"test":"TestA","action":"pass"},{"test":"TestB","action":"pass"}]}' >"$E2E_OUT/summary.json"
 echo "| TestA | pass |" >"$GITHUB_STEP_SUMMARY"
 [ -z "${FAKE_SLEEP:-}" ] || sleep "$FAKE_SLEEP"
@@ -927,6 +927,42 @@ exec `+realCat+` "$@"
 		out, err := h.cmd(t, nil, "gitea").CombinedOutput()
 		assert.Equal(t, 2, exitCode(err), "no token file: %s", out)
 		assert.Empty(t, h.read("up"))
+	})
+	t.Run("-run and -count: a targeted run takes the suite's lock and slot, and says it is targeted", func(t *testing.T) {
+		for _, tc := range []struct {
+			suite  string
+			locked bool
+		}{{"gitea", false}, {"scale", true}} {
+			t.Run(tc.suite, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				out, err := h.cmd(t, nil, "-pr", "7", "-run", "^TestA$", "-count", "3", tc.suite).CombinedOutput()
+				require.NoError(t, err, "%s", out)
+				run, up := h.read("run"), h.read("up")
+				assert.Contains(t, run, "RUN_RE=^TestA$\n", "go test -run")
+				assert.Contains(t, run, "RUN_COUNT=3\n", "go test -count")
+				assert.Contains(t, up, "SLOT=1", "it takes a cluster slot")
+				assert.Equal(t, tc.locked, strings.Contains(up, "LOCKED=yes"), "the heavy-load lock as the suite's class says")
+				body := h.read("body")
+				assert.Contains(t, body, "## local live: "+tc.suite+" (targeted: -run ^TestA$) on Kubernetes", "the comment's title")
+				assert.Contains(t, body, "**Targeted run**", "the comment says it")
+				assert.Contains(t, body, "not a proof of the whole "+tc.suite+" suite")
+				assert.Contains(t, body, "-run \\^TestA\\$ -count 3 "+tc.suite, "the re-run line")
+				assert.Contains(t, string(out), "local-live: PASS "+tc.suite+" (targeted: -run ^TestA$)")
+			})
+		}
+		h := newLocalLiveHost(t)
+		out, err := h.cmd(t, nil, "-pr", "7", "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Contains(t, h.read("run"), "RUN_RE=\n", "the whole suite: no -run")
+		assert.NotContains(t, h.read("body"), "argeted", "a whole-suite run is not marked targeted")
+		dry, err := h.cmd(t, nil, "-n", "-run", "TestA", "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", dry)
+		assert.Contains(t, string(dry), "run      TestA (targeted: not a proof of the whole suite)\n")
+		for _, bad := range []string{"0", "abc", "101", "-1"} {
+			out, err := h.cmd(t, nil, "-count", bad, "gitea").CombinedOutput()
+			assert.Equal(t, 2, exitCode(err), "-count %s: %s", bad, out)
+			assert.Contains(t, string(out), "-count "+bad+": want 1 to 100")
+		}
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)
