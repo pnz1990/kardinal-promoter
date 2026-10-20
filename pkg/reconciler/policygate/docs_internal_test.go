@@ -357,28 +357,38 @@ func substitutePlaceholders(attr string) string {
 	return r.Replace(attr)
 }
 
-// yamlBlockExprs returns the `expression:` values in a yaml code block. The
-// value may be quoted or a block scalar (| or >). The expressions of an
-// admission policy document (kind: ValidatingAdmissionPolicy or
-// MutatingAdmissionPolicy) are the API server's CEL, not a PolicyGate's, and
-// are skipped.
+// heredocLine is a line of a bash block that starts or ends a heredoc
+// (cat <<EOF | kubectl apply -f -, then EOF): it separates manifests as ---
+// does.
+var heredocLine = regexp.MustCompile(`<<-?\s*['"]?[A-Za-z_]+['"]?|^[A-Z_]+$`)
+
+// yamlBlockExprs returns the `expression:` values in a yaml code block, or
+// in the heredocs of a bash block. The value may be quoted or a block scalar
+// (| or >). A document (split at ---, and at heredoc starts and ends) whose
+// every top-level kind is an admission policy (ValidatingAdmissionPolicy,
+// MutatingAdmissionPolicy) holds the API server's CEL, not a PolicyGate's,
+// and is skipped. A document with any other kind, or none, is read, so a
+// PolicyGate beside an admission policy is never skipped.
 func yamlBlockExprs(rel string, start int, block []string) []docExpr {
 	var out []docExpr
 	admission := make([]bool, len(block)) // the line is in an admission policy document
 	for from := 0; from < len(block); {
 		to := from
-		for to < len(block) && strings.TrimSpace(block[to]) != "---" {
+		for to < len(block) && strings.TrimSpace(block[to]) != "---" && !heredocLine.MatchString(strings.TrimSpace(block[to])) {
 			to++
 		}
-		skip := false
+		admissionKind, otherKind := false, false
 		for _, l := range block[from:to] {
 			if k, ok := strings.CutPrefix(l, "kind:"); ok {
-				k = strings.TrimSpace(k)
-				skip = k == "ValidatingAdmissionPolicy" || k == "MutatingAdmissionPolicy"
+				if k = strings.TrimSpace(k); k == "ValidatingAdmissionPolicy" || k == "MutatingAdmissionPolicy" {
+					admissionKind = true
+				} else {
+					otherKind = true
+				}
 			}
 		}
 		for j := from; j < to; j++ {
-			admission[j] = skip
+			admission[j] = admissionKind && !otherKind
 		}
 		from = to + 1
 	}
@@ -497,4 +507,36 @@ func manifestExprs(t *testing.T, path string) []docExpr {
 		})
 	}
 	return out
+}
+
+// TestYAMLBlockExprsAdmissionPolicies: the collector skips the expressions of
+// an admission policy document only. A PolicyGate beside one is read: after
+// ---, in its own heredoc before or after the policy's in one bash block, and
+// in one document with it (whose policy expressions are then read too, which
+// fails safe: separate them with ---).
+func TestYAMLBlockExprsAdmissionPolicies(t *testing.T) {
+	const gate = "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nspec:\n  expression: \"gate.expr\"\n"
+	const vap = "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nspec:\n  variables:\n    - name: v\n      expression: \"vap.expr\"\n"
+	heredoc := func(doc string) string { return "cat <<EOF | kubectl apply -f -\n" + doc + "EOF\n" }
+	for _, tc := range []struct {
+		name, block string
+		want        []string
+	}{
+		{"an admission policy alone", vap, nil},
+		{"a MutatingAdmissionPolicy", strings.Replace(vap, "Validating", "Mutating", 1), nil},
+		{"a PolicyGate after --- (A)", vap + "---\n" + gate, []string{"gate.expr"}},
+		{"a PolicyGate alone (B)", gate, []string{"gate.expr"}},
+		{"a PolicyGate heredoc, then a policy heredoc (C)", heredoc(gate) + heredoc(vap), []string{"gate.expr"}},
+		{"a policy heredoc, then a PolicyGate heredoc (D)", heredoc(vap) + heredoc(gate), []string{"gate.expr"}},
+		{"one document with both kinds (E)", gate + vap, []string{"gate.expr", "vap.expr"}},
+		{"a binding, no expression", "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\n", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, e := range yamlBlockExprs("fixture.md", 0, strings.Split(strings.TrimSuffix(tc.block, "\n"), "\n")) {
+				got = append(got, e.expr)
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
