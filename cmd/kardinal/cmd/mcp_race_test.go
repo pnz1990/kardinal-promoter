@@ -245,13 +245,12 @@ func TestMCPProcess(t *testing.T) {
 	assert.True(t, ignoreRepoFile)
 }
 
-// TestNoticeDefault_Concurrent (#2230): kardinal mcp builds a client per
-// call, and the namespace default's notice is said once whatever the
-// number of calls at once (go test -race).
+// TestNoticeDefault_Concurrent (#2230): goroutines that share one command's
+// stderr (kardinal mcp builds a client per call, its calls run at once) say
+// the namespace default's notice once (go test -race).
 func TestNoticeDefault_Concurrent(t *testing.T) {
-	setForTest(t, &noticed, map[string]bool{})
 	var buf lockedBuffer
-	setForTest(t, &errOut, io.Writer(&buf))
+	setForTest(t, &errOut, io.Writer(&commandStderr{Writer: &buf, said: map[string]bool{}}))
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Add(1)

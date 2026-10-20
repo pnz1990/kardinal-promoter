@@ -185,8 +185,7 @@ func TestRepoDefaults_Args(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			setForTest(t, &errOut, io.Writer(&stderr))
-			setForTest(t, &noticed, map[string]bool{})
+			setForTest(t, &errOut, io.Writer(&commandStderr{Writer: &stderr, said: map[string]bool{}}))
 			p, env, err := envArgs(why, tc.args, tc.flagEnv)
 			require.NoError(t, err)
 			assert.Equal(t, tc.pipeline, p)
@@ -309,8 +308,8 @@ current-context: k
 `), 0o600))
 	setForTest(t, &globalKubeconfig, kubeconfig)
 	var stderr bytes.Buffer
-	setForTest(t, &errOut, io.Writer(&stderr))
-	setForTest(t, &noticed, map[string]bool{})
+	cmdErr := &commandStderr{Writer: &stderr, said: map[string]bool{}}
+	setForTest(t, &errOut, io.Writer(cmdErr))
 	_, ns, err := buildRestConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "team-a", ns, "the file over the kubeconfig")
@@ -324,7 +323,7 @@ current-context: k
 	assert.Equal(t, "from-context", ns, "the file is not read")
 	ignoreRepoFile = false
 	t.Setenv("KARDINAL_NAMESPACE", "team-b")
-	noticed = map[string]bool{}
+	cmdErr.said = map[string]bool{} // a new command
 	_, ns, err = buildRestConfig()
 	require.NoError(t, err)
 	assert.Equal(t, "team-b", ns, "the environment over the file")

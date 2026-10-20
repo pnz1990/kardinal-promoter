@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -95,25 +94,21 @@ func exists(p string) bool {
 // whoever started the server set them).
 var ignoreRepoFile bool
 
-// noticed are the defaults the running command said it uses (useStyle
-// starts it empty): each is said once, on stderr. noticedMu guards it:
-// kardinal mcp builds a client per tool call, and its calls run at once
-// (#2230).
-var (
-	noticed   = map[string]bool{}
-	noticedMu sync.Mutex
-)
-
 // noticeDefault says on stderr, once per command, that what (pipeline or
 // namespace) is v, taken from source: a default the command line does not
 // show, which a repository someone else wrote may have set.
 func noticeDefault(what, v, source string) {
-	noticedMu.Lock()
-	defer noticedMu.Unlock()
-	if v == "" || noticed[what] {
+	if v == "" {
 		return
 	}
-	noticed[what] = true
+	if s, ok := errOut.(*commandStderr); ok {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.said[what] {
+			return
+		}
+		s.said[what] = true
+	}
 	_, _ = fmt.Fprintf(errOut, "using %s %s (from %s)\n", what, v, source)
 }
 
