@@ -103,6 +103,44 @@ type Profile struct {
 	// ReceiptDrainVersions bounds how long the controller takes to sign and
 	// store the scenario's receipts (2 x PackVersions) before the exports.
 	ReceiptDrainVersions time.Duration
+	// Receipts PromotionReceipts TestScale_Receipts creates at once, twice
+	// (one in ReceiptLargeEvery near the 256 KiB statement cap, the others
+	// about 4 KiB), for the controller to sign and store within
+	// ReceiptDrain each time. With Receipts Stored its leader's Go heap in
+	// use (not RSS: the suite's -race build keeps shadow memory) is at most
+	// ReceiptRSSFactor x its baseline, and the second batch adds at most
+	// ReceiptBytesPerReceipt per receipt to it, read just after a
+	// collection (a Stored receipt is cached without its statement and
+	// bundle, about 6 KiB and 8.5 KiB on average here, the bundle's DSSE
+	// envelope carrying the statement in base64; runs measured 1.2 to 2.9
+	// KiB a receipt, so 4 KiB is above that and below caching either).
+	// After every controller Pod is deleted while a batch is
+	// being signed, every receipt is Stored within ReceiptResync (#2062).
+	Receipts               int
+	ReceiptLargeEvery      int
+	ReceiptDrain           time.Duration
+	ReceiptRSSFactor       float64
+	ReceiptBytesPerReceipt int
+	ReceiptResync          time.Duration
+	// ReceiptSteps Verified steps (three-environment Pipelines, one
+	// Bundle each) with their receipts are read through the UI steps API,
+	// whose p95 must stay within ReceiptStepsP95: it reads one receipt per
+	// Verified step. ci's budget is the larger: its controller is built
+	// with -race.
+	ReceiptSteps    int
+	ReceiptStepsP95 time.Duration
+
+	// AttestBundles versions of three images, each image with
+	// AttestReferrers referrers (a signature, a scan and filler
+	// attestations), arrive spread over AttestWithin in
+	// TestScale_Attestations; the ImageVerification reconcile p95 stays
+	// within AttestReconcileP95 and the registry sees at most
+	// AttestReadsPerImage requests per image (#2062).
+	AttestBundles       int
+	AttestReferrers     int
+	AttestWithin        time.Duration
+	AttestReconcileP95  time.Duration
+	AttestReadsPerImage int
 
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
@@ -177,6 +215,9 @@ var profiles = map[string]Profile{
 		// 10k. The export takes 1.2 s live.
 		PackEvents: 10_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 15 * time.Second,
 		PackVersions: 500, PackNamespaces: 10, PackVersionsMaxTime: 10 * time.Second, ReceiptDrainVersions: 5 * time.Minute,
+		Receipts: 1_000, ReceiptLargeEvery: 100, ReceiptDrain: 5 * time.Minute, ReceiptRSSFactor: 1.5, ReceiptBytesPerReceipt: 4096, ReceiptResync: 2 * time.Minute,
+		ReceiptSteps: 150, ReceiptStepsP95: 2 * time.Second,
+		AttestBundles: 30, AttestReferrers: 10, AttestWithin: time.Minute, AttestReconcileP95: 10 * time.Second, AttestReadsPerImage: 40,
 		TenantWave: 30, TenantRepos: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle: 10 * time.Minute,
 		// Twice the stage time measured on a GitHub runner with the -race
@@ -199,6 +240,9 @@ var profiles = map[string]Profile{
 		// 12.5 s live at 100k.
 		PackEvents: 100_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 2 * time.Minute,
 		PackVersions: 5_000, PackNamespaces: 50, PackVersionsMaxTime: 100 * time.Second, ReceiptDrainVersions: 20 * time.Minute,
+		Receipts: 10_000, ReceiptLargeEvery: 100, ReceiptDrain: 20 * time.Minute, ReceiptRSSFactor: 1.5, ReceiptBytesPerReceipt: 4096, ReceiptResync: 2 * time.Minute,
+		ReceiptSteps: 500, ReceiptStepsP95: time.Second,
+		AttestBundles: 500, AttestReferrers: 30, AttestWithin: 5 * time.Minute, AttestReconcileP95: 5 * time.Second, AttestReadsPerImage: 80,
 		TenantWave: 149, TenantRepos: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		// 149 repositories on the release gate's 32 cores are a backlog (A's
 		// median step 8-9 s against B's 2 s alone): with the fair queue B's
