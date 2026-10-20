@@ -142,6 +142,30 @@ func (e *Env) Events(ctx context.Context, ns, kind, name string) ([]eventsv1.Eve
 	return out, nil
 }
 
+// WaitEvents waits until an Event regarding kind/name matches match, and
+// returns every Event regarding it then. The controller records Events
+// through an asynchronous broadcaster, after the status write a test may
+// have waited for, so one list can run before the Event exists (#2188).
+func (e *Env) WaitEvents(t *testing.T, ns, kind, name string, timeout time.Duration, what string,
+	match func(eventsv1.Event) bool) []eventsv1.Event {
+	t.Helper()
+	var evs []eventsv1.Event
+	Eventually(t, timeout, what, func(ctx context.Context) (bool, string) {
+		list, err := e.Events(ctx, ns, kind, name)
+		if err != nil {
+			return false, err.Error()
+		}
+		evs = list
+		for _, ev := range list {
+			if match(ev) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("%d events of %s %s", len(list), kind, name)
+	})
+	return evs
+}
+
 // Table is what `kubectl get` prints for a resource: the API server's Table
 // rendering, keyed by object name.
 type Table struct {
