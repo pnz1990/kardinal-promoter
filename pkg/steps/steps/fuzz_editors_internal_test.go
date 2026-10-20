@@ -280,6 +280,13 @@ var yamlSeedDocs = []string{
 	"key: |\n  literal\n  block\nother: >\n  folded\n",
 	"dependencies:\n  - name: podinfo\n    version: 6.0.0\n  - name: redis\n    version: 1.0.0\n",
 	"\"quoted key\": 1\n? complex\n: 2\n",
+	// #2182: a CRLF file, a file with a byte order mark, both, and mixed
+	// line endings (the dominant one is kept).
+	"image:\r\n  tag: \"1.0.0\" # pinned\r\n  repository: ghcr.io/org/app\r\nreplicas: 2\r\n",
+	"\ufeffimage:\n  tag: \"1.0.0\"\n  repository: ghcr.io/org/app\n",
+	"\ufeffresources:\r\n- deploy.yaml\r\nimages:\r\n- name: ghcr.io/org/app\r\n  newTag: 1.0.0\r\n",
+	"key: |\r\n  literal\r\n  block\r\nimage:\r\n  tag: x\n",
+	"\ufeffa: \"one\n  two\"\nimage:\n  tag: x\n",
 }
 
 var yamlSeedPaths = []string{
