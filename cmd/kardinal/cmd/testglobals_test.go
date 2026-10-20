@@ -68,14 +68,21 @@ func keepStyle(t testing.TB) {
 // the caller's. Names are resolved by type: a local of the same name is not
 // the package's, and the functions followed are every function and method
 // of the package, test files or not, called directly, through a local (f :=
-// stub; f()) or passed by name (t.Run("s", sub), taken to be called). A
-// function literal that the package's own code (not a test file) stores in
-// a value or a field (cobra.Command{RunE: ...}) is not run where it is
-// built; in a test file one is taken to be called (a table's setup func,
-// interceptor.Funcs). TestMain is exempt: it sets up the whole run. Not
-// seen: writes through a pointer or a method of another package (other
-// than Execute), and a function value called through a struct field
-// or a parameter.
+// stub; f()) or passed by name (t.Run("s", sub), taken to be called). So
+// are (#2339) a function-typed package variable's initial function (var
+// set = func() {...}), a method value (f := v.m), every method of the
+// package that an interface method call can run, and the method of the
+// initializer's type behind a package variable of another package's
+// interface (var w io.Writer = impl{}). A method that changes what its
+// pointer receiver points to changes the variable it is called on
+// (bx.put("a") changes bx). A function literal that the package's own code
+// (not a test file) stores in a value or a field (cobra.Command{RunE: ...})
+// is not run where it is built; in a test file one is taken to be called
+// (a table's setup func, interceptor.Funcs). TestMain is exempt: it sets up
+// the whole run. Not seen: writes through a pointer parameter or a method
+// of another package (other than Execute), a function-typed package
+// variable's value after a test swaps it, and a function value called
+// through a struct field or a parameter.
 func TestPackageVariablesAreRestored(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -95,7 +102,7 @@ func TestPackageVariablesAreRestored(t *testing.T) {
 // t.Parallel runs next to the other parallel tests, so it must not change a
 // package variable even if it puts it back: another one would see the
 // change. Found as TestPackageVariablesAreRestored finds changes (helpers
-// one call deep, Execute, setForTest).
+// to any depth, resolved by type; Execute; setForTest).
 func TestParallelTestsChangeNoPackageVariable(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -114,37 +121,102 @@ func TestParallelTestsChangeNoPackageVariable(t *testing.T) {
 // TestParallelChanges: the check on small packages: a parallel test that
 // changes a package variable is named even when it puts it back (directly,
 // through setForTest, keepStyle or a helper); a serial one, or a parallel
-// one that only reads, is not.
+// one that only reads, is not. src, when set, is another file: of package
+// cmd, or a test file of package cmd_test.
 func TestParallelChanges(t *testing.T) {
 	t.Parallel()
 	const pkg = "package cmd\n\nvar x string\nvar errOut, sty, skewCheck any\n"
+	const box = "type box struct{ v string; n int }\nfunc (b *box) put(s string) { b.v = s }\n"
 	cases := []struct {
 		name, test string
 		changes    []string
+		src        string
 	}{
-		{"setForTest", `func TestA(t *testing.T) { t.Parallel(); setForTest(t, &x, "a") }`, []string{"TestA changes x"}},
+		{"setForTest", `func TestA(t *testing.T) { t.Parallel(); setForTest(t, &x, "a") }`, []string{"TestA changes x"}, ""},
 		{"restored in a Cleanup", `func TestA(t *testing.T) { t.Parallel(); prev := x; t.Cleanup(func() { x = prev }); x = "a" }`,
-			[]string{"TestA changes x"}},
+			[]string{"TestA changes x"}, ""},
 		{"a helper", `func stub(t *testing.T) { prev := x; t.Cleanup(func() { x = prev }); x = "a" }
-func TestA(t *testing.T) { t.Parallel(); stub(t) }`, []string{"TestA changes x"}},
+func TestA(t *testing.T) { t.Parallel(); stub(t) }`, []string{"TestA changes x"}, ""},
 		{"keepStyle", `func keepStyle(t *testing.T) { a, b, c := errOut, sty, skewCheck; t.Cleanup(func() { errOut, sty, skewCheck = a, b, c }) }
-func TestA(t *testing.T) { t.Parallel(); keepStyle(t) }`, []string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"}},
+func TestA(t *testing.T) { t.Parallel(); keepStyle(t) }`, []string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"}, ""},
 		{"a flag bound to it (#2194)", `func newCmd() { flags.StringVar(&x, "x", "", "") }
-func TestA(t *testing.T) { t.Parallel(); newCmd() }`, []string{"TestA changes x"}},
-		{"its address handed out", `func TestA(t *testing.T) { t.Parallel(); _ = json.Unmarshal(nil, &x) }`, []string{"TestA changes x"}},
+func TestA(t *testing.T) { t.Parallel(); newCmd() }`, []string{"TestA changes x"}, ""},
+		{"its address handed out", `func TestA(t *testing.T) { t.Parallel(); _ = json.Unmarshal(nil, &x) }`, []string{"TestA changes x"}, ""},
 		{"a signal to the test process", `func TestA(t *testing.T) { t.Parallel(); p, _ := os.FindProcess(os.Getpid()); _ = p.Signal(os.Interrupt) }`,
-			[]string{"TestA signals the test process"}},
+			[]string{"TestA signals the test process"}, ""},
 		{"syscall.Kill", `func TestA(t *testing.T) { t.Parallel(); go func() { _ = syscall.Kill(os.Getpid(), syscall.SIGINT) }() }`,
-			[]string{"TestA signals the test process"}},
-		{"serial", `func TestA(t *testing.T) { setForTest(t, &x, "a") }`, nil},
-		{"reads only", `func TestA(t *testing.T) { t.Parallel(); _ = x }`, nil},
+			[]string{"TestA signals the test process"}, ""},
+		{"serial", `func TestA(t *testing.T) { setForTest(t, &x, "a") }`, nil, ""},
+		{"reads only", `func TestA(t *testing.T) { t.Parallel(); _ = x }`, nil, ""},
+		// QA-3 on #2324 (#2339): what a call runs is resolved by type.
+		{"a pointer-receiver method on a package variable", box + `var bx box
+func TestA(t *testing.T) { t.Parallel(); bx.put("a") }`, []string{"TestA changes bx"}, ""},
+		{"a pointer-receiver method that counts", `type counter struct{ n int }
+func (c *counter) inc() { c.n++ }
+var cnt counter
+func TestA(t *testing.T) { t.Parallel(); cnt.inc() }`, []string{"TestA changes cnt"}, ""},
+		{"a pointer-receiver method through another", box + `func (b *box) reset() { b.put("") }
+var bx box
+func TestA(t *testing.T) { t.Parallel(); bx.reset() }`, []string{"TestA changes bx"}, ""},
+		{"a pointer-receiver method on a package pointer", box + `var pb = &box{}
+func TestA(t *testing.T) { t.Parallel(); pb.put("a") }`, []string{"TestA changes pb"}, ""},
+		{"a pointer-receiver method on a field of a package variable", box + `var st struct{ b box }
+func TestA(t *testing.T) { t.Parallel(); st.b.put("a") }`, []string{"TestA changes st"}, ""},
+		{"a pointer-receiver method on a local", box + `func TestA(t *testing.T) { t.Parallel(); var b box; b.put("a") }`, nil, ""},
+		{"a pointer-receiver method that only reads", `type box struct{ v string }
+func (b *box) get() string { return b.v }
+var bx box
+func TestA(t *testing.T) { t.Parallel(); _ = bx.get() }`, nil, ""},
+		{"a value-receiver method changes a copy", `type box struct{ v string }
+func (b box) put(s string) { b.v = s }
+var bx box
+func TestA(t *testing.T) { t.Parallel(); bx.put("a") }`, nil, ""},
+		{"a function-typed package variable", `var set = func() { x = "a" }
+func TestA(t *testing.T) { t.Parallel(); set() }`, []string{"TestA changes x"}, ""},
+		{"a function-typed package variable bound to a function", `func stub() { x = "a" }
+var set = stub
+func TestA(t *testing.T) { t.Parallel(); set() }`, []string{"TestA changes x"}, ""},
+		{"an interface method", `type writer interface{ Write(s string) }
+type impl struct{}
+func (impl) Write(s string) { x = s }
+var w writer = impl{}
+func TestA(t *testing.T) { t.Parallel(); w.Write("a") }`, []string{"TestA changes x"}, ""},
+		{"an interface method on a local", `type writer interface{ Write(s string) }
+type impl struct{}
+func (impl) Write(s string) { x = s }
+func TestA(t *testing.T) { t.Parallel(); var w writer = impl{}; w.Write("a") }`, []string{"TestA changes x"}, ""},
+		{"an interface method with a pointer receiver", `type writer interface{ Write(s string) }
+type buf struct{ s string }
+func (b *buf) Write(s string) { b.s = s }
+var w writer = &buf{}
+func TestA(t *testing.T) { t.Parallel(); w.Write("a") }`, []string{"TestA changes w"}, ""},
+		{"another package's interface", `type impl struct{}
+func (impl) Write(p []byte) (int, error) { x = "a"; return 0, nil }
+func TestA(t *testing.T) { t.Parallel(); _, _ = w.Write(nil) }`, []string{"TestA changes x"},
+			"package cmd\n\nimport \"io\"\n\nvar w io.Writer = impl{}\n"},
+		{"a function-typed package variable from package cmd_test", `var Set = func() { x = "a" }`, []string{"TestB changes x"},
+			"package cmd_test\n\nimport (\n\t\"testing\"\n\n\t\"cmd\"\n)\n\nfunc TestB(t *testing.T) { t.Parallel(); cmd.Set() }\n"},
+		{"a method value", `type h struct{}
+func (h) set() { x = "a" }
+func TestA(t *testing.T) { t.Parallel(); f := h{}.set; f() }`, []string{"TestA changes x"}, ""},
+		{"a method value on a package variable", box + `var bx box
+func TestA(t *testing.T) { t.Parallel(); f := bx.put; f("a") }`, []string{"TestA changes bx"}, ""},
+		{"a method value passed", `type h struct{}
+func (h) sub(t *testing.T) { x = "a" }
+func TestA(t *testing.T) { t.Parallel(); t.Run("s", h{}.sub) }`, []string{"TestA changes x"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parallelChanges(map[string]string{
+			srcs := map[string]string{
 				"x.go":      pkg,
 				"x_test.go": "package cmd\n\nimport \"testing\"\n\nfunc setForTest[T any](t *testing.T, p *T, v T) {}\n\n" + tc.test + "\n",
-			})
+			}
+			if strings.HasPrefix(tc.src, "package cmd_test") {
+				srcs["y_test.go"] = tc.src
+			} else if tc.src != "" {
+				srcs["y.go"] = tc.src
+			}
+			got, err := parallelChanges(srcs)
 			require.NoError(t, err)
 			assert.Equal(t, tc.changes, got)
 		})
@@ -251,6 +323,10 @@ func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; v.f() }`, []string
 		{"Execute stands for what cobra runs", `func TestA(t *testing.T) { root := NewRootCmd(); _ = root.Execute() }`,
 			[]string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"},
 			"func NewRootCmd() *c { return &c{f: func() { y = \"a\" }} }\ntype c struct{ f func() }\nfunc (*c) Execute() error { return nil }\n"},
+		{"a pointer-receiver method on a package variable (#2339)", `func TestA(t *testing.T) { bx.put("a") }`, []string{"TestA changes bx"},
+			"type box struct{ v string }\nfunc (b *box) put(s string) { b.v = s }\nvar bx box\n"},
+		{"a pointer-receiver method on a package variable, restored", `func TestA(t *testing.T) { prev := bx; t.Cleanup(func() { bx = prev }); bx.put("a") }`,
+			nil, "type box struct{ v string }\nfunc (b *box) put(s string) { b.v = s }\nvar bx box\n"},
 		{"a Benchmark", `func BenchmarkA(b *testing.B) { x = "a" }`, []string{"BenchmarkA changes x"}, ""},
 		{"a Fuzz test that restores", `func FuzzA(f *testing.F) { prev := x; f.Cleanup(func() { x = prev }); x = "a" }`, nil, ""},
 	}
@@ -274,10 +350,11 @@ func TestA(t *testing.T) { var v c; v.f = func() { x = "a" }; v.f() }`, []string
 // its Test, Benchmark and Fuzz functions.
 func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, error) {
 	fset := token.NewFileSet()
-	a := &restoreCheck{fset: fset, info: &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}},
-		scopes: map[*types.Scope]bool{}, decls: map[types.Object]*ast.FuncDecl{}, byName: map[string]*ast.FuncDecl{},
-		testing: map[types.Object]bool{}, inits: map[string]string{}, done: map[*ast.FuncDecl]*restoreSummary{},
-		inTest: map[*ast.FuncDecl]bool{}}
+	a := &restoreCheck{fset: fset, info: &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{},
+		Types: map[ast.Expr]types.TypeAndValue{}},
+		scopes: map[*types.Scope]bool{}, pkgs: map[*types.Package]bool{}, decls: map[types.Object]*ast.FuncDecl{},
+		byName: map[string]*ast.FuncDecl{}, testing: map[types.Object]bool{}, inits: map[string]string{},
+		initType: map[types.Object]types.Type{}, done: map[*ast.FuncDecl]*restoreSummary{}, inTest: map[*ast.FuncDecl]bool{}}
 	var tests []*ast.FuncDecl
 	names := make([]string, 0, len(srcs))
 	for f := range srcs {
@@ -302,7 +379,9 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 		conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}}
 		pkg, _ := conf.Check(name, fset, files, a.info)
 		a.scopes[pkg.Scope()] = true
+		a.pkgs[pkg] = true
 	}
+	var funcVars [][2]*ast.Ident // var set = stub
 	for _, file := range files {
 		for _, d := range file.Decls {
 			switch d := d.(type) {
@@ -330,6 +409,18 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 							init := ""
 							if len(vs.Values) == len(vs.Names) {
 								init = types.ExprString(vs.Values[i])
+								obj := a.info.Defs[n]
+								a.initType[obj] = a.info.TypeOf(vs.Values[i])
+								// A function-typed variable runs what it
+								// starts as, unless a test swaps it.
+								switch v := vs.Values[i].(type) {
+								case *ast.FuncLit:
+									fd := &ast.FuncDecl{Name: n, Type: v.Type, Body: v.Body}
+									a.decls[obj] = fd
+									a.inTest[fd] = testFile[file]
+								case *ast.Ident:
+									funcVars = append(funcVars, [2]*ast.Ident{n, v})
+								}
 							}
 							a.inits[n.Name] = init
 						}
@@ -354,6 +445,16 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 			}
 			return true
 		})
+	}
+	for _, fv := range funcVars {
+		if d := a.decls[a.info.Uses[fv[1]]]; d != nil {
+			a.decls[a.info.Defs[fv[0]]] = d
+		}
+	}
+	for obj, d := range a.decls {
+		if v, ok := obj.(*types.Var); ok && v.Pkg() != nil && v.Pkg().Name() == "cmd" {
+			a.byName[v.Name()] = d // a function-typed package variable, for cmd.Set()
+		}
 	}
 	return a, tests, nil
 }
@@ -464,12 +565,25 @@ type restoreCheck struct {
 	fset    *token.FileSet
 	info    *types.Info                    // what each name refers to
 	scopes  map[*types.Scope]bool          // the package scopes
-	decls   map[types.Object]*ast.FuncDecl // every function and method with a body, test files or not
+	pkgs    map[*types.Package]bool        // the packages (cmd, cmd_test)
+	decls   map[types.Object]*ast.FuncDecl // every function and method with a body, test files or not, and every function-typed package variable's initial function
 	byName  map[string]*ast.FuncDecl       // package cmd's functions, for cmd.X from package cmd_test
 	testing map[types.Object]bool          // the *testing.T, B, F and testing.TB parameters
 	inits   map[string]string              // a package variable's initializer ("" for the zero value)
-	inTest  map[*ast.FuncDecl]bool         // the functions of the test files
-	done    map[*ast.FuncDecl]*restoreSummary
+	// initType is the type of a package variable's initializer: the
+	// concrete type behind an interface of another package, which the
+	// empty stand-in imports leave unresolved.
+	initType map[types.Object]types.Type
+	inTest   map[*ast.FuncDecl]bool // the functions of the test files
+	done     map[*ast.FuncDecl]*restoreSummary
+}
+
+// target is a function a call can run and, for a method, the variable it
+// is called on (its root: v of v.f, v[i]): what a pointer receiver's method
+// changes through the receiver (recvWrites) is a change of it.
+type target struct {
+	decl *ast.FuncDecl
+	recv types.Object
 }
 
 // restoreSummary is what a function changes and puts back.
@@ -485,13 +599,19 @@ type restoreSummary struct {
 	// does not count them (the next build resets them to their defaults); a
 	// parallel test may not (two builds at once race, #2194).
 	binds map[string]bool
+	// recvWrites: a method with a pointer receiver changes what its
+	// receiver points to (b.v = s, or a method of the receiver's that does).
+	recvWrites bool
 }
 
 // pkgVar is the package variable id names, or "" (a local, a field, a
 // parameter, or anything else).
-func (a *restoreCheck) pkgVar(id *ast.Ident) string {
-	if v, ok := a.info.ObjectOf(id).(*types.Var); ok && !v.IsField() && a.scopes[v.Parent()] {
-		return id.Name
+func (a *restoreCheck) pkgVar(id *ast.Ident) string { return a.pkgVarOf(a.info.ObjectOf(id)) }
+
+// pkgVarOf is the name of package variable obj, or "".
+func (a *restoreCheck) pkgVarOf(obj types.Object) string {
+	if v, ok := obj.(*types.Var); ok && !v.IsField() && a.scopes[v.Parent()] {
+		return v.Name()
 	}
 	return ""
 }
@@ -502,10 +622,19 @@ func (a *restoreCheck) object(id *ast.Ident) types.Object { return a.info.Object
 // rootVar is the package variable an assignment target changes: v, v.F,
 // v[k], *v.
 func (a *restoreCheck) rootVar(e ast.Expr) string {
+	if id := rootIdent(e); id != nil {
+		return a.pkgVar(id)
+	}
+	return ""
+}
+
+// rootIdent is the name an assignment target changes: v of v, v.F, v[k],
+// *v; nil for anything else.
+func rootIdent(e ast.Expr) *ast.Ident {
 	for {
 		switch x := e.(type) {
 		case *ast.Ident:
-			return a.pkgVar(x)
+			return x
 		case *ast.SelectorExpr:
 			e = x.X
 		case *ast.IndexExpr:
@@ -515,29 +644,95 @@ func (a *restoreCheck) rootVar(e ast.Expr) string {
 		case *ast.ParenExpr:
 			e = x.X
 		default:
-			return ""
+			return nil
 		}
 	}
 }
 
-// callee is the function e names: a function or method of the package, a
-// local bound to one (aliases: f := stub), or cmd.X from package cmd_test.
-func (a *restoreCheck) callee(e ast.Expr, aliases map[types.Object]*ast.FuncDecl) *ast.FuncDecl {
+// callees are the functions e names, resolved by type: a function or
+// method of the package, a function-typed package variable (what it starts
+// as), a local bound to one (aliases: f := stub, f := v.m), cmd.X from
+// package cmd_test; a method value or method expression (v.m, T.m) as the
+// method; an interface method as every method of the package's types that
+// implement it; a method on a package variable of another package's
+// interface as its initializer's type's.
+func (a *restoreCheck) callees(e ast.Expr, aliases map[types.Object][]target) []target {
 	switch x := e.(type) {
 	case *ast.Ident:
 		if d := a.decls[a.object(x)]; d != nil {
-			return d
+			return []target{{decl: d}}
 		}
 		return aliases[a.object(x)]
 	case *ast.SelectorExpr:
-		if d := a.decls[a.info.Uses[x.Sel]]; d != nil {
-			return d
+		var recv types.Object
+		if id := rootIdent(x.X); id != nil {
+			if _, isVar := a.object(id).(*types.Var); isVar {
+				recv = a.object(id)
+			}
 		}
-		if id, ok := x.X.(*ast.Ident); ok && id.Name == "cmd" && (a.object(id) == nil || isPkgName(a.object(id))) {
-			return a.byName[x.Sel.Name]
+		fn, _ := a.info.Uses[x.Sel].(*types.Func)
+		if d := a.decls[fn]; d != nil {
+			return []target{target{decl: d, recv: recv}}
+		}
+		if fn != nil {
+			if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && types.IsInterface(sig.Recv().Type()) {
+				return a.implementations(sig.Recv().Type().Underlying().(*types.Interface), fn.Name(), recv)
+			}
+		}
+		if id, ok := x.X.(*ast.Ident); ok && fn == nil {
+			if id.Name == "cmd" && (a.object(id) == nil || isPkgName(a.object(id))) {
+				if d := a.byName[x.Sel.Name]; d != nil {
+					return []target{{decl: d}}
+				}
+				return nil
+			}
+			if t := a.initType[a.object(id)]; t != nil {
+				if m, _, _ := types.LookupFieldOrMethod(t, true, pkgOf(t), x.Sel.Name); m != nil {
+					if f, ok := m.(*types.Func); ok && a.decls[f] != nil {
+						return []target{target{decl: a.decls[f], recv: recv}}
+					}
+				}
+			}
 		}
 	case *ast.ParenExpr:
-		return a.callee(x.X, aliases)
+		return a.callees(x.X, aliases)
+	}
+	return nil
+}
+
+// implementations are method name of every named type of the package (T
+// or *T) that implements iface, each called on recv.
+func (a *restoreCheck) implementations(iface *types.Interface, name string, recv types.Object) []target {
+	var out []target
+	seen := map[*ast.FuncDecl]bool{}
+	for _, obj := range a.info.Defs {
+		tn, ok := obj.(*types.TypeName)
+		if !ok || !a.pkgs[tn.Pkg()] || types.IsInterface(tn.Type()) {
+			continue
+		}
+		for _, t := range []types.Type{tn.Type(), types.NewPointer(tn.Type())} {
+			if !types.Implements(t, iface) {
+				continue
+			}
+			m, _, _ := types.LookupFieldOrMethod(t, true, tn.Pkg(), name)
+			if f, ok := m.(*types.Func); ok && a.decls[f] != nil && !seen[a.decls[f]] {
+				seen[a.decls[f]] = true
+				out = append(out, target{decl: a.decls[f], recv: recv})
+			}
+		}
+	}
+	slices.SortFunc(out, func(x, y target) int { return int(x.decl.Pos() - y.decl.Pos()) })
+	return out
+}
+
+// pkgOf is the package that declares named type t (or *t), for looking up
+// its unexported methods.
+func pkgOf(t types.Type) *types.Package {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if n, ok := t.(*types.Named); ok {
+		return n.Obj().Pkg()
 	}
 	return nil
 }
@@ -609,10 +804,20 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 	}
 	s := &restoreSummary{writes: map[string]token.Pos{}, restored: map[string]bool{}, deferred: map[string]bool{},
 		returns: map[string]bool{}, binds: map[string]bool{}}
-	a.done[fn] = s                              // a recursive call sees what is known so far
-	saved := map[types.Object]string{}          // prev := v
-	locals := map[types.Object]*ast.FuncLit{}   // restore := func() { ... }
-	aliases := map[types.Object]*ast.FuncDecl{} // f := stub
+	a.done[fn] = s                            // a recursive call sees what is known so far
+	saved := map[types.Object]string{}        // prev := v
+	locals := map[types.Object]*ast.FuncLit{} // restore := func() { ... }
+	aliases := map[types.Object][]target{}    // f := stub, f := v.m
+	// A method's pointer receiver: what it changes through it, its caller's
+	// variable changes.
+	var recvObj types.Object
+	if fn.Recv != nil && len(fn.Recv.List) == 1 && len(fn.Recv.List[0].Names) == 1 {
+		if o := a.info.Defs[fn.Recv.List[0].Names[0]]; o != nil {
+			if _, ptr := o.Type().(*types.Pointer); ptr {
+				recvObj = o
+			}
+		}
+	}
 	// A closure reads its saved copies when it runs, at the end: what it
 	// puts back is judged against saved once the whole body is read.
 	var pending []func()
@@ -628,6 +833,28 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			s.writes[v] = pos
 		}
 	}
+	// change is a change of assignment target l: of its package variable,
+	// or through the method's pointer receiver.
+	change := func(l ast.Expr, pos token.Pos) {
+		if id := rootIdent(l); id != nil && recvObj != nil && a.object(id) == recvObj {
+			if _, isID := l.(*ast.Ident); !isID {
+				s.recvWrites = true
+			}
+		}
+		write(a.rootVar(l), pos)
+	}
+	// throughRecv is t's changes through its pointer receiver, made to the
+	// variable t was called on: a package variable's, or this method's own
+	// receiver's.
+	throughRecv := func(t target, pos token.Pos) {
+		if t.recv == nil || !a.summary(t.decl).recvWrites {
+			return
+		}
+		if t.recv == recvObj {
+			s.recvWrites = true
+		}
+		write(a.pkgVarOf(t.recv), pos)
+	}
 	merge := func(into, from map[string]bool) {
 		for v := range from {
 			into[v] = true
@@ -637,10 +864,12 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 	// back (with a cleanup, or its own defers) is changed here; what it
 	// registers a cleanup for is put back at the end of the test. Its
 	// defers have run when it returns: they put back nothing of the caller's.
-	call := func(h *ast.FuncDecl, pos token.Pos) {
+	call := func(t target, pos token.Pos) {
+		h := t.decl
 		if h == fn {
 			return
 		}
+		throughRecv(t, pos)
 		hs := a.summary(h)
 		for v := range hs.writes {
 			if !hs.restored[v] && !hs.deferred[v] {
@@ -653,7 +882,9 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 	// named is function d registered as a cleanup or deferred by name: what
 	// it assigns as a restore (initializer or zero value) is put back into
 	// into; its other changes are changes here.
-	named := func(d *ast.FuncDecl, into map[string]bool, pos token.Pos) {
+	named := func(t target, into map[string]bool, pos token.Pos) {
+		d := t.decl
+		throughRecv(t, pos)
 		rest := a.restores(d.Body, nil)
 		merge(into, rest)
 		hs := a.summary(d)
@@ -671,16 +902,18 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 		switch x := e.(type) {
 		case *ast.FuncLit:
 			later(into, x)
-		case *ast.Ident:
-			if lit := locals[a.object(x)]; lit != nil {
-				later(into, lit)
-			} else if d := a.callee(x, aliases); d != nil {
-				named(d, into, x.Pos())
+		case *ast.Ident, *ast.SelectorExpr:
+			if id, ok := x.(*ast.Ident); ok && locals[a.object(id)] != nil {
+				later(into, locals[a.object(id)])
+				return
+			}
+			for _, t := range a.callees(x, aliases) {
+				named(t, into, x.Pos())
 			}
 		case *ast.CallExpr:
-			if h := a.callee(x.Fun, aliases); h != nil {
-				call(h, x.Pos())
-				merge(into, a.summary(h).returns)
+			for _, t := range a.callees(x.Fun, aliases) {
+				call(t, x.Pos())
+				merge(into, a.summary(t.decl).returns)
 			}
 		}
 	}
@@ -719,9 +952,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 					if _, isLit := n.Rhs[i].(*ast.FuncLit); !isLit {
 						ast.Inspect(n.Rhs[i], visit)
 					}
-					if v := a.rootVar(l); v != "" {
-						write(v, l.Pos())
-					}
+					change(l, l.Pos())
 				}
 				return false
 			}
@@ -737,11 +968,13 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 					delete(saved, obj)
 					delete(locals, obj)
 					delete(aliases, obj)
-					switch {
-					case rid != nil && a.pkgVar(rid) != "":
+					if rid != nil && a.pkgVar(rid) != "" {
 						saved[obj] = a.pkgVar(rid)
-					case rid != nil && a.callee(rid, aliases) != nil:
-						aliases[obj] = a.callee(rid, aliases)
+					}
+					if r != nil {
+						if ts := a.callees(r, aliases); len(ts) > 0 {
+							aliases[obj] = ts
+						}
 					}
 					if lit, ok := r.(*ast.FuncLit); ok {
 						locals[obj] = lit
@@ -755,13 +988,15 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 				if rid != nil && v != "" && a.object(rid) != nil && saved[a.object(rid)] == v {
 					continue // putting back what was saved from it
 				}
-				write(v, l.Pos())
+				change(l, l.Pos())
 			}
 		case *ast.IncDecStmt:
-			write(a.rootVar(n.X), n.Pos())
+			change(n.X, n.Pos())
 		case *ast.DeferStmt:
-			if h := a.callee(n.Call.Fun, aliases); h != nil {
-				named(h, s.deferred, n.Pos()) // defer reset(): it runs when fn returns
+			if ts := a.callees(n.Call.Fun, aliases); len(ts) > 0 {
+				for _, t := range ts {
+					named(t, s.deferred, n.Pos()) // defer reset(): it runs when fn returns
+				}
 			} else {
 				cleanup(n.Call.Fun, s.deferred)
 			}
@@ -776,8 +1011,8 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 						later(s.returns, lit)
 					}
 				case *ast.CallExpr:
-					if h := a.callee(x.Fun, aliases); h != nil {
-						merge(s.returns, a.summary(h).returns)
+					for _, t := range a.callees(x.Fun, aliases) {
+						merge(s.returns, a.summary(t.decl).returns)
 					}
 				}
 			}
@@ -799,8 +1034,8 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 					s.restored[a.rootVar(u.X)] = true
 				}
 			} else {
-				if h := a.callee(n.Fun, aliases); h != nil {
-					call(h, n.Pos())
+				for _, t := range a.callees(n.Fun, aliases) {
+					call(t, n.Pos())
 				}
 				for _, arg := range n.Args {
 					if u, ok := arg.(*ast.UnaryExpr); ok && u.Op == token.AND {
@@ -810,12 +1045,13 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 					}
 				}
 			}
-			// A function passed by name (t.Run("s", sub)) is taken to be
-			// called.
+			// A function passed by name (t.Run("s", sub)), or a method
+			// value (t.Run("s", v.sub)), is taken to be called.
 			for _, arg := range n.Args {
-				if id, ok := arg.(*ast.Ident); ok {
-					if h := a.callee(id, aliases); h != nil {
-						call(h, arg.Pos())
+				switch arg.(type) {
+				case *ast.Ident, *ast.SelectorExpr:
+					for _, t := range a.callees(arg, aliases) {
+						call(t, arg.Pos())
 					}
 				}
 			}
