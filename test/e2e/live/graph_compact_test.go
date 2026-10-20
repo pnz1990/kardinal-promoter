@@ -103,7 +103,7 @@ func TestGraph_CompactShapeSmall(t *testing.T) {
 // environments.
 const compactHealthDeployment = "compact-health"
 
-// TestGraph_CompactShape300 promotes a Bundle through a Pipeline of 300
+// TestCompact_Shape300 promotes a Bundle through a Pipeline of 300
 // environments (30 waves of 10), each with a PolicyGate, the shape a large
 // fleet runs and one the node-per-environment Graph cannot hold (etcd refuses
 // it). The Graph is compact automatically (more than 100 environments): about
@@ -111,13 +111,16 @@ const compactHealthDeployment = "compact-health"
 // Verified with the new version in git, every gate instance exists and the
 // Graph is Ready only at the end.
 //
-// It does not run in parallel: committing 300 overlays in one git server
-// request, then 300 promotions, would slow the git server down for every
-// other test of the suite (their repo creation timed out). Go runs the
-// suite's serial tests first, alone.
+// It is the compact suite's only test (#2349): it takes 15 to 30 minutes on a
+// GitHub-hosted runner, nearly all of it in the waves' steps (ten writers
+// pushing one branch of a repo that grows by ten commits a wave; the Graph
+// reaches the next wave within seconds, logWaveTimes), and in the core suite
+// it pushed its shard past the 60-minute job limit. It does not run in
+// parallel: committing 300 overlays in one git server request, then 300
+// promotions, would slow the git server down for any other test.
 //
 // Covers GRAPH-COMPACT-02.
-func TestGraph_CompactShape300(t *testing.T) {
+func TestCompact_Shape300(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	const waves, perWave = 30, 10
@@ -141,6 +144,7 @@ func TestGraph_CompactShape300(t *testing.T) {
 	for _, s := range steps.Items {
 		assert.Equal(t, "Verified", s.Status.State, s.Name)
 	}
+	logWaveTimes(t, steps.Items, perWave)
 	var gates v1alpha1.PolicyGateList
 	require.NoError(t, e.Client.List(ctx, &gates, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
 	assert.Len(t, gates.Items, len(envs), "one gate instance per environment")
@@ -156,6 +160,55 @@ func TestGraph_CompactShape300(t *testing.T) {
 		st, reason, msg := graphCondition(bundleGraph(t, e, ns, bundle), "Ready")
 		return st == "True", st + " " + reason + ": " + msg
 	})
+}
+
+// logWaveTimes logs, for each wave of a wavePipeline's verified steps, when
+// its first step was created (the Graph reached the wave), how long its steps
+// took from creation to Verified (status.stateTransitionTime), and the gap
+// from the previous wave's last Verified to this wave's first step: where a
+// slow run's time goes (#2349).
+func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
+	t.Helper()
+	type wave struct {
+		created, verified time.Time
+		longest           time.Duration
+	}
+	waves := map[int]*wave{}
+	for _, s := range steps {
+		var w, r int
+		if _, err := fmt.Sscanf(s.Spec.Environment, "w%02d-r%d", &w, &r); err != nil || s.Status.StateTransitionTime == nil {
+			continue
+		}
+		created, verified := s.CreationTimestamp.Time, s.Status.StateTransitionTime.Time
+		if waves[w] == nil {
+			waves[w] = &wave{created: created, verified: verified}
+		}
+		wv := waves[w]
+		if created.Before(wv.created) {
+			wv.created = created
+		}
+		if verified.After(wv.verified) {
+			wv.verified = verified
+		}
+		wv.longest = max(wv.longest, verified.Sub(created))
+	}
+	var start, prev time.Time
+	var lines []string
+	for w := 1; waves[w] != nil; w++ {
+		wv := waves[w]
+		if w == 1 {
+			start = wv.created
+		}
+		gap := time.Duration(0)
+		if !prev.IsZero() {
+			gap = wv.created.Sub(prev)
+		}
+		lines = append(lines, fmt.Sprintf("wave %02d: reached at +%s, %d steps verified in %s (longest step %s), gap after the previous wave %s",
+			w, wv.created.Sub(start).Round(time.Second), perWave, wv.verified.Sub(wv.created).Round(time.Second),
+			wv.longest.Round(time.Second), gap.Round(time.Second)))
+		prev = wv.verified
+	}
+	t.Logf("wave times (#2349):\n%s", strings.Join(lines, "\n"))
 }
 
 // wavePipeline sets up a Pipeline of waves × perWave environments
@@ -248,7 +301,7 @@ func stepUIDs(t *testing.T, e *framework.Env, ns, bundle string) map[string]type
 // the shape mid-flight would delete every PromotionStep of the old shape.
 // The second wave's gates hold the Bundle while the Pipeline is edited.
 //
-// It does not run in parallel (100-overlay repos, see TestGraph_CompactShape300).
+// It does not run in parallel (100-overlay repos, see TestCompact_Shape300).
 //
 // Covers GRAPH-COMPACT-03.
 func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {

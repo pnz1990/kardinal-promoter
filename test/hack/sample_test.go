@@ -42,6 +42,27 @@ func sampleJobs(t *testing.T, root, day string) []sampleJob {
 	return jobs
 }
 
+// nightOf is the first night from 2026-10-14 whose sample (hack/e2e/sample.sh)
+// has job id, within one rotation of the pairs.
+func nightOf(t *testing.T, root, id string) string {
+	t.Helper()
+	out, err := runSample(t, root, "-cycle")
+	require.NoError(t, err, out)
+	pairs, err := strconv.Atoi(strings.Fields(out)[0])
+	require.NoError(t, err, out)
+	start := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	for d := 0; d < pairs; d++ {
+		day := start.AddDate(0, 0, d).Format("2006-01-02")
+		for _, j := range sampleJobs(t, root, day) {
+			if j.id == id {
+				return day
+			}
+		}
+	}
+	t.Fatalf("no night of the sample's rotation runs %s", id)
+	return ""
+}
+
 // matrixMinors returns, per suite, the minors hack/e2e/matrix.txt runs it on.
 func matrixMinors(t *testing.T, root string) map[string]map[string]bool {
 	t.Helper()
@@ -165,6 +186,9 @@ esac
 // neither opens nor (through the "e2e live" job it fails) keeps it open.
 func TestLiveReport(t *testing.T) {
 	root := repoRoot(t)
+	// A night whose minor job is sample-ui-136, found in the rotation: a
+	// suite added to (or pinned in) matrix.txt moves it (#2349).
+	night := nightOf(t, root, "sample-ui-136")
 	open := `[{"number":7,"title":"e2e live sample failed: sample-gitlab-136"},` +
 		`{"number":8,"title":"e2e live failed on main (nightly (COUNT=1))"},` +
 		`{"number":9,"title":"e2e live sample failed: sample-core-137-5of9x3"}]`
@@ -175,9 +199,7 @@ func TestLiveReport(t *testing.T) {
 	}{
 		{
 			name: "sample job fails",
-			// sample-ui-136 is 2026-12-12's minor job (hack/e2e/sample.sh
-			// 2026-12-12); a suite added to (or pinned in) matrix.txt shifts the
-			// rotation.
+			// sample-ui-136 is night's minor job (hack/e2e/sample.sh night).
 			jobs: "controller image\tsuccess\nui on Kubernetes 1.37\tsuccess\n" +
 				"sample-ui-136: ui on Kubernetes 1.36\tfailure\n" +
 				"sample-core-137-5of9x3: core 5/9 on Kubernetes 1.37 (COUNT=3)\tsuccess\ne2e live\tfailure\n",
@@ -212,7 +234,7 @@ func TestLiveReport(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(root, "hack/e2e/live-report.sh"), "jobs.tsv")
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KIND=nightly (COUNT=1)",
-				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE=2026-12-12", "E2E_LIVE="+tc.e2eLive)
+				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE="+night, "E2E_LIVE="+tc.e2eLive)
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, string(out))
 			calls, err := os.ReadFile(filepath.Join(bin, "calls.log"))
@@ -226,8 +248,8 @@ func TestLiveReport(t *testing.T) {
 					return '_'
 				}, tc.created)+"_.md"))
 				require.NoError(t, err)
-				assert.Contains(t, string(body), "SAMPLE=2026-12-12 SAMPLE_ONLY=1 SUITES=ui make e2e-all")
-				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=ui -f sample=2026-12-12")
+				assert.Contains(t, string(body), "SAMPLE="+night+" SAMPLE_ONLY=1 SUITES=ui make e2e-all")
+				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=ui -f sample="+night)
 				assert.Contains(t, string(body), "https://example.com/run/1")
 			}
 		})

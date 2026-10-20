@@ -9,6 +9,7 @@
 #
 # Suites (test/e2e/README.md lists the tests each one runs):
 #   core    Forgejo + Argo CD, webhook receiver, OCI registry, Bundle API
+#   compact Forgejo: a 300-environment Pipeline promoted end to end
 #   gitea   Gitea + Argo CD
 #   gitlab  GitLab CE + Argo CD
 #   github  real GitHub (branches of one shared repo, components/github.sh
@@ -124,6 +125,10 @@ case "$SUITE" in
     RUN='^Test(Core|SCM|Forgejo|GiteaFamily|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_'
     # A short grace for holds naming a missing Bundle (TestRollback_HoldBundleMissing).
     HELM_ARGS='--set controller.extraArgs={--hold-bundle-grace=30s}' ;;
+  # A 300-environment Pipeline promoted end to end (TestCompact_Shape300):
+  # 15 to 30 minutes on a runner, a job of its own (#2349). Its health checks
+  # read a Deployment, so no Argo CD.
+  compact) COMPONENTS=("giteafamily.sh forgejo") RUN='^TestCompact_' ;;
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM|Gitea|GiteaFamily)_' ;;
   gitlab) COMPONENTS=(gitlab.sh argocd.sh) RUN='^Test(Core|SCM|GitLab)_' ;;
   # The webhook receiver is the other API host TestGitHub_SCMAPIURL points

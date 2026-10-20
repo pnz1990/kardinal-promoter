@@ -9,10 +9,9 @@
 #
 # Regenerate from the logs of an e2e-live run of the suite (one minor's
 # jobs): the go test -v lines "=== RUN", "=== PAUSE" and "--- PASS: T (Ns)".
-# Measured on e2e-live run 38082901229 (Kubernetes 1.36, GitHub runners);
-# TestGraph_CompactShape300 has its slowest time (run 38087392515, 892 to
-# 1639s between runners): it is the longest serial test, so its job gets
-# less of the rest.
+# Measured on e2e-live run 38082901229 (Kubernetes 1.36, GitHub runners).
+# TestCompact_Shape300, the compact suite's only test, took 863 to 1,896 s
+# between runners (nightly runs of 2026-10-14 to 20, #2349).
 TestAudit_Events 19 parallel
 TestAudit_FailedPromotion 26 parallel
 TestAudit_PromotionRecords 44 parallel
@@ -72,6 +71,7 @@ TestCLI_Reports 84 parallel
 TestCLI_Rollback 189 parallel
 TestCLI_Validate 8 parallel
 TestCLI_Version 4 parallel
+TestCompact_Shape300 1820 serial
 TestCore_CRDsInstalled 0 parallel
 TestCore_ClosedPRFailsStep 355 parallel
 TestCore_ConfigPromotionExample 59 parallel
@@ -155,7 +155,6 @@ TestGiteaFamily_SignedCommitInstance 20 parallel
 TestGiteaFamily_SignedCommitPerson 31 parallel
 TestGraph_AnalysisFailsClosedWithoutRollouts 8 parallel
 TestGraph_AnalysisFailsClosedWithoutRolloutsCompact 6 parallel
-TestGraph_CompactShape300 1639 serial
 TestGraph_CompactShapeSmall 142 parallel
 TestGraph_DeletedGraphIsRecreated 43 parallel
 TestGraph_DependencyErrorsStopPromotion 24 parallel
