@@ -235,6 +235,7 @@ func (s *u0122Stuck) before(t *testing.T, e *framework.Env, from u012From) func(
 
 		// 4. carol's Verdict opens it, and the version promotes.
 		c := e.CLI(t)
+		u012RunsIn(t, e, f.NS, p, "uat", b)
 		r := c.Exec(framework.CLIOptions{Kubeconfig: carol}, c.Args(f.NS, "verify", p, "uat", "--check", "explore",
 			"--pass", "--summary", "checked after the upgrade")...)
 		require.Equal(t, 0, r.Code, r.Output())
