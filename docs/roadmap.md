@@ -88,6 +88,10 @@ including those to rollbacks, gates and the UI.
 - An error-budget gate on SLOs.
 - Custom promotion steps registered by admins.
 - DORA metrics split by human and agent.
+- `spec.policyNamespaces` refuses a namespace that has not agreed to share its gates, which
+  v0.13.0 only warns about: [Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces).
+- A per-namespace list of the repositories receipt referrers may be pushed to, in place of one
+  list for the whole controller: [Where receipts are stored](receipts.md#where-receipts-are-stored).
 
 ### Also planned
 

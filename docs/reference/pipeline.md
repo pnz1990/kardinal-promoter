@@ -244,6 +244,8 @@ See [Image Signature Verification](../image-verification.md).
 
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](../policy-gates.md).
 
+Any other namespace listed must agree to be read (new in v0.13.0, unreleased): the label `kardinal.io/policy-shareable: "true"` on it, or the controller's `--policy-shareable-namespaces`. One that has not is still read for now, and the `PolicyNamespacesShared` condition names it; a later release refuses it ([Sharing gates with other namespaces](../policy-gates.md#sharing-gates-with-other-namespaces)).
+
 Default: none.
 
 ## Status
@@ -272,6 +274,7 @@ my-app-x7k2p  1.5.0     image   my-app     Promoting   12m
 | `status.failedVersion` | When the newest version failed: its `bundle` and `version`, the `reason` and `message` of the Bundle's `InvalidSpec` or `Failed` condition (`GraphBuildFailed`, `GraphRejected`, `InvalidIntent`, `StepFailed`, …; the message says what fixes it where known), the `environment` whose step failed (empty when it failed before any step) and `since`. Cleared once a newer version exists. `status.summary` adds `<version> failed before it started (<reason>)` when no environment shows it; `kardinal why` leads with it and `kardinal status <pipeline>` prints it as an `ERROR` line. |
 | `status.phase` | The newest Bundle's progress: `Ready` (Verified everywhere it went), `Promoting`, `Degraded` (a version failed) or `Unknown` (no Bundle yet). |
 | `Ready` condition | Whether the **spec** is valid (reasons `Valid`, `ValidationFailed`, `NotImplemented`, …). It says nothing about promotions: a `Ready=True` Pipeline can be `Degraded`. |
+| `PolicyNamespacesShared` condition | (new in v0.13.0, unreleased) Only while `spec.policyNamespaces` names a namespace that has not agreed to share its gates: `False`, reason `NotShared` (`PolicyNamespaceUnreadable` while a read fails, keeping the last list), naming those namespaces. Absent otherwise; it does not change `Ready`. |
 
 These fields are for reading: no controller decision uses them. A step moving between running
 states (promoting, waiting for its PR, checking health) shows within about 2 seconds: the

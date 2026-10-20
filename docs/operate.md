@@ -292,6 +292,7 @@ non-finite rate or a burst below 1.
 | `Blocked` | PolicyGate | `Ready=False` condition (reason `Blocked`) and the `GateEvaluated` AuditEvent |
 | `GateExempted` | PolicyGate | `status.reason` (`EXEMPT: …`) and the `GateEvaluated` AuditEvent |
 | `HoldBundleMissing` | Pipeline | the `HoldBundleMissing` AuditEvent and `kardinal_hold_bundle_missing_total` |
+| `PolicyNamespaceNotShared` | Pipeline | the `PolicyNamespacesShared=False` condition, which names the namespaces that have not agreed ([Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces)) |
 | `RollbackRefused` | RollbackPolicy | the `RollbackRefused` condition |
 | `InvalidSpec` | ChangeWindow | `Valid=False` condition |
 | `FreezeAuditFailed` | ChangeWindow | for a freeze's start, the `FreezeAudited` condition, missing until the `FreezeStarted` AuditEvent is written; for a lift whose `FreezeLifted` record still fails after 2 minutes, the controller's warning log only ([Freezes](agentic/freezes.md#who-froze-and-who-lifted-it)) |
