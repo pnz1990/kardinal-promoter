@@ -737,8 +737,11 @@ exec `+realCat+` "$@"
 		})
 	})
 	t.Run("a pid whose stat cannot be opened is alive while its /proc directory is there", func(t *testing.T) {
-		// LOCAL_LIVE_TEST_PROC: a /proc where pid 424242 is there with no
-		// stat to open (a full file table), and pid 424243 is not.
+		// LOCAL_LIVE_TEST_PROC: pid 424242's /proc directory, with no stat to
+		// open (a full file table); pid 424243 is not there.
+		if _, err := os.Stat("/proc/424243"); err == nil {
+			t.Skip("pid 424243 runs on this host")
+		}
 		h := newLocalLiveHost(t)
 		proc := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(proc, "424242"), 0o755))

@@ -289,12 +289,18 @@ mkdir -p "$HOME"
 # never make a live run look gone or the host look free. A file that is
 # there but cannot be read is the safe answer: its run is alive, the host is
 # draining, busy or full.
-# proc is where pids' records are judged from: /proc (LOCAL_LIVE_TEST_PROC,
-# tests only, with LOCAL_LIVE_TEST=1: a /proc whose pids it makes).
-proc=/proc
-[ "${LOCAL_LIVE_TEST:-}" != 1 ] || proc=${LOCAL_LIVE_TEST_PROC:-$proc}
+# LOCAL_LIVE_TEST_PROC (tests only, with LOCAL_LIVE_TEST=1): pids the test
+# makes (directories <pid>, with a stat or without); a pid there is judged
+# from it, every other from /proc, as hack/loadlock.sh's LOADLOCK_TEST_PROC.
+test_proc=''
+[ "${LOCAL_LIVE_TEST:-}" != 1 ] || test_proc=${LOCAL_LIVE_TEST_PROC:-}
+# pid_dir PID sets pid_dir_v to the directory PID is judged from.
+pid_dir() {
+  pid_dir_v=/proc/$1
+  [ -z "$test_proc" ] || [ ! -e "$test_proc/$1" ] || pid_dir_v=$test_proc/$1
+}
 this_boot=
-{ read -r this_boot <"$proc/sys/kernel/random/boot_id"; } 2>/dev/null || this_boot=
+{ read -r this_boot </proc/sys/kernel/random/boot_id; } 2>/dev/null || this_boot=
 # read_file FILE sets file_v to FILE's text, trailing newlines dropped; it
 # fails when FILE cannot be opened (a missing file, or a read that failed).
 read_file() {
@@ -310,7 +316,8 @@ read_file() {
 read_start() {
   local stat rest f
   start_v=''
-  { IFS= read -r stat <"$proc/$1/stat"; } 2>/dev/null || return 1
+  pid_dir "$1"
+  { IFS= read -r stat <"$pid_dir_v/stat"; } 2>/dev/null || return 1
   rest=${stat##*)}
   read -ra f <<<"$rest"
   [ -n "${f[19]:-}" ] || return 1
@@ -343,7 +350,8 @@ record_gone() {
   if ! read_start "$pid"; then
     # Its stat could not be opened: gone, unless /proc/<pid> is there (a
     # full file table fails the open as a failed fork does).
-    [ ! -d "$proc/$pid" ] || return 1
+    pid_dir "$pid"
+    [ ! -d "$pid_dir_v" ] || return 1
     return 0
   fi
   if [[ $r =~ (^|[[:space:]])start=([0-9]+)([[:space:]]|$) ]]; then
