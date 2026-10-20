@@ -234,7 +234,11 @@ fi
 # A heavy suite takes the lock first, by running this script again under
 # hack/loadlock.sh.
 if [ -z "$nolock" ] && [ -n "$heavy" ] && [ -z "${_LOCAL_LIVE_LOCKED:-}" ]; then
-  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" -r "$RETRY" -- \
+  # A heavy suite holds the lock alone: loadlock.sh -x, where it counts
+  # holders (#2242); a single-holder loadlock.sh is alone anyway.
+  alone=()
+  ! grep -q 'exclusive=1' "$LOADLOCK_SH" || alone=(-x)
+  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" "${alone[@]}" -r "$RETRY" -- \
     env _LOCAL_LIVE_LOCKED=1 bash "$SELF" "${ARGS[@]}"
 fi
 

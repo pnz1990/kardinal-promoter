@@ -270,7 +270,9 @@ func TestLocalLive(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(shared, "local-live.sh"), src, 0o755))
 		// The shared loadlock.sh: records that it ran, then runs CMD.
 		require.NoError(t, os.WriteFile(filepath.Join(shared, "loadlock.sh"), []byte(`#!/usr/bin/env bash
+# a counting lock: [-x] holds it alone (exclusive=1)
 echo shared >>"$FAKE/loadlock"
+echo "$*" >>"$FAKE/loadlock-args"
 while [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
@@ -297,6 +299,7 @@ exec "$@"
 		require.NoError(t, err, "%s", out)
 		assert.Empty(t, h.read("old"), "the older checkout's own script is not run")
 		assert.Equal(t, "shared\n", h.read("loadlock"), "the heavy suite ran under the shared loadlock.sh")
+		assert.Contains(t, h.read("loadlock-args"), " -x ", "a heavy suite holds a counting lock alone")
 		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "the checkout's matrix: scale's minor")
 
 		cmd = h.cmd(t, nil, "-n", "core")
