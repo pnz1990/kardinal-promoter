@@ -1576,7 +1576,7 @@ PromotionReceipt is the signed record of one promotion (docs/receipts.md). It ha
 | `status.signedBy.issuer` | string |  | Issuer is the OIDC issuer the certificate names (keyless). |
 | `status.signedBy.keyHint` | string |  | KeyHint is the base64 sha256 of the public key (key and kms). |
 | `status.signedBy.mode` | string | yes | Mode is keyless, key or kms. |
-| `status.stored` | []object |  | Stored lists the sinks holding the signed receipt. |
+| `status.stored` | []object |  | Stored lists the sinks holding the signed receipt: the CR, the transparency log, and an OCI referrer per image. A Bundle has at most 100 images, so at most 102 (#2331). |
 | `status.stored[].at` | string (date-time) | yes | At is when the sink was written. |
 | `status.stored[].logIndex` | integer (int64) |  | LogIndex is the transparency log index, for sink rekor. |
 | `status.stored[].ref` | string |  | Ref is the OCI referrer (repository@sha256:...), for sink oci. |
