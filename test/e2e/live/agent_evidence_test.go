@@ -7,6 +7,7 @@ package live
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
@@ -162,20 +164,28 @@ func TestAgentEvidence_Journey(t *testing.T) {
 		return cr.Status.Ticket != nil && cr.Status.State == "pending", fmt.Sprintf("state %q conditions %v", cr.Status.State, cr.Status.Conditions)
 	})
 	ticket := inst.Status.Ticket
-	e.SetFakeSnowTicket(t, ticket.Key, map[string]interface{}{"state": "-2", "approval": "approved",
-		"approvers": []map[string]string{{"name": "Jane Smith", "state": "approved"}}})
 
 	r = author.Exec(framework.CLIOptions{}, author.Args(a.ns, "approve", bundle, "--env", "prod", "--field", "ticketID="+ticket.Key)...)
 	require.Zero(t, r.Code, r.Output())
 	own := approvalRecord(t, e, a.ns, bundle, "prod", journeyCAB, authorUser)
 	assert.False(t, own.Counted, "the agent's approval of its own version does not count")
 	assert.Contains(t, own.Reason, "own party")
-	a.noStep(t, bundle, "prod", 10*time.Second)
 
+	// alice approves while the ticket is still pending: the gate holds on
+	// the change request alone, and prod gets no step, through a poll of
+	// the ticket (pollInterval 30s) that reads it pending after her approval.
 	const approver = "alice@example.com"
 	alice := userKubeconfig(t, e, a.ns, approver, "release-managers")
 	r = c.Exec(framework.CLIOptions{Kubeconfig: alice}, c.Args(a.ns, "approve", bundle, "--env", "prod", "--field", "ticketID="+ticket.Key)...)
 	require.Zero(t, r.Code, r.Output())
+	require.True(t, approvalRecord(t, e, a.ns, bundle, "prod", journeyCAB, approver).Counted, "alice's approval counts")
+	approvedAt := time.Now()
+	held := holdOnChangeRequest(t, e, a.ns, bundle, crName, approvedAt)
+	assert.Contains(t, held.Status.Reason, "change request prod-change: ticket "+ticket.Key+" is pending",
+		"the gate names what it waits for")
+
+	e.SetFakeSnowTicket(t, ticket.Key, map[string]interface{}{"state": "-2", "approval": "approved",
+		"approvers": []map[string]string{{"name": "Jane Smith", "state": "approved"}}})
 	e.WaitGateReady(t, a.ns, bundle, "prod", journeyCAB, true, "", gateTimeout)
 
 	// 3. The version promotes.
@@ -184,9 +194,20 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	a.merge(t, pr)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 
-	// 4. The signed receipt.
+	// The order of events: prod's promotion started only after the change
+	// request was approved.
+	crApproved := auditEventAt(t, e, a.ns, bundle, "ChangeRequestApproved", "prod")
+	prodStarted := auditEventAt(t, e, a.ns, bundle, "PromotionStarted", "prod")
+	assert.True(t, crApproved.Before(prodStarted), "ChangeRequestApproved (%s) before prod's PromotionStarted (%s)",
+		crApproved.Format(time.RFC3339Nano), prodStarted.Format(time.RFC3339Nano))
+	assert.True(t, approvedAt.Before(crApproved), "the ticket was approved after alice's approval")
+
+	// 4. The signed receipt. Its content is checked on the statement the
+	// envelope signs (base64 DSSE payload), which is the CR's byte for byte.
 	rc := promotionReceipt(t, e, a.ns, bundle, "prod", v1alpha1.ReceiptStored)
-	st, err := receipt.Parse([]byte(rc.Spec.Statement))
+	signed := signedPayload(t, rc.Status.Bundle)
+	require.Equal(t, rc.Spec.Statement, string(signed), "the envelope signs the CR's statement")
+	st, err := receipt.Parse(signed)
 	require.NoError(t, err)
 	rec := st.Predicate.Kardinal
 	assert.True(t, rec.DecisionSnapshot, "the gates as they were at the decision")
@@ -230,13 +251,8 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	assert.Empty(t, rec.Checks.SLSA.OtherSubjects)
 	require.NotNil(t, rec.Change.PR)
 	assert.Equal(t, pr.Number, rec.Change.PR.Number)
-	levels := st.Predicate.VerifiedLevels
-	for _, want := range []string{receipt.LevelGatesPassed, receipt.LevelApproved, receipt.LevelVerifiedByAgent,
-		receipt.LevelHealthy, "SLSA_BUILD_LEVEL_3"} {
-		assert.Contains(t, levels, want)
-	}
-	assert.NotContains(t, levels, receipt.LevelOverridden)
-	assert.NotContains(t, levels, receipt.LevelFreezeExempted)
+	assert.ElementsMatch(t, []string{receipt.LevelGatesPassed, receipt.LevelApproved, receipt.LevelVerifiedByAgent,
+		receipt.LevelHealthy, "SLSA_BUILD_LEVEL_3"}, st.Predicate.VerifiedLevels, "exactly these levels")
 	verified := map[string]bool{}
 	for _, at := range ivDone.Status.Attestations {
 		verified[at.Name] = at.Verified
@@ -286,7 +302,14 @@ func TestAgentEvidence_Journey(t *testing.T) {
 		users = append(users, fmt.Sprint(ap["spec"].(map[string]interface{})["user"]))
 	}
 	assert.ElementsMatch(t, []string{approver, authorUser}, users, "both approvals")
-	require.Len(t, ours("verdicts.ndjson"), 1, "V's verdict")
+	verdicts := ours("verdicts.ndjson")
+	require.Len(t, verdicts, 1, "V's verdict")
+	vspec := verdicts[0]["spec"].(map[string]interface{})
+	assert.Equal(t, bundle, vspec["bundle"])
+	assert.Equal(t, "pass", vspec["result"])
+	if actor, _ := vspec["actor"].(map[string]interface{}); assert.NotNil(t, actor, "the verdict's actor") {
+		assert.Equal(t, verifier, actor["agent"])
+	}
 	crs := ours("changerequests.ndjson")
 	require.Len(t, crs, 1, "the prod change request instance")
 	assert.Equal(t, ticket.Key, crs[0]["status"].(map[string]interface{})["ticket"].(map[string]interface{})["key"])
@@ -331,6 +354,8 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	vout, err := offline(t, os.Getenv(framework.EnvCLI), args...)
 	require.NoError(t, err, vout)
 	assert.Contains(t, vout, "receipt "+rc.Name+": every check below that was made passed")
+	assert.Contains(t, vout, "  approved by: "+approver+"\n", "alice once, and not the agent's uncounted approval")
+	assert.Contains(t, vout, "  verdicts by: agent "+verifier+" for bob@example.com\n")
 	tampered := filepath.Join(t.TempDir(), "tampered.sigstore.json")
 	require.NoError(t, os.WriteFile(tampered, flipPayloadByte(t, prodEnvelope), 0o600))
 	args[2] = tampered
@@ -396,9 +421,9 @@ func citations(t *testing.T, dir string) (files, actions map[string]bool) {
 	return files, actions
 }
 
-// packRecordFiles are the files of the pack, as its manifest lists them,
-// that hold at least one record: the .ndjson files (admission.yaml holds
-// the chart's policies, not kardinal records; manifest.json, SHA256SUMS and
+// packRecordFiles are the files of records the pack writes, as its manifest
+// lists them, empty or not: the .ndjson files (admission.yaml holds the
+// chart's policies, not kardinal records; manifest.json, SHA256SUMS and
 // controls.json describe the pack).
 func packRecordFiles(t *testing.T, m map[string]interface{}) []string {
 	t.Helper()
@@ -406,14 +431,88 @@ func packRecordFiles(t *testing.T, m map[string]interface{}) []string {
 	require.NotEmpty(t, listed, "the manifest lists the pack's files")
 	var out []string
 	for _, f := range listed {
-		file := f.(map[string]interface{})
-		name := fmt.Sprint(file["name"])
-		if n, _ := file["records"].(float64); strings.HasSuffix(name, ".ndjson") && n > 0 {
+		if name := fmt.Sprint(f.(map[string]interface{})["name"]); strings.HasSuffix(name, ".ndjson") {
 			out = append(out, name)
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// holdOnChangeRequest checks, for changeRequestHold, that prod's cab gate
+// stays not ready and prod gets no step while the change request instance
+// crName reads its ticket pending, and that the instance read it at least
+// once after since (its observedAt): the gate held on the change request
+// alone. It returns the gate as last seen.
+func holdOnChangeRequest(t *testing.T, e *framework.Env, ns, bundle, crName string, since time.Time) *v1alpha1.PolicyGate {
+	t.Helper()
+	ctx := context.Background()
+	var gate *v1alpha1.PolicyGate
+	read := false
+	for start := time.Now(); time.Since(start) < changeRequestHold || !read; time.Sleep(2 * time.Second) {
+		require.Less(t, time.Since(start), 2*changeRequestHold, "the change request was not read again while it held")
+		g, ok, err := e.GateInstance(ctx, ns, bundle, "prod", journeyCAB)
+		require.NoError(t, err)
+		require.True(t, ok, "prod's cab gate instance")
+		require.False(t, g.Status.Ready, "cab became ready while the change request was pending: %s", g.Status.Reason)
+		_, has, err := e.Step(ctx, ns, pipelineName, bundle, "prod")
+		require.NoError(t, err)
+		require.False(t, has, "prod got a step while the change request was pending")
+		var cr v1alpha1.ChangeRequest
+		require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: crName}, &cr))
+		require.Equal(t, "pending", cr.Status.State, "the ticket is still pending in the fake")
+		if cr.Status.ObservedAt != nil && cr.Status.ObservedAt.After(since) {
+			read = true
+		}
+		gate = g
+	}
+	return gate
+}
+
+// changeRequestHold is how long holdOnChangeRequest watches: more than the
+// template's pollInterval (30s), so the instance reads the pending ticket
+// after the approval.
+const changeRequestHold = 40 * time.Second
+
+// auditEventAt is when the AuditEvent action of bundle in env happened: its
+// kardinal.io/created-at annotation (nanoseconds; spec.timestamp has
+// seconds).
+func auditEventAt(t *testing.T, e *framework.Env, ns, bundle, action, env string) time.Time {
+	t.Helper()
+	var at time.Time
+	framework.Eventually(t, time.Minute, "the "+action+" AuditEvent of "+bundle+" in "+env, func(ctx context.Context) (bool, string) {
+		var list v1alpha1.AuditEventList
+		if err := e.Client.List(ctx, &list, client.InNamespace(ns)); err != nil {
+			return false, err.Error()
+		}
+		for _, ev := range list.Items {
+			if ev.Spec.BundleName != bundle || ev.Spec.Action != action || ev.Spec.Environment != env {
+				continue
+			}
+			ts, err := time.Parse(time.RFC3339Nano, ev.Annotations["kardinal.io/created-at"])
+			if err != nil {
+				return false, fmt.Sprintf("%s: created-at %q: %v", ev.Name, ev.Annotations["kardinal.io/created-at"], err)
+			}
+			at = ts
+			return true, ""
+		}
+		return false, fmt.Sprintf("%d events", len(list.Items))
+	})
+	return at
+}
+
+// signedPayload is the statement a Sigstore bundle's DSSE envelope signs.
+func signedPayload(t *testing.T, envelope string) []byte {
+	t.Helper()
+	var b struct {
+		DSSE struct {
+			Payload string `json:"payload"`
+		} `json:"dsseEnvelope"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(envelope), &b))
+	raw, err := base64.StdEncoding.DecodeString(b.DSSE.Payload)
+	require.NoError(t, err)
+	return raw
 }
 
 // flipPayloadByte changes one byte of a Sigstore bundle's signed DSSE

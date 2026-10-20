@@ -348,8 +348,8 @@ func TestEvidencePack(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(files["controls.json"], &controls))
 	assert.NotEmpty(t, controls.Frameworks)
-	// The mapping cites every file of records, and only files of the pack
-	// (AGENT-EVIDENCE-04 checks the same on a live pack).
+	// The mapping cites every file of records the pack writes, and only
+	// files of the pack (AGENT-EVIDENCE-04 checks the same on a live pack).
 	cited := map[string]bool{}
 	for _, f := range controls.Frameworks {
 		for _, c := range f.Controls {
@@ -363,9 +363,11 @@ func TestEvidencePack(t *testing.T) {
 			}
 		}
 	}
+	// Every file of records the pack writes, empty or not: a new kind's file
+	// is uncited until a row names it (QA-5 on #2279).
 	for _, f := range m.Files {
-		if strings.HasSuffix(f.Name, ".ndjson") && f.Records > 0 {
-			assert.True(t, cited[f.Name], "no shipped row of controls.json cites %s, which holds %d records", f.Name, f.Records)
+		if strings.HasSuffix(f.Name, ".ndjson") {
+			assert.True(t, cited[f.Name], "no shipped row of controls.json cites %s (%d records)", f.Name, f.Records)
 		}
 	}
 
