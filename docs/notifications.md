@@ -463,22 +463,39 @@ To verify a request:
 
 The key is used exactly as stored, byte for byte: create it with `--from-literal`, or make sure a file has no trailing newline.
 
-Go:
+Go, with the standard library only:
 
 ```go
-func verify(key []byte, r *http.Request, body []byte) bool {
-	ts := r.Header.Get("X-Kardinal-Timestamp")
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+// verify reports whether a request is the controller's, unchanged and recent:
+// body is the raw request body, now the receiver's clock.
+func verify(key []byte, header http.Header, body []byte, now time.Time) bool {
+	ts := header.Get("X-Kardinal-Timestamp")
 	sec, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || math.Abs(time.Since(time.Unix(sec, 0)).Seconds()) > 300 {
+	if err != nil {
 		return false
+	}
+	if d := now.Sub(time.Unix(sec, 0)); d > 5*time.Minute || d < -5*time.Minute {
+		return false // a replay, or a skewed clock
 	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(ts + "."))
 	mac.Write(body)
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	return hmac.Equal([]byte(want), []byte(r.Header.Get("X-Kardinal-Signature")))
+	return hmac.Equal([]byte(want), []byte(header.Get("X-Kardinal-Signature")))
 }
 ```
+
+kardinal's tests check this function, and the shell line below, against the controller's own
+signer. The reference implementation is `Verify` in `pkg/reconciler/notificationhook`.
 
 Python:
 

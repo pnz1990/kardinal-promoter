@@ -54,7 +54,7 @@ kardinal get pipelines
 # kardinal-test-app     sha-9349a3f   Verified   ...     ...      0     2m
 
 # 8. Check policy gate explanation
-kardinal explain kardinal-test-app --env prod
+kardinal why kardinal-test-app prod -o wide
 # Must show: PolicyGates evaluated, reason why prod is waiting or ready
 
 # 9. Prod PR is opened automatically
@@ -72,8 +72,8 @@ kardinal get pipelines
 - [ ] `kardinal version` returns valid version strings
 - [ ] `kubectl apply -f examples/quickstart/pipeline.yaml` succeeds with no errors
 - [ ] Bundle creation triggers automatic promotion to test and uat
-- [ ] PolicyGates block prod on weekends (verify with `kardinal explain`)
-- [ ] `kardinal explain kardinal-test-app --env prod` shows gate evaluation with values
+- [ ] PolicyGates block prod on weekends (verify with `kardinal why`)
+- [ ] `kardinal why kardinal-test-app prod -o wide` shows gate evaluation with values
 - [ ] A PR is opened for prod with structured evidence body (not a raw diff)
 - [ ] After PR merge, `kardinal get pipelines` shows PROD=Verified
 - [ ] `kardinal get steps kardinal-test-app` shows all steps with correct states
@@ -131,7 +131,7 @@ kardinal get pipelines
 
 - [ ] `dependsOn` fan-out works: prod-eu and prod-us start simultaneously after pre-prod
 - [ ] Two PRs opened in parallel, both with evidence and policy compliance
-- [ ] `kardinal explain rollouts-demo --env prod-eu` shows gate states correctly
+- [ ] `kardinal why rollouts-demo prod-eu` shows gate states correctly
 - [ ] Health adapter reads Argo CD Application status from hub cluster
 - [ ] Each prod step stays HealthChecking until its hub Application is Healthy and Synced, which
       Argo CD reports only after the canary finishes
@@ -231,7 +231,7 @@ kardinal policy list
 # Must show no-weekend-deploys [org], staging-soak-30m [org], no-bot-deploys [team]
 
 # 8. Verify gates in Graph
-kardinal explain kardinal-test-app --env prod
+kardinal why kardinal-test-app prod -o wide
 # Must show all three gates as nodes with current evaluation state
 ```
 
@@ -244,8 +244,8 @@ kardinal explain kardinal-test-app --env prod
 - [ ] `kardinal policy simulate` with both gates passing returns PASS with table
 - [ ] Team-level gate is additive alongside org gates
 - [ ] Team cannot delete or modify org gates in `platform-policies` namespace (RBAC verified)
-- [ ] `kardinal explain` shows all three gates as nodes with CEL expression and current value
-- [ ] Gates appear as nodes in the promotion Graph. Gates show in `kardinal explain <pipeline> --env prod` and in the UI graph.
+- [ ] `kardinal why <pipeline> prod -o wide` shows all three gates as nodes with CEL expression and current value
+- [ ] Gates appear as nodes in the promotion Graph. Gates show in `kardinal why <pipeline> prod -o wide` and in the UI graph.
 - [ ] Soak gate re-evaluates after `recheckInterval` without manual trigger
 
 ---
@@ -270,7 +270,7 @@ kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-a
 kardinal rollback kardinal-test-app --env prod
 # Rolling back kardinal-test-app in prod from <bundle> to <bundle> (...)
 # Bundle <x> created (rollbackOf=<y>)
-# Track with: kardinal explain kardinal-test-app --env prod
+# Track with: kardinal why kardinal-test-app prod
 
 # 3. PR has kardinal/rollback label, same evidence structure as a forward promotion
 # Must show previous version info, not just a diff
@@ -301,11 +301,11 @@ matching the documented format.
 ```bash
 kardinal version                          # CLI + controller versions
 kardinal get pipelines                    # table with PIPELINE/BUNDLE/ENV columns
-kardinal get steps <pipeline>             # PromotionSteps with states (gates show in explain and the UI graph)
+kardinal get steps <pipeline>             # PromotionSteps with states (gates show in why and the UI graph)
 kardinal get bundles <pipeline>           # Bundle history with provenance
 kardinal create bundle <pipeline> --image # creates Bundle CRD, prints confirmation
 kardinal promote <pipeline> --env <env>   # creates a Bundle; prints "Promoting <p> to <env>: bundle <x> created from <y> ..." and "Track with: kardinal get bundles <p>"
-kardinal explain <pipeline> --env <env>   # policy gate trace with current values
+kardinal why <pipeline> <env> -o wide     # policy gate trace with current values
 kardinal rollback <pipeline> --env <env>  # opens rollback PR
 kardinal pause <pipeline>                 # injects freeze gate
 kardinal resume <pipeline>                # removes freeze gate
@@ -318,7 +318,7 @@ kardinal policy simulate                  # gate simulation with result
 
 - [ ] Every command above executes without error
 - [ ] Output format matches examples in `docs/cli-reference.md`
-- [ ] `kardinal explain` includes CEL expression, current value, and result
+- [ ] `kardinal why <pipeline> <env> -o wide` includes CEL expression, current value, and result
 - [ ] `kardinal policy simulate` accepts `--time` flag and returns correct block/pass
 
 ---
@@ -376,7 +376,7 @@ kardinal get pipelines
 - [ ] `layout: branch` renders manifests in the RenderRun Job and commits them to the env branch
 - [ ] PR diff shows rendered YAML, not template source
 - [ ] Argo CD Application tracking `env/prod` branch reflects the merged content
-- [ ] `kardinal explain` shows the branch each environment tracks
+- [ ] `kardinal why <pipeline> <env> -o wide` shows the branch each environment tracks
 - [ ] Source branch (`source/`) is never modified by the promotion (only env branches change)
 - [ ] Bundle supersession during an in-flight render: old render is discarded, new render begins
 
@@ -468,7 +468,7 @@ the tests pass does not count either.
 | 3: Policy governance | live, partial | 2026-10-02 | GATE-ORG-01, GATE-TEAM-01, GATE-SOAK-01, GATE-RECHECK-01, CLI-POLICY-LIST-01 and CLI-POLICY-SIMULATE-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). No live test covers pass criterion 7 (RBAC on `platform-policies`). |
 | 4: Rollback | live, partial | 2026-10-02 | RB-PREV-01, RB-TO-01, RB-PR-01, RB-HISTORY-01, CLI-ROLLBACK-01 and CLI-HISTORY-01 passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). |
 | 5: CLI workflow | live, partial | 2026-10-02 | All 35 live CLI-* rows passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). The two deprecated rows also passed: `approve` fails and points to `kardinal override`, and `rollback --emergency` has no effect. |
-| 6: Rendered manifests | live, partial | 2026-10-10 | `layout: branch` shipped in #1515. The live core rows REND-KUST-01, REND-PR-01, REND-ROLLBACK-01, REND-DRIFT-01, REND-HELM-01, REND-SANDBOX-01, REND-CONFLICT-01 and REND-SSH-01 cover rendering, PRs into the rendered branch, rollback, drift and the sandbox. No live test runs `examples/rendered-manifests/` itself (`TestJourney6` checks it against a fake client), and pass criteria 3 (Argo CD syncing `env/prod`), 4 (`explain` shows the branch) and 6 (supersession during a render) have no live row. |
+| 6: Rendered manifests | live, partial | 2026-10-10 | `layout: branch` shipped in #1515. The live core rows REND-KUST-01, REND-PR-01, REND-ROLLBACK-01, REND-DRIFT-01, REND-HELM-01, REND-SANDBOX-01, REND-CONFLICT-01 and REND-SSH-01 cover rendering, PRs into the rendered branch, rollback, drift and the sandbox. No live test runs `examples/rendered-manifests/` itself (`TestJourney6` checks it against a fake client), and pass criteria 3 (Argo CD syncing `env/prod`), 4 (`why -o wide` shows the branch) and 6 (supersession during a render) have no live row. |
 | 7: Multi-tenant self-service | live, partial | 2026-10-02 | `TestHealth_MultiTenantExample` (EX-TENANT-01) passed in [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174). It covers one Pipeline per team from the ApplicationSet, and each team promoting. It does not cover RBAC isolation, the org weekend gate on a new team, or cascade delete. |
 
 The v0.9.0 evidence is e2e-live [run 37037330174](https://github.com/pnz1990/kardinal-promoter/actions/runs/37037330174) on 956bb4ed, the commit tagged v0.9.0: 16 of 17 jobs
