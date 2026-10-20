@@ -255,12 +255,14 @@ func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	}
 	c, cns, err := buildClient()
 	if err != nil {
-		return nil, err
+		return nil, humanizedError{orig: err, human: HumanError(err)}
 	}
 	var out bytes.Buffer
 	v, err := f(ctx, &out, c, cns)
 	if err != nil {
-		return nil, err
+		// Rewritten here, under the lock and with this call's flags: toolError
+		// runs outside it.
+		return nil, humanizedError{orig: err, human: HumanError(err)}
 	}
 	if v == nil {
 		if raw := bytes.TrimSpace(out.Bytes()); json.Valid(raw) && len(raw) > 0 {
