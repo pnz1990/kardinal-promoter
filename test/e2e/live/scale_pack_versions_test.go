@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,7 +54,11 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 	r := scale.Begin(t)
 	ctx := context.Background()
 	n, nns := r.P.PackVersions, r.P.PackNamespaces
+	// Receipts on: the controller signs and stores the receipts the test
+	// writes, so the pack exports them as it would a cluster's.
+	scale.EnableReceipts(t, r.E)
 	as := scale.ControllerClient(t, r.E)
+	user := selfUser(t, r.E)
 	nss := make([]string, nns)
 	for i := range nss {
 		nss[i] = r.E.Namespace(t)
@@ -63,11 +68,20 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 	// A tenth of the versions first, then the rest: a period that ends
 	// between them holds the tenth.
 	start := time.Now()
-	createPackVersions(t, r, as, nss, 0, n/10)
+	createPackVersions(t, r, as, user, nss, 0, n/10)
 	time.Sleep(2 * time.Second)
 	tenth := time.Now().Truncate(time.Second)
 	time.Sleep(2 * time.Second)
-	createPackVersions(t, r, as, nss, n/10, n)
+	createPackVersions(t, r, as, user, nss, n/10, n)
+	// Every receipt signed and stored before the exports: a receipt changing
+	// under one would change the pack.
+	framework.Eventually(t, r.P.ReceiptDrainVersions, fmt.Sprintf("%d receipts Stored", 2*n), func(ctx context.Context) (bool, string) {
+		stored, err := scale.CountReceipts(ctx, r.E, "", v1alpha1.ReceiptStored)
+		if err != nil {
+			return false, err.Error()
+		}
+		return stored >= 2*n, fmt.Sprintf("%d of %d Stored", stored, 2*n)
+	})
 	r.Note("packVersions", n)
 	r.Note("packVersionNamespaces", nns)
 	r.Note("packVersionsSetupSeconds", int(time.Since(start).Seconds()))
@@ -78,7 +92,7 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 	export := func(name string, to time.Time, scope ...string) (records map[string]int, pack []byte, took time.Duration, rssMiB int64) {
 		t.Helper()
 		out := filepath.Join(t.TempDir(), name)
-		args := append(append([]string{"--context", r.E.Context}, scope...), "audit", "evidence-pack",
+		args := append(append([]string{"--context", r.E.Context, "audit", "evidence-pack"}, scope...),
 			"--since", since.Format(time.RFC3339), "--until", to.Format(time.RFC3339), "-o", out)
 		cmd := exec.CommandContext(ctx, os.Getenv(framework.EnvCLI), args...)
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
@@ -163,7 +177,7 @@ func packRecords(t *testing.T, pack []byte) map[string]int {
 // the test's user; and two receipts, for uat and prod (about 4 KiB, the
 // fixture of TestScale_Receipts), Pending: the export reads them as the
 // controller wrote them, signing is TestScale_Receipts' concern.
-func createPackVersions(t *testing.T, r *scale.Run, as client.Client, nss []string, from, to int) {
+func createPackVersions(t *testing.T, r *scale.Run, as client.Client, user string, nss []string, from, to int) {
 	t.Helper()
 	ctx := context.Background()
 	require.NoError(t, scale.Parallel(16, to-from, func(k int) error {
@@ -192,8 +206,9 @@ func createPackVersions(t *testing.T, r *scale.Run, as client.Client, nss []stri
 		if err := as.Create(ctx, gate); err != nil {
 			return fmt.Errorf("create gate instance %s/%s: %w", ns, gate.Name, err)
 		}
-		ap := &v1alpha1.Approval{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name + "-prod"},
-			Spec: v1alpha1.ApprovalSpec{Bundle: name, Environment: "prod", Decision: "approve"}}
+		ap := &v1alpha1.Approval{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name + "-prod",
+			Labels: map[string]string{"kardinal.io/bundle": name, "kardinal.io/environment": "prod"}},
+			Spec: v1alpha1.ApprovalSpec{Bundle: name, BundleUID: string(b.UID), Environment: "prod", User: user, Decision: "approve"}}
 		if err := r.E.Client.Create(ctx, ap); err != nil {
 			return fmt.Errorf("create Approval %s/%s: %w", ns, ap.Name, err)
 		}
@@ -234,4 +249,13 @@ func markSuperseded(ctx context.Context, as client.Client, ns, name string) erro
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// selfUser is the test's own username, as the API server authenticates it
+// (an Approval names its approver, who must be the requester).
+func selfUser(t *testing.T, e *framework.Env) string {
+	t.Helper()
+	ssr, err := e.Kube.AuthenticationV1().SelfSubjectReviews().Create(context.Background(), &authv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	return ssr.Status.UserInfo.Username
 }
