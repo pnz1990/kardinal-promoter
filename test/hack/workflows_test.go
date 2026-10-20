@@ -281,6 +281,7 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	require.NoError(t, err)
 
 	suites := map[string]bool{}
+	hosts := map[string]string{} // suite -> heavy or -
 	// shards["core 1.37"] is the set of core's shards on 1.37 ("-" for none).
 	shards := map[string]map[string]bool{}
 	var oldestUpgrade bool
@@ -290,10 +291,15 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
 			continue
 		}
-		if !assert.Len(t, f, 3, "matrix.txt %q: want suite, Kubernetes minor and shard", line) {
+		if !assert.Len(t, f, 4, "matrix.txt %q: want suite, Kubernetes minor, shard and host", line) {
 			continue
 		}
 		suite, minor, shard := f[0], f[1], f[2]
+		assert.Contains(t, []string{"heavy", "-"}, f[3], "matrix.txt %q: host is heavy or -", line)
+		if h, seen := hosts[suite]; seen {
+			assert.Equal(t, h, f[3], "matrix.txt %q: every line of %s says the same host", line, suite)
+		}
+		hosts[suite] = f[3]
 		_, known := runs[suite]
 		assert.True(t, known, "matrix.txt %q: hack/e2e/up.sh has no suite %s", line, suite)
 		node := "KIND_NODE_" + strings.ReplaceAll(minor, ".", "_")

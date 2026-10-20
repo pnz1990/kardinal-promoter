@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -654,7 +655,7 @@ func TestMachineSlots(t *testing.T) {
 	require.True(t, ok)
 	_, ok, why := b.Slots(2)
 	assert.False(t, ok, "one slot left")
-	assert.Contains(t, why, "fewer than 2 of the host's 3 cluster slots")
+	assert.Contains(t, why, "2 cluster slots are in use in "+dir+", and the host has 3")
 	entries, _ := os.ReadDir(dir)
 	assert.Len(t, entries, 2, "a failed take leaves no slot behind")
 	relB, ok, _ := b.Slots(1)
@@ -676,6 +677,144 @@ func TestMachineSlots(t *testing.T) {
 	none, ok, _ := (&machine{}).Slots(5)
 	assert.True(t, ok, "no slots directory: no limit")
 	none()
+}
+
+// TestMachineSlots_AboveSlotMaxCount (#2244): a slot directory above
+// slot-max (a run with a larger SLOT_MAX took it) is never taken, and counts:
+// the host runs slot-max clusters at most.
+func TestMachineSlots_AboveSlotMaxCount(t *testing.T) {
+	dir := t.TempDir()
+	m := &machine{slotsDir: dir, slotMax: 2, owner: "gate"}
+	for _, n := range []string{"3", "4"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, n), 0o755))
+	}
+	_, ok, why := m.Slots(1)
+	assert.False(t, ok, "slots 1 and 2 are free, but two clusters run")
+	assert.Contains(t, why, "2 cluster slots are in use")
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, "4")))
+	release, ok, why := m.Slots(1)
+	require.True(t, ok, why)
+	assert.DirExists(t, filepath.Join(dir, "1"), "slot 1, never one above slot-max")
+	release()
+	_, ok, _ = m.Slots(2)
+	assert.False(t, ok, "slot 3 and two more would be three")
+	assert.NoDirExists(t, filepath.Join(dir, "1"))
+
+	// The host's slots: $SLOT_MAX, else SLOT_MAX=N in DIR/../host.env,
+	// else 2; -slot-max over all; 1 to 4 from every source, or refused.
+	host := t.TempDir()
+	slots := filepath.Join(host, "slots")
+	hostEnv := filepath.Join(host, "host.env")
+	got := func(flagged int) (int, error) { return slotMaxOr(flagged, slots) }
+	wantSlots := func(want, flagged int, why string) {
+		t.Helper()
+		n, err := got(flagged)
+		require.NoError(t, err, why)
+		assert.Equal(t, want, n, why)
+	}
+	refused := func(flagged int, want string) {
+		t.Helper()
+		_, err := got(flagged)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), want)
+	}
+	t.Setenv("SLOT_MAX", "")
+	wantSlots(2, 0, "the host's default, as local-live.sh's")
+	n, err := slotMaxDefault("")
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "no slots directory")
+	require.NoError(t, os.WriteFile(hostEnv, []byte("# the host's capacity\nSLOT_MAX=3\r\n"), 0o644))
+	wantSlots(3, 0, "host.env")
+	n, err = slotMaxDefault(slots + "/")
+	require.NoError(t, err)
+	assert.Equal(t, 3, n, "a slots directory with a trailing slash")
+	wantSlots(4, 4, "-slot-max over host.env")
+	t.Setenv("SLOT_MAX", "1")
+	wantSlots(1, 0, "$SLOT_MAX over host.env")
+	for _, bad := range []string{"5", "999", "99999999999999999999", "abc", "0", "03", "-1", " 3"} {
+		t.Setenv("SLOT_MAX", bad)
+		refused(0, "SLOT_MAX="+bad+" ($SLOT_MAX): the host has 1 to 4 cluster slots")
+	}
+	t.Setenv("SLOT_MAX", "")
+	for _, bad := range []string{"5", "999", "99999999999999999999", "abc", "0", "03", "-1", " 3"} {
+		require.NoError(t, os.WriteFile(hostEnv, []byte("SLOT_MAX="+bad+"\n"), 0o644))
+		refused(0, "SLOT_MAX="+bad+" ("+hostEnv+"): the host has 1 to 4 cluster slots")
+	}
+	for _, bad := range []int{5, 999, -1} {
+		refused(bad, fmt.Sprintf("-slot-max %d: the host has 1 to 4 cluster slots", bad))
+	}
+	require.NoError(t, os.WriteFile(hostEnv, []byte("slot_max=9\n"), 0o644))
+	wantSlots(2, 0, "another key is not SLOT_MAX")
+	if os.Geteuid() != 0 {
+		require.NoError(t, os.WriteFile(hostEnv, []byte("SLOT_MAX=3\n"), 0o644))
+		require.NoError(t, os.Chmod(hostEnv, 0o000))
+		wantSlots(2, 0, "a host.env that cannot be read: the fewest")
+	}
+}
+
+// TestDrainLive (#2244 QA): a .drain record is judged by local-live.sh's
+// record rule: another boot's, a gone pid's, or a reused pid's (another
+// start time) is not live.
+func TestDrainLive(t *testing.T) {
+	proc := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "sys", "kernel", "random"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "sys", "kernel", "random", "boot_id"), []byte("b-now\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "4242"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "4242", "stat"),
+		[]byte("4242 (a (weird) name) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 777 19 20\n"), 0o644))
+	for _, tc := range []struct {
+		name, record string
+		live         bool
+	}{
+		{"the drainer runs", "E local-live scale 1.37 draining the host for a heavy suite, pid 4242 now boot=b-now start=777", true},
+		{"its pid was reused: another start time", "E local-live scale 1.37 draining the host for a heavy suite, pid 4242 now boot=b-now start=776", false},
+		{"another boot's", "E local-live scale 1.37 draining the host for a heavy suite, pid 4242 now boot=b-old start=777", false},
+		{"its pid is gone", "E local-live scale 1.37 draining the host for a heavy suite, pid 4243 now boot=b-now start=777", false},
+		{"an older record: pid only", "E local-live scale 1.37 draining the host, pid 4242 now", true},
+		{"no pid", "a person, by hand", true},
+		{"this process's", fmt.Sprintf("gate pid %d now", os.Getpid()), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.live, drainLive(tc.record, proc))
+		})
+	}
+}
+
+// TestMachineSlots_HonourTheDrain (#2244 QA): while a heavy local-live
+// suite drains the host (DIR/.drain naming a live process), the gate takes
+// no cluster slot; a marker of a process that is gone, or of the gate
+// itself, does not stop it.
+func TestMachineSlots_HonourTheDrain(t *testing.T) {
+	dir := t.TempDir()
+	m := &machine{slotsDir: dir, slotMax: 4, owner: "gate"}
+	sleeper := exec.Command("sleep", "30")
+	require.NoError(t, sleeper.Start())
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	for _, tc := range []struct {
+		name, drain string
+		takes       bool
+	}{
+		{"a live heavy run drains", fmt.Sprintf("ENGINEER-1 local-live scale 1.37 draining the host, pid %d now", sleeper.Process.Pid), false},
+		{"a gone heavy run's marker", fmt.Sprintf("ENGINEER-1 local-live scale 1.37 draining the host, pid %d now", gone.Process.Pid), true},
+		{"the gate's own marker", fmt.Sprintf("gate pid %d now", os.Getpid()), true},
+		{"no marker", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(filepath.Join(dir, ".drain"))
+			if tc.drain != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".drain"), []byte(tc.drain+"\n"), 0o644))
+			}
+			release, ok, why := m.Slots(1)
+			assert.Equal(t, tc.takes, ok, why)
+			if ok {
+				release()
+			} else {
+				assert.Contains(t, why, "a heavy suite is draining the host")
+			}
+		})
+	}
 }
 
 // fakeGH answers gh calls from a script of responses keyed by the call.

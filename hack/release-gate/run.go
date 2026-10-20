@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -480,10 +481,22 @@ func (m *machine) Ready() (bool, string) {
 }
 
 // Slots makes n of slotsDir/1..slotMax (mkdir is atomic) and writes the
-// owner into each; with fewer than n free it takes none.
+// owner into each; with fewer than n free, or slotMax held in all, it takes
+// none.
 func (m *machine) Slots(n int) (func(), bool, string) {
 	if m.slotsDir == "" {
 		return func() {}, true, ""
+	}
+	// A heavy local-live suite draining the host (DIR/.drain, written by
+	// hack/e2e/local-live.sh) keeps every other run's cluster off it, the
+	// gate's too, unless the gate wrote it.
+	if drain, err := os.ReadFile(filepath.Join(m.slotsDir, ".drain")); err == nil && drainLive(string(drain), "") {
+		return nil, false, "a heavy suite is draining the host: " + strings.TrimSpace(string(drain))
+	}
+	// Every held slot directory counts, one above slotMax too (a run with a
+	// larger SLOT_MAX took it): the host runs slotMax clusters at most.
+	if held := heldSlots(m.slotsDir); held+n > m.slotMax {
+		return nil, false, fmt.Sprintf("%d cluster slots are in use in %s, and the host has %d", held, m.slotsDir, m.slotMax)
 	}
 	var taken []string
 	release := func() {
@@ -509,6 +522,66 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 		return nil, false, fmt.Sprintf("fewer than %d of the host's %d cluster slots in %s are free", n, m.slotMax, m.slotsDir)
 	}
 	return release, true, ""
+}
+
+// heldSlots counts dir's numbered slot directories.
+func heldSlots(dir string) int {
+	entries, _ := os.ReadDir(dir)
+	n := 0
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err == nil && e.IsDir() {
+			n++
+		}
+	}
+	return n
+}
+
+var (
+	drainPid   = regexp.MustCompile(`(?:^|\s)pid (\d+)(?:\s|$)`)
+	drainBoot  = regexp.MustCompile(`(?:^|\s)boot=(\S+)`)
+	drainStart = regexp.MustCompile(`(?:^|\s)start=(\d+)(?:\s|$)`)
+)
+
+// drainLive reports whether a .drain record names a live process other than
+// this one, by local-live.sh's record rule (#2244 QA): the process is gone
+// when the record's boot id is not this boot's, its pid does not run, or
+// its start time (/proc/<pid>/stat field 22) differs, so a reused pid is
+// not the drainer. A record without a pid counts as live; local-live.sh
+// reclaims a dead one. proc is the /proc to read ("" for the host's).
+func drainLive(record, proc string) bool {
+	if proc == "" {
+		proc = "/proc"
+	}
+	m := drainPid.FindStringSubmatch(record)
+	if m == nil {
+		return true
+	}
+	pid, err := strconv.Atoi(m[1])
+	if err != nil || pid == os.Getpid() {
+		return false
+	}
+	if b := drainBoot.FindStringSubmatch(record); b != nil {
+		boot, err := os.ReadFile(filepath.Join(proc, "sys/kernel/random/boot_id"))
+		if err == nil && strings.TrimSpace(string(boot)) != b[1] {
+			return false
+		}
+	}
+	stat, err := os.ReadFile(filepath.Join(proc, strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	if st := drainStart.FindStringSubmatch(record); st != nil {
+		// Field 22, counted after the command's last ')': the command can
+		// hold spaces and parentheses.
+		rest := string(stat)
+		if i := strings.LastIndexByte(rest, ')'); i >= 0 {
+			rest = rest[i+1:]
+		}
+		if f := strings.Fields(rest); len(f) > 19 && f[19] != st[1] {
+			return false
+		}
+	}
+	return true
 }
 
 func memAvailableGB() (float64, bool) {

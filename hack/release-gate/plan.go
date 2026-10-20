@@ -173,8 +173,8 @@ func readMatrix(path string) ([]MatrixLine, error) {
 		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
 			continue
 		}
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("%s: %q: want suite, Kubernetes minor and shard", path, sc.Text())
+		if len(fields) != 4 || (fields[3] != "heavy" && fields[3] != "-") {
+			return nil, fmt.Errorf("%s: %q: want suite, Kubernetes minor, shard and host (heavy or -)", path, sc.Text())
 		}
 		out = append(out, MatrixLine{fields[0], fields[1], fields[2]})
 	}
