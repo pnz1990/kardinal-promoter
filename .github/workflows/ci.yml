@@ -269,13 +269,17 @@ jobs:
           # policy simulate, previews, the evidence pack) took 84s next to the
           # shard's other packages even after #2215 halved it: it keeps 300s
           # too (#2194) until the MCP server's per-call globals are gone and
-          # its MCP tests can run in parallel. Every other package keeps 120s.
+          # its MCP tests can run in parallel. test/hack (TestLocalLive and the
+          # heavy-load lock tests) passed 120s on a runner after #2242-#2244:
+          # it keeps 300s too (#2292) until those tests run in parallel.
+          # Every other package keeps 120s.
           cli=github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd
+          hack=github.com/kardinal-promoter/kardinal-promoter/test/hack
           others=()
           slow=()
           for p in "${packages[@]}"; do
             case "$p" in
-              "$helm" | "$cli") slow+=("$p") ;;
+              "$helm" | "$cli" | "$hack") slow+=("$p") ;;
               *) others+=("$p") ;;
             esac
           done
