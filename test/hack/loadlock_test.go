@@ -227,6 +227,27 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 	})
 }
 
+// holderRuns reports whether one of lock's waiters (cmds) runs with no
+// ticket in its queue: it holds the lock, gives it back, or starts.
+func holderRuns(lock string, cmds []*exec.Cmd) bool {
+	queued := map[string]bool{}
+	entries, _ := os.ReadDir(lock + ".queue")
+	for _, e := range entries {
+		if i := strings.LastIndexByte(e.Name(), '-'); i > 0 {
+			queued[e.Name()[i+1:]] = true
+		}
+	}
+	for _, c := range cmds {
+		if st := procState(c.Process.Pid); st == "gone" || strings.HasPrefix(st, "state Z") {
+			continue // it ended
+		}
+		if !queued[strconv.Itoa(c.Process.Pid)] {
+			return true
+		}
+	}
+	return false
+}
+
 // dirID is dir's inode and change time: the same directory across looks.
 func dirID(dir string) (string, error) {
 	fi, err := os.Stat(dir)
@@ -523,8 +544,12 @@ func TestLoadLock_Races(t *testing.T) {
 			}
 			// A round takes seconds; a lock with no owner for five looks a
 			// second apart, the same LOCK each time (its inode and ctime: a
-			// view made again is a new one), is wedged now, not at the
-			// timeout. Its dump says why (QA-3, #2316).
+			// view made again is a new one), while none of its holders runs,
+			// is wedged now, not at the timeout. Its dump says why (QA-3,
+			// #2316). A holder that runs is changing the view: a runner with
+			// the lock stress tests side by side stretched one fork of that
+			// (mv, rmdir) past five seconds (#2334's nightly dumps: the holder
+			// in D, dup_mmap).
 			ownerless := map[string]int{}
 			seen := map[string]string{}
 			deadline := time.After(60 * time.Second)
@@ -541,7 +566,7 @@ func TestLoadLock_Races(t *testing.T) {
 						lock := filepath.Join(lr.dir, "LOADLOCK")
 						id, lerr := dirID(lock)
 						_, oerr := os.Stat(filepath.Join(lock, "owner"))
-						if lerr == nil && oerr != nil {
+						if lerr == nil && oerr != nil && !holderRuns(lock, lr.cmds) {
 							if seen[lock] != id {
 								seen[lock], ownerless[lock] = id, 0
 							}
