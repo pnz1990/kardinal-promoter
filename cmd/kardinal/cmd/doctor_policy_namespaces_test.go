@@ -70,6 +70,7 @@ func TestDoctor_PolicyNamespaces(t *testing.T) {
 		"a v0.14 patch refuses":    {estate, "0.14.2", true, doctorFail, "refused, their new versions wait"},
 		"an unknown version warns": {estate, "unknown", true, doctorWarn, "v0.14.0 refuses them"},
 		"a dev build warns":        {estate, "v0.14.0-dev", true, doctorWarn, "v0.14.0 refuses them"},
+		"a later dev build warns":  {estate, "v0.15.0-dev", true, doctorWarn, "v0.14.0 refuses them"},
 		"none affected": {clean, "v0.13.0", true,
 			doctorPass, "every spec.policyNamespaces entry agreed (2 Pipelines, all namespaces)"},
 		"a controller before v0.13 does not check": {estate, "v0.12.3", true, doctorWarn,
