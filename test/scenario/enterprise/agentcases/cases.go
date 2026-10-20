@@ -634,19 +634,24 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 	assertLinearAdmission(t, api, send, prs, idx, half, empty, fullBytes, halfBytes, emptyBytes)
 }
 
-// growthRounds and growthSample size assertLinearAdmission: the rounds whose
-// median ratio decides, and the requests timed per index in each.
+// growthRounds, growthSample and growthChunks size assertLinearAdmission:
+// the rounds whose median ratio decides, the requests timed per index in
+// each, and the chunks a round times them in, the indexes taking turns.
 const (
 	growthRounds = 5
 	growthSample = 400
+	growthChunks = 5
 )
 
 // assertLinearAdmission checks that the actor policy's admission cost grows
 // at most linearly with the AgentIndex (#1936 makes it linear). It times the
-// same requests against the full index, half of it and an empty one,
-// interleaved in growthRounds rounds (the order rotates, so drift on a
-// shared runner hits all three alike), and asserts growthShape's median
-// round ratio stays under its bound.
+// same requests against the full index, half of it and an empty one in
+// growthRounds rounds, and asserts growthShape's median round ratio stays
+// under its bound. A round times each index in growthChunks chunks of the
+// requests, the three taking turns (the order rotates), so drift on a
+// shared runner hits all three alike: at the full size a request takes
+// 50ms, and timing an index's 400 in one block, 20s, let the full index's
+// p50 range from 44 to 71ms over a CI run's rounds.
 //
 // Before #2270 it compared the full index with a tenth of it above the
 // empty one: the tenth costs a millisecond or two more than the empty
@@ -658,21 +663,24 @@ func assertLinearAdmission(t *testing.T, api *scenario.APIServer, send func(prob
 	t.Helper()
 	sample := prs[:min(len(prs), growthSample)]
 	indexes := []*v1alpha1.AgentIndex{full, half, empty}
-	timeOf := func(idx *v1alpha1.AgentIndex) time.Duration {
-		require.NoError(t, api.SetAgentIndex(idx))
-		var ds []time.Duration
-		for _, pr := range sample {
-			d, _ := send(pr)
-			ds = append(ds, d)
-		}
-		return median(ds)
-	}
+	per := max(1, (len(sample)+growthChunks-1)/growthChunks)
 	rounds := make([]growthRound, 0, growthRounds)
 	for r := 0; r < growthRounds; r++ {
+		ds := map[*v1alpha1.AgentIndex][]time.Duration{}
+		for c := 0; c*per < len(sample); c++ {
+			chunk := sample[c*per : min((c+1)*per, len(sample))]
+			for k := range indexes {
+				idx := indexes[(r+c+k)%len(indexes)]
+				require.NoError(t, api.SetAgentIndex(idx))
+				for _, pr := range chunk {
+					d, _ := send(pr)
+					ds[idx] = append(ds[idx], d)
+				}
+			}
+		}
 		p50 := map[*v1alpha1.AgentIndex]time.Duration{}
-		for k := range indexes {
-			idx := indexes[(r+k)%len(indexes)]
-			p50[idx] = timeOf(idx)
+		for _, idx := range indexes {
+			p50[idx] = median(ds[idx])
 		}
 		rounds = append(rounds, growthRound{empty: p50[empty], half: p50[half], full: p50[full]})
 		t.Logf("admission round %d: p50 %s empty (%d KiB), %s at %d KiB, %s at %d KiB",
