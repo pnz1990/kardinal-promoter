@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -26,7 +27,8 @@ import (
 
 // mcpWorld is a scenario World (every kardinal reconciler, the chart's
 // admission policies) with a Pipeline app in team-a that ran version 1.1.0
-// to prod, a Pipeline app in team-b, and kardinal mcp --allow-write
+// to prod and whose version mcpWaiting waits at prod's approval gate, a
+// Pipeline app in team-b, and kardinal mcp --allow-write
 // connected as agent fixer (scoped to team-a) through a kubeconfig of its
 // own (World.ClientAs). Without admission, the World stores every write
 // as the CLI made it (scenario.Options.NoAdmission).
@@ -48,6 +50,27 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	scenario.ShipAs(t, w, "human", b)
 	require.True(t, w.RunUntil(scenario.MaxRounds, func() bool { return w.BundlePhase("team-a")[b.Name] == "Verified" }),
 		"%s", w.Describe("team-a"))
+	// A version that waits at prod for an approval the agent's does not
+	// give (alice's counts), so approve records an Approval and the version
+	// still waits for the next call (#2277).
+	w.MustApply(&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: p.PolicyNS, Name: "approval-gate",
+		Labels: map[string]string{"kardinal.io/scope": "team", "kardinal.io/applies-to": p.GateEnv}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true", Message: "prod waits for alice's approval",
+			Approval: &v1alpha1.GateApprovalPolicy{Required: 1, AllowedUsers: []string{scenario.Approver}}}})
+	waiting := scenario.ImageBundle("team-a", scenario.PipelineName, mcpWaiting)
+	scenario.ShipAs(t, w, "human", waiting)
+	require.True(t, w.RunUntil(scenario.MaxRounds, func() bool {
+		var pl v1alpha1.Pipeline
+		if w.Store().Get(context.Background(), sigs_client.ObjectKey{Namespace: "team-a", Name: scenario.PipelineName}, &pl) != nil {
+			return false
+		}
+		for _, e := range pl.Status.Environments {
+			if e.Name == p.GateEnv {
+				return e.IncomingBundle == waiting.Name
+			}
+		}
+		return false
+	}), "%s", w.Describe("team-a"))
 	agent := scenario.ActorIdentities["agent"]
 	// The agent's RBAC: its own namespace, and reading the org's gates.
 	kube := w.ClientAsRBAC(&user.DefaultInfo{Name: agent.Username, Groups: agent.Groups}, []string{"team-a"}, []string{scenario.PolicyNS})
@@ -70,6 +93,9 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
 	return w, cs, agent
 }
+
+// mcpWaiting is the version that waits at prod's approval gate in mcpWorld.
+const mcpWaiting = "1.2.0"
 
 // mcpValid is a valid value of each tool argument, by name.
 var mcpValid = map[string]any{
@@ -138,8 +164,8 @@ func toolArgs(t *testing.T, cs *mcp.ClientSession) map[string]struct {
 // The chart's admission policies refuse a write whose stamp is not its
 // requester's, so there a wrong stamp is never stored to be checked. The
 // write tools run again in a World without admission, where every stamp
-// stored is the CLI's own: a version and a Verdict created and a version
-// rejected are each checked there at least once. (Stored text is bounded
+// stored is the CLI's own: a version, an Approval and a Verdict created and
+// a version rejected are each checked there at least once. (Stored text is bounded
 // by the policies, so that is checked with admission only.)
 func TestMCP_HostileInputs(t *testing.T) {
 	t.Parallel()
@@ -197,6 +223,8 @@ func hostileInputs(t *testing.T, admission bool) {
 				switch name {
 				case "ship":
 					args["images"] = mcpValid["images"]
+				case "approve":
+					args["version"] = mcpWaiting
 				case "reject":
 					// A version of its own to reject, so each call is the first.
 					fresh++
@@ -254,9 +282,7 @@ func hostileInputs(t *testing.T, admission bool) {
 	t.Logf("%d calls, %d refused, %d wrote, stamps checked %v; accepted: %v", calls, refused, wrote, stamped, accepted)
 	assert.NotZero(t, wrote, "no call wrote, so no stamp was checked")
 	if !admission {
-		// No version waits at an approval gate here, so approve writes no
-		// Approval in either World.
-		for _, k := range []string{"Bundle", "Bundle rejected", "Verdict"} {
+		for _, k := range []string{"Bundle", "Bundle rejected", "Approval", "Verdict"} {
 			assert.NotZero(t, stamped[k], "no %s stamp checked without admission", k)
 		}
 	}
