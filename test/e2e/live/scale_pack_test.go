@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -70,9 +69,9 @@ func TestScale_EvidencePack(t *testing.T) {
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		began := time.Now()
-		require.NoError(t, cmd.Run(), stderr.String())
+		rss, err := scale.RunPeakRSS(cmd) // the CLI's own memory, not the test's (rusage would read the test's)
+		require.NoError(t, err, stderr.String())
 		took := time.Since(began)
-		rss := cmd.ProcessState.SysUsage().(*syscall.Rusage).Maxrss / 1024 // KiB on Linux
 		b, err := os.ReadFile(out)
 		require.NoError(t, err)
 		return b, took, rss
