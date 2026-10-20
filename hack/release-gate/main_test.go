@@ -862,7 +862,8 @@ func TestRender(t *testing.T) {
 	require.NoError(t, Render(&b, steps, results, out, cov, notRun, p, 90*time.Minute))
 	s := b.String()
 	assert.Contains(t, s, "# Release gate: 0123456789ab\n")
-	assert.Contains(t, s, "**Verdict: NO-GO.** `0123456789abcdef` (v0.11.0-5-g0123456)")
+	assert.Contains(t, s, "**Verdict: NO-GO.** 1 step pinned, not counted: keyless on 1.37 (see [Steps](#steps)). "+
+		"`0123456789abcdef` (v0.11.0-5-g0123456)", "the verdict line says what was pinned")
 	assert.Contains(t, s, "| Live e2e | PASS | 1 of 1 | 1 | 1 | 0 | 0 | 10m0s |")
 	assert.Contains(t, s, "| Upgrade | FAIL | 0 of 1 | 0 | 0 | 0 | 0 | - |")
 	assert.Contains(t, s, "| Unit, fuzz and scenarios | FAIL | 0 of 1 | 4 | 2 | 1 | 1 | 1m5s |")
@@ -890,6 +891,12 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, b.String(), "\n## Not run by this gate\n\n**The not-run list was not loaded**: this report says nothing about what the gate does not run.\n",
 		"readNotRun refuses an empty list, so no list means it was not loaded: the section says so, not that nothing is missing")
 	assert.NotContains(t, b.String(), "It does not prove")
+
+	// No pinned step: the verdict line names none.
+	b.Reset()
+	require.NoError(t, Render(&b, steps[:len(steps)-1], results[:len(results)-1], out, cov, notRun, p, 90*time.Minute))
+	assert.Contains(t, b.String(), "**Verdict: NO-GO.** `0123456789abcdef` (v0.11.0-5-g0123456)")
+	assert.NotContains(t, b.String(), "pinned, not counted")
 }
 
 // notRunRoot is a checkout with a coverage.tsv, a release.yml and the given

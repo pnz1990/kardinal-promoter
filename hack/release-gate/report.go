@@ -311,7 +311,23 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 	}
 	fmt.Fprintf(&b, "# Release gate: %s\n\n", short)
 	v := verdictOf(results, cov)
-	fmt.Fprintf(&b, "**Verdict: %s.** `%s` (%s)", v, p.SHA, p.Describe)
+	fmt.Fprintf(&b, "**Verdict: %s.** ", v)
+	// Pinned steps do not count towards the verdict: say so at the top, so a
+	// GO with a suite left off a minor is visible before the tables.
+	var pinned []string
+	for i, st := range steps {
+		if results[i].Status == statusPinned {
+			pinned = append(pinned, st.Title)
+		}
+	}
+	if len(pinned) > 0 {
+		noun := "steps"
+		if len(pinned) == 1 {
+			noun = "step"
+		}
+		fmt.Fprintf(&b, "%d %s pinned, not counted: %s (see [Steps](#steps)). ", len(pinned), noun, strings.Join(pinned, ", "))
+	}
+	fmt.Fprintf(&b, "`%s` (%s)", p.SHA, p.Describe)
 	if p.Dirty {
 		b.WriteString(", **with uncommitted changes**")
 	}
