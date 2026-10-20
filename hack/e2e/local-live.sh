@@ -460,14 +460,24 @@ slot_queue=$SLOTS_DIR/.queue
 slot_ticket='' slot_ticket_text=''
 
 # with_flock NAME CMD... runs CMD under flock on SLOTS_DIR/NAME; never
-# without it: when flock fails (a fork that failed), with_flock fails.
+# without it: when flock fails (a fork that failed), with_flock fails. It
+# waits for the flock FLOCK_WAIT seconds (60) at most (#2282 QA): a run
+# stopped (Ctrl-Z) or hung while it held it would stall every other one
+# silently, the drain deadline too; so it says so and the caller tries
+# again. LOCAL_LIVE_TEST_FLOCK_WAIT sets it, in the test mode.
+FLOCK_WAIT=60
+[ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_FLOCK_WAIT:-} =~ ^[0-9]+$ ]] || FLOCK_WAIT=$LOCAL_LIVE_TEST_FLOCK_WAIT
+# Docker answers within DOCKER_WAIT seconds, or counts as not answering: it
+# is asked under these flocks.
+DOCKER_WAIT=10
 with_flock() {
   local name=$1 fd rc
   shift
   exec {fd}>"$SLOTS_DIR/$name" || return 1
-  if ! flock -x "$fd"; then
+  if ! flock -x -w "$FLOCK_WAIT" "$fd"; then
     exec {fd}>&-
-    why="cannot take the $name flock"
+    why="no $name flock in ${FLOCK_WAIT}s: a run stopped (Ctrl-Z) or hung while it held it? Resume or end it"
+    log "$why"
     return 1
   fi
   "$@"
@@ -510,7 +520,7 @@ release_slots() {
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 reclaim_slots() {
   local d owner cluster docker_ok=1
-  docker info >/dev/null 2>&1 || docker_ok=''
+  timeout "$DOCKER_WAIT" docker info >/dev/null 2>&1 || docker_ok=''
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
     # An owner that is there but cannot be read is a live run's.
@@ -556,7 +566,7 @@ reclaim_slots() {
 # shellcheck disable=SC2329 # called by reclaim_slots, through with_flock
 cluster_state() {
   local out lower
-  if out=$(docker inspect "$1-control-plane" 2>&1 >/dev/null); then
+  if out=$(timeout "$DOCKER_WAIT" docker inspect "$1-control-plane" 2>&1 >/dev/null); then
     state_v=running
     return
   fi
@@ -842,7 +852,7 @@ room() {
     return
   fi
   # docker ps is the one fork: when it fails, the nodes cannot be counted.
-  if ! names=$(docker ps --format '{{.Names}}' 2>/dev/null); then
+  if ! names=$(timeout "$DOCKER_WAIT" docker ps --format '{{.Names}}' 2>/dev/null); then
     why="docker ps failed: the kind nodes running cannot be counted"
     return
   fi

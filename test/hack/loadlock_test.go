@@ -1261,3 +1261,41 @@ func TestLoadLock_QueueNeverWedges(t *testing.T) {
 		require.Eventually(t, func() bool { return strings.Contains(w.out.String(), "waits behind "+filepath.Base(aged)) }, 10*time.Second, 20*time.Millisecond)
 	})
 }
+
+// TestLoadLock_FlockWaitCap (#2282 QA): a reclaim flock held by another (a
+// waiter stopped or hung while it held it) is waited for FLOCK_WAIT at most,
+// with the cause, and tried again; nothing runs without it; once it is let
+// go, the waiter gets the lock.
+func TestLoadLock_FlockWaitCap(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	require.NoError(t, os.MkdirAll(lock+".queue", 0o755))
+	// flock's sleep inherits the locked fd: the group is ended, not flock alone.
+	held := exec.Command("flock", filepath.Join(lock+".queue", ".reclaim"), "sleep", "60")
+	held.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, held.Start())
+	letGo := func() { _ = syscall.Kill(-held.Process.Pid, syscall.SIGKILL); _ = held.Wait() }
+	t.Cleanup(letGo)
+	time.Sleep(200 * time.Millisecond) // it holds the flock
+	ran := filepath.Join(t.TempDir(), "ran")
+	cmd := loadlock(t, lock, "touch", ran)
+	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_FLOCK_WAIT=1")
+	out := &syncBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	require.NoError(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(), "no flock on "+filepath.Join(lock+".queue", ".reclaim")+" in 1s: a waiter stopped (Ctrl-Z) or hung")
+	}, 10*time.Second, 20*time.Millisecond, "the cap's message, not a silent hang")
+	assert.NoFileExists(t, ran, "nothing runs without the flock")
+	letGo()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "%s", out.String())
+	case <-time.After(20 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("never got the lock once the flock was let go: %s", out.String())
+	}
+	assert.FileExists(t, ran)
+}

@@ -120,6 +120,9 @@ func (h *localLiveHost) cmd(t *testing.T, env []string, args ...string) *exec.Cm
 		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots,
 		// An idle host with room for clusters, unless a test says otherwise.
 		"LOCAL_LIVE_TEST=1", "LOCAL_LIVE_TEST_TOKEN="+h.token,
+		// The host's go never fetches go.mod's toolchain into a fake HOME (its
+		// files are read-only, and the test's cleanup cannot remove them).
+		"GOTOOLCHAIN=local",
 		"LOCAL_LIVE_TEST_LOAD=0", "LOCAL_LIVE_TEST_INOTIFY=8192", "LOCAL_LIVE_TEST_SPACING=0")
 	cmd.Env = append(cmd.Env, env...)
 	return cmd
@@ -683,10 +686,15 @@ exec "$@"
 		} {
 			h := newLocalLiveHost(t)
 			p := tc.put(h)
-			out, err := h.cmd(t, nil, "gitea").CombinedOutput()
-			require.NoError(t, err, "%s: %s", tc.name, out)
+			// Each case has its own deadline (waitLive's 30s): a wedge fails
+			// it, not the package's timeout.
+			cmd := h.cmd(t, nil, "gitea")
+			out := &liveOut{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			waitLive(t, cmd, out)
 			assert.NoFileExists(t, p, tc.name)
-			assert.Contains(t, string(out), tc.says, tc.name)
+			assert.Contains(t, out.String(), tc.says, tc.name)
 		}
 		// An unreadable ticket of a live pid, touched now, is a live head.
 		h := newLocalLiveHost(t)
@@ -982,7 +990,7 @@ exec `+realCat+` "$@"
 			require.NoError(t, os.WriteFile(filepath.Join(noFlock, "flock"),
 				[]byte("#!/bin/sh\necho \"bash: fork: Resource temporarily unavailable\" >&2\nexit 1\n"), 0o755))
 			h := newLocalLiveHost(t)
-			cmd, out := start(t, h, "cannot take the .reclaim flock", "LOCAL_LIVE_TEST_FAIL_PATH="+noFlock)
+			cmd, out := start(t, h, "no .reclaim flock in", "LOCAL_LIVE_TEST_FAIL_PATH="+noFlock)
 			time.Sleep(300 * time.Millisecond)
 			entries, _ := os.ReadDir(h.slots)
 			for _, e := range entries {
@@ -1151,6 +1159,32 @@ exec `+realCat+` "$@"
 			assert.Equal(t, 2, exitCode(err), "-count %s: %s", bad, out)
 			assert.Contains(t, string(out), "-count "+bad+": want 1 to 100")
 		}
+	})
+	t.Run("a held .reclaim flock is waited for FLOCK_WAIT at most, with the cause (#2282 QA)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		// flock's sleep inherits the locked fd: the group is ended, not flock alone.
+		held := exec.Command("flock", filepath.Join(h.slots, ".reclaim"), "sleep", "60")
+		held.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		require.NoError(t, held.Start())
+		letGo := func() { _ = syscall.Kill(-held.Process.Pid, syscall.SIGKILL); _ = held.Wait() }
+		t.Cleanup(letGo)
+		time.Sleep(200 * time.Millisecond) // it holds the flock
+		cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_FLOCK_WAIT=1"}, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		if !assert.Eventually(t, func() bool {
+			return strings.Contains(out.String(), "no .reclaim flock in 1s: a run stopped (Ctrl-Z) or hung while it held it? Resume or end it")
+		}, 10*time.Second, 20*time.Millisecond, "the cap's message, not a silent hang") {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("%s", out.String())
+		}
+		assert.Empty(t, h.read("up"), "no cluster without the flock")
+		letGo()
+		waitLive(t, cmd, out)
+		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "it runs once the flock is let go")
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own

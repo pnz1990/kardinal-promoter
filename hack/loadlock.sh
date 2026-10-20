@@ -36,7 +36,9 @@
 #   - A normal ticket that has waited 2 hours sorts as a release one, and
 #     -p release needs RELEASE_GATE_PRIORITY_TOKEN matching the token file
 #     next to LOCK (DIR/.release-token, mode 600): release tickets never
-#     starve the others, and no one else jumps the queue.
+#     starve the others, and no one else jumps the queue. Where every agent
+#     runs as one user the token says intent, not authority: the record's
+#     priority= makes a misuse visible.
 #   - A waiter wakes on the queue's changes (inotifywait, when installed) or
 #     every RETRY seconds (10).
 # Clients that take the lock without a ticket (code from before the queue)
@@ -216,14 +218,19 @@ slot=
 # with_flock CMD... runs CMD under flock on queue/.reclaim, which serializes
 # every change to the lock, its slots and its view. CMD never runs without
 # the flock: when flock fails (a fork that failed), with_flock fails.
-# It waits for the flock 60s at most: a waiter stopped (Ctrl-Z) while it
-# held it would wedge every other one, so they say so and try again.
+# It waits for the flock FLOCK_WAIT seconds (60) at most: a waiter stopped
+# (Ctrl-Z) while it held it would wedge every other one, so they say so and
+# try again. LOADLOCK_TEST_FLOCK_WAIT sets it, in tests.
+FLOCK_WAIT=60
+if [ "${LOADLOCK_TEST:-}" = 1 ] && [[ ${LOADLOCK_TEST_FLOCK_WAIT:-} =~ ^[0-9]+$ ]]; then
+  FLOCK_WAIT=$LOADLOCK_TEST_FLOCK_WAIT
+fi
 with_flock() {
   local fd rc
   exec {fd}>"$queue/.reclaim" || return 1
-  if ! flock -x -w 60 "$fd"; then
+  if ! flock -x -w "$FLOCK_WAIT" "$fd"; then
     exec {fd}>&-
-    echo "loadlock: no flock on $queue/.reclaim in 60s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it" >&2
+    echo "loadlock: no flock on $queue/.reclaim in ${FLOCK_WAIT}s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it" >&2
     return 1
   fi
   "$@"

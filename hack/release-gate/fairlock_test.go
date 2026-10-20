@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -867,4 +868,35 @@ func TestFairLock_QueueNeverWedges(t *testing.T) {
 	h.Unlock()
 	require.NoError(t, <-done)
 	w.Unlock()
+}
+
+// TestWithLockFlock_WaitCap (#2282 QA): a reclaim flock held by another
+// (a waiter stopped or hung while it held it) is waited for flockWait at
+// most, with the cause; the retries share one pending attempt (no goroutine
+// or fd per retry); once it is let go, the next call takes it.
+func TestWithLockFlock_WaitCap(t *testing.T) {
+	q := t.TempDir()
+	other, err := os.OpenFile(filepath.Join(q, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	defer func() { _ = other.Close() }()
+	require.NoError(t, unix.Flock(int(other.Fd()), unix.LOCK_EX))
+	assert.Equal(t, time.Minute, flockWait, "a minute at most, as hack/loadlock.sh's and local-live.sh's")
+	flockWait = 200 * time.Millisecond
+	defer func() { flockWait = time.Minute }()
+	ran := 0
+	var fl flocker // one waiter, retrying
+	start := time.Now()
+	err = fl.with(q, func() error { ran++; return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no flock on "+filepath.Join(q, ".reclaim")+" in 200ms: a waiter stopped (Ctrl-Z) or hung")
+	assert.Less(t, time.Since(start), 2*time.Second, "the cap, not a hang")
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		require.Error(t, fl.with(q, func() error { ran++; return nil }))
+	}
+	assert.LessOrEqual(t, runtime.NumGoroutine(), before, "one pending attempt, not one per retry")
+	assert.Zero(t, ran, "nothing ran without the flock")
+	require.NoError(t, unix.Flock(int(other.Fd()), unix.LOCK_UN))
+	require.NoError(t, fl.with(q, func() error { ran++; return nil }))
+	assert.Equal(t, 1, ran)
 }

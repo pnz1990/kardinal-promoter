@@ -223,6 +223,7 @@ var seq atomic.Int64
 
 // fairLock is one waiter of the lock: its ticket, then the lock.
 type fairLock struct {
+	fl          flocker
 	lock, owner string
 	class       string
 	poll        time.Duration
@@ -297,7 +298,7 @@ func (f *fairLock) acquire(ctx context.Context) error {
 			// older client at the head cannot judge the view's holders, so
 			// a new holder that died without its cleanup would wedge the
 			// lock for everyone); only the head takes a slot.
-			if err := withLockFlock(q, func() error { f.reclaim(); return nil }); err != nil {
+			if err := f.fl.with(q, func() error { f.reclaim(); return nil }); err != nil {
 				f.log("reclaim heavy-load lock %s: %v", f.lock, err)
 			}
 		}
@@ -412,37 +413,86 @@ func capacity(load float64) int {
 // It waits for the flock flockWait at most: a waiter stopped (Ctrl-Z) while
 // it held it would wedge every other one, so they say so and try again.
 func withLockFlock(q string, fn func() error) error {
-	rf, err := os.OpenFile(filepath.Join(q, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return fmt.Errorf("open reclaim lock: %w", err)
-	}
-	got := make(chan error, 1)
-	go func() { got <- unix.Flock(int(rf.Fd()), unix.LOCK_EX) }()
-	select {
-	case err := <-got:
-		if err != nil {
-			_ = rf.Close()
-			return fmt.Errorf("flock reclaim lock: %w", err)
-		}
-	case <-time.After(flockWait):
-		// Given back as soon as it comes.
-		go func() {
-			if <-got == nil {
-				_ = unix.Flock(int(rf.Fd()), unix.LOCK_UN)
-			}
-			_ = rf.Close()
-		}()
-		return fmt.Errorf("no flock on %s in %s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it", rf.Name(), flockWait)
-	}
-	defer func() {
-		_ = unix.Flock(int(rf.Fd()), unix.LOCK_UN)
-		_ = rf.Close()
-	}()
-	return fn()
+	var fl flocker // one call: no attempt to keep
+	return fl.with(q, fn)
 }
 
-// flockWait is how long a waiter waits for the reclaim flock.
-const flockWait = time.Minute
+// flocker takes the reclaim flock for one waiter, one call at a time. An
+// attempt that times out stays pending for the waiter's next call, so a
+// long hold costs one goroutine and one fd, not one per retry (#2282 QA).
+type flocker struct{ pending *flockAttempt }
+
+// flockAttempt is a pending flock on a reclaim file: got hands it to the
+// waiter; dead is closed when it was given back unclaimed (flockHandoff).
+type flockAttempt struct {
+	path string
+	got  chan error
+	dead chan struct{}
+	f    *os.File
+}
+
+func (fl *flocker) with(q string, fn func() error) error {
+	path := filepath.Join(q, ".reclaim")
+	deadline := time.NewTimer(flockWait)
+	defer deadline.Stop()
+	for {
+		if fl.pending == nil || fl.pending.path != path {
+			at, err := startFlock(path)
+			if err != nil {
+				return err
+			}
+			fl.pending = at
+		}
+		at := fl.pending
+		select {
+		case err := <-at.got:
+			fl.pending = nil
+			if err != nil {
+				_ = at.f.Close()
+				return fmt.Errorf("flock reclaim lock: %w", err)
+			}
+			defer func() {
+				_ = unix.Flock(int(at.f.Fd()), unix.LOCK_UN)
+				_ = at.f.Close()
+			}()
+			return fn()
+		case <-at.dead:
+			fl.pending = nil // given back while no one was asking: anew
+		case <-deadline.C:
+			return fmt.Errorf("no flock on %s in %s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it", path, flockWait)
+		}
+	}
+}
+
+// startFlock starts an attempt on path's flock.
+func startFlock(path string) (*flockAttempt, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open reclaim lock: %w", err)
+	}
+	at := &flockAttempt{path: path, got: make(chan error), dead: make(chan struct{}), f: f}
+	go func() {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX)
+		select {
+		case at.got <- err: // its waiter takes it (and unlocks it)
+		case <-time.After(flockHandoff):
+			// Its waiter did not ask again: given back, never held for nothing.
+			if err == nil {
+				_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+			}
+			_ = f.Close()
+			close(at.dead)
+		}
+	}()
+	return at, nil
+}
+
+// flockHandoff is how long a flock granted to a pending attempt waits for
+// its waiter to take it before it is given back.
+const flockHandoff = 5 * time.Second
+
+// flockWait is how long a waiter waits for the reclaim flock (tests set it).
+var flockWait = time.Minute
 
 // reclaimDue reports whether a holder looks gone (judged again under the
 // flock): only then does a waiter that is not the head take the flock.
@@ -488,7 +538,7 @@ func (f *fairLock) mayTake() bool {
 // then takes a free slot when fewer than capacity hold the lock. took
 // reports whether it holds the lock now.
 func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
-	err = withLockFlock(q, func() error {
+	err = f.fl.with(q, func() error {
 		f.reclaim()
 		held, exclusive := holders(f.lock)
 		load := hostLoad()

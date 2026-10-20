@@ -66,11 +66,15 @@ Slots are first come, first served: waiters queue in
 ticket first), and only the first takes a slot, however often the others poll. `-p release`
 needs `RELEASE_GATE_PRIORITY_TOKEN` matching the coordinator's token file
 (`$RELEASE_GATE_SLOTS/../.release-token`, mode 600), and a normal ticket that
-has waited 2 hours goes first anyway. Waiters touch their tickets on every
+has waited 2 hours goes first anyway. On a host where every agent runs as one
+user the token says intent, not authority: a ticket's `priority=` makes a
+misuse visible. Waiters touch their tickets on every
 poll: one untouched for 10 minutes (a waiter stopped with Ctrl-Z, hung, or a
 stray file) is removed, and its waiter queues again in its place when it
-resumes. A steady stream of heavy suites keeps light runs mostly out by
-design: each drains the host while it waits and runs. A slot whose owner is gone (its pid, boot
+resumes. A run waits for the slots' flock 60 seconds at most, and says so (a
+run stopped or hung while it held it), and Docker is asked with a 10-second
+timeout under it. A steady stream of heavy suites keeps light runs mostly
+out by design: each drains the host while it waits and runs. A slot whose owner is gone (its pid, boot
 id or start time no longer match) is reclaimed, a kept cluster's only once the
 cluster is gone. It creates its cluster only while the host's one-minute load is under 48
 and `fs.inotify.max_user_instances` has room for another kind node, and at
