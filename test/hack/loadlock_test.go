@@ -4,6 +4,7 @@
 package hack
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -94,12 +95,216 @@ func TestLoadLock(t *testing.T) {
 		assert.Less(t, time.Since(start), 10*time.Second, "the command is stopped, not waited for")
 		assert.NoDirExists(t, lock)
 	})
+	t.Run("a signal while it takes the lock gives the slot and the view back (#2316 CI)", func(t *testing.T) {
+		// LOADLOCK_TEST_AFTER_TAKE parks it after the view is made, under
+		// the flock, where the signal once left both behind.
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		cmd := loadlock(t, lock, "sleep", "30")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_TAKE=1")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool {
+			owner, err := os.ReadFile(filepath.Join(lock, "owner"))
+			return err == nil && strings.HasPrefix(string(owner), "test pid:")
+		}, 10*time.Second, 20*time.Millisecond)
+		start := time.Now()
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err := cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.Less(t, time.Since(start), 10*time.Second, "released under the flock it holds, not waiting for it: %s", out.String())
+		assert.NoDirExists(t, lock, "the view")
+		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Empty(t, slots, "the slot")
+	})
+	t.Run("a signal while it makes its slot gives the slot back (#2316 QA)", func(t *testing.T) {
+		// bash runs a signal's trap once the command it waits for is done: a
+		// mkdir in PATH that makes the slot and then sleeps is the moment
+		// after the mkdir, before the owner write (the slot's owner is not
+		// there yet), with no seam in the script.
+		bin := t.TempDir()
+		mkdir, err := exec.LookPath("mkdir")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "mkdir"), []byte("#!/bin/sh\n"+mkdir+` "$@" || exit
+case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
+`), 0o755))
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		ran := filepath.Join(t.TempDir(), "ran")
+		cmd := loadlock(t, lock, "touch", ran)
+		cmd.Env = append(cmd.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool {
+			_, err := os.Stat(filepath.Join(lock+".d", "1"))
+			return err == nil
+		}, 10*time.Second, 5*time.Millisecond)
+		_, oerr := os.Stat(filepath.Join(lock+".d", "1", "owner"))
+		require.ErrorIs(t, oerr, os.ErrNotExist, "the signal comes before the owner write")
+		start := time.Now()
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err = cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.Less(t, time.Since(start), 10*time.Second, "%s", out.String())
+		assert.NoFileExists(t, ran, "the command never ran")
+		assert.NoDirExists(t, lock, "the view")
+		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Empty(t, slots, "the slot: %s", out.String())
+	})
+	t.Run("a signal just before it lets the flock go releases under the flock it holds (#2316 QA)", func(t *testing.T) {
+		// LOADLOCK_TEST_BEFORE_UNLOCK parks it after the take with the fd
+		// still open: in_flock must still be set there, or release waits
+		// FLOCK_WAIT on a second fd for the flock the first holds, and leaves
+		// the slot (any reordering of the clear before the close, #2316 QA).
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		cmd := loadlock(t, lock, "sleep", "30")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+			10*time.Second, 5*time.Millisecond, "parked before the unlock")
+		start := time.Now()
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err := cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.Less(t, time.Since(start), 5*time.Second, "released under the flock it holds, not after a 10s flock wait: %s", out.String())
+		assert.NotContains(t, out.String(), "no flock")
+		assert.NoDirExists(t, lock, "the view")
+		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Empty(t, slots, "the slot: %s", out.String())
+	})
+	t.Run("a signal as it lets the flock go releases under the flock, taken again (#2316 QA)", func(t *testing.T) {
+		// LOADLOCK_TEST_AFTER_UNLOCK parks it after the take, with the flock's
+		// fd closed but in_flock still set. The test then holds the flock:
+		// it can (the flock was let go before the park), the release waits
+		// for it (it takes it again, never releases without it), and nothing
+		// waits on a second fd while the first still holds it.
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		cmd := loadlock(t, lock, "sleep", "30")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		exited := make(chan error, 1)
+		go func() { exited <- cmd.Wait() }()
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+			10*time.Second, 5*time.Millisecond, "parked after the unlock")
+		f, err := os.OpenFile(filepath.Join(lock+".queue", ".reclaim"), os.O_WRONLY|os.O_CREATE, 0o644)
+		require.NoError(t, err)
+		defer f.Close()
+		require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), "the flock is let go before the park")
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		// The trap runs once the 1s park is done; the release then waits.
+		select {
+		case err := <-exited:
+			t.Fatalf("it ended (%v) while the test held the flock: released without it: %s", err, out.String())
+		case <-time.After(1500 * time.Millisecond):
+		}
+		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Len(t, slots, 1, "the slot stays until the release has the flock")
+		require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_UN))
+		start := time.Now()
+		select {
+		case err := <-exited:
+			assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no release in 5s after the flock was free: %s", out.String())
+		}
+		assert.Less(t, time.Since(start), 3*time.Second, "%s", out.String())
+		assert.NotContains(t, out.String(), "no flock")
+		assert.NoDirExists(t, lock, "the view")
+		slots, _ = filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Empty(t, slots, "the slot: %s", out.String())
+	})
 	t.Run("no lock, no run", func(t *testing.T) {
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "--", "true")
 		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
 		_, err := cmd.CombinedOutput()
 		assert.Equal(t, 2, exitCode(err))
 	})
+}
+
+// dirID is dir's inode and change time: the same directory across looks.
+func dirID(dir string) (string, error) {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return "", err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", fmt.Errorf("no stat for %s", dir)
+	}
+	return fmt.Sprintf("%d %d.%09d", st.Ino, st.Ctim.Sec, st.Ctim.Nsec), nil
+}
+
+// procState is pid's state letter and wait channel, from /proc, or why not.
+func procState(pid int) string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "gone"
+	}
+	f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
+	state := "?"
+	if len(f) > 0 {
+		state = f[0]
+	}
+	wchan, _ := os.ReadFile(fmt.Sprintf("/proc/%d/wchan", pid))
+	return fmt.Sprintf("state %s, wchan %s", state, wchan)
+}
+
+// lockDump lists lock's view, slots and queue (names, modes, sizes, mtimes,
+// inodes) with the small files' contents: a failed race test's evidence.
+func lockDump(lock string) string {
+	var b strings.Builder
+	for _, root := range []string{lock, lock + ".d", lock + ".queue"} {
+		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				fmt.Fprintf(&b, "%s: %v\n", path, err)
+				return nil
+			}
+			fi, ierr := d.Info()
+			if ierr != nil {
+				fmt.Fprintf(&b, "%s: %v\n", path, ierr)
+				return nil
+			}
+			var ino uint64
+			if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+				ino = st.Ino
+			}
+			fmt.Fprintf(&b, "%s %s %d %s ino %d", path, fi.Mode(), fi.Size(), fi.ModTime().UTC().Format(time.RFC3339Nano), ino)
+			if fi.Mode().IsRegular() && fi.Size() <= 512 {
+				c, _ := os.ReadFile(path)
+				fmt.Fprintf(&b, " %q", c)
+			}
+			b.WriteString("\n")
+			return nil
+		})
+	}
+	return b.String()
+}
+
+// sleepingChild reports whether pid has a child running "sleep ARG".
+func sleepingChild(pid int, arg string) bool {
+	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
+	for _, st := range stats {
+		b, err := os.ReadFile(st)
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid ...: comm can hold spaces, so from its ')'.
+		f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
+		if len(f) < 2 || f[1] != strconv.Itoa(pid) {
+			continue
+		}
+		cl, err := os.ReadFile(filepath.Join(filepath.Dir(st), "cmdline"))
+		if err == nil && string(cl) == "sleep\x00"+arg+"\x00" {
+			return true
+		}
+	}
+	return false
 }
 
 // tickets is how many waiters queue for lock.
@@ -260,7 +465,7 @@ func TestLoadLock_Races(t *testing.T) {
 			type lockRun struct {
 				dir  string
 				cmds []*exec.Cmd
-				outs []*strings.Builder
+				outs []*syncBuf
 			}
 			var runs []lockRun
 			for l := 0; l < locks; l++ {
@@ -275,7 +480,7 @@ func TestLoadLock_Races(t *testing.T) {
 					cmd := run(t, lock, fmt.Sprintf("w%d", i), "sh", "-c",
 						`mkdir "$0" 2>/dev/null || touch "$1"; sleep 0.05; rmdir "$0" 2>/dev/null; true`,
 						filepath.Join(dir, "inside"), filepath.Join(dir, "overlap"))
-					o := &strings.Builder{}
+					o := &syncBuf{}
 					cmd.Stdout, cmd.Stderr = o, o
 					lr.cmds, lr.outs = append(lr.cmds, cmd), append(lr.outs, o)
 				}
@@ -303,8 +508,11 @@ func TestLoadLock_Races(t *testing.T) {
 				}
 			}
 			// A round takes seconds; a lock with no owner for five looks a
-			// second apart is wedged now, not at the timeout.
+			// second apart, the same LOCK each time (its inode and ctime: a
+			// view made again is a new one), is wedged now, not at the
+			// timeout. Its dump says why (QA-3, #2316).
 			ownerless := map[string]int{}
+			seen := map[string]string{}
 			deadline := time.After(60 * time.Second)
 		wait:
 			for {
@@ -317,15 +525,24 @@ func TestLoadLock_Races(t *testing.T) {
 				case <-time.After(time.Second):
 					for _, lr := range runs {
 						lock := filepath.Join(lr.dir, "LOADLOCK")
-						_, lerr := os.Stat(lock)
+						id, lerr := dirID(lock)
 						_, oerr := os.Stat(filepath.Join(lock, "owner"))
 						if lerr == nil && oerr != nil {
+							if seen[lock] != id {
+								seen[lock], ownerless[lock] = id, 0
+							}
 							if ownerless[lock]++; ownerless[lock] >= 5 {
+								var w strings.Builder
+								for i, c := range lr.cmds {
+									fmt.Fprintf(&w, "waiter %d, pid %d (%s):\n%s\n", i, c.Process.Pid, procState(c.Process.Pid), lr.outs[i].String())
+								}
+								dump := lockDump(lock)
 								kill()
-								t.Fatalf("round %d: %s is left with no owner", r, lock)
+								t.Fatalf("round %d: %s is left with no owner\n%s\n%s", r, lock, dump, w.String())
 							}
 						} else {
 							delete(ownerless, lock)
+							delete(seen, lock)
 						}
 					}
 				}
@@ -1089,25 +1306,54 @@ func TestLoadLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
 	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	gone := exec.Command("true")
 	require.NoError(t, gone.Run())
-	dir := t.TempDir()
-	lock, pause := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "pause")
-	require.NoError(t, os.Mkdir(lock, 0o755))
-	owner := filepath.Join(lock, "owner")
-	require.NoError(t, os.WriteFile(owner, []byte(fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
-	cmd := loadlock(t, lock, "true")
-	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_RM="+pause)
-	out := &syncBuf{}
-	cmd.Stdout, cmd.Stderr = out, out
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	require.Eventually(t, func() bool { _, err := os.Stat(pause + ".judged"); return err == nil }, 10*time.Second, 20*time.Millisecond, "judged dead")
-	// Another older client's LOCK, live (this test process), meanwhile.
-	live := liveRecord(t, "another older") + "\n"
-	require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
-	require.NoError(t, os.WriteFile(pause+".go", nil, 0o644))
-	time.Sleep(time.Second)
-	assert.Equal(t, live, readFile(t, owner), "the new LOCK is left alone: %s", out.String())
-	assert.NotContains(t, out.String(), "removed "+lock)
+	dead := fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)
+	for _, tc := range []struct {
+		name      string
+		meanwhile func(t *testing.T, owner string)
+		removed   bool
+	}{
+		{"the same dead owner: removed", func(*testing.T, string) {}, true},
+		{"another older client's LOCK, live: it stays", func(t *testing.T, owner string) {
+			require.NoError(t, os.WriteFile(owner, []byte(liveRecord(t, "another older")+"\n"), 0o644))
+		}, false},
+		// #2242 QA-3: shell and Go agree. An owner judged dead that is gone
+		// since is a new LOCK's being written: it stays (the minute rule
+		// takes a LOCK that stays without an owner).
+		{"the owner gone since (a new LOCK, its owner not yet written): it stays", func(t *testing.T, owner string) {
+			require.NoError(t, os.Remove(owner))
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			lock, pause := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "pause")
+			require.NoError(t, os.Mkdir(lock, 0o755))
+			owner := filepath.Join(lock, "owner")
+			require.NoError(t, os.WriteFile(owner, []byte(dead), 0o644))
+			cmd := loadlock(t, lock, "true")
+			cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_RM="+pause)
+			out := &syncBuf{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+			require.Eventually(t, func() bool { _, err := os.Stat(pause + ".judged"); return err == nil }, 10*time.Second, 20*time.Millisecond, "judged dead")
+			tc.meanwhile(t, owner)
+			require.NoError(t, os.WriteFile(pause+".go", nil, 0o644))
+			if tc.removed {
+				require.Eventually(t, func() bool { return strings.Contains(out.String(), "removed "+lock) }, 10*time.Second, 20*time.Millisecond, "%s", out.String())
+				return
+			}
+			time.Sleep(time.Second)
+			assert.DirExists(t, lock, "left alone: %s", out.String())
+			assert.NotContains(t, out.String(), "removed "+lock)
+			if _, err := os.Stat(owner); errors.Is(err, os.ErrNotExist) {
+				// A LOCK that stays without an owner (its holder died before
+				// writing it) goes by the minute rule all the same.
+				old := time.Now().Add(-2 * time.Minute)
+				require.NoError(t, os.Chtimes(lock, old, old))
+				require.Eventually(t, func() bool { return strings.Contains(out.String(), "which has had no owner for a minute") }, 10*time.Second, 20*time.Millisecond, "%s", out.String())
+			}
+		})
+	}
 }
 
 // TestLoadLock_TicketClockWithoutEpochRealtime (#2242 QA): without
