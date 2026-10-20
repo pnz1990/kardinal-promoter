@@ -1,5 +1,5 @@
 {
-  "renderVersion": 2,
+  "renderVersion": 3,
   "graphs": {
     "agent verifier runs": "sha256:3469fdbf012ff2235be239c4879075501b31dbaea7e81d84093d08800f85a56d",
     "agent verifier runs, compact": "sha256:2427a5c5e518a2c8d8df429eeb510c6763b32bcf65b4a4f25278a460307557f4",
