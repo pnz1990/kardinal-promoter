@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Pull requests to a maintenance branch (release/v0.12) run the same
+    # checks: the pins and backports a patch release merges get CI too.
+    branches: [main, 'release/**']
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
