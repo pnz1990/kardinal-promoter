@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kardinal-test-app
+  namespace: default
+  labels:
+    app: kardinal-test-app
+    env: prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kardinal-test-app
+  template:
+    metadata:
+      labels:
+        app: kardinal-test-app
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
+          ports:
+            - containerPort: 8080

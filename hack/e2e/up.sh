@@ -39,6 +39,8 @@
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,
 #           connect an agent, your first pipeline) and holds their output to
 #           the pages'
+#   quickstart-local  nothing: kardinal quickstart --local installs kro, Argo CD,
+#           its git server and kardinal (TestQuickstartLocal_)
 #   shard   Forgejo + Argo CD and two controllers that split the namespaces
 #           (--namespace-shard): the main release is shard "default",
 #           components/shard.sh installs shard "b"
@@ -119,6 +121,11 @@ case "$SUITE" in
   # The docs' command blocks, run as a new user runs them (quickstart's
   # demo in default, its ApplicationSet and kardinal-test-app-<env>).
   docs-walkthrough) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) RUN='^TestDocs_' ;;
+  # kardinal quickstart --local from nothing (#1785): no git server, no Argo
+  # CD, no kro and no release; kardinal.sh only builds and loads this
+  # checkout's images and CLI, and the quickstart installs the rest.
+  quickstart-local) COMPONENTS=() RUN='^TestQuickstartLocal_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   ui) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(ui.sh) RUN='^TestUI_'
     HELM_ARGS='--set ui.allowedHosts={kardinal-ui.test}' ;;
   # Flux health checks, MetricChecks against Prometheus, and the chart's

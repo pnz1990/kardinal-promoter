@@ -85,7 +85,7 @@ func TestQuickstartDelete_RemovesTheDemoOnly(t *testing.T) {
 	require.NotEmpty(t, demo)
 
 	var out bytes.Buffer
-	require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+	require.NoError(t, quickstartDeleteFn(ctx, &out, yes, false))
 	assert.Equal(t, `Removing the kardinal demo from kind-kardinal
   - Versions of default/demo: deleted 1 (`+demo+`)
   - Pipeline default/demo: deleted
@@ -94,9 +94,9 @@ func TestQuickstartDelete_RemovesTheDemoOnly(t *testing.T) {
   - Secret default/github-token: deleted
 Kept: kro, Argo CD, kardinal-promoter and its Secret kardinal-system/kardinal-scm-token, and the namespaces the
 Applications deployed to. To remove those too:
-  kubectl delete namespace kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod
-To set the demo up again: kardinal quickstart --repo <your fork of kardinal-demo>
-`, out.String())
+  kubectl --context kind-kardinal delete namespace kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod
+To set the demo up again: kardinal --context kind-kardinal quickstart --repo <your fork of kardinal-demo>
+`, withoutKubeconfig(out.String()))
 
 	assert.True(t, gone(t, c, &v1alpha1.Pipeline{}, types.NamespacedName{Namespace: "default", Name: "demo"}))
 	assert.True(t, gone(t, c, &v1alpha1.PolicyGate{}, types.NamespacedName{Namespace: "default", Name: "prod-approval"}))
@@ -108,7 +108,7 @@ To set the demo up again: kardinal quickstart --repo <your fork of kardinal-demo
 
 	// A re-run deletes nothing.
 	out.Reset()
-	require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+	require.NoError(t, quickstartDeleteFn(ctx, &out, yes, false))
 	for _, line := range []string{
 		"  - Versions of default/demo: already gone\n",
 		"  - Pipeline default/demo: already gone\n",
@@ -138,7 +138,7 @@ func TestQuickstartDelete_KeepsWhatIsNotQuickstarts(t *testing.T) {
 	quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
 
 	var out bytes.Buffer
-	require.NoError(t, quickstartDeleteFn(context.Background(), &out, yes))
+	require.NoError(t, quickstartDeleteFn(context.Background(), &out, yes, false))
 	for _, line := range []string{
 		"  - Pipeline default/demo: kept (quickstart did not create it)\n",
 		"  - PolicyGate default/prod-approval: kept (quickstart did not create it)\n",
@@ -164,10 +164,10 @@ func TestQuickstartDelete_WaitsForTheVersions(t *testing.T) {
 	quickstartDeleteWait, shipPollInterval = 20*time.Millisecond, time.Millisecond
 	t.Cleanup(func() { quickstartDeleteWait, shipPollInterval = old, oldPoll })
 
-	err := quickstartDeleteFn(context.Background(), &bytes.Buffer{}, yes)
+	err := quickstartDeleteFn(context.Background(), &bytes.Buffer{}, yes, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1 PromotionStep(s) still there after 20ms")
-	assert.Contains(t, err.Error(), "Nothing else was deleted. Run kardinal quickstart --delete again")
+	assert.Contains(t, withoutKubeconfig(err.Error()), "Nothing else was deleted. Run kardinal --context kind-kardinal quickstart --delete again")
 	assert.False(t, gone(t, c, &v1alpha1.Pipeline{}, types.NamespacedName{Namespace: "default", Name: "demo"}))
 	assert.False(t, gone(t, c, &corev1.Secret{}, types.NamespacedName{Namespace: "default", Name: "github-token"}))
 
@@ -177,7 +177,7 @@ func TestQuickstartDelete_WaitsForTheVersions(t *testing.T) {
 	s.Finalizers = nil
 	require.NoError(t, c.Update(context.Background(), &s))
 	var out bytes.Buffer
-	require.NoError(t, quickstartDeleteFn(context.Background(), &out, yes))
+	require.NoError(t, quickstartDeleteFn(context.Background(), &out, yes, false))
 	assert.Contains(t, out.String(), "  - Versions of default/demo: already gone\n")
 	assert.Contains(t, out.String(), "  - Pipeline default/demo: deleted\n")
 }
@@ -202,7 +202,7 @@ func TestQuickstartDelete_Refuses(t *testing.T) {
 				t.Error("--delete runs no tool")
 				return "", nil
 			}
-			err := quickstartDeleteFn(context.Background(), &bytes.Buffer{}, tc.confirm)
+			err := quickstartDeleteFn(context.Background(), &bytes.Buffer{}, tc.confirm, false)
 			require.ErrorIs(t, err, tc.want)
 			assert.False(t, gone(t, c, &v1alpha1.Pipeline{}, types.NamespacedName{Namespace: "default", Name: "demo"}), "nothing was deleted")
 		})
@@ -242,7 +242,7 @@ func TestQuickstartDelete_OnlyWhatQuickstartMade(t *testing.T) {
 		require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "github-token"}, &s))
 		assert.Empty(t, s.Labels[quickstartMark], "quickstart kept it, so it does not mark it")
 		var out bytes.Buffer
-		require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+		require.NoError(t, quickstartDeleteFn(ctx, &out, yes, false))
 		assert.Contains(t, out.String(), "  - Secret default/github-token: kept (quickstart did not create it)\n")
 		assert.Contains(t, out.String(), "  - Pipeline default/demo: deleted\n")
 		assert.False(t, gone(t, c, &corev1.Secret{}, types.NamespacedName{Namespace: "default", Name: "github-token"}))
@@ -258,7 +258,7 @@ func TestQuickstartDelete_OnlyWhatQuickstartMade(t *testing.T) {
 		t.Cleanup(func() { quickstartClient = prev })
 		quickstartClient = func(*clientcmdapi.Config) (sigs_client.Client, error) { return c, nil }
 		var out bytes.Buffer
-		require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+		require.NoError(t, quickstartDeleteFn(ctx, &out, yes, false))
 		assert.Contains(t, out.String(), "  - Versions of default/demo: deleted 1 (demo-qs)\n")
 		assert.False(t, gone(t, c, &v1alpha1.Bundle{}, types.NamespacedName{Namespace: "default", Name: "demo-mine"}), "the user's Bundle stays")
 		assert.True(t, gone(t, c, &v1alpha1.Bundle{}, types.NamespacedName{Namespace: "default", Name: "demo-qs"}))
@@ -268,7 +268,7 @@ func TestQuickstartDelete_OnlyWhatQuickstartMade(t *testing.T) {
 			Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: "https://github.com/me/api", SecretRef: &v1alpha1.SecretRef{Name: "github-token"}}}}
 		c := quickstartDemo(t, api)
 		var out bytes.Buffer
-		require.NoError(t, quickstartDeleteFn(ctx, &out, yes))
+		require.NoError(t, quickstartDeleteFn(ctx, &out, yes, false))
 		assert.Contains(t, out.String(), "  - Secret default/github-token: kept (used by Pipeline api)\n")
 		assert.False(t, gone(t, c, &corev1.Secret{}, types.NamespacedName{Namespace: "default", Name: "github-token"}))
 	})
