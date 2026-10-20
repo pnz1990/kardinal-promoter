@@ -9,48 +9,12 @@ what changed in each release.
 
 ---
 
-## Currently available: v0.12.3
+## Currently available: v0.13.0
 
-v0.12.3 is the latest release: v0.12.0 with three patches: a version no longer recorded Verified
-where a newer one replaced it (#2132, v0.12.1), a security fix to automatic rollback (#2187,
-#2223, v0.12.2), and verify gates next to an approval-policy gate (#2271, v0.12.3). Besides everything earlier releases shipped (see the
-[changelog](changelog.md)), v0.12.0 makes kardinal agent-ready:
-
-- **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
-  the namespaces, pipelines and environments it may act in. Versions, approvals and overrides
-  record the verified actor and sponsor, and AuditEvents name them:
-  [Agents and the verified actor](actors.md).
-- **Policy that knows the actor.** Gates read who created a version (`actor.*`, `agent.*`), and an
-  environment can say `agents: auto | approve | deny`. Approvals from agents count only where a
-  gate opts in, never for the agent's own work or its sponsor's: [Actor-aware policy](agentic/policy.md).
-- **Agents as verifiers.** A `Verdict` object records an agent's pass, fail or inconclusive result
-  for a version in an environment, and a verification gate waits for N verdicts from eligible
-  agents: [Verify with agents](agentic/verify-with-agents.md).
-- **An agent freeze.** `kardinal freeze --agents` stops promotions by agents, and
-  `kardinal freeze --everyone` stops the line for everyone: [Freezes](agentic/freezes.md).
-- **Local MCP.** `kardinal mcp` over stdio, with the caller's kubeconfig: read tools by default,
-  write tools only with `--allow-write`, and a policy pre-flight that says whether a version
-  would be allowed into an environment now: [Connect an agent](agentic/connect-an-agent.md).
-- **Fleets.** Pause and roll back a whole fleet; `maxUnavailable` as a percentage:
-  [Pause one fleet](pause.md#pause-one-fleet), [Roll back a fleet](rollback.md#roll-back-a-fleet).
-- **Who did it, in the audit trail.** AuditEvents name who paused, resumed, froze, lifted a
-  freeze, released a hold and rejected a version, and who merged each `pr-review` pull request:
-  [Audit logging](guides/security.md#audit-logging).
-- **Sync on promotion, scoped.** The controller asks Argo CD or Flux to sync only the Pipeline's
-  own objects (`health.refresh.namespaces` admits more), and `health.refreshTarget` names the
-  object to sync for Rollouts, Canaries and Deployments: [Sync on promotion](health-adapters.md#sync-on-promotion).
-
----
-
-## Planned
-
-Plans change with feedback; the [changelog](changelog.md) says what shipped.
-
-### v0.13: evidence
-
-v0.13.0 is not released yet; v0.12.3 is the latest release.
-
-**Merged, ships in v0.13.0.** These are on main, and this site already documents them:
+v0.13.0 is the latest release. Besides everything earlier releases shipped (see the
+[changelog](changelog.md)), among them v0.12.0's agent-ready controls (the verified actor,
+actor-aware policy, agents as verifiers, agent freezes and the local MCP server:
+[Agentic delivery](agentic/index.md)), v0.13.0 adds evidence:
 
 - **Signed promotion receipts.** With `receipts.enabled` (off by default), each promotion into
   each environment gets a signed in-toto receipt: the version, the actor and sponsor, every gate
@@ -74,8 +38,14 @@ v0.13.0 is not released yet; v0.12.3 is the latest release.
   itself, and names the agent whose workload signed it, which gates read as `commit.*`:
   [Commit signatures with gitsign](image-verification.md#commit-signatures-with-gitsign).
 
-The changelog's [Unreleased](changelog.md#unreleased) section lists every change since v0.12.0,
-including those to rollbacks, gates and the UI.
+The changelog's v0.13.0 section lists every change since v0.12.0, including those to rollbacks,
+gates and the UI.
+
+---
+
+## Planned
+
+Plans change with feedback; the [changelog](changelog.md) says what shipped.
 
 ### v0.14: adaptive
 
@@ -104,5 +74,5 @@ These concerns are intentionally delegated to dedicated tools — kardinal integ
 |---|---|
 | Traffic splitting / canary weights | Argo Rollouts, Flagger |
 | Load test gating | k6, Locust in CI |
-| Running SAST and vulnerability scanners | Trivy, Grype, govulncheck in CI. From v0.13.0 (not released yet) kardinal can require a signed Trivy or Grype scan of each image, and a gate can judge its findings after VEX: [Attestations](image-verification.md#attestations) |
+| Running SAST and vulnerability scanners | Trivy, Grype, govulncheck in CI. Since v0.13.0 kardinal can require a signed Trivy or Grype scan of each image, and a gate can judge its findings after VEX: [Attestations](image-verification.md#attestations) |
 | Code coverage gating | Codecov, SonarQube in CI |
