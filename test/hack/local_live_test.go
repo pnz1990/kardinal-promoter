@@ -667,6 +667,74 @@ exec `+realCat+` "$@"
 			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 			_ = cmd.Wait()
 		})
+		// #2244 QA: each protection below has a test that fails without it.
+		// start runs gitea with env, and waits (5s at most) for want.
+		start := func(t *testing.T, h *localLiveHost, want string, env ...string) (*exec.Cmd, *liveOut) {
+			t.Helper()
+			cmd := h.cmd(t, env, "gitea")
+			out := &liveOut{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			if !assert.Eventually(t, func() bool { return strings.Contains(out.String(), want) }, 5*time.Second, 20*time.Millisecond) {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatalf("no %q: %s", want, out.String())
+			}
+			return cmd, out
+		}
+		t.Run("a flock that fails: no slot is taken without it", func(t *testing.T) {
+			noFlock := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(noFlock, "flock"),
+				[]byte("#!/bin/sh\necho \"bash: fork: Resource temporarily unavailable\" >&2\nexit 1\n"), 0o755))
+			h := newLocalLiveHost(t)
+			cmd, out := start(t, h, "cannot take the .reclaim flock", "LOCAL_LIVE_TEST_FAIL_PATH="+noFlock)
+			time.Sleep(300 * time.Millisecond)
+			entries, _ := os.ReadDir(h.slots)
+			for _, e := range entries {
+				assert.False(t, e.IsDir() && e.Name() != ".queue", "slot %s taken without the flock: %s", e.Name(), out.String())
+			}
+			assert.Empty(t, h.read("up"))
+			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+			_ = cmd.Wait()
+		})
+		if os.Geteuid() == 0 {
+			return // root reads a mode-000 file
+		}
+		t.Run("a drain marker that cannot be read is a drain", func(t *testing.T) {
+			h := newLocalLiveHost(t)
+			marker := filepath.Join(h.slots, ".drain")
+			require.NoError(t, os.WriteFile(marker, []byte(live+"\n"), 0o000))
+			cmd, out := start(t, h, "a heavy suite is draining the host: (a marker that cannot be read)")
+			assert.Empty(t, h.read("up"))
+			assert.FileExists(t, marker, "and it is not removed")
+			require.NoError(t, os.Remove(marker))
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				require.NoError(t, err, "%s", out.String())
+			case <-time.After(10 * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+				t.Fatalf("never started once the marker went: %s", out.String())
+			}
+			assert.Contains(t, h.read("up"), "KIND_K8S=1.37")
+		})
+		t.Run("a dead run's slot whose cluster file cannot be read stays", func(t *testing.T) {
+			h := newLocalLiveHost(t)
+			gone := exec.Command("true")
+			require.NoError(t, gone.Run())
+			d := filepath.Join(h.slots, "1")
+			require.NoError(t, os.MkdirAll(d, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), []byte(fmt.Sprintf("a SIGKILLed KEEP run pid %d now\n", gone.Process.Pid)), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(d, "cluster"), []byte("kardinal-e2e-kept\n"), 0o000))
+			cmd, out := start(t, h, "cannot read cluster slot "+d+"'s cluster; the slot stays", "SLOT_MAX=1")
+			assert.DirExists(t, d)
+			assert.NotContains(t, out.String(), "reclaimed")
+			assert.Empty(t, h.read("up"))
+			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+			_ = cmd.Wait()
+		})
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)

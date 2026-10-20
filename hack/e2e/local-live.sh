@@ -296,7 +296,7 @@ this_boot=
 read_file() {
   local opened=''
   file_v=''
-  { opened=1; IFS= read -r -d '' file_v; } <"$1" 2>/dev/null
+  { { opened=1; IFS= read -r -d '' file_v; } <"$1"; } 2>/dev/null
   [ -n "$opened" ] || return 1
   while [[ $file_v == *$'\n' ]]; do file_v=${file_v%$'\n'}; done
   return 0
@@ -336,7 +336,12 @@ record_gone() {
   if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ -n "$this_boot" ] && [ "${BASH_REMATCH[2]}" != "$this_boot" ]; then
     return 0
   fi
-  read_start "$pid" || return 0
+  if ! read_start "$pid"; then
+    # Its stat could not be opened: gone, unless /proc/<pid> is there (a
+    # full file table fails the open as a failed fork does).
+    [ ! -d "/proc/$pid" ] || return 1
+    return 0
+  fi
   if [[ $r =~ (^|[[:space:]])start=([0-9]+)([[:space:]]|$) ]]; then
     [ "${BASH_REMATCH[2]}" != "$start_v" ]
     return
@@ -524,7 +529,8 @@ take_slots() {
     # Drain: no new run takes a slot from now on, for DRAIN_DEADLINE at most.
     echo "$drain_tag" >"$SLOTS_DIR/.drain"
     draining=1
-    drain_since=$(date +%s)
+    drain_since=${EPOCHSECONDS:-}
+    [ -n "$drain_since" ] || printf -v drain_since '%(%s)T' -1
   fi
   while ! with_flock .reclaim try_slots; do
     drain_expired
@@ -544,9 +550,10 @@ drain_since=''
 # without starting: it says what blocked it, gives the marker and (exiting)
 # the heavy-load lock back, and fails.
 drain_expired() {
-  local d owner cluster
+  local d owner cluster now=${EPOCHSECONDS:-}
   [ -n "$drain_since" ] || return 0
-  [ $(($(date +%s) - drain_since)) -ge "$DRAIN_DEADLINE" ] || return 0
+  [ -n "$now" ] || printf -v now '%(%s)T' -1
+  [ $((now - drain_since)) -ge "$DRAIN_DEADLINE" ] || return 0
   log "the heavy suite $SUITE drained the host for ${DRAIN_DEADLINE}s without starting: $why"
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
