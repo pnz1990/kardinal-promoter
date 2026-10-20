@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -58,7 +59,17 @@ func newMCPTool[In any](name, title, description string, write, destructive bool
 	ann.OpenWorldHint = &openWorld
 	return mcpTool{name: name, write: write, add: func(s *mcp.Server, k *mcpServer) {
 		mcp.AddTool(s, &mcp.Tool{Name: name, Title: title, Description: description, Annotations: ann},
-			func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+			func(ctx context.Context, req *mcp.CallToolRequest, in In) (res *mcp.CallToolResult, _ any, _ error) {
+				// A panic ends this call only: calls run at once, and the
+				// process exiting would cut the others off partway through
+				// their writes (rollback --hold writes the hold, then the
+				// Bundle). The stack goes to the server's log, not the client.
+				defer func() {
+					if r := recover(); r != nil {
+						_, _ = fmt.Fprintf(k.opts.log, "kardinal mcp: tool %s panicked: %v\n%s", name, r, debug.Stack())
+						res = toolError(fmt.Errorf("%s: internal error: the call stopped where it was; kardinal mcp's log has the details", name))
+					}
+				}()
 				ctx = context.WithValue(ctx, mcpClientKey{}, mcpClientLabel(req))
 				if v, ok := any(in).(interface{ check() error }); ok {
 					if err := v.check(); err != nil {

@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -143,4 +144,85 @@ func TestAssertedFor(t *testing.T) {
 	assert.Equal(t, v1alpha1.AssertedActor{Model: "m"}, assertedFor(context.Background()))
 	env.Client = "ci-bot"
 	assert.Equal(t, "ci-bot", assertedFor(ctx).Client, "the environment's client wins")
+}
+
+// lockedBuffer is a bytes.Buffer safe for concurrent writes.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// TestMCP_PanicEndsOneCall (#2241 QA): a tool call that panics ends as a
+// tool error, its stack in the server's log and not in the result, while
+// the calls running next to it finish, and the server goes on serving.
+//
+// Covers MCP-CONCURRENT-01.
+func TestMCP_PanicEndsOneCall(t *testing.T) {
+	inBoom := func(opts []sigs_client.ListOption) bool {
+		lo := (&sigs_client.ListOptions{}).ApplyOptions(opts)
+		return lo.Namespace == "boom"
+	}
+	funcs := &interceptor.Funcs{
+		Get: func(ctx context.Context, c sigs_client.WithWatch, key sigs_client.ObjectKey, obj sigs_client.Object, opts ...sigs_client.GetOption) error {
+			if key.Namespace == "boom" {
+				panic("boom in one call")
+			}
+			time.Sleep(time.Millisecond)
+			return c.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, c sigs_client.WithWatch, list sigs_client.ObjectList, opts ...sigs_client.ListOption) error {
+			if inBoom(opts) {
+				panic("boom in one call")
+			}
+			time.Sleep(time.Millisecond)
+			return c.List(ctx, list, opts...)
+		},
+	}
+	log := &lockedBuffer{}
+	cs, _ := mcpClient(t, mcpOptions{log: log}, funcs, mcpFixture()...)
+	var wg sync.WaitGroup
+	results := make([]*mcp.CallToolResult, 20)
+	errs := make([]error, 20)
+	for i := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ns := "default"
+			if i%4 == 0 {
+				ns = "boom"
+			}
+			results[i], errs[i] = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "status",
+				Arguments: map[string]any{"pipeline": "app", "namespace": ns}})
+		}()
+	}
+	wg.Wait()
+	for i := range 20 {
+		require.NoError(t, errs[i], "call %d: the transport survives", i)
+		text := results[i].Content[0].(*mcp.TextContent).Text
+		if i%4 == 0 {
+			assert.True(t, results[i].IsError, text)
+			assert.Contains(t, text, "status: internal error")
+			assert.NotContains(t, text, "goroutine", "no stack to the client")
+			assert.NotContains(t, text, "boom in one call", "no panic value to the client")
+			continue
+		}
+		assert.False(t, results[i].IsError, "call %d next to the panics: %s", i, text)
+		assert.Contains(t, text, `"pipeline":"app"`)
+	}
+	assert.Contains(t, log.String(), "kardinal mcp: tool status panicked: boom in one call")
+	assert.Contains(t, log.String(), "goroutine", "the stack in the log")
+	_, body := call(t, cs, "status", map[string]any{"pipeline": "app"})
+	assert.Contains(t, fmt.Sprint(body), "app", "the server goes on serving")
 }
