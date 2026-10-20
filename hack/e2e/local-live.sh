@@ -100,7 +100,9 @@ export KUBECONFIG=/dev/null
 # LOCAL_LIVE_ISOLATION=kubeconfig,home (#2233, #2244 QA): a copy at 3 or
 # above must keep the KUBECONFIG and HOME isolation above and below, and the
 # line; one without the line (version 2's a89b89b6f had none of it) is
-# never run by a copy that has it.
+# never run by a copy that has it. The line must stay byte-identical: the
+# hand-off matches it whole (grep -x), so any change to it refuses every
+# checkout copy until the shared one is refreshed.
 LOCAL_LIVE_VERSION=3
 LOCAL_LIVE_ISOLATION=kubeconfig,home
 # The load gate: a cluster starts only while the one-minute load is under
