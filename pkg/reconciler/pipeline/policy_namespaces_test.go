@@ -108,11 +108,17 @@ func TestPipelineReconciler_PolicyNamespacesShared(t *testing.T) {
 			require.NotNil(t, ready)
 			assert.Equal(t, metav1.ConditionTrue, ready.Status, "Ready is unchanged: %s", ready.Message)
 			cond := meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared")
+			// What kardinal doctor reads from the condition (#2286).
+			flagged, names := pipeline.NotSharedPolicyNamespaces(&got)
 			if tt.want == "" {
 				assert.Nil(t, cond)
 				assert.Zero(t, policyNamespaceEvents(rec))
+				assert.False(t, flagged)
+				assert.Empty(t, names)
 				return
 			}
+			assert.True(t, flagged)
+			assert.Equal(t, strings.Split(tt.want, ", "), names)
 			require.NotNil(t, cond)
 			assert.Equal(t, metav1.ConditionFalse, cond.Status)
 			assert.Equal(t, "NotShared", cond.Reason)

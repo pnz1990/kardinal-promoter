@@ -322,7 +322,11 @@ the result of its last read: the condition's reason becomes `PolicyNamespaceUnre
 stays as it was, and the read is retried within a minute. An API blip neither raises nor clears the
 warning.
 
-To list the Pipelines that name a namespace that has not agreed (every one a later release refuses):
+To list the Pipelines that name a namespace that has not agreed (every one a later release refuses),
+run `kardinal doctor`. Its "Policy namespaces shared" check names each such Pipeline and the
+namespaces, and reports a WARN against this release and a FAIL against v0.14, which refuses them.
+Against a controller older than v0.13, which doesn't check, it warns that it can't tell. Without
+the CLI:
 
 ```bash
 kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.conditions[?(@.type=="PolicyNamespacesShared")].status}{"\n"}{end}' | awk -F'\t' '$2=="False"{print $1}'

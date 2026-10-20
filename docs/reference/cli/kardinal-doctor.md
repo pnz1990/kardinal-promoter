@@ -14,6 +14,7 @@ PASS  Controller reachable      kardinal-version ConfigMap in the controller nam
   PASS  kro running               kro controller pod in kro-system
   PASS  kro Graph CRD installed   kro.run/v1alpha1 graphs registered
   PASS  GitHub token              GITHUB_TOKEN set on the controller Deployment
+  PASS  Policy namespaces shared  every spec.policyNamespaces entry agreed
 
 Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
 garnet ✕).
@@ -31,6 +32,14 @@ needs get on it), and asks that cluster, as the kubeconfig's identity,
 whether it may get the object the health check names and, with
 health.refresh on, patch it: a missing patch is a WARN, because the
 refresh is then refused and promotions wait for the GitOps tool's poll.
+
+The policy namespaces check lists the Pipelines whose spec.policyNamespaces
+names a namespace that has not agreed to share its PolicyGates (the
+condition PolicyNamespacesShared=False), with those namespaces: a WARN
+against a v0.13 controller, which still reads their gates, and a FAIL against
+v0.14 and later, which refuse them (their new versions wait). Run it before
+upgrading to v0.14. Against a controller older than v0.13, which does not
+check, it is a WARN saying so: upgrade to v0.13 and run it again.
 
 Use 'kardinal doctor' as the first troubleshooting step.
 
