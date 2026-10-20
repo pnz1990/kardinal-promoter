@@ -601,7 +601,9 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	}
 	what := "pipeline spec changed"
 	if !pipelineChanged {
-		what = "policy gates changed"
+		// The gates hash covers graph.RenderVersion too: a controller that
+		// renders Graphs differently re-translates once (#2271).
+		what = "policy gates or the Graph rendering changed"
 	}
 	log.Info().
 		Str("graph", b.Status.GraphRef).

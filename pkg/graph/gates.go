@@ -55,6 +55,21 @@ const (
 	iterPR   = "PR"
 )
 
+// RenderVersion is the version of how the builder renders a Graph from the
+// same inputs. translator.GatesHash includes it, so a controller whose
+// RenderVersion differs re-translates every Promoting Bundle's Graph once
+// (the Bundle reconciler compares status.policyGatesHash): a version stuck
+// under a rendering bug picks up the fix on upgrade. A Graph whose rendering
+// did not change re-renders identically, which kro applies as a no-op.
+//
+// Bump it with every change that renders an existing Bundle's Graph
+// differently (node IDs, templates, data), and say so in the changelog
+// fragment; a change that leaves every existing Graph identical needs none.
+//
+//   - 2: the gate collections render spec.approval for all their items or
+//     for none (#2271).
+const RenderVersion = 2
+
 // The annotations that stamp a gate instance with the template it was copied
 // from (#1360), as evidence of the rule a Bundle was held to: the template's
 // metadata.generation and the digest of its rule (TemplateDigest). They
