@@ -247,6 +247,15 @@ allowed. An image outside the list gets no referrer: its receipt is still signed
 `Stored` condition is `False` with reason `RepositoryNotAllowed`, naming the repository. Left
 empty, the sink pushes to every image's repository its Secret reaches.
 
+Both values are the controller's, not a namespace's. If one tenant's Bundle names an image in
+a repository the list allows for another tenant, the referrer is pushed there: a write into
+the other tenant's repository. `verify-receipt` pins the namespace, so it does not take that
+referrer as the other tenant's receipt. Where tenants must not write into each other's
+repositories, run one release per tenant, each with its own list
+([One install per team namespace](guides/security.md#stronger-isolation-one-install-per-team-namespace)).
+Shards with a list each separate the pushes too, but shards are not a trust boundary
+([Sharding](sharding.md#what-sharding-does-not-split)). A per-namespace list is planned (#2285).
+
 ImageVerification skips receipt referrers before it counts an image's signatures, so an image
 promoted to many environments does not crowd out its own signature
 ([Image verification](image-verification.md#signature-formats)).

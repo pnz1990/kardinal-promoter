@@ -92,7 +92,9 @@ agrees to have it sent to the address whoever writes the ChangeRequest chooses. 
 credential that may create and read changes, not one that may approve them. Every request goes
 through the controller's egress guard: loopback, link-local and cloud metadata addresses are
 refused (condition `Refused`), and with `--egress-allowlist` only the listed destinations are
-reached.
+reached. Cluster and other private addresses are allowed by design, so an in-cluster ticketing
+proxy works; narrow them with the allowlist or a NetworkPolicy
+([Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
 
 ## ServiceNow
 
