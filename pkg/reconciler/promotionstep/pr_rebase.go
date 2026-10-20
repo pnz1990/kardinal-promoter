@@ -318,8 +318,9 @@ const outputPushedSHA = builtinsteps.OutputPushedSHA
 //   - If the new head already has the promotion's change (the PR merged
 //     before its PRStatus said so), nothing is pushed or counted as a
 //     rebuild: baseSHA follows the head (#1640).
-//   - If the PR branch's head is not the commit kardinal pushed
-//     (status.outputs.pushedSHA), someone else committed to it: nothing is
+//   - If the PR branch's head is not one of the commits kardinal pushed
+//     (status.outputs.pushedSHAs and pushedSHA, builtinsteps.OwnPush, as
+//     git-push checks, #2095), someone else committed to it: nothing is
 //     rebuilt, and the message says so.
 //
 // It reports whether it wrote the step's status. A failure is logged and
@@ -364,7 +365,8 @@ func (r *Reconciler) refreshPRBranch(ctx context.Context, log zerolog.Logger, ba
 		return false, nil
 	}
 	pr := ps.Status.Outputs["prNumber"]
-	if pushed, now := ps.Status.Outputs[outputPushedSHA], heads[ps.Status.Outputs["branch"]]; pushed != "" && now != "" && now != pushed {
+	if pushed, now := ps.Status.Outputs[outputPushedSHA], heads[ps.Status.Outputs["branch"]]; pushed != "" && now != "" &&
+		!builtinsteps.OwnPush(ps.Status.Outputs, now) {
 		msg := withLabelsError(fmt.Sprintf("PR #%s is open, waiting for merge; its branch has commits kardinal did not push "+
 			"(head %s, kardinal pushed %s), so it is not rebuilt on %s at %s", pr, short(now), short(pushed), branch, short(head)), ps.Status.Outputs)
 		if ps.Status.Message == msg {
