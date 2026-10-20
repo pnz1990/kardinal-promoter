@@ -208,7 +208,7 @@ func TestQuickstart_Preconditions(t *testing.T) {
 		noTool string
 		want   string
 	}{
-		{"no repo", "", "tok", "", "quickstart needs --repo, your fork of github.com/pnz1990/kardinal-demo"},
+		{"no repo", "", "tok", "", "quickstart needs --local (a git server in the cluster, no account needed) or --repo"},
 		{"no helm", "https://github.com/me/kardinal-demo", "tok", "helm", "quickstart needs helm on PATH"},
 		{"no kubectl", "https://github.com/me/kardinal-demo", "tok", "kubectl", "quickstart needs kubectl on PATH"},
 		{"no token", "https://github.com/me/kardinal-demo", "", "", "needs a GitHub token with contents and pull requests read and write on https://github.com/me/kardinal-demo: export GITHUB_TOKEN=<token>, or log in with gh auth login"},
@@ -284,12 +284,17 @@ func quickstartCluster(t *testing.T, objs ...sigs_client.Object) sigs_client.Cli
 	for _, gvk := range []schema.GroupVersionKind{
 		{Group: "kro.run", Version: "v1alpha1", Kind: "Graph"},
 		applicationSetGVK,
+		applicationGVK,
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "AppProject"},
 		v1alpha1.GroupVersion.WithKind("Pipeline"),
 		v1alpha1.GroupVersion.WithKind("PolicyGate"),
 		v1alpha1.GroupVersion.WithKind("Bundle"),
 		v1alpha1.GroupVersion.WithKind("PromotionStep"),
 		corev1.SchemeGroupVersion.WithKind("Secret"),
 		corev1.SchemeGroupVersion.WithKind("Namespace"),
+		corev1.SchemeGroupVersion.WithKind("ConfigMap"),
+		corev1.SchemeGroupVersion.WithKind("Service"),
+		corev1.SchemeGroupVersion.WithKind("PersistentVolumeClaim"),
 		appsv1.SchemeGroupVersion.WithKind("Deployment"),
 	} {
 		scope := meta.RESTScopeNamespace
@@ -405,9 +410,12 @@ func TestQuickstart_Demo(t *testing.T) {
   - Pipeline default/demo: applied
 `, strings.SplitAfter(got, "  - Pipeline default/demo: applied\n")[0])
 	assert.Regexp(t, `  - First version: shipped as demo-\S+\n`, got)
-	assert.Contains(t, got, "Approve prod:    kardinal approve demo prod\n")
-	assert.Contains(t, got, "Open the UI:     kardinal dashboard\n")
-	assert.Contains(t, got, "Ship the next:   kardinal ship demo --image "+quickstartImages[1]+" --wait\n")
+	// The commands it prints name the context, and the --kubeconfig it was given.
+	assert.Contains(t, got, "Approve prod:    kardinal --context kind-kardinal --kubeconfig "+globalKubeconfig+" approve demo prod\n")
+	got = withoutKubeconfig(got)
+	assert.Contains(t, got, "Approve prod:    kardinal --context kind-kardinal approve demo prod\n")
+	assert.Contains(t, got, "Open the UI:     kardinal --context kind-kardinal dashboard\n")
+	assert.Contains(t, got, "Ship the next:   kardinal --context kind-kardinal ship demo --image "+quickstartImages[1]+" --wait\n")
 
 	ctx := context.Background()
 	var s corev1.Secret
@@ -625,5 +633,6 @@ func TestQuickstart_InterruptRemovesKubeconfig(t *testing.T) {
 	require.NotEmpty(t, file)
 	assert.NoFileExists(t, file, "the kubeconfig file is removed")
 
-	assert.Equal(t, []string{"PATH=/bin", "KUBERC=off"}, toolEnv([]string{"KUBERC=/home/me/.kube/kuberc", "PATH=/bin", "HELM_KUBECONTEXT=prod"}))
+	assert.Equal(t, []string{"PATH=/bin", "KUBERC=off", "KUBECONFIG=" + os.DevNull},
+		toolEnv([]string{"KUBERC=/home/me/.kube/kuberc", "PATH=/bin", "HELM_KUBECONTEXT=prod", "KUBECONFIG=/home/me/.kube/config"}))
 }

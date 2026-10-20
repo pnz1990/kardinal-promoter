@@ -5,10 +5,10 @@ Install kardinal on a local cluster and promote a first version
 ### Synopsis
 
 Set up a demo on a local cluster (kind, k3d, minikube, Docker or Rancher
-Desktop; any other context is refused before anything is written): kro, Argo
-CD, kardinal, the git Secret, the Argo CD Applications of your kardinal-demo
-fork, a Pipeline with an approval gate on prod, and a first version, which it
-follows until prod waits for your approval. A re-run changes nothing.
+Desktop; any other context is refused first): kro, Argo CD, kardinal, the demo's
+git repository (--local: on a git server in the cluster, no account needed;
+--repo: your GitHub fork), a Pipeline gated on prod, and a first version,
+followed until prod waits for your approval. A re-run changes nothing.
 
 quickstart refuses, before it sends anything to a cluster, a kubeconfig
 context whose name is not kind-*, k3d-*, minikube, docker-desktop or
@@ -48,6 +48,37 @@ It ships the first version (--image) unless demo has one, and follows it
 until prod waits for your approval (--no-wait does not follow). It does not
 change your kubeconfig. A re-run changes nothing.
 
+With --local instead of --repo, the demo's repository is on a git server in
+the cluster, and no GitHub account or token is needed. First it checks, and
+stops with nothing changed: helm is 3.13 or later (it labels its releases),
+the namespace kardinal-git is its own or absent, the cluster has a default
+StorageClass, and a kardinal-promoter already installed is one for the local
+git server. Then it marks the install: an install ID, the label
+kardinal.io/quickstart-id of every namespace it creates (kardinal-git,
+kro-system, argocd, kardinal-system, kardinal-test-app-<env>; one that
+exists is left unmarked), of the ApplicationSet and its Applications, and of
+the Helm releases of kro and kardinal-promoter it installs (helm --labels),
+recorded in the ConfigMap
+kardinal-git/kardinal-quickstart. Before kardinal it installs, in the
+namespace kardinal-git:
+  a single-pod Forgejo (the image hack/e2e/versions.env pins, by digest),
+    with a 1Gi volume of the default StorageClass (it stops before it creates
+    anything without one), behind a ClusterIP Service: reachable only inside
+    the cluster, with no port published on this machine
+  its user kardinal (a random password nobody keeps) and the repository
+    kardinal/kardinal-demo, seeded with kardinal-demo's environments by
+    kubectl exec of a script that holds no secret
+Then the controller's Secret kardinal-system/kardinal-scm-token and the git
+Secret default/git-token each get a token of that user (scopes
+write:repository and write:issue), read from kubectl exec's output and
+written straight into the Secret: never printed, passed as an argument or
+written to a file. kardinal-promoter is installed with scm.provider=forgejo,
+the server as scm.apiURL and scm.allowedRepositories limited to the demo
+repository; one already installed for another git server is refused. The
+ApplicationSet and the Pipeline use the repository's in-cluster URL.
+kubectl -n kardinal-git port-forward svc/kardinal-git 3000 shows it in a
+browser at http://127.0.0.1:3000 (the forward listens on 127.0.0.1).
+
 Then: kardinal approve demo prod ships it to prod; kardinal dashboard opens
 the UI; the Next lines show the command that ships the next version. To get
 PR evidence for prod, set its approval to pr-review in the Pipeline.
@@ -65,16 +96,34 @@ token Secret, and the kardinal-test-app-<env> namespaces, and prints the
 command that deletes those. It asks first on a terminal (--yes does not).
 A re-run deletes nothing.
 
+kardinal quickstart --local --delete first prints everything it will remove
+and keep, then asks; without a terminal it goes ahead only with --yes. It
+removes only what carries the install ID of the record in kardinal-git (the
+namespace's ID and the record's must match). It deletes the demo the same
+way, then the namespaces kardinal-test-app-<env> it created (once Argo CD
+has deleted their Applications) and each of kardinal-promoter, kro (their
+Helm release carries the ID) and Argo CD (its namespace does) with its CRDs
+and the namespace it created for it: helm uninstall, Argo CD's release
+manifests. A part stays, CRDs and all, while any object of its API groups
+(kardinal.io; argoproj.io; kro.run and internal.kro.run), in any namespace,
+is not the demo's: deleting a CRD deletes every object of its kind, and the
+reason is printed. Then it deletes the namespace kardinal-git with the git
+server, its repository and the record.
+
 ```
-kardinal quickstart --repo <your fork of kardinal-demo> [flags]
+kardinal quickstart --local | --repo <your fork of kardinal-demo> [flags]
 ```
 
 ### Examples
 
 ```
   kind create cluster --name kardinal
-  kardinal quickstart --repo https://github.com/<you>/kardinal-demo
+  kardinal quickstart --local
   kardinal approve demo prod
+  kardinal quickstart --local --delete
+
+  # With your GitHub fork of kardinal-demo instead (GITHUB_TOKEN or gh auth login):
+  kardinal quickstart --repo https://github.com/<you>/kardinal-demo
   kardinal quickstart --delete
 ```
 
@@ -86,6 +135,7 @@ kardinal quickstart --repo <your fork of kardinal-demo> [flags]
       --delete                 Delete the demo quickstart applied (its versions, Pipeline, gate, ApplicationSet and git Secret); keep kro, Argo CD and kardinal
   -h, --help                   help for quickstart
       --image string           The first version to ship (default "ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f@sha256:51a7355fc6cb8928c89cef5bdf55a7e1ea9fe8be102beb718486338fc7286cd0")
+      --local                  Keep the demo's git repository on a git server in the cluster (Forgejo, reachable only inside it), seeded with kardinal-demo: no GitHub account, fork or token; with --delete, also remove the server and what quickstart --local installed
       --no-argocd              Do not install Argo CD (the cluster has one)
       --no-wait                Do not follow the first version
       --repo string            Your GitHub fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it); another git host needs --set scm.provider

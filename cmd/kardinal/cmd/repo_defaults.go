@@ -102,6 +102,8 @@ func noticeDefault(what, v, source string) {
 		return
 	}
 	if s, ok := errOut.(*commandStderr); ok {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		if s.said[what] {
 			return
 		}

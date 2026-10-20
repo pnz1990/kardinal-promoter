@@ -188,7 +188,7 @@ in environment variables, as the chart does for the SCM, UI and Bundle API token
 flags (`controller.extraArgs`). Only an empty `pprofAddress` turns it off.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 --reset-then-reuse-values --set pprofAddress=:6060
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 --reset-then-reuse-values --set pprofAddress=:6060
 kubectl -n kardinal-system port-forward deploy/kardinal-promoter 6060:6060
 go tool pprof -sample_index=inuse_space http://localhost:6060/debug/pprof/heap
 # Compare two snapshots: what grew between them.
@@ -286,14 +286,18 @@ non-finite rate or a burst below 1.
 | `GatesStatusFailed` | PromotionStep | `status.outputs.gatesStatus` (`error:…` with the retry time) |
 | `GatesStatusNoCommit` | PromotionStep | no `status.outputs.prHeadSHA`; the PR has no `kardinal/gates` status |
 | `MergedWhileBlocked` | PromotionStep | `status.outputs.mergedWhileBlocked` |
+| `PRBranchForeignCommit` | PromotionStep | `status.outputs.prForeignHead` and the step's message, which name the foreign head; once the step's retries are used up, `status.state: Failed` and the `PromotionFailed` AuditEvent ([PR evidence](pr-evidence.md)) |
+| `GitOpsRefreshSkipped`, `GitOpsRefreshFailed` | PromotionStep | `status.refreshMessage`; the step then waits for the GitOps tool's own poll ([Sync on promotion](health-adapters.md#sync-on-promotion)) |
 | `PRLeftOpen`, `ClosePRFailed` | PromotionStep (deleted) | `kardinal_pr_cleanup_failures_total{reason}` and the controller's error log: the step is gone, so close the PR by hand ([troubleshooting](troubleshooting.md)) |
 | `Blocked` | PolicyGate | `Ready=False` condition (reason `Blocked`) and the `GateEvaluated` AuditEvent |
 | `GateExempted` | PolicyGate | `status.reason` (`EXEMPT: …`) and the `GateEvaluated` AuditEvent |
 | `HoldBundleMissing` | Pipeline | the `HoldBundleMissing` AuditEvent and `kardinal_hold_bundle_missing_total` |
 | `RollbackRefused` | RollbackPolicy | the `RollbackRefused` condition |
 | `InvalidSpec` | ChangeWindow | `Valid=False` condition |
+| `FreezeAuditFailed` | ChangeWindow | for a freeze's start, the `FreezeAudited` condition, missing until the `FreezeStarted` AuditEvent is written; for a lift whose `FreezeLifted` record still fails after 2 minutes, the controller's warning log only ([Freezes](agentic/freezes.md#who-froze-and-who-lifted-it)) |
 | `NotificationDropped`, `NotificationTemplateFailed` | NotificationHook | `status.failureMessage` and `kardinal_notifications_dropped_total{reason}` |
 | `ShardNotRunning`, `ShardHomeConflict` | Namespace | the controller's warning log only |
+| `ControllerSecretReferenceable` | Secret (the controller's SCM token) | the `kardinal.io/referenceable=true` label on that Secret, and the controller's warning log |
 
 ### Leader election under API pressure
 
@@ -396,7 +400,7 @@ resources:
 **3. Reduce ScheduleClock tick frequency** if no gate needs minute-level `schedule.*`
 re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   -n kardinal-system --reset-then-reuse-values --set scheduleClock.interval=5m
 ```
 

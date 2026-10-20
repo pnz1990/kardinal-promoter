@@ -253,7 +253,10 @@ type ChangeRequest struct {
 type Checks struct {
 	Metrics           []Metric     `json:"metrics,omitempty"`
 	ImageVerification []ImageCheck `json:"imageVerification,omitempty"`
-	Health            *Health      `json:"health,omitempty"`
+	// SLSA is the version's SLSA build level, from its ImageVerification's
+	// attestations; nil when its policy decides none.
+	SLSA   *SLSA   `json:"slsa,omitempty"`
+	Health *Health `json:"health,omitempty"`
 }
 
 // Metric is one per-promotion MetricCheck result.
@@ -502,7 +505,7 @@ func statement(in Input) (Statement, error) {
 			ResourceURI:        ResourceURI(in.ClusterID, ns, ps.Spec.PipelineName, ps.Spec.Environment),
 			Policy:             policy,
 			VerificationResult: ResultPassed,
-			VerifiedLevels:     levels(rec, facts),
+			VerifiedLevels:     append(levels(rec, facts), slsaLevels(rec)...),
 			SlsaVersion:        slsaVersion,
 			Kardinal:           rec,
 		},
@@ -546,6 +549,28 @@ func subjects(in Input) []Subject {
 			Name:   fmt.Sprintf("kardinal://%s/namespaces/%s/bundles/%s", in.ClusterID, in.Bundle.Namespace, in.Bundle.Name),
 			Digest: digestMap(Digest(spec)),
 		})
+	}
+	return out
+}
+
+// uncovered are the subjects the SLSA fold does not check: every subject
+// that is not a digest-pinned image of the Bundle (the config commit, the
+// Bundle's spec, and any kind of subject added later), so that a subject
+// is uncovered unless it is shown to be a checked image: a new kind fails
+// closed.
+func uncovered(subj []Subject, images []v1alpha1.ImageRef) []Subject {
+	checked := map[string]bool{}
+	for _, img := range images {
+		if digestMap(img.Digest) != nil {
+			checked[img.Repository+"@"+img.Digest] = true
+		}
+	}
+	var out []Subject
+	for _, s := range subj {
+		if hexPart := s.Digest[digestSHA256]; len(s.Digest) == 1 && hexPart != "" && checked[s.Name+"@sha256:"+hexPart] {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -616,6 +641,7 @@ func checks(in Input) Checks {
 		for _, r := range iv.Status.Images {
 			c.ImageVerification = append(c.ImageVerification, ImageCheck{Image: r.Image, Verified: r.Verified, By: r.Signer})
 		}
+		c.SLSA = slsaCheck(iv, in.Bundle.Spec.Images, uncovered(subjects(in), in.Bundle.Spec.Images))
 	}
 	for _, s := range in.Step.Status.Steps {
 		if s.Name != "health-check" {

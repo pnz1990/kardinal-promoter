@@ -53,6 +53,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	agentidentityrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 	agentrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/auditretention"
@@ -1390,7 +1391,13 @@ func main() {
 	// after every reconciler and HTTP server has drained, so their last
 	// spans are exported too.
 	signals := ctrl.SetupSignalHandler()
-	if err := runThenFlush(func() error { return mgr.Start(signals) }, shutdownTracing, logger); err != nil {
+	// The KMS keys' clients (their connections) are released once every
+	// reconciler has stopped signing.
+	start := func() error {
+		defer receipt.CloseKMS()
+		return mgr.Start(signals)
+	}
+	if err := runThenFlush(start, shutdownTracing, logger); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
 }

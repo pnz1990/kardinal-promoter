@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +45,7 @@ var errOut io.Writer = os.Stderr
 // command's own writer, so nothing a command says once outlives it.
 type commandStderr struct {
 	io.Writer
+	mu   sync.Mutex // said: a command's goroutines may say at once
 	said map[string]bool
 }
 

@@ -9,10 +9,10 @@ what changed in each release.
 
 ---
 
-## Currently available: v0.12.0
+## Currently available: v0.12.1
 
-v0.12.0 is the latest release. Besides everything earlier releases shipped (see the
-[changelog](changelog.md)), it makes kardinal agent-ready:
+v0.12.1 is the latest release: v0.12.0 with one fix (#2132). Besides everything earlier releases
+shipped (see the [changelog](changelog.md)), v0.12.0 makes kardinal agent-ready:
 
 - **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
   the namespaces, pipelines and environments it may act in. Versions, approvals and overrides
@@ -46,14 +46,15 @@ Plans change with feedback; the [changelog](changelog.md) says what shipped.
 
 ### v0.13: evidence
 
-v0.13.0 is not released yet; v0.12.0 is the latest release.
+v0.13.0 is not released yet; v0.12.1 is the latest release.
 
 **Merged, ships in v0.13.0.** These are on main, and this site already documents them:
 
 - **Signed promotion receipts.** With `receipts.enabled` (off by default), each promotion into
   each environment gets a signed in-toto receipt: the version, the actor and sponsor, every gate
-  with its result, the approvals and verdicts, the checks and the PR. Keyless or key signing,
-  OCI referrer and Rekor sinks, and `kardinal verify-receipt` to check one offline:
+  with its result, the approvals and verdicts, the checks, the SLSA build level, any freeze
+  exemption and the PR. Keyless, key or KMS (AWS, Google Cloud) signing, OCI referrer and Rekor
+  sinks, and `kardinal verify-receipt` to check one offline:
   [Signed promotion receipts](receipts.md).
 - **Attestations.** Verified SLSA provenance (with the build level you grant each builder),
   vulnerability scans with OpenVEX, and any in-toto predicate, read by gates as
@@ -75,7 +76,6 @@ including those to rollbacks, gates and the UI.
 - Keyless (gitsign) commit signatures, mapped to the agent that signed. Commit signatures the
   SCM verified (`commits.requireSigned`) already ship:
   [Signed commits](image-verification.md#signed-commits).
-- Receipts signed with AWS KMS or Google Cloud KMS.
 - A maximum age for attestations, so a gate can refuse a stale scan.
 
 ### v0.14: adaptive

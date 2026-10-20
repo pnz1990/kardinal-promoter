@@ -88,6 +88,17 @@ func HumanError(err error) error {
 	return err
 }
 
+// humanErrorIn is HumanError for a command that ran with client c in
+// namespace ns (a kardinal mcp tool call): the not-found hint lists ns's
+// pipelines, never those of the flags' namespace, which a tool call does not
+// set (#2230).
+func humanErrorIn(err error, c sigs_client.Client, ns string) error {
+	if name, ok := notFoundPipeline(err); ok && c != nil {
+		return pipelineNotFound(context.Background(), c, ns, name)
+	}
+	return HumanError(err)
+}
+
 // lifecycleNotFoundRE parses lifecycle's missing-pipeline error.
 var lifecycleNotFoundRE = regexp.MustCompile(`pipeline ([a-z0-9][a-z0-9.-]*)/([a-z0-9][a-z0-9.-]*): not found`)
 

@@ -32,7 +32,11 @@ type Block struct {
 var Manifest = map[string][]Block{
 	"quickstart.md": {
 		{Match: "uname -s", Skip: "installs a released CLI; the suite runs this checkout's"},
-		{Match: "kind create cluster --name kardinal", Skip: "the suite has its cluster, and the fork is a Forgejo repo laid out as kardinal-demo"},
+		{Match: "kind create cluster --name kardinal", Skip: "the suite has its cluster"},
+		{Match: "kardinal quickstart --local\n", Exact: true, Skip: "installs kro, Argo CD, its git server and kardinal on an empty cluster: TestQuickstartLocal_FromNothing runs it (quickstart-local suite)"},
+		{Match: "port-forward svc/kardinal-git", Skip: "forwards a port until Ctrl-C, to the git server of quickstart --local"},
+		{Match: "kardinal quickstart --local --delete", Skip: "TestQuickstartLocal_FromNothing runs it"},
+		{Match: "gh repo fork", Skip: "the fork is a Forgejo repo laid out as kardinal-demo"},
 		{Match: "kardinal quickstart --repo"},
 		{Match: "kardinal why demo prod"},
 		// Both approve blocks: the first runs; approvals.md's approve stands

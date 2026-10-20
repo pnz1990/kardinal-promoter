@@ -389,6 +389,13 @@ func (e *Env) Shell(t *testing.T, script string) ShellRun {
 // in the logged script.
 func (e *Env) ShellEnv(t *testing.T, env []string, script string) ShellRun {
 	t.Helper()
+	return e.ShellEnvFor(t, 10*time.Minute, env, script)
+}
+
+// ShellEnvFor is ShellEnv with a timeout of its own, for a script that
+// installs a stack (kardinal quickstart --local on an empty cluster).
+func (e *Env) ShellEnvFor(t *testing.T, timeout time.Duration, env []string, script string) ShellRun {
+	t.Helper()
 	kubeconfig := e.contextKubeconfig(t)
 	path := os.Getenv("PATH")
 	if h := os.Getenv(EnvHelm); h != "" {
@@ -403,7 +410,7 @@ helm() { command helm --kube-context "$E2E_CONTEXT" "$@"; }
 kardinal() { command kardinal --context "$E2E_CONTEXT" "$@"; }
 export -f kubectl helm kardinal
 `
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", prelude+script)
 	cmd.Dir = RepoRoot(t)

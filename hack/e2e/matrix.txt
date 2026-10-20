@@ -29,6 +29,8 @@ delivery      1.37        -
 ui            1.37        -
 docs-walkthrough 1.35     -
 docs-walkthrough 1.37     -
+# From an empty cluster: the quickstart installs everything (#1785).
+quickstart-local 1.35     -
 # The API server trusts Dex through kind's kubeadm config patches on the
 # oldest and the newest minor.
 sso           1.35        -

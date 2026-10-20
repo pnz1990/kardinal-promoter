@@ -167,8 +167,11 @@ The host rules are on by default:
   a directory made with mkdir. They take it one at a time, in a fair queue
   that `hack/loadlock.sh` shares: waiters are served in the order they asked,
   and `-priority release` (a release gate; `loadlock.sh -p release`) before
-  everyone else. A lock or queued ticket of a process that is gone is
-  removed.
+  everyone else. A lock or queued ticket of a process that is gone (another
+  boot's, or a reused pid's) is removed, by the head waiter only. The queue
+  orders only the clients that use it: a worktree on code from before it
+  takes the lock without a ticket, and waiters log when such a holder has
+  it; rebase to use main's `hack/loadlock.sh`.
 - **Cluster steps need slots.** A step that starts kind clusters needs the
   host's shared slots (`-slots DIR` or `$RELEASE_GATE_SLOTS`), one per
   cluster.

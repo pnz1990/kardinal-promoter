@@ -69,7 +69,7 @@ kubectl create secret generic github-token \
 ### 2. Install with Helm
 
 ```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 \
   --namespace kardinal-system \
   --create-namespace \
   --set scm.secretRef.name=github-token
@@ -127,17 +127,51 @@ macOS (`amd64`, `arm64`) and `kardinal-windows-amd64.exe`.
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
-curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.12.0/kardinal-${OS}-${ARCH}"
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.12.1/kardinal-${OS}-${ARCH}"
 chmod +x kardinal && sudo mv kardinal /usr/local/bin/
 kardinal version
-# CLI:        v0.12.0
-# Controller: v0.12.0
+# CLI:        v0.12.1
+# Controller: v0.12.1
 # Graph:      kro v0.10.0-rc.0
 ```
 
 Keep the CLI and the controller on the same minor version. From v0.13.0 (unreleased), when they are a minor version apart,
 each command that talks to the cluster prints one `warning: kardinal CLI ... talks to controller ...`
 line on stderr, with the command that upgrades the older one ([`kardinal version`](reference/cli/kardinal-version.md)).
+
+### Defaults for a repository
+
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.0 and earlier take the pipeline as an argument only. The [changelog](changelog.md) lists every change since v0.12.0.
+
+Inside an application's repository you need not repeat its pipeline and namespace. Put them in a
+`.kardinal.yaml` at the repository's root:
+
+```yaml
+pipeline: checkout
+namespace: team-a
+```
+
+```bash
+kardinal why prod
+```
+
+- **Where a default comes from.** A command that takes `<pipeline> [<env>]` (`why`, `explain`,
+  `history`, `logs`, `ship`, `approve`, `promote`, `rollback`, `hold`, `unhold`, `pause`,
+  `resume`, `override`, `verify`) takes the pipeline from its argument, then `KARDINAL_PIPELINE`,
+  then the file's `pipeline`. The namespace comes from `-n`, then `KARDINAL_NAMESPACE`, then the
+  file's `namespace`, then the kubeconfig context. The file is the nearest `.kardinal.yaml` from
+  the working directory up to the git repository's root.
+- **One argument.** With a default pipeline, `kardinal why prod` means its environment `prod` when
+  it has one, else a pipeline named `prod`. When the cluster cannot say, the command refuses
+  rather than guess.
+- **Never silent.** Each default a command uses is printed once on stderr with its source, for
+  example `using namespace team-a (from /src/app/.kardinal.yaml)`.
+- **Never a cluster.** The file may set `pipeline` and `namespace` only, and any other key is an
+  error: it never selects a context or a cluster. `kardinal mcp`'s tools never read it, because
+  an agent's working directory may be a repository it does not trust.
+
+See [kardinal](reference/cli/kardinal.md) for the details.
 
 ---
 

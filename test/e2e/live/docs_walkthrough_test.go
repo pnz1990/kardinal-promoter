@@ -223,6 +223,9 @@ func TestDocs_Walkthrough(t *testing.T) {
 	// ── quickstart.md ───────────────────────────────────────────────────
 	q := "quickstart.md"
 	out := w.must(q, "kardinal quickstart --repo", "https://github.com/<you>/kardinal-demo", repo.CloneURL)
+	// The commands it prints name the suite's context and the kubeconfig the
+	// shell set (KUBECONFIG); the page shows kind's context alone.
+	out = kubeconfigFlag.ReplaceAllString(strings.ReplaceAll(out, e.Context, "kind-kardinal"), "")
 	// The installs differ (the suite installed kro, Argo CD and kardinal);
 	// what the quickstart applies and its next steps are the page's.
 	sample := framework.PageSample(t, q, "kardinal quickstart --repo", -1)

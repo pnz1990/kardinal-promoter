@@ -4,7 +4,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 
 !!! note "Objectivity"
     Surveyed from each project's source, docs and release notes: kardinal-promoter
-    v0.12.0, Kargo v1.12.4 and GitOps Promoter v0.45.3. What kardinal's main branch has merged
+    v0.12.1, Kargo v1.12.4 and GitOps Promoter v0.45.3. What kardinal's main branch has merged
     for v0.13.0, which is not released yet, is marked "v0.13.0". All three tools are actively developed;
     check each project's releases for the latest capabilities. "Kargo Enterprise" means the
     commercial edition (Kargo on the Akuity Platform); everything else in the Kargo column is open source.
@@ -62,7 +62,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Artifact discovery** | Bundle created by CI (HTTP API, GitHub Action) or the CLI; the Subscription CRD watches OCI images, Git (HTTPS or SSH, `pathGlob`) and Helm charts (HTTP index or OCI), public or private (pull Secrets; ECR, GCR and ACR through refreshed token Secrets), with semver, regex and allow/ignore filters, and webhook receivers for Docker Hub, GHCR, Harbor, Quay, Artifactory and generic senders | Warehouse: images, Git and Helm charts, with webhook receivers for registries and SCMs | Git commits from a hydrator (Argo CD Source Hydrator or any other) |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight, with creation criteria since v1.8) | No |
 | **Architecture** | Graph-first (one kro Graph per Bundle) | Controllers over Stage and Freight CRDs; v2.0 will replace the storage layer | Controller, plus an optional API server for the dashboard |
-| **Maturity** | v0.12.0, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.4, production-grade; v2.0.0 is next | v0.45.3, `v1alpha1` API, "experimental" per its README |
+| **Maturity** | v0.12.1, active development; runs on kro's alpha Graph API (v0.10.0-rc.0) | v1.12.4, production-grade; v2.0.0 is next | v0.45.3, `v1alpha1` API, "experimental" per its README |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 
 ---
@@ -109,7 +109,7 @@ What kardinal does for each row, in v0.12.0 and, where marked, on main for v0.13
 | **Agents as verifiers** | Yes: a verify gate holds an environment for `required` passing Verdicts on the version, from the agents it allows (never the author agent's party), with `maxFailures`, `onInconclusive` and a timeout; an AgentRun runs an admin-registered agent image in the cluster to write one ([Verify with agents](agentic/verify-with-agents.md)). Post hooks and Argo Rollouts analyses also gate an environment |
 | **Budgets** | No: per-agent budgets are [planned](roadmap.md#v014-adaptive) |
 | **Kill switch** | Yes: `kardinal freeze --agents` holds every promotion by agents, `kardinal freeze --everyone` stops the line, cluster-wide or for one namespace, enforced by the controller; a person's break-glass exemption is verified and audited, and never counts for an agent ([Freezes](agentic/freezes.md)). Pipelines and fleets also pause |
-| **Receipts** | Yes, from v0.13.0 (merged on main, not released yet): with `receipts.enabled`, a signed in-toto receipt per promotion and environment (keyless or key signing; OCI referrer and Rekor sinks), checked offline with `kardinal verify-receipt` and kept in the evidence pack ([Signed promotion receipts](receipts.md)). v0.12.0 has the PR evidence and append-only AuditEvents |
+| **Receipts** | Yes, from v0.13.0 (merged on main, not released yet): with `receipts.enabled`, a signed in-toto receipt per promotion and environment (keyless, key or AWS/Google Cloud KMS signing; OCI referrer and Rekor sinks), checked offline with `kardinal verify-receipt` and kept in the evidence pack ([Signed promotion receipts](receipts.md)). v0.12.0 has the PR evidence and append-only AuditEvents |
 | **Pre-flight** | Yes: the MCP `simulate` tool (`kardinal policy simulate --version`) says whether a version would be allowed into an environment now, and what would let it in |
 | **Read-only by default** | Yes: `kardinal mcp` offers write tools only with `--allow-write` |
 

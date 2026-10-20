@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -96,6 +97,7 @@ func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *intercept
 	}
 	c := b.Build()
 	setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return c, "default", nil })
+	mcpProcessForTest(t)
 	stubIdentity(t, Identity{Username: "system:serviceaccount:agents:fixer"})
 	if opts.maxBytes == 0 {
 		opts.maxBytes = defaultMCPMaxBytes
@@ -109,6 +111,16 @@ func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *intercept
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
 	return cs, c
+}
+
+// mcpProcessForTest is mcpProcess (what kardinal mcp sets when it starts),
+// put back when the test ends.
+func mcpProcessForTest(t *testing.T) {
+	t.Helper()
+	setForTest(t, &globalOutput, "json")
+	setForTest(t, &sty, style.Plain())
+	setForTest(t, &errOut, io.Discard)
+	setForTest(t, &ignoreRepoFile, true)
 }
 
 // call calls tool with args and returns the result and its JSON.
@@ -510,33 +522,37 @@ func TestMCP_ConcurrentCalls(t *testing.T) {
 	for err := range errs {
 		assert.NoError(t, err)
 	}
-	assert.Empty(t, globalOutput, "-o json does not leak out of a tool")
+	assert.Equal(t, "json", globalOutput, "no call writes the output flag")
 }
 
-// TestMCP_PersistentFlags: the server passes the flags it was started with
-// to every command, and a tool's namespace after them.
+// TestMCP_PersistentFlags: every tool's command runs with the client the
+// server's own flags build (its kubeconfig and context, which no tool
+// changes), and a tool's namespace over the flags' default; no call writes
+// a flag variable (#2230).
 func TestMCP_PersistentFlags(t *testing.T) {
 	setForTest(t, &globalKubeconfig, "/tmp/kc")
 	setForTest(t, &globalContext, "kind-kp")
 	setForTest(t, &globalNamespace, "team-a")
-	assert.Equal(t, []string{"--kubeconfig", "/tmp/kc", "--context", "kind-kp", "--namespace", "team-a"}, persistentArgs())
-
+	mcpProcessForTest(t)
 	var seen []string
 	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
 		seen = append(seen, globalKubeconfig+"|"+globalContext+"|"+globalNamespace)
 		assert.True(t, ignoreRepoFile, "a tool reads no .kardinal.yaml (#1759)")
-		return nil, "", errors.New("no cluster")
+		return nil, globalNamespace, nil
 	})
-	k := &mcpServer{opts: mcpOptions{maxBytes: defaultMCPMaxBytes, base: persistentArgs()}}
-	setForTest(t, &globalNamespace, "")
-	noop := func(context.Context, io.Writer, sigs_client.Client, string) (any, error) { return nil, nil }
-	_, err := k.direct(t.Context(), "", 0, noop)
-	require.Error(t, err)
-	_, err = k.direct(t.Context(), "team-b", 0, noop)
-	require.Error(t, err)
-	assert.Equal(t, []string{"/tmp/kc|kind-kp|team-a", "/tmp/kc|kind-kp|team-b"}, seen)
-	assert.Empty(t, globalNamespace, "put back")
-	assert.False(t, ignoreRepoFile, "put back")
+	k := &mcpServer{opts: mcpOptions{maxBytes: defaultMCPMaxBytes, client: buildClient}}
+	var gotNS []string
+	record := func(_ context.Context, _ io.Writer, _ sigs_client.Client, ns string) (any, error) {
+		gotNS = append(gotNS, ns)
+		return "ok", nil
+	}
+	_, err := k.direct(t.Context(), "", 0, record)
+	require.NoError(t, err)
+	_, err = k.direct(t.Context(), "team-b", 0, record)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/tmp/kc|kind-kp|team-a", "/tmp/kc|kind-kp|team-a"}, seen, "the server's flags, unchanged")
+	assert.Equal(t, []string{"team-a", "team-b"}, gotNS, "the flags' namespace, else the tool's")
+	assert.Equal(t, "team-a", globalNamespace, "no call writes it")
 }
 
 // mcpHostile are values an agent (or text it read) may put in a tool's

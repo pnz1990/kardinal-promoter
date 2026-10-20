@@ -8,7 +8,7 @@ kardinal promotes versions of your application through environments, with
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
-  kardinal quickstart --repo <your fork>                 try it on a local cluster
+  kardinal quickstart --local                            try it on a local cluster
   kardinal init --name my-app --repo <gitops repo>       write a Pipeline for your repository
   kardinal ship my-app --image app:1.4 --wait            ship a version and follow it
   kardinal why my-app prod                               why it waits, and what moves it on
@@ -100,6 +100,10 @@ when empty):
   ship:
     the create bundle fields and exitCode, with --wait also [result,
     message, environments]
+
+The CLI sends at most 50 requests a second to the API server, in bursts of
+up to 300; KARDINAL_KUBE_QPS and KARDINAL_KUBE_BURST set other numbers, for
+a small or busy control plane (KARDINAL_KUBE_QPS=10 KARDINAL_KUBE_BURST=20).
 
 url is the pipeline in the UI: KARDINAL_UI_URL, else the address kardinal
 dashboard opens (http://localhost:8082/ui/). For example

@@ -45,12 +45,12 @@ the extension field `kardinalPromotion`, which those tools ignore.
 | `resourceUri` | `kardinal://<cluster>/namespaces/<ns>/pipelines/<pipeline>/environments/<env>`. The cluster is the `kube-system` Namespace UID (or `receipts.clusterID`), so two clusters' `prod` never match. |
 | `policy` | The Pipeline generation, and a digest of the policy set: the Pipeline's spec hash and each gate template's UID, generation and spec digest, as they were when the version's Graph was built (the gate instance carries them, `kardinal.io/gate-template-{uid,generation,digest}`): a template edited later is not what the gate evaluated, so the receipt does not name it. A template's status writes do not change it. |
 | `verificationResult` | Always `PASSED`: a receipt exists only for a promotion that landed. |
-| `verifiedLevels` | What the record shows, and nothing more: `KARDINAL_GATES_PASSED` (every required gate passed), `KARDINAL_APPROVED` (at least one counted approval), `KARDINAL_VERIFIED_BY_AGENT` (a verify gate counted a passing Verdict), `KARDINAL_HEALTHY` (the health check passed), `KARDINAL_OVERRIDDEN` (a gate passed by override), `KARDINAL_FREEZE_EXEMPTED` (the promotion went on through a freeze under an exemption). A verifier usually requires the last two absent: `--require GATES_PASSED,!OVERRIDDEN,!FREEZE_EXEMPTED`. |
+| `verifiedLevels` | What the record shows, and nothing more: `KARDINAL_GATES_PASSED` (every required gate passed), `KARDINAL_APPROVED` (at least one counted approval), `KARDINAL_VERIFIED_BY_AGENT` (a verify gate counted a passing Verdict), `KARDINAL_HEALTHY` (the health check passed), `KARDINAL_OVERRIDDEN` (a gate passed by override), `KARDINAL_FREEZE_EXEMPTED` (the promotion went on through a freeze under an exemption), and `SLSA_BUILD_LEVEL_<n>` (the version's SLSA build level, 1 to 3: see `kardinalPromotion.checks`). A verifier usually requires the overridden and freeze-exempted levels absent: `--require GATES_PASSED,!OVERRIDDEN,!FREEZE_EXEMPTED`. |
 | `kardinalPromotion.version` | The Bundle: name, UID, version, type, images, config commit, provenance. |
 | `kardinalPromotion.actor` | Who made the version and for whom ([the actor](actors.md#the-actor)); asserted fields stay under `asserted`. |
 | `kardinalPromotion.gates` | Each required gate **as it was when the step started**: expression, result, reason, when it was evaluated, the override in effect (with its actor and whether it was verified), its approvals (with their structured [fields](approvals.md#approval-fields)) and, for a verify gate, its Verdicts, with whether each counted. |
 | `kardinalPromotion.changeRequests` | Each [change request](change-requests.md) ticket of the version in the environment, **as it was when the step started**: template, instance, provider, ticket key and URL, state and the provider's state, whether the ticket is the promotion's (`verified`, and `verifiedReason`), approvers, `timedOut`, and when it was read (`observedAt`) and until when that reading counted (`validUntil`). Left out when there is none. |
-| `kardinalPromotion.checks` | The per-promotion MetricCheck results, the ImageVerification result per image, and the health check. |
+| `kardinalPromotion.checks` | The per-promotion MetricCheck results, the ImageVerification result per image, and the health check. `checks.slsa` is the version's SLSA build level from its newest Verified ImageVerification ([attestations](image-verification.md#attestations)) when its policy decides one (`slsa`): recorded image by image (`checks.slsa.images`): an image with a verified attestation that decides a level has `status: verified` and its `buildLevel` (the highest of those), and every other image `status: none`, since an attestation that did not verify never counts. The images are every digest-pinned image of the Bundle (each is a subject of the receipt, and a VSA's `verifiedLevels` hold for every subject), including one the Pipeline's `imageVerification.images` does not select: that one is never checked, so it is `none` and the version claims no level. A subject that is not an image, a `mixed` or `config` version's config commit, is listed in `checks.slsa.otherSubjects` as `none`: no SLSA build attestation kardinal verifies covers a commit, so such a version claims no level either. The version's `buildLevel` is the lowest of its images', as `attestations.<name>.slsa.buildLevel` folds them for a gate, and 0 when an image is `none`. `levelSource` (`builder` or `vsa`) is kept only when every image's level was decided the same way. A level of 1 or more is claimed as `SLSA_BUILD_LEVEL_<n>`, so a version with an unchecked image never claims one. |
 | `kardinalPromotion.change` | The environment and the PR (URL, number, merge commit), or the commit pushed for `approval: auto`. For a PR the step adopted after a restart rather than opened ([PR evidence](pr-evidence.md#commit-messages)), `pr.adopted` holds its head commit (`headSHA`), the SCM account that opened it (`openedBy`), and each commit kardinal did not push with its author (`unpushedCommits`, at most 20; `unpushedCount` is how many there are). Names have no e-mail address, bidi or zero-width characters and are at most 128 bytes; a commit ID that is not hex is `(invalid)`. A receipt of a PR kardinal opened has no `adopted` key and is byte for byte what it was before. |
 | `kardinalPromotion.rollbackOf` | The version a rollback restores. |
 | `kardinalPromotion.freezeExemptions` | Each freeze the promotion went on through under an exemption ([`kardinal override --freeze`](agentic/freezes.md#let-one-change-through)): the freeze and whom it held, who made the exemption (with their actor stamp), why, its environment or version when it named one, and until when it counted. The step records them as it goes on (`status.freezeExemptions`). They cover the receipt's own step: a step deleted and created again (a retry) starts a new record. A step let through by v0.12, which did not record them, has `freezeExemptionsUnknown: true` instead (when the freeze is still on at its next git step, the record is written then), and its receipt claims `KARDINAL_FREEZE_EXEMPTED` all the same, so `--require '!FREEZE_EXEMPTED'` refuses it. |
@@ -147,9 +147,65 @@ records it, and `kardinal_receipts_failed_total{sink="build"}` counts it once.
 |---|---|---|
 | `keyless` (default) | The certificate identity `https://kubernetes.io/namespaces/<ns>/serviceaccounts/<sa>` **and** the cluster's OIDC issuer | EKS, GKE and AKS, whose issuers the public-good Fulcio accepts. No key to keep. The controller gets a short-lived certificate from Fulcio with a projected ServiceAccount token of audience `sigstore`, separate from its API server token. kind and on-prem clusters need a private Fulcio that trusts their issuer (`receipts.signing.keyless.fulcioURL`). Keyless needs proof of the signing time: set `receipts.sinks.rekor.url` or `receipts.signing.tsaURL`. |
 | `key` | The public key | Air-gapped clusters. Anyone who can read the Secret can sign receipts; rotate it by replacing the Secret (the next receipt uses the new key). |
-| `kms` | The public key | Key custody outside the cluster. The controller signs only with KMS providers its image was built with; v0.13's image has none yet (#1952), so a `kms` key reference is refused at start with the provider named. The sigstore CLI-plugin fallback, which runs a subprocess, is never used. |
+| `kms` | The public key | Key custody outside the cluster: AWS KMS or Google Cloud KMS (`receipts.signing.kmsKey`, below). The private key never leaves the KMS. |
 
 The keyless certificate names the ServiceAccount, not the cluster: always pin the issuer too.
+
+#### KMS keys
+
+The controller image is built with two KMS providers (Go build tags `kms_aws` and `kms_gcp`). A
+key reference for any other provider is refused at start, naming the provider and the ones built
+in. kardinal calls the provider itself and never sigstore's CLI-plugin fallback, which runs a
+subprocess.
+
+| Provider | `receipts.signing.kmsKey` | Key | Credentials |
+|---|---|---|---|
+| AWS KMS | `awskms:///alias/kardinal-receipts`, `awskms:///arn:aws:kms:<region>:<account>:key/<id>`, or with an endpoint, `awskms://<host>:<port>/<id>` | Asymmetric, `SIGN_VERIFY`, `ECC_NIST_P256` | The SDK's default chain: IRSA (`serviceAccount.annotations`, `eks.amazonaws.com/role-arn`), EKS Pod Identity, or the node's instance role. The role needs `kms:Sign`, `kms:GetPublicKey` and `kms:DescribeKey` on the key ([policy below](#kms-permissions)). Prefer the key ARN to an alias: whoever may `kms:UpdateAlias` re-points an alias to another key. An endpoint that is a credential address (instance metadata, ECS, Pod Identity) is refused. The region comes from the ARN, or `AWS_REGION`. |
+| Google Cloud KMS | `gcpkms://projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<v>`. The version is required: a reference without one is refused | Asymmetric sign, `EC_SIGN_P256_SHA256` | Application Default Credentials: GKE Workload Identity, or `GOOGLE_APPLICATION_CREDENTIALS`. The identity needs four permissions on the key ([below](#kms-permissions)); `roles/cloudkms.signerVerifier` alone cannot sign. |
+
+<a id="kms-permissions"></a>
+- **Permissions.** AWS: a policy on the controller's role, scoped to the key ARN (an alias
+  reference still needs the key ARN as the resource; DescribeKey is required, as the signer
+  reads the key's spec):
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["kms:Sign", "kms:GetPublicKey", "kms:DescribeKey"],
+      "Resource": "arn:aws:kms:<region>:<account>:key/<id>"
+    }]
+  }
+  ```
+
+  Google Cloud: a custom role on the key with exactly `cloudkms.cryptoKeys.get`,
+  `cloudkms.cryptoKeyVersions.get`, `cloudkms.cryptoKeyVersions.useToSign` and
+  `cloudkms.cryptoKeyVersions.viewPublicKey` (the signer reads the key and its version before
+  it signs), or the predefined `roles/cloudkms.signer`, `roles/cloudkms.publicKeyViewer` and
+  `roles/cloudkms.viewer` together:
+
+  ```sh
+  gcloud iam roles create kardinalReceiptSigner --project <p> \
+    --permissions cloudkms.cryptoKeys.get,cloudkms.cryptoKeyVersions.get,cloudkms.cryptoKeyVersions.useToSign,cloudkms.cryptoKeyVersions.viewPublicKey
+  gcloud kms keys add-iam-policy-binding <k> --keyring <r> --location <l> --project <p> \
+    --member serviceAccount:<gsa> --role projects/<p>/roles/kardinalReceiptSigner
+  ```
+- **Egress.** The KMS API calls (and AWS STS) go through the controller's egress guard and
+  allowlist like every sink: with `egress.allowlist` set, add `kms.<region>.amazonaws.com` and
+  `sts.<region>.amazonaws.com`, or `cloudkms.googleapis.com`. The credential requests to the
+  instance metadata, ECS and Pod Identity endpoints (and Google's metadata server) are the
+  cloud SDK's own, not user input, and are not guarded.
+- **Rotation.** A receipt records the key reference it was signed with (`status.signedBy`); a
+  verifier pins the public key. A Cloud KMS reference must pin its key version: without one the
+  provider would sign with the newest enabled version, so whoever may add a version would change
+  the signing key. Rotating is a configuration change: set the new version's reference and give
+  verifiers its public key. The key is loaded once, at the first signature, and its client is
+  reused until the controller stops. A key disabled in the KMS fails signing (`Signed=False`, `SignFailed`), retried
+  with backoff and counted in `kardinal_receipts_failed_total{sink="signing"}`; promotions are
+  not held.
+- **Timeouts.** Each KMS call is bounded by the signer's timeout (30 s); an endpoint the egress
+  guard refuses fails at once, naming the address.
 
 ### Where receipts are stored
 
@@ -252,7 +308,7 @@ It checks, and exits non-zero when any check fails:
    `kube-system` Namespace UID, or `receipts.clusterID`); `--any-cluster` accepts any cluster's,
    with a warning. A receipt of another tenant's Pipeline, or another cluster's, signed with the
    same key for the same image, is refused.
-4. **The summary**: `PASSED`, with each `--require`d level present (`!LEVEL` absent).
+4. **The summary**: `PASSED`, with each `--require`d level present (`!LEVEL` absent). A SLSA level is the highest of its track, as a verification summary lists it: `SLSA_BUILD_LEVEL_3` satisfies `--require SLSA_BUILD_LEVEL_2`, and `!SLSA_BUILD_LEVEL_3` means a build level below 3.
 5. **From the cluster**: the PromotionReceipt's statement is the signed one, byte for byte, and
    the Bundle it names, when it still exists, has the UID it records. A receipt edited after it
    was signed fails.
