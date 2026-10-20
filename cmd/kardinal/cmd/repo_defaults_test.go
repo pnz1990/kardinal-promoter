@@ -231,6 +231,19 @@ func TestRepoDefaults_Args(t *testing.T) {
 		assert.Contains(t, err.Error(), filepath.Join(broken, ".kardinal.yaml"))
 		assert.Contains(t, err.Error(), "a repository file never picks a cluster")
 	})
+	// QA nit on #2179: a KARDINAL_PIPELINE that is not a name is reported
+	// whatever the arguments, not only when it would be used.
+	t.Run("an invalid KARDINAL_PIPELINE with a pipeline argument", func(t *testing.T) {
+		t.Setenv("KARDINAL_PIPELINE", "Not A Name")
+		for _, args := range [][]string{{"my-app"}, {"my-app", "prod"}} {
+			_, _, err := envArgs(why, args, "")
+			require.Error(t, err, args)
+			assert.Contains(t, err.Error(), `KARDINAL_PIPELINE "Not A Name" is not a valid name`, args)
+		}
+		_, err := pipelineOf([]string{"my-app"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `KARDINAL_PIPELINE "Not A Name" is not a valid name`)
+	})
 	t.Run("the default pipeline does not exist", func(t *testing.T) {
 		empty := fake.NewClientBuilder().WithScheme(rootScheme).Build()
 		setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return empty, "default", nil })

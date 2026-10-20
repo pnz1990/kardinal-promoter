@@ -185,6 +185,13 @@ func defaultNamespace() (string, string, error) {
 	return repoDefault(namespaceEnvVar, func(d repoDefaults) string { return d.Namespace })
 }
 
+// checkPipelineEnvVar refuses a KARDINAL_PIPELINE that is not a pipeline name,
+// also when the command line names the pipeline: a broken environment is
+// said, not hidden until the day it is used.
+func checkPipelineEnvVar() error {
+	return checkDefaultName(pipelineEnvVar, strings.TrimSpace(os.Getenv(pipelineEnvVar)))
+}
+
 // errNoPipeline is the error of a command given no pipeline and no default.
 func errNoPipeline(cmd *cobra.Command) error {
 	path := "kardinal <command>"
@@ -202,6 +209,9 @@ func errNoPipeline(cmd *cobra.Command) error {
 // args are unchanged. Explicit arguments always win, also over a
 // .kardinal.yaml that cannot be read.
 func withDefaultPipeline(args []string, flagEnv string) ([]string, error) {
+	if err := checkPipelineEnvVar(); err != nil {
+		return nil, err
+	}
 	if len(args) > 1 || (len(args) == 1 && flagEnv != "") {
 		return args, nil
 	}
@@ -279,6 +289,9 @@ func pipelineArgs(maxArgs int) cobra.PositionalArgs {
 // pipelineOf is the pipeline of a <pipeline> command: args[0], else the
 // default (pipelineArgs checked there is one).
 func pipelineOf(args []string) (string, error) {
+	if err := checkPipelineEnvVar(); err != nil {
+		return "", err
+	}
 	if len(args) > 0 {
 		return args[0], nil
 	}
