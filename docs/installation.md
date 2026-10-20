@@ -139,6 +139,40 @@ Keep the CLI and the controller on the same minor version. From v0.13.0 (unrelea
 each command that talks to the cluster prints one `warning: kardinal CLI ... talks to controller ...`
 line on stderr, with the command that upgrades the older one ([`kardinal version`](reference/cli/kardinal-version.md)).
 
+### Defaults for a repository
+
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.0 and earlier take the pipeline as an argument only. The [changelog](changelog.md) lists every change since v0.12.0.
+
+Inside an application's repository you need not repeat its pipeline and namespace. Put them in a
+`.kardinal.yaml` at the repository's root:
+
+```yaml
+pipeline: checkout
+namespace: team-a
+```
+
+```bash
+kardinal why prod
+```
+
+- **Where a default comes from.** A command that takes `<pipeline> [<env>]` (`why`, `explain`,
+  `history`, `logs`, `ship`, `approve`, `promote`, `rollback`, `hold`, `unhold`, `pause`,
+  `resume`, `override`, `verify`) takes the pipeline from its argument, then `KARDINAL_PIPELINE`,
+  then the file's `pipeline`. The namespace comes from `-n`, then `KARDINAL_NAMESPACE`, then the
+  file's `namespace`, then the kubeconfig context. The file is the nearest `.kardinal.yaml` from
+  the working directory up to the git repository's root.
+- **One argument.** With a default pipeline, `kardinal why prod` means its environment `prod` when
+  it has one, else a pipeline named `prod`. When the cluster cannot say, the command refuses
+  rather than guess.
+- **Never silent.** Each default a command uses is printed once on stderr with its source, for
+  example `using namespace team-a (from /src/app/.kardinal.yaml)`.
+- **Never a cluster.** The file may set `pipeline` and `namespace` only, and any other key is an
+  error: it never selects a context or a cluster. `kardinal mcp`'s tools never read it, because
+  an agent's working directory may be a repository it does not trust.
+
+See [kardinal](reference/cli/kardinal.md) for the details.
+
 ---
 
 ## Accessing the UI

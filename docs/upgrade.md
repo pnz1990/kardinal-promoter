@@ -121,6 +121,31 @@ something for you:
   (HTTP 400) and `kardinal create bundle` refuse a credential parameter. Remove it from the URL your
   CI sends. A Bundle already stored with one stays writable while the URL is unchanged
   ([Provenance](ci-integration.md#provenance)).
+- **Only the controller changes its own rollback markers, and labels no longer make a rollback.**
+  On a Bundle the controller created, the `<release>-bundle-creator` admission policy refuses
+  anyone else's add, change or removal of the `kardinal.io/rollback-from` annotation and the
+  `kardinal.io/rollback` and `kardinal.io/pipeline` labels, so a script or GitOps tool that
+  relabels those Bundles gets an error. New rollbacks record the version they roll back from in
+  `spec.provenance.rollbackFrom` (a new field, step 2); rollbacks v0.12.0 created have none and
+  are still found by their name. An automatic rollback adopts only a Bundle the controller created
+  as that rollback, never another Bundle at its name or one that only carries the markers. The
+  controller's own automatic rollbacks are never rolled back again, as before; any other version
+  labelled `kardinal.io/rollback` is exempt from an automatic rollback only when every artifact it
+  deploys was Verified in that environment before. This applies to what is in flight when you
+  upgrade: the admission rule covers the Bundles the controller created before the upgrade too,
+  and a labelled version already promoting whose artifacts were never Verified there is rolled
+  back automatically when its health check fails, where v0.12.0 stopped it for a person
+  ([What Happens in Git](rollback.md#what-happens-in-git)).
+- **kardinal's PR branch is kardinal's.** A PR create the SCM refuses counts as a duplicate only on
+  the provider's own answer, and an open PR of kardinal's branch is adopted only when its head is,
+  or contains, the commit kardinal pushed. git-push no longer force-pushes over a commit someone
+  else pushed to kardinal's PR branch. Where v0.12.0 adopted such a PR or overwrote the commit, the
+  step now fails against its retry budget with a `PRBranchForeignCommit` Warning Event that names
+  the foreign head; any other refused create fails with the SCM's own message. This applies to
+  steps already in flight when you upgrade: kardinal still recognises their own pushes (v0.12.0
+  recorded them), but one that pushes again, or opens its PR again, over a commit someone else
+  pushed to its branch now fails instead of overwriting the commit or adopting the PR
+  ([PR evidence](pr-evidence.md), [SCM providers](scm-providers.md#supported-providers)).
 
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
 fields to Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals and

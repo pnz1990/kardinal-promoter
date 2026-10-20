@@ -157,8 +157,8 @@ kardinal init --name kardinal-test-app --repo https://github.com/pnz1990/kardina
 ```
 
 A git server without TLS, such as a local or in-cluster Forgejo or Gitea, has an `http://` URL.
-`init` takes one only with `--insecure-http`, and warns: the controller sends the git token to that
-server in clear text.
+`init` takes one only with `--insecure-http` (new in v0.13.0, unreleased: v0.12.0's `init` refuses
+it), and warns: the controller sends the git token to that server in clear text.
 
 Running it again with the same flags changes nothing (`unchanged`). Add `--create-secret` to
 create the git Secret of the step above from `$GITHUB_TOKEN` (or `gh auth token`). Or apply the
