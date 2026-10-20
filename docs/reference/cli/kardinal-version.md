@@ -17,7 +17,7 @@ when the CLI and the controller (in kardinal-system, or --controller-namespace
 where the command has it) are a minor version apart, it prints one warning
 on stderr with the command that upgrades the older side, for example:
 
-  warning: kardinal CLI v0.12.0 talks to controller v0.11.0 (in kardinal-system); some output may not match: upgrade the controller: helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.0 --namespace kardinal-system --create-namespace
+  warning: kardinal CLI v0.12.1 talks to controller v0.11.0 (in kardinal-system); some output may not match: upgrade the controller: helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.1 --namespace kardinal-system --create-namespace
 
 There is no warning for a patch apart, with -o json or yaml, for a dev
 build of either side, or when the controller's version cannot be read.
