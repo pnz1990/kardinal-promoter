@@ -1709,7 +1709,9 @@ func TestReleaseTokenProblem(t *testing.T) {
 // final tag of the commit's minor line from every tag, not only the ones
 // merged into HEAD. v0.12.3, tagged on release/v0.12 only, is main's
 // previous release; on the release branch it is the newest patch before the
-// commit, and a tag on HEAD is never its own previous release.
+// commit, and a tag on HEAD is never its own previous release (the gate
+// re-run on the commit tagged v0.13.0 still upgrades from v0.12.3). A
+// release candidate, merged into HEAD or not, is no release.
 func TestPreviousReleaseFromEveryTag(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) string {
@@ -1749,14 +1751,18 @@ func TestPreviousReleaseFromEveryTag(t *testing.T) {
 	commit("v0.11.9")
 	git("tag", "v0.11.9")
 	git("checkout", "-q", "main")
+	commit("v0.13 candidate")
+	git("tag", "v0.13.0-rc.1")
 	mainHead := commit("toward v0.13")
 
-	assert.Equal(t, "v0.12.3", prev(mainHead), "main: the latest v0.12 patch, though only release/v0.12 has it")
+	assert.Equal(t, "v0.12.3", prev(mainHead), "main: the latest v0.12 patch, though only release/v0.12 has it (v0.13.0-rc.1, merged, is no release)")
 	assert.Equal(t, "v0.12.3", prev(afterTag), "the release branch after v0.12.3: v0.12.3 (the release candidate is no release)")
 	assert.Equal(t, "v0.12.1", prev(atTag), "the commit tagged v0.12.3: the release before it")
 
 	git("checkout", "-q", "main")
 	git("tag", "v0.13.0")
+	assert.Equal(t, "v0.12.3", prev(mainHead), "the commit tagged v0.13.0: the latest v0.12 patch, not v0.13.0 itself")
+	git("checkout", "-q", "main")
 	afterMinor := commit("toward v0.14")
 	assert.Equal(t, "v0.13.0", prev(afterMinor), "after v0.13.0: v0.13.0, whatever the v0.12 line has")
 	assert.Equal(t, "v0.12.3", prev(afterTag), "the v0.12 line does not take v0.13.0, though it does not contain the branch")
