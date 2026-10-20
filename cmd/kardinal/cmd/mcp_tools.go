@@ -67,7 +67,9 @@ func newMCPTool[In any](name, title, description string, write, destructive bool
 				defer func() {
 					if r := recover(); r != nil {
 						_, _ = fmt.Fprintf(k.opts.log, "kardinal mcp: tool %s panicked: %v\n%s", name, r, debug.Stack())
-						res = toolError(fmt.Errorf("%s: internal error: the call stopped where it was; kardinal mcp's log has the details", name))
+						res = toolError(fmt.Errorf("%s: internal error; any change it made before it stopped was not undone: "+
+							"check the state (the status or why tool, or kardinal status / get) before retrying. "+
+							"kardinal mcp's log has the details", name))
 					}
 				}()
 				ctx = context.WithValue(ctx, mcpClientKey{}, mcpClientLabel(req))

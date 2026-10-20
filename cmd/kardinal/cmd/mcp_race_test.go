@@ -213,7 +213,8 @@ func TestMCP_PanicEndsOneCall(t *testing.T) {
 		text := results[i].Content[0].(*mcp.TextContent).Text
 		if i%4 == 0 {
 			assert.True(t, results[i].IsError, text)
-			assert.Contains(t, text, "status: internal error")
+			assert.Contains(t, text, "status: internal error; any change it made before it stopped was not undone")
+			assert.Contains(t, text, "before retrying")
 			assert.NotContains(t, text, "goroutine", "no stack to the client")
 			assert.NotContains(t, text, "boom in one call", "no panic value to the client")
 			continue
