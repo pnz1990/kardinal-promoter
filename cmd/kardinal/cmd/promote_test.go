@@ -33,7 +33,7 @@ func TestPromote_PipelineNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
 	var buf bytes.Buffer
-	err := promoteFn(&buf, c, "default", "no-such-pipeline", "prod")
+	err := promoteFn(t.Context(), &buf, c, "default", "no-such-pipeline", "prod")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no-such-pipeline")
 }
@@ -54,7 +54,7 @@ func TestPromote_EnvironmentNotInPipeline(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
 
 	var buf bytes.Buffer
-	err := promoteFn(&buf, c, "default", "nginx-demo", "nonexistent")
+	err := promoteFn(t.Context(), &buf, c, "default", "nginx-demo", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nonexistent")
 	assert.Contains(t, err.Error(), "has no environment")

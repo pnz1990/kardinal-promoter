@@ -142,11 +142,12 @@ var inboxRights = map[string][][3]string{
 
 // inboxFn writes what waits for a person in ns ("" for every namespace).
 func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) error {
+	env := envOf(ctx)
 	var me *lifecycle.ApproverIdentity
-	if id, err := identityOf(ctx, c); err == nil {
+	if id, err := callerIdentity(ctx, c); err == nil {
 		me = &lifecycle.ApproverIdentity{User: id.Username, Groups: id.Groups}
 	} else {
-		_, _ = fmt.Fprintf(errOut, "%s could not tell who you are (%v): approvals are listed under someone else\n", sty.Warning("note:"), HumanError(err))
+		_, _ = fmt.Fprintf(env.errOut, "%s could not tell who you are (%v): approvals are listed under someone else\n", env.sty.Warning("note:"), HumanError(err))
 	}
 	items, skipped, err := inboxItems(ctx, c, ns, me)
 	if err != nil {
@@ -162,10 +163,10 @@ func inboxFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) 
 		}
 	}
 	if len(skipped) > 0 {
-		_, _ = fmt.Fprintf(errOut, "%s skipped what you may not read: %s\n", sty.Warning("note:"), strings.Join(skipped, ", "))
+		_, _ = fmt.Fprintf(env.errOut, "%s skipped what you may not read: %s\n", env.sty.Warning("note:"), strings.Join(skipped, ", "))
 	}
-	if structured() {
-		return writeStructured(w, out)
+	if env.structured() {
+		return env.writeStructured(w, out)
 	}
 	if len(items) == 0 {
 		_, err := fmt.Fprintln(w, "Nothing waits for a person.")

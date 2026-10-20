@@ -133,16 +133,16 @@ func rollbackDo(ctx context.Context, w, errw io.Writer, c sigs_client.Client, ns
 			_, _ = fmt.Fprintf(errw, "warning: %v; recording %s as the hold's createdBy\n", err, currentUser())
 			actor = currentUser()
 		}
-		return rollbackHoldFn(w, c, ns, r.pipeline, r.env, to, r.reason, actor, r.expires)
+		return rollbackHoldFn(ctx, w, c, ns, r.pipeline, r.env, to, r.reason, actor, r.expires)
 	}
-	return rollbackFn(w, c, ns, r.pipeline, r.env, to)
+	return rollbackFn(ctx, w, c, ns, r.pipeline, r.env, to)
 }
 
 // rollbackFn is the testable implementation of rollback. The target and the
 // rollback Bundle come from lifecycle.PlanRollback, the implementation the UI
 // and the automatic rollback share.
-func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBundle string) error {
-	ctx := context.Background()
+func rollbackFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBundle string) error {
+	env := envOf(ctx)
 
 	plan, err := lifecycle.PlanRollback(ctx, c, lifecycle.RollbackRequest{
 		Namespace:   ns,
@@ -162,21 +162,21 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 		return fmt.Errorf("create rollback bundle: %w", createErr)
 	}
 
-	if structured() {
+	if env.structured() {
 		out := createdOf(plan.Bundle)
 		out.Environment, out.RollbackOf, out.Replaces = envFilter, plan.Target.Name, plan.CurrentName
 		out.Fleet = plan.Fleet
-		return writeStructured(w, out)
+		return env.writeStructured(w, out)
 	}
 	from := plan.CurrentName
 	if from == "" {
 		from = "(unknown)"
 	}
 	if plan.Fleet != nil {
-		if err := writeFleetRollback(w, c, ns, pipeline, envFilter, plan); err != nil {
+		if err := writeFleetRollback(ctx, w, c, ns, pipeline, envFilter, plan); err != nil {
 			return err
 		}
-		return writeRollbackPath(w, c, ns, plan.Bundle)
+		return writeRollbackPath(ctx, w, c, ns, plan.Bundle)
 	}
 	if _, err := fmt.Fprintf(w,
 		"Rolling back %s in %s from %s to %s (%s)\nBundle %s created (rollbackOf=%s)\nTrack with: kardinal why %s %s\n",
@@ -185,7 +185,7 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 	); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
-	return writeRollbackPath(w, c, ns, plan.Bundle)
+	return writeRollbackPath(ctx, w, c, ns, plan.Bundle)
 }
 
 // writeRollbackPath says when the rollback Bundle b will be promoted through
@@ -196,11 +196,10 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 // no verification upstream counts for it). The controller records its
 // decision in the Bundle's UpstreamEvidence condition; this is the reason
 // known before it decides.
-func writeRollbackPath(w io.Writer, c sigs_client.Client, ns string, b *v1alpha1.Bundle) error {
+func writeRollbackPath(ctx context.Context, w io.Writer, c sigs_client.Client, ns string, b *v1alpha1.Bundle) error {
 	if b.Spec.Intent == nil || !b.Spec.Intent.TargetOnly {
 		return nil
 	}
-	ctx := context.Background()
 	var p v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: b.Spec.Pipeline}, &p); err != nil {
 		return nil // the controller's condition says it
@@ -232,7 +231,7 @@ const fleetRollbackNamed = 6
 // writeFleetRollback prints the rollback of a whole fleet: the version it
 // goes back to, which targets it changes (from what), which run it already,
 // and that a paused fleet starts none until it is resumed.
-func writeFleetRollback(w io.Writer, c sigs_client.Client, ns, pipeline, fleet string, plan *lifecycle.RollbackPlan) error {
+func writeFleetRollback(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, fleet string, plan *lifecycle.RollbackPlan) error {
 	var changing []string
 	stay := 0
 	for _, t := range plan.Fleet {
@@ -262,7 +261,7 @@ func writeFleetRollback(w io.Writer, c sigs_client.Client, ns, pipeline, fleet s
 		}
 	}
 	var p v1alpha1.Pipeline
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err == nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err == nil {
 		if lifecycle.FleetPaused(&p, fleet) {
 			if err := writef(w, "Fleet %s is paused: the rollback starts no target until kardinal resume %s --env %s\n",
 				fleet, pipeline, fleet); err != nil {
@@ -275,19 +274,20 @@ func writeFleetRollback(w io.Writer, c sigs_client.Client, ns, pipeline, fleet s
 
 // rollbackHoldFn rolls back and holds the environment
 // (lifecycle.RollbackAndHold, the implementation the UI shares).
-func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBundle, reason, actor string,
+func rollbackHoldFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, env, toBundle, reason, actor string,
 	expiresIn time.Duration) error {
+	ui := envOf(ctx)
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("rollback --hold needs --reason: say why the environment is held")
 	}
 	var stamp *v1alpha1.Actor
-	if id, idErr := identityOf(context.Background(), c); idErr == nil {
+	if id, idErr := callerIdentity(ctx, c); idErr == nil {
 		var err error
-		if stamp, err = stampOf(context.Background(), c, id, actorpkg.Where{Namespace: ns, Pipeline: pipeline}); err != nil {
+		if stamp, err = stampOf(ctx, c, id, actorpkg.Where{Namespace: ns, Pipeline: pipeline}); err != nil {
 			return fmt.Errorf("rollback: %w", err)
 		}
 	}
-	plan, hold, err := lifecycle.RollbackAndHold(context.Background(), c, lifecycle.HoldRequest{
+	plan, hold, err := lifecycle.RollbackAndHold(ctx, c, lifecycle.HoldRequest{
 		RollbackRequest: lifecycle.RollbackRequest{
 			Namespace:   ns,
 			Pipeline:    pipeline,
@@ -299,17 +299,17 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 		},
 		HoldReason: reason,
 		ExpiresIn:  expiresIn,
-		Creator:    creatorOf(context.Background(), c),
+		Creator:    creatorOf(ctx, c),
 	})
 	if err != nil {
 		return err
 	}
-	if structured() {
+	if ui.structured() {
 		out := createdOf(plan.Bundle)
 		out.Environment, out.RollbackOf, out.Replaces = env, plan.Target.Name, plan.CurrentName
 		out.Hold = &createdHold{Environment: env, Bundle: hold.Bundle, Reason: hold.Reason, ExpiresAt: hold.ExpiresAt}
 		out.Fleet = plan.Fleet
-		return writeStructured(w, out)
+		return ui.writeStructured(w, out)
 	}
 	from := plan.CurrentName
 	if from == "" {
@@ -330,7 +330,7 @@ func rollbackHoldFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, toBund
 			return fmt.Errorf("write output: %w", err)
 		}
 	}
-	return writeRollbackPath(w, c, ns, plan.Bundle)
+	return writeRollbackPath(ctx, w, c, ns, plan.Bundle)
 }
 
 func newReleaseHoldCmd() *cobra.Command {
@@ -447,7 +447,7 @@ type heldEnvironment struct {
 // holdFn is the testable implementation of hold (lifecycle.HoldCurrent).
 func holdFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, reason, actor string, expiresIn time.Duration) error {
 	h, existed, err := lifecycle.HoldCurrent(context.Background(), c, lifecycle.HoldCurrentRequest{
-		Namespace: ns, Pipeline: pipeline, Environment: env, Reason: reason, Actor: actor, Stamp: bestStamp(c, actorpkg.Where{Namespace: ns, Pipeline: pipeline, Environment: env}),
+		Namespace: ns, Pipeline: pipeline, Environment: env, Reason: reason, Actor: actor, Stamp: bestStamp(context.Background(), c, actorpkg.Where{Namespace: ns, Pipeline: pipeline, Environment: env}),
 		ExpiresIn: expiresIn, Now: time.Now(),
 	})
 	if err != nil {
@@ -527,12 +527,12 @@ func artifactSummary(b *v1alpha1.Bundle) string {
 // bestStamp is the actor stamp of this CLI's user for a write at where, nil
 // when it cannot be read: a hold or a freeze names its createdBy all the
 // same, and its AuditEvent then names no actor kind.
-func bestStamp(c sigs_client.Client, where actorpkg.Where) *v1alpha1.Actor {
-	id, err := identityOf(context.Background(), c)
+func bestStamp(ctx context.Context, c sigs_client.Client, where actorpkg.Where) *v1alpha1.Actor {
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
 		return nil
 	}
-	stamp, err := stampOf(context.Background(), c, id, where)
+	stamp, err := stampOf(ctx, c, id, where)
 	if err != nil {
 		return nil
 	}

@@ -473,13 +473,13 @@ func TestExplainHints(t *testing.T) {
 		explainGateInstance("demo", "b1", "prod", "freeze", "false", false, true, "false = false"), approval,
 		explainGateInstance("demo", "b1", "prod", "fresh", "false", false, false, ""))
 	var out bytes.Buffer
-	require.NoError(t, explainHinted(&out, c, "default", "demo", "", false))
+	require.NoError(t, explainHinted(t.Context(), &out, c, "default", "demo", "", false))
 	assert.Equal(t, "Approve: kardinal approve demo prod\nOverride: kardinal override demo prod --gate freeze --reason <why>\n", errb.String(),
 		"a gate not evaluated yet gets no hint")
 	assert.NotContains(t, out.String(), "Override:", "hints are not on stdout")
 
 	errb.Reset()
-	require.NoError(t, explainOnce(&out, c, "default", "demo", "", false))
+	require.NoError(t, explainOnce(t.Context(), &out, c, "default", "demo", "", false))
 	assert.Empty(t, errb.String())
 }
 

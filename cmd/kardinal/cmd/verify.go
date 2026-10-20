@@ -199,7 +199,7 @@ func verifyFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundle
 		}
 		return fmt.Errorf("verify: get bundle %s: %w", bundleName, err)
 	}
-	id, err := identityOf(ctx, c)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}

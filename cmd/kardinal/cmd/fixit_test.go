@@ -140,7 +140,7 @@ func TestFixitHints(t *testing.T) {
 	assert.EqualError(t, err, `pipeline "apo" not found in namespace "default"; pipelines here: api. Other namespaces: kardinal get pipelines -A`)
 
 	var buf fmtBuf
-	err = historyFn(&buf, c, "default", "apo", "", 10)
+	err = historyFn(t.Context(), &buf, c, "default", "apo", "", 10)
 	assert.ErrorContains(t, err, `pipeline "apo" not found`, "a typo is not an empty history")
 
 	assert.EqualError(t, missingGateError("api", "prod"), "which gate? Gates not passing for api in prod: no-weekend. Pass --gate <name>",

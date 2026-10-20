@@ -55,7 +55,7 @@ the PR, how long it took, and when it started.`,
 			if err != nil {
 				return fmt.Errorf("history: %w", err)
 			}
-			return historyFn(cmd.OutOrStdout(), c, ns, pipeline, env, limitFlag)
+			return historyFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, env, limitFlag)
 		},
 	}
 
@@ -120,7 +120,8 @@ type historyReceipt struct {
 }
 
 // writeHistoryStructured writes rows as -o json|yaml asks.
-func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
+func writeHistoryStructured(ctx context.Context, w io.Writer, rows []HistoryRow) error {
+	env := envOf(ctx)
 	out := make([]historyEntry, 0, len(rows))
 	for _, r := range rows {
 		e := historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
@@ -130,13 +131,13 @@ func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
 		}
 		out = append(out, e)
 	}
-	return writeStructured(w, out)
+	return env.writeStructured(w, out)
 }
 
 // historyFn is the testable implementation of history.
 // It builds a per-(bundle,env) row from PromotionSteps, sorted newest first.
-func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, envFilter string, limit int) error {
-	ctx := context.Background()
+func historyFn(ctx context.Context, w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, envFilter string, limit int) error {
+	env := envOf(ctx)
 
 	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
 	items, listErr := lifecycle.ListPromotionSteps(ctx, c, ns, sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline})
@@ -150,8 +151,8 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
 			return err
 		}
-		if structured() {
-			return writeHistoryStructured(w, nil)
+		if env.structured() {
+			return writeHistoryStructured(ctx, w, nil)
 		}
 		if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q\n", pipeline); err != nil {
 			return fmt.Errorf("write empty: %w", err)
@@ -196,8 +197,8 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		if err := checkPipelineEnv(ctx, c, ns, pipeline, envFilter); err != nil {
 			return err
 		}
-		if structured() {
-			return writeHistoryStructured(w, nil)
+		if env.structured() {
+			return writeHistoryStructured(ctx, w, nil)
 		}
 		if envFilter != "" {
 			if _, err := fmt.Fprintf(w, "No promotion history found for pipeline %q env %q\n", pipeline, envFilter); err != nil {
@@ -211,10 +212,10 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		return nil
 	}
 
-	if structured() {
-		return writeHistoryStructured(w, rows)
+	if env.structured() {
+		return writeHistoryStructured(ctx, w, rows)
 	}
-	return formatHistoryTable(w, rows)
+	return formatHistoryTable(ctx, w, rows)
 }
 
 // buildHistoryRows converts PromotionSteps into history rows, newest first.
@@ -364,7 +365,7 @@ func stepDuration(s v1alpha1.PromotionStep) (time.Duration, bool) {
 
 // formatHistoryTable writes the history table to w. The RECEIPT column is
 // there only when a row has a receipt (docs/receipts.md).
-func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
+func formatHistoryTable(ctx context.Context, w io.Writer, rows []HistoryRow) error {
 	receipts := slices.ContainsFunc(rows, func(r HistoryRow) bool { return r.Receipt != nil })
 	tw := style.NewTable(w, 3)
 	header := "VERSION\tACTION\tACTOR\tENV\tPR\tDURATION\tTIMESTAMP"
@@ -380,7 +381,7 @@ func formatHistoryTable(w io.Writer, rows []HistoryRow) error {
 		if receipts {
 			mark := "--"
 			if r.Receipt != nil {
-				mark = receiptMark(*r.Receipt)
+				mark = receiptMark(ctx, *r.Receipt)
 			}
 			line += "\t" + mark
 		}

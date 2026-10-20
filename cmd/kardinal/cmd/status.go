@@ -67,7 +67,7 @@ refreshes it and -o json prints it for scripts.`,
 			w := cmd.OutOrStdout()
 			render := func() error {
 				if len(args) == 1 {
-					return statusPipelineWriter(w, c, ns, args[0])
+					return statusPipelineWriter(contextOf(cmd), w, c, ns, args[0])
 				}
 				// Every namespace, unless -n names one (-A: every namespace).
 				scope, fallback := "", ns
@@ -77,7 +77,7 @@ refreshes it and -o json prints it for scripts.`,
 				if all {
 					fallback = "" // asked for every namespace: no fallback
 				}
-				return statusSummaryIn(w, c, controllerNS, scope, fallback)
+				return statusSummaryIn(contextOf(cmd), w, c, controllerNS, scope, fallback)
 			}
 			if !watchFlag {
 				if err := render(); err != nil {
@@ -145,8 +145,8 @@ type controllerHealth struct {
 // readiness), a line of counts, then one line per pipeline with its summary
 // sentence. A cluster-wide read that is forbidden falls back to fallbackNS
 // with a note; without one (-A) it is an error that says to use -n.
-func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, fallbackNS string) error {
-	ctx := context.Background()
+func statusSummaryIn(ctx context.Context, out io.Writer, c sigs_client.Reader, controllerNS, scope, fallbackNS string) error {
+	env := envOf(ctx)
 	ctrlVersion := controllerVersion(ctx, c, controllerNS)
 	health := controllerReadiness(ctx, c, controllerNS)
 	ready := health.Ready
@@ -198,8 +198,8 @@ func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, f
 		items = append(items, statusSummaryItem{Namespace: p.Namespace, Pipeline: p.Name, Phase: p.Status.Phase, Summary: pipelineSentence(p)})
 	}
 
-	if structured() {
-		return writeStructured(out, statusSummary{Controller: ctrlVersion, ControllerReady: ready, ControllerHealth: health,
+	if env.structured() {
+		return env.writeStructured(out, statusSummary{Controller: ctrlVersion, ControllerReady: ready, ControllerHealth: health,
 			Namespace: scope, Note: note, Pipelines: len(pls),
 			Degraded: degraded, Bundles: len(bundles.Items), ActiveBundles: activeBundles, Items: items})
 	}
@@ -207,11 +207,11 @@ func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, f
 	if ready != "" {
 		healthText = ready + " ready"
 		if r, d, ok := strings.Cut(ready, "/"); ok && (r == "0" || r != d) {
-			healthText = sty.Warning(healthText) + ": kardinal doctor"
+			healthText = env.sty.Warning(healthText) + ": kardinal doctor"
 		}
 	}
 	if note != "" {
-		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Warning("note:"), note)
+		_, _ = fmt.Fprintf(env.errOut, "%s %s\n", env.sty.Warning("note:"), note)
 	}
 	_, _ = fmt.Fprintf(out, "Controller:  %s in %s, %s\n", ctrlVersion, controllerNS, healthText)
 	_, _ = fmt.Fprintf(out, "Pipelines:   %d", len(pls))
@@ -234,11 +234,11 @@ func statusSummaryIn(out io.Writer, c sigs_client.Reader, controllerNS, scope, f
 		if len(items) > statusMaxRows {
 			_, _ = fmt.Fprintf(out, "... and %d more: kardinal get pipelines -A\n", len(items)-statusMaxRows)
 		}
-		_, _ = fmt.Fprintln(out, "\n"+sty.Dim("Details:")+" kardinal status <pipeline> -n <namespace>")
+		_, _ = fmt.Fprintln(out, "\n"+env.sty.Dim("Details:")+" kardinal status <pipeline> -n <namespace>")
 	}
 	if len(degraded) > 0 {
 		_, _ = fmt.Fprintf(out,
-			"\n%s %d pipeline(s) Degraded: run 'kardinal get pipelines' for details\n", sty.Warning("Warning:"), len(degraded))
+			"\n%s %d pipeline(s) Degraded: run 'kardinal get pipelines' for details\n", env.sty.Warning("Warning:"), len(degraded))
 	}
 	return nil
 }
@@ -283,16 +283,16 @@ func controllerReadiness(ctx context.Context, c sigs_client.Reader, ns string) c
 
 // statusPipelineWriter renders the per-pipeline status to w using client c.
 // It is separate from the command so tests can pass a fake client.
-func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
-	ctx := context.Background()
+func statusPipelineWriter(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline string) error {
+	env := envOf(ctx)
 	view, err := pipelineStatusOf(ctx, c, ns, pipeline)
 	if err != nil {
 		return err
 	}
-	if structured() {
-		return writeStructured(w, view)
+	if env.structured() {
+		return env.writeStructured(w, view)
 	}
-	return writePipelineStatus(w, view)
+	return writePipelineStatus(ctx, w, view)
 }
 
 // pipelineStatus is kardinal status <pipeline>: per environment what runs
@@ -362,6 +362,7 @@ type statusGate struct {
 // The gates listed are the instances status.environments names in
 // blockedBy.
 func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline string) (*pipelineStatus, error) {
+	env := envOf(ctx)
 	var pl v1alpha1.Pipeline
 	if err := c.Get(ctx, types.NamespacedName{Name: pipeline, Namespace: ns}, &pl); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -424,7 +425,7 @@ func pipelineStatusOf(ctx context.Context, c sigs_client.Client, ns, pipeline st
 		view.Notices = append(view.Notices, failedNotice(pipeline, f))
 	}
 	view.Regions = environmentRegions(&pl)
-	if OutputFormat() == "wide" {
+	if env.output == "wide" {
 		var steps v1alpha1.PromotionStepList
 		if err := c.List(ctx, &steps, sigs_client.InNamespace(ns),
 			sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline}); err != nil {
@@ -542,12 +543,13 @@ func versionCell(bundle, version string) string {
 }
 
 // writePipelineStatus writes view as kardinal status <pipeline> prints it.
-func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
+func writePipelineStatus(ctx context.Context, w io.Writer, view *pipelineStatus) error {
+	env := envOf(ctx)
 	_, _ = fmt.Fprintf(w, "Pipeline: %s   Namespace: %s\n", view.Pipeline, view.Namespace)
 	// The Pipeline's own problems come first: nothing promotes until they
 	// are fixed.
 	for _, n := range view.Notices {
-		_, _ = fmt.Fprintln(w, notice(n))
+		_, _ = fmt.Fprintln(w, notice(ctx, n))
 	}
 	running := slices.ContainsFunc(view.Environments, func(e v1alpha1.PipelineEnvironmentStatus) bool {
 		return e.Bundle != "" || e.IncomingBundle != "" || e.State != ""
@@ -562,7 +564,7 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 	_, _ = fmt.Fprintln(w)
 	// REGION shows where an environment runs when one of them says (a
 	// multi-cluster pipeline); ACTIVE STEP only with -o wide.
-	wide := OutputFormat() == "wide"
+	wide := env.output == "wide"
 	tw := style.NewTable(w, 2)
 	header := "ENVIRONMENT\t"
 	if view.Regions != nil {
@@ -582,7 +584,7 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 		if view.Regions != nil {
 			row += orDash(view.Regions[e.Name]) + "\t"
 		}
-		row += versionCell(e.Bundle, e.Version) + "\t" + versionCell(e.IncomingBundle, e.IncomingVersion) + "\t" + sty.State(envState(e)) + "\t"
+		row += versionCell(e.Bundle, e.Version) + "\t" + versionCell(e.IncomingBundle, e.IncomingVersion) + "\t" + env.sty.State(envState(e)) + "\t"
 		if wide {
 			row += orDash(view.activeSteps[e.Name]) + "\t"
 		}
@@ -592,13 +594,13 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 		return fmt.Errorf("write status table: %w", err)
 	}
 	for _, h := range view.Warnings {
-		_, _ = fmt.Fprintln(w, notice(h))
+		_, _ = fmt.Fprintln(w, notice(ctx, h))
 	}
 
 	if len(view.BlockingGates) > 0 {
 		_, _ = fmt.Fprintln(w)
 		_, _ = fmt.Fprintln(w, "Blocking gates")
-		_, _ = fmt.Fprintln(w, sty.Rule(72))
+		_, _ = fmt.Fprintln(w, env.sty.Rule(72))
 		gtw := style.NewTable(w, 2)
 		// The column holds an approval gate's tally in place of its
 		// expression: then it is the gate's RULE.
@@ -629,7 +631,7 @@ func writePipelineStatus(w io.Writer, view *pipelineStatus) error {
 			if g.Approval != "" {
 				cell = g.Approval
 			}
-			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", sty.Paint(display.ToneBlocked, g.Name), g.Environment,
+			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n", env.sty.Paint(display.ToneBlocked, g.Name), g.Environment,
 				cell, reason, lastChecked)
 		}
 		if err := gtw.Flush(); err != nil {

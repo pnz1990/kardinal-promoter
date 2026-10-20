@@ -246,6 +246,12 @@ func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	// goes in the stamp's asserted fields from ctx (mcpClientKey, assertedFor):
 	// kardinal mcp and the agent that connected, unless KARDINAL_ACTOR_CLIENT
 	// says otherwise.
+	// The call's output (JSON, plain, warnings discarded) and identity come
+	// with its context: the commands read no package variable for them.
+	ctx = withEnv(ctx, mcpEnv())
+	if k.opts.identity != nil {
+		ctx = withIdentity(ctx, k.opts.identity)
+	}
 	c, cns, err := k.opts.client()
 	if err != nil {
 		return nil, humanizedError{orig: err, human: HumanError(err)}
@@ -258,7 +264,7 @@ func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	if err != nil {
 		// Rewritten with this call's client and namespace: the hints never
 		// read the flags' namespace.
-		return nil, humanizedError{orig: err, human: humanErrorIn(err, c, cns)}
+		return nil, humanizedError{orig: err, human: humanErrorIn(ctx, err, c, cns)}
 	}
 	if v == nil {
 		if raw := bytes.TrimSpace(out.Bytes()); json.Valid(raw) && len(raw) > 0 {
@@ -408,9 +414,9 @@ func (in mcpStatusIn) check() error {
 }
 
 func mcpStatus(ctx context.Context, k *mcpServer, in mcpStatusIn) (*mcp.CallToolResult, error) {
-	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
 		if in.Pipeline != "" {
-			return nil, statusPipelineWriter(w, c, ns, in.Pipeline)
+			return nil, statusPipelineWriter(ctx, w, c, ns, in.Pipeline)
 		}
 		// As kardinal status: every namespace, unless one is named.
 		scope, fallback := "", ns
@@ -420,7 +426,7 @@ func mcpStatus(ctx context.Context, k *mcpServer, in mcpStatusIn) (*mcp.CallTool
 		if in.AllNamespaces {
 			fallback = ""
 		}
-		return nil, statusSummaryIn(w, c, defaultControllerNamespace, scope, fallback)
+		return nil, statusSummaryIn(ctx, w, c, defaultControllerNamespace, scope, fallback)
 	})
 }
 
@@ -458,8 +464,8 @@ func mcpHistory(ctx context.Context, k *mcpServer, in mcpHistoryIn) (*mcp.CallTo
 	if limit == 0 {
 		limit = 20
 	}
-	return k.direct(ctx, in.Namespace, in.Offset, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, historyFn(w, c, ns, in.Pipeline, in.Environment, limit)
+	return k.direct(ctx, in.Namespace, in.Offset, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, historyFn(ctx, w, c, ns, in.Pipeline, in.Environment, limit)
 	})
 }
 
@@ -530,8 +536,8 @@ func mcpDiff(ctx context.Context, k *mcpServer, in mcpDiffIn) (*mcp.CallToolResu
 }
 
 func mcpExplain(ctx context.Context, k *mcpServer, in mcpPipelineEnv) (*mcp.CallToolResult, error) {
-	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, explainOnce(w, c, ns, in.Pipeline, in.Environment, false)
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, explainOnce(ctx, w, c, ns, in.Pipeline, in.Environment, false)
 	})
 }
 
@@ -545,8 +551,8 @@ func (in mcpGatesIn) check() error {
 }
 
 func mcpGates(ctx context.Context, k *mcpServer, in mcpGatesIn) (*mcp.CallToolResult, error) {
-	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, policyListFn(w, c, ns, in.Pipeline, slices.Clone(defaultPolicyNamespaces))
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, policyListFn(ctx, w, c, ns, in.Pipeline, slices.Clone(defaultPolicyNamespaces))
 	})
 }
 
@@ -652,8 +658,8 @@ func (in mcpPipelineTarget) check() error {
 }
 
 func mcpPromote(ctx context.Context, k *mcpServer, in mcpPipelineTarget) (*mcp.CallToolResult, error) {
-	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, promoteFn(w, c, ns, in.Pipeline, in.Environment)
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, promoteFn(ctx, w, c, ns, in.Pipeline, in.Environment)
 	})
 }
 
@@ -691,14 +697,14 @@ func (in mcpPipelineOnly) check() error {
 }
 
 func mcpPause(ctx context.Context, k *mcpServer, in mcpPipelineOnly) (*mcp.CallToolResult, error) {
-	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, pauseFn(w, c, ns, in.Pipeline, "")
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, pauseFn(ctx, w, c, ns, in.Pipeline, "")
 	})
 }
 
 func mcpResume(ctx context.Context, k *mcpServer, in mcpPipelineOnly) (*mcp.CallToolResult, error) {
-	return k.direct(ctx, in.Namespace, 0, func(_ context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
-		return nil, resumeFn(w, c, ns, in.Pipeline, "")
+	return k.direct(ctx, in.Namespace, 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error) {
+		return nil, resumeFn(ctx, w, c, ns, in.Pipeline, "")
 	})
 }
 
@@ -1014,7 +1020,7 @@ func mcpFreeze(ctx context.Context, k *mcpServer, in mcpFreezeIn) (*mcp.CallTool
 	if in.For != "" {
 		d, _ = parseDuration(in.For) // checked
 	}
-	return k.direct(ctx, "", 0, func(_ context.Context, w io.Writer, c sigs_client.Client, _ string) (any, error) {
-		return nil, freezeFn(w, c, in.Holds, in.Namespace, in.Reason, d, time.Now())
+	return k.direct(ctx, "", 0, func(ctx context.Context, w io.Writer, c sigs_client.Client, _ string) (any, error) {
+		return nil, freezeFn(ctx, w, c, in.Holds, in.Namespace, in.Reason, d, time.Now())
 	})
 }

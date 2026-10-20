@@ -43,7 +43,7 @@ func TestHistory_ListsPromotionSteps(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(step1, step2).WithStatusSubresource(step1, step2).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
-	err := historyFn(&buf, c, "default", "nginx-demo", "", 20)
+	err := historyFn(t.Context(), &buf, c, "default", "nginx-demo", "", 20)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -79,7 +79,7 @@ func TestHistory_EnvFilter(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(stepDev, stepProd).WithStatusSubresource(stepDev, stepProd).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
-	err := historyFn(&buf, c, "default", "nginx-demo", "prod", 20)
+	err := historyFn(t.Context(), &buf, c, "default", "nginx-demo", "prod", 20)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -124,7 +124,7 @@ func TestHistory_RollbackAction(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
-	require.NoError(t, historyFn(&buf, c, "default", "nginx-demo", "", 20))
+	require.NoError(t, historyFn(t.Context(), &buf, c, "default", "nginx-demo", "", 20))
 
 	actions := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n")[1:] {
@@ -229,7 +229,7 @@ func TestHistory_RetiredBundle(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 
 	var buf bytes.Buffer
-	require.NoError(t, historyFn(&buf, c, "default", "nginx-demo", "", 20))
+	require.NoError(t, historyFn(t.Context(), &buf, c, "default", "nginx-demo", "", 20))
 	out := buf.String()
 	assert.Contains(t, out, "nginx-demo-v1")
 	assert.Contains(t, out, "#10")

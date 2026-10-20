@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"io"
 
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,5 +73,5 @@ func FormatSubscriptionTable(w io.Writer, subs []v1alpha1.Subscription, showName
 
 // statusSummaryFn is statusSummaryIn across every namespace.
 func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) error {
-	return statusSummaryIn(out, c, controllerNS, "", "default")
+	return statusSummaryIn(context.Background(), out, c, controllerNS, "", "default")
 }

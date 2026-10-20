@@ -148,7 +148,7 @@ func overrideFn(
 
 	// createdBy is the username the API server authenticates this CLI as:
 	// the chart's identity policy refuses any other name.
-	id, err := identityOf(ctx, c)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
 		return fmt.Errorf("override: %w", err)
 	}

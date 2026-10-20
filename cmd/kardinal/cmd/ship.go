@@ -155,6 +155,7 @@ type shipResult struct {
 // shipFn creates the Bundle and, with wait, follows it.
 func shipFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline string, opts createBundleOptions,
 	wait bool, timeout time.Duration, stopAtGate, quiet bool) error {
+	env := envOf(ctx)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -164,29 +165,29 @@ func shipFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline
 	}
 	res := shipResult{createdBundle: createdOf(b)}
 	if !wait {
-		if structured() {
-			return writeStructured(w, res)
+		if env.structured() {
+			return env.writeStructured(w, res)
 		}
 		_, _ = fmt.Fprintf(w, "Shipped %s as %s\n", versionOr(res.Version, b.Name), b.Name)
-		_, _ = fmt.Fprintf(errOut, "%s kardinal status %s -w\n", sty.Dim("Watch:"), pipeline)
+		_, _ = fmt.Fprintf(env.errOut, "%s kardinal status %s -w\n", env.sty.Dim("Watch:"), pipeline)
 		return nil
 	}
 	// Ctrl-C or SIGTERM ends the wait with its result (exit 6), not the
 	// promotion.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	progress := &shipProgress{w: errOut, timed: true, start: shipNow(), created: b.CreationTimestamp.Time}
+	progress := &shipProgress{w: env.errOut, sty: env.sty, timed: true, start: shipNow(), created: b.CreationTimestamp.Time}
 	if quiet {
 		progress = &shipProgress{}
 	} else {
-		_, _ = fmt.Fprintf(errOut, "Shipped %s as %s; following it (Ctrl-C stops following, the promotion goes on)\n",
+		_, _ = fmt.Fprintf(env.errOut, "Shipped %s as %s; following it (Ctrl-C stops following, the promotion goes on)\n",
 			versionOr(res.Version, b.Name), b.Name)
 	}
 	res = followShip(ctx, c, ns, pipeline, b.Name, res, timeout, stopAtGate, progress)
 	progress.timing(ctx, c, b)
 	progress.summary(res.Environments)
-	if structured() {
-		if err := writeStructured(w, res); err != nil {
+	if env.structured() {
+		if err := env.writeStructured(w, res); err != nil {
 			return err
 		}
 	} else {
@@ -222,7 +223,7 @@ func versionRef(version, name string) string {
 // pause each time; three in a row end the wait with the error. stopAtGate
 // stops at any evaluated gate that does not pass (--stop-at-gate).
 func waitShip(ctx context.Context, c sigs_client.Client, ns, pipeline, name string, res shipResult, timeout time.Duration, stopAtGate bool) shipResult {
-	return followShip(ctx, c, ns, pipeline, name, res, timeout, stopAtGate, &shipProgress{w: errOut, start: shipNow()})
+	return followShip(ctx, c, ns, pipeline, name, res, timeout, stopAtGate, &shipProgress{w: errOut, sty: sty, start: shipNow()})
 }
 
 // shipNow is the clock of ship --wait's progress; a test replaces it.
@@ -233,7 +234,9 @@ var shipNow = time.Now
 // timed), the URL of each PR it opens, and with timed a summary at the end.
 // A nil w prints nothing (--quiet).
 type shipProgress struct {
-	w     io.Writer
+	w io.Writer
+	// sty renders the states (the call's env: plain under kardinal mcp).
+	sty   style.Styler
 	timed bool
 	start time.Time
 	// created is when the Bundle was created (the summary's "took" is
@@ -257,7 +260,7 @@ func (p *shipProgress) observe(envs []v1alpha1.PipelineEnvironmentStatus) {
 	}
 	now := shipNow()
 	for _, e := range envs {
-		text := sty.State(envState(e))
+		text := p.sty.State(envState(e))
 		if p.seen[e.Name] != text {
 			p.seen[e.Name] = text
 			p.changed[e.Name] = now
@@ -345,7 +348,7 @@ func (p *shipProgress) summary(envs []v1alpha1.PipelineEnvironmentStatus) {
 		}
 		return start
 	}
-	_, _ = fmt.Fprintf(p.w, "%s after %s:\n", sty.Dim("Summary"), shortDuration(now.Sub(p.start)))
+	_, _ = fmt.Fprintf(p.w, "%s after %s:\n", p.sty.Dim("Summary"), shortDuration(now.Sub(p.start)))
 	tw := style.NewTable(p.w, 3)
 	for i, e := range envs {
 		t, known := since[e.Name]
@@ -360,10 +363,10 @@ func (p *shipProgress) summary(envs []v1alpha1.PipelineEnvironmentStatus) {
 			when = "for " + shortDuration(now.Sub(t))
 		}
 		if when == "" {
-			_, _ = fmt.Fprintf(tw, "  %s\t%s\n", e.Name, sty.State(envState(e)))
+			_, _ = fmt.Fprintf(tw, "  %s\t%s\n", e.Name, p.sty.State(envState(e)))
 			continue
 		}
-		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", e.Name, sty.State(envState(e)), when)
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", e.Name, p.sty.State(envState(e)), when)
 	}
 	_ = tw.Flush()
 }

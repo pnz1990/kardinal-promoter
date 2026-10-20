@@ -393,7 +393,7 @@ func TestWhy_HintsNameTheNamespace(t *testing.T) {
 		var why, table, explain bytes.Buffer
 		setForTest(t, &errOut, io.Writer(&explain)) // explain's hints go to stderr
 		require.NoError(t, whyFn(context.Background(), &why, c, "default", "demo", "prod"))
-		require.NoError(t, explainHinted(&table, c, "default", "demo", "prod", false))
+		require.NoError(t, explainHinted(t.Context(), &table, c, "default", "demo", "prod", false))
 		require.NotEmpty(t, commands(explain.String()), "explain hints:\n%s", explain.String())
 		cmds := append(commands(why.String()), commands(explain.String())...)
 		require.NotEmpty(t, cmds, "why:\n%s\nexplain:\n%s", why.String(), explain.String())

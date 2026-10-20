@@ -33,6 +33,7 @@ import (
 // lists it, with what the verifier wrote (summary, evidence, finding titles)
 // labelled untrusted.
 func TestMCP_VerifyAndVerdicts(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, append(mcpFixture(), mcpIndex("*"))...)
 	ctx := context.Background()
 
@@ -79,6 +80,7 @@ func TestMCP_VerifyAndVerdicts(t *testing.T) {
 // TestMCP_VerifyRefusesBadValues: what the CRD would refuse, and what is
 // not a value of its kind, is refused before anything runs.
 func TestMCP_VerifyRefusesBadValues(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
 	base := map[string]any{"pipeline": "app", "environment": "prod", "version": "1.0", "check": "qa", "result": "pass"}
 	for name, change := range map[string]map[string]any{

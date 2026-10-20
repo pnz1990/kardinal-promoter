@@ -53,7 +53,7 @@ The first environment has nothing upstream: use kardinal ship there.`,
 			if err != nil {
 				return fmt.Errorf("promote: %w", err)
 			}
-			return promoteFn(cmd.OutOrStdout(), c, ns, pipeline, env)
+			return promoteFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, env)
 		},
 	}
 
@@ -64,8 +64,8 @@ The first environment has nothing upstream: use kardinal ship there.`,
 // promoteFn is the testable implementation of the promote command. The
 // source Bundle and the new Bundle come from lifecycle.PlanPromote, the
 // implementation the UI shares.
-func promoteFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) error {
-	ctx := context.Background()
+func promoteFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, env string) error {
+	ui := envOf(ctx)
 
 	plan, err := lifecycle.PlanPromote(ctx, c, lifecycle.PromoteRequest{
 		Namespace:   ns,
@@ -84,10 +84,10 @@ func promoteFn(w io.Writer, c sigs_client.Client, ns, pipeline, env string) erro
 		return fmt.Errorf("create promote bundle for pipeline %s env %s: %w", pipeline, env, err)
 	}
 
-	if structured() {
+	if ui.structured() {
 		out := createdOf(plan.Bundle)
 		out.Environment, out.From = env, plan.Source.Name
-		return writeStructured(w, out)
+		return ui.writeStructured(w, out)
 	}
 	if _, err := fmt.Fprintf(w,
 		"Promoting %s to %s: bundle %s created from %s (Verified in %s; %s)\n"+

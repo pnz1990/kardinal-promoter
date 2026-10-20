@@ -32,6 +32,7 @@ import (
 // the freezes tool lists it with its reason labelled untrusted; there is no
 // tool that lifts a freeze or exempts a pipeline from it.
 func TestMCP_Freeze(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
 	res, body := call(t, cs, "freeze", map[string]any{"holds": "agents", "reason": "INC-1: " + injection, "for": "2h"})
 	require.False(t, res.IsError, "%v", body)
@@ -84,6 +85,7 @@ func TestMCP_Freeze(t *testing.T) {
 // TestMCP_FreezeRefusesBadValues: what is not a freeze is refused before
 // anything is written.
 func TestMCP_FreezeRefusesBadValues(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
 	for name, args := range map[string]map[string]any{
 		"holds that is a flag":       {"holds": "--everyone", "reason": "r"},
@@ -107,6 +109,7 @@ func TestMCP_FreezeRefusesBadValues(t *testing.T) {
 // for a version that agent created, its registry entry read for agent.*:
 // prod denies agents, test lets this one in; an unknown agent is an error.
 func TestMCP_SimulateAsAgent(t *testing.T) {
+	t.Parallel()
 	objs := mcpFixture()
 	for _, o := range objs {
 		if p, ok := o.(*v1alpha1.Pipeline); ok {

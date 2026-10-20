@@ -58,9 +58,10 @@ func whoAmI(ctx context.Context, c sigs_client.Client) (Identity, error) {
 // warning is printed: excludeAuthor then blocks the gate. It fails when the
 // caller is an agent that may not act on this Pipeline.
 func stampCreator(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle) error {
-	id, err := identityOf(ctx, c)
+	env := envOf(ctx)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
-		_, _ = fmt.Fprintf(errOut, "warning: the version records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
+		_, _ = fmt.Fprintf(env.errOut, "warning: the version records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
 		return nil
 	}
 	lifecycle.StampCreatedBy(b, id.Username)
@@ -75,9 +76,10 @@ func stampCreator(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle)
 // creatorOf is the caller's username for kardinal.io/created-by, or "" with
 // a warning on stderr when the API server cannot say.
 func creatorOf(ctx context.Context, c sigs_client.Client) string {
-	id, err := identityOf(ctx, c)
+	env := envOf(ctx)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
-		_, _ = fmt.Fprintf(errOut, "warning: the version records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
+		_, _ = fmt.Fprintf(env.errOut, "warning: the version records no creator (%v); an approval gate with excludeAuthor will not pass it\n", err)
 		return ""
 	}
 	return id.Username
@@ -108,13 +110,14 @@ func assertedFor(ctx context.Context) v1alpha1.AssertedActor {
 // actor policy admits that for people and bots, and tells an agent which
 // stamp to write. It fails when id is an agent that may not act at w.
 func stampOf(ctx context.Context, c sigs_client.Client, id Identity, w actor.Where) (*v1alpha1.Actor, error) {
+	env := envOf(ctx)
 	src := &actor.Source{Reader: c}
 	r, err := src.Resolve(ctx, actor.User{Username: id.Username, Groups: id.Groups}, w)
 	switch {
 	case errors.Is(err, actor.ErrConflict), errors.Is(err, actor.ErrBlocked), errors.Is(err, actor.ErrOutOfScope):
 		return nil, err
 	case err != nil:
-		_, _ = fmt.Fprintf(errOut, "warning: cannot read the agent index (%v); writing without an actor stamp\n", err)
+		_, _ = fmt.Fprintf(env.errOut, "warning: cannot read the agent index (%v); writing without an actor stamp\n", err)
 		return nil, nil
 	}
 	a := assertedFor(ctx)
@@ -127,9 +130,10 @@ func stampOf(ctx context.Context, c sigs_client.Client, id Identity, w actor.Whe
 // AuditEvent). Without an identity it warns and records none: the change is
 // still made, and audited with an unknown actor.
 func changeBy(ctx context.Context, c sigs_client.Client, reason string, w actor.Where) (*v1alpha1.PipelineChange, error) {
-	id, err := identityOf(ctx, c)
+	env := envOf(ctx)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
-		_, _ = fmt.Fprintf(errOut, "warning: the change records no actor (%v); its AuditEvent names none\n", err)
+		_, _ = fmt.Fprintf(env.errOut, "warning: the change records no actor (%v); its AuditEvent names none\n", err)
 		return nil, nil
 	}
 	stamp, err := stampOf(ctx, c, id, w)

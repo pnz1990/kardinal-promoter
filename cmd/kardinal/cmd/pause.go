@@ -52,9 +52,9 @@ and the targets in flight finish. Resume with kardinal resume (--env <fleet>).`,
 				return fmt.Errorf("pause: %w", err)
 			}
 			if env != "" {
-				return fleetPauseFn(cmd.OutOrStdout(), c, ns, pipeline, env, true, reason)
+				return fleetPauseFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, env, true, reason)
 			}
-			return pauseFn(cmd.OutOrStdout(), c, ns, pipeline, reason)
+			return pauseFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, reason)
 		},
 	}
 	cmd.Flags().StringVar(&env, "env", "", "pause only this fleet environment: no further target starts")
@@ -64,12 +64,12 @@ and the targets in flight finish. Resume with kardinal resume (--env <fleet>).`,
 
 // pauseFn is the testable implementation of pause. It uses lifecycle.Pause,
 // the implementation the UI shares.
-func pauseFn(w io.Writer, c sigs_client.Client, ns, pipeline, reason string) error {
-	who, err := changeBy(context.Background(), c, reason, actor.Where{Namespace: ns, Pipeline: pipeline})
+func pauseFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, reason string) error {
+	who, err := changeBy(ctx, c, reason, actor.Where{Namespace: ns, Pipeline: pipeline})
 	if err != nil {
 		return fmt.Errorf("pause %s: %w", pipeline, err)
 	}
-	if err := lifecycle.Pause(context.Background(), c, ns, pipeline, who); err != nil {
+	if err := lifecycle.Pause(ctx, c, ns, pipeline, who); err != nil {
 		return fmt.Errorf("pause %s: %w", pipeline, err)
 	}
 	if _, err := fmt.Fprintf(w,
@@ -83,16 +83,16 @@ func pauseFn(w io.Writer, c sigs_client.Client, ns, pipeline, reason string) err
 // fleetPauseFn is the testable implementation of pause and resume --env
 // <fleet>. It uses lifecycle.SetFleetPaused, the implementation the UI
 // shares.
-func fleetPauseFn(w io.Writer, c sigs_client.Client, ns, pipeline, fleet string, paused bool, reason string) error {
+func fleetPauseFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, fleet string, paused bool, reason string) error {
 	verb := "resume"
 	if paused {
 		verb = "pause"
 	}
-	who, err := changeBy(context.Background(), c, reason, actor.Where{Namespace: ns, Pipeline: pipeline, Environment: fleet})
+	who, err := changeBy(ctx, c, reason, actor.Where{Namespace: ns, Pipeline: pipeline, Environment: fleet})
 	if err != nil {
 		return fmt.Errorf("%s %s --env %s: %w", verb, pipeline, fleet, err)
 	}
-	if err := lifecycle.SetFleetPaused(context.Background(), c, ns, pipeline, fleet, paused, who); err != nil {
+	if err := lifecycle.SetFleetPaused(ctx, c, ns, pipeline, fleet, paused, who); err != nil {
 		return fmt.Errorf("%s %s --env %s: %w", verb, pipeline, fleet, err)
 	}
 	msg := fmt.Sprintf("Fleet %s of pipeline %s resumed. Its targets start again as places free up.\n", fleet, pipeline)
@@ -127,9 +127,9 @@ kardinal pause --env <fleet>.`,
 				return fmt.Errorf("resume: %w", err)
 			}
 			if env != "" {
-				return fleetPauseFn(cmd.OutOrStdout(), c, ns, pipeline, env, false, reason)
+				return fleetPauseFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, env, false, reason)
 			}
-			return resumeFn(cmd.OutOrStdout(), c, ns, pipeline, reason)
+			return resumeFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, reason)
 		},
 	}
 	cmd.Flags().StringVar(&env, "env", "", "resume only this fleet environment")
@@ -139,12 +139,12 @@ kardinal pause --env <fleet>.`,
 
 // resumeFn is the testable implementation of resume. It uses
 // lifecycle.Resume, the implementation the UI shares.
-func resumeFn(w io.Writer, c sigs_client.Client, ns, pipeline, reason string) error {
-	who, err := changeBy(context.Background(), c, reason, actor.Where{Namespace: ns, Pipeline: pipeline})
+func resumeFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, reason string) error {
+	who, err := changeBy(ctx, c, reason, actor.Where{Namespace: ns, Pipeline: pipeline})
 	if err != nil {
 		return fmt.Errorf("resume %s: %w", pipeline, err)
 	}
-	if err := lifecycle.Resume(context.Background(), c, ns, pipeline, who); err != nil {
+	if err := lifecycle.Resume(ctx, c, ns, pipeline, who); err != nil {
 		return fmt.Errorf("resume %s: %w", pipeline, err)
 	}
 	if _, err := fmt.Fprintf(w, "Pipeline %s resumed.\n", pipeline); err != nil {

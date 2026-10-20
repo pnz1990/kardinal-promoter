@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -553,7 +554,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, env
 	}
 	for _, p := range pipelines {
 		for _, h := range rows[p.Namespace+"/"+p.Name].hints {
-			if _, err := fmt.Fprintln(w, notice(h)); err != nil {
+			if _, err := fmt.Fprintln(w, notice(context.Background(), h)); err != nil {
 				return fmt.Errorf("write pipeline hint: %w", err)
 			}
 		}

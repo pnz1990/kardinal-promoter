@@ -71,7 +71,7 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 			}
 			w := cmd.OutOrStdout()
 			if !watchFlag {
-				return explainHinted(w, c, ns, pipeline, env, colorFlag)
+				return explainHinted(contextOf(cmd), w, c, ns, pipeline, env, colorFlag)
 			}
 			return explainWatch(cmd.Context(), w, c, ns, pipeline, env, colorFlag, 3*time.Second)
 		},
@@ -123,7 +123,7 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 			_, _ = fmt.Fprint(w, "\033[H\033[2J")
 		}
 		yamlDocument(w)
-		if err := explainOnce(w, c, ns, pipeline, envFilter, forceColor); err != nil {
+		if err := explainOnce(ctx, w, c, ns, pipeline, envFilter, forceColor); err != nil {
 			if table {
 				_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
 			} else {
@@ -144,21 +144,21 @@ func explainWatch(ctx context.Context, w io.Writer, c sigs_client.Client,
 // explainHinted is explainOnce followed, on stderr, by the command that gets
 // past each gate that blocks: kardinal explain and why without -w (a watch
 // would repeat them every frame).
-func explainHinted(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
-	return explainRender(w, c, ns, pipeline, envFilter, forceColor, true)
+func explainHinted(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
+	return explainRender(ctx, w, c, ns, pipeline, envFilter, forceColor, true)
 }
 
 // explainNow is explain's clock (a soak gate's progress); a test replaces it.
 var explainNow = time.Now
 
-func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
-	return explainRender(w, c, ns, pipeline, envFilter, forceColor, false)
+func explainOnce(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
+	return explainRender(ctx, w, c, ns, pipeline, envFilter, forceColor, false)
 }
 
 // explainRender renders explain to w, and with hints the unblock commands
 // on stderr.
-func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor, hints bool) error {
-	ctx := context.Background()
+func explainRender(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor, hints bool) error {
+	env := envOf(ctx)
 
 	pipe, err := getPipeline(ctx, c, ns, pipeline)
 	if err != nil {
@@ -315,7 +315,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		return rows[i].name < rows[j].name
 	})
 
-	if structured() {
+	if env.structured() {
 		out := explainOutput{Pipeline: pipeline, Namespace: ns, Entries: []explainEntry{}, Holds: explainHolds(pipe, envFilter)}
 		for _, row := range rows {
 			out.Entries = append(out.Entries, explainEntry{
@@ -323,7 +323,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 				State: row.state, Expression: noDash(row.expression), Reason: noDash(row.reason), Progress: row.progress,
 			})
 		}
-		return writeStructured(w, out)
+		return env.writeStructured(w, out)
 	}
 
 	if len(rows) == 0 {
@@ -338,7 +338,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 	}
 
 	// --color colours the STATE cells off a terminal too.
-	st := sty
+	st := env.sty
 	if forceColor {
 		st = st.ForceColor()
 	}
@@ -368,7 +368,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 		return fmt.Errorf("flush explain table: %w", err)
 	}
 	for _, h := range rejectedLiveHints(pipeline, current, bundles.Items, steps.Items, envFilter) {
-		if _, err := fmt.Fprintln(w, notice(h)); err != nil {
+		if _, err := fmt.Fprintln(w, notice(ctx, h)); err != nil {
 			return fmt.Errorf("write explain hint: %w", err)
 		}
 	}
@@ -384,7 +384,7 @@ func explainRender(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter st
 	}
 	for _, h := range unblock {
 		label, cmdline, _ := strings.Cut(h, ": ")
-		_, _ = fmt.Fprintf(errOut, "%s %s\n", sty.Dim(label+":"), cmdline)
+		_, _ = fmt.Fprintf(env.errOut, "%s %s\n", env.sty.Dim(label+":"), cmdline)
 	}
 	return nil
 }

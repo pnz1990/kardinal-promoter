@@ -39,7 +39,7 @@ import (
 func runStatusPipeline(t *testing.T, objs ...sigs_client.Object) string {
 	t.Helper()
 	var buf bytes.Buffer
-	require.NoError(t, statusPipelineWriter(&buf, policyClient(t, objs...), "default", "demo"))
+	require.NoError(t, statusPipelineWriter(t.Context(), &buf, policyClient(t, objs...), "default", "demo"))
 	return buf.String()
 }
 
@@ -88,7 +88,7 @@ func TestStatusPipelineWriter_NoSteps(t *testing.T) {
 
 func TestStatusPipelineWriter_NotFound(t *testing.T) {
 	var buf bytes.Buffer
-	err := statusPipelineWriter(&buf, policyClient(t), "default", "missing-pipeline")
+	err := statusPipelineWriter(t.Context(), &buf, policyClient(t), "default", "missing-pipeline")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `pipeline "missing-pipeline" not found`)
 }
@@ -662,7 +662,7 @@ func TestStatusSummary_ScopeAndRights(t *testing.T) {
 	errOut = &errb
 	t.Cleanup(func() { errOut = prev })
 
-	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "", "team-a"))
+	require.NoError(t, statusSummaryIn(t.Context(), &out, c, "kardinal-system", "", "team-a"))
 	assert.Contains(t, out.String(), "Controller:  unknown in kardinal-system, can't read the controller Deployment (needs list on deployments in kardinal-system); kardinal doctor checks it\n")
 	assert.Contains(t, out.String(), "team-a      web        1.0.0 live in prod\n")
 	assert.NotContains(t, out.String(), "team-b")
@@ -671,13 +671,13 @@ func TestStatusSummary_ScopeAndRights(t *testing.T) {
 	// -A asked for every namespace: refused, not one namespace.
 	out.Reset()
 	errb.Reset()
-	err := statusSummaryIn(&out, c, "kardinal-system", "", "")
+	err := statusSummaryIn(t.Context(), &out, c, "kardinal-system", "", "")
 	require.EqualError(t, err, "you may not list Pipelines and Bundles in every namespace: run kardinal status -n <namespace>")
 	assert.NotContains(t, out.String(), "team-a")
 
 	out.Reset()
 	errb.Reset()
-	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "team-b", "team-a"))
+	require.NoError(t, statusSummaryIn(t.Context(), &out, c, "kardinal-system", "team-b", "team-a"))
 	assert.Contains(t, out.String(), "team-b      api")
 	assert.NotContains(t, out.String(), "team-a")
 	assert.Empty(t, errb.String())
@@ -685,7 +685,7 @@ func TestStatusSummary_ScopeAndRights(t *testing.T) {
 	globalOutput = "json"
 	t.Cleanup(func() { globalOutput = "" })
 	out.Reset()
-	require.NoError(t, statusSummaryIn(&out, c, "kardinal-system", "", "team-a"))
+	require.NoError(t, statusSummaryIn(t.Context(), &out, c, "kardinal-system", "", "team-a"))
 	var s statusSummary
 	require.NoError(t, json.Unmarshal(out.Bytes(), &s), out.String())
 	assert.Equal(t, "unknown", s.Controller, "controller stays the version string")

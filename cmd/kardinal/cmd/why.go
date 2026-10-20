@@ -70,7 +70,7 @@ deprecated kardinal explain printed); -o json and yaml print its entries.
 				if watchFlag {
 					return explainWatch(cmd.Context(), w, c, ns, pipeline, env, colorFlag, 3*time.Second)
 				}
-				return explainHinted(w, c, ns, pipeline, env, colorFlag)
+				return explainHinted(contextOf(cmd), w, c, ns, pipeline, env, colorFlag)
 			}
 			if !watchFlag {
 				if err := whyFn(cmd.Context(), w, c, ns, pipeline, env); err != nil {
@@ -198,7 +198,7 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 	// Who asks, to tell "your approval" from someone else's; unknown (nil)
 	// when the API server does not say.
 	var me *Identity
-	if id, err := identityOf(ctx, c); err == nil {
+	if id, err := callerIdentity(ctx, c); err == nil {
 		me = &id
 	}
 	// The ChangeWindows a window gate reads, to say when it opens.
@@ -218,7 +218,7 @@ func whyAnswers(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilt
 		// The signed receipt of the version running there (docs/receipts.md).
 		if rc, ok := receipts[receiptKey{e.Bundle, e.Name}]; ok && e.Bundle != "" {
 			a.lines = append(a.lines, whyLine{"Receipt", fmt.Sprintf("%s, %s: kardinal verify-receipt %s %s --bundle %s",
-				rc.Name, receiptMark(rc), p.Name, e.Name, e.Bundle)})
+				rc.Name, receiptMark(ctx, rc), p.Name, e.Name, e.Bundle)})
 		}
 		answers = append(answers, a)
 	}
