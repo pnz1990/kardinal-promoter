@@ -113,11 +113,38 @@ func (c commitInfo) file(t *testing.T, path string) string {
 func newGitRemote(t *testing.T) *gitRemote {
 	t.Helper()
 	g := &gitRemote{t: t, dir: t.TempDir(), c: scm.NewGoGitClient()}
-	_, err := gogit.PlainInitWithOptions(g.dir, &gogit.PlainInitOptions{Bare: true,
+	repo, err := gogit.PlainInitWithOptions(g.dir, &gogit.PlainInitOptions{Bare: true,
 		InitOptions: gogit.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName("main")}})
 	require.NoError(t, err)
+	// No git housekeeping in the remote: git-receive-pack would start
+	// "git maintenance run --auto --detach" after each push, which can still
+	// write in the remote when TempDir removes it (#2227).
+	cfg, err := repo.Config()
+	require.NoError(t, err)
+	cfg.Raw.Section("receive").SetOption("autogc", "false")
+	cfg.Raw.Section("maintenance").SetOption("auto", "false")
+	cfg.Raw.Section("gc").SetOption("auto", "0")
+	require.NoError(t, repo.SetConfig(cfg))
 	g.commit(map[string]string{"environments/prod/kustomization.yaml": prodKustomization}, true)
 	return g
+}
+
+// TestGitRemote_NoDetachedMaintenance (#2227): a push into the test's bare
+// remote starts no git maintenance. git-receive-pack (which go-git's file://
+// transport runs) otherwise starts "git maintenance run --auto --detach"
+// after every push, and that background process can still be writing in the
+// remote (its lock and log files) when the test's TempDir is removed:
+// "TempDir RemoveAll cleanup: ... directory not empty".
+func TestGitRemote_NoDetachedMaintenance(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	remote := newGitRemote(t)
+	remote.commit(map[string]string{"notes/a.txt": "a\n"}, false)
+	b, err := os.ReadFile(trace)
+	require.NoError(t, err, "git-receive-pack ran with GIT_TRACE")
+	require.Contains(t, string(b), "receive-pack", "the push went through git-receive-pack")
+	assert.NotContains(t, string(b), "maintenance run", "no maintenance is started in the remote")
+	assert.NotContains(t, string(b), "gc --auto")
 }
 
 // TestWaitingForMerge_RebuildsPRBranchOnMovedBase (#1504 QA): while a
