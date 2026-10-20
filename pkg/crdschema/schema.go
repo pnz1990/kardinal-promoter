@@ -84,10 +84,10 @@ func Load(fsys fs.FS, version string) (map[string]Schema, error) {
 
 // Check returns what the API server would do to obj (a decoded document)
 // beyond accepting it on create: the paths of the fields pruning would
-// drop, and the schema's validation errors on what is left once it drops
-// the status of a CRD with a status subresource (it ignores status on
-// create) and sets the schema's defaults (a required field with a default
-// may be left out). obj is not changed.
+// drop (in status too), and the schema's validation errors on what is left
+// once it drops the status of a CRD with a status subresource (it ignores
+// status values on create) and sets the schema's defaults (a required field
+// with a default may be left out). obj is not changed.
 func (s Schema) Check(obj map[string]any) (unknown []string, invalid field.ErrorList, err error) {
 	b, err := json.Marshal(obj)
 	if err != nil {
@@ -97,11 +97,13 @@ func (s Schema) Check(obj map[string]any) (unknown []string, invalid field.Error
 	if err := json.Unmarshal(b, &cp); err != nil {
 		return nil, nil, fmt.Errorf("decode the document: %w", err)
 	}
+	unknown = pruning.PruneWithOptions(cp, s.structural, true,
+		structuralschema.UnknownFieldPathOptions{TrackUnknownFieldPaths: true})
+	// An unknown field is reported wherever it is, status too (kubectl's
+	// strict field validation refuses it); only then is the status dropped.
 	if s.status {
 		delete(cp, "status")
 	}
-	unknown = pruning.PruneWithOptions(cp, s.structural, true,
-		structuralschema.UnknownFieldPathOptions{TrackUnknownFieldPaths: true})
 	structuraldefaulting.Default(cp, s.structural)
 	return unknown, apivalidation.ValidateCustomResource(nil, cp, s.validator), nil
 }

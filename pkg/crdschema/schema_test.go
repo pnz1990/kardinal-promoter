@@ -92,7 +92,7 @@ spec:
 		{"PolicyGate", "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata: {name: g}\n" +
 			"spec: {expression: 'true'}\nstatus: {reason: exported with kubectl get -o yaml}\n"},
 		{"PolicyGate", "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata: {name: g}\n" +
-			"spec: {expression: 'true'}\nstatus: {ready: not-a-bool, lastEvaluatedAt: 7, bogus: 1}\n"},
+			"spec: {expression: 'true'}\nstatus: {ready: not-a-bool, lastEvaluatedAt: 7}\n"},
 	} {
 		var doc map[string]any
 		require.NoError(t, yaml.Unmarshal([]byte(tc.doc), &doc))
@@ -101,6 +101,16 @@ spec:
 		assert.Empty(t, unknown, tc.doc)
 		assert.Empty(t, invalid, tc.doc)
 	}
+	// An unknown status field is still an unknown field (only the status
+	// values are ignored on create).
+	var withBogus map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte("apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata: {name: g}\n"+
+		"spec: {expression: 'true'}\nstatus: {reason: r, bogus: 1}\n"), &withBogus))
+	unknown, invalid, err = schemas["PolicyGate"].Check(withBogus)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"status.bogus"}, unknown)
+	assert.Empty(t, invalid)
+
 	// A default never hides a wrong value, and a CRD without a status
 	// subresource keeps its status validated.
 	var bad map[string]any
