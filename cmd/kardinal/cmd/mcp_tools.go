@@ -32,7 +32,6 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
@@ -228,43 +227,25 @@ func checkAll(errs ...error) error {
 // value; the result is the value, else what f wrote (JSON, or text).
 func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	f func(ctx context.Context, w io.Writer, c sigs_client.Client, ns string) (any, error)) (*mcp.CallToolResult, error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	defer keepGlobals()()
-	root := NewRootCmd()
-	if err := root.ParseFlags(k.opts.base); err != nil {
-		return nil, fmt.Errorf("flags: %w", err)
-	}
-	if ns != "" {
-		globalNamespace = ns
-	}
-	globalOutput = "json"
-	sty, errOut = style.Plain(), io.Discard
-	// A .kardinal.yaml in the agent's working directory picks nothing.
-	ignoreRepoFile = true
+	// Nothing here writes a package variable: calls run at once (#2230).
 	// The writes are stamped by the commands' own code (stampOf): the actor
 	// is who the kubeconfig authenticates. What the client says about itself
-	// goes in the stamp's asserted fields: kardinal mcp and the agent that
-	// connected, unless KARDINAL_ACTOR_CLIENT says otherwise.
-	label, _ := ctx.Value(mcpClientKey{}).(string)
-	asserted := assertedOf
-	assertedOf = func() v1alpha1.AssertedActor {
-		a := asserted()
-		if a.Client == "" {
-			a.Client = label
-		}
-		return a
-	}
-	c, cns, err := buildClient()
+	// goes in the stamp's asserted fields from ctx (mcpClientKey, assertedFor):
+	// kardinal mcp and the agent that connected, unless KARDINAL_ACTOR_CLIENT
+	// says otherwise.
+	c, cns, err := k.opts.client()
 	if err != nil {
 		return nil, humanizedError{orig: err, human: HumanError(err)}
+	}
+	if ns != "" {
+		cns = ns
 	}
 	var out bytes.Buffer
 	v, err := f(ctx, &out, c, cns)
 	if err != nil {
-		// Rewritten here, under the lock and with this call's flags: toolError
-		// runs outside it.
-		return nil, humanizedError{orig: err, human: HumanError(err)}
+		// Rewritten with this call's client and namespace: the hints never
+		// read the flags' namespace.
+		return nil, humanizedError{orig: err, human: humanErrorIn(err, c, cns)}
 	}
 	if v == nil {
 		if raw := bytes.TrimSpace(out.Bytes()); json.Valid(raw) && len(raw) > 0 {

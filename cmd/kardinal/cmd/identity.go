@@ -91,6 +91,17 @@ var assertedOf = func() v1alpha1.AssertedActor {
 		Session: os.Getenv("KARDINAL_ACTOR_SESSION"), Client: os.Getenv("KARDINAL_ACTOR_CLIENT")}
 }
 
+// assertedFor is assertedOf for a call: under kardinal mcp, the client the
+// tool call came from (ctx's mcpClientKey) when KARDINAL_ACTOR_CLIENT names
+// none.
+func assertedFor(ctx context.Context) v1alpha1.AssertedActor {
+	a := assertedOf()
+	if label, ok := ctx.Value(mcpClientKey{}).(string); ok && a.Client == "" {
+		a.Client = label
+	}
+	return a
+}
+
 // stampOf is the actor stamp for a write by id at w (docs/actors.md): id
 // through the cluster's agent index, with the asserted fields. When the
 // index cannot be read the stamp is left out with a warning: the chart's
@@ -106,7 +117,7 @@ func stampOf(ctx context.Context, c sigs_client.Client, id Identity, w actor.Whe
 		_, _ = fmt.Fprintf(errOut, "warning: cannot read the agent index (%v); writing without an actor stamp\n", err)
 		return nil, nil
 	}
-	a := assertedOf()
+	a := assertedFor(ctx)
 	return actor.Stamp(r, &a), nil
 }
 
