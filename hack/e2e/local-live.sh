@@ -73,7 +73,8 @@
 #                later -reuse
 #   KARDINAL_E2E_STATE  STATE (default: e2e-state next to $LOADLOCK, the
 #                host's shared directory; test/e2e/results with -no-lock)
-#   SLOT_MAX     the host's cluster slots (default 2): no run starts a
+#   SLOT_MAX     the host's cluster slots (default: SLOT_MAX=N in
+#                $RELEASE_GATE_SLOTS/../host.env, else 2): no run starts a
 #                cluster while SLOT_MAX slots are in use, counting any slot
 #                directory above SLOT_MAX a run with a larger one took
 #   OWNER        who holds the lock and slot (default $AGENT_ID or $USER)
@@ -218,8 +219,21 @@ export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$owner_part-$SUITE-${MINOR#1
 case $KIND_CLUSTER in kardinal-e2e-*) ;; *) die "KIND_CLUSTER=$KIND_CLUSTER must start with kardinal-e2e-" ;; esac
 COUNT=${COUNT:-1}
 RETRY=${RETRY:-10}
-SLOT_MAX=${SLOT_MAX:-2}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
+# The host's cluster slots: $SLOT_MAX, else SLOT_MAX=N in the host's
+# host.env next to the slots directory (DIR/../host.env, where the host's
+# capacity is tuned, not in this script), else 2. hack/release-gate's
+# -slot-max reads the same.
+# A host.env that cannot be read leaves the default (2, the fewest).
+if [ -z "${SLOT_MAX:-}" ] && [ -n "$SLOTS_DIR" ] && [ -e "${SLOTS_DIR%/}/../host.env" ]; then
+  {
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%$'\r'}
+      if [[ $line =~ ^SLOT_MAX=([1-9][0-9]*)$ ]]; then SLOT_MAX=${BASH_REMATCH[1]}; fi
+    done <"${SLOTS_DIR%/}/../host.env"
+  } 2>/dev/null || true
+fi
+SLOT_MAX=${SLOT_MAX:-2}
 need_slots=1
 [ "$SUITE" != multi-cluster ] || need_slots=2
 

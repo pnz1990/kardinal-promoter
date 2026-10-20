@@ -700,12 +700,26 @@ func TestMachineSlots_AboveSlotMaxCount(t *testing.T) {
 	assert.False(t, ok, "slot 3 and two more would be three")
 	assert.NoDirExists(t, filepath.Join(dir, "1"))
 
+	// The host's slots: $SLOT_MAX, else SLOT_MAX=N in DIR/../host.env,
+	// else 2; -slot-max over all.
+	host := t.TempDir()
+	slots := filepath.Join(host, "slots")
 	t.Setenv("SLOT_MAX", "")
-	assert.Equal(t, 2, slotMaxDefault(), "the host's default, as local-live.sh's")
-	t.Setenv("SLOT_MAX", "3")
-	assert.Equal(t, 3, slotMaxDefault())
+	assert.Equal(t, 2, slotMaxDefault(slots), "the host's default, as local-live.sh's")
+	assert.Equal(t, 2, slotMaxDefault(""))
+	require.NoError(t, os.WriteFile(filepath.Join(host, "host.env"), []byte("# the host's capacity\nSLOT_MAX=3\r\n"), 0o644))
+	assert.Equal(t, 3, slotMaxDefault(slots), "host.env")
+	assert.Equal(t, 3, slotMaxDefault(slots+"/"), "a slots directory with a trailing slash")
+	assert.Equal(t, 4, slotMaxOr(4, slots), "-slot-max over host.env")
+	t.Setenv("SLOT_MAX", "5")
+	assert.Equal(t, 5, slotMaxDefault(slots), "$SLOT_MAX over host.env")
 	t.Setenv("SLOT_MAX", "zero")
-	assert.Equal(t, 2, slotMaxDefault())
+	assert.Equal(t, 3, slotMaxDefault(slots))
+	t.Setenv("SLOT_MAX", "")
+	for _, bad := range []string{"SLOT_MAX=0\n", "SLOT_MAX=03\n", "SLOT_MAX=three\n", "slot_max=3\n"} {
+		require.NoError(t, os.WriteFile(filepath.Join(host, "host.env"), []byte(bad), 0o644))
+		assert.Equal(t, 2, slotMaxDefault(slots), "%q", bad)
+	}
 }
 
 // TestDrainLive (#2244 QA): a .drain record is judged by local-live.sh's

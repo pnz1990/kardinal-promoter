@@ -756,6 +756,28 @@ exec `+realCat+` "$@"
 		assert.NotContains(t, string(out), "reclaimed cluster slot "+filepath.Join(h.slots, "1"))
 		assert.Contains(t, string(out), "reclaimed cluster slot "+filepath.Join(h.slots, "2"), "the pid that is gone does not")
 	})
+	t.Run("SLOT_MAX: $SLOT_MAX, else the host's host.env next to the slots, else 2", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		dry := func(env ...string) string {
+			out, err := h.cmd(t, env, "-n", "gitea").CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			return string(out)
+		}
+		assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..2\n", "no host.env: 2")
+		hostEnv := filepath.Join(filepath.Dir(h.slots), "host.env")
+		require.NoError(t, os.WriteFile(hostEnv, []byte("# the host's capacity\nSLOT_MAX=3\r\n"), 0o644))
+		assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..3\n", "host.env")
+		assert.Contains(t, dry("SLOT_MAX=5"), "slots    1 of "+h.slots+"/1..5\n", "$SLOT_MAX over host.env")
+		for _, bad := range []string{"SLOT_MAX=0\n", "SLOT_MAX=03\n", "SLOT_MAX=three\n"} {
+			require.NoError(t, os.WriteFile(hostEnv, []byte(bad), 0o644))
+			assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..2\n", "%q", bad)
+		}
+		if os.Geteuid() != 0 {
+			require.NoError(t, os.WriteFile(hostEnv, []byte("SLOT_MAX=3\n"), 0o644))
+			require.NoError(t, os.Chmod(hostEnv, 0o000))
+			assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..2\n", "a host.env that cannot be read: the fewest")
+		}
+	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)
 		for _, n := range []string{"1", "2", "3", "4"} {
