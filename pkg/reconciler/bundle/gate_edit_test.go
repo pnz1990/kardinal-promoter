@@ -556,6 +556,7 @@ func TestRenderVersion_UpgradeRecordsRuleChange(t *testing.T) {
 	cab := gateTemplate("cab", "prod", false)
 	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
 	window := gateTemplate("window", "prod", false)
+	window.Generation = 4 // the fake client sets none
 	g := newGateEditRig(t, gateEditPipeline(), cab, window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
 	lcReconcile(t, g.r, "app-v1")
 	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
@@ -599,9 +600,10 @@ func TestRenderVersion_UpgradeRecordsRuleChange(t *testing.T) {
 	require.Len(t, got, 1, "one record for the re-render")
 	var current kardinalv1alpha1.PolicyGate
 	require.NoError(t, g.c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "window"}, &current))
+	require.Equal(t, int64(4), current.Generation)
 	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
 		{Template: "gone", Namespace: "default"},
-		{Template: "window", Namespace: "default", NewDigest: graph.TemplateDigest(current), NewGeneration: current.Generation},
+		{Template: "window", Namespace: "default", NewDigest: graph.TemplateDigest(current), NewGeneration: 4},
 	}, got[0].Gates)
 	assert.Equal(t, "*", got[0].Environment, "window applies to prod, a deleted template to no environment: the record names several")
 	assert.Contains(t, got[0].Message, "on upgrade")
@@ -611,4 +613,98 @@ func TestRenderVersion_UpgradeRecordsRuleChange(t *testing.T) {
 
 	lcReconcile(t, g.r, "app-v1")
 	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
+
+// renderOlder rewrites Bundle b's Graph to what an earlier controller left:
+// the render-version label set to label ("" removes it), and edit applied to
+// each PolicyGateData template entry.
+func (g *gateEditRig) renderOlder(t *testing.T, b, label string, edit func(tmpl map[string]interface{})) {
+	t.Helper()
+	ctx := context.Background()
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", b)
+	u, err := gvr.Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+	for _, n := range nodes {
+		node := n.(map[string]interface{})
+		if node["id"] != graph.NodePolicyGateData {
+			continue
+		}
+		for _, raw := range node["def"].(map[string]interface{})["templates"].([]interface{}) {
+			edit(raw.(map[string]interface{}))
+		}
+	}
+	require.NoError(t, unstructured.SetNestedSlice(u.Object, nodes, "spec", "nodes"))
+	labels := u.GetLabels()
+	if label == "" {
+		delete(labels, graph.LabelRenderVersion)
+	} else {
+		labels[graph.LabelRenderVersion] = label
+	}
+	u.SetLabels(labels)
+	_, err = gvr.Update(ctx, u, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
+// #2271: a template created under v0.12 after the version started reaches
+// it at the upgrade: one record says it now applies, in its environment,
+// with no stamp before. The Bundle is as v0.12 leaves a Promoting one (no
+// gates hash), so the render-version re-render, not a gate-change rebuild,
+// applies it.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_UpgradeRecordsCreatedTemplate(t *testing.T) {
+	ctx := context.Background()
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	g := newGateEditRig(t, gateEditPipeline(), cab, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	g.renderOlder(t, "app-v1", "", func(tmpl map[string]interface{}) {
+		delete(tmpl, "digest")
+		delete(tmpl, "generation")
+		delete(tmpl, "uid")
+	})
+	b := lcGet(t, g.c, "app-v1")
+	b.Status.PolicyGatesHash = ""
+	require.NoError(t, g.c.Status().Update(ctx, &b))
+	late := gateTemplate("late", "prod", false)
+	late.Generation = 3
+	require.NoError(t, g.c.Create(ctx, late))
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "late", Namespace: "default", NewDigest: graph.TemplateDigest(*late), NewGeneration: 3},
+	}, got[0].Gates)
+	assert.Equal(t, "prod", got[0].Environment)
+	assert.Contains(t, got[0].Message, "on upgrade")
+	assert.Contains(t, got[0].Message, "default/late now applies (generation 3)")
+}
+
+// #2271: at a later RenderVersion bump the copies carry a stamp: the record
+// names it as the one before, and the template's as the one after.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_UpgradeRecordsOldStamp(t *testing.T) {
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4
+	g := newGateEditRig(t, gateEditPipeline(), window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	g.renderOlder(t, "app-v1", strconv.Itoa(graph.RenderVersion-1), func(tmpl map[string]interface{}) {
+		tmpl["digest"], tmpl["generation"] = "sha256:old", "2"
+		tmpl["spec"].(map[string]interface{})["expression"] = "false"
+	})
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "window", Namespace: "default", OldDigest: "sha256:old", OldGeneration: 2, NewDigest: graph.TemplateDigest(*window), NewGeneration: 4},
+	}, got[0].Gates)
+	assert.Equal(t, "prod", got[0].Environment)
+	assert.Contains(t, got[0].Message, "default/window takes its current rule (generation 4)")
 }
