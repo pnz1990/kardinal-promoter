@@ -550,6 +550,12 @@ func TestCountingLock_OlderClientsAreLeftAlone(t *testing.T) {
 	assert.ErrorIs(t, writeView(dir), errOlderHolder)
 	assert.NoFileExists(t, filepath.Join(dir, viewMarker), "the older client's LOCK is not made a view")
 	assert.Equal(t, "older pid 2 now\n", readOwner(t, dir), "nor its owner overwritten")
+
+	// With no slot held, writeView removes LOCK only when it is the view:
+	// an older client's LOCK made after holders() looked stays.
+	require.NoError(t, os.RemoveAll(slotsDir(dir)))
+	assert.ErrorIs(t, writeView(dir), errOlderHolder)
+	assert.Equal(t, "older pid 2 now\n", readOwner(t, dir), "an older client's LOCK is never removed")
 }
 
 func readOwner(t *testing.T, dir string) string {
