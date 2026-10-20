@@ -10,6 +10,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- changelog.d: the unreleased entries are the files in docs/changelog.d (CONTRIBUTING.md, Changelog) -->
 
+## [v0.12.3] — 2026-10-20
+
+A patch release of v0.12.2 with one fix: a verify gate, or an approval gate that only reads
+`approvals.*`, was never created next to a gate with an approval policy, so the environment
+waited for ever (#2271). It changes no CRD, value or admission policy. Upgrade the chart in place
+with `--version 0.12.3` (and the CLI with it), following
+[Upgrading from v0.12.2](upgrade.md#upgrading-from-v0122); from v0.11.0, follow
+[Upgrading from v0.11.0](upgrade.md#upgrading-from-v0110) with `--version 0.12.3`.
+
+### Fixed
+
+- **A verify gate, or an approval gate that only reads `approvals.*`, works next to a gate with an approval policy** (#2271): in a version's Graph that also held a gate with `spec.approval`, such a gate's instance was refused by the API server (`spec.approval` rendered as null) and never created, so the environment waited for ever. This covered, for example, an agent verifier on an environment where kardinal adds its approval gate for agents' versions. Each gate collection of the Graph now renders `spec.approval` for all its gates or for none ([Agents as verifiers](agentic/verify-with-agents.md)). A version already stuck recovers when you upgrade: the controller re-translates each promoting version's Graph once, which changes nothing for a Graph that was working. On a kro install that runs with its alpha `CELOmitFunction` feature gate, where these mixed Graphs worked, the gates of such a Graph are deleted and created again once as they move to their new collections.
+
 ## [v0.12.2] — 2026-10-19
 
 A patch release of v0.12.1 with one security fix, in two parts: Bundles carrying forged rollback

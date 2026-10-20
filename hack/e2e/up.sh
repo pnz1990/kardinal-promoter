@@ -45,8 +45,9 @@
 #           release in flight, and follows "Upgrading from v0.12.1"; one run
 #           per cluster too
 #   upgrade-v0122  the same from kardinal-promoter v0.12.2 as released
-#           (kardinal-v0122.sh), following "Upgrading from v0.12.2"; one run
-#           per cluster too
+#           (kardinal-v0122.sh), plus a version v0.12.2 never creates a
+#           verify gate for (#2271), following "Upgrading from v0.12.2"; one
+#           run per cluster too
 #   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
 #           blocks of the getting-started and how-to pages in order
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,

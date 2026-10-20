@@ -45,12 +45,16 @@ const guideChartV0120 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --versio
 // the chart reference its "Upgrading from" guide names. extra, when set,
 // is a case of the suite's own: it runs before the estate's versions start,
 // under the release, and returns the checks to make after the upgrade, once
-// the held gates are checked.
+// the held gates are checked. kroExpected, when set, names the kro error
+// lines from the upgrade on that the suite's own case expects (text, and
+// the kubelet's time of the line): an error kro logs until the new
+// controller has rendered a Graph again.
 type u012From struct {
-	pins       string
-	cli        func(e *framework.Env, t *testing.T, ns string, args ...string) (string, error)
-	guideChart string
-	extra      func(t *testing.T, e *framework.Env, from u012From) (after func())
+	pins        string
+	cli         func(e *framework.Env, t *testing.T, ns string, args ...string) (string, error)
+	guideChart  string
+	extra       func(t *testing.T, e *framework.Env, from u012From) (after func())
+	kroExpected func(text string, at time.Time) bool
 }
 
 // u012Pins is the release from installs: its chart version ("0.12.0"),
@@ -264,8 +268,8 @@ var kroLevel = regexp.MustCompile(`^\S+\t([A-Z]+)\t`)
 // whole log: kro logs its start at info and little after it, so none means
 // another format, which the check cannot read. errs are the lines at error
 // level or above written from since on, but the benign ones
-// (invariants.Benign).
-func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, errs []string) {
+// (invariants.Benign) and those expected says it expects (nil: none).
+func kroErrors(t *testing.T, e *framework.Env, since time.Time, expected func(text string, at time.Time) bool) (leveled int, errs []string) {
 	t.Helper()
 	ctx := context.Background()
 	var pods corev1.PodList
@@ -288,7 +292,8 @@ func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, er
 				leveled++
 				at, err := time.Parse(time.RFC3339Nano, ts)
 				require.NoError(t, err, "kubelet timestamp of %q", l)
-				if at.Before(since) || !slices.Contains([]string{"ERROR", "DPANIC", "PANIC", "FATAL"}, m[1]) {
+				if at.Before(since) || !slices.Contains([]string{"ERROR", "DPANIC", "PANIC", "FATAL"}, m[1]) ||
+					(expected != nil && expected(text, at)) {
 					continue
 				}
 				for _, re := range invariants.Benign {
@@ -907,7 +912,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 		SeedTag: scale.SeedTag, Start: testStart, AllowEmpty: false, Logs: logs,
 		Skip: map[string]string{"env-content": "the rollbacks restore older versions on purpose; their content is checked above"}})
 	logs.Stop()
-	leveled, kroErrs := kroErrors(t, e, upgradeStart)
+	leveled, kroErrs := kroErrors(t, e, upgradeStart, from.kroExpected)
 	t.Logf("kro: %d log lines with a level", leveled)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")
 	assert.Empty(t, kroErrs, "kro logged no error from the upgrade on")

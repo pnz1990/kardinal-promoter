@@ -701,6 +701,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 
 	gates := newGateCollections(pipelineName, bundle.Name)
 	gates.approvals = anyNeedsApprovals(gatesByEnv)
+	gates.approvalPolicies = anyApprovalPolicy(gatesByEnv)
 	agentRuns := newAgentRunPlan()
 	var prItems []interface{}
 	var compactSteps []compactStep
@@ -1166,6 +1167,7 @@ func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 			Labels: map[string]string{
 				"kardinal.io/pipeline": pipeline.Name,
 				"kardinal.io/bundle":   bundle.Name,
+				LabelRenderVersion:     strconv.Itoa(RenderVersion),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{

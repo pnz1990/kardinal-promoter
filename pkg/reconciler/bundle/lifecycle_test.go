@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,10 +128,13 @@ type existsChecker struct{}
 func (existsChecker) GraphExists(_ context.Context, _, _ string) (bool, error) { return true, nil }
 
 // graphStatusReader is a GraphChecker that also returns the Graph with status,
-// like *graph.GraphClient.
+// like *graph.GraphClient. The Graph is one this controller rendered (it
+// carries graph.LabelRenderVersion) unless earlier is set: a Graph an
+// earlier controller rendered, which a Promoting Bundle re-translates once.
 type graphStatusReader struct {
-	g    *graph.Graph
-	gets int
+	g       *graph.Graph
+	gets    int
+	earlier bool
 }
 
 func (m *graphStatusReader) GraphExists(_ context.Context, _, _ string) (bool, error) {
@@ -142,7 +146,45 @@ func (m *graphStatusReader) Get(_ context.Context, _, name string) (*graph.Graph
 	if m.g == nil {
 		return nil, fmt.Errorf("get graph: %w", apierrors.NewNotFound(schema.GroupResource{Group: "kro.run", Resource: "graphs"}, name))
 	}
+	if !m.earlier {
+		if m.g.Labels == nil {
+			m.g.Labels = map[string]string{}
+		}
+		m.g.Labels[graph.LabelRenderVersion] = strconv.Itoa(graph.RenderVersion)
+	}
 	return m.g, nil
+}
+
+// #2271: a Promoting Bundle whose Graph an earlier controller rendered (no
+// render version label) is re-translated once; a Verified or a failed
+// Bundle's Graph is never re-translated for it, and a Graph this controller
+// rendered is not.
+func TestRenderVersion_OnlyPromotingRetranslates(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		phase   string
+		earlier bool
+		want    int
+	}{
+		{"promoting, earlier rendering", "Promoting", true, 1},
+		{"promoting, current rendering", "Promoting", false, 0},
+		{"verified, earlier rendering", "Verified", true, 0},
+		{"failed, earlier rendering", "Failed", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := lcBundle("app-v1", "image", tc.phase, time.Now().UTC())
+			b.Status.GraphRef = "app-app-v1"
+			if tc.phase == "Failed" {
+				meta.SetStatusCondition(&b.Status.Conditions, metav1.Condition{Type: "Failed", Status: metav1.ConditionTrue, Reason: "StepFailed"})
+			}
+			c := lcClient(lcPipeline("app", lcEnvs("test")...), b)
+			tr := &countingTranslator{}
+			r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: &graphStatusReader{earlier: tc.earlier,
+				g: &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: "app-app-v1", Namespace: "default"}}}}
+			lcReconcile(t, r, "app-v1")
+			assert.Equal(t, tc.want, tr.calls)
+		})
+	}
 }
 
 // --- phase derivation ---
