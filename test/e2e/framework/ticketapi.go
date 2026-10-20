@@ -64,7 +64,11 @@ type FakeTicketRequest struct {
 	Path   string    `json:"path"`
 	Query  string    `json:"query"`
 	Auth   string    `json:"auth"`
-	Status int       `json:"status"`
+	// User is the basic-auth user the request carried, accepted or not.
+	User   string `json:"user"`
+	Status int    `json:"status"`
+	// Body is the request body (a create carries the correlation key).
+	Body string `json:"body"`
 }
 
 func (e *Env) ticketControl(ctx context.Context, method string, body interface{}, out interface{}, path ...string) error {
@@ -92,6 +96,18 @@ func (e *Env) ticketControl(ctx context.Context, method string, body interface{}
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// AddFakeTicketUser makes the fake ticketing API accept user with password
+// too, and returns the "user:password" credential a ChangeRequest's Secret
+// holds. Request records name the user (FakeTicketRequest.User), so a test
+// sees whose credential each request carried.
+func (e *Env) AddFakeTicketUser(t *testing.T, user, password string) string {
+	t.Helper()
+	if err := e.ticketControl(context.Background(), "PUT", map[string]string{"password": password}, nil, "users", user); err != nil {
+		t.Fatalf("add the fake ticketing API user %s: %v", user, err)
+	}
+	return user + ":" + password
 }
 
 // FakeSnowTickets returns the fake ServiceNow's change_requests.
