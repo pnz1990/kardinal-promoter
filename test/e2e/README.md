@@ -51,17 +51,22 @@ hack/e2e/local-live.sh -reuse kardinal-e2e-ll-engineer-4-gitea-37 gitea  # from 
 `hack/e2e/matrix.txt` the way its `e2e-live.yml` job does: the pinned kind,
 kubectl and helm, the minor's pinned node image (default the suite's first
 minor in `matrix.txt`), `up.sh`, then `run.sh`. The controller is built on the
-host (`KARDINAL_E2E_BUILD=host`) unless you set another build. It holds the
-host's heavy-load lock (`$LOADLOCK`, through `hack/loadlock.sh`) and a cluster
-slot (`$RELEASE_GATE_SLOTS/1..4`, as `hack/release-gate -slots` takes them)
-for the whole run, refuses to start without them (`-no-lock` on a host of your
-own), and deletes the cluster `kardinal-e2e-ll-<owner>-<suite>-<minor>` (`$AGENT_ID`, or `-o`'s first word) and releases
-both when it ends, however it ends. It prints a pass/fail summary with the
+host (`KARDINAL_E2E_BUILD=host`) unless you set another build. It holds a
+cluster slot (`$RELEASE_GATE_SLOTS/1..4`, as `hack/release-gate -slots` takes
+them) for the whole run, and creates its cluster only while the host's
+one-minute load is under 48 and `fs.inotify.max_user_instances` has room for
+another kind node (it waits, checking every 30s). Only the heavy suites, scale
+and multi-cluster (`HEAVY_SUITES` in the script), also hold the heavy-load lock
+(`$LOADLOCK`, through `hack/loadlock.sh`); an ordinary live suite does not. It
+refuses to start without what it needs (`-no-lock` on a host of your own), and
+deletes the cluster `kardinal-e2e-ll-<owner>-<suite>-<minor>` (`$AGENT_ID`, or
+`-o`'s first word) and releases the slot and the lock when it ends, however it
+ends. It prints a pass/fail summary with the
 commit, node image and tool pins, and `-pr N` posts it on pull request N.
 
 A cluster's state (its kubeconfig, the env file, the git server's and
 Argo CD's generated secrets) is kept in `$KARDINAL_E2E_STATE/<cluster>`
-(default `e2e-state` next to `$LOADLOCK`), not in the worktree that set it
+(default `e2e-state` next to `$LOADLOCK`, or `$RELEASE_GATE_SLOTS`), not in the worktree that set it
 up, so `-reuse <cluster>` from any worktree rebuilds and reinstalls only the
 controller (`up.sh` with `KARDINAL_E2E_REUSE=1`) on a cluster an earlier
 `KEEP=1` run kept, and runs the suite. Each run's log, report and summary are

@@ -8,12 +8,17 @@
 # GitHub's runners are throttled: with -pr N it posts the summary as a
 # comment on pull request N.
 #
-# A shared host: the run takes the heavy-load lock (hack/loadlock.sh, LOCK
-# from $LOADLOCK) and then a cluster slot (DIR/1..SLOT_MAX, taken with
+# A shared host: every run takes a cluster slot (DIR/1..SLOT_MAX, taken with
 # mkdir, as hack/release-gate -slots does; DIR from $RELEASE_GATE_SLOTS;
-# the multi-cluster suite takes two). Both are released, and the cluster
-# (and the multi-cluster suite's spoke) deleted, when the run ends, however
-# it ends. -no-lock runs without either (a host of your own).
+# the multi-cluster suite takes two), and before it creates its cluster waits
+# until the host's one-minute load is under 48 (headroom under the gate's 64
+# for the clusters already running) and fs.inotify.max_user_instances leaves
+# room for another cluster's node. Only the heavy suites (HEAVY_SUITES below)
+# also take the heavy-load lock first (hack/loadlock.sh, LOCK from
+# $LOADLOCK): an ordinary live suite does not need it. All are released, and
+# the cluster (and the multi-cluster suite's spoke) deleted, when the run
+# ends, however it ends. -no-lock runs without the lock, a slot or the gate
+# (a host of your own).
 #
 # A cluster's state (up.sh's E2E_OUT: its kubeconfig, the env file the
 # tests source, the git server's and Argo CD's generated secrets) lives in
@@ -65,6 +70,14 @@
 # Licensed under the Apache License, Version 2.0
 set -euo pipefail
 
+# HEAVY_SUITES take the heavy-load lock as well as a cluster slot: the scale
+# suite (its full and soak profiles too) and multi-cluster's two clusters.
+HEAVY_SUITES="scale multi-cluster"
+# The load gate: a cluster starts only while the one-minute load is under
+# MAX_LOAD, checked every LOAD_RETRY seconds.
+MAX_LOAD=48
+LOAD_RETRY=30
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 E2E_DIR=${LOCAL_LIVE_E2E_DIR:-$REPO_ROOT/hack/e2e}
 SELF="$REPO_ROOT/hack/e2e/local-live.sh"
@@ -102,10 +115,14 @@ SUITE=$1 MINOR=${2:-}
 minors=$(awk -v s="$SUITE" '!/^#/ && $1 == s { print $2 }' "$REPO_ROOT/hack/e2e/matrix.txt" | uniq)
 [ -n "$minors" ] || die "$SUITE is not a suite of hack/e2e/matrix.txt"
 LOCK=${LOADLOCK:-}
+heavy=''
+[[ " $HEAVY_SUITES " == *" $SUITE "* ]] && heavy=1
 if [ -n "${KARDINAL_E2E_STATE:-}" ]; then
   STATE=$KARDINAL_E2E_STATE
 elif [ -z "$nolock" ] && [ -n "$LOCK" ]; then
   STATE=$(dirname "$LOCK")/e2e-state
+elif [ -z "$nolock" ] && [ -n "${RELEASE_GATE_SLOTS:-}" ]; then
+  STATE=$(dirname "$RELEASE_GATE_SLOTS")/e2e-state
 else
   STATE=$REPO_ROOT/test/e2e/results
 fi
@@ -141,12 +158,13 @@ need_slots=1
 [ "$SUITE" != multi-cluster ] || need_slots=2
 
 if [ -z "$nolock" ]; then
-  [ -n "$LOCK" ] || die "LOADLOCK is not set: the host's heavy-load lock (or -no-lock on a host of your own)"
+  [ -z "$heavy" ] || [ -n "$LOCK" ] || die "LOADLOCK is not set: the heavy-load lock the $SUITE suite takes (or -no-lock on a host of your own)"
   [ -n "$SLOTS_DIR" ] || die "RELEASE_GATE_SLOTS is not set: the host's cluster slots directory (or -no-lock on a host of your own)"
 fi
 
 if [ -n "$dry" ]; then
   lock_d="$LOCK" slots_d="$need_slots of $SLOTS_DIR/1..$SLOT_MAX" pr_d=none
+  [ -n "$heavy" ] || lock_d="none (not a heavy suite)"
   [ -z "$nolock" ] || lock_d=none slots_d=none
   [ -z "$pr" ] || pr_d="pull request $pr"
   cat <<EOF
@@ -163,8 +181,9 @@ EOF
   exit 0
 fi
 
-# Take the lock first, by running this script again under hack/loadlock.sh.
-if [ -z "$nolock" ] && [ -z "${_LOCAL_LIVE_LOCKED:-}" ]; then
+# A heavy suite takes the lock first, by running this script again under
+# hack/loadlock.sh.
+if [ -z "$nolock" ] && [ -n "$heavy" ] && [ -z "${_LOCAL_LIVE_LOCKED:-}" ]; then
   exec bash "$REPO_ROOT/hack/loadlock.sh" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" -r "$RETRY" -- \
     env _LOCAL_LIVE_LOCKED=1 bash "$SELF" "${ARGS[@]}"
 fi
@@ -222,6 +241,40 @@ take_slots() {
   done
 }
 
+# room says why another cluster may not start now, or nothing when it may:
+# the one-minute load is at MAX_LOAD or more, or fs.inotify.max_user_instances
+# is under 128 per kind node running and the one to come (kind nodes hang at
+# boot without them). LOCAL_LIVE_TEST=1 lets tests set the load and the
+# limit (LOCAL_LIVE_TEST_LOAD, LOCAL_LIVE_TEST_INOTIFY).
+room() {
+  local load max nodes
+  load=$(cut -d' ' -f1 /proc/loadavg)
+  max=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || echo 0)
+  if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
+    load=${LOCAL_LIVE_TEST_LOAD:-$load}
+    max=${LOCAL_LIVE_TEST_INOTIFY:-$max}
+  fi
+  nodes=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c -- '-control-plane$' || true)
+  if ! awk -v l="$load" -v m="$MAX_LOAD" 'BEGIN { exit !(l < m) }'; then
+    echo "the one-minute load is $load, not under $MAX_LOAD"
+  elif [ "$max" -lt $((128 * (nodes + need_slots))) ]; then
+    echo "fs.inotify.max_user_instances is $max, under 128 for each of $nodes kind nodes and $need_slots more (sudo sysctl -w fs.inotify.max_user_instances=8192)"
+  fi
+}
+
+# wait_for_room waits until another cluster may start.
+wait_for_room() {
+  local why said=
+  while why=$(room) && [ -n "$why" ]; do
+    [ "$why" = "$said" ] || log "waiting to create $KIND_CLUSTER: $why; checking every ${LOAD_RETRY}s"
+    said=$why
+    sleep "$LOAD_RETRY" &
+    napping=$!
+    wait "$napping" || true
+    napping=''
+  done
+}
+
 # forget_state drops a deleted cluster's state but its runs' logs: its
 # kubeconfig, env file and generated credentials are of no use any more.
 forget_state() {
@@ -249,6 +302,7 @@ suite_pid=''
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
+  [ -z "${napping:-}" ] || kill "$napping" 2>/dev/null || true
   if [ -n "$suite_pid" ] && kill -0 "$suite_pid" 2>/dev/null; then
     kill -TERM -- "-$suite_pid" 2>/dev/null || kill -TERM "$suite_pid" 2>/dev/null || true
     wait "$suite_pid" 2>/dev/null || true
@@ -278,6 +332,7 @@ else
       die "kind cluster $c exists: another run's, or a KEEP run's (reuse it with -reuse $KIND_CLUSTER); delete it, or set KIND_CLUSTER"
     fi
   done
+  [ -n "$nolock" ] || wait_for_room
   # A deleted cluster's leftover state would point up.sh at its old secrets.
   forget_state
   echo "$MINOR" >"$E2E_OUT/minor"
