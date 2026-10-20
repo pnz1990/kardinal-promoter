@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
 )
 
 // TestMCP_ConcurrentNamespaces: two agents' calls at once, one per
@@ -226,4 +229,37 @@ func TestMCP_PanicEndsOneCall(t *testing.T) {
 	assert.Contains(t, log.String(), "goroutine", "the stack in the log")
 	_, body := call(t, cs, "status", map[string]any{"pipeline": "app"})
 	assert.Contains(t, fmt.Sprint(body), "app", "the server goes on serving")
+}
+
+// TestMCPProcess: what kardinal mcp sets when it starts, for every call:
+// JSON output, no colour, warnings discarded, and no .kardinal.yaml.
+func TestMCPProcess(t *testing.T) {
+	setForTest(t, &globalOutput, "")
+	setForTest(t, &errOut, io.Writer(os.Stderr))
+	setForTest(t, &ignoreRepoFile, false)
+	keepStyle(t)
+	mcpProcess()
+	assert.Equal(t, "json", globalOutput)
+	assert.Equal(t, style.Plain(), sty)
+	assert.Equal(t, io.Discard, errOut)
+	assert.True(t, ignoreRepoFile)
+}
+
+// TestNoticeDefault_Concurrent (#2230): kardinal mcp builds a client per
+// call, and the namespace default's notice is said once whatever the
+// number of calls at once (go test -race).
+func TestNoticeDefault_Concurrent(t *testing.T) {
+	setForTest(t, &noticed, map[string]bool{})
+	var buf lockedBuffer
+	setForTest(t, &errOut, io.Writer(&buf))
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			noticeDefault("namespace", "team-a", "KARDINAL_NAMESPACE")
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, "using namespace team-a (from KARDINAL_NAMESPACE)\n", buf.String())
 }
