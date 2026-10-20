@@ -1873,6 +1873,22 @@ spec:
                           type: string
                         maxItems: 50
                         type: array
+                      authorities:
+                        description: |-
+                          Authorities, when set, has kardinal verify the commit's gitsign
+                          (Sigstore) signature itself instead of asking the SCM: they name
+                          keyless spec.imageVerification.authorities, and the commit verifies
+                          when its signature verifies against one of them. The signed payload
+                          is read from the SCM API (GitHub, Forgejo, Gitea), the commit SHA is
+                          recomputed from it, and the Rekor entry embedded in the signature is
+                          checked offline against the authority's trusted root. A GPG or SSH
+                          signature is then refused, and allowedSigners does not apply. See
+                          docs/image-verification.md#commit-signatures-with-gitsign.
+                        items:
+                          maxLength: 63
+                          type: string
+                        maxItems: 10
+                        type: array
                       requireSigned:
                         description: |-
                           RequireSigned requires the config Bundle's commit to be signed with a
@@ -1933,6 +1949,10 @@ spec:
                 - message: set authorities, commits.requireSigned, or both
                   rule: (has(self.authorities) && size(self.authorities) > 0) || (has(self.commits)
                     && self.commits.requireSigned)
+                - message: commits.authorities must name keyless spec.imageVerification.authorities
+                  rule: '!has(self.commits) || !has(self.commits.authorities) || self.commits.authorities.all(n,
+                    has(self.authorities) && self.authorities.exists(x, x.name ==
+                    n && has(x.keyless)))'
                 - message: an attestation's authorities and vex.authorities must name
                     spec.imageVerification.authorities
                   rule: '!has(self.attestations) || self.attestations.all(a, a.authorities.all(n,

@@ -20,6 +20,7 @@ const (
 // promoted into its first environments until the ImageVerification of its
 // Graph is Verified. See docs/image-verification.md.
 // +kubebuilder:validation:XValidation:rule="(has(self.authorities) && size(self.authorities) > 0) || (has(self.commits) && self.commits.requireSigned)",message="set authorities, commits.requireSigned, or both"
+// +kubebuilder:validation:XValidation:rule="!has(self.commits) || !has(self.commits.authorities) || self.commits.authorities.all(n, has(self.authorities) && self.authorities.exists(x, x.name == n && has(x.keyless)))",message="commits.authorities must name keyless spec.imageVerification.authorities"
 // +kubebuilder:validation:XValidation:rule="!has(self.attestations) || self.attestations.all(a, a.authorities.all(n, has(self.authorities) && self.authorities.exists(x, x.name == n)) && (!has(a.vex) || a.vex.authorities.all(n, has(self.authorities) && self.authorities.exists(x, x.name == n))))",message="an attestation's authorities and vex.authorities must name spec.imageVerification.authorities"
 type ImageVerificationPolicy struct {
 	// Images selects the Bundle images to verify by repository, with "*"
@@ -249,6 +250,20 @@ type CommitSignaturePolicy struct {
 	// +kubebuilder:validation:MaxItems=50
 	// +optional
 	AllowedSigners []string `json:"allowedSigners,omitempty"`
+
+	// Authorities, when set, has kardinal verify the commit's gitsign
+	// (Sigstore) signature itself instead of asking the SCM: they name
+	// keyless spec.imageVerification.authorities, and the commit verifies
+	// when its signature verifies against one of them. The signed payload
+	// is read from the SCM API (GitHub, Forgejo, Gitea), the commit SHA is
+	// recomputed from it, and the Rekor entry embedded in the signature is
+	// checked offline against the authority's trusted root. A GPG or SSH
+	// signature is then refused, and allowedSigners does not apply. See
+	// docs/image-verification.md#commit-signatures-with-gitsign.
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:MaxLength=63
+	// +optional
+	Authorities []string `json:"authorities,omitempty"`
 }
 
 // LocalObjectName names an object in the same namespace.
@@ -333,12 +348,31 @@ type ImageVerificationResult struct {
 
 // CommitVerificationResult is the result for the config commit.
 type CommitVerificationResult struct {
-	// Verified is true when the SCM verified the commit's signature.
+	// Verified is true when the commit's signature verified.
 	Verified bool `json:"verified"`
-	// Signer is who signed, as the SCM reports it.
+	// Method is how: "scm" (the SCM verified it) or "gitsign" (kardinal
+	// verified a Sigstore signature against commits.authorities).
+	// +kubebuilder:validation:Enum=scm;gitsign
+	// +optional
+	Method string `json:"method,omitempty"`
+	// Signer is who signed: as the SCM reports it, or the certificate
+	// identity (SAN) for gitsign.
 	// +optional
 	Signer string `json:"signer,omitempty"`
-	// Message is the SCM's reason when not verified.
+	// Issuer is the OIDC issuer of the signing certificate (gitsign).
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Issuer string `json:"issuer,omitempty"`
+	// Authority is the commits.authorities entry that verified it (gitsign).
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Authority string `json:"authority,omitempty"`
+	// Agent is the ready AgentIdentity whose spec.signingIdentities match
+	// the signer, when exactly one does (gitsign); empty otherwise.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Agent string `json:"agent,omitempty"`
+	// Message is the reason when not verified, or a note.
 	// +optional
 	Message string `json:"message,omitempty"`
 }
@@ -364,6 +398,11 @@ type AttestationResult struct {
 	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	Signer string `json:"signer,omitempty"`
+	// Agent is the ready AgentIdentity whose spec.signingIdentities match
+	// the signing certificate, when exactly one does; empty otherwise.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Agent string `json:"agent,omitempty"`
 	// Digest is the sha256 of the verified DSSE payload.
 	// +kubebuilder:validation:MaxLength=80
 	// +optional

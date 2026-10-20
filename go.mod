@@ -17,12 +17,14 @@ require (
 	github.com/aws/smithy-go v1.28.4
 	github.com/bmatcuk/doublestar/v4 v4.10.2
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467
+	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7
 	github.com/go-git/go-billy/v5 v5.9.2
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-logr/logr v1.4.4
 	github.com/go-openapi/runtime v0.33.0
 	github.com/go-openapi/strfmt v0.27.0
+	github.com/go-openapi/swag/conv v0.28.0
 	github.com/google/cel-go v0.31.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/mattn/go-isatty v0.0.24
@@ -110,7 +112,6 @@ require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
 	github.com/docker/cli v29.7.2+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
@@ -133,7 +134,6 @@ require (
 	github.com/go-openapi/spec v0.22.9 // indirect
 	github.com/go-openapi/swag v0.28.0 // indirect
 	github.com/go-openapi/swag/cmdutils v0.28.0 // indirect
-	github.com/go-openapi/swag/conv v0.28.0 // indirect
 	github.com/go-openapi/swag/fileutils v0.28.0 // indirect
 	github.com/go-openapi/swag/jsonutils v0.28.0 // indirect
 	github.com/go-openapi/swag/loading v0.28.0 // indirect

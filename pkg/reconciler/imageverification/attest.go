@@ -49,10 +49,10 @@ const (
 // it, when (its verified timestamp; zero when it has none), its place in
 // the referrers, and its statement's predicate as canonical JSON.
 type verifiedStatement struct {
-	authority, signer, payloadDigest string
-	at                               time.Time
-	index                            int
-	predicate                        []byte
+	authority, signer, issuer, payloadDigest string
+	at                                       time.Time
+	index                                    int
+	predicate                                []byte
 }
 
 // verifyStatements verifies bundles for the image digest against auths and
@@ -86,7 +86,7 @@ func verifyStatements(digest string, bundles [][]byte, predicateType string, aut
 				// Another attestation (or the signature): not a reason.
 				break
 			}
-			vs := verifiedStatement{authority: a.name, signer: signer, index: i}
+			vs := verifiedStatement{authority: a.name, signer: signer, issuer: certIssuer(res), index: i}
 			for _, ts := range res.VerifiedTimestamps {
 				if ts.Timestamp.After(vs.at) {
 					vs.at = ts.Timestamp
@@ -149,8 +149,10 @@ func namedAuthorities(auths []authority, names []string) []authority {
 
 // evaluateAttestation is the result of policy p for image img, from the
 // bundles its referrers hold: the newest verified attestation of the type,
-// with its SLSA level and vulnerability counts when the policy asks.
-func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolicy, bundles [][]byte, auths []authority) v1alpha1.AttestationResult {
+// with its SLSA level and vulnerability counts when the policy asks, and
+// the agent of agents its signer maps to.
+func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolicy, bundles [][]byte, auths []authority,
+	agents []v1alpha1.AgentIdentity) v1alpha1.AttestationResult {
 	res := v1alpha1.AttestationResult{Name: p.Name, Image: img.Repository + "@" + img.Digest, PredicateType: p.PredicateType}
 	pa := namedAuthorities(auths, p.Authorities)
 	found, reasons := verifyStatements(img.Digest, bundles, p.PredicateType, pa)
@@ -165,6 +167,11 @@ func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolic
 		res.Predicate, res.PredicateOmitted = "", "64 KiB"
 	}
 	var notes []string
+	agent, note := signingAgent(agents, newest.issuer, newest.signer)
+	res.Agent = agent
+	if note != "" {
+		notes = append(notes, note)
+	}
 	if p.SLSA != nil {
 		slsa, note := slsaResult(img, p, newest.predicate, bundles, pa)
 		res.SLSA = slsa

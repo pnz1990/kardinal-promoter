@@ -59,6 +59,7 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
 | `authorities[].keyless.trustedRootRef` | public good | `{name, key}`: a Secret with a Sigstore `trusted_root.json`, for a private Sigstore. Without it the controller fetches the public-good trusted root through TUF (from `tuf-repo-cdn.sigstore.dev`) on first use and again once a day; a failed refresh keeps the previous root and is retried after 5 minutes. Each TUF request times out after 20s; a request answered 5xx or 429, or that fails in transport, is tried up to 3 times, a 404 ends it at once, and a whole fetch of the root takes at most 2 minutes. |
 | `commits.requireSigned` | `false` | A config or mixed version's `configRef.commitSHA` must be signed with a signature the SCM verified (GitHub, GitLab, Forgejo and Gitea report it; Bitbucket and Azure DevOps do not, and such a version fails). See [Signed commits](#signed-commits). |
 | `commits.allowedSigners[]` | any person | Also require the signer to be one of these SCM logins or emails. Platform signatures (`web-flow`, `gitlab-system`, `forgejo-instance`) are accepted only when listed. |
+| `commits.authorities[]` | | Names of keyless `authorities`: kardinal verifies the commit's gitsign (Sigstore) signature itself against them, instead of asking the SCM. GPG and SSH signatures are then refused, and `allowedSigners` does not apply. GitHub, Forgejo and Gitea only. See [Commit signatures with gitsign](#commit-signatures-with-gitsign). |
 | `signatureRepository` | next to the image | Where the signatures are, when they are not next to the images (cosign's `COSIGN_REPOSITORY`). |
 | `registrySecretRef.name` | anonymous | A `kubernetes.io/dockerconfigjson` Secret in the Pipeline namespace for private registries. |
 | `insecureRegistries[]` | | Registry hosts read over plain HTTP. Every other registry is HTTPS only. |
@@ -290,6 +291,56 @@ To accept PRs merged in the web UI (the usual GitOps flow), list the identity, f
 `allowedSigners: [web-flow, alice, bob@example.com]`. Anyone who can merge through the web UI then
 gets such a commit, so pair it with branch protection that requires reviews.
 
+### Commit signatures with gitsign
+
+An SCM verifies a signature against a key one of its users registered, so it cannot verify a
+[gitsign](https://github.com/sigstore/gitsign) signature: a short-lived Fulcio certificate for a
+workload identity (a CI job, an agent's runner) with its Rekor entry embedded. With
+`commits.authorities`, kardinal verifies those itself:
+
+```yaml
+imageVerification:
+  authorities:
+    - name: agents
+      keyless:
+        issuer: https://token.actions.githubusercontent.com
+        subjectRegExp: https://github\.com/myorg/agents/\.github/workflows/.+@refs/heads/main
+  commits:
+    requireSigned: true
+    authorities: [agents]
+```
+
+1. The signed payload and the signature are read from the SCM API: GitHub
+   `GET /repos/{repo}/git/commits/{sha}`, Forgejo and Gitea
+   `GET /api/v1/repos/{owner}/{name}/git/commits/{sha}`. Another provider fails the version
+   (GitLab's API returns no payload).
+2. The commit SHA is recomputed from payload and signature, as git hashes the commit, and must
+   be `configRef.commitSHA`: the SCM cannot answer for another commit.
+3. The CMS signature must be over that payload, by the certificate it carries.
+4. The certificate, the signature and the embedded Rekor entry are verified offline, as for a
+   keyless image: the certificate chains to the authority's Fulcio root and was valid at the
+   Rekor entry's time, the entry's inclusion proof or signed timestamp verifies against the
+   Rekor keys of the trusted root (public good, or `trustedRootRef`), and the certificate's
+   issuer and subject match the authority.
+
+A signature without an embedded Rekor entry (gitsign's online mode, before v0.8) is refused, as
+is a GPG or SSH one. A signature that does not verify fails the version at once: a commit's
+signature does not change. An SCM that cannot be reached, or an authority that cannot be loaded
+yet, is retried until the policy's timeout.
+
+`status.commit` records `method: gitsign`, the `signer` (certificate subject), `issuer`,
+`authority`, and the `agent`: the [AgentIdentity](actors.md#signing-identities) whose
+`signingIdentities` match the signer, when exactly one ready, unsuspended AgentIdentity does.
+A gate reads them as [`commit.*`](reference/cel-context.md#commit), for example to require that
+an agent's version was signed by that agent's own workload:
+
+```yaml
+expression: 'actor.kind != "agent" || (commit.verified && commit.agent == actor.agent)'
+```
+
+The same mapping applies to a keyless attestation's signer
+([`attestations.<name>.agent`](reference/cel-context.md#attestations)).
+
 In a [compact Graph](pipeline-reference.md#large-pipelines) (above `--graph-compact-above`
 environments) it works the same: the root environments' PromotionSteps name the
 ImageVerification and wait for it, and so do their pre-deploy hooks.
@@ -305,12 +356,15 @@ ImageVerification and wait for it, and so do their pre-deploy hooks.
 - Images that arrive through a config commit (a `configRef` whose files change an image) are not
   image-verified: only the Bundle's `spec.images` are. Use `commits.requireSigned` for config
   versions, and admission-time verification for images in config changes.
-- Commit signatures are taken from the SCM's own verification (the keys its users registered),
-  not checked against a key in the policy.
+- Without `commits.authorities`, commit signatures are taken from the SCM's own verification
+  (the keys its users registered), not checked against a key in the policy. With it, only gitsign
+  (Sigstore) signatures are accepted; GPG and SSH signatures need the SCM path.
+- A gitsign commit is read only through the SCM API (GitHub, Forgejo, Gitea); there is no git
+  fetch fallback for other providers yet (#2109).
 
 ## Permissions
 
 The controller reads the key, trusted-root and registry Secrets labelled
-`kardinal.io/referenceable: "true"` (it already has `get` on Secrets) and writes
-`imageverifications`; the Graph ServiceAccount creates them. See
+`kardinal.io/referenceable: "true"` (it already has `get` on Secrets), lists `agentidentities`
+(for `signingIdentities`; it already has `list`) and writes `imageverifications`; the Graph ServiceAccount creates them. See
 [Graph coverage](graph-coverage.md).

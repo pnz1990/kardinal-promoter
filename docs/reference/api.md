@@ -53,6 +53,10 @@ AgentIdentity registers an AI agent: the principals that are the agent, the pers
 | `spec.scope.environments` | []string |  | Environments the agent may approve or override in. Default: all. Default: `["*"]`. |
 | `spec.scope.namespaces` | []string |  | Namespaces the agent may write in. Empty: nowhere. |
 | `spec.scope.pipelines` | []string |  | Pipelines the agent may create Bundles for. Default: all. Default: `["*"]`. |
+| `spec.signingIdentities` | []object |  | SigningIdentities are the Sigstore (Fulcio) certificate identities of the agent's workload. A config commit or an attestation whose verified signer matches exactly one ready, unsuspended AgentIdentity records that agent (commit.agent, attestations.&lt;name&gt;.agent), so a gate can require that the agent that created a version also signed it. See docs/actors.md#signing-identities. |
+| `spec.signingIdentities[].issuer` | string | yes | Issuer is the OIDC issuer, for example https://token.actions.githubusercontent.com. |
+| `spec.signingIdentities[].subject` | string |  | Subject is the certificate's subject (SAN). |
+| `spec.signingIdentities[].subjectRegExp` | string |  | SubjectRegExp is a regular expression the whole subject must match. |
 | `spec.sponsor` | object | yes | Sponsor is the person accountable for the agent. |
 | `spec.sponsor.team` | string |  | Team is the sponsor's team: shown and exported, not used by policy. |
 | `spec.sponsor.user` | string | yes | User is the sponsor's Kubernetes username. |
@@ -698,6 +702,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `spec.policy.authorities[].name` | string | yes | Name identifies the authority in results. |
 | `spec.policy.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
 | `spec.policy.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login or an email address, as the SCM reports the verified signer (GitLab: the key owner's verified email, the committer's for SSH; never a key title). Commits the SCM platform signed itself, not a person, are refused unless listed here explicitly: "web-flow" (GitHub web UI edits and merges), "gitlab-system" (GitLab verified_system) and "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs merged in the web UI, list the platform identity. Empty means any person's signature the SCM verified. |
+| `spec.policy.commits.authorities` | []string |  | Authorities, when set, has kardinal verify the commit's gitsign (Sigstore) signature itself instead of asking the SCM: they name keyless spec.imageVerification.authorities, and the commit verifies when its signature verifies against one of them. The signed payload is read from the SCM API (GitHub, Forgejo, Gitea), the commit SHA is recomputed from it, and the Rekor entry embedded in the signature is checked offline against the authority's trusted root. A GPG or SSH signature is then refused, and allowedSigners does not apply. See docs/image-verification.md#commit-signatures-with-gitsign. |
 | `spec.policy.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
 | `spec.policy.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
 | `spec.policy.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |
@@ -708,6 +713,7 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status` | object |  | ImageVerificationStatus is the observed state. |
 | `status.attempts` | integer |  | Attempts counts checks that ended without a verdict (registry or SCM unreachable, signature not there yet); it spaces the retries. |
 | `status.attestations` | []object |  | Attestations has one result per attestation policy and image. |
+| `status.attestations[].agent` | string |  | Agent is the ready AgentIdentity whose spec.signingIdentities match the signing certificate, when exactly one does; empty otherwise. |
 | `status.attestations[].authority` | string |  | Authority is the authority that verified it. |
 | `status.attestations[].count` | integer |  | Count is how many attestations of the type verified; the newest is used. |
 | `status.attestations[].digest` | string |  | Digest is the sha256 of the verified DSSE payload. |
@@ -744,9 +750,13 @@ ImageVerification checks the signatures of one Bundle's images (and of its confi
 | `status.attestations[].vulns.scannerVersion` | string |  | ScannerVersion is the scanner's version. |
 | `status.attestations[].vulns.vexStatements` | integer |  | VEXStatements counts the statements read from verified VEX attestations. |
 | `status.commit` | object |  | Commit is the commit result. |
-| `status.commit.message` | string |  | Message is the SCM's reason when not verified. |
-| `status.commit.signer` | string |  | Signer is who signed, as the SCM reports it. |
-| `status.commit.verified` | boolean | yes | Verified is true when the SCM verified the commit's signature. |
+| `status.commit.agent` | string |  | Agent is the ready AgentIdentity whose spec.signingIdentities match the signer, when exactly one does (gitsign); empty otherwise. |
+| `status.commit.authority` | string |  | Authority is the commits.authorities entry that verified it (gitsign). |
+| `status.commit.issuer` | string |  | Issuer is the OIDC issuer of the signing certificate (gitsign). |
+| `status.commit.message` | string |  | Message is the reason when not verified, or a note. |
+| `status.commit.method` | string |  | Method is how: "scm" (the SCM verified it) or "gitsign" (kardinal verified a Sigstore signature against commits.authorities). One of: `scm`, `gitsign`. |
+| `status.commit.signer` | string |  | Signer is who signed: as the SCM reports it, or the certificate identity (SAN) for gitsign. |
+| `status.commit.verified` | boolean | yes | Verified is true when the commit's signature verified. |
 | `status.deadline` | string (date-time) |  | Deadline is StartedAt plus the policy timeout. |
 | `status.images` | []object |  | Images has one result per spec.images entry. |
 | `status.images[].authority` | string |  | Authority is the authority that verified it. |
@@ -1131,6 +1141,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.imageVerification.authorities[].name` | string | yes | Name identifies the authority in results. |
 | `spec.imageVerification.commits` | object |  | Commits, when requireSigned is true, requires the commit of a config or mixed Bundle (spec.configRef.commitSHA) to be signed, as the SCM provider reports it (GitHub, GitLab, Forgejo, Gitea). |
 | `spec.imageVerification.commits.allowedSigners` | []string |  | AllowedSigners, when set, also requires the signer to be one of these: an SCM login or an email address, as the SCM reports the verified signer (GitLab: the key owner's verified email, the committer's for SSH; never a key title). Commits the SCM platform signed itself, not a person, are refused unless listed here explicitly: "web-flow" (GitHub web UI edits and merges), "gitlab-system" (GitLab verified_system) and "forgejo-instance" (the Forgejo/Gitea instance key). To accept PRs merged in the web UI, list the platform identity. Empty means any person's signature the SCM verified. |
+| `spec.imageVerification.commits.authorities` | []string |  | Authorities, when set, has kardinal verify the commit's gitsign (Sigstore) signature itself instead of asking the SCM: they name keyless spec.imageVerification.authorities, and the commit verifies when its signature verifies against one of them. The signed payload is read from the SCM API (GitHub, Forgejo, Gitea), the commit SHA is recomputed from it, and the Rekor entry embedded in the signature is checked offline against the authority's trusted root. A GPG or SSH signature is then refused, and allowedSigners does not apply. See docs/image-verification.md#commit-signatures-with-gitsign. |
 | `spec.imageVerification.commits.requireSigned` | boolean | yes | RequireSigned requires the config Bundle's commit to be signed with a signature the SCM provider verified. configRef.commitSHA must then be a full 40- or 64-character SHA, and configRef.gitRepo must be on the controller's SCM host. |
 | `spec.imageVerification.images` | []string |  | Images selects the Bundle images to verify by repository, with "*" matching any characters ("ghcr.io/myorg/*"). Empty means every image. Every selected image must be pinned by digest in the Bundle. |
 | `spec.imageVerification.insecureRegistries` | []string |  | InsecureRegistries are registry hosts ("registry.local:5000") read over plain HTTP. Every other registry is read over HTTPS. |

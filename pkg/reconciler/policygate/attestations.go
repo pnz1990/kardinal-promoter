@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,6 +25,52 @@ const attestationsRoot = "attestations"
 // maxContextIDs bounds attestations.<name>.vulns.effectiveIDs.
 const maxContextIDs = 50
 
+// commitRoot is the CEL variable of the version's config commit signature
+// (docs/design/20-attestations.md §6).
+const commitRoot = "commit"
+
+// newestImageVerification is the version's newest ImageVerification (label
+// kardinal.io/bundle), or nil: a policy edit gives a new ImageVerification
+// (its name hashes the spec), and the newest decides.
+func (r *Reconciler) newestImageVerification(ctx context.Context, ns, bundle string) (*kardinalv1alpha1.ImageVerification, error) {
+	var list kardinalv1alpha1.ImageVerificationList
+	if err := r.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{labelBundle: bundle}); err != nil {
+		return nil, fmt.Errorf("list imageverifications of bundle %s: %w", bundle, err)
+	}
+	if len(list.Items) == 0 {
+		return nil, nil
+	}
+	iv := slices.MaxFunc(list.Items, func(a, b kardinalv1alpha1.ImageVerification) int {
+		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
+			return c
+		}
+		if a.Name < b.Name {
+			return -1
+		}
+		return 1
+	})
+	return &iv, nil
+}
+
+// buildCommitContext is commit.*: the config commit's signature as the
+// version's newest ImageVerification recorded it. verified is true when the
+// commit's signature verified; method is "scm" or "gitsign"; signer,
+// issuer, authority and agent are what the verification recorded (issuer,
+// authority and agent for gitsign only), and "" otherwise. A version with
+// no ImageVerification, or none that checks its commit, has verified
+// false and every string empty.
+func (r *Reconciler) buildCommitContext(ctx context.Context, ns, bundle string) (map[string]interface{}, error) {
+	out := map[string]interface{}{"verified": false, "method": "", "signer": "", "issuer": "", "authority": "", "agent": ""}
+	iv, err := r.newestImageVerification(ctx, ns, bundle)
+	if err != nil || iv == nil || iv.Spec.Commit == nil || iv.Status.Commit == nil {
+		return out, err
+	}
+	c := iv.Status.Commit
+	out["verified"] = c.Verified
+	out["method"], out["signer"], out["issuer"], out["authority"], out["agent"] = c.Method, c.Signer, c.Issuer, c.Authority, c.Agent
+	return out, nil
+}
+
 // buildAttestationContext is attestations.*: the version's newest
 // ImageVerification (label kardinal.io/bundle), with verified (it is
 // Verified) and, per attestation policy name, the results of its images
@@ -35,25 +82,11 @@ const maxContextIDs = 50
 // with no ImageVerification has verified false and no names: an expression
 // that reads a name fails closed.
 func (r *Reconciler) buildAttestationContext(ctx context.Context, ns, bundle string) (map[string]interface{}, error) {
-	var list kardinalv1alpha1.ImageVerificationList
-	if err := r.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{labelBundle: bundle}); err != nil {
-		return nil, fmt.Errorf("list imageverifications of bundle %s: %w", bundle, err)
-	}
 	out := map[string]interface{}{"verified": false}
-	if len(list.Items) == 0 {
-		return out, nil
+	iv, err := r.newestImageVerification(ctx, ns, bundle)
+	if err != nil || iv == nil {
+		return out, err
 	}
-	// A policy edit gives a new ImageVerification (its name hashes the
-	// spec): the newest decides.
-	iv := slices.MaxFunc(list.Items, func(a, b kardinalv1alpha1.ImageVerification) int {
-		if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
-			return c
-		}
-		if a.Name < b.Name {
-			return -1
-		}
-		return 1
-	})
 	out["verified"] = iv.Status.Phase == kardinalv1alpha1.ImageVerificationVerified
 	byName := map[string][]kardinalv1alpha1.AttestationResult{}
 	var names []string
@@ -92,6 +125,7 @@ func foldAttestation(results []kardinalv1alpha1.AttestationResult) map[string]in
 		"images":        images,
 	}
 	same(v, "signer", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Signer })
+	same(v, "agent", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Agent })
 	same(v, "authority", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Authority })
 	same(v, "digest", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Digest })
 	same(v, "predicate", results, func(r *kardinalv1alpha1.AttestationResult) string { return r.Predicate })
@@ -196,7 +230,7 @@ func same(m map[string]interface{}, key string, results []kardinalv1alpha1.Attes
 // out, as for the folded value.
 func imageAttestation(r *kardinalv1alpha1.AttestationResult) map[string]interface{} {
 	v := map[string]interface{}{"image": r.Image, "verified": r.Verified}
-	for k, val := range map[string]string{"signer": r.Signer, "authority": r.Authority, "digest": r.Digest, "predicate": r.Predicate} {
+	for k, val := range map[string]string{"signer": r.Signer, "agent": r.Agent, "authority": r.Authority, "digest": r.Digest, "predicate": r.Predicate} {
 		if val != "" {
 			v[k] = val
 		}
@@ -247,19 +281,20 @@ func counts(c kardinalv1alpha1.SeverityCounts) map[string]interface{} {
 }
 
 // imageVerificationRequests re-evaluates the gate instances of the
-// ImageVerification's Bundle that read attestations.*.
+// ImageVerification's Bundle that read attestations.* or commit.*.
 func (r *Reconciler) imageVerificationRequests(ctx context.Context, obj client.Object) []reconcile.Request {
 	bundle := obj.GetLabels()[labelBundle]
 	if bundle == "" {
 		return nil
 	}
-	return r.instanceGateRequests(ctx, "ImageVerification", attestationsRoot,
-		client.InNamespace(obj.GetNamespace()), client.MatchingLabels{labelBundle: bundle})
+	return r.instanceGateRequestsWhere(ctx, "ImageVerification", func(gate *kardinalv1alpha1.PolicyGate) bool {
+		return strings.Contains(gate.Spec.Expression, attestationsRoot) || strings.Contains(gate.Spec.Expression, commitRoot)
+	}, client.InNamespace(obj.GetNamespace()), client.MatchingLabels{labelBundle: bundle})
 }
 
 // imageVerificationStatusChanged passes ImageVerification creates and
 // deletes, and the updates that change its phase or attestation results,
-// what attestations.* reads (not its retry bookkeeping).
+// what attestations.* and commit.* read (not its retry bookkeeping).
 var imageVerificationStatusChanged = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		o, ok1 := e.ObjectOld.(*kardinalv1alpha1.ImageVerification)
@@ -267,6 +302,7 @@ var imageVerificationStatusChanged = predicate.Funcs{
 		if !ok1 || !ok2 {
 			return true
 		}
-		return o.Status.Phase != n.Status.Phase || !equality.Semantic.DeepEqual(o.Status.Attestations, n.Status.Attestations)
+		return o.Status.Phase != n.Status.Phase || !equality.Semantic.DeepEqual(o.Status.Attestations, n.Status.Attestations) ||
+			!equality.Semantic.DeepEqual(o.Status.Commit, n.Status.Commit)
 	},
 }

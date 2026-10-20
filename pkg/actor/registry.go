@@ -6,6 +6,7 @@ package actor
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -23,6 +24,9 @@ const (
 	ReasonSubjectConflict = "SubjectConflict"
 	ReasonInvalidSponsor  = "InvalidSponsor"
 	ReasonIndexFull       = "IndexFull"
+	// ReasonInvalidSigningIdentity: a spec.signingIdentities subjectRegExp
+	// does not compile.
+	ReasonInvalidSigningIdentity = "InvalidSigningIdentity"
 )
 
 // Verdict is the registry's decision on one AgentIdentity.
@@ -96,6 +100,15 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 		if o, ok := userSubjects[id.Spec.Sponsor.User]; v.Ready && ok {
 			v = Verdict{Reason: ReasonInvalidSponsor,
 				Message: fmt.Sprintf("sponsor %s is agent %s: an agent cannot sponsor an agent", id.Spec.Sponsor.User, o)}
+		}
+		for i, si := range id.Spec.SigningIdentities {
+			if si.SubjectRegExp == "" || !v.Ready {
+				continue
+			}
+			if _, err := regexp.Compile("^(?:" + si.SubjectRegExp + ")$"); err != nil {
+				v = Verdict{Reason: ReasonInvalidSigningIdentity,
+					Message: fmt.Sprintf("signingIdentities[%d].subjectRegExp does not compile: %v", i, err)}
+			}
 		}
 		entry := v1alpha1.AgentIndexEntry{
 			Agent: id.Name, Sponsor: id.Spec.Sponsor.User,
