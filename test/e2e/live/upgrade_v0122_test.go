@@ -8,7 +8,6 @@ package live
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -195,7 +194,7 @@ func (s *u0122Stuck) before(t *testing.T, e *framework.Env, from u012From) func(
 
 	return func() {
 		// 3. The new controller renders the Graph again, once, in place.
-		want := strconv.Itoa(graph.RenderVersion)
+		want := graph.RenderLabel
 		var rendered *unstructured.Unstructured
 		framework.Eventually(t, 2*time.Minute, "the Graph of "+b+" rendered by this release", func(ctx context.Context) (bool, string) {
 			g, err := u0122Graph(ctx, e, f.NS, b)

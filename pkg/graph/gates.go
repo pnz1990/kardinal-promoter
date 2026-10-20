@@ -70,6 +70,16 @@ const (
 //     for none (#2271). Graphs before it carry no label.
 const RenderVersion = 2
 
+// RenderLabel is the LabelRenderVersion value this controller writes on every
+// Graph and compares, for equality, with the one a Graph carries. On a
+// release branch it never takes an integer main uses or will use: a backport
+// that changes the rendering sets main's RenderVersion at the branch's
+// release with the patch release, for example "3-v0.12.4". v0.12.3 labelled
+// its Graphs 2, which main used for another rendering, so the upgrade from it
+// to main re-rendered nothing until main moved to 3 (#2346).
+// TestRenderLabelOnReleaseBranch (test/hack) checks it in CI.
+const RenderLabel = "2"
+
 // LabelRenderVersion is the label of a Graph that holds the RenderVersion it
 // was rendered with.
 const LabelRenderVersion = "kardinal.io/render-version"

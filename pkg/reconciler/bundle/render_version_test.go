@@ -6,7 +6,6 @@ package bundle_test
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"testing"
 	"time"
 
@@ -102,7 +101,7 @@ func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
 		}
 		return ids
 	}
-	current := strconv.Itoa(graph.RenderVersion)
+	current := graph.RenderLabel
 	require.Contains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
 	require.Equal(t, current, read().GetLabels()[graph.LabelRenderVersion], "the Graph carries its render version")
 
