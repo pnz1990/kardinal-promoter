@@ -1021,3 +1021,55 @@ exec `+realFlock+` "$@"
 	}
 	assert.FileExists(t, ran)
 }
+
+// TestLoadLock_OwnerReadAgainBeforeTheRemoval (#2242 QA): an older client's
+// lock judged dead is removed only while its owner is still the dead one
+// (LOADLOCK_TEST_BEFORE_RM pauses between the judgement and the removal, and
+// the test puts another older client's LOCK there meanwhile).
+func TestLoadLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	dir := t.TempDir()
+	lock, pause := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "pause")
+	require.NoError(t, os.Mkdir(lock, 0o755))
+	owner := filepath.Join(lock, "owner")
+	require.NoError(t, os.WriteFile(owner, []byte(fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
+	cmd := loadlock(t, lock, "true")
+	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_RM="+pause)
+	out := &syncBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	require.Eventually(t, func() bool { _, err := os.Stat(pause + ".judged"); return err == nil }, 10*time.Second, 20*time.Millisecond, "judged dead")
+	// Another older client's LOCK, live (this test process), meanwhile.
+	live := liveRecord(t, "another older") + "\n"
+	require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
+	require.NoError(t, os.WriteFile(pause+".go", nil, 0o644))
+	time.Sleep(time.Second)
+	assert.Equal(t, live, readFile(t, owner), "the new LOCK is left alone: %s", out.String())
+	assert.NotContains(t, out.String(), "removed "+lock)
+}
+
+// TestLoadLock_TicketClockWithoutEpochRealtime (#2242 QA): without
+// EPOCHREALTIME (an older bash) the ticket's time is date's, and a date that
+// fails ends the run: it never writes a 0 that jumps the queue.
+func TestLoadLock_TicketClockWithoutEpochRealtime(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	out, err := func() ([]byte, error) {
+		cmd := loadlock(t, lock, "true")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_NO_EPOCHREALTIME=1")
+		return cmd.CombinedOutput()
+	}()
+	require.NoError(t, err, "date's time: %s", out)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "date"), []byte("#!/bin/sh\necho 'bash: fork: Resource temporarily unavailable' >&2\nexit 1\n"), 0o755))
+	ran := filepath.Join(t.TempDir(), "ran")
+	cmd := loadlock(t, lock, "touch", ran)
+	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_NO_EPOCHREALTIME=1", "PATH="+bin+":"+os.Getenv("PATH"))
+	out, err = cmd.CombinedOutput()
+	assert.Equal(t, 1, exitCode(err), "%s", out)
+	assert.Contains(t, string(out), "cannot read the time for a ticket")
+	assert.NoFileExists(t, ran)
+	tickets, _ := filepath.Glob(filepath.Join(lock+".queue", "[0-9]-*"))
+	assert.Empty(t, tickets, "no ticket, a 0 one least of all")
+}

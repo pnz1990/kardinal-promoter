@@ -754,3 +754,36 @@ func TestCountingLock_AnyWaiterReclaims(t *testing.T) {
 	require.NoError(t, <-done)
 	w.Unlock()
 }
+
+// TestFairLock_OwnerReadAgainBeforeTheRemoval (#2242 QA): an older client's
+// lock judged dead is removed only while its owner is still the dead one: a
+// LOCK another older client made meanwhile stays.
+func TestFairLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	for _, tc := range []struct {
+		name    string
+		swap    bool
+		removed bool
+	}{{"the owner is the same: removed", false, true}, {"another LOCK meanwhile: it stays", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "LOADLOCK")
+			require.NoError(t, os.Mkdir(dir, 0o755))
+			owner := filepath.Join(dir, "owner")
+			require.NoError(t, os.WriteFile(owner, []byte(fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
+			live := fmt.Sprintf("another older pid %d now %s\n", os.Getpid(), selfRecord(hostProc{}))
+			beforeReclaimRemove = func() {
+				if tc.swap {
+					require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
+				}
+			}
+			defer func() { beforeReclaimRemove = nil }()
+			(&fairLock{lock: dir, log: func(string, ...any) {}, proc: hostProc{}}).reclaim()
+			if tc.removed {
+				assert.NoDirExists(t, dir)
+			} else {
+				assert.Equal(t, live, readOwner(t, dir), "the new LOCK is left alone")
+			}
+		})
+	}
+}

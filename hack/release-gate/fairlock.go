@@ -597,6 +597,9 @@ func (f *fairLock) reclaim() {
 	}
 	if _, exclusive := holders(f.lock); exclusive {
 		if ok, why := dead(f.lock); ok {
+			if beforeReclaimRemove != nil {
+				beforeReclaimRemove()
+			}
 			// Only while its owner is still the dead one judged (read again
 			// just before): an older client may have put a new LOCK there.
 			now, err := os.ReadFile(filepath.Join(f.lock, "owner"))
@@ -632,6 +635,11 @@ func (f *fairLock) reclaim() {
 		f.log("refresh heavy-load lock %s: %v", f.lock, err)
 	}
 }
+
+// beforeReclaimRemove, nil but in tests, runs between judging an older
+// client's lock dead and reading its owner again (a test puts another LOCK
+// there meanwhile).
+var beforeReclaimRemove func()
 
 // reapTickets removes the tickets of waiters that are gone.
 // It warns once (warned) about each ticket of a waiter on code from before

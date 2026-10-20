@@ -154,8 +154,11 @@ tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$this_boot start=$self_st
 queue="$lock.queue"
 mkdir -p "$queue"
 # The ticket's time is EPOCHREALTIME's (a builtin: a failed date never
-# writes a 0 that jumps the queue, #2242 QA), date's on an older bash.
-if [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+# writes a 0 that jumps the queue, #2242 QA), date's on an older bash
+# (LOADLOCK_TEST_NO_EPOCHREALTIME, tests only, with LOADLOCK_TEST=1: as if).
+epoch=${EPOCHREALTIME:-}
+[ "${LOADLOCK_TEST:-}" != 1 ] || [ -z "${LOADLOCK_TEST_NO_EPOCHREALTIME:-}" ] || epoch=''
+if [[ $epoch =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
   ticket_ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
 else
   ticket_ns=$(date +%s%N) && [[ $ticket_ns =~ ^[1-9][0-9]+$ ]] || {
@@ -349,6 +352,21 @@ dead_dir() {
 # (and an older client's exclusive lock) of holders that are gone, then takes
 # a free slot when fewer than the capacity hold the lock. It succeeds when
 # this run holds a slot.
+# before_rm is a test's pause between judging an older client's lock dead
+# and reading its owner again (LOADLOCK_TEST_BEFORE_RM=FILE, tests only,
+# with LOADLOCK_TEST=1): it writes FILE.judged and waits, 10s at most, for
+# FILE.go, so the test can put another LOCK there meanwhile.
+# shellcheck disable=SC2329 # called by reclaim_turn, through with_flock
+before_rm() {
+  local f=${LOADLOCK_TEST_BEFORE_RM:-} i
+  [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "$f" ] || return 0
+  : >"$f.judged"
+  for ((i = 0; i < 100; i++)); do
+    [ ! -e "$f.go" ] || return 0
+    sleep 0.1
+  done
+}
+
 # reclaim_turn, under the flock, removes the slots (and an older client's
 # exclusive lock) of holders that are gone, and the view when no slot is
 # left. Any waiter does it, not only the head (#2242 QA: an older client at
@@ -362,6 +380,7 @@ reclaim_turn() {
   count_holders
   if [ "$held_n" = exclusive ] && dead_dir "$lock"; then
     judged=$why_v
+    before_rm
     if [ -e "$lock/owner" ]; then
       read_file "$lock/owner" && [ " of a holder that is gone: $file_v" = "$judged" ] || judged=''
     fi
