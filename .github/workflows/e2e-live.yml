@@ -42,7 +42,7 @@ on:
         required: false
         default: ''
       minors:
-        description: 'run every suite on these Kubernetes minors instead of matrix.txt''s, space-separated (hack/e2e/all.sh MINORS; the release gate passes the floor and the newest)'
+        description: 'run every suite on these Kubernetes minors instead of matrix.txt''s, space-separated, a pinned suite on its own of them only (hack/e2e/all.sh MINORS; the release gate passes the floor and the newest)'
         required: false
         default: ''
       sample:

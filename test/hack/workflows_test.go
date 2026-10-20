@@ -281,7 +281,8 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 	require.NoError(t, err)
 
 	suites := map[string]bool{}
-	hosts := map[string]string{} // suite -> heavy or -
+	hosts := map[string]string{}  // suite -> heavy or -
+	pinned := map[string]string{} // suite -> pinned or -
 	// shards["core 1.37"] is the set of core's shards on 1.37 ("-" for none).
 	shards := map[string]map[string]bool{}
 	var oldestUpgrade bool
@@ -291,7 +292,7 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
 			continue
 		}
-		if !assert.Len(t, f, 4, "matrix.txt %q: want suite, Kubernetes minor, shard and host", line) {
+		if !assert.Contains(t, []int{4, 5}, len(f), "matrix.txt %q: want suite, Kubernetes minor, shard, host and maybe pinned", line) {
 			continue
 		}
 		suite, minor, shard := f[0], f[1], f[2]
@@ -300,6 +301,15 @@ func TestE2EMatrixRunsEverySuite(t *testing.T) {
 			assert.Equal(t, h, f[3], "matrix.txt %q: every line of %s says the same host", line, suite)
 		}
 		hosts[suite] = f[3]
+		pin := "-"
+		if len(f) == 5 {
+			pin = f[4]
+			assert.Equal(t, "pinned", pin, "matrix.txt %q: the fifth column is pinned", line)
+		}
+		if p, seen := pinned[suite]; seen {
+			assert.Equal(t, p, pin, "matrix.txt %q: every line of %s says pinned, or none", line, suite)
+		}
+		pinned[suite] = pin
 		_, known := runs[suite]
 		assert.True(t, known, "matrix.txt %q: hack/e2e/up.sh has no suite %s", line, suite)
 		node := "KIND_NODE_" + strings.ReplaceAll(minor, ".", "_")
@@ -622,9 +632,10 @@ func TestE2EMatrixMinors(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "matrix.txt"))
 	require.NoError(t, err)
 	shards := map[string]map[string]bool{}
+	pinnedTo := map[string]map[string]bool{} // a pinned suite's minors
 	for _, l := range strings.Split(string(data), "\n") {
 		f := strings.Fields(l)
-		if len(f) != 3 || strings.HasPrefix(f[0], "#") {
+		if len(f) < 4 || strings.HasPrefix(f[0], "#") {
 			continue
 		}
 		if shards[f[0]] == nil {
@@ -635,11 +646,30 @@ func TestE2EMatrixMinors(t *testing.T) {
 			s = ""
 		}
 		shards[f[0]][s] = true
+		if len(f) == 5 && f[4] == "pinned" {
+			if pinnedTo[f[0]] == nil {
+				pinnedTo[f[0]] = map[string]bool{}
+			}
+			pinnedTo[f[0]][f[1]] = true
+		}
 	}
+	require.NotEmpty(t, shards, "matrix.txt's jobs")
+	require.Contains(t, pinnedTo, "receipts-keyless", "matrix.txt pins receipts-keyless to 1.35 (Knative)")
 	for suite, want := range shards {
 		require.Contains(t, got, suite)
-		assert.Len(t, got[suite], 2, "%s runs on exactly 1.35 and 1.37: %v", suite, got[suite])
-		for _, minor := range []string{"1.35", "1.37"} {
+		minors := []string{"1.35", "1.37"}
+		if pins := pinnedTo[suite]; pins != nil {
+			// A pinned suite runs only on its own minors (QA-2's v0.13
+			// gate audit, #2304): receipts-keyless never on 1.37.
+			minors = nil
+			for _, m := range []string{"1.35", "1.37"} {
+				if pins[m] {
+					minors = append(minors, m)
+				}
+			}
+		}
+		assert.Len(t, got[suite], len(minors), "%s runs on exactly %v: %v", suite, minors, got[suite])
+		for _, minor := range minors {
 			assert.Len(t, got[suite][minor], len(want), "%s on %s keeps its shards", suite, minor)
 		}
 	}

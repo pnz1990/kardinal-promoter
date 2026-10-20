@@ -29,6 +29,9 @@ const (
 	statusFail    = "fail"
 	statusNotRun  = "not run"
 	statusMissing = "missing"
+	// statusPinned: hack/e2e/matrix.txt pins the suite to other minors
+	// (Step.Pinned). Reported, never run, not against the verdict.
+	statusPinned = "pinned"
 )
 
 // Result is a step's outcome, STEP_DIR/result.json. A pass is cached: a
@@ -209,6 +212,8 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 			results[i] = Result{ID: st.ID, Status: statusMissing, SHA: g.SHA, Reason: st.Missing}
 		case st.NotRun != "":
 			results[i] = Result{ID: st.ID, Status: statusNotRun, SHA: g.SHA, Reason: st.NotRun}
+		case st.Pinned != "":
+			results[i] = Result{ID: st.ID, Status: statusPinned, SHA: g.SHA, Reason: st.Pinned}
 		default:
 			if r, ok := g.cached(st); ok && !g.Fresh {
 				results[i] = r

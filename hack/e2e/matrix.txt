@@ -8,12 +8,22 @@
 # core runs on every KIND_NODE_1_* minor in hack/tool-versions.env and that
 # upgrade runs on the oldest of them, the oldest minor kardinal supports.
 #
-# suite           Kubernetes  shard  host
+# suite           Kubernetes  shard  host  [pinned]
 #   shard: hack/e2e/run.sh SHARD; - for the whole suite
 #   host: heavy, and hack/e2e/local-live.sh takes the heavy-load lock and
 #   drains the host for the suite (no new runs start, it starts with at most
 #   one other cluster slot in use and the load under 16); - for a suite
 #   that needs only a cluster slot. Every line of a suite says the same.
+#   pinned: the suite cannot run on any other minor. The release gate and
+#   all.sh MINORS run every other suite on the oldest and the newest minor
+#   whatever its lines say, and the nightly sample on the minors they don't
+#   list; a pinned suite runs on its own minors only, and the gate reports
+#   the other minor as pinned, with the comment right above the suite's
+#   first line as the reason (one is required, in words). Every line of a
+#   suite says pinned, or none does. A pinned suite lists only minors of
+#   hack/tool-versions.env, one of them the oldest or the newest; core cannot
+#   be pinned, and an upgrade suite cannot be pinned off the oldest. The
+#   release gate refuses any other pin before it runs.
 # The scale suite's ci profile (test/e2e/README.md#scale-suite): its
 # controller is built with -race on the runner, whatever KARDINAL_E2E_BUILD.
 scale             1.37        -      heavy
@@ -48,7 +58,7 @@ shard             1.37        -      -
 receipts          1.37        -      -
 # Knative 1.19, which sigstore scaffolding runs on, supports Kubernetes up to
 # 1.35.
-receipts-keyless  1.35        -      -
+receipts-keyless  1.35        -      -     pinned
 evidence-airgap   1.37        -      -
 evidence-tenancy  1.37        -      -
 # 1.35: the oldest minor kardinal supports.

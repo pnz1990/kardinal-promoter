@@ -21,7 +21,8 @@
 #               memory, gitlab's about 7 GB; multi-cluster's job has two)
 #   SUITES      only these suites, e.g. 'core gitea' (default every suite)
 #   MINORS      run every suite on these Kubernetes minors, e.g. '1.35 1.37',
-#               instead of matrix.txt's (each suite keeps its shards)
+#               instead of matrix.txt's (each suite keeps its shards); a
+#               suite matrix.txt pins runs only on those of its own minors
 #   SAMPLE      a date (YYYY-MM-DD, or today): add that night's sample jobs
 #               (hack/e2e/sample.sh), as the scheduled e2e-live.yml runs do
 #   SAMPLE_ONLY set with SAMPLE to run the sample jobs alone
@@ -67,10 +68,13 @@ die() {
 # One "id suite k8s shard count" entry per matrix.txt line; the id names the
 # job's cluster, results and CI artifact (core-135-1of3). count - is COUNT.
 matrix=()
+# pinned_on[suite]: the minors of a suite matrix.txt pins to them (" 1.35 ").
+declare -A pinned_on=()
 if [ -z "${SAMPLE_ONLY:-}" ]; then
-  while read -r suite k8s shard _ || [ -n "$suite" ]; do
+  while read -r suite k8s shard _ pin _ || [ -n "$suite" ]; do
     case "$suite" in '' | '#'*) continue ;; esac
     [ -n "$k8s" ] && [ -n "$shard" ] || die "matrix.txt: '$suite $k8s $shard': want suite, Kubernetes minor and shard"
+    [ "${pin:-}" != pinned ] || pinned_on[$suite]+=" $k8s "
     [ "$shard" != - ] || shard=
     id="$suite-${k8s//./}${shard:+-${shard%/*}of${shard#*/}}"
     matrix+=("$id $suite $k8s ${shard:--} -")
@@ -94,6 +98,10 @@ if [ -n "${MINORS:-}" ]; then
   matrix=()
   for suite in "${order[@]}"; do
     for m in "${minors[@]}"; do
+      # A pinned suite: no job on another minor (the release gate reports it).
+      if [ -n "${pinned_on[$suite]:-}" ] && [[ "${pinned_on[$suite]}" != *" $m "* ]]; then
+        continue
+      fi
       for shard in ${shards_of[$suite]}; do
         s=$shard
         [ "$s" != - ] || s=

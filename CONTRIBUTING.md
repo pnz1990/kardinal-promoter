@@ -121,13 +121,19 @@ It covers:
 
 - every live suite, its upgrade suites included, on exactly the oldest
   supported and the newest Kubernetes (the lowest and highest
-  `KIND_NODE_1_<minor>` in `hack/tool-versions.env`, now 1.35 and 1.37);
+  `KIND_NODE_1_<minor>` in `hack/tool-versions.env`, now 1.35 and 1.37). A
+  suite `hack/e2e/matrix.txt` pins to its minors runs on those only; the
+  report lists its other minor as PINNED, with matrix.txt's reason, and that
+  does not hold the verdict;
 - the upgrade from the previous release;
 - the scale suite's `full` and `soak` profiles;
 - `go test -race -count=3`, every fuzz target, the scenario matrix and the
   enterprise scenario;
 - govulncheck, golangci-lint, `make hygiene`, trivy on the images, the
   strict docs build with check-site-offline, and the bundle size budget;
+- a `go build` of every binary `release.yml` ships, for its platform: the
+  CLI for linux, darwin and windows, and the controller and render on
+  linux/arm64 too;
 - helm lint and template of every values profile in
   `hack/release-gate/profiles`, and envtest: every CRD and the chart's
   admission policies on the same two Kubernetes versions.
@@ -148,7 +154,8 @@ The verdict is GO only when everything is proven:
   no more skips than the step allows. A green CI job with no artifact is not
   a pass.
 - **Every covered `test/e2e/coverage.tsv` row** must have run and passed in
-  the gate's live suites. An exception is a line in
+  the gate's live suites. A covered row that no test claims anymore (its
+  proof result is `todo`) is not proven either. An exception is a line in
   `hack/release-gate/coverage-allow.txt`, with its reason.
 - **Missing evidence is NO-GO.** Examples are an upgrade suite from the
   previous release that does not exist, or no node image for a minor.

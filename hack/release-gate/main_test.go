@@ -191,6 +191,30 @@ func TestPlanOfThisRepo(t *testing.T) {
 			}
 		}
 	}
+
+	// receipts-keyless runs on 1.35 alone: Knative, under sigstore
+	// scaffolding, supports Kubernetes up to 1.35 (#2304).
+	assert.Contains(t, ids["e2e-receipts-keyless-137"].Pinned, "hack/e2e/matrix.txt runs receipts-keyless on 1.35 only: Knative 1.19")
+	assert.Empty(t, ids["e2e-receipts-keyless-137"].Script)
+	assert.NotEmpty(t, ids["e2e-receipts-keyless-135"].Script)
+
+	// Every binary release.yml ships, for its platform (#2304): the CLI's
+	// five, the controller's assets, and both images on linux/arm64.
+	cc := ids["cross-compile"]
+	require.Empty(t, cc.Missing)
+	t.Log(cc.Script)
+	for _, want := range []string{
+		"GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/kardinal\n",
+		"GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/kardinal\n",
+		"GOOS=darwin GOARCH=amd64 go build -o /dev/null ./cmd/kardinal\n",
+		"GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/kardinal\n",
+		"GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/kardinal\n",
+		"GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/kardinal-controller\n",
+		"GOOS=linux GOARCH=arm64 go build -tags kms_aws,kms_gcp -o /dev/null ./cmd/kardinal-controller\n",
+		"GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/kardinal-render\n",
+	} {
+		assert.Contains(t, cc.Script, want)
+	}
 }
 
 func TestPlanCI(t *testing.T) {
@@ -214,6 +238,210 @@ func TestPlanCI(t *testing.T) {
 	assert.Contains(t, ids, "scale-full", "scale stays local")
 	assert.Equal(t, []string{"core", "gitlab", "github", "multi-cluster", "upgrade-v0100"}, ciSuitesOf(steps))
 	assert.Equal(t, "1.35 1.37", minorsInput(Options{Floor: 35, Newest: 37}))
+}
+
+// TestPlanPinned (QA-2's v0.13 gate audit, #2304): a suite matrix.txt pins
+// to its minors runs on those only; the gate's other minor is a pinned step
+// with matrix.txt's reason, locally and in CI, never a cluster or a CI job.
+func TestPlanPinned(t *testing.T) {
+	r := fakeRepo()
+	r.Matrix = append(r.Matrix, MatrixLine{"keyless", "1.35", "-"})
+	r.Pinned = map[string]string{"keyless": "Knative supports Kubernetes up to 1.35."}
+	ids := byID(Plan(r, fakeOptions()))
+	on := ids["e2e-keyless-135"]
+	assert.Empty(t, on.Pinned)
+	assert.Contains(t, on.Script, "KIND_K8S=1.35")
+	off := ids["e2e-keyless-137"]
+	assert.Equal(t, "hack/e2e/matrix.txt runs keyless on 1.35 only: Knative supports Kubernetes up to 1.35.", off.Pinned)
+	assert.Empty(t, off.Script, "never run")
+	assert.Zero(t, off.Clusters)
+	assert.Zero(t, off.MinTests)
+	assert.Empty(t, ids["e2e-gitlab-135"].Pinned, "an unpinned suite runs on the floor and the newest whatever its lines say")
+
+	o := fakeOptions()
+	o.LiveCI = true
+	steps := Plan(r, o)
+	ci := byID(steps)
+	require.NotNil(t, ci["ci-keyless-135"].CIJob)
+	assert.Nil(t, ci["ci-keyless-137"].CIJob, "all.sh MINORS runs no job for it: none is waited for")
+	assert.Contains(t, ci["ci-keyless-137"].Pinned, "runs keyless on 1.35 only")
+	assert.Contains(t, ciSuitesOf(steps), "keyless")
+}
+
+// TestReleaseTargets (#2304): the cross-compile step builds what
+// release.yml ships: each GOOS/GOARCH asset, and each image's Dockerfile
+// build on each image platform, with its tags.
+func TestReleaseTargets(t *testing.T) {
+	root := t.TempDir()
+	for name, data := range map[string]string{
+		".github/workflows/release.yml": `jobs:
+  dry-run:
+    steps:
+      - run: |
+          GOOS=linux GOARCH=amd64 go build -ldflags="${X}" -o dist/c ./cmd/ctl/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="${Y}" -o dist/k   ./cmd/cli/
+          GOOS=windows GOARCH=amd64 go build -tags netgo -o dist/k.exe ./cmd/cli
+      - uses: docker/build-push-action@x
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+      - uses: docker/build-push-action@x
+        with:
+          file: render.Dockerfile
+          platforms: linux/amd64,linux/arm64
+  release:
+    steps:
+      - run: GOOS=darwin GOARCH=arm64 go build -o dist/k ./cmd/cli/
+`,
+		"Dockerfile":        "FROM x\nRUN CGO_ENABLED=0 GOOS=${TARGETOS} \\\n    go build \\\n      -tags kms_aws,kms_gcp \\\n      -o /out/ctl \\\n      ./cmd/ctl\n",
+		"render.Dockerfile": "FROM x\nRUN go build -o /out/r ./cmd/render\n",
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(data), 0o644))
+	}
+	got, err := releaseTargets(root)
+	require.NoError(t, err)
+	assert.Equal(t, []BuildTarget{
+		{"darwin", "arm64", "./cmd/cli", ""}, // once, though both jobs build it
+		{"windows", "amd64", "./cmd/cli", "netgo"},
+		{"linux", "amd64", "./cmd/ctl", ""},
+		{"linux", "amd64", "./cmd/ctl", "kms_aws,kms_gcp"},
+		{"linux", "arm64", "./cmd/ctl", "kms_aws,kms_gcp"},
+		{"linux", "amd64", "./cmd/render", ""},
+		{"linux", "arm64", "./cmd/render", ""},
+	}, got)
+
+	r := fakeRepo()
+	r.ReleaseTargets = got
+	st := byID(Plan(r, fakeOptions()))["cross-compile"]
+	assert.Equal(t, areaStatic, st.Area)
+	assert.Contains(t, st.Script, "export CGO_ENABLED=0\n")
+	assert.Contains(t, st.Script, "GOOS=windows GOARCH=amd64 go build -tags netgo -o /dev/null ./cmd/cli\n")
+	assert.Contains(t, st.Script, "GOOS=linux GOARCH=arm64 go build -tags kms_aws,kms_gcp -o /dev/null ./cmd/ctl\n")
+	assert.Equal(t, 7, strings.Count(st.Script, " go build"))
+
+	r.ReleaseTargets = nil
+	assert.Contains(t, byID(Plan(r, fakeOptions()))["cross-compile"].Missing, "found no GOOS/GOARCH go build",
+		"a release.yml the gate cannot read for targets is missing evidence, not an empty pass")
+}
+
+// TestReadMatrix: the fifth column pins a suite to its minors, with the
+// comment right above its first line as the reason.
+func TestReadMatrix(t *testing.T) {
+	write := func(t *testing.T, data string) string {
+		p := filepath.Join(t.TempDir(), "matrix.txt")
+		require.NoError(t, os.WriteFile(p, []byte(data), 0o644))
+		return p
+	}
+	lines, pins, err := readMatrix(write(t, "# the header\n\ncore 1.35 1/2 -\ncore 1.35 2/2 -\n"+
+		"# Knative 1.19 supports Kubernetes\n#   up to 1.35.\nkeyless 1.35 - - pinned\nkeyless 1.36 - - pinned\n"+
+		"# a note, no pin\nui 1.37 - -\n"))
+	require.NoError(t, err)
+	assert.Equal(t, []MatrixLine{{"core", "1.35", "1/2"}, {"core", "1.35", "2/2"}, {"keyless", "1.35", "-"}, {"keyless", "1.36", "-"}, {"ui", "1.37", "-"}}, lines)
+	assert.Equal(t, map[string]string{"keyless": "Knative 1.19 supports Kubernetes up to 1.35."}, pins)
+
+	for _, tc := range []struct{ name, data, err string }{
+		{"no reason", "core 1.35 - -\nkeyless 1.35 - - pinned\n", "keyless is pinned to its minors without a reason"},
+		{"a blank line between", "# Knative\n\nkeyless 1.35 - - pinned\n", "keyless is pinned to its minors without a reason"},
+		{"some lines pinned", "# Knative\nkeyless 1.35 - - pinned\nkeyless 1.37 - -\n", "every line of keyless says pinned, or none"},
+		{"another fifth column", "keyless 1.35 - - only\n", "for a suite that runs only on the minors it lists, pinned"},
+		{"six columns", "keyless 1.35 - - pinned x\n", "want suite, Kubernetes minor, shard, host"},
+		{"a reason with no letters", "#.\nkeyless 1.35 - - pinned\n", `keyless is pinned with the reason ".", which names no cause`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := readMatrix(write(t, tc.data))
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
+// TestCheckPins: a pin cannot keep a suite out of the gate (QA-2 on #2309).
+// The gate runs the floor (1.35) and the newest (1.37) minor of
+// tool-versions.env.
+func TestCheckPins(t *testing.T) {
+	tools := map[string]string{"KIND_NODE_1_35": "a", "KIND_NODE_1_36": "b", "KIND_NODE_1_37": "c", "KIND_NODE_FLUX_1_38": "d"}
+	repo := func(lines ...string) *Repo {
+		r := &Repo{ToolVersions: tools, Pinned: map[string]string{}}
+		for _, l := range lines {
+			f := strings.Fields(l)
+			r.Matrix = append(r.Matrix, MatrixLine{f[0], f[1], "-"})
+			if len(f) == 3 {
+				r.Pinned[f[0]] = "why"
+			}
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		err   string
+	}{
+		{"unpinned", []string{"core 1.35", "ui 1.37"}, ""},
+		{"pinned to the floor", []string{"keyless 1.35 pinned"}, ""},
+		{"pinned to the newest", []string{"keyless 1.37 pinned"}, ""},
+		{"pinned to the floor and another minor", []string{"keyless 1.35 pinned", "keyless 1.36 pinned"}, ""},
+		{"an upgrade suite pinned to the floor", []string{"upgrade-v090 1.35 pinned"}, ""},
+		{"a minor tool-versions.env has no node for", []string{"keyless 1.99 pinned"},
+			"keyless is pinned to 1.99, which hack/tool-versions.env has no KIND_NODE_1_99 for"},
+		{"a suite's own node image is not a gate minor", []string{"keyless 1.38 pinned"},
+			"keyless is pinned to 1.38, which hack/tool-versions.env has no KIND_NODE_1_38 for"},
+		{"no minor the gate runs", []string{"keyless 1.36 pinned"},
+			"keyless is pinned to 1.36, none of the minors the gate runs (1.35 and 1.37): it would run nowhere"},
+		{"core", []string{"core 1.37 pinned"}, "core cannot be pinned"},
+		{"an upgrade suite off the floor", []string{"upgrade-v090 1.37 pinned"},
+			"upgrade-v090 is pinned off the floor minor 1.35"},
+		{"the upgrade suite off the floor", []string{"upgrade 1.37 pinned"}, "upgrade is pinned off the floor minor 1.35"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := repo(tc.lines...).checkPins()
+			if tc.err == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
+// TestPinProbes are QA-2's three release-gate -list probes on #2309, on this
+// checkout's matrix.txt and tool-versions.env: each edit stops LoadRepo,
+// where the gate (and -list) starts, instead of planning a gate that runs a
+// suite nowhere or misses core on the floor.
+func TestPinProbes(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	matrix, err := os.ReadFile(filepath.Join(repoRoot, "hack", "e2e", "matrix.txt"))
+	require.NoError(t, err)
+	tools, err := os.ReadFile(filepath.Join(repoRoot, "hack", "tool-versions.env"))
+	require.NoError(t, err)
+	const keyless = "receipts-keyless  1.35        -      -     pinned\n"
+	const keylessWhy = "# Knative 1.19, which sigstore scaffolding runs on, supports Kubernetes up to\n# 1.35.\n"
+	require.Contains(t, string(matrix), keylessWhy+keyless, "the probes edit these lines")
+	var withoutCore []string
+	for _, l := range strings.SplitAfter(string(matrix), "\n") {
+		if !strings.HasPrefix(l, "core ") {
+			withoutCore = append(withoutCore, l)
+		}
+	}
+	for _, tc := range []struct{ name, matrix, err string }{
+		{"A: receipts-keyless pinned to 1.99, a minor the gate never runs",
+			strings.Replace(string(matrix), keyless, strings.Replace(keyless, "1.35", "1.99", 1), 1),
+			"receipts-keyless is pinned to 1.99, which hack/tool-versions.env has no KIND_NODE_1_99 for"},
+		{"B: core pinned to 1.37",
+			"# qa2: x\ncore 1.37 - - pinned\n" + strings.Join(withoutCore, ""), "core cannot be pinned"},
+		{"C: the reason #.",
+			strings.Replace(string(matrix), keylessWhy, "#.\n", 1), `which names no cause`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, data := range map[string]string{"hack/e2e/matrix.txt": tc.matrix, "hack/tool-versions.env": string(tools)} {
+				require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(data), 0o644))
+			}
+			_, err := LoadRepo(root)
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
 }
 
 // ── the scheduler ────────────────────────────────────────────────────────────
@@ -367,6 +595,7 @@ func schedSteps() []Step {
 		{ID: "h1", Clusters: 2, Heavy: true, Script: "x", Cleanup: "y"},
 		{ID: "l1", Script: "x"}, {ID: "l2", Script: "x"}, {ID: "lh", Heavy: true, Script: "x"},
 		{ID: "missing", Missing: "no test"}, {ID: "notrun", NotRun: "no token"},
+		{ID: "pinned", Pinned: "matrix.txt runs it on 1.35 only"},
 	}
 }
 
@@ -387,8 +616,9 @@ func TestGateRun_Budget(t *testing.T) {
 			}
 			assert.Equal(t, statusMissing, got["missing"])
 			assert.Equal(t, statusNotRun, got["notrun"])
+			assert.Equal(t, statusPinned, got["pinned"], "a pinned step is reported, never run")
 			for _, st := range schedSteps() {
-				if st.Missing == "" && st.NotRun == "" {
+				if st.Missing == "" && st.NotRun == "" && st.Pinned == "" {
 					assert.Equal(t, statusPass, got[st.ID], "%s: the heavy-load lock is never taken twice", st.ID)
 				}
 			}
@@ -592,6 +822,7 @@ func TestVerdict(t *testing.T) {
 	pass := Result{Status: statusPass}
 	assert.Equal(t, "GO", verdict([]Result{pass, pass}))
 	assert.Equal(t, "INCOMPLETE", verdict([]Result{pass, {Status: statusNotRun}}))
+	assert.Equal(t, "GO", verdict([]Result{pass, {Status: statusPinned}}), "no host could run a pinned step: it does not hold the verdict")
 	assert.Equal(t, "NO-GO", verdict([]Result{pass, {Status: statusNotRun}, {Status: statusFail}}))
 	assert.Equal(t, "NO-GO", verdict([]Result{pass, {Status: statusMissing}}))
 }
@@ -602,6 +833,7 @@ func TestRender(t *testing.T) {
 		{ID: "unit", Area: areaUnit, Title: "unit tests", Tests: "tests.json"},
 		{ID: "e2e-core-137", Area: areaE2E, Title: "core on 1.37", Tests: "e2e/test.json"},
 		{ID: "upgrade-v0110", Area: areaUpgrade, Title: "upgrade from v0.11.0", Missing: "no suite"},
+		{ID: "e2e-keyless-137", Area: areaE2E, Title: "keyless on 1.37", Pinned: "matrix.txt runs keyless on 1.35 only"},
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(out, "unit"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(out, "unit", "tests.json"), []byte(goTestJSON), 0o644))
@@ -617,6 +849,7 @@ func TestRender(t *testing.T) {
 		{ID: "unit", Status: statusFail, Reason: "script: exit status 1", Seconds: 65, Started: t0},
 		{ID: "e2e-core-137", Status: statusPass, Seconds: 600, Cached: true, Started: t0},
 		{ID: "upgrade-v0110", Status: statusMissing, Reason: "no suite"},
+		{ID: "e2e-keyless-137", Status: statusPinned, Reason: "matrix.txt runs keyless on 1.35 only"},
 	}
 	cov := Coverage{Rows: 10, ByStatus: map[string]int{"covered": 8, "todo": 2}, ByResult: map[string]int{"passed": 7, "not run": 3}}
 	p := Provenance{SHA: "0123456789abcdef", Describe: "v0.11.0-5-g0123456", PrevRelease: "v0.11.0", GoVersion: "go1.26.9",
@@ -629,7 +862,8 @@ func TestRender(t *testing.T) {
 	require.NoError(t, Render(&b, steps, results, out, cov, notRun, p, 90*time.Minute))
 	s := b.String()
 	assert.Contains(t, s, "# Release gate: 0123456789ab\n")
-	assert.Contains(t, s, "**Verdict: NO-GO.** `0123456789abcdef` (v0.11.0-5-g0123456)")
+	assert.Contains(t, s, "**Verdict: NO-GO.** 1 step pinned, not counted: keyless on 1.37 (see [Steps](#steps)). "+
+		"`0123456789abcdef` (v0.11.0-5-g0123456)", "the verdict line says what was pinned")
 	assert.Contains(t, s, "| Live e2e | PASS | 1 of 1 | 1 | 1 | 0 | 0 | 10m0s |")
 	assert.Contains(t, s, "| Upgrade | FAIL | 0 of 1 | 0 | 0 | 0 | 0 | - |")
 	assert.Contains(t, s, "| Unit, fuzz and scenarios | FAIL | 0 of 1 | 4 | 2 | 1 | 1 | 1m5s |")
@@ -637,6 +871,7 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, s, "| unit tests | Unit, fuzz and scenarios | FAIL: script: exit status 1 | 2/1/1 | 1m5s | [log](unit/log.txt) |")
 	assert.Contains(t, s, "| core on 1.37 | Live e2e | PASS (cached) | 1/0/0 | 10m0s | [CI job](https://x/job/1) |")
 	assert.Contains(t, s, "| upgrade from v0.11.0 | Upgrade | MISSING: no suite |")
+	assert.Contains(t, s, "| keyless on 1.37 | Live e2e | PINNED: matrix.txt runs keyless on 1.35 only |", "a pinned step is listed, with why")
 	assert.Contains(t, s, "10 rows, 8 covered and 2 not (8 covered, 2 todo)")
 	assert.Contains(t, s, "): 3 not run, 7 passed.")
 	assert.Contains(t, s, "- Image trivy scanned: `ctl:abc sha256:111 (host build)`")
@@ -656,6 +891,12 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, b.String(), "\n## Not run by this gate\n\n**The not-run list was not loaded**: this report says nothing about what the gate does not run.\n",
 		"readNotRun refuses an empty list, so no list means it was not loaded: the section says so, not that nothing is missing")
 	assert.NotContains(t, b.String(), "It does not prove")
+
+	// No pinned step: the verdict line names none.
+	b.Reset()
+	require.NoError(t, Render(&b, steps[:len(steps)-1], results[:len(results)-1], out, cov, notRun, p, 90*time.Minute))
+	assert.Contains(t, b.String(), "**Verdict: NO-GO.** `0123456789abcdef` (v0.11.0-5-g0123456)")
+	assert.NotContains(t, b.String(), "pinned, not counted")
 }
 
 // notRunRoot is a checkout with a coverage.tsv, a release.yml and the given
@@ -754,14 +995,21 @@ func TestReadCoverage(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "test", "e2e"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "test", "e2e", "coverage.tsv"),
-		[]byte("id\ttier\tsuite\tstatus\nA\tlive\tcore\tcovered\nB\tunit\t-\ttodo\n"), 0o644))
+		[]byte("id\ttier\tsuite\tstatus\nA\tlive\tcore\tcovered\nB\tunit\t-\ttodo\n"+
+			"C\tlive\tcore\tcovered\nD\tcontract\tunit\tcovered\nE\tlive\tcore\tknown-bug\n"), 0o644))
 	proof := filepath.Join(root, "proof.json")
-	require.NoError(t, os.WriteFile(proof, []byte(`[{"id":"A","result":"passed"},{"id":"B","result":"todo"}]`), 0o644))
+	require.NoError(t, os.WriteFile(proof, []byte(`[{"id":"A","result":"passed"},{"id":"B","result":"todo"},`+
+		`{"id":"C","result":"todo"},{"id":"D","result":"todo"},{"id":"E","result":"todo"}]`), 0o644))
 	c, err := readCoverage(root, proof)
 	require.NoError(t, err)
-	assert.Equal(t, 2, c.Rows)
-	assert.Equal(t, map[string]int{"covered": 1, "todo": 1}, c.ByStatus)
-	assert.Equal(t, map[string]int{"passed": 1, "todo": 1}, c.ByResult)
+	assert.Equal(t, 5, c.Rows)
+	assert.Equal(t, map[string]int{"covered": 3, "todo": 1, "known-bug": 1}, c.ByStatus)
+	assert.Equal(t, map[string]int{"passed": 1, "todo": 4}, c.ByResult)
+	// A covered (or known-bug) row the proof finds no test for is not
+	// proven: the test that claimed it is gone (#2304). A todo row's todo
+	// is no claim.
+	assert.Equal(t, map[string]string{"C": "todo", "D": "todo", "E": "todo"}, c.Unproven)
+	assert.Equal(t, "NO-GO", verdictOf([]Result{{Status: statusPass}}, c))
 	c, err = readCoverage(root, filepath.Join(root, "none.json"))
 	require.NoError(t, err)
 	assert.Empty(t, c.ByResult)
