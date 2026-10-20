@@ -503,12 +503,20 @@ func TestLoadLock_Counting(t *testing.T) {
 		require.NoError(t, b.Wait())
 		assert.FileExists(t, ran)
 	})
-	t.Run("50 locks at once on an idle host, 8 waiters each on dead holders: at most two, none wedged", func(t *testing.T) {
+	t.Run("20 locks at once on an idle host, 8 waiters each on dead holders: at most two, none wedged", func(t *testing.T) {
+		// 20 in CI's package budget; LOADLOCK_STRESS_LOCKS=50 for the
+		// review-size run.
+		locks := 20
+		if v := os.Getenv("LOADLOCK_STRESS_LOCKS"); v != "" {
+			n, err := strconv.Atoi(v)
+			require.NoError(t, err)
+			locks = n
+		}
 		gone := exec.Command("true")
 		require.NoError(t, gone.Run())
 		var cmds []*exec.Cmd
 		var dirs []string
-		for l := 0; l < 50; l++ {
+		for l := 0; l < locks; l++ {
 			dir := t.TempDir()
 			lock := filepath.Join(dir, "LOADLOCK")
 			for _, n := range []string{"1", "2"} {
@@ -520,9 +528,11 @@ func TestLoadLock_Counting(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(lock, ".counting"), nil, 0o644))
 			dirs = append(dirs, dir)
 			for i := 0; i < 8; i++ {
-				// Two places in the critical section; a third holder finds both taken.
+				// Two places in the critical section; a third holder finds both
+				// taken. Held long enough (0.5s) that the next waiter's turn
+				// comes while it holds, on a busy CI runner too.
 				cmd := exec.Command("bash", script, "-l", lock, "-o", fmt.Sprintf("w%d", i), "-r", "0.05", "--", "sh", "-c",
-					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi; sleep 0.05; rmdir "$0/$p"`, dir)
+					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi; sleep 0.5; rmdir "$0/$p"`, dir)
 				cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
 				require.NoError(t, cmd.Start())
 				cmds = append(cmds, cmd)
