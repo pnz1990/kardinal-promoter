@@ -147,7 +147,7 @@ Where a value sets a controller flag, the flag is in [Controller flags](controll
 | `receipts.enabled` | `false` | Create and sign receipts (--receipts). |
 | `receipts.retention.maxAge` | `""` | Delete receipts created longer ago than this (--receipt-retention-max-age, a Go duration, for example "8760h"). Empty keeps every receipt: they are evidence, and the sinks outside the cluster keep their copy whatever this says. |
 | `receipts.clusterID` | `""` | Identity of this cluster in each receipt's resourceUri (--receipt-cluster-id). Empty reads the kube-system Namespace UID; the chart then lets the controller get that one Namespace. |
-| `receipts.signing.mode` | `keyless` | keyless (Fulcio, with the controller's projected ServiceAccount token, audience sigstore), key (an ECDSA P-256 key in a Secret) or kms (a provider the controller image was built with). |
+| `receipts.signing.mode` | `keyless` | keyless (Fulcio, with the controller's projected ServiceAccount token, audience sigstore), key (an ECDSA P-256 key in a Secret) or kms (AWS KMS or Google Cloud KMS, which the published image is built with). |
 | `receipts.signing.keyless.fulcioURL` | `https://fulcio.sigstore.dev` | Fulcio URL. The public-good Fulcio accepts the OIDC issuers of EKS, GKE and AKS clusters; kind and on-prem clusters need a private Fulcio that trusts their issuer. |
 | `receipts.signing.keyless.tokenExpirationSeconds` | `600` | Expiry of the projected token, seconds (at least 600). |
 | `receipts.signing.key.secretRef` | `{"key":"cosign.key","name":""}` | Secret in the release namespace holding the PEM private key (unencrypted PKCS #8 or SEC 1, ECDSA P-256). Anyone who can read it can sign receipts. |

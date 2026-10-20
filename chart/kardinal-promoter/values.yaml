@@ -670,8 +670,7 @@ receipts:
   signing:
     # -- keyless (Fulcio, with the controller's projected ServiceAccount
     # token, audience sigstore), key (an ECDSA P-256 key in a Secret) or kms
-    # (a provider the controller image was built with; the published image
-    # has none yet, #1952, so the controller refuses kms at start).
+    # (AWS KMS or Google Cloud KMS, which the published image is built with).
     mode: keyless
     keyless:
       # -- Fulcio URL. The public-good Fulcio accepts the OIDC issuers of
