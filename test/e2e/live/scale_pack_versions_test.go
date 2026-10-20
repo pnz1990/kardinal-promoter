@@ -10,16 +10,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -86,6 +89,10 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 	r.Note("packVersionNamespaces", nns)
 	r.Note("packVersionsSetupSeconds", int(time.Since(start).Seconds()))
 	until := time.Now().Add(time.Minute).Truncate(time.Second)
+	// The exports read every namespace (-A): wait until no namespace is
+	// being deleted (an earlier test's, with its records), so the cluster
+	// they read is the same each time.
+	waitNoTerminatingNamespaces(t, r, 15*time.Minute)
 
 	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
 	r.E.WriteKubeconfig(t, kubeconfig, map[string]string{r.E.Context: ""}, r.E.Context)
@@ -99,10 +106,11 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		began := time.Now()
-		require.NoError(t, cmd.Run(), stderr.String())
+		var err error
+		rssMiB, err = scale.RunPeakRSS(cmd) // the CLI's own memory, not the test's (rusage would read the test's)
+		require.NoError(t, err, stderr.String())
 		took = time.Since(began)
-		rssMiB = cmd.ProcessState.SysUsage().(*syscall.Rusage).Maxrss / 1024 // KiB on Linux
-		pack, err := os.ReadFile(out)
+		pack, err = os.ReadFile(out)
 		require.NoError(t, err)
 		return packRecords(t, pack), pack, took, rssMiB
 	}
@@ -135,9 +143,10 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 
 	// The pack also holds cluster-scoped kinds (ChangeWindows,
 	// AgentIdentities, the admission policies): the scale suite runs one
-	// test at a time (LOADLOCK), so nothing changes them between the two.
+	// test at a time (LOADLOCK), and no namespace is being deleted, so
+	// nothing changes them between the two.
 	_, again, _, _ := export("again.tar.gz", until, "-A")
-	assert.True(t, bytes.Equal(pack, again), "a second export of the same period is the same bytes")
+	assert.True(t, bytes.Equal(pack, again), "a second export of the same period is the same bytes: %s", packDiff(t, pack, again))
 
 	r.Finish(func(o *invariants.Options) {
 		o.AllowEmpty = true
@@ -147,6 +156,96 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 
 // packRecords are the per-file record counts of an evidence pack's
 // manifest.
+// waitNoTerminatingNamespaces waits until no Namespace is being deleted, and
+// notes how long that took.
+func waitNoTerminatingNamespaces(t *testing.T, r *scale.Run, timeout time.Duration) {
+	t.Helper()
+	began := time.Now()
+	framework.Eventually(t, timeout, "no namespace being deleted", func(ctx context.Context) (bool, string) {
+		var list corev1.NamespaceList
+		if err := r.E.Client.List(ctx, &list); err != nil {
+			return false, err.Error()
+		}
+		var deleting []string
+		for _, ns := range list.Items {
+			if ns.DeletionTimestamp != nil {
+				deleting = append(deleting, ns.Name)
+			}
+		}
+		return len(deleting) == 0, fmt.Sprintf("%d being deleted: %v", len(deleting), deleting)
+	})
+	r.Note("packVersionsQuiesceSeconds", int(time.Since(began).Seconds()))
+}
+
+// packDiff names the files of two packs that differ, with their manifest
+// lines, for a failed byte-identity check.
+func packDiff(t *testing.T, a, b []byte) string {
+	t.Helper()
+	files := func(pack []byte) map[string]string {
+		dir := t.TempDir()
+		path := filepath.Join(t.TempDir(), "pack.tar.gz")
+		require.NoError(t, os.WriteFile(path, pack, 0o600))
+		out, err := exec.Command("tar", "-xzf", path, "-C", dir).CombinedOutput()
+		require.NoError(t, err, string(out))
+		got := map[string]string{}
+		require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(p)
+			rel, _ := filepath.Rel(dir, p)
+			got[rel] = string(data)
+			return err
+		}))
+		return got
+	}
+	fa, fb := files(a), files(b)
+	var diff []string
+	for name, da := range fa {
+		db, ok := fb[name]
+		switch {
+		case !ok:
+			diff = append(diff, name+": only in the first")
+		case da != db && strings.HasSuffix(name, "manifest.json"):
+			diff = append(diff, name+": "+lineDiff(da, db))
+		case da != db:
+			diff = append(diff, fmt.Sprintf("%s: %d bytes, then %d", name, len(da), len(db)))
+		}
+	}
+	for name := range fb {
+		if _, ok := fa[name]; !ok {
+			diff = append(diff, name+": only in the second")
+		}
+	}
+	sort.Strings(diff)
+	return strings.Join(diff, "; ")
+}
+
+// lineDiff is the lines of a that b does not have, then b's that a does not.
+func lineDiff(a, b string) string {
+	in := func(s string) map[string]bool {
+		m := map[string]bool{}
+		for _, l := range strings.Split(s, "\n") {
+			m[strings.TrimSpace(l)] = true
+		}
+		return m
+	}
+	ia, ib := in(a), in(b)
+	var out []string
+	for l := range ia {
+		if !ib[l] {
+			out = append(out, "-"+l)
+		}
+	}
+	for l := range ib {
+		if !ia[l] {
+			out = append(out, "+"+l)
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, " ")
+}
+
 func packRecords(t *testing.T, pack []byte) map[string]int {
 	t.Helper()
 	dir := t.TempDir()
