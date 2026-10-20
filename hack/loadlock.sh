@@ -77,7 +77,7 @@ this_boot=
 read_file() {
   local opened=
   file_v=
-  { opened=1; IFS= read -r -d '' file_v; } <"$1" 2>/dev/null
+  { { opened=1; IFS= read -r -d '' file_v; } <"$1"; } 2>/dev/null
   [ -n "$opened" ] || return 1
   while [[ $file_v == *$'\n' ]]; do file_v=${file_v%$'\n'}; done
   return 0
@@ -104,7 +104,12 @@ record_dead() {
   if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ -n "$this_boot" ] && [ "${BASH_REMATCH[2]}" != "$this_boot" ]; then
     return 0
   fi
-  read_start "$pid" || return 0
+  if ! read_start "$pid"; then
+    # Its stat could not be opened: gone, unless $proc/<pid> is there (a
+    # full file table fails the open as a failed fork does).
+    [ ! -d "$proc/$pid" ] || return 1
+    return 0
+  fi
   start=$start_v
   # A holder that could not read its own start time: boot id and pid only.
   [[ $r =~ (^|[[:space:]])start=unknown([[:space:]]|$) ]] && return 1
