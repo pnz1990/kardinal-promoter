@@ -41,6 +41,18 @@ func TestPlanPromote(t *testing.T) {
 			env: "prod", wantSrc: "v2", wantTag: "2",
 		},
 		{
+			name: "a rollback as the source: the promotion is not a rollback (#2225)",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), func() *v1alpha1.Bundle {
+					b := bundle("r1", "app", "1", 10)
+					b.Spec.Provenance.RollbackOf, b.Spec.Provenance.RollbackFrom = "v1", "v2"
+					return b
+				}(),
+				step("v1", "app", "uat", "Verified", 1), step("r1", "app", "uat", "Verified", 11),
+			},
+			env: "prod", wantSrc: "r1", wantTag: "1",
+		},
+		{
 			name: "a rejected bundle is never the source, also when it was Verified upstream (#1451)",
 			objs: []client.Object{
 				bundle("v1", "app", "1", 0), rejected(bundle("v2", "app", "2", 10)),
@@ -179,6 +191,7 @@ func TestPlanPromote(t *testing.T) {
 			assert.Equal(t, "alice", b.Annotations[lifecycle.AnnotationRequestedBy])
 			assert.Equal(t, "sha-"+tc.wantTag, b.Spec.Provenance.CommitSHA)
 			assert.Empty(t, b.Spec.Provenance.RollbackOf)
+			assert.Empty(t, b.Spec.Provenance.RollbackFrom, "a promotion of a rollback is not a rollback (#2225)")
 			assert.Equal(t, "app", b.Labels[lifecycle.LabelPipeline])
 		})
 	}

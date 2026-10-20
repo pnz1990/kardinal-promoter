@@ -835,7 +835,7 @@ func rolledBackFromByEnv(ctx context.Context, c client.Reader, ns, pipeline, fle
 	}
 	for i := range list.Items {
 		b := &list.Items[i]
-		bf := b.Annotations[AnnotationRollbackFrom]
+		bf := RollbackFromOf(b)
 		if bf == "" || b.Spec.Pipeline != pipeline || b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == "" {
 			continue
 		}
@@ -1011,6 +1011,7 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 		prov.Timestamp = plan.Target.Spec.Provenance.Timestamp
 	}
 	prov.RollbackOf = plan.Target.Name
+	prov.RollbackFrom = plan.CurrentName
 	b.Spec.Provenance = prov
 	return b
 }
@@ -1029,7 +1030,7 @@ func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env, fle
 	out := map[string]bool{}
 	for i := range list.Items {
 		b := &list.Items[i]
-		from := b.Annotations[AnnotationRollbackFrom]
+		from := RollbackFromOf(b)
 		if from == "" || b.Spec.Pipeline != pipeline {
 			continue
 		}

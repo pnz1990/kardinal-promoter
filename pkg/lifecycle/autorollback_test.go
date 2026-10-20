@@ -106,6 +106,71 @@ func TestFindRollback(t *testing.T) {
 		forged.Annotations[lifecycle.AnnotationCreatedBy] = "mallory"
 		assert.Empty(t, find(newClient(t, forged), "prod", "app-v3"), "at the name but not the controller's")
 	})
+	// #2225: a rollback created since v0.13.0 records the Bundle it rolls
+	// back from in the immutable spec.provenance.rollbackFrom, and is bound
+	// on it; one created by v0.12.x has no such field and the name binds it.
+	t.Run("bound by spec.provenance.rollbackFrom", func(t *testing.T) {
+		name := lifecycle.AutoRollbackName("app-v3", "alarm")
+		recorded := func(rollbackFrom, annotation string) *v1alpha1.Bundle {
+			b := rb(name, annotation, "prod")
+			b.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackOf: "app-v1", RollbackFrom: rollbackFrom}
+			return b
+		}
+		assert.Equal(t, name, find(newClient(t, recorded("app-v3", "app-v3")), "prod", "app-v3"))
+		assert.Equal(t, name, find(newClient(t, recorded("app-v3", "app-v9")), "prod", "app-v3"),
+			"the annotation relinked: the field still binds it")
+		assert.Empty(t, find(newClient(t, recorded("app-v8", "app-v3")), "prod", "app-v3"),
+			"at app-v3's name but recorded for another Bundle (a shared hashed name): not app-v3's")
+		assert.Equal(t, name, find(newClient(t, rb(name, "app-v3", "prod")), "prod", "app-v3"),
+			"a v0.12.x rollback without the field: the name binds it")
+	})
+}
+
+// TestAutoRollbackNameIn_BoundByProvenance (#2225): at the plain name, the
+// controller's rollback recorded for another failing Bundle (as when the
+// hashed form of a long name is shared) is not taken for this one's: the
+// rollback takes the environment's own name; one recorded for this Bundle,
+// or a v0.12.x one without the field, is its own.
+//
+// Covers RB-AUTO-NAME-04.
+func TestAutoRollbackNameIn_BoundByProvenance(t *testing.T) {
+	ctx := context.Background()
+	at := func(rollbackFrom string) *v1alpha1.Bundle {
+		return stampAuto(&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2-rollback-alarm", Namespace: "default",
+			Labels:      map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"},
+			Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: "app-v2"}},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod"},
+				Provenance: &v1alpha1.BundleProvenance{RollbackFrom: rollbackFrom}}})
+	}
+	for _, tc := range []struct {
+		rollbackFrom, want string
+		taken              bool
+	}{
+		{rollbackFrom: "app-v2", want: "app-v2-rollback-alarm"},
+		{rollbackFrom: "", want: "app-v2-rollback-alarm"},
+		{rollbackFrom: "app-v7", want: "app-v2-rollback-alarm-prod", taken: true},
+	} {
+		t.Run("recorded "+tc.rollbackFrom, func(t *testing.T) {
+			c := newClient(t, at(tc.rollbackFrom))
+			got, err := lifecycle.AutoRollbackNameIn(ctx, c, "default", "app", "app-v2", "alarm", "prod")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			taken, err := lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod", "app-v2")
+			require.NoError(t, err)
+			assert.Equal(t, tc.taken, taken)
+		})
+	}
+}
+
+// TestRollbackFromOf (#2225): the Bundle a rollback rolls back from is its
+// immutable spec.provenance.rollbackFrom, or, for a v0.12.x rollback without
+// it, its kardinal.io/rollback-from annotation.
+func TestRollbackFromOf(t *testing.T) {
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: "relinked"}}}
+	assert.Equal(t, "relinked", lifecycle.RollbackFromOf(b), "v0.12.x: the annotation")
+	b.Spec.Provenance = &v1alpha1.BundleProvenance{RollbackFrom: "app-v2"}
+	assert.Equal(t, "app-v2", lifecycle.RollbackFromOf(b), "the field, not the annotation")
+	assert.Empty(t, lifecycle.RollbackFromOf(&v1alpha1.Bundle{}))
 }
 
 // TestAutoRollbackName_LongEnvironment (#2082 QA): the rollback of a Bundle
@@ -161,10 +226,10 @@ func TestAutoRollbackNameIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "app-v2-rollback-alarm-prod-us", got, "another environment's is taken")
 
-	taken, err := lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod-us")
+	taken, err := lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod-us", "app-v2")
 	require.NoError(t, err)
 	assert.True(t, taken, "prod-eu's is not prod-us's")
-	taken, err = lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod-eu")
+	taken, err = lifecycle.RollbackTaken(ctx, c, "default", "app-v2-rollback-alarm", "app", "prod-eu", "app-v2")
 	require.NoError(t, err)
 	assert.False(t, taken, "prod-eu's own")
 
@@ -184,7 +249,7 @@ func TestAutoRollbackNameIn(t *testing.T) {
 			got, err := nameIn(newClient(t, squat), "prod-eu")
 			require.NoError(t, err)
 			assert.Equal(t, "app-v2-rollback-alarm-prod-eu", got, "the plain name's Bundle is not adopted")
-			taken, err := lifecycle.RollbackTaken(ctx, newClient(t, squat), "default", "app-v2-rollback-alarm", "app", "prod-eu")
+			taken, err := lifecycle.RollbackTaken(ctx, newClient(t, squat), "default", "app-v2-rollback-alarm", "app", "prod-eu", "app-v2")
 			require.NoError(t, err)
 			assert.True(t, taken, "met at the name after a create: not adopted either")
 			_, err = nameIn(newClient(t, squat, rollback("app-v2-rollback-alarm-prod-eu", "prod-us")), "prod-eu")
@@ -213,7 +278,7 @@ func TestAutoRollbackNameIn(t *testing.T) {
 			got, err := nameIn(newClient(t, own), "prod-eu")
 			require.NoError(t, err)
 			assert.Equal(t, "app-v2-rollback-alarm", got, "its own")
-			taken, err := lifecycle.RollbackTaken(ctx, newClient(t, own), "default", "app-v2-rollback-alarm", "app", "prod-eu")
+			taken, err := lifecycle.RollbackTaken(ctx, newClient(t, own), "default", "app-v2-rollback-alarm", "app", "prod-eu", "app-v2")
 			require.NoError(t, err)
 			assert.False(t, taken)
 		})
@@ -300,7 +365,7 @@ func TestRollbackTaken_ForgedAtTheName(t *testing.T) {
 		Annotations: map[string]string{lifecycle.AnnotationRollbackFrom: "app-v2", lifecycle.AnnotationCreatedBy: "mallory"}},
 		Spec: v1alpha1.BundleSpec{Pipeline: "app", Intent: &v1alpha1.BundleIntent{TargetEnvironment: "prod"},
 			Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "mallory"}}}
-	taken, err := lifecycle.RollbackTaken(context.Background(), newClient(t, forged), "default", "app-v2-rollback-alarm", "app", "prod")
+	taken, err := lifecycle.RollbackTaken(context.Background(), newClient(t, forged), "default", "app-v2-rollback-alarm", "app", "prod", "app-v2")
 	require.NoError(t, err)
 	assert.True(t, taken, "not the controller's: never adopted")
 }
