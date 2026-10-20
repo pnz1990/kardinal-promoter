@@ -158,9 +158,7 @@ func TestSignedRequestsDoc_GoVerifier(t *testing.T) {
 func TestSignedRequestsDoc_ShellLine(t *testing.T) {
 	t.Parallel()
 	for _, tool := range []string{"bash", "openssl", "sed"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("%s is not installed: %v", tool, err)
-		}
+		requireTool(t, tool, "the docs' openssl line")
 	}
 	block := fence(t, signedRequestsSection(t), "bash", "openssl dgst")
 	line := strings.TrimSpace(block)
@@ -243,16 +241,29 @@ func scriptCases(tsHeader, sigHeader string) []scriptCase {
 	}
 }
 
+// requireTool skips the test when tool is not on PATH, with the reason, and
+// fails it under CI (GitHub Actions sets CI): the runner has the tool, so a
+// runner image that loses it must not turn the test into a silent skip.
+func requireTool(t *testing.T, tool, what string) {
+	t.Helper()
+	if _, err := exec.LookPath(tool); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("%s is not on PATH under CI, so %s cannot be checked: %v", tool, what, err)
+		}
+		t.Skipf("%s is not on PATH, so %s is not checked: %v", tool, what, err)
+	}
+}
+
 // runScriptVerifier runs the docs' verifier of a language: the fenced block
 // of lang that contains defines, then harness, which reads the cases as JSON
 // on stdin and prints a JSON list of verify's answers. A verifier that raises
-// fails the run.
-func runScriptVerifier(t *testing.T, tool, lang, defines, harness, file string, cases []scriptCase) {
+// fails the run. The block must compare with constantTime, the language's
+// constant-time compare: a plain == would leak where the signatures differ.
+func runScriptVerifier(t *testing.T, tool, lang, defines, constantTime, harness, file string, cases []scriptCase) {
 	t.Helper()
-	if _, err := exec.LookPath(tool); err != nil {
-		t.Skipf("%s is not on PATH, so the docs' %s verifier is not run: %v", tool, lang, err)
-	}
+	requireTool(t, tool, "the docs' "+lang+" verifier")
 	block := fence(t, signedRequestsSection(t), lang, defines)
+	assert.Contains(t, block, constantTime, "the docs' %s verifier compares the signatures with %s", lang, constantTime)
 	dir := t.TempDir()
 	script := filepath.Join(dir, file)
 	require.NoError(t, os.WriteFile(script, []byte(block+"\n"+harness), 0o600))
@@ -286,7 +297,7 @@ func runScriptVerifier(t *testing.T, tool, lang, defines, harness, file string, 
 // request without raising.
 func TestSignedRequestsDoc_PythonVerifier(t *testing.T) {
 	t.Parallel()
-	runScriptVerifier(t, "python3", "python", "def verify(", `
+	runScriptVerifier(t, "python3", "python", "def verify(", "hmac.compare_digest(", `
 import json, sys
 cases = json.load(sys.stdin)
 print(json.dumps([verify(c["key"].encode(), c["headers"], c["body"].encode()) is True for c in cases]))
@@ -298,7 +309,7 @@ print(json.dumps([verify(c["key"].encode(), c["headers"], c["body"].encode()) is
 // without throwing.
 func TestSignedRequestsDoc_NodeVerifier(t *testing.T) {
 	t.Parallel()
-	runScriptVerifier(t, "node", "js", "function verify(", `
+	runScriptVerifier(t, "node", "js", "function verify(", "crypto.timingSafeEqual(", `
 const cases = JSON.parse(require("fs").readFileSync(0, "utf8"));
 process.stdout.write(JSON.stringify(cases.map((c) => verify(c.key, c.headers, Buffer.from(c.body, "utf8")) === true)));
 `, "verify.js", scriptCases("x-kardinal-timestamp", "x-kardinal-signature"))
