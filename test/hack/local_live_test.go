@@ -37,14 +37,16 @@ esac
 
 // docker knows the fake clusters' nodes: ps lists them, inspect finds them.
 // FAKE_DOCKER_DOWN makes docker info fail, FAKE_DOCKER_ERR every inspect.
+// Its tools are the system's (command -p): a run's failing tools are not
+// docker's.
 const localLiveDocker = `#!/usr/bin/env bash
-f=$FAKE/clusters; touch "$f"
+f=$FAKE/clusters; command -p touch "$f"
 case "$1" in
   info) [ -z "${FAKE_DOCKER_DOWN:-}" ] ;;
-  ps) sed 's/$/-control-plane/' "$f" ;;
+  ps) command -p sed 's/$/-control-plane/' "$f" ;;
   inspect)
     if [ -n "${FAKE_DOCKER_ERR:-}" ]; then echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1; fi
-    grep -qx "${2%-control-plane}" "$f" || { echo "Error: No such object: $2" >&2; exit 1; } ;;
+    command -p grep -qx "${2%-control-plane}" "$f" || { echo "Error: No such object: $2" >&2; exit 1; } ;;
 esac
 `
 
@@ -568,6 +570,103 @@ exec "$@"
 		require.NoError(t, os.RemoveAll(filepath.Join(h.slots, "4")))
 		require.NoError(t, cmd.Wait(), "%s", out.String())
 		assert.Contains(t, h.read("up"), "SLOT=1\n", "slot 1, beside the other run's 3")
+	})
+	t.Run("a run whose cat, grep, cut, awk, sed and find fail takes no unsafe answer", func(t *testing.T) {
+		// #2242 QA's rule, for the slots: the tools fail while the run takes
+		// its slots and waits for room (LOCAL_LIVE_TEST_FAIL_PATH), as forks
+		// do on a busy host. Before it, a failed $(cat ...) made a live run's
+		// slot look gone, and a drain marker look absent.
+		failing := t.TempDir()
+		for _, tool := range []string{"cat", "grep", "cut", "awk", "sed", "find"} {
+			require.NoError(t, os.WriteFile(filepath.Join(failing, tool),
+				[]byte("#!/bin/sh\necho \"bash: fork: Resource temporarily unavailable\" >&2\nexit 1\n"), 0o755))
+		}
+		// And forks that fail now and then: a cat that reads a slot's owner
+		// but fails on /proc and on a slot's cluster file (the script before
+		// this fix then judged the live run gone and removed its slot).
+		flaky := t.TempDir()
+		realCat, err := exec.LookPath("cat")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(flaky, "cat"), []byte(`#!/bin/sh
+case "$*" in /proc/*|*/cluster) echo "bash: fork: Resource temporarily unavailable" >&2; exit 1 ;; esac
+exec `+realCat+` "$@"
+`), 0o755))
+		boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		require.NoError(t, err)
+		stat, err := os.ReadFile("/proc/self/stat")
+		require.NoError(t, err)
+		f := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
+		require.Greater(t, len(f), 19)
+		live := fmt.Sprintf("other run pid %d now boot=%s start=%s", os.Getpid(), strings.TrimSpace(string(boot)), f[19])
+		// slot is a live run's slot 1, its cluster running; drain a live
+		// heavy run's marker. Each returns what to remove to unblock.
+		slot := func(h *localLiveHost) string {
+			d := filepath.Join(h.slots, "1")
+			require.NoError(t, os.MkdirAll(d, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), []byte(live+"\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(d, "cluster"), []byte("kardinal-e2e-other\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-other\n"), 0o644))
+			return d
+		}
+		drain := func(h *localLiveHost) string {
+			m := filepath.Join(h.slots, ".drain")
+			require.NoError(t, os.WriteFile(m, []byte("E local-live scale 1.37 draining the host for a heavy suite, "+strings.TrimPrefix(live, "other run ")+"\n"), 0o644))
+			return m
+		}
+		for _, tc := range []struct {
+			name, why, fail string
+			env             []string
+			setup           func(h *localLiveHost) string
+		}{
+			{"a live run's slot (SLOT_MAX=1)", "cluster slots are in use", failing, []string{"SLOT_MAX=1"}, slot},
+			{"a live run's slot, forks failing now and then", "cluster slots are in use", flaky, []string{"SLOT_MAX=1"}, slot},
+			{"a live heavy run's drain marker", "a heavy suite is draining the host", failing, nil, drain},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				blocker := tc.setup(h)
+				cmd := h.cmd(t, append(tc.env, "LOCAL_LIVE_TEST_FAIL_PATH="+tc.fail), "gitea")
+				out := &liveOut{}
+				cmd.Stdout, cmd.Stderr = out, out
+				require.NoError(t, cmd.Start())
+				if !assert.Eventually(t, func() bool { return strings.Contains(out.String(), tc.why) }, 10*time.Second, 20*time.Millisecond) {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					t.Fatalf("it did not wait (%q): %s", tc.why, out.String())
+				}
+				time.Sleep(300 * time.Millisecond)
+				assert.Empty(t, h.read("up"), "no cluster while it is blocked")
+				assert.NotContains(t, out.String(), "reclaimed")
+				assert.NotContains(t, out.String(), "removed the drain marker")
+				require.NoError(t, os.RemoveAll(blocker))
+				done := make(chan error, 1)
+				go func() { done <- cmd.Wait() }()
+				select {
+				case err := <-done:
+					require.NoError(t, err, "%s", out.String())
+				case <-time.After(30 * time.Second):
+					_ = cmd.Process.Kill()
+					<-done
+					t.Fatalf("never started once unblocked: %s", out.String())
+				}
+				assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "it runs once unblocked")
+			})
+		}
+		t.Run("a load it cannot parse", func(t *testing.T) {
+			h := newLocalLiveHost(t)
+			cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_FAIL_PATH=" + failing, "LOCAL_LIVE_TEST_LOAD=busy"}, "gitea")
+			out := &liveOut{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			if !assert.Eventually(t, func() bool { return strings.Contains(out.String(), "the one-minute load is busy, not under 48") }, 10*time.Second, 20*time.Millisecond) {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				t.Fatalf("it did not wait: %s", out.String())
+			}
+			assert.Empty(t, h.read("up"))
+			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+			_ = cmd.Wait()
+		})
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)

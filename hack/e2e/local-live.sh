@@ -282,49 +282,86 @@ export HOME=$RUN_DIR/home
 mkdir -p "$HOME"
 [ "$KUBECONFIG" = "$E2E_OUT/kubeconfig" ] && [ ! -e "$HOME/.kube/config" ] ||
   die "refusing to run: KUBECONFIG is $KUBECONFIG, not the run's own $E2E_OUT/kubeconfig"
-boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
-# start_of PID prints PID's start time (/proc/<pid>/stat field 22, counted
-# after the command's last ')'), or fails when PID does not run.
-start_of() {
+# Every decision on the host's shared state below (slots, the drain marker,
+# the load gate) uses shell builtins only (read, case, [[ ]], parameter
+# expansion; no $(...) of cat, grep, cut or awk), as hack/loadlock.sh does
+# (#2242 QA): on a busy host a fork can fail, and a failed $(cat ...) must
+# never make a live run look gone or the host look free. A file that is
+# there but cannot be read is the safe answer: its run is alive, the host is
+# draining, busy or full.
+this_boot=
+{ read -r this_boot </proc/sys/kernel/random/boot_id; } 2>/dev/null || this_boot=
+# read_file FILE sets file_v to FILE's text, trailing newlines dropped; it
+# fails when FILE cannot be opened (a missing file, or a read that failed).
+read_file() {
+  local opened=''
+  file_v=''
+  { opened=1; IFS= read -r -d '' file_v; } <"$1" 2>/dev/null
+  [ -n "$opened" ] || return 1
+  while [[ $file_v == *$'\n' ]]; do file_v=${file_v%$'\n'}; done
+  return 0
+}
+# read_start PID sets start_v to PID's start time (/proc/<pid>/stat field 22,
+# counted after the command's last ')'), or fails when PID does not run.
+read_start() {
   local stat rest f
-  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  start_v=''
+  { IFS= read -r stat <"/proc/$1/stat"; } 2>/dev/null || return 1
   rest=${stat##*)}
   read -ra f <<<"$rest"
   [ -n "${f[19]:-}" ] || return 1
-  echo "${f[19]}"
+  start_v=${f[19]}
+}
+# now_ms sets now_ms_v to the time in milliseconds (bash 5's EPOCHREALTIME;
+# date on an older bash), or to nothing when it cannot be read.
+# shellcheck disable=SC2329 # called by room, through with_flock
+now_ms() {
+  local t=${EPOCHREALTIME:-}
+  now_ms_v=''
+  if [[ $t =~ ^([0-9]+)[.,]([0-9]{3}) ]]; then
+    now_ms_v=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+  else
+    t=$(date +%s%3N 2>/dev/null) && [[ $t =~ ^[0-9]+$ ]] && now_ms_v=$t
+  fi
+  return 0
 }
 # record_gone RECORD succeeds when RECORD ("... pid N ..." with optional
 # boot= and start= keys, as hack/loadlock.sh writes them) names a process
 # that is gone. A record without a pid is never gone.
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 record_gone() {
-  local r=$1 pid start
+  local r=$1 pid
   [[ $r =~ (^|[[:space:]])pid\ ([0-9]+)([[:space:]]|$) ]] || return 1
   pid=${BASH_REMATCH[2]}
-  if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ "${BASH_REMATCH[2]}" != "$(boot_id)" ]; then
+  if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ -n "$this_boot" ] && [ "${BASH_REMATCH[2]}" != "$this_boot" ]; then
     return 0
   fi
-  start=$(start_of "$pid") || return 0
+  read_start "$pid" || return 0
   if [[ $r =~ (^|[[:space:]])start=([0-9]+)([[:space:]]|$) ]]; then
-    [ "${BASH_REMATCH[2]}" != "$start" ]
+    [ "${BASH_REMATCH[2]}" != "$start_v" ]
     return
   fi
   return 1
 }
 
-self_start=$(start_of $$) || self_start=unknown
-slot_tag="$OWNER local-live $SUITE $MINOR pid $$ $stamp boot=$(boot_id) start=$self_start"
+read_start $$ && self_start=$start_v || self_start=unknown
+slot_tag="$OWNER local-live $SUITE $MINOR pid $$ $stamp boot=$this_boot start=$self_start"
 kept_tag="KEEP $KIND_CLUSTER, kept by $OWNER local-live $SUITE $MINOR at $stamp"
-drain_tag="$OWNER local-live $SUITE $MINOR draining the host for a heavy suite, pid $$ $stamp boot=$(boot_id) start=$self_start"
+drain_tag="$OWNER local-live $SUITE $MINOR draining the host for a heavy suite, pid $$ $stamp boot=$this_boot start=$self_start"
 taken=()
 draining=''
 
-# with_flock NAME CMD... runs CMD under flock on SLOTS_DIR/NAME.
+# with_flock NAME CMD... runs CMD under flock on SLOTS_DIR/NAME; never
+# without it: when flock fails (a fork that failed), with_flock fails.
 with_flock() {
   local name=$1 fd rc
   shift
   exec {fd}>"$SLOTS_DIR/$name" || return 1
-  flock -x "$fd"
+  if ! flock -x "$fd"; then
+    exec {fd}>&-
+    why="cannot take the $name flock"
+    return 1
+  fi
   "$@"
   rc=$?
   flock -u "$fd"
@@ -336,7 +373,7 @@ with_flock() {
 release_slots() {
   local d
   for d in "${taken[@]}"; do
-    if [ "$(cat "$d/owner" 2>/dev/null)" = "$slot_tag" ]; then
+    if read_file "$d/owner" && [ "$file_v" = "$slot_tag" ]; then
       if [ -n "${KEEP:-}" ] && [ -n "$cluster_ours" ]; then
         # A kept cluster's slot has no pid: it is not reclaimed while the
         # cluster is there.
@@ -350,7 +387,7 @@ release_slots() {
     fi
   done
   taken=()
-  if [ -n "$draining" ] && [ "$(cat "$SLOTS_DIR/.drain" 2>/dev/null)" = "$drain_tag" ]; then
+  if [ -n "$draining" ] && read_file "$SLOTS_DIR/.drain" && [ "$file_v" = "$drain_tag" ]; then
     rm -f "$SLOTS_DIR/.drain"
   fi
   draining=''
@@ -362,15 +399,24 @@ release_slots() {
 # with none) is never reclaimed.
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 reclaim_slots() {
-  local d owner cluster state docker_ok=1
+  local d owner cluster docker_ok=1
   docker info >/dev/null 2>&1 || docker_ok=''
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
-    owner=$(cat "$d/owner" 2>/dev/null) || continue
+    # An owner that is there but cannot be read is a live run's.
+    read_file "$d/owner" || continue
+    owner=$file_v
     [[ $owner == KEEP\ * ]] || record_gone "$owner" || continue
     # A kept cluster's slot, or a dead run's (a SIGKILLed KEEP run's cluster
     # may still run): reclaimed only when the cluster is definitely gone.
-    cluster=$(cat "$d/cluster" 2>/dev/null)
+    cluster=''
+    if [ -e "$d/cluster" ]; then
+      if ! read_file "$d/cluster" || [ -z "$file_v" ]; then
+        log "warning: cannot read cluster slot $d's cluster; the slot stays"
+        continue
+      fi
+      cluster=$file_v
+    fi
     if [ -z "$cluster" ]; then
       [[ $owner == KEEP\ * ]] || { rm -r "$d" && log "reclaimed cluster slot $d of a run that is gone: $owner"; }
       continue
@@ -379,42 +425,48 @@ reclaim_slots() {
       log "warning: docker does not answer; kept cluster slot $d ($cluster) as it is"
       continue
     fi
-    state=$(cluster_state "$cluster")
-    case $state in
+    cluster_state "$cluster"
+    case $state_v in
       gone) rm -r "$d" && log "reclaimed cluster slot $d: its cluster $cluster is gone ($owner)" ;;
       running) [[ $owner == KEEP\ * ]] || log "warning: cluster slot $d's run is gone but its cluster $cluster still runs; the slot stays: delete the cluster to free it" ;;
-      *) log "warning: cannot tell whether cluster $cluster of slot $d is there ($state); the slot stays" ;;
+      *) log "warning: cannot tell whether cluster $cluster of slot $d is there ($state_v); the slot stays" ;;
     esac
   done
-  owner=$(cat "$SLOTS_DIR/.drain" 2>/dev/null) || return 0
+  read_file "$SLOTS_DIR/.drain" || return 0
+  owner=$file_v
   if record_gone "$owner"; then
     rm -f "$SLOTS_DIR/.drain" && log "removed the drain marker of a heavy run that is gone: $owner"
   fi
 }
 
-# cluster_state prints running when CLUSTER's node is there, gone only on a
-# definite "no such object" or "not found" from docker (or podman), and the
-# error otherwise.
+# cluster_state sets state_v to running when CLUSTER's node is there, gone
+# only on a definite "no such object" or "not found" from docker (or
+# podman), and to the error otherwise (docker inspect is the one fork: when
+# it fails to run, the answer is its error, never gone).
 # shellcheck disable=SC2329 # called by reclaim_slots, through with_flock
 cluster_state() {
-  local out
+  local out lower
   if out=$(docker inspect "$1-control-plane" 2>&1 >/dev/null); then
-    echo running
-  elif grep -qiE 'no such object|not found|no such container' <<<"$out"; then
-    echo gone
+    state_v=running
+    return
+  fi
+  lower=${out,,}
+  if [[ $lower == *"no such object"* || $lower == *"not found"* || $lower == *"no such container"* ]]; then
+    state_v=gone
   else
-    echo "${out:-docker inspect failed}" | head -1
+    state_v=${out%%$'\n'*}
+    state_v=${state_v:-docker inspect failed}
   fi
 }
 
-# in_use is how many slots other runs hold.
+# in_use sets in_use_v to how many slots other runs hold.
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 in_use() {
   local d n=0
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] && n=$((n + 1))
   done
-  echo $((n - ${#taken[@]}))
+  in_use_v=$((n - ${#taken[@]}))
 }
 
 # try_slots, under the .reclaim flock and in this shell (it sets taken):
@@ -423,21 +475,24 @@ in_use() {
 # other slots in use. It sets why when it did not.
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 try_slots() {
-  local i d drain
+  local i d
   why=''
   reclaim_slots
-  if [ -z "$heavy" ] && drain=$(cat "$SLOTS_DIR/.drain" 2>/dev/null); then
-    why="a heavy suite is draining the host: $drain"
+  # A marker that is there but cannot be read is a drain.
+  if [ -z "$heavy" ] && [ -e "$SLOTS_DIR/.drain" ]; then
+    read_file "$SLOTS_DIR/.drain" || file_v='(a marker that cannot be read)'
+    why="a heavy suite is draining the host: $file_v"
     return 1
   fi
-  if [ -n "$heavy" ] && [ "$(in_use)" -gt "$HEAVY_OTHER_SLOTS" ]; then
-    why="$(in_use) other cluster slots are in use; a heavy suite starts with at most $HEAVY_OTHER_SLOTS"
+  in_use
+  if [ -n "$heavy" ] && [ "$in_use_v" -gt "$HEAVY_OTHER_SLOTS" ]; then
+    why="$in_use_v other cluster slots are in use; a heavy suite starts with at most $HEAVY_OTHER_SLOTS"
     return 1
   fi
   # Every slot directory counts, one above SLOT_MAX too (a run with a larger
   # SLOT_MAX took it): the host runs SLOT_MAX clusters at most.
-  if [ $(($(in_use) + need_slots)) -gt "$SLOT_MAX" ]; then
-    why="$(in_use) cluster slots are in use in $SLOTS_DIR, and the host has $SLOT_MAX"
+  if [ $((in_use_v + need_slots)) -gt "$SLOT_MAX" ]; then
+    why="$in_use_v cluster slots are in use in $SLOTS_DIR, and the host has $SLOT_MAX"
     return 1
   fi
   for ((i = 1; i <= SLOT_MAX && ${#taken[@]} < need_slots; i++)); do
@@ -459,7 +514,7 @@ take_slots() {
   # A kept cluster's slots name it: a -reuse run takes them over.
   for ((i = 1; i <= SLOT_MAX; i++)); do
     d=$SLOTS_DIR/$i
-    if [ "$(cat "$d/cluster" 2>/dev/null)" = "$KIND_CLUSTER" ] && [ "${#taken[@]}" -lt "$need_slots" ]; then
+    if read_file "$d/cluster" && [ "$file_v" = "$KIND_CLUSTER" ] && [ "${#taken[@]}" -lt "$need_slots" ]; then
       echo "$slot_tag" >"$d/owner"
       taken+=("$d")
     fi
@@ -517,25 +572,42 @@ drain_expired() {
 # LOCAL_LIVE_TEST=1 lets tests set the load, the limit and the spacing
 # (LOCAL_LIVE_TEST_LOAD, LOCAL_LIVE_TEST_INOTIFY, LOCAL_LIVE_TEST_SPACING).
 # shellcheck disable=SC2329 # called by start_turn, through with_flock
+# It sets why; a load, an inotify limit, a node count or a last start it
+# cannot read is the safe answer (no room).
 room() {
-  local load max nodes limit=$MAX_LOAD spacing=$START_SPACING last now
-  load=$(cut -d' ' -f1 /proc/loadavg)
-  max=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || echo 0)
+  local load='' max='' names nodes=0 n limit=$MAX_LOAD spacing=$START_SPACING last=''
+  why=''
+  { read -r load _ </proc/loadavg; } 2>/dev/null
+  { read -r max </proc/sys/fs/inotify/max_user_instances; } 2>/dev/null
   if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
     load=${LOCAL_LIVE_TEST_LOAD:-$load}
     max=${LOCAL_LIVE_TEST_INOTIFY:-$max}
     spacing=${LOCAL_LIVE_TEST_SPACING:-$spacing}
   fi
   [ -z "$heavy" ] || limit=$HEAVY_MAX_LOAD
-  nodes=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c -- '-control-plane$' || true)
-  last=$(cat "$SLOTS_DIR/.last-start" 2>/dev/null || echo 0) # milliseconds
-  now=$(date +%s%3N)
-  if ! awk -v l="$load" -v m="$limit" 'BEGIN { exit !(l < m) }'; then
-    echo "the one-minute load is $load, not under $limit"
-  elif [ "$max" -lt $((128 * (nodes + need_slots))) ]; then
-    echo "fs.inotify.max_user_instances is $max, under 128 for each of $nodes kind nodes and $need_slots more (sudo sysctl -w fs.inotify.max_user_instances=8192)"
-  elif [ $((now - ${last:-0})) -lt $((spacing * 1000)) ]; then
-    echo "a cluster started $(((now - last) / 1000))s ago; starts are ${spacing}s apart"
+  if ! [[ $load =~ ^([0-9]+)(\.[0-9]*)?$ ]] || [ "$((10#${BASH_REMATCH[1]}))" -ge "$limit" ]; then
+    why="the one-minute load is ${load:-unreadable}, not under $limit"
+    return
+  fi
+  # docker ps is the one fork: when it fails, the nodes cannot be counted.
+  if ! names=$(docker ps --format '{{.Names}}' 2>/dev/null); then
+    why="docker ps failed: the kind nodes running cannot be counted"
+    return
+  fi
+  for n in $names; do [[ $n != *-control-plane ]] || nodes=$((nodes + 1)); done
+  if ! [[ $max =~ ^[0-9]+$ ]] || [ "$max" -lt $((128 * (nodes + need_slots))) ]; then
+    why="fs.inotify.max_user_instances is ${max:-unreadable}, under 128 for each of $nodes kind nodes and $need_slots more (sudo sysctl -w fs.inotify.max_user_instances=8192)"
+    return
+  fi
+  now_ms
+  if [ -e "$SLOTS_DIR/.last-start" ]; then
+    read_file "$SLOTS_DIR/.last-start" && last=$file_v # milliseconds
+    [[ $last =~ ^[0-9]+$ ]] || last=$now_ms_v          # unreadable: as if just now
+  fi
+  if ! [[ $now_ms_v =~ ^[0-9]+$ ]]; then
+    why="the time cannot be read"
+  elif [ $((now_ms_v - ${last:-0})) -lt $((spacing * 1000)) ]; then
+    why="a cluster started $(((now_ms_v - last) / 1000))s ago; starts are ${spacing}s apart"
   fi
 }
 
@@ -543,9 +615,9 @@ room() {
 # (SLOTS_DIR/.last-start) and succeeds; otherwise it sets why.
 # shellcheck disable=SC2329 # called through with_flock
 start_turn() {
-  why=$(room)
+  room
   [ -z "$why" ] || return 1
-  date +%s%3N >"$SLOTS_DIR/.last-start"
+  printf '%s\n' "$now_ms_v" >"$SLOTS_DIR/.last-start"
 }
 
 # wait_for_room waits until this run may start its cluster: the check and the
@@ -604,9 +676,14 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# LOCAL_LIVE_TEST_FAIL_PATH (tests, with LOCAL_LIVE_TEST=1) is put in front
+# of PATH while the run takes its slots and waits for room: a directory of
+# tools that fail, as forks do on a busy host.
+fail_path=''
+[ "${LOCAL_LIVE_TEST:-}" != 1 ] || [ -z "${LOCAL_LIVE_TEST_FAIL_PATH:-}" ] || fail_path=$LOCAL_LIVE_TEST_FAIL_PATH:
 if [ -z "$nolock" ]; then
   mkdir -p "$SLOTS_DIR"
-  take_slots
+  PATH=$fail_path$PATH take_slots
   log "holding cluster slot(s) ${taken[*]}"
 fi
 
@@ -620,7 +697,7 @@ else
       die "kind cluster $c exists: another run's, or a KEEP run's (reuse it with -reuse $KIND_CLUSTER); delete it, or set KIND_CLUSTER"
     fi
   done
-  [ -n "$nolock" ] || wait_for_room
+  [ -n "$nolock" ] || PATH=$fail_path$PATH wait_for_room
   # A deleted cluster's leftover state would point up.sh at its old secrets.
   forget_state
   echo "$MINOR" >"$E2E_OUT/minor"
