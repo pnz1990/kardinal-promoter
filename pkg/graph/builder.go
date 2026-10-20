@@ -1224,7 +1224,7 @@ func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 			Labels: map[string]string{
 				"kardinal.io/pipeline": pipeline.Name,
 				"kardinal.io/bundle":   bundle.Name,
-				LabelRenderVersion:     strconv.Itoa(RenderVersion),
+				LabelRenderVersion:     RenderLabel,
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{

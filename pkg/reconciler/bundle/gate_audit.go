@@ -338,7 +338,7 @@ func upgradeGateChangeEntry(b *kardinalv1alpha1.Bundle, before, after map[string
 		clauses = append(clauses[:gateMessageChanges], fmt.Sprintf("and %d more", len(clauses)-gateMessageChanges))
 	}
 	entry.Spec.Message = fmt.Sprintf("%d PolicyGate %s changed under version %s on upgrade: its Graph, rendered by an earlier controller, "+
-		"was rendered again (render version %d) and its gates took the current rules: %s",
-		len(changes), noun, b.Name, graph.RenderVersion, strings.Join(clauses, "; "))
+		"was rendered again (render version %s) and its gates took the current rules: %s",
+		len(changes), noun, b.Name, graph.RenderLabel, strings.Join(clauses, "; "))
 	return entry, true
 }

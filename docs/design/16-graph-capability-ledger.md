@@ -1261,7 +1261,7 @@ every gate where it was, so a working Graph's nodes do not change. The
 package's test renderer renders an optional with no value as null as kro does, and every test
 that renders a Graph checks no PolicyGate has a null `spec.approval` (`assertNoNullApproval`).
 A version already stuck when the fix ships recovers on upgrade: the fix bumps
-`graph.RenderVersion` (2), which every Graph carries as its `kardinal.io/render-version` label, and
+`graph.RenderVersion` (2; 3 on main since #2346), which every Graph carries as its `kardinal.io/render-version` label, and
 the Bundle reconciler re-translates a Promoting Bundle's Graph whose label differs once.
 **Smallest change, no upstream work yet.** Nothing upstream is needed: omitting the field is
 what `CELOmitFunction` is for. Requiring that alpha gate of every kardinal install is not worth
@@ -1391,11 +1391,16 @@ Cadence):
    survey (`graphcleanup` depends on the finalizer name and the `status.managedResources` shape).
 6. **Render version.** If the upgrade, or any change to `pkg/graph`, renders an existing
    Bundle's Graph differently (node IDs, templates, data), bump `graph.RenderVersion` and say so
-   in the changelog fragment. Every Graph carries it as its `kardinal.io/render-version` label,
-   and the new controller re-translates every Promoting Bundle's Graph whose label differs once;
-   without the bump a version stuck under the old rendering stays stuck (#2271, G28). Verified,
-   failed and superseded Bundles keep their Graphs. A change that leaves every existing Graph
-   identical needs no bump.
+   in the changelog fragment. Every Graph carries it as its `kardinal.io/render-version` label
+   (`graph.RenderLabel`), and the new controller re-translates every Promoting Bundle's Graph whose
+   label differs once; without the bump a version stuck under the old rendering stays stuck
+   (#2271, G28). Verified, failed and superseded Bundles keep their Graphs. A change that leaves
+   every existing Graph identical needs no bump. The label is compared for equality, so **a
+   release-branch backport that changes the rendering sets `graph.RenderLabel` to a value main
+   never uses**: main's `RenderVersion` at the branch's release, plus the patch release (for
+   example `3-v0.12.4`). It never takes main's next integer. v0.12.3 labelled its Graphs `2`,
+   which main used for a different rendering, so the upgrade from it to main re-rendered nothing
+   until main moved to 3 (#2346).
 
 ---
 

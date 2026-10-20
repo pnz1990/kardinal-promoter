@@ -6,7 +6,6 @@ package bundle_test
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"testing"
 	"time"
 
@@ -474,7 +473,7 @@ func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
 		}
 		return ids
 	}
-	current := strconv.Itoa(graph.RenderVersion)
+	current := graph.RenderLabel
 	require.Contains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
 	require.Equal(t, current, read().GetLabels()[graph.LabelRenderVersion], "the Graph carries its render version")
 
@@ -694,7 +693,7 @@ func TestRenderVersion_UpgradeRecordsOldStamp(t *testing.T) {
 	g := newGateEditRig(t, gateEditPipeline(), window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
 	lcReconcile(t, g.r, "app-v1")
 	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
-	g.renderOlder(t, "app-v1", strconv.Itoa(graph.RenderVersion-1), func(tmpl map[string]interface{}) {
+	g.renderOlder(t, "app-v1", "2", func(tmpl map[string]interface{}) {
 		tmpl["digest"], tmpl["generation"] = "sha256:old", "2"
 		tmpl["spec"].(map[string]interface{})["expression"] = "false"
 	})
@@ -707,4 +706,44 @@ func TestRenderVersion_UpgradeRecordsOldStamp(t *testing.T) {
 	}, got[0].Gates)
 	assert.Equal(t, "prod", got[0].Environment)
 	assert.Contains(t, got[0].Message, "default/window takes its current rule (generation 4)")
+}
+
+// #2346: a Graph v0.12.3 rendered carries render version 2, which main
+// renders differently from: it is re-rendered once, in place. A Graph whose
+// rendering is otherwise the current one keeps every node and the same spec,
+// gets only the current label, and records no GateChanged; a second
+// reconcile writes nothing.
+func TestRenderVersion_V0123LabelRetranslatesOnce(t *testing.T) {
+	ctx := context.Background()
+	verify := gateTemplate("explore-qa", "prod", false)
+	verify.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1}
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	g := newGateEditRig(t, gateEditPipeline(), verify, cab, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", "app-v1")
+	read := func() *unstructured.Unstructured {
+		u, err := gvr.Get(ctx, name, metav1.GetOptions{})
+		require.NoError(t, err)
+		return u
+	}
+	before := read()
+	g.renderOlder(t, "app-v1", "2", func(map[string]interface{}) {})
+	require.Equal(t, "2", read().GetLabels()[graph.LabelRenderVersion])
+	updates := g.writes("app-v1", "update")
+
+	lcReconcile(t, g.r, "app-v1")
+	after := read()
+	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "re-rendered once")
+	assert.Equal(t, graph.RenderLabel, after.GetLabels()[graph.LabelRenderVersion])
+	assert.Equal(t, before.GetUID(), after.GetUID(), "in place")
+	beforeSpec, _, _ := unstructured.NestedMap(before.Object, "spec")
+	afterSpec, _, _ := unstructured.NestedMap(after.Object, "spec")
+	assert.Equal(t, beforeSpec, afterSpec, "the same nodes and data: kro applies it as a no-op")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"), "no rule changed")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "once")
 }
