@@ -346,6 +346,15 @@ func kroErrors(t *testing.T, e *framework.Env, since time.Time, expected func(at
 // that start, kro cannot read those nodes" (#1283).
 var u012HealthRefForbidden = regexp.MustCompile(`apply \\"health[A-Z][A-Za-z0-9]*\\" \(ref\): get external ref .* is forbidden`)
 
+// u012HealthWatchForbidden matches the same gap in kro's watch manager: its
+// informer for a kind the removed health ref nodes read (the kinds the
+// deleted reader ClusterRole and the old kro-watch rules granted) cannot
+// list or watch it at the cluster scope any more, while Graphs still have
+// those nodes. Seen in one of four upgrade jobs (e2e-live 39476864470,
+// upgrade-v0121 on 1.35): three lines, 5 to 9 seconds before the nodes were
+// gone (#1283).
+var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-manager\tWatch error\t\{"gvr": "(apps/v1, Resource=deployments|argoproj\.io/v1alpha1, Resource=(applications|rollouts)|kustomize\.toolkit\.fluxcd\.io/v1, Resource=kustomizations|flagger\.app/v1beta1, Resource=canaries)", "error": "(failed to list \*v1\.PartialObjectMetadata: )?[a-z.]+ is forbidden: User \\"system:serviceaccount:[^\\"]+\\" cannot (list|watch) resource `)
+
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
 // released (its chart, CLI and kro) and follows "Upgrading from v0.12.0" in
 // docs/upgrade.md, running the guide's own commands, while versions are in
@@ -1081,7 +1090,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 	// node between the chart upgrade and the new controller's removal of
 	// those nodes. Only that read, and only before the nodes were gone.
 	leveled, allowed, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
-		return at.Before(refsGone) && u012HealthRefForbidden.MatchString(line)
+		return at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line))
 	})
 	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283)", leveled, allowed)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")
