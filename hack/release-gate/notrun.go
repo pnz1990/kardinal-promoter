@@ -160,7 +160,7 @@ func releaseJobs(root string) (map[string]bool, error) {
 func renderNotRun(b *strings.Builder, items []NotRunItem) {
 	b.WriteString("\n## Not run by this gate\n\n")
 	if len(items) == 0 {
-		b.WriteString("Nothing is listed in hack/release-gate/not-run.txt.\n")
+		b.WriteString("**The not-run list was not loaded**: this report says nothing about what the gate does not run.\n")
 		return
 	}
 	b.WriteString("The verdict covers only what the steps above ran. The gate does not run these " +

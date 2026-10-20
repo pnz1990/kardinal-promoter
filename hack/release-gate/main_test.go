@@ -653,8 +653,8 @@ func TestRender(t *testing.T) {
 
 	b.Reset()
 	require.NoError(t, Render(&b, steps, results, out, cov, nil, p, 90*time.Minute))
-	assert.Contains(t, b.String(), "\n## Not run by this gate\n\nNothing is listed in hack/release-gate/not-run.txt.\n",
-		"the section is there with an empty list too")
+	assert.Contains(t, b.String(), "\n## Not run by this gate\n\n**The not-run list was not loaded**: this report says nothing about what the gate does not run.\n",
+		"readNotRun refuses an empty list, so no list means it was not loaded: the section says so, not that nothing is missing")
 	assert.NotContains(t, b.String(), "It does not prove")
 }
 
