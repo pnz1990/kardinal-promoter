@@ -28,6 +28,9 @@ import (
 type yamlDoc struct {
 	doc        yaml.Node
 	compactSeq bool
+	// style is how the file writes its lines (a BOM, CRLF), which the
+	// parser and the encoder do not keep: encode restores it (#2182).
+	style lineStyle
 	// raw and orig are the file as read and an unedited parse of it, for
 	// spliceEncode; orig is nil when the document cannot be spliced.
 	raw  []byte
@@ -45,7 +48,8 @@ type yamlDoc struct {
 // "---\n# x\n---"), so they are moved to the end of the first document
 // instead of being dropped.
 func parseYAMLMapping(raw []byte) (*yamlDoc, error) {
-	d := &yamlDoc{compactSeq: compactSeqIndent(raw)}
+	raw, style := normalizeLineStyle(raw)
+	d := &yamlDoc{compactSeq: compactSeqIndent(raw), style: style}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&d.doc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
@@ -132,8 +136,18 @@ func (d *yamlDoc) root() *yaml.Node { return d.doc.Content[0] }
 // When it can, it writes only what an edit changed (spliceEncode, #1907):
 // the file's other bytes stay as they were. Otherwise, or when the splice
 // would not read back as the edited document, the whole document is
-// encoded.
+// encoded. Either way the file keeps its leading byte order mark and its
+// dominant line ending (lineStyle, #2182).
 func (d *yamlDoc) encode() ([]byte, error) {
+	out, err := d.encodeLF()
+	if err != nil {
+		return nil, err
+	}
+	return d.style.restore(out), nil
+}
+
+// encodeLF is encode with LF line endings and no byte order mark.
+func (d *yamlDoc) encodeLF() ([]byte, error) {
 	if d.orig != nil {
 		if out, ok := spliceEncode(d.raw, d.orig, &d.doc, d.compactSeq); ok {
 			same, err := sameData(out, &d.doc)
@@ -297,4 +311,43 @@ func compactSeqIndent(raw []byte) bool {
 		prevIsKey = strings.HasSuffix(strings.TrimRight(trimmed, " "), ":")
 	}
 	return true
+}
+
+// utf8BOM is the UTF-8 byte order mark.
+var utf8BOM = []byte("\xef\xbb\xbf")
+
+// lineStyle is how a YAML file writes its lines, which the parser and the
+// encoder do not keep: whether it starts with a UTF-8 byte order mark, and
+// whether its dominant line ending is CRLF (#2182).
+type lineStyle struct {
+	bom, crlf bool
+}
+
+// normalizeLineStyle returns raw as the parser and the splice read it,
+// without a leading byte order mark and, when CRLF is its dominant line
+// ending, with LF line endings, and the style to restore. The dominant
+// ending is the one more lines end with; a tie is LF. A file with mixed line
+// endings is written with its dominant one throughout: the lines that ended
+// otherwise change.
+func normalizeLineStyle(raw []byte) ([]byte, lineStyle) {
+	var s lineStyle
+	if bytes.HasPrefix(raw, utf8BOM) {
+		s.bom, raw = true, raw[len(utf8BOM):]
+	}
+	crlf := bytes.Count(raw, []byte("\r\n"))
+	if lf := bytes.Count(raw, []byte("\n")) - crlf; crlf > lf {
+		s.crlf, raw = true, bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	}
+	return raw, s
+}
+
+// restore writes out, LF-encoded, in style s.
+func (s lineStyle) restore(out []byte) []byte {
+	if s.crlf {
+		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+	}
+	if s.bom {
+		out = append(append([]byte{}, utf8BOM...), out...)
+	}
+	return out
 }
