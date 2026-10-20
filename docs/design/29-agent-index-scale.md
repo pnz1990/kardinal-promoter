@@ -1,6 +1,8 @@
 # Design: an agent index whose admission cost does not grow with every agent (#2071)
 
-> Status: **Proposed, for the coordinator's review before any code** (v0.14.0, #2071).
+> Status: **Decided (2026-10-20)**: v0.14.0 ships design C, compact entries in the one index
+> (#2071). The per-namespace index, PodTemplate params and a ConfigMap opt-in are rejected
+> (§6). The upstream issue is on the owner's list (Appendix A).
 > Created: 2026-10-20
 > Depends on: [17-actors.md](17-actors.md) §5 (the actor policy and the AgentIndex) and
 > [18-actor-policy.md](18-actor-policy.md).
@@ -232,6 +234,9 @@ Notes on each design:
 
 ## 5. Recommendation
 
+> As proposed for review. §6 records the decisions: items 1, 2 and 4 stand; item 3 (D) was
+> rejected without measuring.
+
 1. **Don't build the per-namespace index** (§3.4).
 2. **v0.14, first step: C**, the compact encoding in the one AgentIndex.
    - It's about 2.8× cheaper per request, and has more capacity per byte.
@@ -251,10 +256,60 @@ Notes on each design:
 4. **Ask the owner to post U upstream.** It's the only design that removes the cost with no new
    kardinal parts, but its timeline isn't kardinal's.
 
-## 6. What this note does not settle
+## 6. Decisions
 
-- **Whether a workload kind (D) is an acceptable param** to the owner and operators, even when
-  it's measured cheap. That's the coordinator's call.
-- **Whether a chart value should offer B-cm** to clusters that know they hold few ConfigMaps.
-- **The bound for a single cluster under C.** It depends on the encoding's average length and
-  needs measuring at 5,000 and 10,000 identities with the enterprise scenario's identities.
+The coordinator decided on 2026-10-20:
+
+1. **The per-namespace index is rejected**, for §3.4's reasons.
+2. **v0.14 ships C**, compact entries in the single AgentIndex (about 2.8× cheaper). That is the
+   plan of record, tracked in #2071.
+3. **PodTemplates as the index (D) are rejected, and not to be measured.** Using a built-in kind
+   for unrelated data confuses operators, policy engines (Kyverno and Gatekeeper act on
+   PodTemplates), security scanners and RBAC reviews: an enterprise-hostile trick, however cheap.
+4. **A ConfigMap opt-in (B-cm) is rejected.** Two index paths double the admission surface, for a
+   gain only clusters with few ConfigMaps see.
+5. **The upstream issue (U) goes on the owner's list**, as posting externally is theirs. The draft
+   is Appendix A.
+
+Still to measure when C is built: its bound for one cluster, which depends on the encoding's
+average length, at 5,000 and 10,000 identities with the enterprise scenario's identities.
+
+## Appendix A. Draft upstream issue (kubernetes/kubernetes), not posted
+
+For the owner to post. It is the draft from #2071's v0.13 work, unchanged.
+
+> **ValidatingAdmissionPolicy: custom-resource params are converted eagerly on every request, so
+> admission cost grows with the param's size**
+>
+> **What happens.** For every request a policy matches, the param is turned into a CEL value
+> with `common.SchemalessTypedToVal(inputs.VersionedParams)`
+> (`staging/src/k8s.io/apiserver/pkg/admission/plugin/cel/activation.go`, `newActivation`).
+> This happens before any expression runs, and also for the policy's matchConditions
+> (`validating/validator.go`, `celMatcher.Match`, then `condition.ForInput`, then
+> `newActivation`).
+>
+> - For a built-in param kind, the object comes from the typed informer and is read lazily
+>   (`reflectSchemalessTypedStruct` and `Map`). The cost doesn't depend on its size.
+> - A custom-resource param is an `*unstructured.Unstructured`. Its type entry
+>   `CanConvertToUnstructured()`, so `cacheEntry.ToUnstructured(v)` runs, then `NativeToValue`
+>   over the whole map. The cost is linear in the object.
+>
+> **Measured** (`SchemalessTypedToVal` alone, per call):
+>
+> - an Unstructured param with 5,000 map entries of five fields each: about 22 ms, 10 MB and
+>   155k allocations;
+> - a ConfigMap with 5,000 data entries, including one lookup: about 1.1 µs.
+>
+> **Why it matters.**
+>
+> - Routing a request to one of N shard params with matchConditions doesn't help, because each
+>   shard policy pays its own conversion before its matchCondition rejects. A paramRef selector
+>   matching N params doesn't help either.
+> - The workaround, a built-in param kind, has its own cost: a ConfigMap param starts a
+>   cluster-wide ConfigMap informer in kube-apiserver (`options/coreapi.go`
+>   `NewSharedInformerFactory`, `policy_source.go` `ForResource`). With 20k ConfigMaps of 1 KiB,
+>   kube-apiserver RSS grew by 48 MiB or more.
+>
+> **Ask.** Wrap `Unstructured` content lazily, as typed objects already are: a CEL map over
+> `map[string]interface{}` that converts values on access. Or skip param conversion for a
+> matchCondition that does not reference `params`.
