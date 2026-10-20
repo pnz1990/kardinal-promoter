@@ -525,7 +525,12 @@ func TestCLI_PauseResume(t *testing.T) {
 	paused := "Pipeline podinfo paused. No new promotions will start; in-flight steps hold at the next safe point.\n"
 	refusesNotFound(t, c, a.ns, "", "nope", "pause", "nope")
 	refusesNotFound(t, c, a.ns, "", "nope", "resume", "nope")
-	refuses(t, c, a.ns, "accepts 1 arg(s), received 0", "pause")
+	// No pipeline, and no default (#1759): the error says the three ways to
+	// give one.
+	for _, verb := range []string{"pause", "resume"} {
+		refuses(t, c, a.ns, "a pipeline name is required: give it as an argument ("+verb+" <pipeline>), set KARDINAL_PIPELINE, "+
+			`or write "pipeline: <name>" in .kardinal.yaml at the repository's root`, verb)
+	}
 
 	assert.Equal(t, paused, c.Must(a.ns, "pause", pipelineName))
 	p := getPipeline(t, a)
