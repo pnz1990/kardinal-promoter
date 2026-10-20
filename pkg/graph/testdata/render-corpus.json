@@ -1,0 +1,18 @@
+{
+  "renderVersion": 2,
+  "graphs": {
+    "agents": "sha256:387ee719fca338ef0b114947f94a8401c5a1ad462a6ef6e4dcd6e97cecf47190",
+    "approval gates": "sha256:756c673d5e67e5c22dbeb1a3364dde0ab8b72111edc15e1882873f2663b89ae6",
+    "approval readers": "sha256:a7d7c74c4dbfaced24ae9e66e3cb1aa2df6969b9bf8cf042aa0004b7e6a71e68",
+    "compact": "sha256:8484583b548693c61239f3ce74c9106fd73aace225aa03ce49236dd2f1b2127a",
+    "fleet": "sha256:a098bbeeab6c0b311957af5f7b3efd165e551e982740954132049c011b48f080",
+    "linear, no gates": "sha256:eef50b46e173f1118abbf1c3b0bada492b032eac5eeda8893f0e6cb83fb37548",
+    "org-namespace gate": "sha256:031e3bd05473bfdf2dc12a652c3128eb6c04604f0acfa59d97f2b4604d8c6625",
+    "plain gate": "sha256:71818aebc56ac38901fa40bca4f0affd308cb1d378bbd092de2c811fefc882f6",
+    "pr-review": "sha256:7edbf50563e93a07b16dcff3d89e23ed0127683ea925376ad139c9830c886f29",
+    "skip permission": "sha256:3a87b9a41f3d668403d5396c9607a9baf678efb084c32d036abbf68c8e492363",
+    "verify beside an approval policy": "sha256:711ae377669e51992365d882dc7d19b58ac7751a38a0549ddc6840c1f8f2515c",
+    "verify gate": "sha256:cce255c3c0f168e4a8bde8ddb1420b44d51e2618e0281126df999670797551f4",
+    "verify with policy": "sha256:0a5a763ab00988d1e1157a1f4452ed1750275b3350a100baf1714e41b469f56c"
+  }
+}

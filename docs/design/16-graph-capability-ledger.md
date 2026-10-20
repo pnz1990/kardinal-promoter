@@ -1401,6 +1401,10 @@ Cadence):
    example `3-v0.12.4`). It never takes main's next integer. v0.12.3 labelled its Graphs `2`,
    which main used for a different rendering, so the upgrade from it to main re-rendered nothing
    until main moved to 3 (#2346).
+   `pkg/graph`'s `TestRenderCorpus` holds the bump to it: it pins the hash of each corpus Graph's
+   spec (`pkg/graph/testdata/render-corpus.json`) to the `RenderVersion`, and fails, naming the
+   corpus Graphs, when one renders differently at the same version; `KARDINAL_UPDATE_RENDER_CORPUS=1`
+   records the hashes after a bump and refuses to without one (#2296).
 
 ---
 

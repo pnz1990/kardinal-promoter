@@ -72,6 +72,9 @@ const (
 // differently (node IDs, templates, data), and say so in the changelog
 // fragment; a change that leaves every existing Graph identical needs none.
 // Release branches: see RenderLabel.
+// TestRenderCorpus pins the corpus Graphs' hashes to it
+// (testdata/render-corpus.json) and fails when one renders differently at
+// the same version.
 //
 //   - 2: the gate collections render spec.approval for all their items or
 //     for none (#2271). Graphs before it carry no label.
