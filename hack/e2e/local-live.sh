@@ -151,8 +151,22 @@ if [ ! -f "$REPO_ROOT/hack/e2e/matrix.txt" ]; then
   # The checkout's own copy, when it is at least as new, knows its suites
   # best: run it.
   own=$REPO_ROOT/hack/e2e/local-live.sh
-  own_version=$(sed -n 's/^LOCAL_LIVE_VERSION=\([0-9]*\)$/\1/p' "$own" 2>/dev/null | head -1)
-  if [ "${own_version:-0}" -ge "$LOCAL_LIVE_VERSION" ]; then
+  own_version=0
+  if [ ! -f "$own" ]; then
+    # A branch from before local-live.sh (release/v0.12): this copy runs
+    # its hack/e2e (sed on the missing file once ended the run, silently,
+    # under pipefail, #2288).
+    echo "local-live: $REPO_ROOT has no hack/e2e/local-live.sh (a branch older than it): running this copy (version $LOCAL_LIVE_VERSION) on its hack/e2e" >&2
+  else
+    # Read with builtins: an unreadable copy is version 0, never the end.
+    while IFS= read -r own_line || [ -n "$own_line" ]; do
+      if [[ $own_line =~ ^LOCAL_LIVE_VERSION=([0-9]+)$ ]]; then
+        own_version=${BASH_REMATCH[1]}
+        break
+      fi
+    done <"$own" 2>/dev/null || true
+  fi
+  if [ "$own_version" -ge "$LOCAL_LIVE_VERSION" ]; then
     if grep -qx "LOCAL_LIVE_ISOLATION=$LOCAL_LIVE_ISOLATION" "$own" 2>/dev/null; then
       exec bash "$own" "$@"
     fi
@@ -160,6 +174,12 @@ if [ ! -f "$REPO_ROOT/hack/e2e/matrix.txt" ]; then
   fi
 fi
 E2E_DIR=${LOCAL_LIVE_E2E_DIR:-$REPO_ROOT/hack/e2e}
+for f in up.sh run.sh tools.sh; do
+  [ -f "$E2E_DIR/$f" ] || {
+    echo "local-live: $E2E_DIR has no $f: this checkout's e2e harness is older than this local-live.sh (version $LOCAL_LIVE_VERSION) can run" >&2
+    exit 2
+  }
+done
 ARGS=("$@")
 
 die() {

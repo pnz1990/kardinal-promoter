@@ -341,6 +341,54 @@ exec "$@"
 		assert.Equal(t, 2, exitCode(err), "%s", out)
 		assert.Contains(t, string(out), "run it from a kardinal-promoter checkout")
 	})
+	t.Run("a copy outside a checkout runs a checkout with no local-live.sh of its own (release/v0.12), and says so (#2288)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		shared := filepath.Join(t.TempDir(), "bin")
+		require.NoError(t, os.MkdirAll(shared, 0o755))
+		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(shared, "local-live.sh"), src, 0o755))
+		// checkout makes a git checkout with files (from this repo) and no
+		// hack/e2e/local-live.sh.
+		checkout := func(t *testing.T, files ...string) string {
+			dir := t.TempDir()
+			for _, f := range files {
+				b, err := os.ReadFile(filepath.Join(repoRoot(t), f))
+				require.NoError(t, err)
+				require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, f), b, 0o644))
+			}
+			for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "older"}} {
+				git := exec.Command("git", args...)
+				git.Dir = dir
+				out, err := git.CombinedOutput()
+				require.NoError(t, err, "git %v: %s", args, out)
+			}
+			return dir
+		}
+		old := checkout(t, "hack/e2e/matrix.txt", "hack/tool-versions.env", "hack/loadlock.sh")
+		cmd := h.cmd(t, nil, "gitea")
+		cmd.Args[1] = filepath.Join(shared, "local-live.sh")
+		cmd.Dir = old
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "it ran, not ended silently: %s", out)
+		assert.Contains(t, string(out), old+" has no hack/e2e/local-live.sh (a branch older than it): running this copy")
+		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "the checkout's matrix: gitea's minor")
+		assert.NotEmpty(t, h.read("run"), "the suite ran")
+
+		// A checkout whose e2e harness lacks what this copy runs: it says
+		// which file, and starts nothing (no test mode: the harness's fake
+		// e2e directory is not the checkout's).
+		bare := checkout(t, "hack/e2e/matrix.txt", "hack/tool-versions.env", "hack/loadlock.sh")
+		cmd = exec.Command("bash", filepath.Join(shared, "local-live.sh"), "-n", "core")
+		cmd.Dir = bare
+		cmd.Env = append(os.Environ(), "KUBECONFIG=/dev/null", "LOCAL_LIVE_E2E_DIR=", "LOCAL_LIVE_TEST=",
+			"LOADLOCK="+h.lock, "RELEASE_GATE_SLOTS="+h.slots, "HOME="+t.TempDir())
+		out, err = cmd.CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), filepath.Join(bare, "hack", "e2e")+" has no up.sh: this checkout's e2e harness is older than this local-live.sh")
+	})
 	t.Run("a copy outside a checkout hands off to a checkout's local-live.sh at least as new", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
