@@ -68,8 +68,9 @@ func u0121Rollbacks(ctx context.Context, e *framework.Env, ns string) (map[strin
 // u0121FailedStep checks that the failed version's step in test is the step
 // that started the rollback rb: the step itself (uid), still RollingBack and
 // naming rb, or, once the version's Graph is retired (a Superseded version
-// retires after a minute), its record in status.retiredSteps. A step of the
-// version with another uid means the version promoted again.
+// retires after a minute), its record in status.retiredSteps: RollingBack,
+// with the step's message. A step of the version with another uid means the
+// version promoted again.
 func u0121FailedStep(ctx context.Context, e *framework.Env, ns, bundle string, failed *v1alpha1.PromotionStep, rb string) (bool, string) {
 	ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test")
 	switch {
@@ -83,10 +84,12 @@ func u0121FailedStep(ctx context.Context, e *framework.Env, ns, bundle string, f
 	if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundle}, &b); err != nil {
 		return false, err.Error()
 	}
+	// The record keeps the message cut to 512 bytes, which can drop the
+	// rollback's name: it is the step's message, or its start.
 	for _, r := range b.Status.RetiredSteps {
 		if r.Name == failed.Name {
-			return r.State == "RollingBack" && strings.Contains(r.Message, "rollback Bundle "+rb),
-				fmt.Sprintf("retired step %s: state %q, message %q", r.Name, r.State, r.Message)
+			return r.State == "RollingBack" && r.Message != "" && strings.HasPrefix(failed.Status.Message, r.Message),
+				fmt.Sprintf("retired step %s: state %q, message %q (the step's was %q)", r.Name, r.State, r.Message, failed.Status.Message)
 		}
 	}
 	return false, fmt.Sprintf("no step %s and no record of it in %s's status.retiredSteps", failed.Name, bundle)
