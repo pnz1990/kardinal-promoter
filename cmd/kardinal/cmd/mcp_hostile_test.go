@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -26,7 +27,8 @@ import (
 
 // mcpWorld is a scenario World (every kardinal reconciler, the chart's
 // admission policies) with a Pipeline app in team-a that ran version 1.1.0
-// to prod, a Pipeline app in team-b, and kardinal mcp --allow-write
+// to prod and whose version mcpWaiting waits at prod's approval gate, a
+// Pipeline app in team-b, and kardinal mcp --allow-write
 // connected as agent fixer (scoped to team-a) through a kubeconfig of its
 // own (World.ClientAs). Without admission, the World stores every write
 // as the CLI made it (scenario.Options.NoAdmission).
@@ -48,6 +50,31 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	scenario.ShipAs(t, w, "human", b)
 	require.True(t, w.RunUntil(scenario.MaxRounds, func() bool { return w.BundlePhase("team-a")[b.Name] == "Verified" }),
 		"%s", w.Describe("team-a"))
+	// A version that waits at prod for an approval the agent's does not
+	// give (anyone may approve, an agent counts only with allowAgents), so
+	// approve records an Approval, the gate records it as not counted, and
+	// the version still waits for the next call (#2277). The gate lists no
+	// allowedUsers: the Graph copies only allowed approvers' Approvals into
+	// it, so an outside one would never be recorded at all
+	// (TestGate_ApprovalQuorum, GATE-APPROVAL-02, covers that refusal).
+	w.MustApply(&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: p.PolicyNS, Name: "approval-gate",
+		Labels: map[string]string{"kardinal.io/scope": "team", "kardinal.io/applies-to": p.GateEnv}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true", Message: "prod waits for a person's approval",
+			Approval: &v1alpha1.GateApprovalPolicy{Required: 1}}})
+	waiting := scenario.ImageBundle("team-a", scenario.PipelineName, mcpWaiting)
+	scenario.ShipAs(t, w, "human", waiting)
+	require.True(t, w.RunUntil(scenario.MaxRounds, func() bool {
+		var pl v1alpha1.Pipeline
+		if w.Store().Get(context.Background(), sigs_client.ObjectKey{Namespace: "team-a", Name: scenario.PipelineName}, &pl) != nil {
+			return false
+		}
+		for _, e := range pl.Status.Environments {
+			if e.Name == p.GateEnv {
+				return e.IncomingBundle == waiting.Name
+			}
+		}
+		return false
+	}), "%s", w.Describe("team-a"))
 	agent := scenario.ActorIdentities["agent"]
 	// The agent's RBAC: its own namespace, and reading the org's gates.
 	kube := w.ClientAsRBAC(&user.DefaultInfo{Name: agent.Username, Groups: agent.Groups}, []string{"team-a"}, []string{scenario.PolicyNS})
@@ -69,6 +96,22 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
 	return w, cs, agent
+}
+
+// mcpWaiting is the version that waits at prod's approval gate in mcpWorld.
+const mcpWaiting = "1.2.0"
+
+// incomingAt is the Bundle that waits for env of ns's Pipeline app, or "".
+func incomingAt(t *testing.T, w *scenario.World, ns, env string) string {
+	t.Helper()
+	var pl v1alpha1.Pipeline
+	require.NoError(t, w.Store().Get(context.Background(), sigs_client.ObjectKey{Namespace: ns, Name: scenario.PipelineName}, &pl))
+	for _, e := range pl.Status.Environments {
+		if e.Name == env {
+			return e.IncomingBundle
+		}
+	}
+	return ""
 }
 
 // mcpValid is a valid value of each tool argument, by name.
@@ -138,8 +181,8 @@ func toolArgs(t *testing.T, cs *mcp.ClientSession) map[string]struct {
 // The chart's admission policies refuse a write whose stamp is not its
 // requester's, so there a wrong stamp is never stored to be checked. The
 // write tools run again in a World without admission, where every stamp
-// stored is the CLI's own: a version and a Verdict created and a version
-// rejected are each checked there at least once. (Stored text is bounded
+// stored is the CLI's own: a version, an Approval and a Verdict created and
+// a version rejected are each checked there at least once. (Stored text is bounded
 // by the policies, so that is checked with admission only.)
 func TestMCP_HostileInputs(t *testing.T) {
 	t.Parallel()
@@ -178,6 +221,36 @@ func hostileInputs(t *testing.T, admission bool) {
 		res, body := call(t, cs, name, baseArgs(name))
 		assert.False(t, res.IsError, "%s with valid arguments: %v", name, body)
 	}
+	// The agent's approval is recorded as the agent's, and its gate (which
+	// counts an agent only with allowAgents) records it as not counted: the
+	// version still waits, so every approve below meets the same waiting
+	// version (no ship has run yet, and nothing reconciles during the calls).
+	res, body := call(t, cs, "approve", map[string]any{"pipeline": "app", "environment": "prod", "version": mcpWaiting,
+		"namespace": "team-a"})
+	require.False(t, res.IsError, "approve: %v", body)
+	waiting := incomingAt(t, w, "team-a", "prod")
+	var gate *v1alpha1.PolicyGate
+	require.True(t, w.RunUntil(scenario.MaxRounds, func() bool {
+		gate = nil
+		var gates v1alpha1.PolicyGateList
+		if w.Store().List(context.Background(), &gates, sigs_client.InNamespace("team-a"),
+			sigs_client.MatchingLabels{"kardinal.io/bundle": waiting, "kardinal.io/environment": "prod"}) != nil {
+			return false
+		}
+		for i := range gates.Items {
+			if g := &gates.Items[i]; g.Spec.Approval != nil && len(g.Status.Approvals) > 0 {
+				gate = g
+			}
+		}
+		return gate != nil
+	}), "%s", w.Describe("team-a"))
+	require.Len(t, gate.Status.Approvals, 1, "the gate's approvals")
+	got := gate.Status.Approvals[0]
+	assert.Equal(t, agent.Username, got.User)
+	assert.False(t, got.Counted, "the agent's approval counts for a gate that counts an agent only with allowAgents (%s)", got.Reason)
+	assert.NotEmpty(t, got.Reason, "why it does not count")
+	assert.False(t, gate.Status.Ready, "the gate opened: %s", gate.Status.Reason)
+	assert.Equal(t, waiting, incomingAt(t, w, "team-a", "prod"), "the version still waits at prod")
 	calls, refused, fresh, wrote := 0, 0, 0, 0
 	stamped := map[string]int{}
 	snap := w.Snapshot()
@@ -197,6 +270,8 @@ func hostileInputs(t *testing.T, admission bool) {
 				switch name {
 				case "ship":
 					args["images"] = mcpValid["images"]
+				case "approve":
+					args["version"] = mcpWaiting
 				case "reject":
 					// A version of its own to reject, so each call is the first.
 					fresh++
@@ -254,9 +329,7 @@ func hostileInputs(t *testing.T, admission bool) {
 	t.Logf("%d calls, %d refused, %d wrote, stamps checked %v; accepted: %v", calls, refused, wrote, stamped, accepted)
 	assert.NotZero(t, wrote, "no call wrote, so no stamp was checked")
 	if !admission {
-		// No version waits at an approval gate here, so approve writes no
-		// Approval in either World.
-		for _, k := range []string{"Bundle", "Bundle rejected", "Verdict"} {
+		for _, k := range []string{"Bundle", "Bundle rejected", "Approval", "Verdict"} {
 			assert.NotZero(t, stamped[k], "no %s stamp checked without admission", k)
 		}
 	}
@@ -280,8 +353,9 @@ func hostileCalled(h scenario.Hostile, argN int) bool {
 }
 
 // checkStamped checks that every Bundle, Approval and Verdict changed
-// created names agent as its actor's principal (and a Bundle as its
-// creator), and that a Bundle it rejected names agent as who rejected it.
+// created names agent as its actor's principal (a Bundle also as its
+// creator, an Approval as its user and a Verdict as who gave it), and that
+// a Bundle it rejected names agent as who rejected it.
 // It returns how many of each it checked ("Bundle rejected" for a
 // rejection).
 func checkStamped(t *testing.T, w *scenario.World, what string, before map[string]string, changed []string, agent string) map[string]int {
@@ -315,12 +389,15 @@ func checkStamped(t *testing.T, w *scenario.World, what string, before map[strin
 			if w.Store().Get(context.Background(), key, &o) != nil {
 				continue
 			}
+			// spec.user is whom a gate's approval policy matches.
+			assert.Equal(t, agent, o.Spec.User, "%s: %s approves in another's name", what, k)
 			a = o.Spec.Actor
 		case "Verdict":
 			var o v1alpha1.Verdict
 			if w.Store().Get(context.Background(), key, &o) != nil {
 				continue
 			}
+			assert.Equal(t, agent, o.Spec.By, "%s: %s gives another's verdict", what, k)
 			a = o.Spec.Actor
 		default:
 			continue
