@@ -472,6 +472,8 @@ slot_tag="$OWNER local-live $SUITE $MINOR pid $$ $stamp boot=$this_boot start=$s
 kept_tag="KEEP $KIND_CLUSTER, kept by $OWNER local-live $SUITE $MINOR at $stamp"
 drain_tag="$OWNER local-live $SUITE $MINOR draining the host for a heavy suite, pid $$ $stamp boot=$this_boot start=$self_start"
 taken=()
+# making is the slot try_slots is making (its mkdir to its owner write).
+making=''
 draining=''
 # The cluster slots' queue (#2242's protocol, as hack/loadlock.sh's): a
 # waiter's ticket SLOTS_DIR/.queue/<class>-<ns>-<pid>, release gates'
@@ -531,6 +533,13 @@ release_slots() {
     fi
   done
   taken=()
+  # The slot a signal stopped it making (bash runs the trap once the mkdir
+  # it waits for is done): there with no owner yet, or this run's.
+  if [ -n "$making" ] && [ -d "$making" ] &&
+    { [ ! -e "$making/owner" ] || { read_file "$making/owner" && { [ -z "$file_v" ] || [ "$file_v" = "$slot_tag" ]; }; }; }; then
+    rm -r "$making"
+  fi
+  making=''
   [ -z "$slot_ticket" ] || rm -f "$slot_queue/$slot_ticket"
   slot_ticket=''
   if [ -n "$draining" ] && read_file "$SLOTS_DIR/.drain" && [ "$file_v" = "$drain_tag" ]; then
@@ -770,10 +779,21 @@ try_slots() {
   fi
   for ((i = 1; i <= SLOT_MAX && ${#taken[@]} < need_slots; i++)); do
     d=$SLOTS_DIR/$i
-    mkdir "$d" 2>/dev/null || continue
+    # making from before the mkdir to the owner write and taken: a signal
+    # during the mkdir runs the trap once it is done, and release_slots gives
+    # the slot up (it was left to slot_orphan's 120s). Only because no one
+    # else makes one: every take is under the .reclaim flock, and this one
+    # was free.
+    [ ! -e "$d" ] || continue
+    making=$d
+    if ! mkdir "$d" 2>/dev/null; then
+      making=''
+      continue
+    fi
     echo "$slot_tag" >"$d/owner"
-    echo "$KIND_CLUSTER" >"$d/cluster"
     taken+=("$d")
+    making=''
+    echo "$KIND_CLUSTER" >"$d/cluster"
   done
   if [ "${#taken[@]}" -ge "$need_slots" ]; then
     rm -f "$slot_queue/$slot_ticket"
@@ -792,8 +812,10 @@ take_slots() {
   for ((i = 1; i <= SLOT_MAX; i++)); do
     d=$SLOTS_DIR/$i
     if read_file "$d/cluster" && [ "$file_v" = "$KIND_CLUSTER" ] && [ "${#taken[@]}" -lt "$need_slots" ]; then
-      echo "$slot_tag" >"$d/owner"
+      # In taken before its owner is this run's: a signal between the two
+      # leaves the kept slot as it was, not with a record nobody gives up.
       taken+=("$d")
+      echo "$slot_tag" >"$d/owner"
     fi
   done
   [ "${#taken[@]}" -lt "$need_slots" ] || return 0

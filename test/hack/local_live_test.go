@@ -222,6 +222,34 @@ func TestLocalLive(t *testing.T) {
 		assert.NoDirExists(t, h.lock)
 		assert.NoDirExists(t, filepath.Join(h.slots, "1"))
 	})
+	t.Run("a signal while it makes its cluster slot gives the slot back (#2316 follow-up)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		// bash runs a signal's trap once the command it waits for is done:
+		// a mkdir that makes the slot and then sleeps (in front of PATH while
+		// the run takes its slots) is the moment after the mkdir, before the
+		// owner write.
+		h := newLocalLiveHost(t)
+		bin := t.TempDir()
+		mkdir, err := exec.LookPath("mkdir")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "mkdir"), []byte("#!/bin/sh\n"+mkdir+` "$@" || exit
+case "$*" in */slots/[0-9]) sleep 1 ;; esac
+`), 0o755))
+		cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_FAIL_PATH=" + bin}, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		slot := filepath.Join(h.slots, "1")
+		require.Eventually(t, func() bool { _, err := os.Stat(slot); return err == nil }, 10*time.Second, 5*time.Millisecond)
+		_, oerr := os.Stat(filepath.Join(slot, "owner"))
+		require.ErrorIs(t, oerr, os.ErrNotExist, "the signal comes before the owner write")
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err = cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.NoDirExists(t, slot, "the slot: %s", out.String())
+		assert.Empty(t, h.read("up"), "no cluster started")
+	})
 	t.Run("the owner names the cluster, so two agents' runs do not collide", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
