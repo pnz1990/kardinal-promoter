@@ -545,3 +545,21 @@ func TestVerifyReceipt_TimeoutTrustedRoot(t *testing.T) {
 	assert.Less(t, time.Since(start), 10*time.Second)
 	assert.Positive(t, asked.Load(), "the trusted root was asked for at the mirror")
 }
+
+// TestPrintReceipt_NamesEachApproverOnce (#2062): an approval that counts on
+// two gates (an approval gate and the agent policy gate that reads
+// approvals) and a verdict on two verify gates are listed once each.
+func TestPrintReceipt_NamesEachApproverOnce(t *testing.T) {
+	alice := receipt.Approval{User: "alice@example.com", Decision: "approve", Counted: true}
+	qa := receipt.Verdict{Name: "v", Verifier: "agent qa for bob", Result: "pass", Counted: true}
+	st := &receipt.Statement{}
+	st.Predicate.Kardinal.Gates = []receipt.Gate{
+		{Name: "cab", Result: "pass", Approvals: []receipt.Approval{alice}, Verdicts: []receipt.Verdict{qa}},
+		{Name: "kardinal-agents-auto", Result: "pass", Approvals: []receipt.Approval{alice,
+			{User: "carol@example.com", Decision: "approve", Counted: true}}, Verdicts: []receipt.Verdict{qa}},
+	}
+	var b strings.Builder
+	printReceipt(&b, "r", &receipt.Verified{Statement: st})
+	assert.Contains(t, b.String(), "  approved by: alice@example.com, carol@example.com\n")
+	assert.Contains(t, b.String(), "  verdicts by: agent qa for bob\n")
+}

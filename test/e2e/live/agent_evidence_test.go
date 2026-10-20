@@ -290,7 +290,17 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	crs := ours("changerequests.ndjson")
 	require.Len(t, crs, 1, "the prod change request instance")
 	assert.Equal(t, ticket.Key, crs[0]["status"].(map[string]interface{})["ticket"].(map[string]interface{})["key"])
-	assert.Len(t, ours("policygates.ndjson"), 3, "prod's three gate instances")
+	instances := map[string]bool{}
+	for _, g := range ours("policygates.ndjson") {
+		md := g["metadata"].(map[string]interface{})
+		labels, _ := md["labels"].(map[string]interface{})
+		if labels["kardinal.io/bundle"] == bundle && labels["kardinal.io/environment"] == "prod" {
+			instances[fmt.Sprint(labels["kardinal.io/gate-template"])] = true
+		}
+	}
+	for _, name := range []string{attestGate, journeyVerify, journeyCAB} {
+		assert.True(t, instances[name], "the pack holds prod's %s gate instance (has %v)", name, instances)
+	}
 	var prodEnvelope string
 	for _, rr := range ours("receipts.ndjson") {
 		md := rr["metadata"].(map[string]interface{})
@@ -300,8 +310,10 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	}
 	require.NotEmpty(t, prodEnvelope, "prod's receipt is in the pack with its signed envelope")
 	actions := map[string]bool{}
-	for _, ev := range ours("auditevents.ndjson") {
-		if spec := ev["spec"].(map[string]interface{}); spec["bundleName"] == bundle {
+	// auditevents.ndjson is kardinal audit export's format: namespace at the
+	// top level, not under metadata.
+	for _, ev := range ndjson(t, dir, "auditevents.ndjson") {
+		if spec := ev["spec"].(map[string]interface{}); ev["namespace"] == a.ns && spec["bundleName"] == bundle {
 			actions[fmt.Sprint(spec["action"])] = true
 		}
 	}
