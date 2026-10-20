@@ -696,10 +696,14 @@ type growthRound struct{ empty, half, full time.Duration }
 // (F+H)/(H+E), about 2.6 for the enterprise index; the bound is the ratio of
 // a cost half of whose growth from the empty index to the full one is
 // quadratic, (2F+H+E)/(F+H+2E), about 1.58. Both halves span thousands of
-// bytes, so neither difference is a few milliseconds of noise; a round
-// whose half index costs no more than the empty one (a stall timing the
-// empty one) is floored at a microsecond, a high ratio the median
-// discards.
+// bytes, so neither difference is a few milliseconds of noise.
+//
+// A round whose half index costs no more than the empty one (a stall
+// timing the empty one) is floored at a microsecond: a high ratio, which
+// the median discards while such rounds are a minority, and which, as a
+// majority, fails the check rather than passing a superlinear cost. The
+// median's limit is the other stall: a round stalled timing the half index
+// has a low ratio, and 3 such rounds of 5 would pass a superlinear cost.
 func growthShape(rounds []growthRound, emptyBytes, halfBytes, fullBytes int) (ratio, bound float64, ratios []float64) {
 	e, h, f := float64(emptyBytes), float64(halfBytes), float64(fullBytes)
 	for _, r := range rounds {
