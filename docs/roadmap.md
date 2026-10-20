@@ -9,10 +9,11 @@ what changed in each release.
 
 ---
 
-## Currently available: v0.12.2
+## Currently available: v0.12.3
 
-v0.12.2 is the latest release: v0.12.0 with a fix (#2132, in v0.12.1) and a security fix to
-automatic rollback (#2187, #2223). Besides everything earlier releases shipped (see the
+v0.12.3 is the latest release: v0.12.0 with three patches: a version no longer recorded Verified
+where a newer one replaced it (#2132, v0.12.1), a security fix to automatic rollback (#2187,
+#2223, v0.12.2), and verify gates next to an approval-policy gate (#2271, v0.12.3). Besides everything earlier releases shipped (see the
 [changelog](changelog.md)), v0.12.0 makes kardinal agent-ready:
 
 - **Actors.** An `AgentIdentity` object registers each agent with a required human sponsor and
@@ -47,7 +48,7 @@ Plans change with feedback; the [changelog](changelog.md) says what shipped.
 
 ### v0.13: evidence
 
-v0.13.0 is not released yet; v0.12.2 is the latest release.
+v0.13.0 is not released yet; v0.12.3 is the latest release.
 
 **Merged, ships in v0.13.0.** These are on main, and this site already documents them:
 
