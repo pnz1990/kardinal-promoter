@@ -421,7 +421,8 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	watch.Interrupt()
 	r := watch.Wait(30 * time.Second)
 	assert.Equal(t, 0, r.Code, "Ctrl-C ends --watch with exit 0")
-	assert.Empty(t, r.Stderr)
+	assert.Equal(t, "warning: kardinal explain is deprecated and will be removed in a later release: use kardinal why "+
+		pipelineName+" test -o wide -w (the same output)\n", r.Stderr, "only the deprecation notice, once (#1758)")
 	assert.True(t, strings.HasSuffix(r.Stdout, watchFooter), "every frame ends with the footer:\n%s", r.Stdout)
 	for _, f := range frames(r.Stdout) {
 		explainTable(t, f)
