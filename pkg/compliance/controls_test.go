@@ -159,7 +159,8 @@ func TestForPack(t *testing.T) {
 	require.Len(t, got[0].Controls, 1)
 	ev := got[0].Controls[0].Evidence
 	require.Len(t, ev, 2)
-	assert.Equal(t, []string{"auditevents.ndjson", "bundles.ndjson"}, ev[0].Files)
+	assert.Equal(t, []string{"auditevents.ndjson", "auditevents.ocsf.ndjson", "bundles.ndjson"}, ev[0].Files,
+		"a kind's own file and its other files (PackAlsoIn)")
 	assert.Equal(t, compliance.Planned, ev[1].Status)
 	assert.Empty(t, ev[1].Files)
 }

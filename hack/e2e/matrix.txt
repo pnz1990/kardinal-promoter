@@ -61,6 +61,9 @@ receipts          1.37        -      -
 receipts-keyless  1.35        -      -     pinned
 evidence-airgap   1.37        -      -
 evidence-tenancy  1.37        -      -
+# The v0.13 acceptance test (#2062); the release gate runs it on the oldest
+# and newest minors.
+agent-evidence    1.37        -      -
 # 1.35: the oldest minor kardinal supports.
 # all.sh and CI run the upgrade test once whatever COUNT is: it upgrades its
 # cluster.

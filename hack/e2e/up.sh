@@ -64,6 +64,9 @@
 #           flags and values, and signs in as Dex's users
 #   receipts  Forgejo + Argo CD + an OCI registry: receipts signed with a
 #           static key, pushed as referrers
+#   agent-evidence  Forgejo + Argo CD + an OCI registry + the fake ticket
+#           API + the test agent, receipts signed with a static key: the v0.13
+#           acceptance test (an agent's version to a receipt, a pack, offline)
 #   receipts-keyless  Forgejo + Argo CD + sigstore scaffolding on Knative
 #           (sigstore.sh): keyless receipts, Rekor v2 and a timestamp
 #   evidence-tenancy  Forgejo + Argo CD + an OCI registry + the fake ticketing
@@ -182,6 +185,14 @@ case "$SUITE" in
   # own: receipts comment on every PR, which other suites count.
   # The fake ticketing API, for the change request a receipt records.
   receipts) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh ticketapi.sh) RUN='^TestReceipts_'
+    export KARDINAL_E2E_RECEIPTS=1 ;;
+  # The v0.13 acceptance test (#2062): an agent's version through an
+  # attestations gate, an agent verifier (the test agent), a ServiceNow change
+  # request (the fake ticket API) and a person's approval, to a receipt signed
+  # with a static key (as in the receipts suite), an evidence pack and an
+  # offline verify-receipt.
+  agent-evidence) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh ticketapi.sh test-agent.sh)
+    RUN='^TestAgentEvidence_'
     export KARDINAL_E2E_RECEIPTS=1 ;;
   # Keyless receipts against a private sigstore in the cluster
   # (components/sigstore.sh: Fulcio trusting the cluster's issuer, Rekor v2,

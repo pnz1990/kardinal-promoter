@@ -23,6 +23,16 @@ var PackFiles = map[string]string{
 	"ChangeRequest":    "changerequests.ndjson",
 }
 
+// PackAlsoIn are the pack's other files that hold objects of a kind, which
+// a row naming the kind cites too: the templates in force are PolicyGates
+// and ChangeRequests of their own files, and the AuditEvents are written
+// twice, the second time as OCSF.
+var PackAlsoIn = map[string][]string{
+	"AuditEvent":    {"auditevents.ocsf.ndjson"},
+	"PolicyGate":    {"policygate-templates.ndjson"},
+	"ChangeRequest": {"changerequest-templates.ndjson"},
+}
+
 // PackEvidence is a row of controls.json: the evidence with the pack files
 // that hold it.
 type PackEvidence struct {
@@ -61,6 +71,7 @@ func ForPack(frameworks []Framework) []PackFramework {
 				pe := PackEvidence{Evidence: e}
 				for _, k := range e.Kinds {
 					pe.Files = append(pe.Files, PackFiles[k])
+					pe.Files = append(pe.Files, PackAlsoIn[k]...)
 				}
 				pc.Evidence = append(pc.Evidence, pe)
 			}
