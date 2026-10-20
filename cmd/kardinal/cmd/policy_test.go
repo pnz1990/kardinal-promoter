@@ -31,6 +31,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -568,6 +569,63 @@ func TestGateEvaluator_ReasonPrefixes(t *testing.T) {
 	_, reason, err = localGateCheck(ctx, *policyGate("g", "default", "prod", `metrics["x"].result == "Pass"`), "prod", policyTestNow)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(reason, celEvalErrorPrefix), reason)
+}
+
+// TestSimulationStatus (#2194): the simulation writes a gate's status as the
+// API server's status subresource does: the status of the copy the patch
+// was made from lands, spec and metadata changes do not, the resource
+// version moves on and the caller gets the stored gate; a patch from a copy
+// older than the stored gate is a conflict; another kind takes the fake
+// client's own path.
+func TestSimulationStatus(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	gate := policyGate("g", "default", "prod", "true")
+	pipe := policyPipeline("demo", "test", "prod")
+	sim := newSimulationClient(buildPolicyScheme(t), nil, gate, pipe)
+	key := sigs_client.ObjectKeyFromObject(gate)
+
+	var g v1alpha1.PolicyGate
+	require.NoError(t, sim.Get(ctx, key, &g))
+	stale := g.DeepCopy()
+	base := g.DeepCopy()
+	g.Status.Ready, g.Status.Reason = true, "true = true"
+	g.Spec.Expression = "false" // not the status: dropped
+	g.Labels["x"] = "y"         // nor this
+	require.NoError(t, sim.Status().Patch(ctx, &g, sigs_client.MergeFromWithOptions(base, sigs_client.MergeFromWithOptimisticLock{})))
+	assert.True(t, g.Status.Ready, "the caller gets the stored gate")
+	assert.Equal(t, "true", g.Spec.Expression, "the stored spec, not the copy's")
+	assert.NotEqual(t, stale.ResourceVersion, g.ResourceVersion)
+
+	var got v1alpha1.PolicyGate
+	require.NoError(t, sim.Get(ctx, key, &got))
+	assert.True(t, got.Status.Ready)
+	assert.Equal(t, "true = true", got.Status.Reason)
+	assert.Equal(t, "true", got.Spec.Expression)
+	assert.NotContains(t, got.Labels, "x")
+
+	// A patch from the copy read before that write: refused with the
+	// optimistic lock; without it, only its own change lands, as the API
+	// server applies a merge patch.
+	staleBase := stale.DeepCopy()
+	stale.Status.BundleVersion = "late"
+	err := sim.Status().Patch(ctx, stale.DeepCopy(), sigs_client.MergeFromWithOptions(staleBase, sigs_client.MergeFromWithOptimisticLock{}))
+	assert.True(t, apierrors.IsConflict(err), "%v", err)
+	require.NoError(t, sim.Status().Patch(ctx, stale, sigs_client.MergeFrom(staleBase)))
+	require.NoError(t, sim.Get(ctx, key, &got))
+	assert.Equal(t, "late", got.Status.BundleVersion)
+	assert.Equal(t, "true = true", got.Status.Reason, "the newer write stays")
+	assert.True(t, got.Status.Ready)
+
+	// Another kind takes the fake client's own status writer. The overlay
+	// has no Pipeline status subresource, so that writer answers NotFound
+	// where the gate path would have written.
+	var p v1alpha1.Pipeline
+	require.NoError(t, sim.Get(ctx, sigs_client.ObjectKeyFromObject(pipe), &p))
+	pbase := p.DeepCopy()
+	p.Status.Phase = "Promoting"
+	err = sim.Status().Patch(ctx, &p, sigs_client.MergeFrom(pbase))
+	assert.True(t, apierrors.IsNotFound(err), "%v", err)
 }
 
 // ─── policy test (C09b-cli-10, C09b-cli-11) ─────────────────────────────────
