@@ -354,7 +354,8 @@ func TestGateChangeEntry_EnvironmentMove(t *testing.T) {
 
 // #2338: environmentDiff, then and set: the names in each list are sorted,
 // a record keeps the first MaxAuditGateEnvironments of each and counts the
-// rest, and an environment added and then removed is no move.
+// rest, and an environment added and then removed (or the reverse) stays in
+// both lists, said as moved and back (QA-2 on #2347).
 //
 // Covers GATE-EDIT-04.
 func TestEnvironmentMove(t *testing.T) {
@@ -376,37 +377,51 @@ func TestEnvironmentMove(t *testing.T) {
 
 	there := environmentDiff([]string{"prod"}, []string{"prod", "test"})
 	back := environmentDiff([]string{"prod", "test"}, []string{"prod"})
-	assert.True(t, there.then(back).none(), "added, then removed")
+	round := there.then(back)
+	assert.Equal(t, []string{"test"}, round.added, "added, then removed: kept")
+	assert.Equal(t, []string{"test"}, round.removed)
+	assert.Equal(t, "moved and back in test", round.String())
+	assert.Equal(t, round, back.then(there), "removed, then added: the same")
 	both := there.then(environmentDiff([]string{"prod", "test"}, []string{"prod", "test", "uat"}))
 	assert.Equal(t, []string{"test", "uat"}, both.added)
+	assert.Empty(t, both.removed)
 }
 
-// #2338: merged records carry the net move: added in the older record and
-// removed in the newer is none, so a template moved and moved back with no
-// rule change drops out of the merge.
+// #2338, QA-2 on #2347: merged records keep every move, so a merge (the
+// outbox full during an AuditEvent write outage) cannot erase that a gate
+// was off an environment of the version for a while: prod-freeze taken off
+// prod by an applies-to edit and put back ten minutes later is one change
+// that says it moved and back, beside window's edit.
 //
 // Covers GATE-EDIT-04.
 func TestCoalesceGateChanges_EnvironmentMove(t *testing.T) {
 	p, b := gateAuditFixture()
-	window := gateAuditGate("window", "test,prod", "true", 2)
-	stamp := map[string]graph.TemplateStamp{"platform-policies/window": {Digest: graph.TemplateDigest(window), Generation: 2}}
-	other := gateAuditGate("other", "prod", "false", 3)
-	otherStamp := map[string]graph.TemplateStamp{"platform-policies/other": {Digest: "sha256:old", Generation: 2}}
-	prod, both := []string{"prod"}, []string{"prod", "test"}
-	key := "platform-policies/window"
-	moved, ok := gateChangeEntry(b, p, stamp, map[string][]string{key: prod}, map[string][]string{key: both},
-		[]kardinalv1alpha1.PolicyGate{window}, time.Unix(500, 0))
-	require.True(t, ok)
-	for k, v := range otherStamp {
-		stamp[k] = v
+	freeze := gateAuditGate("prod-freeze", "uat,prod", "!schedule.isWeekend", 2)
+	window := gateAuditGate("window", "prod", "true", 2)
+	stamps := map[string]graph.TemplateStamp{
+		"platform-policies/prod-freeze": {Digest: graph.TemplateDigest(freeze), Generation: 2},
+		"platform-policies/window":      {Digest: "sha256:old", Generation: 1},
 	}
-	movedBack, ok := gateChangeEntry(b, p, stamp, map[string][]string{key: both}, map[string][]string{key: prod},
-		[]kardinalv1alpha1.PolicyGate{window, other}, time.Unix(501, 0))
+	key := "platform-policies/prod-freeze"
+	on, off := []string{"prod", "uat"}, []string{"uat"}
+	gates := []kardinalv1alpha1.PolicyGate{freeze, window}
+	removed, ok := gateChangeEntry(b, p, stamps, map[string][]string{key: on}, map[string][]string{key: off}, gates, time.Unix(500, 0))
 	require.True(t, ok)
-	require.Len(t, movedBack.Spec.Gates, 2)
+	require.Len(t, removed.Spec.Gates, 2, "the move and window's edit")
+	stamps["platform-policies/window"] = graph.TemplateStamp{Digest: graph.TemplateDigest(window), Generation: 2}
+	back, ok := gateChangeEntry(b, p, stamps, map[string][]string{key: off}, map[string][]string{key: on}, gates, time.Unix(1100, 0))
+	require.True(t, ok)
+	require.Len(t, back.Spec.Gates, 1)
 
-	m, ok := coalesceGateChanges(moved, movedBack)
+	m, ok := coalesceGateChanges(removed, back)
 	require.True(t, ok)
-	require.Len(t, m.Spec.Gates, 1, "window moved and moved back: no change; other's edit stays")
-	assert.Equal(t, "other", m.Spec.Gates[0].Template)
+	byName := map[string]kardinalv1alpha1.AuditGateChange{}
+	for _, gc := range m.Spec.Gates {
+		byName[gc.Template] = gc
+	}
+	require.Contains(t, byName, "prod-freeze", "the move and the move back are kept")
+	assert.Equal(t, []string{"prod"}, byName["prod-freeze"].EnvironmentsAdded)
+	assert.Equal(t, []string{"prod"}, byName["prod-freeze"].EnvironmentsRemoved)
+	assert.Contains(t, byName, "window")
+	assert.Contains(t, m.Spec.Message, "platform-policies/prod-freeze moved (generation 2): moved and back in prod")
 }

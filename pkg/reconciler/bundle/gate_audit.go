@@ -416,40 +416,30 @@ func (m environmentMove) none() bool {
 	return len(m.added) == 0 && len(m.removed) == 0 && m.omitted == 0
 }
 
-// then is m followed by next: an environment added and then removed (or the
-// reverse) is no move. Counts of omitted names add up, an upper bound.
+// then is m followed by next, as a merge of two records sees them: every
+// environment either added goes into added, and every one either removed
+// into removed. An environment in both moved there and back (or back and
+// there): kept, so a merge never erases a window in which a gate was off an
+// environment of the version, as an edit and an edit back are kept with
+// the generations (QA-2 on #2347). Counts of omitted names add up, an upper
+// bound.
 func (m environmentMove) then(next environmentMove) environmentMove {
-	added, removed := map[string]bool{}, map[string]bool{}
-	for _, e := range m.added {
-		added[e] = true
-	}
-	for _, e := range m.removed {
-		removed[e] = true
-	}
-	for _, e := range next.added {
-		if removed[e] {
-			delete(removed, e)
-		} else {
-			added[e] = true
+	union := func(a, b []string) []string {
+		in := map[string]bool{}
+		for _, e := range append(append([]string(nil), a...), b...) {
+			in[e] = true
 		}
-	}
-	for _, e := range next.removed {
-		if added[e] {
-			delete(added, e)
-		} else {
-			removed[e] = true
+		out := make([]string, 0, len(in))
+		for e := range in {
+			out = append(out, e)
 		}
+		sort.Strings(out)
+		if len(out) == 0 {
+			return nil
+		}
+		return out
 	}
-	out := environmentMove{omitted: m.omitted + next.omitted}
-	for e := range added {
-		out.added = append(out.added, e)
-	}
-	for e := range removed {
-		out.removed = append(out.removed, e)
-	}
-	sort.Strings(out.added)
-	sort.Strings(out.removed)
-	return out
+	return environmentMove{added: union(m.added, next.added), removed: union(m.removed, next.removed), omitted: m.omitted + next.omitted}
 }
 
 // set writes m to gc, the first MaxAuditGateEnvironments names of each list.
@@ -466,15 +456,38 @@ func (m environmentMove) set(gc *kardinalv1alpha1.AuditGateChange) {
 	}
 }
 
-// String says the move: "now also in test; no longer in uat", and how many
-// more.
+// String says the move: "now also in test; no longer in uat; moved and
+// back in prod" (an environment both added and removed, after a merge), and
+// how many more.
 func (m environmentMove) String() string {
-	var parts []string
-	if len(m.added) > 0 {
-		parts = append(parts, "now also in "+strings.Join(m.added, ", "))
+	removed := map[string]bool{}
+	for _, e := range m.removed {
+		removed[e] = true
 	}
-	if len(m.removed) > 0 {
-		parts = append(parts, "no longer in "+strings.Join(m.removed, ", "))
+	var added, both []string
+	for _, e := range m.added {
+		if removed[e] {
+			both = append(both, e)
+			delete(removed, e)
+		} else {
+			added = append(added, e)
+		}
+	}
+	var gone []string
+	for _, e := range m.removed {
+		if removed[e] {
+			gone = append(gone, e)
+		}
+	}
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "now also in "+strings.Join(added, ", "))
+	}
+	if len(gone) > 0 {
+		parts = append(parts, "no longer in "+strings.Join(gone, ", "))
+	}
+	if len(both) > 0 {
+		parts = append(parts, "moved and back in "+strings.Join(both, ", "))
 	}
 	if m.omitted > 0 {
 		parts = append(parts, fmt.Sprintf("and %d more environments", m.omitted))

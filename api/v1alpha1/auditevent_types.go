@@ -161,22 +161,24 @@ type AuditGateChange struct {
 	Manager string `json:"manager,omitempty"`
 	// EnvironmentsAdded are environments of the version the template's gate
 	// copies now apply to and did not before (a kardinal.io/applies-to edit
-	// moves a gate without changing its rule): the first
-	// MaxAuditGateEnvironments in name order.
+	// moves a gate without changing its rule): the first 5 in name order. In
+	// a record merged from several, an environment in both
+	// environmentsAdded and environmentsRemoved moved and back.
 	// +optional
 	// +kubebuilder:validation:MaxItems=5
 	// +kubebuilder:validation:items:MaxLength=63
 	EnvironmentsAdded []string `json:"environmentsAdded,omitempty"`
 	// EnvironmentsRemoved are environments of the version the template's
-	// gate copies applied to and no longer do: the first
-	// MaxAuditGateEnvironments in name order.
+	// gate copies applied to and no longer do: the first 5 in name order.
 	// +optional
 	// +kubebuilder:validation:MaxItems=5
 	// +kubebuilder:validation:items:MaxLength=63
 	EnvironmentsRemoved []string `json:"environmentsRemoved,omitempty"`
-	// EnvironmentsOmitted counts the added and removed environments past the
-	// first MaxAuditGateEnvironments of each.
+	// EnvironmentsOmitted is one count, for environmentsAdded and
+	// environmentsRemoved together, of the environments past the first 5 of
+	// each. In a record merged from several it is an upper bound.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	EnvironmentsOmitted int32 `json:"environmentsOmitted,omitempty"`
 }
 
