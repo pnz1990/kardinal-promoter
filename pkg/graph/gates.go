@@ -57,7 +57,10 @@ const (
 // (or none) once: a version stuck under a rendering bug picks up the fix on
 // upgrade. A Graph whose rendering did not change re-renders identically,
 // which kro applies as a no-op. Verified, failed and superseded Bundles keep
-// the Graph they were promoted with.
+// the Graph they were promoted with. The check is equality, not "older
+// than": a controller downgraded to an earlier RenderVersion re-renders a
+// newer controller's Graph once with its own rendering, which is right,
+// since the running controller owns the rendering of the Graphs it serves.
 //
 // Bump it with every change that renders an existing Bundle's Graph
 // differently (node IDs, templates, data), and say so in the changelog; a
