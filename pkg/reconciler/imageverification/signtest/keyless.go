@@ -27,6 +27,18 @@ import (
 // timestamp, like `cosign attest --new-bundle-format` against that Sigstore.
 // It verifies offline against TrustedRootJSON(vs).
 func KeylessAttest(vs *ca.VirtualSigstore, identity, issuer, repository, digest, predicateType string, predicate interface{}) ([]byte, error) {
+	return KeylessAttestStamped(vs, identity, issuer, repository, digest, predicateType, predicate, 0)
+}
+
+// KeylessAttestStamped is an attestation bundle for repository@digest
+// signed the keyless way by vs, a private Sigstore: a Fulcio leaf
+// certificate for identity and issuer, a Rekor entry with its inclusion
+// proof and an RFC 3161 timestamp, like `cosign attest --new-bundle-format`
+// against that Sigstore; it verifies offline against vs's trusted material.
+// With later > 0 it carries a second timestamp over the same signature,
+// taken after later: an existing signature stamped again.
+func KeylessAttestStamped(vs *ca.VirtualSigstore, identity, issuer, repository, digest, predicateType string, predicate interface{},
+	later time.Duration) ([]byte, error) {
 	hexPart, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok {
 		return nil, fmt.Errorf("digest %q is not sha256", digest)
@@ -81,10 +93,6 @@ func KeylessAttest(vs *ca.VirtualSigstore, identity, issuer, repository, digest,
 	if err != nil {
 		return nil, err
 	}
-	var rfc3161 []*protocommon.RFC3161SignedTimestamp
-	for _, s := range stamps {
-		rfc3161 = append(rfc3161, &protocommon.RFC3161SignedTimestamp{SignedTimestamp: s})
-	}
 	sc, err := entity.SignatureContent()
 	if err != nil {
 		return nil, err
@@ -94,6 +102,22 @@ func KeylessAttest(vs *ca.VirtualSigstore, identity, issuer, repository, digest,
 		return nil, fmt.Errorf("attest: no DSSE envelope")
 	}
 	raw := env.RawEnvelope()
+	if later > 0 {
+		sig, err := decodeB64(raw.Signatures[0].Sig)
+		if err != nil {
+			return nil, fmt.Errorf("attest: signature: %w", err)
+		}
+		time.Sleep(later)
+		again, err := vs.TimestampResponse(sig)
+		if err != nil {
+			return nil, fmt.Errorf("attest: second timestamp: %w", err)
+		}
+		stamps = append(stamps, again)
+	}
+	var rfc3161 []*protocommon.RFC3161SignedTimestamp
+	for _, s := range stamps {
+		rfc3161 = append(rfc3161, &protocommon.RFC3161SignedTimestamp{SignedTimestamp: s})
+	}
 	var sigs []*protodsse.Signature
 	for _, s := range raw.Signatures {
 		b, err := decodeB64(s.Sig)

@@ -127,12 +127,14 @@ the in-toto/attestation v1 Go type, `signed_entity.go:26`). The reconciler's `ve
    provenance v1, `in-toto/attestation@v1.2.0/go/predicates/provenance/v1/provenance.pb.go:31-34`;
    the VSA, `predicates/vsa/v1/vsa.pb.go:27-37`), or kept as JSON otherwise.
 
-Several bundles with the same predicate type: the newest by Rekor integrated time that
-verifies is used, and the count is recorded. One that does not verify is recorded with its
+Several bundles with the same predicate type: the newest by its earliest verified time (Rekor
+integrated time or RFC 3161 timestamp) that verifies is used, and the count is recorded; with
+`maxAge`, the one that stays fresh longest (section 5). One that does not verify is recorded with its
 reason and never used.
 
 Verified attestations are not checked again (Verified is terminal, as for signatures,
-`imageverification_types.go` `ImageVerificationStatus.Phase`).
+`imageverification_types.go` `ImageVerificationStatus.Phase`), except that a result past its
+policy's `maxAge` is looked for again (section 5, #2044).
 
 ### 3.3 SLSA build level
 
@@ -282,7 +284,12 @@ status:
 
 The ImageVerification holds the version's first environments until it is Verified (signatures,
 `required` attestations, `minLevel`). Gates further along read its status, which is terminal by
-then. A gate in an environment whose Pipeline has no attestation policy sees
+then, except for attestation ages: with `attestations[].maxAge` (#2044) the reconciler writes each
+result's `staleAt`, sets `stale` when it passes, and re-reads the image's referrers (a quarter of
+maxAge, between 5 minutes and an hour) until a newer attestation replaces it; the phase stays
+Verified and gates read `attestations.<name>.stale`. The clock stays in the reconciler's status
+write (option (a) of #2044): no `now` reaches gate CEL, and in-flight versions are not re-verified
+on an interval. A gate in an environment whose Pipeline has no attestation policy sees
 `attestations.verified == false` and an empty map, so `attestations.provenance.slsa.buildLevel`
 is an evaluation error and the gate blocks: fail closed, as for an unknown ChangeWindow.
 
@@ -340,7 +347,8 @@ reconciler is for (ledger G8, PolicyGate CEL row).
 - **A trusted builder that lies.** The level is what the policy grants the builder; a
   compromised builder signs false provenance.
 - **Stale scans.** A scan attests the database at `scannedAt`; a gate must bound its age.
-  Vulnerabilities found later are not seen (Verified is terminal).
+  Vulnerabilities found later are not seen until a newer scan is attached; `maxAge` makes a gate
+  require one (#2044).
 - **VEX from the wrong party.** Only `vex.authorities` may suppress findings; listing the
   scanner's own identity there lets the build vouch for itself.
 - **Oversized predicates.** CEL cannot read a predicate over the cap; split the claim into a

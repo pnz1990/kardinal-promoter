@@ -123,6 +123,40 @@ type AttestationPolicy struct {
 	// scan does not apply.
 	// +optional
 	VEX *VEXPolicy `json:"vex,omitempty"`
+
+	// MaxAge, when set, is how old the attestation may be (a Go duration,
+	// for example 24h), from the time its signed statement gives: a scan's
+	// scannedAt, a SLSA provenance's finishedOn (buildFinishedOn in v0.2;
+	// with both, the earlier), a SLSA verification summary's timeVerified.
+	// A keyless attestation without one counts from its verified signing
+	// time when its certificate lives at most an hour (Fulcio's: ten
+	// minutes), which bounds it. Any other has no time
+	// it cannot be re-stamped with, and is stale at once unless datedBy is
+	// logTime. Past maxAge the result is stale
+	// (status.attestations[].stale, attestations.<name>.stale in a gate),
+	// also after the ImageVerification is Verified, and kardinal looks for
+	// a newer attestation in the image's referrers until one replaces it.
+	// A required attestation that is already stale is waited for like a
+	// missing one. See docs/image-verification.md#attestation-age.
+	// +kubebuilder:validation:Pattern=`^(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$`
+	// +optional
+	MaxAge string `json:"maxAge,omitempty"`
+
+	// DatedBy logTime dates a key-signed attestation whose statement has no
+	// time of its own by its transparency log entry or timestamp authority
+	// time. Anyone can log an old key signature again or stamp it anew, so
+	// such an attestation can be made to look fresh: use it only for an
+	// attestation that has no signed time and whose log you trust not to
+	// take re-submissions. Empty: such an attestation is stale at once.
+	// A keyless attestation needs neither when its certificate lives at most
+	// an hour: it is dated by its verified time, which must fall inside the
+	// certificate's validity (a Fulcio certificate's ten minutes from
+	// signing), so a fresh entry or stamp over an old keyless signature does
+	// not verify. One with a longer-lived certificate (a private CA) is
+	// dated like a key signature.
+	// +kubebuilder:validation:Enum=logTime
+	// +optional
+	DatedBy string `json:"datedBy,omitempty"`
 }
 
 // SLSAPolicy is how SLSA build levels are decided: the level a policy
@@ -377,6 +411,15 @@ type CommitVerificationResult struct {
 	Message string `json:"message,omitempty"`
 }
 
+// AttestationSighting is when kardinal first saw one attestation.
+type AttestationSighting struct {
+	// Digest is the sha256 of the attestation's verified DSSE payload.
+	// +kubebuilder:validation:MaxLength=80
+	Digest string `json:"digest"`
+	// At is when it was first seen.
+	At metav1.Time `json:"at"`
+}
+
 // AttestationResult is one attestation of one image: whether it verified,
 // who signed it, and its typed summary and predicate.
 type AttestationResult struct {
@@ -403,6 +446,39 @@ type AttestationResult struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Agent string `json:"agent,omitempty"`
+	// VerifiedAt is the verified signing time of the attestation: its
+	// transparency log or timestamp authority time.
+	// +optional
+	VerifiedAt *metav1.Time `json:"verifiedAt,omitempty"`
+	// DatedAt is when kardinal first recorded this attestation (its
+	// digest): the age base never counts from later than this, so a scan
+	// that claims a future scannedAt ages from when it was first seen.
+	// +optional
+	DatedAt *metav1.Time `json:"datedAt,omitempty"`
+	// FirstSeen is when kardinal first saw each attestation of the type
+	// that verified for the image (by payload digest), newest 16 kept: an
+	// attestation that comes back keeps the date it was first seen.
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	FirstSeen []AttestationSighting `json:"firstSeen,omitempty"`
+	// StatementTime is the time the signed statement gives: a scan's
+	// scannedAt, a SLSA provenance's finishedOn.
+	// +optional
+	StatementTime *metav1.Time `json:"statementTime,omitempty"`
+	// TimeSource is what the age counts from: statement (StatementTime),
+	// certificate (a keyless signature's verified time, which its
+	// certificate bounds) or log (verifiedAt, with datedBy logTime). Empty
+	// when the attestation cannot be dated.
+	// +kubebuilder:validation:Enum=statement;certificate;log
+	// +optional
+	TimeSource string `json:"timeSource,omitempty"`
+	// StaleAt is when the attestation passes the policy's maxAge.
+	// +optional
+	StaleAt *metav1.Time `json:"staleAt,omitempty"`
+	// Stale is true once StaleAt has passed, until a newer attestation
+	// replaces it.
+	// +optional
+	Stale bool `json:"stale,omitempty"`
 	// Digest is the sha256 of the verified DSSE payload.
 	// +kubebuilder:validation:MaxLength=80
 	// +optional
