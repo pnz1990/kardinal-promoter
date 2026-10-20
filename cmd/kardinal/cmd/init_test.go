@@ -124,7 +124,7 @@ func TestInitCmd_Flags(t *testing.T) {
 	assert.Contains(t, string(content), "url: https://github.com/o/r2\n")
 
 	for args, msg := range map[string]string{
-		"--repo http://github.com/o/r":              `init: --repo needs a git repository URL, https://host/owner/repo or ssh`,
+		"--repo http://github.com/o/r":              `init: --repo "http://github.com/o/r" is http://`,
 		"--repo https://x/y --strategy argo":        `init: --strategy must be kustomize or helm, got "argo"`,
 		"--repo https://x/y --prod-approval manual": `init: --prod-approval must be pr-review or auto, got "manual"`,
 		"--repo https://x/y --envs bundle --stdout": "init: the Pipeline it would write is not valid:",
@@ -138,6 +138,61 @@ func TestInitCmd_Flags(t *testing.T) {
 	_, _, err = runInitCmd(t, t.TempDir(), "", "--name", "web")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "give the answers as flags: kardinal init --name my-app --repo https://github.com/myorg/gitops")
+}
+
+// TestInitCmd_InsecureHTTP (#1949): an http:// --repo is refused unless
+// --insecure-http says so; with it init writes the URL and warns on stderr
+// that the git token crosses the network in clear text. The flag does not
+// relax the other URL rules and does nothing for https or ssh (the live
+// side is TestCLI_Init, CLI-INIT-03).
+func TestInitCmd_InsecureHTTP(t *testing.T) {
+	keepStyle(t)
+	const warning = "warning: --repo is http://"
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr string
+		wantURL string
+		warns   bool
+	}{
+		{name: "http refused without the flag", args: []string{"--repo", "http://forgejo-http.forgejo.svc:3000/o/r"},
+			wantErr: `init: --repo "http://forgejo-http.forgejo.svc:3000/o/r" is http://, which sends the git token in clear text; ` +
+				"use https:// or ssh, or pass --insecure-http for a git server without TLS (a local or in-cluster Forgejo or Gitea)"},
+		{name: "loopback is not special", args: []string{"--repo", "http://127.0.0.1:3000/o/r"}, wantErr: "pass --insecure-http"},
+		{name: "http with the flag", args: []string{"--repo", "http://forgejo-http.forgejo.svc:3000/o/r", "--insecure-http"},
+			wantURL: "http://forgejo-http.forgejo.svc:3000/o/r", warns: true},
+		{name: "the flag keeps the password rule", args: []string{"--repo", "http://u:p@git.local/o/r", "--insecure-http"},
+			wantErr: "init: --repo needs a git repository URL"},
+		{name: "the flag keeps the query rule", args: []string{"--repo", "http://git.local/o/r?a=b", "--insecure-http"},
+			wantErr: "init: --repo needs a git repository URL"},
+		{name: "the flag keeps the path rule", args: []string{"--repo", "http://git.local", "--insecure-http"},
+			wantErr: "init: --repo needs a git repository URL"},
+		{name: "https with the flag: no warning", args: []string{"--repo", "https://github.com/o/r", "--insecure-http"},
+			wantURL: "https://github.com/o/r"},
+		{name: "ssh with the flag: no warning", args: []string{"--repo", "git@github.com:o/r.git", "--insecure-http"},
+			wantURL: "git@github.com:o/r.git"},
+		{name: "other schemes stay refused", args: []string{"--repo", "ftp://git.local/o/r", "--insecure-http"},
+			wantErr: "init: --repo needs a git repository URL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, err := runInitCmd(t, t.TempDir(), "", append([]string{"--name", "web", "--stdout"}, tc.args...)...)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Empty(t, out, "nothing is written")
+				return
+			}
+			require.NoError(t, err)
+			assert.Contains(t, out, "url: "+tc.wantURL+"\n")
+			if tc.warns {
+				assert.Equal(t, warning+": the controller sends the git token to it in clear text; "+
+					"use it only for a git server on a network you trust\n", errOut)
+			} else {
+				assert.NotContains(t, errOut, warning)
+			}
+		})
+	}
 }
 
 // TestInitCmd_NoInjection (C6 QA): no flag value can add or change a field
@@ -469,8 +524,20 @@ func TestRunInitWizard_Validation(t *testing.T) {
 			AppName: "web", Namespace: "team-a", Environments: []string{"test", "prod"},
 			GitURL: "https://github.com/o/r", Branch: "main", UpdateStrategy: "helm",
 		}, cfg)
-		assert.Equal(t, 2, strings.Count(out.String(), "a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)"))
+		assert.Equal(t, 1, strings.Count(out.String(), "a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git)"))
+		assert.Contains(t, out.String(), `"http://github.com/o/r" is http://`)
 		assert.Contains(t, out.String(), `update strategy must be kustomize or helm, got "argocd"`)
+	})
+	t.Run("http needs --insecure-http (#1949)", func(t *testing.T) {
+		var out bytes.Buffer
+		cfg := &InitConfig{}
+		err := runInitWizard(strings.NewReader("web\n\n\nhttp://git.local/o/r\n"), &out, cfg, none)
+		require.Error(t, err, "re-asked, then the input ends")
+		assert.Contains(t, out.String(), `  "http://git.local/o/r" is http://, which sends the git token in clear text; `+
+			"use https:// or ssh, or pass --insecure-http for a git server without TLS (a local or in-cluster Forgejo or Gitea)\n")
+		cfg = &InitConfig{insecureHTTP: true}
+		require.NoError(t, runInitWizard(strings.NewReader("web\n\n\nhttp://git.local/o/r\n\n\n"), &out, cfg, none))
+		assert.Equal(t, "http://git.local/o/r", cfg.GitURL)
 	})
 	t.Run("a flag's question is not asked", func(t *testing.T) {
 		var out bytes.Buffer
