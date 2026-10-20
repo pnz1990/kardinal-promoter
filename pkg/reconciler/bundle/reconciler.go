@@ -710,7 +710,7 @@ type gateSnapshot struct {
 
 func snapshotGates(g *graph.Graph) gateSnapshot {
 	return gateSnapshot{rules: graph.TemplateRules(g), stamps: graph.TemplateStamps(g), envs: graph.TemplateEnvironments(g),
-		stale: g.Labels[graph.LabelRenderVersion] != strconv.Itoa(graph.RenderVersion)}
+		stale: g.Labels[graph.LabelRenderVersion] != graph.RenderLabel}
 }
 
 // auditGraph is b's Graph, read for its gate copies, or nil when it cannot be
