@@ -41,6 +41,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -181,6 +182,9 @@ type Reconciler struct {
 	// JitterFn is the random part added to a retry's delay d, in [0, d]
 	// (nil: random); tests fix it.
 	JitterFn func(d time.Duration) time.Duration
+	// SleepFn waits d between tries of a status write (nil: a timer that
+	// ctx ends early); tests record the waits instead.
+	SleepFn func(ctx context.Context, d time.Duration) error
 }
 
 func (r *Reconciler) now() time.Time {
@@ -499,20 +503,41 @@ func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionRe
 	return ctrlruntime.Result{}, r.patchKeeping(ctx, base, rc, commented)
 }
 
-// patchKeeping patches rc's status like patch, and on a conflict re-reads
-// the receipt and re-applies apply to it, so what an external call just did
-// (a signature, a PR comment) is recorded rather than done again. apply
-// returns false when the stored receipt already has it.
+// keepTries and keepWait bound patchKeeping: up to keepTries status writes
+// in all, the wait before each one after a server error, a timeout or
+// throttling doubling from keepWait (about 3 s in all). After a conflict the
+// write is tried again at once, on a fresh read.
+const (
+	keepTries = 6
+	keepWait  = 100 * time.Millisecond
+)
+
+// patchKeeping patches rc's status like patch, so that what an external
+// call just did (a signature, a PR comment) is recorded rather than done
+// again: on a conflict, a server error, a timeout, throttling or a failed
+// connection it re-reads the receipt from the API server and re-applies
+// apply to it, up to keepTries writes. apply returns false when the stored
+// receipt already has it (a write that failed may have landed). A write
+// that still fails returns its error, and the next reconcile does the call
+// again: a second signature, which verifies like the first (#2313).
 func (r *Reconciler) patchKeeping(ctx context.Context, base, rc *v1alpha1.PromotionReceipt,
 	apply func(*v1alpha1.PromotionReceipt) bool) error {
 	err := r.patch(ctx, base, rc)
-	for i := 0; i < 5 && apierrors.IsConflict(err); i++ {
+	wait := keepWait
+	for try := 1; try < keepTries && transient(err); try++ {
+		if !apierrors.IsConflict(err) {
+			if serr := r.sleep(ctx, wait); serr != nil {
+				return err
+			}
+			wait *= 2
+		}
 		var cur v1alpha1.PromotionReceipt
 		if gerr := r.reader().Get(ctx, ctrl.ObjectKeyFromObject(rc), &cur); gerr != nil {
 			if apierrors.IsNotFound(gerr) {
 				return nil
 			}
-			return fmt.Errorf("re-read promotion receipt %s: %w", rc.Name, gerr)
+			err = fmt.Errorf("re-read promotion receipt %s: %w", rc.Name, gerr)
+			continue
 		}
 		curBase := cur.DeepCopy()
 		if !apply(&cur) {
@@ -521,6 +546,33 @@ func (r *Reconciler) patchKeeping(ctx context.Context, base, rc *v1alpha1.Promot
 		err = r.patch(ctx, curBase, &cur)
 	}
 	return err
+}
+
+// transient reports whether a status write or read that failed with err
+// may succeed when tried again shortly.
+func transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apierrors.IsConflict(err) || apierrors.IsInternalError(err) || apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) ||
+		apierrors.IsUnexpectedServerError(err) || utilnet.IsTimeout(err) || utilnet.IsConnectionRefused(err) ||
+		utilnet.IsConnectionReset(err) || utilnet.IsProbableEOF(err)
+}
+
+// sleep waits d, or until ctx ends.
+func (r *Reconciler) sleep(ctx context.Context, d time.Duration) error {
+	if r.SleepFn != nil {
+		return r.SleepFn(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (r *Reconciler) scmFor(ctx context.Context, rc *v1alpha1.PromotionReceipt) (scm.SCMProvider, error) {

@@ -556,6 +556,174 @@ func TestReconcile_OnceDespiteALaggingCache(t *testing.T) {
 	}
 }
 
+// TestReconcile_SignWriteRetried (#2313, QA-3 on #2315): the status write
+// right after a signature is tried again, on a fresh read, when it fails for
+// a transient reason (a server error, a timeout, throttling), after waits
+// doubling from keepWait, up to keepTries writes: the signature made is the
+// one recorded, and a write that landed despite its error is kept. A
+// permanent refusal is not retried. A write that still fails returns its
+// error, and the next reconcile signs again (the documented limit, like a
+// crash between the signature and its write).
+//
+// Covers RECEIPT-SIGN-09.
+func TestReconcile_SignWriteRetried(t *testing.T) {
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "promotionreceipts"}
+	internal := apierrors.NewInternalError(errors.New("etcdserver: leader changed"))
+	for _, tc := range []struct {
+		name    string
+		fail    []error // the sign write's errors, in turn
+		landed  bool    // the first failed write was applied all the same
+		waits   []time.Duration
+		writes  int
+		wantErr bool
+		signs   int // after a second reconcile
+	}{
+		{name: "a server error, then the write lands", fail: []error{internal},
+			waits: []time.Duration{keepWait}, writes: 2, signs: 1},
+		{name: "a timeout and throttling, then the write lands",
+			fail:  []error{apierrors.NewServerTimeout(gr, "patch", 1), apierrors.NewTooManyRequests("slow down", 1)},
+			waits: []time.Duration{keepWait, 2 * keepWait}, writes: 3, signs: 1},
+		{name: "a server error on a write that landed", fail: []error{internal}, landed: true,
+			waits: []time.Duration{keepWait}, writes: 1, signs: 1},
+		{name: "server errors past the budget", fail: []error{internal, internal, internal, internal, internal, internal},
+			waits: []time.Duration{keepWait, 2 * keepWait, 4 * keepWait, 8 * keepWait, 16 * keepWait}, writes: keepTries, wantErr: true, signs: 2},
+		{name: "a permanent refusal", fail: []error{apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied"))},
+			writes: 1, wantErr: true, signs: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			fail, writes := tc.fail, 0
+			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if obj.(*v1alpha1.PromotionReceipt).Status.Phase != v1alpha1.ReceiptSigned {
+						return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					}
+					writes++
+					if len(fail) == 0 {
+						return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					}
+					err := fail[0]
+					fail = fail[1:]
+					if tc.landed {
+						require.NoError(t, c.SubResource(sub).Patch(ctx, obj, patch, opts...))
+					}
+					return err
+				}}).Build()
+			signs := 0
+			key := SecretKey(c, "kardinal-system", "receipt-key", "cosign.key")
+			var waits []time.Duration
+			r := &Reconciler{Client: c, APIReader: c, SCM: &commentSCM{}, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				SleepFn: func(_ context.Context, d time.Duration) error {
+					waits = append(waits, d)
+					return nil
+				},
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			_, err := r.Reconcile(context.Background(), req)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.waits, waits, "waits before the tries")
+			assert.Equal(t, tc.writes, writes, "status writes after the signature")
+			assert.Equal(t, 1, signs, "one signature in the first reconcile")
+			fail = nil
+			for range 3 {
+				_, err = r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			var rc v1alpha1.PromotionReceipt
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &rc))
+			assert.Equal(t, tc.signs, signs, "signatures in all")
+			assert.Equal(t, v1alpha1.ReceiptStored, rc.Status.Phase)
+			_, err = receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestReconcile_ConflictReReadsTheAPIServer (QA-3 on #2315): the status
+// write after a signature meets a real conflict (another writer's update
+// lands between the read and the write), and the cache has not seen that
+// update yet. The re-read goes to the API server (APIReader), so the write
+// converges and the receipt is signed once; re-read through the cache, every
+// try conflicts again and the error comes back after keepTries writes.
+//
+// Covers RECEIPT-SIGN-08.
+func TestReconcile_ConflictReReadsTheAPIServer(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		apiReader bool
+	}{
+		{name: "the API server's copy", apiReader: true},
+		{name: "the cache's copy", apiReader: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			// stale is what the cache returns: the receipt before the
+			// other writer's update, until the next reconcile.
+			var stale *v1alpha1.PromotionReceipt
+			writes := 0
+			inner := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if obj.(*v1alpha1.PromotionReceipt).Status.Phase == v1alpha1.ReceiptSigned {
+						writes++
+						if writes == 1 {
+							var cur v1alpha1.PromotionReceipt
+							require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), &cur))
+							stale = cur.DeepCopy()
+							cur.Annotations = map[string]string{"touched": "by another writer"}
+							require.NoError(t, c.Update(ctx, &cur))
+						}
+					}
+					return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+				}}).Build()
+			cache := interceptor.NewClient(inner, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption) error {
+				if rc, ok := obj.(*v1alpha1.PromotionReceipt); ok && stale != nil {
+					stale.DeepCopyInto(rc)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}})
+			signs := 0
+			key := SecretKey(inner, "kardinal-system", "receipt-key", "cosign.key")
+			r := &Reconciler{Client: cache, SCM: &commentSCM{}, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			if tc.apiReader {
+				r.APIReader = inner
+			}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			_, err := r.Reconcile(context.Background(), req)
+			assert.Equal(t, 1, signs)
+			if !tc.apiReader {
+				require.Error(t, err)
+				assert.True(t, apierrors.IsConflict(err), "a conflict: %v", err)
+				assert.Equal(t, keepTries, writes, "every try conflicts")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 2, writes, "the second write lands")
+			var rc v1alpha1.PromotionReceipt
+			require.NoError(t, inner.Get(context.Background(), req.NamespacedName, &rc))
+			assert.Equal(t, "by another writer", rc.Annotations["touched"])
+			_, err = receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
 // TestCacheTransform (#1951 finding 5): a done receipt is cached without
 // its statement and signed bundle, and the reconciler returns for it before
 // parsing anything; a receipt still to be signed, stored or commented is
