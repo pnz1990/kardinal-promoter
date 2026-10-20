@@ -226,22 +226,30 @@ if [ "${LOADLOCK_TEST:-}" = 1 ] && [[ ${LOADLOCK_TEST_FLOCK_WAIT:-} =~ ^[0-9]+$ 
   FLOCK_WAIT=$LOADLOCK_TEST_FLOCK_WAIT
 fi
 with_flock() {
-  local fd rc
-  exec {fd}>"$queue/.reclaim" || return 1
-  if ! flock -x -w "$FLOCK_WAIT" "$fd"; then
-    exec {fd}>&-
+  local rc
+  exec {flock_fd}>"$queue/.reclaim" || return 1
+  if ! flock -x -w "$FLOCK_WAIT" "$flock_fd"; then
+    exec {flock_fd}>&-
     echo "loadlock: no flock on $queue/.reclaim in ${FLOCK_WAIT}s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it" >&2
     return 1
   fi
   in_flock=1
   "$@"
   rc=$?
+  # Closing the fd lets the flock go; in_flock is cleared after it. A signal
+  # in between finds in_flock set but the fd closed, and release takes the
+  # flock again (clearing in_flock first left a moment where release waited
+  # on a second fd for the flock this one still held, #2316 QA).
+  exec {flock_fd}>&-
+  # LOADLOCK_TEST_AFTER_UNLOCK (tests only, with LOADLOCK_TEST=1) parks it
+  # there after a take, seconds.
+  if [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "${LOADLOCK_TEST_AFTER_UNLOCK:-}" ] && [ "$1" = take_turn ]; then
+    sleep "$LOADLOCK_TEST_AFTER_UNLOCK"
+  fi
   in_flock=''
-  flock -u "$fd"
-  exec {fd}>&-
   return "$rc"
 }
-in_flock=''
+in_flock='' flock_fd=''
 
 # count_holders sets held_n to how many slots are held, or to "exclusive"
 # when LOCK is an older client's (no view marker); held_x is set when a
@@ -306,8 +314,8 @@ write_view() {
 held=
 child=
 release_slot() {
-  # Ours: its owner is this run's record, or (a signal between the mkdir and
-  # the owner write) there is none yet.
+  # Ours: its owner is this run's record, or (a signal during the mkdir, or
+  # before the owner write) there is none yet.
   if { read_file "$slot/owner" && [ "$file_v" = "$record" ]; } ||
     { [ -d "$slot" ] && { [ ! -e "$slot/owner" ] || { read_file "$slot/owner" && [ -z "$file_v" ]; }; }; }; then
     rm -r "$slot"
@@ -319,9 +327,17 @@ release_slot() {
 release() {
   rm -f "$queue/$ticket"
   [ -n "$held" ] || return 0
-  # A signal inside a with_flock (while it takes the lock) still holds
-  # the flock: release under it, never wait for it from a second fd.
-  if [ -n "$in_flock" ]; then release_slot; else with_flock release_slot; fi
+  # A signal inside a with_flock (while it takes the lock) still holds the
+  # flock while its fd is open: release under it, never wait for it from a
+  # second fd. Once that fd is closed, take the flock again. (No redirection
+  # around the test: bash saves the fd it redirects on the lowest free one
+  # from 10, which can be the closed flock fd's number. Without /proc, the
+  # fd is taken as open.)
+  if [ -n "$in_flock" ] && { [ ! -d /proc/self/fd ] || [ -e "/proc/self/fd/$flock_fd" ]; }; then
+    release_slot
+  else
+    with_flock release_slot
+  fi
 }
 trap release EXIT
 # A signal stops CMD first, then releases the lock (EXIT).
@@ -497,12 +513,17 @@ take_turn() {
   [ -z "$alone" ] || [ "$held_n" -eq 0 ] || return 1
   [ -z "$held_x" ] || return 1
   for n in 1 2; do
-    mkdir "$slots/$n" 2>/dev/null || continue
-    # Held from the mkdir on: a signal from here gives the slot (and the
-    # view) up, through release (a signal between the view and a later
-    # held=1 left both behind, #2316's CI).
-    slot="$slots/$n"
-    held=1
+    # Held from before its mkdir: bash runs a signal's trap once the command
+    # it waits for is done, so a held=1 after the mkdir (or after the view,
+    # #2316's CI) left the slot behind when the signal came during it (#2316
+    # QA). release gives up a slot with no owner yet only because no one
+    # else makes one: every take is under the flock, and this one was free.
+    [ ! -e "$slots/$n" ] || continue
+    slot="$slots/$n" held=1
+    if ! mkdir "$slot" 2>/dev/null; then
+      slot='' held=''
+      continue
+    fi
     if ! echo "$record" >"$slots/$n/owner"; then
       rmdir "$slots/$n"
       slot='' held=''
