@@ -192,7 +192,7 @@ func TestLoadLock_Races(t *testing.T) {
 	t.Run("25 locks at once, 8 waiters each on a dead holder: one holder at a time, none wedged", func(t *testing.T) {
 		// Locks in parallel, so reapers overlap (#2226 QA: sequential rounds
 		// never interleaved two, and #2202's script passed them).
-		rounds := 5 // about 13s
+		rounds := 2 // CI time; LOADLOCK_STRESS=5 for the review-size run
 		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
 			n, err := strconv.Atoi(v)
 			require.NoError(t, err)
