@@ -114,6 +114,33 @@ kube_secret() {
     --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
 }
 
+# receipt_helm_args NS KEY [ALLOWED] sets RECEIPT_ARGS to the chart values of
+# key-signed receipts (KARDINAL_E2E_RECEIPTS=1) for a release in NS: signed
+# with the ECDSA P-256 key SECRETS_DIR/KEY (generated once and kept, so a
+# rerun keeps it; Secret NS/receipt-key), referrers pushed to the suite's
+# registry (components/registry.sh). Without ALLOWED they all go to its
+# repository e2e/receipts; with ALLOWED (space-separated repository path
+# prefixes of that registry) to each image's own repository, only under
+# those (receipts.sinks.oci.allowedRepositories).
+receipt_helm_args() {
+  : "${KARDINAL_E2E_REGISTRY:?components/registry.sh must run first}"
+  local ns=$1 key=$2 allowed=${3:-} host=${KARDINAL_E2E_REGISTRY#http://} list='' p
+  mkdir -p "$SECRETS_DIR" && chmod 700 "$SECRETS_DIR"
+  if [ ! -s "$SECRETS_DIR/$key" ]; then
+    (umask 077 && openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt >"$SECRETS_DIR/$key")
+  fi
+  kube_secret "$ns" receipt-key cosign.key "$key"
+  RECEIPT_ARGS=(--set receipts.enabled=true --set receipts.signing.mode=key
+    --set receipts.signing.key.secretRef.name=receipt-key
+    --set receipts.sinks.oci.enabled=true --set receipts.sinks.oci.insecure=true)
+  if [ -z "$allowed" ]; then
+    RECEIPT_ARGS+=(--set "receipts.sinks.oci.repository=$host/e2e/receipts")
+    return
+  fi
+  for p in $allowed; do list+="${list:+,}$host/$p"; done
+  RECEIPT_ARGS+=(--set "receipts.sinks.oci.allowedRepositories={$list}")
+}
+
 # mirror_of IMAGE prints mirror.gcr.io's copy of a Docker Hub image
 # (docker.io/..., public.ecr.aws/docker/library/...), or nothing.
 mirror_of() {

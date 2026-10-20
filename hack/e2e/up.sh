@@ -56,6 +56,10 @@
 #           static key, pushed as referrers
 #   receipts-keyless  Forgejo + Argo CD + sigstore scaffolding on Knative
 #           (sigstore.sh): keyless receipts, Rekor v2 and a timestamp
+#   evidence-tenancy  Forgejo + Argo CD + an OCI registry + the fake ticketing
+#           API, and two shards (shard.sh), each signing receipts with its own
+#           key and pushing referrers only under its team's registry prefix:
+#           the TestTenancy_ tests keep two teams' evidence apart
 #   scale   Forgejo behind Toxiproxy (git latency and outages), Prometheus,
 #           and two controller replicas built with -race (KARDINAL_E2E_RACE,
 #           default 1 here): the TestScale_ topology, load, race and chaos
@@ -171,6 +175,13 @@ case "$SUITE" in
   # NetworkPolicy, which lets the controller reach only the cluster.
   evidence-airgap) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh) AFTER=(airgap.sh) RUN='^TestAirgap_'
     export KARDINAL_E2E_RECEIPTS=1 ;;
+  # Two teams' evidence kept apart (#2062): team A on the main release
+  # (shard default), team B on shard b, each with its own receipt key and
+  # registry prefix (e2e/team-a, e2e/team-b), and the fake ticketing API.
+  evidence-tenancy) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh ticketapi.sh) AFTER=(shard.sh)
+    RUN='^TestTenancy_' HELM_ARGS='--set controller.namespaceShard=default'
+    export KARDINAL_E2E_RECEIPTS=1 KARDINAL_E2E_RECEIPTS_OCI_ALLOWED=e2e/team-a \
+      KARDINAL_E2E_SHARD_B_RECEIPTS_OCI_ALLOWED=e2e/team-b ;;
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
     HELM_ARGS='--set controller.namespaceShard=default' ;;

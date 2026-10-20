@@ -147,17 +147,13 @@ if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret bundle-api-token >/dev/null 2>&1
 fi
 # The receipts suite (hack/e2e/up.sh): receipts signed with a static
 # ECDSA P-256 key generated here (kept in SECRETS_DIR, so a rerun keeps it),
-# referrers pushed to the suite's registry (components/registry.sh).
+# referrers pushed to the suite's registry (components/registry.sh): to its
+# repository e2e/receipts, or with KARDINAL_E2E_RECEIPTS_OCI_ALLOWED (path
+# prefixes, the evidence-tenancy suite) to each image's own repository under
+# them (lib.sh receipt_helm_args).
 if [ "${KARDINAL_E2E_RECEIPTS:-0}" = 1 ]; then
-  : "${KARDINAL_E2E_REGISTRY:?components/registry.sh must run first}"
-  if [ ! -s "$SECRETS_DIR/receipt-key" ]; then
-    (umask 077 && openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt >"$SECRETS_DIR/receipt-key")
-  fi
-  kube_secret "$KARDINAL_NS" receipt-key cosign.key receipt-key
-  args+=(--set receipts.enabled=true --set receipts.signing.mode=key
-    --set receipts.signing.key.secretRef.name=receipt-key
-    --set receipts.sinks.oci.enabled=true --set receipts.sinks.oci.insecure=true
-    --set "receipts.sinks.oci.repository=${KARDINAL_E2E_REGISTRY#http://}/e2e/receipts")
+  receipt_helm_args "$KARDINAL_NS" receipt-key "${KARDINAL_E2E_RECEIPTS_OCI_ALLOWED:-}"
+  args+=("${RECEIPT_ARGS[@]}")
 fi
 # components/ticketapi.sh: trust the fake ticketing API's CA.
 if "${KUBECTL[@]}" -n "$KARDINAL_NS" get configmap change-request-ca >/dev/null 2>&1; then

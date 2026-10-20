@@ -174,8 +174,8 @@ func TestLiveReport(t *testing.T) {
 	}{
 		{
 			name: "sample job fails",
-			// sample-ui-136 is 2026-11-02's minor job (hack/e2e/sample.sh
-			// 2026-11-02); a suite added to matrix.txt shifts the rotation.
+			// sample-ui-136 is 2026-11-16's minor job (hack/e2e/sample.sh
+			// 2026-11-16); a suite added to matrix.txt shifts the rotation.
 			jobs: "controller image\tsuccess\nui on Kubernetes 1.37\tsuccess\n" +
 				"sample-ui-136: ui on Kubernetes 1.36\tfailure\n" +
 				"sample-core-137-5of9x3: core 5/9 on Kubernetes 1.37 (COUNT=3)\tsuccess\ne2e live\tfailure\n",
@@ -210,7 +210,7 @@ func TestLiveReport(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(root, "hack/e2e/live-report.sh"), "jobs.tsv")
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KIND=nightly (COUNT=1)",
-				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE=2026-11-02", "E2E_LIVE="+tc.e2eLive)
+				"RUN_URL=https://example.com/run/1", "SHA=0123456789abcdef", "SAMPLE=2026-11-16", "E2E_LIVE="+tc.e2eLive)
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, string(out))
 			calls, err := os.ReadFile(filepath.Join(bin, "calls.log"))
@@ -224,8 +224,8 @@ func TestLiveReport(t *testing.T) {
 					return '_'
 				}, tc.created)+"_.md"))
 				require.NoError(t, err)
-				assert.Contains(t, string(body), "SAMPLE=2026-11-02 SAMPLE_ONLY=1 SUITES=ui make e2e-all")
-				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=ui -f sample=2026-11-02")
+				assert.Contains(t, string(body), "SAMPLE=2026-11-16 SAMPLE_ONLY=1 SUITES=ui make e2e-all")
+				assert.Contains(t, string(body), "gh workflow run e2e-live.yml --ref main -f suites=ui -f sample=2026-11-16")
 				assert.Contains(t, string(body), "https://example.com/run/1")
 			}
 		})
