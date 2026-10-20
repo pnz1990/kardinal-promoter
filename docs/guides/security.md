@@ -1212,7 +1212,7 @@ The user needs these permissions:
 | Roll back | `get` on `pipelines` and `bundles`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
 | Pause, resume | `get` on `pipelines`; `update` on `pipelines/pause` |
 | Roll back and hold, release a hold | as roll back; `update` on `pipelines/hold` |
-| Approve a gate | `get` on `policygates`; `update` on `policygates/override`. Recording or revoking an Approval (`/api/v1/ui/approvals`: Approve, Decline, Revoke mine) needs `create` or `delete` on `approvals` |
+| Approve a gate | `get` on `policygates`; `update` on `policygates/override`. Recording or revoking an Approval (`/api/v1/ui/approvals`: Approve, Decline, Revoke mine) needs `create` or `delete` on `approvals`; with `list` on `policygates` too, the UI checks the gates' `approval.fields` before writing, and without it the gate's tally applies them, as with `kardinal approve` |
 | Override a gate in an environment (`/api/v1/ui/override`) | `get` on `pipelines` and `policygates`; `list` on `policygates` and `bundles`; `update` on `policygates/override` |
 | Reject a Bundle | `update` on `bundles/reject` |
 

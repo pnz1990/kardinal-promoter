@@ -754,6 +754,63 @@ func TestUIHandler_HoldNeedsBundleCreateFirst(t *testing.T) {
 	assert.Empty(t, p.Spec.Holds)
 }
 
+// TestUIHandler_ApprovalWithoutGateRead (#2267): an approver who may create
+// Approvals but not list PolicyGates approves through the UI, as with
+// kardinal approve: the gates' approval.fields are then not checked before
+// the write (the tally applies them). Reading the gates is optional, so its
+// denial must not turn the request into a 403. Without create on approvals
+// the UI still refuses, and writes nothing.
+func TestUIHandler_ApprovalWithoutGateRead(t *testing.T) {
+	ctx := context.Background()
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}}}
+	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "team-a", UID: "uid-v2"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app"}, Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
+	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "change--app-v2-prod", Namespace: "team-a",
+		Labels: map[string]string{"kardinal.io/bundle": "app-v2", "kardinal.io/environment": "prod", "kardinal.io/gate-name": "change"}},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true", Approval: &v1alpha1.GateApprovalPolicy{Required: 1}}}
+	tokens := groupTokens{"approver": {Username: "approver@example.com"}, "watcher": {Username: "watcher@example.com"}}
+	var asked []authzv1.ResourceAttributes
+	// The test's approver role (e2e TestUI_APIApprovalsTokenReview): read
+	// pipelines, bundles and approvals, create approvals; nothing on
+	// policygates. The watcher only reads.
+	access := uiAccessReviewerFunc(func(_ context.Context, u authv1.UserInfo, a authzv1.ResourceAttributes) (bool, string, error) {
+		asked = append(asked, a)
+		if a.Group != "kardinal.io" || a.Namespace != "team-a" {
+			return false, "", nil
+		}
+		switch a.Resource {
+		case "pipelines", "bundles":
+			return a.Verb == "get" || a.Verb == "list", "", nil
+		case "approvals":
+			return a.Verb == "list" || (u.Username == "approver@example.com" && (a.Verb == "create" || a.Verb == "delete")), "", nil
+		}
+		return false, "", nil
+	})
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(p, b, gate).Build()
+	h := newUIHandler(c, nil, nil, uiAuthConfig{tokens: tokens, access: access}, "", nil, zerolog.Nop())
+	body := `{"bundle":"app-v2","namespace":"team-a","environment":"prod","decision":"approve","comment":"from the UI"}`
+
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/approvals", "Bearer watcher", body)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "no create on approvals: %s", rec.Body.String())
+	var l v1alpha1.ApprovalList
+	require.NoError(t, c.List(ctx, &l))
+	assert.Empty(t, l.Items, "the watcher wrote nothing")
+
+	asked = nil
+	rec = uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/approvals", "Bearer approver", body)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "approver@example.com approves app-v2 for prod")
+	require.NoError(t, c.List(ctx, &l))
+	require.Len(t, l.Items, 1)
+	assert.Equal(t, "approver@example.com", l.Items[0].Spec.User)
+	for _, a := range asked {
+		if a.Resource == "policygates" {
+			assert.Equal(t, "list", a.Verb, "the only gate check is whether they may be listed")
+		}
+	}
+}
+
 // TestUIHandler_ApprovalFields (spec 23 §8.4): the UI's approve carries the
 // fields of the gate's approval.fields; one the gate does not accept is 400,
 // with the gate's own reason, and nothing is written.
