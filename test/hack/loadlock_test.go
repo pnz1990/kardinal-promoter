@@ -802,3 +802,86 @@ exec `+realCat+` "$@"
 		t.Fatalf("the waiter never got the lock: %s", out.String())
 	}
 }
+
+// TestLoadLock_FailingToolsAreNoUnsafeAnswer (#2242 QA): every decision on
+// the lock's state uses shell builtins, so a waiter whose cat, grep, cut,
+// awk, sed and find all fail (forks failing on a busy host) never takes an
+// unsafe answer: a live, long-held holder's slot is not reclaimed, an
+// exclusive holder is not joined, a load it cannot read is a busy host's;
+// and it still gets the lock once the holder is done.
+func TestLoadLock_FailingToolsAreNoUnsafeAnswer(t *testing.T) {
+	// All six fail; and cat and grep alone, so the waiter still finds its
+	// turn (find) and reaches the decisions (the script before #2242 QA's
+	// fix reclaimed the long-held slot and joined the exclusive holder).
+	for _, tools := range [][]string{{"cat", "grep", "cut", "awk", "sed", "find"}, {"cat", "grep"}} {
+		t.Run(strings.Join(tools, ","), func(t *testing.T) { failingToolsAreNoUnsafeAnswer(t, tools) })
+	}
+}
+
+func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
+	failing := t.TempDir()
+	for _, tool := range tools {
+		require.NoError(t, os.WriteFile(filepath.Join(failing, tool),
+			[]byte("#!/bin/sh\necho \"bash: fork: Resource temporarily unavailable\" >&2\nexit 1\n"), 0o755))
+	}
+	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
+	run := func(lock string, env []string, args ...string) (*exec.Cmd, *syncBuf) {
+		c := exec.Command("bash", append([]string{script, "-l", lock, "-o", "t", "-r", "0.05"}, args...)...)
+		c.Env = append(append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1"), env...)
+		o := &syncBuf{}
+		c.Stdout, c.Stderr = o, o
+		require.NoError(t, c.Start())
+		return c, o
+	}
+	waitFor := func(t *testing.T, c *exec.Cmd, out *syncBuf) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- c.Wait() }()
+		select {
+		case err := <-done:
+			require.NoError(t, err, "%s", out.String())
+		case <-time.After(20 * time.Second):
+			_ = c.Process.Kill()
+			<-done
+			t.Fatalf("never got the lock: %s", out.String())
+		}
+	}
+	withFailing := func(env ...string) []string {
+		return append(env, "PATH="+failing+":"+os.Getenv("PATH"))
+	}
+	for _, tc := range []struct {
+		name                 string
+		holderEnv, waiterEnv []string
+		holderArgs           []string
+		old                  bool // the slot's directory is two minutes old: a long-held slot
+	}{
+		{"a live holder's long-held slot on a busy host", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOAD=99"}, nil, true},
+		{"an exclusive holder on an idle host", []string{"LOADLOCK_TEST_LOAD=0"}, []string{"LOADLOCK_TEST_LOAD=0"}, []string{"-x"}, false},
+		{"a load it cannot read", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOADAVG=/nonexistent/loadavg"}, nil, false},
+		{"a load it cannot parse", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOAD=busy"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			lock := filepath.Join(dir, "LOADLOCK")
+			stop, held, ran := filepath.Join(dir, "stop"), filepath.Join(dir, "held"), filepath.Join(dir, "ran")
+			t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+			h, hout := run(lock, tc.holderEnv, append(tc.holderArgs, "--", "sh", "-c",
+				`touch "$1"; while [ ! -e "$0" ]; do sleep 0.02; done`, stop, held)...)
+			require.Eventually(t, func() bool { _, err := os.Stat(held); return err == nil }, 20*time.Second, 20*time.Millisecond)
+			if tc.old {
+				old := time.Now().Add(-2 * time.Minute)
+				require.NoError(t, os.Chtimes(filepath.Join(lock+".d", "1"), old, old))
+			}
+			w, wout := run(lock, withFailing(tc.waiterEnv...), "--", "touch", ran)
+			time.Sleep(1500 * time.Millisecond)
+			assert.NoFileExists(t, ran, "the waiter took the lock beside its holder: %s", wout.String())
+			assert.DirExists(t, filepath.Join(lock+".d", "1"), "the live holder keeps its slot")
+			assert.NotContains(t, wout.String(), "removed")
+			require.NoError(t, os.WriteFile(stop, nil, 0o644))
+			waitFor(t, h, hout)
+			waitFor(t, w, wout)
+			assert.FileExists(t, ran, "it gets the lock once the holder is done")
+			assert.NoDirExists(t, lock)
+		})
+	}
+}

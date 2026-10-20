@@ -679,3 +679,35 @@ func TestPlan_ScaleStepsHoldTheLockAlone(t *testing.T) {
 	}
 	assert.Positive(t, scale)
 }
+
+// TestCountingLock_WhatCannotBeReadIsTheSafeAnswer (#2242 QA): a load that
+// cannot be read or parsed is a busy host's, and a holder record that is
+// there but cannot be read counts and holds the lock alone.
+func TestCountingLock_WhatCannotBeReadIsTheSafeAnswer(t *testing.T) {
+	dir := t.TempDir()
+	for name, text := range map[string]string{"ok": "3.50 2.00 1.00 1/100 42\n", "empty": "", "garbage": "load? 1 2\n"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644))
+	}
+	assert.InDelta(t, 3.5, loadFrom(filepath.Join(dir, "ok")), 0.001)
+	for _, name := range []string{"missing", "empty", "garbage"} {
+		assert.Equal(t, 1, capacity(loadFrom(filepath.Join(dir, name))), "%s: a busy host's one holder", name)
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	lock := filepath.Join(dir, "LOADLOCK")
+	slot := filepath.Join(slotsDir(lock), "1")
+	require.NoError(t, os.MkdirAll(slot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte(fmt.Sprintf("live pid %d now\n", os.Getpid())), 0o000))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(slot, "owner"), 0o644) })
+	records, exclusive := holders(lock)
+	require.False(t, exclusive)
+	require.Len(t, records, 1, "an unreadable record counts")
+	assert.Contains(t, records[0], "exclusive=1", "and holds the lock alone")
+	w := idleAs(lock, "w", classNormal)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, w.Lock(ctx), context.DeadlineExceeded, "no second holder beside a record it cannot read, on an idle host")
+	assert.DirExists(t, slot, "nor is that slot reclaimed")
+}

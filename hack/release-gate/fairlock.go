@@ -347,16 +347,24 @@ const (
 func slotsDir(lock string) string { return lock + slotsSuffix }
 
 // hostLoad is the one-minute load average (/proc/loadavg).
-func hostLoad() float64 {
-	b, err := os.ReadFile("/proc/loadavg")
+// A load that cannot be read or parsed is a busy host's (#2242 QA): one
+// holder.
+func hostLoad() float64 { return loadFrom("/proc/loadavg") }
+
+// loadFrom is the one-minute load of a /proc/loadavg file.
+func loadFrom(path string) float64 {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return 0
+		return loadForTwo
 	}
 	f := strings.Fields(string(b))
 	if len(f) == 0 {
-		return 0
+		return loadForTwo
 	}
-	v, _ := strconv.ParseFloat(f[0], 64)
+	v, err := strconv.ParseFloat(f[0], 64)
+	if err != nil {
+		return loadForTwo
+	}
 	return v
 }
 
@@ -445,17 +453,23 @@ func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
 }
 
 // holders returns the owner records of lock's slots, and whether lock is an
-// older client's exclusive lock (LOCK without the view marker).
+// older client's exclusive lock (LOCK without the view marker). A record
+// that is there but cannot be read counts, and holds the lock alone
+// (#2242 QA: where it cannot tell, the safe answer).
 func holders(lock string) (records []string, exclusive bool) {
 	if _, err := os.Stat(lock); err == nil {
-		if _, err := os.Stat(filepath.Join(lock, viewMarker)); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(lock, viewMarker)); err != nil {
 			return nil, true
 		}
 	}
 	entries, _ := os.ReadDir(slotsDir(lock))
 	for _, e := range entries {
-		if b, err := os.ReadFile(filepath.Join(slotsDir(lock), e.Name(), "owner")); err == nil {
+		b, err := os.ReadFile(filepath.Join(slotsDir(lock), e.Name(), "owner"))
+		switch {
+		case err == nil:
 			records = append(records, strings.TrimSpace(string(b)))
+		case !errors.Is(err, os.ErrNotExist):
+			records = append(records, fmt.Sprintf("a holder whose record cannot be read (slot %s: %v) exclusive=1", e.Name(), err))
 		}
 	}
 	return records, false
