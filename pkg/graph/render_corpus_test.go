@@ -233,23 +233,44 @@ func TestRenderCorpus(t *testing.T) {
 // an installed Graph.
 var notInCorpus = map[string]string{}
 
+// envStepKind is the kind of a node whose ID is an environment's slug
+// (CELSafeSlug(env)): the node shape's PromotionStep of each environment.
+const envStepKind = "<an environment's step>"
+
+// notEmitting are pkg/graph functions that build a GraphNode without
+// emitting a node kind, with why.
+var notEmitting = map[string]string{
+	"nodeOf": "reads a node of an existing Graph back (RemoveHealthRefs); it emits none",
+}
+
 // TestRenderCorpus_EveryNodeKind (QA-2 on #2353): every node the builder can
 // emit appears in a corpus Graph, so a rendering change to any of them fails
 // TestRenderCorpus at the same RenderVersion. The node kinds are read from
-// pkg/graph's source: every Node* or *NodeID string constant, and every
-// literal prefix a function builds node IDs from ("hook0" + ...). A node
-// kind added later is required the day it is added; one that no installed
-// Graph can have goes in notInCorpus, with why.
+// where pkg/graph sets node IDs: every GraphNode{ID: ...} in its source
+// (nodeKinds). An ID written in a form nodeKinds cannot follow fails here, so
+// a node kind added later is required the day it lands; one that no
+// installed Graph can have goes in notInCorpus, with why.
 func TestRenderCorpus_EveryNodeKind(t *testing.T) {
 	var ids []string
+	envSteps := false
 	for name, in := range renderCorpus() {
 		res, err := graph.NewBuilder().Build(in)
 		require.NoError(t, err, name)
+		envIDs := map[string]bool{}
+		for _, env := range res.Environments {
+			envIDs[graph.CELSafeSlug(env)] = true
+		}
 		for _, n := range res.Graph.Spec.Nodes {
 			ids = append(ids, n.ID)
+			envSteps = envSteps || envIDs[n.ID]
 		}
 	}
-	kinds := nodeKinds(t)
+	if envSteps {
+		ids = append(ids, envStepKind)
+	}
+	kinds, unknown := nodeKinds(t, ".")
+	require.Empty(t, unknown, "node IDs nodeKinds cannot follow to a kind: use a Node* constant (or any string "+
+		"constant), a chunkID of one, or a helper that returns \"<prefix>0\" + ...")
 	require.NotEmpty(t, kinds)
 	var missing []string
 	for kind, where := range kinds {
@@ -275,61 +296,405 @@ func TestRenderCorpus_EveryNodeKind(t *testing.T) {
 	}
 }
 
-// nodeKinds are pkg/graph's node kinds, from its source, with where each is
-// declared: the Node* and *NodeID string constants (not labels), and the
-// literal prefixes of the node IDs its functions build ("hook0" + ...).
-func nodeKinds(t *testing.T) map[string]string {
+// nodeKinds follows the ID of every GraphNode composite literal in dir's
+// non-test Go files (but notEmitting's) to the node kinds it can be, with
+// where each is set. An ID is a kind when it is:
+//   - a string literal, or a string constant of any name;
+//   - chunkID(x, i): x's kinds;
+//   - CELSafeSlug(env): envStepKind, the node shape's step of an
+//     environment;
+//   - a call to a function whose every return is "<lower>0" + ...: that
+//     prefix;
+//   - a local variable: the kinds of what it is assigned;
+//   - a parameter of a function, a method or a function literal bound to a
+//     variable: the kinds of its argument at every call;
+//   - a field of a parameter of a named struct type: the kinds of that field
+//     in every literal of the type.
+//
+// Any other form (fmt.Sprintf, a prefix without 0, a map lookup, ...) is
+// returned in unknown, with its position.
+func nodeKinds(t *testing.T, dir string) (kinds map[string]string, unknown []string) {
 	t.Helper()
-	files, err := filepath.Glob("*.go")
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	require.NoError(t, err)
-	constName := regexp.MustCompile(`^Node[A-Z]|NodeID$`)
-	prefix := regexp.MustCompile(`^[a-z]+0$`)
-	out := map[string]string{}
 	fset := token.NewFileSet()
+	var parsed []*ast.File
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
 			continue
 		}
 		f, err := parser.ParseFile(fset, file, nil, 0)
 		require.NoError(t, err, file)
-		ast.Inspect(f, func(n ast.Node) bool {
-			switch n := n.(type) {
-			case *ast.GenDecl:
-				if n.Tok != token.CONST {
+		parsed = append(parsed, f)
+	}
+	nk := &nodeKindFinder{fset: fset, consts: map[string]string{}, funcs: map[string][]*ast.FuncDecl{},
+		parents: map[ast.Node]ast.Node{}, kinds: map[string]string{}, seen: map[ast.Node]bool{}}
+	for _, f := range parsed {
+		nk.index(f)
+	}
+	for _, f := range parsed {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || notEmitting[fd.Name.Name] != "" {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				cl, ok := n.(*ast.CompositeLit)
+				if !ok {
 					return true
 				}
-				for _, spec := range n.Specs {
-					vs := spec.(*ast.ValueSpec)
-					for i, name := range vs.Names {
-						if i >= len(vs.Values) || !constName.MatchString(name.Name) || strings.HasPrefix(name.Name, "Label") {
-							continue
+				if id, ok := cl.Type.(*ast.Ident); !ok || id.Name != "GraphNode" {
+					return true
+				}
+				for _, el := range cl.Elts {
+					if kv, ok := el.(*ast.KeyValueExpr); ok {
+						if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "ID" {
+							nk.classify(kv.Value)
 						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	sort.Strings(nk.unknown)
+	return nk.kinds, nk.unknown
+}
+
+// nodeKindFinder is nodeKinds' state: the package's string constants, its
+// functions by name, every node's parent (to find a name's declaration),
+// the kinds found and the forms it could not follow.
+type nodeKindFinder struct {
+	fset    *token.FileSet
+	consts  map[string]string
+	funcs   map[string][]*ast.FuncDecl
+	files   []*ast.File
+	parents map[ast.Node]ast.Node
+	kinds   map[string]string
+	unknown []string
+	seen    map[ast.Node]bool
+}
+
+func (nk *nodeKindFinder) index(f *ast.File) {
+	nk.files = append(nk.files, f)
+	var stack []ast.Node
+	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if len(stack) > 0 {
+			nk.parents[n] = stack[len(stack)-1]
+		}
+		stack = append(stack, n)
+		return true
+	})
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.GenDecl:
+			if d.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range d.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, name := range vs.Names {
+					if i < len(vs.Values) {
 						if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-							v, _ := strconv.Unquote(lit.Value)
-							out[v] = fmt.Sprintf("%s, %s", name.Name, fset.Position(name.Pos()))
+							nk.consts[name.Name], _ = strconv.Unquote(lit.Value)
 						}
 					}
 				}
-			case *ast.ReturnStmt:
-				if len(n.Results) != 1 {
-					return true
+			}
+		case *ast.FuncDecl:
+			nk.funcs[d.Name.Name] = append(nk.funcs[d.Name.Name], d)
+		}
+	}
+}
+
+func (nk *nodeKindFinder) at(n ast.Node) string { return nk.fset.Position(n.Pos()).String() }
+
+func (nk *nodeKindFinder) add(kind string, n ast.Node) {
+	if _, ok := nk.kinds[kind]; !ok {
+		nk.kinds[kind] = nk.at(n)
+	}
+}
+
+func (nk *nodeKindFinder) fail(e ast.Expr, why string) {
+	nk.unknown = append(nk.unknown, fmt.Sprintf("%s: %s", nk.at(e), why))
+}
+
+// classify adds the kinds e can be, or records it as unknown.
+func (nk *nodeKindFinder) classify(e ast.Expr) {
+	if nk.seen[e] {
+		return
+	}
+	nk.seen[e] = true
+	switch e := e.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.STRING {
+			v, _ := strconv.Unquote(e.Value)
+			nk.add(v, e)
+			return
+		}
+	case *ast.ParenExpr:
+		nk.classify(e.X)
+		return
+	case *ast.Ident:
+		nk.classifyName(e)
+		return
+	case *ast.CallExpr:
+		if fn, ok := e.Fun.(*ast.Ident); ok {
+			if fn.Name == "CELSafeSlug" {
+				nk.add(envStepKind, e)
+				return
+			}
+			if fn.Name == "chunkID" && len(e.Args) == 2 {
+				nk.classify(e.Args[0])
+				return
+			}
+			if prefix, ok := nk.prefixFunc(fn.Name); ok {
+				nk.add(prefix, e)
+				return
+			}
+		}
+		nk.fail(e, "a call nodeKinds cannot follow: use a helper that returns \"<prefix>0\" + ...")
+		return
+	case *ast.SelectorExpr:
+		if nk.classifyField(e) {
+			return
+		}
+	}
+	nk.fail(e, "a node ID form nodeKinds cannot follow")
+}
+
+// prefixFunc reports the prefix of a function whose every return is
+// "<lower>0" + ...
+func (nk *nodeKindFinder) prefixFunc(name string) (string, bool) {
+	decls := nk.funcs[name]
+	if len(decls) != 1 || decls[0].Body == nil {
+		return "", false
+	}
+	prefix, ok := "", true
+	ast.Inspect(decls[0].Body, func(n ast.Node) bool {
+		if _, lit := n.(*ast.FuncLit); lit {
+			return false
+		}
+		r, isReturn := n.(*ast.ReturnStmt)
+		if !isReturn {
+			return true
+		}
+		p := ""
+		if len(r.Results) == 1 {
+			e := r.Results[0]
+			for {
+				b, ok := e.(*ast.BinaryExpr)
+				if !ok || b.Op != token.ADD {
+					break
 				}
-				e := n.Results[0]
-				for {
-					b, ok := e.(*ast.BinaryExpr)
-					if !ok || b.Op != token.ADD {
-						break
+				e = b.X
+			}
+			if lit, isLit := e.(*ast.BasicLit); isLit && lit.Kind == token.STRING && e != r.Results[0] {
+				p, _ = strconv.Unquote(lit.Value)
+			}
+		}
+		if !regexp.MustCompile(`^[a-z]+0$`).MatchString(p) || prefix != "" && p != prefix {
+			ok = false
+		}
+		prefix = p
+		return true
+	})
+	return prefix, ok && prefix != ""
+}
+
+// classifyName follows an identifier to its declaration: a parameter, a
+// local variable, a function literal's parameter, or a constant.
+func (nk *nodeKindFinder) classifyName(id *ast.Ident) {
+	for n := nk.parents[id]; n != nil; n = nk.parents[n] {
+		var params *ast.FieldList
+		var body *ast.BlockStmt
+		switch fn := n.(type) {
+		case *ast.FuncDecl:
+			params, body = fn.Type.Params, fn.Body
+		case *ast.FuncLit:
+			params, body = fn.Type.Params, fn.Body
+		default:
+			continue
+		}
+		if i, ok := paramIndex(params, id.Name); ok {
+			nk.classifyParam(n, i, id)
+			return
+		}
+		if values := assignments(body, id.Name); len(values) > 0 {
+			for _, v := range values {
+				nk.classify(v)
+			}
+			return
+		}
+	}
+	if v, ok := nk.consts[id.Name]; ok {
+		nk.add(v, id)
+		return
+	}
+	nk.fail(id, "a name nodeKinds cannot follow to a constant, an assignment or a call")
+}
+
+// classifyParam classifies the i-th argument of every call of fn, a
+// function, a method or a function literal bound to a variable.
+func (nk *nodeKindFinder) classifyParam(fn ast.Node, i int, id *ast.Ident) {
+	var calls []*ast.CallExpr
+	switch fn := fn.(type) {
+	case *ast.FuncDecl:
+		for _, f := range nk.files {
+			ast.Inspect(f, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					switch c := call.Fun.(type) {
+					case *ast.Ident:
+						if c.Name == fn.Name.Name && fn.Recv == nil {
+							calls = append(calls, call)
+						}
+					case *ast.SelectorExpr:
+						if c.Sel.Name == fn.Name.Name && fn.Recv != nil {
+							calls = append(calls, call)
+						}
 					}
-					e = b.X
 				}
-				if lit, ok := e.(*ast.BasicLit); ok && lit.Kind == token.STRING && e != n.Results[0] {
-					if v, _ := strconv.Unquote(lit.Value); prefix.MatchString(v) {
-						out[v] = fmt.Sprintf("prefix, %s", fset.Position(lit.Pos()))
+				return true
+			})
+		}
+	case *ast.FuncLit:
+		name := ""
+		if as, ok := nk.parents[fn].(*ast.AssignStmt); ok {
+			for j, rhs := range as.Rhs {
+				if rhs == fn && j < len(as.Lhs) {
+					if lhs, ok := as.Lhs[j].(*ast.Ident); ok {
+						name = lhs.Name
+					}
+				}
+			}
+		}
+		if name == "" {
+			nk.fail(id, "a parameter of a function literal not bound to a variable")
+			return
+		}
+		ast.Inspect(nk.enclosingBody(fn), func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if c, ok := call.Fun.(*ast.Ident); ok && c.Name == name {
+					calls = append(calls, call)
+				}
+			}
+			return true
+		})
+	}
+	if len(calls) == 0 {
+		nk.fail(id, "a parameter of a function nothing calls")
+		return
+	}
+	for _, call := range calls {
+		if i >= len(call.Args) {
+			nk.fail(call, "a call with too few arguments")
+			continue
+		}
+		nk.classify(call.Args[i])
+	}
+}
+
+// enclosingBody is the body of the function that encloses n.
+func (nk *nodeKindFinder) enclosingBody(n ast.Node) *ast.BlockStmt {
+	for p := nk.parents[n]; p != nil; p = nk.parents[p] {
+		switch fn := p.(type) {
+		case *ast.FuncDecl:
+			return fn.Body
+		case *ast.FuncLit:
+			return fn.Body
+		}
+	}
+	return nil
+}
+
+// classifyField follows x.f, x a parameter of a named struct type, to the
+// value of f in every composite literal of that type.
+func (nk *nodeKindFinder) classifyField(sel *ast.SelectorExpr) bool {
+	x, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	typeName := ""
+	for n := nk.parents[sel]; n != nil && typeName == ""; n = nk.parents[n] {
+		if fd, ok := n.(*ast.FuncDecl); ok {
+			for _, f := range fd.Type.Params.List {
+				for _, name := range f.Names {
+					if t, ok := f.Type.(*ast.Ident); ok && name.Name == x.Name {
+						typeName = t.Name
+					}
+				}
+			}
+		}
+	}
+	if typeName == "" {
+		return false
+	}
+	found := false
+	for _, f := range nk.files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if t, ok := cl.Type.(*ast.Ident); !ok || t.Name != typeName {
+				return true
+			}
+			for _, el := range cl.Elts {
+				if kv, ok := el.(*ast.KeyValueExpr); ok {
+					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == sel.Sel.Name {
+						found = true
+						nk.classify(kv.Value)
 					}
 				}
 			}
 			return true
 		})
 	}
+	return found
+}
+
+// paramIndex is the position of name among params.
+func paramIndex(params *ast.FieldList, name string) (int, bool) {
+	i := 0
+	for _, f := range params.List {
+		for _, n := range f.Names {
+			if n.Name == name {
+				return i, true
+			}
+			i++
+		}
+	}
+	return 0, false
+}
+
+// assignments are the values assigned to name in body (:=, = and var),
+// outside nested function literals.
+func assignments(body *ast.BlockStmt, name string) []ast.Expr {
+	var out []ast.Expr
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.AssignStmt:
+			if len(n.Lhs) == len(n.Rhs) {
+				for i, lhs := range n.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && id.Name == name {
+						out = append(out, n.Rhs[i])
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for i, id := range n.Names {
+				if id.Name == name && i < len(n.Values) {
+					out = append(out, n.Values[i])
+				}
+			}
+		}
+		return true
+	})
 	return out
 }
