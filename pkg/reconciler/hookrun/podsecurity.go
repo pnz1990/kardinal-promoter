@@ -42,7 +42,8 @@ func ParsePodSecurityLevel(s string) (string, error) {
 	}
 	l, err := psaapi.ParseLevel(s)
 	if err != nil {
-		return "", fmt.Errorf("pod security level %q: must be baseline, restricted or privileged", s)
+		return "", fmt.Errorf("pod security level %q: must be %s, %s or %s", s,
+			PodSecurityBaseline, PodSecurityRestricted, PodSecurityPrivileged)
 	}
 	return string(l), nil
 }

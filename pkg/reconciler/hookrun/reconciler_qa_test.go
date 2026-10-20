@@ -439,6 +439,9 @@ func TestParsePodSecurityLevel(t *testing.T) {
 	}
 	_, err := hookrun.ParsePodSecurityLevel("strict")
 	require.Error(t, err)
+	// The message names the levels from PodSecurityBaseline,
+	// PodSecurityRestricted and PodSecurityPrivileged, as the flag's help does.
+	assert.EqualError(t, err, `pod security level "strict": must be baseline, restricted or privileged`)
 }
 
 func sprintf(format, arg string) string { return fmt.Sprintf(format, arg) }
