@@ -21,6 +21,19 @@ func needsApprovals(gate kardinalv1alpha1.PolicyGate) bool {
 	return gate.Spec.Approval != nil || strings.Contains(gate.Spec.Expression, "approvals.")
 }
 
+// anyApprovalPolicy reports whether any gate of the Graph has spec.approval
+// (gateCollections.approvalPolicies).
+func anyApprovalPolicy(gatesByEnv map[string][]kardinalv1alpha1.PolicyGate) bool {
+	for _, gates := range gatesByEnv {
+		for _, g := range gates {
+			if g.Spec.Approval != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // anyNeedsApprovals reports whether any gate of the Graph reads the Approvals.
 func anyNeedsApprovals(gatesByEnv map[string][]kardinalv1alpha1.PolicyGate) bool {
 	for _, gates := range gatesByEnv {

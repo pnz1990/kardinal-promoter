@@ -327,7 +327,27 @@ jobs:
         run: |
           mapfile -t packages < <(awk '$0 !~ /^#/ && $0 !~ /^!/ && NF { print "./" $1 "/" }' hack/ci/docs-tests.txt)
           echo "${#packages[@]} packages: ${packages[*]}"
-          go test -race -count=1 -timeout 120s "${packages[@]}"
+          # As in the shards: test/helm's PromQL tests need promtool, and
+          # fail without it in CI (test/helm reads the docs since #2289), and
+          # the packages the shards give 300s (test/helm #2156, test/hack
+          # #2292) get it here too. So does cmd/kardinal/cmd, which passed
+          # 120s here next to the other packages (#2194). Every other package
+          # keeps 120s.
+          others=()
+          slow=()
+          for p in "${packages[@]}"; do
+            case "$p" in
+              ./test/helm/) bash hack/ci/install-promtool.sh; slow+=("$p") ;;
+              ./test/hack/ | ./cmd/kardinal/cmd/) slow+=("$p") ;;
+              *) others+=("$p") ;;
+            esac
+          done
+          if [ "${#others[@]}" -gt 0 ]; then
+            go test -race -count=1 -timeout 120s "${others[@]}"
+          fi
+          if [ "${#slow[@]}" -gt 0 ]; then
+            go test -race -count=1 -timeout 300s "${slow[@]}"
+          fi
 
   count3:
     # #1889: each run of a test starts from clean state. These packages

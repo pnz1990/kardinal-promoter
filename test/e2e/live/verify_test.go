@@ -199,6 +199,41 @@ func TestGate_VerifyAgentRuns(t *testing.T) {
 	}
 }
 
+// TestGate_VerifyWithApprovalGates (#2271): prod has a verify gate with no
+// approval policy, an approval gate with one, and a gate that only reads
+// approvals.* in its expression, in one Graph. Every instance is created
+// (none carries a null spec.approval, which the API server refuses): the
+// verify gate passes on the agent's run, both approval gates pass on
+// carol's approval, and prod promotes.
+//
+// Covers GATE-VERIFY-09.
+func TestGate_VerifyWithApprovalGates(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	a := newArgoApp(t, e, "uat", "prod")
+	agent := registerAgent(t, e, a.ns, "qa", "bob@example.com", nil)
+	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{agent},
+		Run: &v1alpha1.GateVerifyRun{Template: agent, Count: 1, Namespace: a.ns}}))
+	people := framework.Gate(a.ns, "people", "prod", "true", recheck)
+	people.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+	e.CreateGate(t, people)
+	e.CreateGate(t, framework.Gate(a.ns, "count-one", "prod", "approvals.count >= 1", recheck))
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
+	waitRuns(t, e, a.ns, bundle, 1)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", true, "verified: 1 of 1", gateTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "people", false, "", gateTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "count-one", false, "", gateTimeout)
+
+	r := c.Exec(framework.CLIOptions{Kubeconfig: userKubeconfig(t, e, a.ns, "carol@example.com")}, c.Args(a.ns, "approve", bundle, "--env", "prod")...)
+	require.Zero(t, r.Code, r.Output())
+	e.WaitGateReady(t, a.ns, bundle, "prod", "people", true, "", gateTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "count-one", true, "", gateTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+}
+
 // TestGate_VerifyRetryAndSuspend: with onInconclusive: retry, a run whose
 // first attempt is inconclusive gets a second attempt from the Graph, whose
 // pass verifies the gate; a suspended agent's AgentRun is refused
