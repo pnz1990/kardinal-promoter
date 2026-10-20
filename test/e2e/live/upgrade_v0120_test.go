@@ -241,6 +241,27 @@ func u0120CheckoutChart(t *testing.T) string {
 	return c.Name + "-" + c.Version
 }
 
+// u012RunsIn waits until pipeline's status names bundle as the version that
+// runs in env. That is what kardinal verify <pipeline> <env> verifies
+// (runningBundle in cmd/kardinal/cmd/verify.go), and the Pipeline reconciler
+// writes it after the step in env is Verified: a verify run right after
+// WaitStepState can find no version there yet.
+func u012RunsIn(t *testing.T, e *framework.Env, ns, pipeline, env, bundle string) {
+	t.Helper()
+	framework.Eventually(t, time.Minute, fmt.Sprintf("Pipeline %s/%s names %s in %s", ns, pipeline, bundle, env), func(ctx context.Context) (bool, string) {
+		var p v1alpha1.Pipeline
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
+			return false, err.Error()
+		}
+		for _, s := range p.Status.Environments {
+			if s.Name == env {
+				return s.Bundle == bundle, fmt.Sprintf("status.environments[%s].bundle is %q", env, s.Bundle)
+			}
+		}
+		return false, fmt.Sprintf("status.environments has no %s", env)
+	})
+}
+
 // kroPods are the kro controller's Pods: uid → restarts.
 func kroPods(t *testing.T, e *framework.Env) map[types.UID]int32 {
 	t.Helper()
@@ -497,6 +518,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 		e.WaitGateReady(t, s.held.NS, b, "prod", "release-window", false, "= false", gateTimeout)
 	}
 	e.WaitStepState(t, s.verify.NS, byPerson, byPersonB, "qa", "Verified", promoteTimeout)
+	u012RunsIn(t, e, s.verify.NS, byPerson, "qa", byPersonB)
 	out, err = from.cli(e, t, s.verify.NS, "--kubeconfig", carol, "verify", byPerson, "qa", "--check", "explore",
 		"--pass", "--summary", "checked before the upgrade")
 	require.NoError(t, err, out)
@@ -807,6 +829,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 	})
 	assert.True(t, runBefore.CreationTimestamp.Time.Before(upgradeStart), "the AgentRun was created before the upgrade began")
 	e.WaitGateReady(t, s.verify.NS, byRunB, "prod", "agent-check", true, "verified: 1 of 1", gateTimeout)
+	u012RunsIn(t, e, s.verify.NS, byPerson, "qa", byPersonB)
 	r := c.Exec(framework.CLIOptions{Kubeconfig: dave}, c.Args(s.verify.NS, "verify", byPerson, "qa", "--check", "explore",
 		"--pass", "--summary", "checked after the upgrade")...)
 	require.Equal(t, 0, r.Code, r.Output())
