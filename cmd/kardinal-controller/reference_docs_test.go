@@ -8,6 +8,7 @@ import (
 	"flag"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,17 +56,21 @@ func printControllerHelp() {
 // docs/reference/controller-flags.md does not match the controller's flags;
 // run: make reference-docs. It runs this test binary, which is the controller
 // package, with -help, so a flag change in any package the controller imports
-// is caught without building the controller again. The environment is empty:
-// a flag's default can come from a variable (KARDINAL_*, GITHUB_APP_*, ...),
-// and the page shows the built-in ones.
+// is caught without building the controller again. The environment is empty
+// but for HOME, a scratch directory this test removes, which the child's
+// kubetest guard takes (kubetest.HomeEnv) instead of making one that main's
+// exit would leave behind: a flag's default can come from a variable
+// (KARDINAL_*, GITHUB_APP_*, ...), and the page shows the built-in ones.
 func TestControllerFlagsPageIsUpToDate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0])
-	cmd.Env = []string{printHelpEnv + "=1"}
+	home := t.TempDir()
+	cmd.Env = []string{printHelpEnv + "=1", "HOME=" + home, kubetest.HomeEnv + "=" + home}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "controller -help: %s", out)
 	require.Contains(t, string(out), "Usage of kardinal-controller:")
+	assert.FileExists(t, filepath.Join(home, ".gitconfig"), "the child's guard took this test's home, not one of its own that main's exit leaves behind")
 
 	got, err := os.ReadFile("../../docs/reference/controller-flags.md")
 	require.NoError(t, err)

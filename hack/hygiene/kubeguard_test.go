@@ -45,9 +45,12 @@ const guardMain = "package p\nimport (\n\"testing\"\n\"github.com/kardinal-promo
 // TestKubeFindings (QA on #2216): each probe QA planted, and the safe
 // forms. Loaders are resolved by import path (an alias, a dot import), in
 // test files too and under any build tag; $HOME's kubeconfig is banned
-// outside test/e2e; a loader at package initialization is refused; every
-// test package under cmd/ and test/ needs the guard in an untagged file,
-// directly or through a wrapper; an e2e-only package is left alone.
+// outside test/e2e; a loader, or a read of the home directory, at package
+// initialization is refused; every test package under cmd/ and test/ needs
+// the guard in an untagged file, directly or through a wrapper, as one of
+// TestMain's own statements before anything can run the tests; a child
+// process needs HOME in an environment built from scratch; an e2e-only
+// package is left alone.
 func TestKubeFindings(t *testing.T) {
 	fset := token.NewFileSet()
 	src := map[string]string{
@@ -109,6 +112,38 @@ func TestKubeFindings(t *testing.T) {
 		// import it) is refused; in an e2e-only file it is not.
 		"test/e2e/framework/h.go":      "package framework\nimport \"k8s.io/client-go/tools/clientcmd\"\nvar _ = func() string { return clientcmd.RecommendedHomeFile }\n",
 		"test/e2e/framework/h_test.go": guardMain,
+		// #2321 (QA-3 on #2216):
+		// 7. a guard a helper, a defer or a condition puts after the tests,
+		// or may skip; a guard after other setup, and code := Run(m), count.
+		"test/late/helper/h_test.go": "package helper\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func runTests(m *testing.M) int { return m.Run() }\nfunc TestMain(m *testing.M) { code := runTests(m); kubetest.Isolate(); os.Exit(code) }\n",
+		"test/late/deferred/d_test.go": "package deferred\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { defer kubetest.Isolate(); os.Exit(m.Run()) }\n",
+		"test/late/cond/c_test.go": "package cond\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { if os.Getenv(\"CI\") == \"\" { kubetest.Isolate() }; os.Exit(m.Run()) }\n",
+		"test/early/setup/s_test.go": "package setup\nimport (\n\"flag\"\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { flag.Parse(); kubetest.Isolate(); os.Exit(m.Run()) }\n",
+		"test/early/assign/a_test.go": "package assign\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { code := kubetest.Run(m); os.Exit(code) }\n",
+		// 8. a child process with an environment built from scratch and no
+		// HOME; with HOME, from os.Environ(), or a cgi handler's env, it is
+		// not reported.
+		"test/child/c_test.go": "package child\nimport (\n\"net/http/cgi\"\n\"os\"\n\"os/exec\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { kubetest.Main(m) }\n" +
+			"func TestA(t *testing.T) { cmd := exec.Command(\"kardinal\"); cmd.Env = []string{\"KUBECONFIG=/nonexistent\"}; _ = cmd.Run() }\n" +
+			"func TestB(t *testing.T) { cmd := exec.Command(\"kardinal\"); cmd.Env = append([]string{\"PATH=/bin\"}, \"X=1\"); _ = cmd.Run() }\n" +
+			"func TestC(t *testing.T) { _ = (&exec.Cmd{Path: \"/bin/kardinal\", Env: []string{\"A=1\"}}).Run() }\n" +
+			"func TestD(t *testing.T) { cmd := exec.Command(\"kardinal\"); cmd.Env = []string{\"HOME=\" + t.TempDir()}; _ = cmd.Run() }\n" +
+			"func TestE(t *testing.T) { cmd := exec.Command(\"kardinal\"); cmd.Env = append(os.Environ(), \"A=1\"); _ = cmd.Run() }\n" +
+			"func TestF(t *testing.T) { _ = &cgi.Handler{Env: []string{\"A=1\"}} }\n" +
+			"func TestG(t *testing.T) { cmd := exec.Command(\"kardinal\"); cmd.Env = append([]string{\"A=1\"}, os.Environ()...); _ = cmd.Run() }\n",
+		// 9. the home directory read at package initialization (QA-3's
+		// probe E); a function stored in a var reads it when called.
+		"pkg/home/h.go": "package home\nimport (\n\"os\"\n\"os/user\"\n\"k8s.io/client-go/util/homedir\"\n)\n" +
+			"var initHome = os.Getenv(\"HOME\")\nvar dir, _ = os.UserHomeDir()\nvar u, _ = user.Current()\n" +
+			"var hd = func() string { _, _ = os.LookupEnv(\"HOME\"); return homedir.HomeDir() }()\n" +
+			"var later = func() string { return os.Getenv(\"HOME\") }\nvar other = os.Getenv(\"OTHER\")\n" +
+			"func init() { _ = os.Getenv(\"HOME\") }\n",
 	}
 	var files []*goFile
 	for rel, s := range src {
@@ -129,8 +164,14 @@ func TestKubeFindings(t *testing.T) {
 		"kubeguard " + mod + "/pkg/user",
 		"kubeguard " + mod + "/pkg/x",
 		"kubeguard " + mod + "/pkg/y",
+		"kubeguard " + mod + "/test/late/cond",
+		"kubeguard " + mod + "/test/late/deferred",
+		"kubeguard " + mod + "/test/late/helper",
 		"kubeguard " + mod + "/test/late",
 		"kubeguard " + mod + "/test/plain",
+		"kubeguard-env test/child/c_test.go:10",
+		"kubeguard-env test/child/c_test.go:11",
+		"kubeguard-env test/child/c_test.go:12",
 		"kubeguard-env test/env/e_test.go:10",
 		"kubeguard-env test/env/e_test.go:11",
 		"kubeguard-env test/env/e_test.go:12",
@@ -140,6 +181,12 @@ func TestKubeFindings(t *testing.T) {
 		"kubeguard-init pkg/f/f.go:3",
 		"kubeguard-init pkg/f/f.go:5",
 		"kubeguard-init pkg/g/g.go:6",
+		"kubeguard-init pkg/home/h.go:10",
+		"kubeguard-init pkg/home/h.go:10",
+		"kubeguard-init pkg/home/h.go:13",
+		"kubeguard-init pkg/home/h.go:7",
+		"kubeguard-init pkg/home/h.go:8",
+		"kubeguard-init pkg/home/h.go:9",
 	}, keys, strings.Join(got, "\n"))
 	for _, g := range got {
 		switch {

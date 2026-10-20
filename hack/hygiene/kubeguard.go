@@ -48,6 +48,12 @@ import (
 //     ~/.kube/config, and controller-runtime to the password database's
 //     home (QA-3 on #2216). kubetest.Isolate points both at nothing; a test
 //     that wants no kubeconfig sets KUBECONFIG to a path that does not exist.
+//     Also a child process a test (or test/ code) starts with an environment
+//     built from scratch and no HOME, which a controller-runtime child turns
+//     into the password database's home (#2321).
+//   - kubeguard-init <file:line> also covers the home directory read at
+//     package initialization (os.Getenv("HOME"), os.UserHomeDir, ...): it is
+//     the developer's, read before the guard replaces it (#2321).
 //
 // Calls are resolved by import path, so an aliased or dot import is seen.
 
@@ -271,10 +277,15 @@ func guardWrappers(files []*goFile, module string) map[string]bool {
 // guardNames are test/kubetest's guards.
 var guardNames = map[string]bool{"Main": true, "Run": true, "Isolate": true}
 
-// guardsFirst reports whether fd calls kubetest.Main, Run or Isolate, or a
-// wrapper (module path + "." + name; unqualified for f's own package),
-// before it calls Run on its *testing.M parameter: a guard after the tests
-// guards nothing (QA-3 on #2216).
+// guardsFirst reports whether fd runs the kubetest guard before anything
+// can start its tests: kubetest.Main(m), os.Exit(kubetest.Run(m)), code :=
+// kubetest.Run(m), or kubetest.Isolate() or a wrapper (module path + "." +
+// name; unqualified for f's own package), as one of fd's own statements,
+// not deferred and not inside an if, a loop or a function, before any
+// statement that mentions its *testing.M parameter. A guard after the
+// tests, or one that may not run, guards nothing: a helper that runs the
+// tests, a defer and a condition all slipped past a check that only looked
+// for a direct m.Run (QA-3 on #2216).
 func guardsFirst(fd *ast.FuncDecl, f *goFile, wrappers map[string]bool) bool {
 	m := ""
 	for _, p := range fd.Type.Params.List {
@@ -284,33 +295,62 @@ func guardsFirst(fd *ast.FuncDecl, f *goFile, wrappers map[string]bool) bool {
 			}
 		}
 	}
-	guard, run := token.NoPos, token.NoPos
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
+	for _, st := range fd.Body.List {
+		if guardStmt(st, f, wrappers) {
 			return true
 		}
-		switch fn := call.Fun.(type) {
-		case *ast.SelectorExpr:
-			if id, ok := fn.X.(*ast.Ident); ok {
-				ip := f.imports[id.Name]
-				switch {
-				case ip == kubetestPath && guardNames[fn.Sel.Name], wrappers[ip+"."+fn.Sel.Name]:
-					if !guard.IsValid() {
-						guard = call.Pos()
-					}
-				case m != "" && id.Name == m && fn.Sel.Name == "Run" && !run.IsValid():
-					run = call.Pos()
+		if m != "" && mentions(st, m) {
+			return false
+		}
+	}
+	return false
+}
+
+// guardStmt reports whether st is a guard on its own: a guard call as a
+// statement, as os.Exit's argument or as an assignment's value.
+func guardStmt(st ast.Stmt, f *goFile, wrappers map[string]bool) bool {
+	var e ast.Expr
+	switch st := st.(type) {
+	case *ast.ExprStmt:
+		e = st.X
+		if call, ok := e.(*ast.CallExpr); ok && len(call.Args) == 1 {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Exit" {
+				if id, ok := sel.X.(*ast.Ident); ok && f.imports[id.Name] == "os" {
+					e = call.Args[0]
 				}
 			}
-		case *ast.Ident:
-			if wrappers[f.dir+"."+fn.Name] && !guard.IsValid() {
-				guard = call.Pos()
-			}
 		}
-		return true
+	case *ast.AssignStmt:
+		if len(st.Rhs) == 1 {
+			e = st.Rhs[0]
+		}
+	}
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		if id, ok := fn.X.(*ast.Ident); ok {
+			ip := f.imports[id.Name]
+			return ip == kubetestPath && guardNames[fn.Sel.Name] || wrappers[ip+"."+fn.Sel.Name]
+		}
+	case *ast.Ident:
+		return wrappers[f.dir+"."+fn.Name]
+	}
+	return false
+}
+
+// mentions reports whether n refers to the identifier name.
+func mentions(n ast.Node, name string) bool {
+	found := false
+	ast.Inspect(n, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
 	})
-	return guard.IsValid() && (!run.IsValid() || guard < run)
+	return found
 }
 
 // startsProcesses reports whether f imports os/exec.
@@ -353,6 +393,211 @@ func envFindings(f *goFile, fset *token.FileSet) []string {
 			"such as kubetest.NoKubeconfig", f.rel, fset.Position(call.Pos()).Line, sel.Sel.Name, name))
 		return true
 	})
+	return out
+}
+
+// childEnvFindings are f's child processes (exec.Command, exec.CommandContext
+// or an exec.Cmd literal) given an environment built from scratch, a
+// []string literal or an append to one, with no HOME in it. A child that
+// uses controller-runtime's GetConfig (the CLI, the controller) then adds
+// the login account's ~/.kube/config, from the password database, to
+// whatever KUBECONFIG names, and loads it (QA-3 on #2216). An environment
+// that starts from os.Environ() keeps the guard's scratch $HOME.
+func childEnvFindings(f *goFile, fset *token.FileSet) []string {
+	execName := ""
+	for name, ip := range f.imports {
+		if ip == "os/exec" {
+			execName = name
+		}
+	}
+	if execName == "" {
+		return nil
+	}
+	var out []string
+	report := func(n ast.Node) {
+		out = append(out, fmt.Sprintf("kubeguard-env %s:%d: a child process with an environment built from scratch and no HOME: "+
+			"a child that uses controller-runtime (the CLI, the controller) then loads the login account's ~/.kube/config, "+
+			"whatever KUBECONFIG says; add HOME (t.TempDir()), or start from os.Environ()", f.rel, fset.Position(n.Pos()).Line))
+	}
+	isCommand := func(e ast.Expr) bool {
+		call, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		id, ok := sel.X.(*ast.Ident)
+		return ok && id.Name == execName && (sel.Sel.Name == "Command" || sel.Sel.Name == "CommandContext")
+	}
+	inspectBodies(f.file, func(body *ast.BlockStmt) {
+		if hasHomeLiteral(body) {
+			return
+		}
+		cmds := map[string]bool{}
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncLit:
+				return false // its own body
+			case *ast.AssignStmt:
+				for i, lhs := range n.Lhs {
+					if i < len(n.Rhs) && isCommand(n.Rhs[i]) {
+						if id, ok := lhs.(*ast.Ident); ok {
+							cmds[id.Name] = true
+						}
+					}
+					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Env" && i < len(n.Rhs) && fromScratch(n.Rhs[i]) {
+						if id, ok := sel.X.(*ast.Ident); ok && cmds[id.Name] {
+							report(n)
+						}
+					}
+				}
+			case *ast.CompositeLit:
+				if sel, ok := n.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Cmd" {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == execName {
+						for _, el := range n.Elts {
+							if kv, ok := el.(*ast.KeyValueExpr); ok && fromScratch(kv.Value) {
+								if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Env" {
+									report(n)
+								}
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+	})
+	return out
+}
+
+// inspectBodies calls fn with every function body of file, function
+// literals included.
+func inspectBodies(file *ast.File, fn func(*ast.BlockStmt)) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncDecl:
+			if n.Body != nil {
+				fn(n.Body)
+			}
+		case *ast.FuncLit:
+			fn(n.Body)
+		}
+		return true
+	})
+}
+
+// fromScratch reports whether e is an environment that does not start from
+// this process's: a []string literal, or an append to one, with no
+// os.Environ() in it.
+func fromScratch(e ast.Expr) bool {
+	lit := e
+	if call, ok := e.(*ast.CallExpr); ok {
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "append" && len(call.Args) > 0 {
+			lit = call.Args[0]
+		}
+	}
+	if _, ok := lit.(*ast.CompositeLit); !ok {
+		return false
+	}
+	environ := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Environ" {
+			environ = true
+		}
+		return !environ
+	})
+	return !environ
+}
+
+// hasHomeLiteral reports whether body has a string literal that starts
+// with HOME=: the environment it builds sets HOME.
+func hasHomeLiteral(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			if v, err := strconv.Unquote(lit.Value); err == nil && strings.HasPrefix(v, "HOME=") {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// homeReaders are, by import path, the calls that read the home directory.
+var homeReaders = map[string]map[string]bool{
+	"os":                            {"UserHomeDir": true},
+	"os/user":                       {"Current": true},
+	"k8s.io/client-go/util/homedir": {"HomeDir": true},
+}
+
+// homeAtInit are f's reads of the home directory at package initialization
+// (a package var, a function literal called there, an init function):
+// os.Getenv or os.LookupEnv of HOME, os.UserHomeDir, user.Current or
+// homedir.HomeDir. They run before TestMain, so they read the developer's
+// $HOME, not the guard's scratch one, and a kubeconfig or credentials found
+// from it later reach the real ones (QA-3's probe E on #2216).
+func homeAtInit(f *goFile, fset *token.FileSet) []string {
+	var out []string
+	check := func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		ip, name := f.imports[id.Name], sel.Sel.Name
+		home := homeReaders[ip][name]
+		if ip == "os" && (name == "Getenv" || name == "LookupEnv") && len(call.Args) == 1 {
+			v, ok := stringLit(call.Args[0])
+			home = ok && v == "HOME"
+		}
+		if home {
+			out = append(out, fmt.Sprintf("kubeguard-init %s:%d: %s.%s reads the home directory at package initialization (a package var "+
+				"or init), before the kubetest guard replaces $HOME: it gets the developer's; read it in a function",
+				f.rel, fset.Position(call.Pos()).Line, path.Base(ip), name))
+		}
+	}
+	var visit func(n ast.Node, packageLevel bool)
+	visit = func(n ast.Node, packageLevel bool) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				if lit, ok := n.(*ast.FuncLit); ok {
+					visit(lit.Body, false) // stored, not called at initialization
+					return false
+				}
+				return true
+			}
+			if lit, ok := call.Fun.(*ast.FuncLit); ok && packageLevel {
+				visit(lit.Body, true) // called at initialization
+				for _, a := range call.Args {
+					visit(a, true)
+				}
+				return false
+			}
+			if packageLevel {
+				check(call)
+			}
+			return true
+		})
+	}
+	for _, d := range f.file.Decls {
+		switch d := d.(type) {
+		case *ast.GenDecl:
+			if d.Tok == token.VAR {
+				visit(d, true)
+			}
+		case *ast.FuncDecl:
+			if d.Body != nil && d.Recv == nil && d.Name.Name == "init" {
+				visit(d.Body, true)
+			}
+		}
+	}
 	return out
 }
 
@@ -439,6 +684,12 @@ func kubeFindings(files []*goFile, fset *token.FileSet, module string, deps map[
 		}
 		if f.test && f.dir != "test/kubetest" && !f.e2eOnly() {
 			out = append(out, envFindings(f, fset)...)
+		}
+		if (f.test || strings.HasPrefix(f.dir, "test/")) && !f.e2eOnly() {
+			out = append(out, childEnvFindings(f, fset)...)
+		}
+		if !f.e2eOnly() {
+			out = append(out, homeAtInit(f, fset)...)
 		}
 		for _, u := range loaderUses(f, fset) {
 			ownLoader[f.dir] = true

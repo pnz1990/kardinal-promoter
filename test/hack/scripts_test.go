@@ -140,6 +140,7 @@ func TestKindContextGuard(t *testing.T) {
 			cmd.Dir = repoRoot(t)
 			cmd.Env = append([]string{
 				"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"HOME=" + t.TempDir(),
 				"FAKE_LOG=" + filepath.Join(t.TempDir(), "calls.log"),
 				"FAKE_CURRENT_CONTEXT=arn:aws:eks:us-east-2:111111111111:cluster/prod",
 				"KUBECONFIG=" + os.DevNull,
