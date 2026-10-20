@@ -609,9 +609,10 @@ func (w *firstFrameWriter) Write(p []byte) (int, error) {
 }
 
 // Ctrl-C (SIGINT) ends explain --watch with no error, so the CLI exits 0 like
-// the other --watch commands instead of being killed by the signal.
+// the other --watch commands instead of being killed by the signal. Serial:
+// the SIGINT goes to the whole test process, and would end every watch a
+// parallel test runs (TestParallelTestsChangeNoPackageVariable).
 func TestExplainWatch_InterruptEndsTheWatch(t *testing.T) {
-	t.Parallel()
 	// Another listener turns off the default action (exit), so without the
 	// handler the test fails on the timeout instead of killing the binary.
 	keep := make(chan os.Signal, 1)

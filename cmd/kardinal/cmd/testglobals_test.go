@@ -132,6 +132,10 @@ func TestA(t *testing.T) { t.Parallel(); keepStyle(t) }`, []string{"TestA change
 		{"a flag bound to it (#2194)", `func newCmd() { flags.StringVar(&x, "x", "", "") }
 func TestA(t *testing.T) { t.Parallel(); newCmd() }`, []string{"TestA changes x"}},
 		{"its address handed out", `func TestA(t *testing.T) { t.Parallel(); _ = json.Unmarshal(nil, &x) }`, []string{"TestA changes x"}},
+		{"a signal to the test process", `func TestA(t *testing.T) { t.Parallel(); p, _ := os.FindProcess(os.Getpid()); _ = p.Signal(os.Interrupt) }`,
+			[]string{"TestA signals the test process"}},
+		{"syscall.Kill", `func TestA(t *testing.T) { t.Parallel(); go func() { _ = syscall.Kill(os.Getpid(), syscall.SIGINT) }() }`,
+			[]string{"TestA signals the test process"}},
 		{"serial", `func TestA(t *testing.T) { setForTest(t, &x, "a") }`, nil},
 		{"reads only", `func TestA(t *testing.T) { t.Parallel(); _ = x }`, nil},
 	}
@@ -416,9 +420,33 @@ func parallelChanges(srcs map[string]string) ([]string, error) {
 		for v := range vars {
 			out = append(out, fmt.Sprintf("%s changes %s", fn.Name.Name, v))
 		}
+		if signalsSelf(fn.Body) {
+			// SIGINT or SIGTERM to the test process ends every watch and
+			// wait that a parallel test runs (signal.NotifyContext, #2194).
+			out = append(out, fmt.Sprintf("%s signals the test process", fn.Name.Name))
+		}
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// signalsSelf reports whether body sends a signal: a Signal call (on
+// os.FindProcess(os.Getpid())) or syscall.Kill, in the test or a function
+// literal of it.
+func signalsSelf(body ast.Node) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return !found
+		}
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+			id, _ := sel.X.(*ast.Ident)
+			found = found || sel.Sel.Name == "Signal" || (id != nil && id.Name == "syscall" && sel.Sel.Name == "Kill")
+		}
+		return !found
+	})
+	return found
 }
 
 // emptyImporter imports every package as an empty one: the check needs the
