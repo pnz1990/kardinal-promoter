@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -227,26 +228,39 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 	})
 }
 
-// holderRuns reports whether one of lock's waiters (cmds) runs with no
-// ticket in its queue: it holds the lock, gives it back, or starts.
+// holderRuns reports whether one of lock's waiters (cmds) runs as its
+// holder: a slot's owner, or with no ticket in its queue (it gives the lock
+// back, or starts).
 func holderRuns(lock string, cmds []*exec.Cmd) bool {
-	queued := map[string]bool{}
+	holders := map[string]bool{}
 	entries, _ := os.ReadDir(lock + ".queue")
+	queued := map[string]bool{}
 	for _, e := range entries {
 		if i := strings.LastIndexByte(e.Name(), '-'); i > 0 {
 			queued[e.Name()[i+1:]] = true
+		}
+	}
+	slots, _ := filepath.Glob(filepath.Join(lock+".d", "*", "owner"))
+	for _, o := range slots {
+		if b, err := os.ReadFile(o); err == nil {
+			if m := ownerPid.FindStringSubmatch(string(b)); m != nil {
+				holders[m[1]] = true
+			}
 		}
 	}
 	for _, c := range cmds {
 		if st := procState(c.Process.Pid); st == "gone" || strings.HasPrefix(st, "state Z") {
 			continue // it ended
 		}
-		if !queued[strconv.Itoa(c.Process.Pid)] {
+		if pid := strconv.Itoa(c.Process.Pid); holders[pid] || !queued[pid] {
 			return true
 		}
 	}
 	return false
 }
+
+// ownerPid is a slot owner record's pid.
+var ownerPid = regexp.MustCompile(`(?:^|\s)pid (\d+)(?:\s|$)`)
 
 // dirID is dir's inode and change time: the same directory across looks.
 func dirID(dir string) (string, error) {
@@ -544,12 +558,13 @@ func TestLoadLock_Races(t *testing.T) {
 			}
 			// A round takes seconds; a lock with no owner for five looks a
 			// second apart, the same LOCK each time (its inode and ctime: a
-			// view made again is a new one), while none of its holders runs,
-			// is wedged now, not at the timeout. Its dump says why (QA-3,
-			// #2316). A holder that runs is changing the view: a runner with
-			// the lock stress tests side by side stretched one fork of that
-			// (mv, rmdir) past five seconds (#2334's nightly dumps: the holder
-			// in D, dup_mmap).
+			// view made again is a new one), while none of its holders runs
+			// (a slot's owner, or a waiter without a ticket), is wedged now,
+			// not at the timeout. Its dump says why (QA-3, #2316). A holder
+			// that runs is changing the view: a runner with the lock stress
+			// tests side by side stretched one fork of that (the take's mv,
+			// the release's rmdir) past five seconds (#2334's nightly dumps:
+			// the holder in D, dup_mmap).
 			ownerless := map[string]int{}
 			seen := map[string]string{}
 			deadline := time.After(60 * time.Second)
