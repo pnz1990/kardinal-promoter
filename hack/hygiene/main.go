@@ -20,12 +20,9 @@
 //     maxFileSize (a `go build` at the root committed a 4.8 MB release-gate
 //     binary, #2202). A large asset that belongs in the repo goes in the
 //     allowlist with its reason.
-//   - Go packages whose tests can reach code that loads the ambient
-//     kubeconfig (client-go's default loading rules, controller-runtime's
-//     GetConfig, the in-cluster config), in the package or in any package
-//     their tests import, without a TestMain that calls kubetest.Main or
-//     kubetest.Isolate (test/kubetest): such a test would talk to whatever
-//     cluster the developer's machine points at.
+//   - test packages that can reach the ambient kubeconfig without the
+//     kubetest guard, and kube config loaders that run before any guard
+//     can (kubeguard.go).
 //
 // hack/hygiene/allow.txt lists the intentional exceptions, each with its
 // reason; an entry that no longer matches anything is reported too, so the
@@ -390,107 +387,6 @@ func filter(found []string, allow map[string]bool, kinds map[string]bool) []stri
 	return out
 }
 
-var (
-	// ambientKube is a call that loads the ambient kubeconfig or the
-	// in-cluster config.
-	ambientKube = regexp.MustCompile(`\bclientcmd\.NewDefaultClientConfigLoadingRules\(|\bctrl\.GetConfig(OrDie)?\(|\bconfig\.GetConfig(OrDie)?\(|\brest\.InClusterConfig\(`)
-	// kubeGuardCall is the guard a TestMain calls.
-	kubeGuardCall = regexp.MustCompile(`\bkubetest\.(Main|Isolate)\(`)
-)
-
-// goPkg is one package of go list: its files (names in dir) and the
-// transitive imports of its test binary.
-type goPkg struct {
-	path, dir        string
-	files, testFiles []string
-	testDeps         []string
-}
-
-// unguardedKube are the packages whose tests can reach a package (their
-// own, or one their tests import) with a call that loads the ambient
-// kubeconfig, and whose test files never call the kubetest guard.
-func unguardedKube(pkgs []goPkg, read func(string) string) []string {
-	builds := map[string]bool{}
-	for _, p := range pkgs {
-		for _, f := range p.files {
-			if ambientKube.MatchString(read(filepath.Join(p.dir, f))) {
-				builds[p.path] = true
-			}
-		}
-	}
-	var out []string
-	for _, p := range pkgs {
-		if len(p.testFiles) == 0 {
-			continue
-		}
-		reach := ""
-		if builds[p.path] {
-			reach = p.path
-		}
-		for _, d := range p.testDeps {
-			if reach == "" && builds[d] {
-				reach = d
-			}
-		}
-		if reach == "" {
-			continue
-		}
-		guarded := false
-		for _, f := range p.testFiles {
-			guarded = guarded || kubeGuardCall.MatchString(read(filepath.Join(p.dir, f)))
-		}
-		if !guarded {
-			out = append(out, fmt.Sprintf("kubeguard %s: its tests can reach %s, which loads the ambient kubeconfig; "+
-				"add func TestMain(m *testing.M) { kubetest.Main(m) } (test/kubetest)", p.path, reach))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// goPackages lists the packages of the module (no build tags: the e2e
-// suites talk to their own clusters on purpose) with go list.
-func goPackages(root string) ([]goPkg, error) {
-	run := func(args ...string) ([]string, error) {
-		cmd := exec.Command("go", append([]string{"list"}, args...)...)
-		cmd.Dir = root
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, fmt.Errorf("go list %s: %w: %s", strings.Join(args, " "), err, stderr.String())
-		}
-		return strings.Split(strings.TrimSpace(string(out)), "\n"), nil
-	}
-	lines, err := run("-f", "{{.ImportPath}}\t{{.Dir}}\t{{join .GoFiles \" \"}}\t{{join .TestGoFiles \" \"}} {{join .XTestGoFiles \" \"}}", "./...")
-	if err != nil {
-		return nil, err
-	}
-	deps, err := run("-test", "-f", "{{.ImportPath}}\t{{join .Deps \" \"}}", "./...")
-	if err != nil {
-		return nil, err
-	}
-	testDeps := map[string][]string{}
-	for _, l := range deps {
-		name, d, _ := strings.Cut(l, "\t")
-		// "p [p.test]" and "p_test [p.test]" are p's test variants.
-		if base, variant, ok := strings.Cut(name, " ["); ok && strings.HasSuffix(variant, ".test]") {
-			p := strings.TrimSuffix(base, "_test")
-			testDeps[p] = append(testDeps[p], strings.Fields(d)...)
-		}
-	}
-	var pkgs []goPkg
-	for _, l := range lines {
-		f := strings.Split(l, "\t")
-		if len(f) != 4 {
-			continue
-		}
-		pkgs = append(pkgs, goPkg{path: f[0], dir: f[1], files: strings.Fields(f[2]), testFiles: strings.Fields(f[3]),
-			testDeps: testDeps[f[0]]})
-	}
-	return pkgs, nil
-}
-
 func main() {
 	root := flag.String("root", ".", "repository root")
 	bin := flag.String("deadcode", "deadcode", "deadcode binary (golang.org/x/tools/cmd/deadcode)")
@@ -509,15 +405,12 @@ func main() {
 	}
 	found := fileFindings(*root, r)
 	kinds := map[string]bool{"file": true, "kubeguard": true}
-	pkgs, err := goPackages(*root)
+	kg, err := kubeGuard(*root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	found = append(found, unguardedKube(pkgs, func(f string) string {
-		b, _ := os.ReadFile(f)
-		return string(b)
-	})...)
+	found = append(found, kg...)
 	if !*skipDeadcode {
 		dc, err := deadcode(*root, *bin)
 		if err != nil {

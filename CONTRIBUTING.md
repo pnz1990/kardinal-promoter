@@ -28,12 +28,18 @@ make hygiene
 
 `make hygiene` fails on a Go function no main or test reaches, a docs page that is neither in
 `mkdocs.yml` nor linked, a docs asset or a script under `hack/` or `scripts/` that nothing names,
-an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`), and a Go package
-whose tests can reach code that loads the ambient kubeconfig (client-go's default loading rules,
-controller-runtime's `GetConfig`, the in-cluster config) without `TestMain` calling
-`kubetest.Main` (`test/kubetest`). That guard points `KUBECONFIG` at a path that does not exist
-and unsets `KUBERNETES_SERVICE_HOST` before any test runs, so a unit test can never reach the
-cluster your machine points at; a test that needs one gives its kubeconfig explicitly. A helper only
+an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`), and a Go test
+package without the kube guard. Every test package under `cmd/` and `test/` (their tests run the
+CLI, kubectl, helm and kind), and every other one whose tests can reach a kube config loader
+(client-go's default loading rules or `BuildConfigFromFlags`, controller-runtime's `GetConfig`,
+`rest.InClusterConfig`, envtest; resolved by import path, under every build tag but `e2e`), needs
+a `TestMain` calling `kubetest.Main` (`test/kubetest`) in a file without build constraints. The
+guard points `KUBECONFIG` at a path that does not exist and unsets `KUBERNETES_SERVICE_HOST` and
+`USE_EXISTING_CLUSTER` before any test runs, for the tests and every process they start, so a unit
+test can never reach the cluster your machine points at; a test that needs one gives its
+kubeconfig explicitly. `clientcmd.RecommendedHomeFile` (read from `$HOME` before any `TestMain`) is
+refused outside `test/e2e`, and so is a loader in a package-level var or `init`. The e2e suites
+(`test/e2e/live`) talk to their own kind clusters and are not checked. A helper only
 tests call belongs in an `export_test.go` of its package. Intentional exceptions go in
 `hack/hygiene/allow.txt` with a reason.
 

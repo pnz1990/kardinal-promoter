@@ -198,39 +198,3 @@ func TestBulkyFiles(t *testing.T) {
 	assert.True(t, strings.HasPrefix(got[0], "file docs/big.webp: "), got[0])
 	assert.True(t, strings.HasPrefix(got[1], "file release-gate: a committed ELF binary"), got[1])
 }
-
-// TestUnguardedKube: a package whose tests can reach a call that loads the
-// ambient kubeconfig (in the package, or in any package its test binary
-// imports) needs the kubetest guard in its test files; one without tests,
-// or whose tests reach none, does not.
-func TestUnguardedKube(t *testing.T) {
-	files := map[string]string{
-		"cli/root.go":         "func c() { clientcmd.NewDefaultClientConfigLoadingRules() }",
-		"cli/root_test.go":    "func TestX(t *testing.T) {}",
-		"ctrl/main.go":        "func main() { cfg := ctrl.GetConfigOrDie(); _ = cfg }",
-		"ctrl/main_test.go":   "func TestMain(m *testing.M) { kubetest.Isolate(); os.Exit(m.Run()) }",
-		"user/user_test.go":   "func TestY(t *testing.T) { cli.Run() }",
-		"guarded/a_test.go":   "func TestMain(m *testing.M) { kubetest.Main(m) }",
-		"incluster/x.go":      "func x() { rest.InClusterConfig() }",
-		"notests/x.go":        "func x() { rest.InClusterConfig() }",
-		"plain/p.go":          "func p() { mgr.GetConfig() }", // a method, not the ambient config
-		"plain/p_test.go":     "func TestP(t *testing.T) {}",
-		"incluster/x_test.go": "func TestX(t *testing.T) {}",
-	}
-	read := func(f string) string { return files[f] }
-	pkgs := []goPkg{
-		{path: "m/cli", dir: "cli", files: []string{"root.go"}, testFiles: []string{"root_test.go"}},
-		{path: "m/ctrl", dir: "ctrl", files: []string{"main.go"}, testFiles: []string{"main_test.go"}},
-		{path: "m/user", dir: "user", testFiles: []string{"user_test.go"}, testDeps: []string{"fmt", "m/lib", "m/cli"}},
-		{path: "m/guarded", dir: "guarded", testFiles: []string{"a_test.go"}, testDeps: []string{"m/cli"}},
-		{path: "m/incluster", dir: "incluster", files: []string{"x.go"}, testFiles: []string{"x_test.go"}},
-		{path: "m/notests", dir: "notests", files: []string{"x.go"}},
-		{path: "m/plain", dir: "plain", files: []string{"p.go"}, testFiles: []string{"p_test.go"}},
-	}
-	got := unguardedKube(pkgs, read)
-	for i, g := range got {
-		got[i], _, _ = strings.Cut(g, ":")
-	}
-	assert.Equal(t, []string{"kubeguard m/cli", "kubeguard m/incluster", "kubeguard m/user"}, got)
-	assert.Contains(t, unguardedKube(pkgs, read)[2], "kubeguard m/user: its tests can reach m/cli")
-}

@@ -42,6 +42,7 @@ current-context: c
 	t.Setenv("KUBECONFIG", kc)
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
+	t.Setenv("USE_EXISTING_CLUSTER", "true")
 	load := func() (*rest.Config, error) {
 		return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(),
 			&clientcmd.ConfigOverrides{}).ClientConfig()
@@ -56,4 +57,6 @@ current-context: c
 	assert.True(t, clientcmd.IsEmptyConfig(err), "no config at all: %v", err)
 	_, err = rest.InClusterConfig()
 	assert.Error(t, err, "no in-cluster address either")
+	_, set := os.LookupEnv("USE_EXISTING_CLUSTER")
+	assert.False(t, set, "envtest starts its own API server")
 }

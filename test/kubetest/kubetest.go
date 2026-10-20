@@ -31,13 +31,16 @@ import (
 // config at all, and never fall back to ~/.kube/config.
 const NoKubeconfig = "/nonexistent/kardinal-unit-tests/kubeconfig"
 
-// Isolate points the ambient kubeconfig of this process at nothing:
-// KUBECONFIG at NoKubeconfig, and no in-cluster service address, so the
-// in-cluster fallback fails too.
+// Isolate points the ambient kubeconfig of this process, and of every
+// process it starts, at nothing: KUBECONFIG at NoKubeconfig, no in-cluster
+// service address, so the in-cluster fallback fails too, and no
+// USE_EXISTING_CLUSTER, with which envtest would take the ambient config and
+// install CRDs into that cluster.
 func Isolate() {
 	_ = os.Setenv("KUBECONFIG", NoKubeconfig)
 	_ = os.Unsetenv("KUBERNETES_SERVICE_HOST")
 	_ = os.Unsetenv("KUBERNETES_SERVICE_PORT")
+	_ = os.Unsetenv("USE_EXISTING_CLUSTER")
 }
 
 // Main is a package's TestMain: Isolate, then the tests.
