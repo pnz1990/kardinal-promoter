@@ -15,8 +15,10 @@ import (
 	"strings"
 	"time"
 
+	authzv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -368,6 +370,37 @@ func (s *uiAPIServer) handleReleaseHold(w http.ResponseWriter, r *http.Request) 
 		Message: "released the hold of " + req.Environment + " (rollback " + h.Bundle + ")"})
 }
 
+// approvalClient is the client an approval is recorded with: the request's
+// client, unless the user may not list the PolicyGates of ns. Reading the
+// gates' approval.fields before the write is optional (lifecycle: an
+// approver who may not read gates gets the tally's check instead, as with
+// kardinal approve), but a denied read through the AuthorizingClient would
+// turn the whole request into a 403. So the UI asks first, without
+// recording a denial (Can), and for such a user lists no gate (#2267).
+func (s *uiAPIServer) approvalClient(ctx context.Context, ns string) client.Client {
+	az, ok := s.client.(*uiauth.AuthorizingClient)
+	if !ok {
+		return s.client
+	}
+	can, err := az.Can(ctx, authzv1.ResourceAttributes{Namespace: ns, Verb: "list", Group: v1alpha1.GroupVersion.Group, Resource: "policygates"})
+	if err != nil || can {
+		return s.client // a failed review is the write's own check to answer
+	}
+	return gateBlindClient{Client: s.client}
+}
+
+// gateBlindClient is a client that may not list PolicyGates: it answers
+// Forbidden itself, before the AuthorizingClient would record a denial.
+type gateBlindClient struct{ client.Client }
+
+func (g gateBlindClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*v1alpha1.PolicyGateList); ok {
+		return apierrors.NewForbidden(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "policygates"}, "",
+			errors.New("the UI does not read the gates for a user who may not list them"))
+	}
+	return g.Client.List(ctx, list, opts...)
+}
+
 // handleApproval handles POST /api/v1/ui/approvals: the UI's kardinal
 // approve. It records the authenticated UI user's decision (approve or
 // reject) on a Bundle for an environment's approval gates, replaces it, or
@@ -418,7 +451,7 @@ func (s *uiAPIServer) handleApproval(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	outcome, a, err := lifecycle.RecordApproval(r.Context(), s.client, lifecycle.ApprovalRequest{
+	outcome, a, err := lifecycle.RecordApproval(r.Context(), s.approvalClient(r.Context(), ns), lifecycle.ApprovalRequest{
 		Namespace: ns, Bundle: req.Bundle, Environment: req.Environment, User: user.Username, Groups: user.Groups,
 		Decision: req.Decision, Comment: req.Comment, Revoke: req.Revoke, Via: "ui", Actor: stamp, Fields: req.Fields,
 	})
