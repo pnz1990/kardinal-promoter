@@ -45,7 +45,7 @@ kardinal audit evidence-pack -A --since 2026-07-01 --until 2026-10-01 -o q3.tar.
 
 The period is the versions created in `[--since, --until)` and the AuditEvents timestamped in
 it. Each version brings its Approvals, gate instances (with their overrides and results),
-Verdicts, ChangeRequest instances (the [change request](change-requests.md) ticket, its state
+Verdicts and the AgentRuns that wrote them, ChangeRequest instances (the [change request](change-requests.md) ticket, its state
 and approvers, and whether a linked ticket was verified) and signed [promotion receipts](receipts.md)
 (`receipts.ndjson`, with receipts on). The Pipelines, gate and ChangeRequest templates,
 ChangeWindows, AgentIdentities and the chart's
@@ -57,7 +57,7 @@ to the pack's files, and `manifest.json` records the exporter, the period, the f
 Producing a pack needs read on every kind it holds, and the chart has two ClusterRoles that grant
 exactly that and no write ([User roles](guides/security.md#user-roles)):
 `<release>-auditor` reads the namespaced records (AuditEvents, versions, Approvals, gates,
-Verdicts, ChangeRequests, Pipelines), and `<release>-auditor-cluster` the cluster-scoped ones (ChangeWindows,
+Verdicts, AgentRuns, ChangeRequests, Pipelines), and `<release>-auditor-cluster` the cluster-scoped ones (ChangeWindows,
 AgentIdentities) and the admission policies. An auditor of some namespaces gets the first in each
 of them with a RoleBinding, and the second cluster-wide; they then export each namespace with
 `-n`:
@@ -149,6 +149,33 @@ receipt is annotated `kardinal.io/evidence-pack-withheld` with the reason, the c
 and `redactions.receiptsWithheld` counts them. Verify such a receipt from the cluster or its OCI
 or Rekor sink.
 
+### Trace a Verdict to its agent
+
+A Verdict that an in-cluster verifier wrote has no actor stamp: the verifier's AgentRun wrote it,
+and kardinal takes the agent from that run ([Run agents in the cluster](agentic/verify-with-agents.md#run-agents-in-the-cluster)). The pack holds the run, so
+the raw records name the agent without the cluster:
+
+1. In `verdicts.ndjson`, the Verdict's `spec.run.name` is its AgentRun, and `spec.by` is the
+   run's own ServiceAccount, `system:serviceaccount:<namespace>:kr-<run>`, the only identity
+   admission lets write it.
+2. In `agentruns.ndjson`, the AgentRun of that name in the same namespace has the agent in
+   `status.agent` and its sponsor in `status.sponsor`, with `status.serviceAccount` (`kr-<run>`,
+   matching `spec.by`) and the StepTemplate it ran (`spec.template`).
+3. `agentidentities.ndjson` has that agent's registry entry: its sponsor and scope.
+
+```bash
+jq -c 'select(.spec.run) | {verdict: .metadata.name, ns: .metadata.namespace, run: .spec.run.name, by: .spec.by}' verdicts.ndjson
+jq -c '{run: .metadata.name, ns: .metadata.namespace, agent: .status.agent, sponsor: .status.sponsor,
+  sa: .status.serviceAccount, template: .spec.template}' agentruns.ndjson
+```
+
+The version's receipt names the same agent and sponsor in its signed statement (`kardinal
+verify-receipt` prints `verdicts by: agent <agent> for <sponsor>`), and so do the gate
+instance's `spec.verdicts[].actor` and the VerdictRecorded AuditEvent. An AgentRun the cluster no
+longer holds is left out, and the command warns how many Verdicts name one. An AgentRun deleted and
+created again after its Verdict was recorded has an empty `status.agent` and `status.sponsor` (#2345):
+the receipt, the gate instance and the AuditEvent still name its agent.
+
 `manifest.json`'s `coverage` says what the pack cannot hold:
 
 - `oldest`: the oldest record of each kind the cluster still holds. When the period starts
@@ -204,7 +231,7 @@ bytes.
 | Approvals, where production requires them | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit status; an `auto` environment records none. A gate that reads `changeRequests` waits for the change request in ServiceNow or Jira: the `ChangeRequest` instance records the ticket, its state and approvers, and whether a linked ticket was verified as the promotion's |
 | The version's creator does not approve it (when `excludeAuthor` is set) | `approval.excludeAuthor` (off by default, except on the approval gates kardinal adds for agents' versions in `agents: approve` environments) does not count an approval by the user who created the version (`kardinal.io/created-by`): for a version CI creates, that is the CI identity, not the commit's author, whom kardinal does not compare. With an actor stamp, an agent and its sponsor count as one party. `status.approvals[].reason` says why an approval did not count. A verify gate's `verify.excludeAuthor` is on by default: a verdict from the version's author's party does not count |
 | Emergency changes are controlled | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
-| Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+| Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires, each from an in-cluster verifier with the AgentRun that wrote it |
 | Evidence is tamper-evident | a signed `PromotionReceipt` per promotion per environment (v0.13, off by default: `receipts.enabled`), written when the step reaches Verified and verifiable offline with `kardinal verify-receipt`; `receipts.ndjson` in the evidence pack keeps each one with its signed envelope |
 
 **Your part:** The change policy itself, the review of the evidence, changes that bypass kardinal (direct pushes to the GitOps branch: protect it and require the `kardinal/gates` status), and access reviews of who holds the approver role. Requiring an approval on production: `approval: pr-review`, or a PolicyGate with `spec.approval`, on each production environment. Setting `approval.excludeAuthor: true` on those gates; and, to keep a change's commit author from approving it, the SCM's branch protection (required reviewers or code owners, no self-approval), which kardinal does not check.
@@ -258,7 +285,7 @@ bytes.
 
 | Element | kardinal record |
 |---|---|
-| Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+| Changes are tested before release | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires, each from an in-cluster verifier with the AgentRun that wrote it |
 
 **Your part:** The test plans themselves, and the tests that run outside kardinal (CI).
 
@@ -303,7 +330,7 @@ Change management is Article 9(4)(e) of the Regulation, detailed in the RTS on t
 | Element | kardinal record |
 |---|---|
 | Changes are recorded | `AuditEvent` promotion actions per version and environment, with the actor that caused them; the version's `spec.provenance` (author, commit, CI run) and its verified creator (`spec.actor`, annotation `kardinal.io/created-by`) |
-| Changes are tested | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires |
+| Changes are tested | the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires, each from an in-cluster verifier with the AgentRun that wrote it |
 | Approvals, where production requires them | approval gates (`spec.approval` on a PolicyGate), the `Approval` objects and `status.approvals[]` (who approved, and whether it counted), and `pr-review` environments with the `kardinal/gates` commit status; an `auto` environment records none. A gate that reads `changeRequests` waits for the change request in ServiceNow or Jira: the `ChangeRequest` instance records the ticket, its state and approvers, and whether a linked ticket was verified as the promotion's |
 | Emergency changes are handled and documented | gate overrides (`spec.overrides[]`: who, why, an expiry the policy caps) and freeze exemptions (`ChangeWindow.spec.freeze.exemptions[]`: who and why) |
 
@@ -350,7 +377,7 @@ These articles bind the providers and deployers of the AI systems the Act names 
 
 | Element | kardinal record |
 |---|---|
-| Agent-made changes are marked | the actor stamp marks each version and decision an agent made (`spec.actor.kind: agent`), shown in the PR evidence and the UI |
+| Agent-made changes are marked | the actor stamp marks each version and decision an agent made (`spec.actor.kind: agent`), shown in the PR evidence and the UI; a Verdict an in-cluster verifier wrote names its AgentRun (`spec.run`), whose status names the agent and its sponsor |
 
 **Your part:** Telling the people who read the agents' output.
 

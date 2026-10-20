@@ -71,8 +71,12 @@ const (
 //  7. The compliance mapping in the pack (controls.json) cites every
 //     record: each file of the pack that holds a record is named by a
 //     shipped row, and so is each action of the version's AuditEvents.
+//  8. From the pack's raw records alone, V's Verdict traces to V: its
+//     spec.run names an AgentRun of agentruns.ndjson whose status names V
+//     and its sponsor, its spec.by is that run's ServiceAccount, and the
+//     receipt verified offline in step 6 names the same agent and sponsor.
 //
-// Covers AGENT-EVIDENCE-01, AGENT-EVIDENCE-02, AGENT-EVIDENCE-03, AGENT-EVIDENCE-04.
+// Covers AGENT-EVIDENCE-01, AGENT-EVIDENCE-02, AGENT-EVIDENCE-03, AGENT-EVIDENCE-04, AGENT-EVIDENCE-05.
 func TestAgentEvidence_Journey(t *testing.T) {
 	e := framework.New(t)
 	c := e.CLI(t)
@@ -359,6 +363,7 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	assert.Contains(t, vout, "receipt "+rc.Name+": every check below that was made passed")
 	assert.Contains(t, vout, "  approved by: "+approver+"\n", "alice once, and not the agent's uncounted approval")
 	assert.Contains(t, vout, "  verdicts by: agent "+verifier+" for bob@example.com\n")
+	verifiedOut := vout
 	tampered := filepath.Join(t.TempDir(), "tampered.sigstore.json")
 	require.NoError(t, os.WriteFile(tampered, flipPayloadByte(t, prodEnvelope), 0o600))
 	args[2] = tampered
@@ -374,6 +379,26 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	for act := range actions {
 		assert.True(t, cited[act], "controls.json: no shipped row cites the version's %s AuditEvent", act)
 	}
+
+	// 8. The pack's raw records name V without the cluster (#2295): V's
+	// Verdict has no actor stamp, its run does. The receipt said the same in
+	// step 6, offline: one line, built from the pack's AgentRun.
+	run, _ := vspec["run"].(map[string]interface{})
+	require.NotNil(t, run, "V's verdict names its run")
+	var packedRun map[string]interface{}
+	for _, ar := range ours("agentruns.ndjson") {
+		if ar["metadata"].(map[string]interface{})["name"] == run["name"] {
+			packedRun = ar
+		}
+	}
+	require.NotNil(t, packedRun, "agentruns.ndjson holds the AgentRun V's verdict names (%v)", run["name"])
+	rstatus := packedRun["status"].(map[string]interface{})
+	assert.Equal(t, verifier, rstatus["agent"], "the pack's AgentRun names V")
+	assert.Equal(t, "bob@example.com", rstatus["sponsor"], "and V's sponsor")
+	assert.Equal(t, "system:serviceaccount:"+a.ns+":"+fmt.Sprint(rstatus["serviceAccount"]), vspec["by"],
+		"the verdict was written by the run's own ServiceAccount")
+	assert.Contains(t, verifiedOut, fmt.Sprintf("  verdicts by: agent %s for %s\n", rstatus["agent"], rstatus["sponsor"]),
+		"the offline receipt names the agent and sponsor the pack's AgentRun names")
 }
 
 // warningsOf are the coverage warnings of a pack's manifest.
