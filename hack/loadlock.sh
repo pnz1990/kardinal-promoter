@@ -16,9 +16,10 @@
 # <class>-<nanoseconds>-<pid>: release gates' tickets (-p release, class 0)
 # before everyone else's (class 1), then the oldest. hack/release-gate
 # (-priority) follows the same protocol (hack/release-gate/fairlock.go):
-#   - Only the waiter whose ticket sorts first tries the lock, and only it may
-#     reclaim a slot (or an older client's LOCK) of a holder that is gone,
-#     under flock(1) on LOCK.queue/.reclaim; it removes it outright.
+#   - Only the waiter whose ticket sorts first takes the lock. Every waiter
+#     reclaims a slot (or an older client's LOCK) of a holder that is gone,
+#     under flock(1) on LOCK.queue/.reclaim, and removes it outright: an
+#     older client at the head cannot judge the counting lock's holders.
 #   - Records (the owner file, tickets) are "<owner> pid <N> <time>" plus
 #     boot=<boot id> start=<the process's start time, /proc/<pid>/stat field
 #     22> (and ticket=<name> in the owner file). One is dead when its boot id
@@ -152,7 +153,17 @@ tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$this_boot start=$self_st
 [ -z "$alone" ] || tag="$tag exclusive=1"
 queue="$lock.queue"
 mkdir -p "$queue"
-ticket=$(printf '%s-%019d-%d' "$class" "$(date +%s%N)" "$$")
+# The ticket's time is EPOCHREALTIME's (a builtin: a failed date never
+# writes a 0 that jumps the queue, #2242 QA), date's on an older bash.
+if [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+  ticket_ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
+else
+  ticket_ns=$(date +%s%N) && [[ $ticket_ns =~ ^[1-9][0-9]+$ ]] || {
+    echo "loadlock: cannot read the time for a ticket" >&2
+    exit 1
+  }
+fi
+printf -v ticket '%s-%019d-%d' "$class" "$((10#$ticket_ns))" "$$"
 # write_ticket (re)writes this run's ticket, the queue directory too when it
 # was removed; a failure ends the run, as hack/release-gate's does.
 write_ticket() {
@@ -338,11 +349,23 @@ dead_dir() {
 # (and an older client's exclusive lock) of holders that are gone, then takes
 # a free slot when fewer than the capacity hold the lock. It succeeds when
 # this run holds a slot.
-take_turn() {
-  local d n reclaimed=
+# reclaim_turn, under the flock, removes the slots (and an older client's
+# exclusive lock) of holders that are gone, and the view when no slot is
+# left. Any waiter does it, not only the head (#2242 QA: an older client at
+# the head cannot judge the view's holders, so a new holder that died
+# without its EXIT trap would wedge the lock for everyone); only the head
+# takes a slot. An older client's lock is removed only while its owner is
+# still the dead one judged (read again just before).
+# shellcheck disable=SC2329 # called through with_flock
+reclaim_turn() {
+  local d judged reclaimed=
   count_holders
   if [ "$held_n" = exclusive ] && dead_dir "$lock"; then
-    rm -r "$lock" && echo "loadlock: removed $lock$why_v" >&2
+    judged=$why_v
+    if [ -e "$lock/owner" ]; then
+      read_file "$lock/owner" && [ " of a holder that is gone: $file_v" = "$judged" ] || judged=''
+    fi
+    [ -z "$judged" ] || { rm -r "$lock" && echo "loadlock: removed $lock$judged" >&2; }
   fi
   for d in "$slots"/*; do
     [ -d "$d" ] || continue
@@ -352,6 +375,11 @@ take_turn() {
   done
   # The view changes only with the slots (#2242 QA).
   [ -z "$reclaimed" ] || write_view || true
+}
+
+take_turn() {
+  local d n
+  reclaim_turn
   count_holders
   capacity
   [ "$held_n" != exclusive ] && [ "$held_n" -lt "$cap_v" ] || return 1
@@ -406,8 +434,10 @@ while :; do
   fi
   reap_tickets
   first_ticket
-  if [ "$first" = "$ticket" ] && head_turn; then
-    break
+  if [ "$first" = "$ticket" ]; then
+    head_turn && break
+  else
+    with_flock reclaim_turn || true
   fi
   holder='?'
   ! read_file "$lock/owner" || holder=$file_v

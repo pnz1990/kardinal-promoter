@@ -30,10 +30,11 @@ import (
 // hack/loadlock.sh follows the same protocol:
 //
 //   - Only the waiter whose ticket sorts first (release tickets first, then
-//     the oldest) tries the lock, and only it may reclaim a lock whose
-//     holder is gone. It does both under flock(2) on LOCK.queue/.reclaim, and
-//     removes a dead holder's lock outright (no rename aside and back: two
-//     reclaimers once moved a live holder's lock, #2202 QA).
+//     the oldest) takes the lock; every waiter reclaims a lock whose holder
+//     is gone (an older client at the head cannot judge the counting lock's
+//     holders, #2242 QA). Both happen under flock(2) on LOCK.queue/.reclaim,
+//     and a dead holder's lock is removed outright (no rename aside and
+//     back: two reclaimers once moved a live holder's lock, #2202 QA).
 //   - A record (the owner file, a ticket) is "<text> pid <N> <time>" with
 //     key=value pairs appended: boot=<boot id> start=<the process's start
 //     time, /proc/<pid>/stat field 22> ticket=<the holder's ticket>. It is
@@ -285,6 +286,14 @@ func (f *fairLock) acquire(ctx context.Context) error {
 			took, err := f.tryHead(q, name, record)
 			if err != nil || took {
 				return err
+			}
+		} else {
+			// Any waiter removes the holders that are gone (#2242 QA: an
+			// older client at the head cannot judge the view's holders, so
+			// a new holder that died without its cleanup would wedge the
+			// lock for everyone); only the head takes a slot.
+			if err := withLockFlock(q, func() error { f.reclaim(); return nil }); err != nil {
+				f.log("reclaim heavy-load lock %s: %v", f.lock, err)
 			}
 		}
 		holder, _ := os.ReadFile(filepath.Join(f.lock, "owner"))
@@ -566,7 +575,7 @@ func release(lock, slot, held string) (bool, error) {
 // reclaim removes the slots of holders that are gone (recordDead), or that
 // have had no owner file for orphanAge, and an older client's exclusive lock
 // in the same cases; then it refreshes the view when it removed a slot.
-// Only the head waiter calls it, under the reclaim flock.
+// Any waiter calls it, under the reclaim flock; only the head takes a slot.
 func (f *fairLock) reclaim() {
 	dead := func(dir string) (bool, string) {
 		owner, err := os.ReadFile(filepath.Join(dir, "owner"))
@@ -582,6 +591,14 @@ func (f *fairLock) reclaim() {
 	}
 	if _, exclusive := holders(f.lock); exclusive {
 		if ok, why := dead(f.lock); ok {
+			// Only while its owner is still the dead one judged (read again
+			// just before): an older client may have put a new LOCK there.
+			now, err := os.ReadFile(filepath.Join(f.lock, "owner"))
+			same := errors.Is(err, os.ErrNotExist) && !strings.HasPrefix(why, " of a holder") ||
+				err == nil && why == " of a holder that is gone: "+strings.TrimSpace(string(now))
+			if !same {
+				return
+			}
 			f.log("removed heavy-load lock %s%s", f.lock, why)
 			if err := os.RemoveAll(f.lock); err != nil {
 				f.log("remove heavy-load lock %s: %v", f.lock, err)

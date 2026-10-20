@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -710,4 +711,46 @@ func TestCountingLock_WhatCannotBeReadIsTheSafeAnswer(t *testing.T) {
 	defer cancel()
 	assert.ErrorIs(t, w.Lock(ctx), context.DeadlineExceeded, "no second holder beside a record it cannot read, on an idle host")
 	assert.DirExists(t, slot, "nor is that slot reclaimed")
+}
+
+// TestCountingLock_AnyWaiterReclaims (#2242 QA): a waiter that is not the
+// head removes a dead holder's slot and the view it leaves, so an older
+// client at the head (which cannot judge the view's holders) is not wedged;
+// it takes the lock only at the head.
+func TestCountingLock_AnyWaiterReclaims(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	slot := filepath.Join(slotsDir(dir), "1")
+	require.NoError(t, os.MkdirAll(slot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte(fmt.Sprintf("dead pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, viewMarker), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "owner"), []byte(fmt.Sprintf("dead pid:%d\n", gone.Process.Pid)), 0o644))
+	// An older client's ticket at the head: a live process (this one) that
+	// never reclaims.
+	q := queueDir(dir)
+	require.NoError(t, os.MkdirAll(q, 0o755))
+	older := filepath.Join(q, fmt.Sprintf("1-%019d-%d", 1, os.Getpid()))
+	require.NoError(t, os.WriteFile(older, []byte(fmt.Sprintf("older pid %d now %s\n", os.Getpid(), selfRecord(hostProc{}))), 0o644))
+
+	w := idleAs(dir, "w", classNormal)
+	w.lockRetry = 20 * time.Millisecond
+	done := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() { done <- w.Lock(ctx) }()
+	require.Eventually(t, func() bool {
+		_, serr := os.Stat(slot)
+		_, verr := os.Stat(dir)
+		return errors.Is(serr, os.ErrNotExist) && errors.Is(verr, os.ErrNotExist)
+	}, 10*time.Second, 20*time.Millisecond, "the waiter behind the head removed the dead slot and its view")
+	select {
+	case err := <-done:
+		t.Fatalf("it took the lock ahead of the head: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	require.NoError(t, os.Remove(older))
+	require.NoError(t, <-done)
+	w.Unlock()
 }
