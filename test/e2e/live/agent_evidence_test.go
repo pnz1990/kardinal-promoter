@@ -156,7 +156,8 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	ivDone := waitImageVerification(t, e, a.ns, bundle, "Verified")
 	e.WaitGateReady(t, a.ns, bundle, "prod", attestGate, true, "", promoteTimeout)
-	waitRuns(t, e, a.ns, bundle, 1)
+	runs := waitRuns(t, e, a.ns, bundle, 1)
+	require.Equal(t, verifier, runs[0].Spec.Template, "the AgentRun runs V")
 	e.WaitGateReady(t, a.ns, bundle, "prod", journeyVerify, true, "verified: 1 of 1", gateTimeout)
 
 	crName := "prod-change-prod--" + bundle
@@ -307,8 +308,10 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	vspec := verdicts[0]["spec"].(map[string]interface{})
 	assert.Equal(t, bundle, vspec["bundle"])
 	assert.Equal(t, "pass", vspec["result"])
-	if actor, _ := vspec["actor"].(map[string]interface{}); assert.NotNil(t, actor, "the verdict's actor") {
-		assert.Equal(t, verifier, actor["agent"])
+	// V's AgentRun wrote it: admission binds it to that run (spec.run), which
+	// is how it counts as V's; such a Verdict has no actor stamp.
+	if run, _ := vspec["run"].(map[string]interface{}); assert.NotNil(t, run, "the verdict's run") {
+		assert.Equal(t, runs[0].Name, run["name"], "the verdict is bound to V's AgentRun")
 	}
 	crs := ours("changerequests.ndjson")
 	require.Len(t, crs, 1, "the prod change request instance")
