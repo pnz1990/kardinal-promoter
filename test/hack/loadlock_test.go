@@ -1089,25 +1089,54 @@ func TestLoadLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
 	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	gone := exec.Command("true")
 	require.NoError(t, gone.Run())
-	dir := t.TempDir()
-	lock, pause := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "pause")
-	require.NoError(t, os.Mkdir(lock, 0o755))
-	owner := filepath.Join(lock, "owner")
-	require.NoError(t, os.WriteFile(owner, []byte(fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
-	cmd := loadlock(t, lock, "true")
-	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_RM="+pause)
-	out := &syncBuf{}
-	cmd.Stdout, cmd.Stderr = out, out
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	require.Eventually(t, func() bool { _, err := os.Stat(pause + ".judged"); return err == nil }, 10*time.Second, 20*time.Millisecond, "judged dead")
-	// Another older client's LOCK, live (this test process), meanwhile.
-	live := liveRecord(t, "another older") + "\n"
-	require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
-	require.NoError(t, os.WriteFile(pause+".go", nil, 0o644))
-	time.Sleep(time.Second)
-	assert.Equal(t, live, readFile(t, owner), "the new LOCK is left alone: %s", out.String())
-	assert.NotContains(t, out.String(), "removed "+lock)
+	dead := fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)
+	for _, tc := range []struct {
+		name      string
+		meanwhile func(t *testing.T, owner string)
+		removed   bool
+	}{
+		{"the same dead owner: removed", func(*testing.T, string) {}, true},
+		{"another older client's LOCK, live: it stays", func(t *testing.T, owner string) {
+			require.NoError(t, os.WriteFile(owner, []byte(liveRecord(t, "another older")+"\n"), 0o644))
+		}, false},
+		// #2242 QA-3: shell and Go agree. An owner judged dead that is gone
+		// since is a new LOCK's being written: it stays (the minute rule
+		// takes a LOCK that stays without an owner).
+		{"the owner gone since (a new LOCK, its owner not yet written): it stays", func(t *testing.T, owner string) {
+			require.NoError(t, os.Remove(owner))
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			lock, pause := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "pause")
+			require.NoError(t, os.Mkdir(lock, 0o755))
+			owner := filepath.Join(lock, "owner")
+			require.NoError(t, os.WriteFile(owner, []byte(dead), 0o644))
+			cmd := loadlock(t, lock, "true")
+			cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_RM="+pause)
+			out := &syncBuf{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+			require.Eventually(t, func() bool { _, err := os.Stat(pause + ".judged"); return err == nil }, 10*time.Second, 20*time.Millisecond, "judged dead")
+			tc.meanwhile(t, owner)
+			require.NoError(t, os.WriteFile(pause+".go", nil, 0o644))
+			if tc.removed {
+				require.Eventually(t, func() bool { return strings.Contains(out.String(), "removed "+lock) }, 10*time.Second, 20*time.Millisecond, "%s", out.String())
+				return
+			}
+			time.Sleep(time.Second)
+			assert.DirExists(t, lock, "left alone: %s", out.String())
+			assert.NotContains(t, out.String(), "removed "+lock)
+			if _, err := os.Stat(owner); errors.Is(err, os.ErrNotExist) {
+				// A LOCK that stays without an owner (its holder died before
+				// writing it) goes by the minute rule all the same.
+				old := time.Now().Add(-2 * time.Minute)
+				require.NoError(t, os.Chtimes(lock, old, old))
+				require.Eventually(t, func() bool { return strings.Contains(out.String(), "which has had no owner for a minute") }, 10*time.Second, 20*time.Millisecond, "%s", out.String())
+			}
+		})
+	}
 }
 
 // TestLoadLock_TicketClockWithoutEpochRealtime (#2242 QA): without

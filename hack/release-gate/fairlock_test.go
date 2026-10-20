@@ -781,7 +781,11 @@ func TestFairLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
 		name    string
 		swap    bool
 		removed bool
-	}{{"the owner is the same: removed", false, true}, {"another LOCK meanwhile: it stays", true, false}} {
+		vanish  bool
+	}{{"the owner is the same: removed", false, true, false}, {"another LOCK meanwhile: it stays", true, false, false},
+		// #2242 QA-3: as the shell does. An owner judged dead that is gone
+		// since is a new LOCK's being written: it stays.
+		{"the owner gone since: it stays", false, false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "LOADLOCK")
 			require.NoError(t, os.Mkdir(dir, 0o755))
@@ -792,12 +796,24 @@ func TestFairLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
 				if tc.swap {
 					require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
 				}
+				if tc.vanish {
+					require.NoError(t, os.Remove(owner))
+				}
 			}
 			defer func() { beforeReclaimRemove = nil }()
 			(&fairLock{lock: dir, log: func(string, ...any) {}, proc: hostProc{}}).reclaim()
-			if tc.removed {
+			switch {
+			case tc.removed:
 				assert.NoDirExists(t, dir)
-			} else {
+			case tc.vanish:
+				assert.DirExists(t, dir, "a LOCK whose owner went since is left alone")
+				// One that stays without an owner goes by the orphanAge rule.
+				beforeReclaimRemove = nil
+				old := time.Now().Add(-2 * orphanAge)
+				require.NoError(t, os.Chtimes(dir, old, old))
+				(&fairLock{lock: dir, log: func(string, ...any) {}, proc: hostProc{}}).reclaim()
+				assert.NoDirExists(t, dir, "an ownerless LOCK goes after orphanAge")
+			default:
 				assert.Equal(t, live, readOwner(t, dir), "the new LOCK is left alone")
 			}
 		})

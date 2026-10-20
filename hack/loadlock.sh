@@ -454,8 +454,15 @@ reclaim_turn() {
   if [ "$held_n" = exclusive ] && dead_dir "$lock"; then
     judged=$why_v
     before_rm
+    # Read again: still the dead owner judged, or still no owner for one
+    # judged ownerless. An owner judged dead that has gone since is a new
+    # LOCK's being written (or another reclaimer's work): left alone, as
+    # hack/release-gate does (#2242 QA-3); the minute rule takes a LOCK that
+    # stays without an owner.
     if [ -e "$lock/owner" ]; then
       read_file "$lock/owner" && [ " of a holder that is gone: $file_v" = "$judged" ] || judged=''
+    elif [[ $judged == " of a holder that is gone: "* ]]; then
+      judged=''
     fi
     [ -z "$judged" ] || { rm -r "$lock" && echo "loadlock: removed $lock$judged" >&2; }
   fi
