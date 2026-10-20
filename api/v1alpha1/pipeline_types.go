@@ -10,6 +10,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// LabelPolicyShareable is the label a Namespace carries, with the value
+// "true", when a Pipeline of another namespace may read its PolicyGates
+// through spec.policyNamespaces: the namespace's owner agrees to have its gate
+// templates copied into that Pipeline's namespace (#2286).
+const LabelPolicyShareable = "kardinal.io/policy-shareable"
+
 // PipelineSpec defines the desired state of a Pipeline.
 type PipelineSpec struct {
 	// Git holds the shared GitOps repository configuration for all
@@ -85,6 +91,11 @@ type PipelineSpec struct {
 	// default "platform-policies") and the pipeline's own namespace are always read,
 	// so a Pipeline cannot opt out of org gates. Gates found only through this
 	// field are team gates: they never count as org gates and never grant a skip.
+	// Any other namespace listed must agree to be read: the label
+	// kardinal.io/policy-shareable=true on it, or the controller's
+	// --policy-shareable-namespaces. One that has not is still read for now,
+	// and the Pipeline's PolicyNamespacesShared condition is False naming it;
+	// a later release refuses it.
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
 

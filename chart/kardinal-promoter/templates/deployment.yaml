@@ -83,6 +83,9 @@ spec:
             {{- with include "kardinal-promoter.policyNamespaces" . }}
             - --policy-namespaces={{ . }}
             {{- end }}
+            {{- with .Values.controller.policyShareableNamespaces }}
+            - --policy-shareable-namespaces={{ join "," . }}
+            {{- end }}
             {{- with .Values.receipts }}
             {{- if .enabled }}
             - --receipts=true

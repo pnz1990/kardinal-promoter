@@ -71,6 +71,7 @@ built-in ones: a flag whose help names a `KARDINAL_*` variable reads it as its d
 | `--override-identity-policy` | string |  | Name of the chart's gate-overrides ValidatingAdmissionPolicy and binding. The controller records an override's createdBy as verified only while both exist; empty records every override unverified. |
 | `--pipeline-workers` | int | `4` | How many Pipelines (status, history) are reconciled at once. |
 | `--policy-namespaces` | string | `"platform-policies"` | Comma-separated list of namespaces to scan for org-level PolicyGates. |
+| `--policy-shareable-namespaces` | string |  | Comma-separated namespaces whose PolicyGates any Pipeline may read through spec.policyNamespaces, besides those labelled kardinal.io/policy-shareable=true. A Pipeline naming another namespace gets PolicyNamespacesShared=False and a Warning Event; its gates are still read for now (#2286). |
 | `--policygate-workers` | int | `8` | How many PolicyGates (CEL evaluation) are reconciled at once. |
 | `--pprof-address` | string |  | Address that serves Go's net/http/pprof profiles (heap, goroutine, CPU) under /debug/pprof/, with no authentication. Only an empty value (the default) disables it; an address without a host, such as :6060, binds to 127.0.0.1 only. |
 | `--promotionstep-workers` | int | `16` | How many PromotionSteps (git clone, commit, push, PR, health check) are reconciled at once. |

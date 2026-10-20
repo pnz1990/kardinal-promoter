@@ -20,6 +20,7 @@ pkg/reconciler/notificationhook
 pkg/reconciler/policygate
 test/examples
 test/hack
+test/helm
 !pkg/reconciler/promotionstep README.md is a file its tests write into scratch git repositories
 !pkg/scm README.md is a file its tests write into scratch git repositories
 !pkg/source its README.md and docs/notes.md are files of the scratch repositories it serves

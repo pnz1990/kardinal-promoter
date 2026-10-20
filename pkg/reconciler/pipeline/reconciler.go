@@ -35,6 +35,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/shard"
@@ -148,9 +149,10 @@ type Reconciler struct {
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
 
-	// Reader reads the Argo CD Applications a fleet selector matches. It is
-	// not cached: the controller does not watch Applications, whose CRD may
-	// be missing. Nil uses Client.
+	// Reader reads the Argo CD Applications a fleet selector matches, and the
+	// Namespaces spec.policyNamespaces names (their consent label, #2286). It
+	// is not cached: the controller does not watch Applications, whose CRD
+	// may be missing, nor Namespaces. Nil uses Client.
 	Reader client.Reader
 	// FleetApplicationNamespaces are the namespaces a fleet selector of kind
 	// Application may read (--fleet-application-namespaces); empty is
@@ -171,9 +173,19 @@ type Reconciler struct {
 	// DefaultHoldBundleGrace.
 	HoldBundleGrace time.Duration
 
-	// Recorder emits the HoldBundleMissing Warning Event. Nil emits none
-	// (tests).
+	// Recorder emits the HoldBundleMissing and PolicyNamespaceNotShared
+	// Warning Events. Nil emits none (tests).
 	Recorder events.EventRecorder
+
+	// PolicyNamespaces are the org policy namespaces (--policy-namespaces;
+	// empty is graph.DefaultPolicyNamespace). Every Pipeline reads them, so a
+	// spec.policyNamespaces entry naming one needs no consent.
+	PolicyNamespaces []string
+	// PolicyShareableNamespaces are the namespaces whose PolicyGates any
+	// Pipeline may read through spec.policyNamespaces
+	// (--policy-shareable-namespaces), besides those labelled
+	// kardinal.io/policy-shareable=true (#2286).
+	PolicyShareableNamespaces []string
 }
 
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
@@ -331,6 +343,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	desiredConflict := pathConflict(&p, peers)
+	// spec.policyNamespaces entries that have not agreed to be read (#2286):
+	// a warning only, re-checked as Namespaces are not watched.
+	desiredShared, sharedRecheck := r.policyNamespacesShared(ctx, &p)
+	if sharedRecheck > 0 && (result.RequeueAfter == 0 || sharedRecheck < result.RequeueAfter) {
+		result.RequeueAfter = sharedRecheck
+	}
 
 	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
 	steps := lifecycle.AddRetiredSteps(stepList.Items, bundleList.Items,
@@ -372,12 +390,16 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredConflict != nil {
 		conflictMatch = conditionMatches(p.Status.Conditions, *desiredConflict)
 	}
+	sharedMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPolicyNamespacesShared) == nil
+	if desiredShared != nil {
+		sharedMatch = conditionMatches(p.Status.Conditions, *desiredShared)
+	}
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
 	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
 	envsMatch := environmentsEqual(p.Status.Environments, desiredEnvs) &&
 		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine &&
 		failedVersionEqual(p.Status.FailedVersion, desiredFailed)
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && secretMatch && fleetsMatch && envsMatch {
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && sharedMatch && secretMatch && fleetsMatch && envsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -400,6 +422,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	} else {
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPathConflict)
 	}
+	sharedNews := policyNamespacesNews(p.Status.Conditions, desiredShared)
+	if desiredShared != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredShared)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPolicyNamespacesShared)
+	}
 	meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
 	p.Status.DeploymentMetrics = desiredMetrics
 	p.Status.Fleets = desiredFleets
@@ -410,6 +438,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
+	}
+	// Once the condition is stored, so the Event is not repeated.
+	if sharedNews {
+		log.Warn().Msg(desiredShared.Message)
+		kubeevent.Emit(r.Recorder, &p, corev1.EventTypeWarning, eventPolicyNamespaceNotShared, "CheckPolicyNamespaces",
+			desiredShared.Message)
 	}
 
 	log.Info().

@@ -125,6 +125,12 @@ controller:
   # mode org gates are read from watchNamespace, and an entry other than
   # watchNamespace fails the install.
   policyNamespaces: []
+  # -- Namespaces whose PolicyGates any Pipeline may read through
+  # spec.policyNamespaces (--policy-shareable-namespaces), besides those
+  # labelled kardinal.io/policy-shareable=true. A Pipeline that names another
+  # namespace gets PolicyNamespacesShared=False and a Warning Event; its gates
+  # are still read for now, and a later release refuses them (#2286).
+  policyShareableNamespaces: []
   # -- Longest a PolicyGate's status goes unwritten while its result does not
   # change (--gate-status-heartbeat, a Go duration). Empty keeps the controller
   # default, 10m. "0s" writes the status on every evaluation; each write makes
