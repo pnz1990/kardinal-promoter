@@ -699,7 +699,13 @@ func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 		{name: "a 500 past the tries", step: metricSigning, signs: 1, tries: keepTries,
 			fail: always(apierrors.NewInternalError(errors.New("etcdserver: request timed out")))},
 		{name: "a broken pipe past the tries", step: metricSigning, signs: 1, tries: keepTries, fail: always(brokenPipe)},
+		{name: "a 400 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewBadRequest("status.stored: invalid"))},
 		{name: "a 401", step: metricSigning, signs: 1, tries: 1, fail: always(apierrors.NewUnauthorized("token expired"))},
+		{name: "a DNS failure", step: metricSigning, signs: 1, tries: 1,
+			fail: always(transport(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "kubernetes.default.svc", IsNotFound: true}}))},
+		{name: "a refusal as the reconcile is cancelled", step: metricSigning, signs: 1, tries: 1, cancel: true,
+			fail: always(fmt.Errorf("patch promotion receipt status: %w", apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied"))))},
 		{name: "the reconcile cancelled", step: metricSigning, signs: 1, tries: 1, cancel: true, fail: always(transport(context.Canceled))},
 		{name: "a lost connection that recovers", step: metricSigning, signs: 1, tries: 2, fail: func(try int) error {
 			if try == 1 {
