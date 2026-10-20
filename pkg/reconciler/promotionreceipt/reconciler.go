@@ -164,7 +164,9 @@ func parseAllowed(entry string) (string, []string, bool) {
 type Reconciler struct {
 	ctrl.Client
 	// APIReader reads the OCI credentials Secret, which the cache does not
-	// hold.
+	// hold, and every receipt with work left: the cache can lag the
+	// controller's own last status write (#2313). Nil reads through the
+	// cache (tests).
 	APIReader ctrl.Reader
 	// Signer signs statements.
 	Signer *receipt.Signer
@@ -243,6 +245,20 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrlruntime.Request) (ct
 		// and bundle (CacheTransform): return before reading either.
 		return ctrlruntime.Result{}, nil
 	}
+	// The next step is decided on the API server's copy. The cache's can
+	// predate this controller's last status write, and a step decided on it
+	// is done again: a second signature (in keyless mode a second
+	// certificate and Rekor entry), a referrer pushed again, a PR comment
+	// posted again, or a write that conflicts (#2313).
+	if err := r.reader().Get(ctx, req.NamespacedName, &rc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrlruntime.Result{}, nil
+		}
+		return ctrlruntime.Result{}, fmt.Errorf("read promotion receipt %s: %w", req.Name, err)
+	}
+	if Done(&rc) {
+		return ctrlruntime.Result{}, nil
+	}
 	now := r.now()
 	if t := rc.Status.NextRetryAt; t != nil && now.Before(t.Time) {
 		return ctrlruntime.Result{RequeueAfter: t.Sub(now)}, nil
@@ -265,7 +281,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrlruntime.Request) (ct
 		} else {
 			setCondition(&rc, ConditionStored, metav1.ConditionTrue, "AllSinks", "stored in "+sinks(&rc), now)
 		}
-		return ctrlruntime.Result{Requeue: true}, r.patch(ctx, base, &rc)
+		return ctrlruntime.Result{}, r.patch(ctx, base, &rc)
 	case rc.Spec.PullRequest != nil && !rc.Status.PRComment:
 		return r.comment(ctx, base, &rc, now)
 	}
@@ -325,7 +341,7 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 	}
 	observability.ReceiptsTotal.WithLabelValues(signed.SignedBy.Mode).Inc()
 	observability.ReceiptBytesTotal.Add(float64(len(rc.Spec.Statement) + len(signed.Bundle)))
-	return ctrlruntime.Result{Requeue: true}, nil
+	return ctrlruntime.Result{}, nil
 }
 
 // ociStored reports whether every image subject of rc has its referrer.
@@ -418,15 +434,11 @@ func (r *Reconciler) storeOCI(ctx context.Context, base, rc *v1alpha1.PromotionR
 		rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{Sink: v1alpha1.ReceiptSinkOCI, Ref: ref, Subject: s.Name, At: metav1.NewTime(now.UTC())})
 	}
 	rc.Status.Attempts, rc.Status.NextRetryAt = 0, nil
-	return ctrlruntime.Result{Requeue: true}, r.patch(ctx, base, rc)
+	return ctrlruntime.Result{}, r.patch(ctx, base, rc)
 }
 
 func (r *Reconciler) keychain(ctx context.Context) (authn.Keychain, error) {
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	return loadKeychain(ctx, reader, r.OCI.SecretNamespace, r.OCI.SecretName)
+	return loadKeychain(ctx, r.reader(), r.OCI.SecretNamespace, r.OCI.SecretName)
 }
 
 func (r *Reconciler) sinkFailed(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, reason string, err error,
@@ -496,7 +508,7 @@ func (r *Reconciler) patchKeeping(ctx context.Context, base, rc *v1alpha1.Promot
 	err := r.patch(ctx, base, rc)
 	for i := 0; i < 5 && apierrors.IsConflict(err); i++ {
 		var cur v1alpha1.PromotionReceipt
-		if gerr := r.Get(ctx, ctrl.ObjectKeyFromObject(rc), &cur); gerr != nil {
+		if gerr := r.reader().Get(ctx, ctrl.ObjectKeyFromObject(rc), &cur); gerr != nil {
 			if apierrors.IsNotFound(gerr) {
 				return nil
 			}
@@ -619,6 +631,15 @@ func backoff(attempts int) time.Duration {
 	return min(d, retryMax)
 }
 
+// reader reads receipts from the API server (APIReader), or from the cache
+// when there is none.
+func (r *Reconciler) reader() ctrl.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 // patch writes rc's status, optimistic-locked: a reconcile from a stale
 // copy gets a conflict and is retried, so a receipt is never signed twice
 // over (the CRD also refuses to change status.bundle once set).
@@ -646,7 +667,9 @@ func setCondition(rc *v1alpha1.PromotionReceipt, typ string, status metav1.Condi
 const MaxConcurrentReconciles = 4
 
 // SetupWithManager registers the reconciler, sharded like every namespaced
-// reconciler (pkg/shard).
+// reconciler (pkg/shard). The watch has no predicate: each status write
+// starts the next step, from a cache that holds the write, so no step
+// requeues itself (a requeue read the cache before the write, #2313).
 func (r *Reconciler) SetupWithManager(mgr ctrlruntime.Manager) error {
 	b := ctrlruntime.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PromotionReceipt{}).

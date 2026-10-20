@@ -277,10 +277,12 @@ checkout-1-5-0-prod   checkout   prod   checkout-1-5-0   Stored   2m
   (every sink holds it), `Failed` (its statement does not match `spec.statementDigest`: it was
   changed, and is never signed).
 - **Conditions**: `Signed`, `Stored` and `PRCommented`, with reasons naming a failing sink.
-- **Signed once**: a status write that meets a conflict after signing re-reads the receipt and
-  records the same signature, rather than signing again (a second certificate and, with Rekor,
-  a second log entry). A controller that crashes between signing and its status write signs
-  again on restart: both signatures verify.
+- **Signed once**: the controller decides each step on the API server's copy of the receipt,
+  not on its cache, which can lag its own last status write. So a receipt is signed, pushed
+  and commented once, however busy the API server is. A status write that meets a conflict
+  after signing re-reads the receipt and records the same signature, rather than signing again
+  (a second certificate and, with Rekor, a second log entry). A controller that crashes
+  between signing and its status write signs again on restart: both signatures verify.
 - **No owner**: a receipt outlives its Bundle, the Graph and the step. Deleting a Bundle does
   not delete its receipts. kardinal keeps every receipt unless you set
   `receipts.retention.maxAge` (for example `8760h`): the leader then deletes the receipts
