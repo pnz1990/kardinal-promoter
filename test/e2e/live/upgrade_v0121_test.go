@@ -65,6 +65,33 @@ func u0121Rollbacks(ctx context.Context, e *framework.Env, ns string) (map[strin
 	return out, nil
 }
 
+// u0121FailedStep checks that the failed version's step in test is the step
+// that started the rollback rb: the step itself (uid), still RollingBack and
+// naming rb, or, once the version's Graph is retired (a Superseded version
+// retires after a minute), its record in status.retiredSteps. A step of the
+// version with another uid means the version promoted again.
+func u0121FailedStep(ctx context.Context, e *framework.Env, ns, bundle string, failed *v1alpha1.PromotionStep, rb string) (bool, string) {
+	ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test")
+	switch {
+	case err != nil:
+		return false, err.Error()
+	case ok:
+		return ps.UID == failed.UID && ps.Status.State == "RollingBack" && strings.Contains(ps.Status.Message, "rollback Bundle "+rb),
+			fmt.Sprintf("step %s (uid %s, was %s): state %q, message %q", ps.Name, ps.UID, failed.UID, ps.Status.State, ps.Status.Message)
+	}
+	var b v1alpha1.Bundle
+	if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundle}, &b); err != nil {
+		return false, err.Error()
+	}
+	for _, r := range b.Status.RetiredSteps {
+		if r.Name == failed.Name {
+			return r.State == "RollingBack" && strings.Contains(r.Message, "rollback Bundle "+rb),
+				fmt.Sprintf("retired step %s: state %q, message %q", r.Name, r.State, r.Message)
+		}
+	}
+	return false, fmt.Sprintf("no step %s and no record of it in %s's status.retiredSteps", failed.Name, bundle)
+}
+
 // u0121AutoRollbackOf checks that rb is the controller's automatic rollback
 // of from (onHealthFailure: rollback): its stamp, its marker and the image it
 // restores.
@@ -86,10 +113,12 @@ func u0121AutoRollbackOf(t *testing.T, e *framework.Env, ns, rb, from string) *v
 // fixture) has a version Verified, then a version whose rollout fails
 // (ProgressDeadlineExceeded): its step turns RollingBack and v0.12.1
 // creates the rollback Bundle <version>-rollback-alarm, which a gate on the
-// controller's auto-rollback stamp holds at test. After the upgrade:
+// controller's auto-rollback stamp holds at test. The failed version is
+// Superseded, and its Graph retires a minute later (its step then is a
+// record in status.retiredSteps). After the upgrade:
 //   - the new controller adopts that rollback: for 30s the namespace has it
-//     alone (the same uid) and the failed step is the same step, still
-//     RollingBack and naming it;
+//     alone (the same uid), the failed version is the same Bundle, and its
+//     step is the same step (or its record), RollingBack and naming it;
 //   - released by kardinal override, it promotes the Verified image back and
 //     is Verified, the same Bundle, and the failed version ends Superseded;
 //   - a version that fails after the upgrade gets exactly one new automatic
@@ -121,6 +150,7 @@ func u0121AutoRollback(t *testing.T, e *framework.Env, from u012From) func() {
 	rb := b2 + "-rollback-alarm"
 	require.True(t, strings.HasSuffix(failed.Status.Message, " — rollback Bundle "+rb+" created"), failed.Status.Message)
 	held := u0121AutoRollbackOf(t, e, a.ns, rb, b2)
+	failedB := getBundle(t, e, a.ns, b2)
 	e.WaitGateReady(t, a.ns, rb, "test", u0121AlarmGate, false, "", gateTimeout)
 	e.NoStep(t, a.ns, pipelineName, rb, "test", 10*time.Second)
 	want := map[string]types.UID{rb: held.UID}
@@ -137,14 +167,14 @@ func u0121AutoRollback(t *testing.T, e *framework.Env, from u012From) func() {
 			if !maps.Equal(want, got) {
 				return false, fmt.Sprintf("rollback Bundles %v, want %v", got, want)
 			}
-			ps, ok, err := e.Step(ctx, a.ns, pipelineName, b2, "test")
-			if err != nil || !ok {
-				return false, fmt.Sprintf("failed step: ok=%v err=%v", ok, err)
+			var b v1alpha1.Bundle
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: b2}, &b); err != nil {
+				return false, err.Error()
 			}
-			if ps.UID != failed.UID || ps.Status.State != "RollingBack" || !strings.Contains(ps.Status.Message, "rollback Bundle "+rb) {
-				return false, fmt.Sprintf("failed step %s (uid %s): state %q, message %q", ps.Name, ps.UID, ps.Status.State, ps.Status.Message)
+			if b.UID != failedB.UID {
+				return false, fmt.Sprintf("%s is uid %s, was %s", b2, b.UID, failedB.UID)
 			}
-			return true, ""
+			return u0121FailedStep(ctx, e, a.ns, b2, failed, rb)
 		})
 		me := whoAmI(t, e)
 		e.MustKardinal(t, a.ns, "override", pipelineName, "--stage", "test", "--gate", u0121AlarmGate, "--reason", "e2e: release the rollback")
