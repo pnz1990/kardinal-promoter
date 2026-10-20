@@ -43,7 +43,7 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
 
 ```bash
 kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0   # ship a version
-kardinal explain my-app --env prod                                   # why is it not in prod yet?
+kardinal why my-app prod                                             # why is it not in prod yet?
 ```
 
 Try it in about 10 minutes with the [Quickstart](https://pnz1990.github.io/kardinal-promoter/quickstart/).
@@ -51,7 +51,7 @@ Try it in about 10 minutes with the [Quickstart](https://pnz1990.github.io/kardi
 ## Why kardinal
 
 - **Gates you can read.** Rules are CEL expressions over the version, the clock, soak time,
-  metrics and approvals. `kardinal explain` shows which gate holds a version and why;
+  metrics and approvals. `kardinal why` shows which gate holds a version and why;
   `kardinal policy simulate` tries a rule at any time. Platform teams set org gates that a team
   pipeline cannot remove.
 - **Soak time that requires health.** `bake` requires continuous health, and a failed health
