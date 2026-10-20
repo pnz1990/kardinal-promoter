@@ -556,6 +556,39 @@ func TestCountingLock_OlderClientsAreLeftAlone(t *testing.T) {
 	require.NoError(t, os.RemoveAll(slotsDir(dir)))
 	assert.ErrorIs(t, writeView(dir), errOlderHolder)
 	assert.Equal(t, "older pid 2 now\n", readOwner(t, dir), "an older client's LOCK is never removed")
+
+	// Nor when it appears after holders() looked and found the view
+	// (#2242 QA): the removal itself is gated on the marker going.
+	require.NoError(t, removeView(dir))
+	assert.Equal(t, "older pid 2 now\n", readOwner(t, dir), "removeView leaves a LOCK with no marker")
+	require.NoError(t, os.RemoveAll(dir))
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, viewMarker), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "owner"), []byte("w pid:1 now\n"), 0o644))
+	require.NoError(t, removeView(dir))
+	assert.NoDirExists(t, dir, "removeView removes the view")
+}
+
+// TestCountingLock_ReclaimLeavesTheViewWhenNothingGoes (#2242 QA): the head
+// waiter rewrites the view only when it removed a slot.
+func TestCountingLock_ReclaimLeavesTheViewWhenNothingGoes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	w := idleAs(dir, fmt.Sprintf("w pid %d 2026-10-20T00:00:00Z", os.Getpid()), classNormal)
+	require.NoError(t, w.Lock(context.Background()))
+	defer w.Unlock()
+	owner := filepath.Join(dir, "owner")
+	require.NoError(t, os.WriteFile(owner, []byte("as it was\n"), 0o644))
+	head := &fairLock{lock: dir, log: func(string, ...any) {}, proc: hostProc{}}
+	head.reclaim()
+	assert.Equal(t, "as it was\n", readOwner(t, dir), "no slot went, so the view is as it was")
+
+	// A dead holder's slot goes, and the view is rewritten.
+	dead := filepath.Join(slotsDir(dir), "2")
+	require.NoError(t, os.Mkdir(dead, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dead, "owner"), []byte("gone pid 2147480000 2026-10-20T00:00:00Z\n"), 0o644))
+	head.reclaim()
+	assert.NoDirExists(t, dead)
+	assert.Contains(t, readOwner(t, dir), fmt.Sprintf("pid:%d", os.Getpid()))
 }
 
 func readOwner(t *testing.T, dir string) string {

@@ -606,17 +606,25 @@ func TestLoadLock_MixedClients(t *testing.T) {
 			require.NoError(t, err)
 			rounds = n
 		}
-		// crit KIND DIR: the critical section. A new client may share it
+		// LOADLOCK_STRESS_LOCKS sizes a round for a busy host (the
+		// review-size run holds the host's LOADLOCK).
+		locks := 20
+		if v := os.Getenv("LOADLOCK_STRESS_LOCKS"); v != "" {
+			n, err := strconv.Atoi(v)
+			require.NoError(t, err)
+			locks = n
+		}
+		// crit KIND DIR [CLIENT]: the critical section. A new client may share it
 		// with one other new client; an older one with nobody.
 		crit := filepath.Join(t.TempDir(), "crit.sh")
-		require.NoError(t, os.WriteFile(crit, []byte(`kind=$1 d=$2 me=$d/$kind.$$
+		require.NoError(t, os.WriteFile(crit, []byte(`kind=$1 d=$2 me=$d/$kind.$$.${3:-new}
 mkdir "$me"
 n_new=$(find "$d" -maxdepth 1 -name 'new.*' | wc -l)
 n_all=$(find "$d" -maxdepth 1 \( -name 'new.*' -o -name 'old.*' \) | wc -l)
 if [ "$kind" = new ]; then
-  [ "$n_new" -le 2 ] && [ "$n_new" -eq "$n_all" ] || touch "$d/violation"
+  [ "$n_new" -le 2 ] && [ "$n_new" -eq "$n_all" ] || { echo "$kind.$$ saw: $(ls "$d" | tr '\n' ' ') LOCK/owner: $(cat "$d/LOADLOCK/owner" 2>&1 | tr '\n' '|')" >>"$d/violation"; }
 else
-  [ "$n_all" -eq 1 ] || touch "$d/violation"
+  [ "$n_all" -eq 1 ] || { echo "$kind.$$ saw: $(ls "$d" | tr '\n' ' ') LOCK/owner: $(cat "$d/LOADLOCK/owner" 2>&1 | tr '\n' '|')" >>"$d/violation"; }
 fi
 sleep 0.05
 rmdir "$me"
@@ -625,7 +633,7 @@ rmdir "$me"
 			var cmds []*exec.Cmd
 			var outs []*syncBuf
 			var dirs []string
-			for l := 0; l < 20; l++ {
+			for l := 0; l < locks; l++ {
 				dir := t.TempDir()
 				lock := filepath.Join(dir, "LOADLOCK")
 				dirs = append(dirs, dir)
@@ -639,13 +647,13 @@ rmdir "$me"
 				for i := 0; i < 4; i++ {
 					add("bash", script, "-l", lock, "-o", fmt.Sprintf("new%d", i), "-r", "0.05", "--", "sh", crit, "new", dir)
 				}
-				add("bash", old2202, "-l", lock, "-o", "old2202", "-r", "0.05", "--", "sh", crit, "old", dir)
-				add("bash", old2226, "-l", lock, "-o", "old2226", "-r", "0.05", "--", "sh", crit, "old", dir)
+				add("bash", old2202, "-l", lock, "-o", "old2202", "-r", "0.05", "--", "sh", crit, "old", dir, "old2202")
+				add("bash", old2226, "-l", lock, "-o", "old2226", "-r", "0.05", "--", "sh", crit, "old", dir, "old2226")
 				for i := 0; i < 2; i++ {
 					// The bare mkdir an agent's brief once described.
 					add("sh", "-c", `until mkdir "$0" 2>/dev/null; do sleep 0.02; done
 echo "manual pid $$ now" >"$0/owner"
-sh "$1" old "$2"
+sh "$1" old "$2" manual
 if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; else echo "manual: not ours any more"; fi`, lock, crit, dir)
 				}
 			}
@@ -669,8 +677,9 @@ if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; e
 			}
 			violations, notOurs, left := 0, 0, 0
 			for _, dir := range dirs {
-				if _, err := os.Stat(filepath.Join(dir, "violation")); err == nil {
+				if b, err := os.ReadFile(filepath.Join(dir, "violation")); err == nil {
 					violations++
+					t.Logf("round %d %s: %s", r, dir, b)
 				}
 				if _, err := os.Stat(filepath.Join(dir, "LOADLOCK")); err == nil {
 					left++

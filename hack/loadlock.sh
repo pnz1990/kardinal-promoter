@@ -168,9 +168,14 @@ write_view() {
     [ -f "$d/owner" ] && lines="$lines$(sed -E 's/(^|[[:space:]])pid ([0-9]+)/\1pid:\2/g' "$d/owner")"$'\n'
   done
   if [ -z "$lines" ]; then
-    # Only the view goes: a LOCK an older client made since holders_count
-    # looked has no marker, and is left alone.
-    [ ! -e "$lock/.counting" ] || rm -r "$lock"
+    # Only the view goes, and only once its marker has: removing the marker
+    # is the test (#2242 QA), so a LOCK an older client made since
+    # holders_count looked (no marker) is never removed. LOCK stays there
+    # until the rmdir, so no one makes another meanwhile.
+    if rm "$lock/.counting" 2>/dev/null; then
+      rm -f "$lock/owner" "$lock/.owner.tmp"
+      rmdir "$lock" 2>/dev/null || echo "loadlock: cannot remove the view $lock; it is left with no owner, and goes in a minute" >&2
+    fi
     return 0
   fi
   if mkdir "$lock" 2>/dev/null; then
@@ -255,7 +260,7 @@ dead_dir() {
 # a free slot when fewer than the capacity hold the lock. It succeeds when
 # this run holds a slot.
 take_turn() {
-  local d why held_n n
+  local d why held_n n reclaimed=
   if [ "$(holders_count)" = exclusive ]; then
     if why=$(dead_dir "$lock"); then
       rm -r "$lock" && echo "loadlock: removed $lock$why" >&2
@@ -264,10 +269,11 @@ take_turn() {
   for d in "$slots"/*; do
     [ -d "$d" ] || continue
     if why=$(dead_dir "$d"); then
-      rm -r "$d" && echo "loadlock: removed lock slot $d$why" >&2
+      rm -r "$d" && reclaimed=1 && echo "loadlock: removed lock slot $d$why" >&2
     fi
   done
-  write_view || true
+  # The view changes only with the slots (#2242 QA).
+  [ -z "$reclaimed" ] || write_view || true
   held_n=$(holders_count)
   [ "$held_n" != exclusive ] && [ "$held_n" -lt "$(capacity)" ] || return 1
   [ -z "$alone" ] || [ "$held_n" -eq 0 ] || return 1

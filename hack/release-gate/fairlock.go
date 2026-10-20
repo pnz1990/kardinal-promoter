@@ -450,15 +450,7 @@ func writeView(lock string) error {
 		return errOlderHolder
 	}
 	if len(held) == 0 {
-		// Only the view goes: a LOCK an older client made since holders
-		// looked has no marker, and is left alone.
-		if _, err := os.Stat(filepath.Join(lock, viewMarker)); err != nil {
-			return nil
-		}
-		if err := os.RemoveAll(lock); err != nil {
-			return fmt.Errorf("remove %s: %w", lock, err)
-		}
-		return nil
+		return removeView(lock)
 	}
 	// A plain mkdir: a LOCK that is there without the marker is an older
 	// client's, made since holders looked (#2242 QA): never take it over.
@@ -483,6 +475,25 @@ func writeView(lock string) error {
 		return fmt.Errorf("write view: %w", err)
 	}
 	return os.Rename(tmp, filepath.Join(lock, "owner"))
+}
+
+// removeView removes LOCK when it is the view, and only once its marker has
+// gone: removing the marker is the test (#2242 QA), so a LOCK an older
+// client made since holders looked (no marker) is never removed. LOCK stays
+// there until the last Remove, so no one makes another meanwhile.
+func removeView(lock string) error {
+	if err := os.Remove(filepath.Join(lock, viewMarker)); err != nil {
+		return nil
+	}
+	for _, f := range []string{"owner", ".owner.tmp"} {
+		if err := os.Remove(filepath.Join(lock, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove the view %s: %w", lock, err)
+		}
+	}
+	if err := os.Remove(lock); err != nil {
+		return fmt.Errorf("remove the view %s (left with no owner; it goes in %s): %w", lock, orphanAge, err)
+	}
+	return nil
 }
 
 // errOlderHolder: LOCK is an older client's exclusive lock.
@@ -520,8 +531,8 @@ func release(lock, slot, held string) (bool, error) {
 
 // reclaim removes the slots of holders that are gone (recordDead), or that
 // have had no owner file for orphanAge, and an older client's exclusive lock
-// in the same cases; then it refreshes the view. Only the head waiter calls
-// it, under the reclaim flock.
+// in the same cases; then it refreshes the view when it removed a slot.
+// Only the head waiter calls it, under the reclaim flock.
 func (f *fairLock) reclaim() {
 	dead := func(dir string) (bool, string) {
 		owner, err := os.ReadFile(filepath.Join(dir, "owner"))
@@ -545,6 +556,7 @@ func (f *fairLock) reclaim() {
 		return
 	}
 	entries, _ := os.ReadDir(slotsDir(f.lock))
+	reclaimed := false
 	for _, e := range entries {
 		slot := filepath.Join(slotsDir(f.lock), e.Name())
 		if ok, why := dead(slot); ok {
@@ -552,7 +564,12 @@ func (f *fairLock) reclaim() {
 			if err := os.RemoveAll(slot); err != nil {
 				f.log("remove heavy-load lock slot %s: %v", slot, err)
 			}
+			reclaimed = true
 		}
+	}
+	// The view changes only with the slots (#2242 QA).
+	if !reclaimed {
+		return
 	}
 	if err := writeView(f.lock); err != nil && !errors.Is(err, errOlderHolder) {
 		f.log("refresh heavy-load lock %s: %v", f.lock, err)
