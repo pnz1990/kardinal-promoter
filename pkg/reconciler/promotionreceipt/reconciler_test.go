@@ -474,6 +474,88 @@ func TestReconcile_OnceDespiteConflicts(t *testing.T) {
 	assert.Contains(t, conditionOf(rc, ConditionPRCommented).Message, "already has the receipt's comment")
 }
 
+// TestReconcile_OnceDespiteALaggingCache (#2313): the controller's cache
+// lags its own status writes, as a busy API server's watch leaves it: the
+// reconcile after a write still reads the receipt from before it.
+// Every step is decided on the API server's copy (APIReader), so the
+// receipt is signed once and commented once, no write conflicts, and no
+// step requeues itself (the write's watch event starts the next). Without
+// the API server read the same cache gets the receipt signed twice: the
+// lag is real, and the test can fail.
+//
+// Covers RECEIPT-SIGN-08.
+func TestReconcile_OnceDespiteALaggingCache(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		apiReader bool
+		signs     int
+	}{
+		{name: "the API server's copy decides", apiReader: true, signs: 1},
+		{name: "the cache decides", apiReader: false, signs: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			// written is the receipt from before the last status write;
+			// stale is what the cache returns during the reconcile after
+			// that write, whose watch event arrives only once it is over.
+			var written, stale *v1alpha1.PromotionReceipt
+			inner := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					var before v1alpha1.PromotionReceipt
+					if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &before); err != nil {
+						return err
+					}
+					if err := c.SubResource(sub).Patch(ctx, obj, patch, opts...); err != nil {
+						return err
+					}
+					written = before.DeepCopy()
+					return nil
+				}}).Build()
+			cache := interceptor.NewClient(inner, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption) error {
+				if rc, ok := obj.(*v1alpha1.PromotionReceipt); ok && stale != nil {
+					stale.DeepCopyInto(rc)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}})
+			signs := 0
+			key := SecretKey(inner, "kardinal-system", "receipt-key", "cosign.key")
+			s := &commentSCM{}
+			r := &Reconciler{Client: cache, SCM: s, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			if tc.apiReader {
+				r.APIReader = inner
+			}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			for i := 0; i < 6; i++ {
+				stale, written = written, nil
+				res, err := r.Reconcile(context.Background(), req)
+				if tc.apiReader {
+					require.NoError(t, err, "reconcile %d", i)
+					assert.Equal(t, ctrlruntime.Result{}, res, "reconcile %d requeues nothing", i)
+				}
+			}
+			var rc v1alpha1.PromotionReceipt
+			require.NoError(t, inner.Get(context.Background(), req.NamespacedName, &rc))
+			assert.Equal(t, tc.signs, signs, "signatures made")
+			if !tc.apiReader {
+				return
+			}
+			assert.Equal(t, v1alpha1.ReceiptStored, rc.Status.Phase)
+			assert.True(t, rc.Status.PRComment)
+			assert.Len(t, s.comments, 1, "commented once")
+			_, err := receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
 // TestCacheTransform (#1951 finding 5): a done receipt is cached without
 // its statement and signed bundle, and the reconciler returns for it before
 // parsing anything; a receipt still to be signed, stored or commented is
