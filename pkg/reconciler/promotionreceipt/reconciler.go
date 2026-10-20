@@ -33,6 +33,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -518,16 +519,19 @@ func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionRe
 }
 
 // refused returns err, the failed status write after an external call (a
-// signature, a PR comment) that patchKeeping could not record. A transient
-// one comes back to be retried with backoff. A refusal (a 403 for a missing
-// RBAC rule on promotionreceipts/status, an admission policy, a 422 for an
-// invalid status) would be refused again: retried with backoff it would
-// sign again every few minutes, each time a new certificate and Rekor entry,
-// for as long as it lasts. So it is a terminal error, tried again at the
-// receipt's next change or a resync, and counted and announced (a Warning
-// Event on the receipt).
+// signature, a PR comment) that patchKeeping could not record. A refusal
+// the API server names (a 403 for a missing RBAC rule on
+// promotionreceipts/status or an admission policy, a 422 or 400 for an
+// invalid status, a 413 for one too large) would be refused again: retried
+// with backoff it would sign again every few minutes, each time a new
+// certificate and Rekor entry, for as long as it lasts. So it is a terminal
+// error, tried again at the receipt's next change or a resync (every 10
+// hours by default), and counted and announced (a Warning Event on the
+// receipt). Every other error (a server error or a connection lost past
+// patchKeeping's tries, a 401 while a rotated token is reloaded, the
+// reconcile's context ended) comes back as it is, retried with backoff.
 func (r *Reconciler) refused(ctx context.Context, rc *v1alpha1.PromotionReceipt, step, action string, err error) error {
-	if transient(err) {
+	if !refusal(err) || ctx.Err() != nil {
 		return err
 	}
 	observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(step).Inc()
@@ -592,7 +596,16 @@ func transient(err error) bool {
 	return apierrors.IsConflict(err) || apierrors.IsInternalError(err) || apierrors.IsServiceUnavailable(err) ||
 		apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) ||
 		apierrors.IsUnexpectedServerError(err) || utilnet.IsTimeout(err) || utilnet.IsConnectionRefused(err) ||
-		utilnet.IsConnectionReset(err) || utilnet.IsProbableEOF(err)
+		utilnet.IsConnectionReset(err) || utilnet.IsProbableEOF(err) || utilnet.IsHTTP2ConnectionLost(err) ||
+		errors.Is(err, syscall.EPIPE)
+}
+
+// refusal reports whether the API server refused a write and would refuse it
+// again: forbidden (RBAC, an admission policy), invalid, a bad request, or
+// too large.
+func refusal(err error) bool {
+	return apierrors.IsForbidden(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) ||
+		apierrors.IsRequestEntityTooLargeError(err)
 }
 
 // sleep waits d, or until ctx ends.

@@ -23,8 +23,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -660,26 +664,55 @@ func TestReconcile_SignWriteRetried(t *testing.T) {
 // (kardinal_receipt_status_writes_refused_total{step}) and announced with a
 // Warning Event on the receipt. Once the receipt changes and the write is
 // allowed, the step is done again and recorded: the documented second
-// signature.
+// signature. Every error that is not a refusal the API server names (a
+// server error past patchKeeping's tries, a lost connection or a broken
+// pipe, a 401, a cancelled reconcile) comes back as it is, for backoff, with
+// no Event and no count; a lost connection that recovers within the tries is
+// recorded in place, signed once.
 //
 // Covers RECEIPT-SIGN-10.
 func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 	gr := schema.GroupResource{Group: "kardinal.io", Resource: "promotionreceipts"}
+	transport := func(err error) error {
+		return &url.Error{Op: "Patch", URL: "https://10.96.0.1/apis/kardinal.io/v1alpha1/namespaces/payments/promotionreceipts/checkout-1-5-0-prod/status", Err: err}
+	}
+	brokenPipe := transport(&net.OpError{Op: "write", Net: "tcp", Err: os.NewSyscallError("write", syscall.EPIPE)})
+	lost := transport(errors.New("http2: client connection lost"))
+	always := func(err error) func(int) error { return func(int) error { return err } }
 	for _, tc := range []struct {
-		name   string
-		step   string // the write refused: signing or pr-comment
-		refuse error
+		name     string
+		step     string              // the write that fails: signing or pr-comment
+		fail     func(try int) error // its error at each try (nil: it lands)
+		terminal bool
+		cancel   bool // the reconcile's context ends as the write fails
+		signs    int  // in the first reconcile
+		tries    int  // writes of the failing step
 	}{
-		{name: "a 403 after the signature", step: metricSigning,
-			refuse: apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("cannot patch resource \"promotionreceipts/status\""))},
-		{name: "a 422 after the signature", step: metricSigning,
-			refuse: apierrors.NewInvalid(schema.GroupKind{Group: "kardinal.io", Kind: "PromotionReceipt"}, "checkout-1-5-0-prod", nil)},
-		{name: "a 403 after the PR comment", step: metricPRComment,
-			refuse: apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied by admission"))},
+		{name: "a 403 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("cannot patch resource \"promotionreceipts/status\"")))},
+		{name: "a 422 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewInvalid(schema.GroupKind{Group: "kardinal.io", Kind: "PromotionReceipt"}, "checkout-1-5-0-prod", nil))},
+		{name: "a 413 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewRequestEntityTooLargeError("limit is 3145728"))},
+		{name: "a 403 after the PR comment", step: metricPRComment, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied by admission")))},
+		{name: "a 500 past the tries", step: metricSigning, signs: 1, tries: keepTries,
+			fail: always(apierrors.NewInternalError(errors.New("etcdserver: request timed out")))},
+		{name: "a broken pipe past the tries", step: metricSigning, signs: 1, tries: keepTries, fail: always(brokenPipe)},
+		{name: "a 401", step: metricSigning, signs: 1, tries: 1, fail: always(apierrors.NewUnauthorized("token expired"))},
+		{name: "the reconcile cancelled", step: metricSigning, signs: 1, tries: 1, cancel: true, fail: always(transport(context.Canceled))},
+		{name: "a lost connection that recovers", step: metricSigning, signs: 1, tries: 2, fail: func(try int) error {
+			if try == 1 {
+				return lost
+			}
+			return nil
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			secret, pub := keySecret(t)
-			refusing := true
+			failing, tries := true, 0
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
 				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
 				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
@@ -692,8 +725,14 @@ func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 					case rc.Status.PRComment:
 						step = metricPRComment
 					}
-					if refusing && step == tc.step {
-						return tc.refuse
+					if failing && step == tc.step {
+						tries++
+						if err := tc.fail(tries); err != nil {
+							if tc.cancel {
+								cancel()
+							}
+							return err
+						}
 					}
 					return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 				}}).Build()
@@ -702,7 +741,7 @@ func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 			rec := events.NewFakeRecorder(10)
 			s := &commentSCM{}
 			r := &Reconciler{Client: c, APIReader: c, SCM: s, Recorder: rec, NowFn: func() time.Time { return now }, JitterFn: noJitter,
-				SleepFn: func(context.Context, time.Duration) error { return nil },
+				SleepFn: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
 					signs++
 					return key(ctx)
@@ -710,18 +749,32 @@ func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
 			refusedBefore := testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step))
 			// Driven as controller-runtime does: after a nil error the next
-			// round comes from the status write's event; after an error it is
-			// requeued, unless the error is terminal.
-			rounds, terminal := 0, false
-			for ; rounds < 8 && !terminal; rounds++ {
-				_, err := r.Reconcile(context.Background(), req)
-				terminal = err != nil && errors.Is(err, reconcile.TerminalError(nil))
-				if err != nil && !terminal {
-					t.Fatalf("round %d: a non-terminal error: %v", rounds, err)
+			// round comes from the status write's event, until the receipt is
+			// done; after an error it is requeued, unless the error is
+			// terminal. A non-terminal error is checked and the drive stops.
+			var err error
+			for round := 0; round < 8; round++ {
+				if _, err = r.Reconcile(ctx, req); err != nil {
+					break
 				}
 			}
-			require.True(t, terminal, "the refused write ends in a terminal error")
-			assert.Equal(t, 1, signs, "signed once, not once a backoff")
+			terminal := err != nil && errors.Is(err, reconcile.TerminalError(nil))
+			assert.Equal(t, tc.terminal, terminal, "terminal: %v", err)
+			assert.Equal(t, tc.signs, signs, "signed once, not once a backoff")
+			assert.Equal(t, tc.tries, tries, "writes of the %s step", tc.step)
+			if !tc.terminal {
+				assert.Equal(t, refusedBefore, testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step)), "not counted as refused")
+				assert.Empty(t, rec.Events, "no StatusWriteRefused Event")
+				if tc.fail(keepTries+1) == nil {
+					require.NoError(t, err, "recorded in place")
+					var got v1alpha1.PromotionReceipt
+					require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+					assert.Equal(t, v1alpha1.ReceiptStored, got.Status.Phase)
+				} else {
+					require.Error(t, err, "comes back for backoff")
+				}
+				return
+			}
 			assert.Equal(t, refusedBefore+1, testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step)))
 			require.Len(t, rec.Events, 1)
 			ev := <-rec.Events
@@ -730,7 +783,7 @@ func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 
 			// The receipt changes (or a resync comes) once the write is
 			// allowed: the step is done again, and recorded.
-			refusing = false
+			failing = false
 			for range 3 {
 				_, err := r.Reconcile(context.Background(), req)
 				require.NoError(t, err)
@@ -746,7 +799,7 @@ func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
 				assert.Equal(t, 1, signs)
 				assert.Len(t, s.comments, 2, "the provider cannot search: commented again at the change")
 			}
-			_, err := receipt.Verify([]byte(got.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			_, err = receipt.Verify([]byte(got.Status.Bundle), receipt.VerifyOptions{Key: pub})
 			require.NoError(t, err)
 		})
 	}
