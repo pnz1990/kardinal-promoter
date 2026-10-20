@@ -510,6 +510,8 @@ expression: 'attestations.tests.images.all(i, has(i.predicate) && json.unmarshal
 
 ## `commit.*`
 
+New in v0.13.0 (unreleased): v0.12.0 has no `commit`.
+
 The config commit's signature as the version's ImageVerification verified it
 ([Signed commits](../image-verification.md#signed-commits)): its `status.commit`, read when the
 expression names `commit`. A version whose Pipeline does not check commits, or with no

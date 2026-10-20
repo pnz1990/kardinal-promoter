@@ -256,6 +256,10 @@ Every matching gate from all three is added to the Graph. `spec.policyNamespaces
 
 ### Sharing gates with other namespaces
 
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.x and earlier read every namespace `spec.policyNamespaces` names, without its consent
+    and without a condition or Event.
+
 A gate read through `spec.policyNamespaces` is copied into the Pipeline's namespace, where
 everyone who may read that namespace sees its expression, name and labels. So a namespace other
 than the org policy namespaces must agree to be named there, in one of two ways:

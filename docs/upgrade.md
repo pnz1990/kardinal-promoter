@@ -166,10 +166,20 @@ something for you:
   recorded them), but one that pushes again, or opens its PR again, over a commit someone else
   pushed to its branch now fails instead of overwriting the commit or adopting the PR
   ([PR evidence](pr-evidence.md), [SCM providers](scm-providers.md#supported-providers)).
+- **`spec.policyNamespaces` asks the named namespace's consent.** A namespace a Pipeline names
+  there, other than the org policy namespaces and the Pipeline's own, must agree to share its
+  PolicyGates: the label `kardinal.io/policy-shareable: "true"` on it, or an entry in
+  `controller.policyShareableNamespaces`. After the upgrade, a Pipeline naming one that has not is
+  `PolicyNamespacesShared=False` (reason `NotShared`) with a `PolicyNamespaceNotShared` Warning
+  Event. In this release its gates are still read and `Ready` is unchanged; the next release
+  refuses them. Label or list those namespaces; the command in
+  [Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces) lists
+  the Pipelines it concerns, and the same section says who may set the label.
 
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
-fields to Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals and
-ImageVerifications. Helm never upgrades CRDs, and Helm owns the fields of the CRDs the v0.12.0
+fields to AgentIdentities, Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals
+and ImageVerifications; Pipelines and RenderRuns accept quoted keys in YAML paths only once the
+new CRDs are applied. Helm never upgrades CRDs, and Helm owns the fields of the CRDs the v0.12.0
 chart installed, so `--force-conflicts` is required:
 
 ```bash

@@ -262,7 +262,7 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
   [UI API Access Control](#ui-api-access-control)).
 - A Pipeline's `spec.policyNamespaces` reads the PolicyGates of other namespaces with the
   controller's access, not its author's, and copies them into the Pipeline's namespace. A namespace
-  other than the org policy namespaces must agree to it, with the label
+  other than the org policy namespaces must agree to it (new in v0.13.0, unreleased), with the label
   `kardinal.io/policy-shareable: "true"` or `controller.policyShareableNamespaces`. Until a later
   release refuses the rest, a Pipeline naming one that has not is `PolicyNamespacesShared=False`.
   The label agrees for every Pipeline of the cluster and is as strong as the right to edit the

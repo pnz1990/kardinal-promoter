@@ -70,15 +70,12 @@ v0.13.0 is not released yet; v0.12.3 is the latest release.
   kardinal opens for the promotion or links by its key: [Change Requests](change-requests.md).
 - **Approval fields.** An approval gate can require what an approve carries, such as a change
   ticket ID or an acknowledgement: [Approval fields](approvals.md#approval-fields).
+- **Keyless commit signatures.** kardinal verifies a config commit's gitsign (Sigstore) signature
+  itself, and names the agent whose workload signed it, which gates read as `commit.*`:
+  [Commit signatures with gitsign](image-verification.md#commit-signatures-with-gitsign).
 
 The changelog's [Unreleased](changelog.md#unreleased) section lists every change since v0.12.0,
 including those to rollbacks, gates and the UI.
-
-**Still planned for v0.13:**
-
-- Keyless (gitsign) commit signatures, mapped to the agent that signed. Commit signatures the
-  SCM verified (`commits.requireSigned`) already ship:
-  [Signed commits](image-verification.md#signed-commits).
 
 ### v0.14: adaptive
 
@@ -88,6 +85,10 @@ including those to rollbacks, gates and the UI.
 - An error-budget gate on SLOs.
 - Custom promotion steps registered by admins.
 - DORA metrics split by human and agent.
+- `spec.policyNamespaces` refuses a namespace that has not agreed to share its gates, which
+  v0.13.0 only warns about: [Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces).
+- A per-namespace list of the repositories receipt referrers may be pushed to, in place of one
+  list for the whole controller: [Where receipts are stored](receipts.md#where-receipts-are-stored).
 
 ### Also planned
 

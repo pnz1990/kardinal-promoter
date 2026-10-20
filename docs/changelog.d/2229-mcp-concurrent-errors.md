@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **`kardinal mcp` no longer races between concurrent tool calls** (#2229). A failed call's error was rewritten into its hint (the pipelines in its namespace, the context it could not reach) outside the server's lock, reading the CLI's flag variables while another agent's call had set them to its own namespace: a data race, and a hint that could name the wrong namespace. The rewrite now happens while the call holds the lock, with its own namespace.
+- **A failed `kardinal mcp` tool call's error hint names the call's own namespace** (#2229). In v0.12.0 to v0.12.3 a hint was written outside the server's lock, so it could name another agent's namespace (a data race); see `kardinal mcp` runs tool calls concurrently, under Changed (#2230).
