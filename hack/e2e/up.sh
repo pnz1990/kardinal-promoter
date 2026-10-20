@@ -166,6 +166,11 @@ case "$SUITE" in
   # a timestamp authority, TUF), nightly only (spec 21 section 13).
   receipts-keyless) COMPONENTS=("giteafamily.sh forgejo" argocd.sh sigstore.sh) RUN='^TestReceiptsKeyless_'
     export KARDINAL_E2E_RECEIPTS=keyless ;;
+  # Evidence with no way out of the cluster (#2062): the receipts suite's
+  # key-signed receipts and in-cluster registry, and components/airgap.sh's
+  # NetworkPolicy, which lets the controller reach only the cluster.
+  evidence-airgap) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh) AFTER=(airgap.sh) RUN='^TestAirgap_'
+    export KARDINAL_E2E_RECEIPTS=1 ;;
   # Two controllers splitting the namespaces by the kardinal.io/shard label.
   shard) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(shard.sh) RUN='^TestShard_'
     HELM_ARGS='--set controller.namespaceShard=default' ;;
