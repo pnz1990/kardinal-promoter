@@ -1591,3 +1591,108 @@ func TestLoadLock_FlockWaitCap(t *testing.T) {
 	}
 	assert.FileExists(t, ran)
 }
+
+// lockRecords is test/hack/testdata/lock-records.tsv with its placeholders
+// filled in: each row's lock clients' verdict, local-live.sh's, the record.
+func lockRecords(t *testing.T) [][3]string {
+	t.Helper()
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	require.NoError(t, err)
+	stat, err := os.ReadFile("/proc/self/stat")
+	require.NoError(t, err)
+	f := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
+	require.Greater(t, len(f), 19)
+	repl := strings.NewReplacer("{LIVE}", strconv.Itoa(os.Getpid()), "{START}", f[19], "{BOOT}", strings.TrimSpace(string(boot)),
+		"{GONE}", strconv.Itoa(gone.Process.Pid), "{NOW}", time.Now().UTC().Format(time.RFC3339), "{NL}", "\n")
+	b, err := os.ReadFile(filepath.Join("testdata", "lock-records.tsv"))
+	require.NoError(t, err)
+	var rows [][3]string
+	for _, line := range strings.Split(string(b), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		c := strings.SplitN(line, "\t", 3)
+		require.Len(t, c, 3, "%q", line)
+		rows = append(rows, [3]string{c[0], c[1], repl.Replace(c[2])})
+	}
+	require.Greater(t, len(rows), 15)
+	return rows
+}
+
+// TestLoadLock_RecordsTable (#2242 QA-3): hack/loadlock.sh judges the shared
+// table of records as fairlock.go does (hack/release-gate's
+// TestRecordDead_SharedTable): read from the right, so an owner with a
+// field's token in it never makes a live holder look dead.
+func TestLoadLock_RecordsTable(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	for _, row := range lockRecords(t) {
+		cmd := loadlock(t, lock, "true")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_JUDGE="+row[2])
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Equal(t, row[0], strings.TrimSpace(string(out)), "%q", row[2])
+	}
+	assert.NoDirExists(t, lock+".queue", "a judge only judges")
+}
+
+// TestLoadLock_OwnerRefused (#2242 QA-3): -o OWNER with the word pid, a
+// field's key or a control character is refused.
+func TestLoadLock_OwnerRefused(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	for _, bad := range []string{"rerun pid 999999 x", "x-pid 9", "boot=abc x", "a start=1", "ticket=x", "exclusive=1", "priority=release", "beat=1", "tab\there"} {
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", bad, "--", "true")
+		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		out, err := cmd.CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%q: %s", bad, out)
+		assert.Contains(t, string(out), "an owner may not hold", "%q", bad)
+	}
+	assert.NoDirExists(t, lock+".queue", "nothing queued")
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", "ENGINEER-4 (rapid) run", "--", "true")
+	cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "a plain owner: %s", out)
+}
+
+// TestLoadLock_EmptyOwnerIsNoOwner (#2242 QA-3): a slot whose owner file is
+// empty (its writer killed between the create and the write, or a crash)
+// goes by the minute rule; a fresh one (being written) stays.
+func TestLoadLock_EmptyOwnerIsNoOwner(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	for _, tc := range []struct {
+		name string
+		old  bool
+	}{{"fresh: a holder writing it, it stays", false}, {"a minute old: no owner, reclaimed", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			lock := filepath.Join(t.TempDir(), "LOADLOCK")
+			slot := filepath.Join(lock+".d", "1")
+			require.NoError(t, os.MkdirAll(slot, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), nil, 0o644))
+			if tc.old {
+				old := time.Now().Add(-2 * time.Minute)
+				require.NoError(t, os.Chtimes(filepath.Join(slot, "owner"), old, old))
+				require.NoError(t, os.Chtimes(slot, old, old))
+			}
+			cmd := loadlock(t, lock, "true") // a busy host: one holder at a time
+			out := &syncBuf{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				require.True(t, tc.old, "it took the lock beside a holder writing its owner: %s", out.String())
+				require.NoError(t, err, "%s", out.String())
+				assert.Contains(t, out.String(), "which has had no owner for a minute")
+			case <-time.After(time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+				require.False(t, tc.old, "an old empty owner wedged the lock: %s", out.String())
+				assert.DirExists(t, slot)
+			}
+		})
+	}
+}

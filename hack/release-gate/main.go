@@ -42,6 +42,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 func main() {
@@ -190,6 +191,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := ownerProblem(*owner); err != nil {
+		return err
+	}
 	if *priority == "release" {
 		if err := releaseTokenProblem(*lock, *slots); err != nil {
 			return err
@@ -285,6 +289,30 @@ func run() error {
 	}
 	if v != "GO" {
 		return fmt.Errorf("verdict %s", v)
+	}
+	return nil
+}
+
+// ownerWord and ownerKey are the tokens an owner (free text at a lock
+// record's start) may not hold: the word pid, a structured field's key.
+var (
+	ownerWord = regexp.MustCompile(`(^|[^[:alnum:]_])pid([^[:alnum:]_]|$)`)
+	ownerKeys = []string{"boot=", "start=", "ticket=", "exclusive=", "priority=", "beat="}
+)
+
+// ownerProblem refuses an -owner that holds the word pid, a structured
+// field's key or a control character, as hack/loadlock.sh's -o and
+// local-live.sh's OWNER (#2242 QA-3): no record reads two ways.
+func ownerProblem(owner string) error {
+	bad := ownerWord.MatchString(owner)
+	for _, k := range ownerKeys {
+		bad = bad || strings.Contains(owner, k)
+	}
+	for _, r := range owner {
+		bad = bad || unicode.IsControl(r)
+	}
+	if bad {
+		return fmt.Errorf("-owner %q: an owner may not hold the word pid, boot=, start=, ticket=, exclusive=, priority=, beat= or a control character", owner)
 	}
 	return nil
 }

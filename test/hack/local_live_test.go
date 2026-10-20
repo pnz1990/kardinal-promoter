@@ -1215,6 +1215,58 @@ exec `+realCat+` "$@"
 		assert.DirExists(t, d, "the kept cluster's slot stays")
 		assert.Empty(t, h.read("up"), "no cluster starts")
 	})
+	t.Run("records are judged as the lock clients judge them, read from the right (#2242 QA-3)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		for _, row := range lockRecords(t) {
+			out, err := h.cmd(t, []string{"LOCAL_LIVE_TEST_JUDGE=" + row[2]}, "gitea").CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			assert.Equal(t, row[1], lines[len(lines)-1], "%q", row[2])
+		}
+		assert.Empty(t, h.read("up"), "a judge only judges")
+	})
+	t.Run("an OWNER with the word pid, a field's key or a control character is refused (#2242 QA-3)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		for _, bad := range []string{"rerun pid 999999 x", "boot=abc x", "a start=1", "priority=release", "tab\there"} {
+			out, err := h.cmd(t, nil, "-o", bad, "gitea").CombinedOutput()
+			assert.Equal(t, 2, exitCode(err), "%q: %s", bad, out)
+			assert.Contains(t, string(out), "an owner may not hold", "%q", bad)
+		}
+		assert.Empty(t, h.read("up"))
+	})
+	t.Run("a slot with no owner, or an empty one, goes after 2 minutes; a fresh one stays (#2242 QA-3)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		old := time.Now().Add(-3 * time.Minute)
+		for _, tc := range []struct {
+			name    string
+			empty   bool
+			age     bool
+			removed bool
+		}{
+			{"no owner file, fresh", false, false, false},
+			{"no owner file, 3 minutes old", false, true, true},
+			{"an empty owner file, fresh", true, false, false},
+			{"an empty owner file, 3 minutes old", true, true, true},
+		} {
+			h := newLocalLiveHost(t)
+			d := filepath.Join(h.slots, "1")
+			require.NoError(t, os.MkdirAll(d, 0o755))
+			if tc.empty {
+				require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), nil, 0o644))
+			}
+			if tc.age {
+				if tc.empty {
+					require.NoError(t, os.Chtimes(filepath.Join(d, "owner"), old, old))
+				}
+				require.NoError(t, os.Chtimes(d, old, old))
+			}
+			out, err := h.cmd(t, []string{"SLOT_MAX=2"}, "gitea").CombinedOutput()
+			require.NoError(t, err, "%s: %s", tc.name, out)
+			assert.Equal(t, tc.removed, strings.Contains(string(out), "reclaimed cluster slot "+d+", which has had no owner for 120s"), "%s: %s", tc.name, out)
+		}
+	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)

@@ -254,6 +254,12 @@ NODE_IMAGE=${!pin:-}
 
 export KARDINAL_E2E_BUILD=${KARDINAL_E2E_BUILD:-host}
 OWNER=${OWNER:-${AGENT_ID:-${USER:-unknown}}}
+# OWNER is free text at a record's start: one with a field's token in it is
+# refused, as hack/loadlock.sh's -o (#2242 QA-3).
+if [[ $OWNER == *[[:cntrl:]]* ]] || [[ $OWNER =~ (^|[^[:alnum:]_])pid([^[:alnum:]_]|$) ]] ||
+  [[ $OWNER == *boot=* || $OWNER == *start=* || $OWNER == *ticket=* || $OWNER == *exclusive=* || $OWNER == *priority=* || $OWNER == *beat=* ]]; then
+  die "OWNER $OWNER: an owner may not hold the word pid, boot=, start=, ticket=, exclusive=, priority=, beat= or a control character"
+fi
 # The owner's part of the default cluster name: AGENT_ID, else OWNER's first
 # word, as a DNS label part (lowercase letters, digits and dashes, 16 at most).
 owner_part=${AGENT_ID:-${OWNER%% *}}
@@ -423,10 +429,21 @@ now_ms() {
 # that is gone. A record without a pid is never gone.
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 record_gone() {
-  local r=$1 pid
-  [[ $r =~ (^|[[:space:]])pid\ ([0-9]+)([[:space:]]|$) ]] || return 1
+  local r=$1 pid kv rboot='' rstart=''
+  local -a kvs
+  # The structured fields are at the record's end, after the owner (free
+  # text): "<owner> pid N [time] [key=value...]", read from the right, as
+  # hack/loadlock.sh's parse_record (#2242 QA-3).
+  [[ $r =~ ^(.*[[:space:]])?pid\ ([0-9]+)(\ ([^[:space:]=]+))?(([[:space:]]+[a-z_]+=[^[:space:]]*)*)[[:space:]]*$ ]] || return 1
   pid=${BASH_REMATCH[2]}
-  if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ -n "$this_boot" ] && [ "${BASH_REMATCH[2]}" != "$this_boot" ]; then
+  read -ra kvs <<<"${BASH_REMATCH[5]}"
+  for kv in "${kvs[@]}"; do
+    case $kv in
+      boot=*) rboot=${kv#boot=} ;;
+      start=*) rstart=${kv#start=} ;;
+    esac
+  done
+  if [ -n "$rboot" ] && [ -n "$this_boot" ] && [ "$rboot" != "$this_boot" ]; then
     return 0
   fi
   if ! read_start "$pid"; then
@@ -436,12 +453,19 @@ record_gone() {
     [ ! -d "$pid_dir_v" ] || return 1
     return 0
   fi
-  if [[ $r =~ (^|[[:space:]])start=([0-9]+)([[:space:]]|$) ]]; then
-    [ "${BASH_REMATCH[2]}" != "$start_v" ]
+  if [[ $rstart =~ ^[0-9]+$ ]]; then
+    [ "$rstart" != "$start_v" ]
     return
   fi
   return 1
 }
+# LOCAL_LIVE_TEST_JUDGE=RECORD (the test mode): print whether RECORD is a gone
+# process's ("dead") or not ("alive"), and exit: test/hack judges one table
+# of records with every client.
+if [ -n "$test_mode" ] && [ -n "${LOCAL_LIVE_TEST_JUDGE+x}" ]; then
+  if record_gone "$LOCAL_LIVE_TEST_JUDGE"; then echo dead; else echo alive; fi
+  exit 0
+fi
 
 read_start $$ && self_start=$start_v || self_start=unknown
 slot_tag="$OWNER local-live $SUITE $MINOR pid $$ $stamp boot=$this_boot start=$self_start"
@@ -525,6 +549,10 @@ reclaim_slots() {
   timeout "$DOCKER_WAIT" docker info >/dev/null 2>&1 || docker_ok=''
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
+    if slot_orphan "$d"; then
+      rm -r "$d" && log "reclaimed cluster slot $d, which has had no owner for ${SLOT_ORPHAN}s"
+      continue
+    fi
     # An owner that is there but cannot be read is a live run's.
     read_file "$d/owner" || continue
     owner=$file_v
@@ -665,6 +693,27 @@ slots_room() {
   fi
 }
 
+# slot_orphan succeeds when slot D has had no owner (no owner file, or an
+# empty one) for SLOT_ORPHAN seconds (2 minutes), by the newer of its and
+# its owner file's mtimes (#2242 QA-3: a run killed between its mkdir and
+# its owner write, or a crash, left one no one ever reclaimed). One being
+# written stays: its mtime is new. stat is the one fork: when it fails, the
+# slot is not old.
+SLOT_ORPHAN=120
+slot_orphan() {
+  local d=$1 m fm now=${EPOCHSECONDS:-}
+  if [ -e "$d/owner" ]; then
+    read_file "$d/owner" || return 1
+    [[ ! $file_v =~ [^[:space:]] ]] || return 1
+  fi
+  [[ $now =~ ^[0-9]+$ ]] && m=$(stat -c %Y "$d" 2>/dev/null) && [[ $m =~ ^[0-9]+$ ]] || return 1
+  if [ -e "$d/owner" ]; then
+    fm=$(stat -c %Y "$d/owner" 2>/dev/null) && [[ $fm =~ ^[0-9]+$ ]] || return 1
+    ((fm <= m)) || m=$fm
+  fi
+  ((now - m >= SLOT_ORPHAN))
+}
+
 # slots_reclaim_due succeeds when a slot's owner (or the drain marker's run)
 # looks gone, or a slot is a kept cluster's (judged again under the flock):
 # only then does a waiter that is not the head take the flock, so a waiter
@@ -673,6 +722,7 @@ slots_reclaim_due() {
   local d
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
+    slot_orphan "$d" && return 0
     read_file "$d/owner" || continue
     [[ $file_v == KEEP\ * ]] && return 0
     record_gone "$file_v" && return 0

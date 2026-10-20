@@ -937,3 +937,63 @@ func TestWithLockFlock_WaitCap(t *testing.T) {
 	require.NoError(t, fl.with(q, func() error { ran++; return nil }))
 	assert.Equal(t, 1, ran)
 }
+
+// TestRecordDead_SharedTable (#2242 QA-3): fairlock.go judges
+// test/hack/testdata/lock-records.tsv as hack/loadlock.sh does (test/hack's
+// TestLoadLock_RecordsTable): one table, so the clients cannot drift.
+func TestRecordDead_SharedTable(t *testing.T) {
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	start, ok := hostProc{}.Start(os.Getpid())
+	require.True(t, ok)
+	repl := strings.NewReplacer("{LIVE}", strconv.Itoa(os.Getpid()), "{START}", strconv.FormatUint(start, 10),
+		"{BOOT}", hostProc{}.BootID(), "{GONE}", strconv.Itoa(gone.Process.Pid), "{NOW}", time.Now().UTC().Format(time.RFC3339), "{NL}", "\n")
+	b, err := os.ReadFile(filepath.Join("..", "..", "test", "hack", "testdata", "lock-records.tsv"))
+	require.NoError(t, err)
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.SplitN(line, "\t", 3)
+		require.Len(t, f, 3, "%q", line)
+		record := repl.Replace(f[2])
+		assert.Equal(t, f[0] == "dead", recordDead(hostProc{}, record, time.Time{}), "%s: %q", f[0], record)
+		n++
+	}
+	assert.Greater(t, n, 15)
+}
+
+// TestOwnerProblem (#2242 QA-3): an -owner that holds the word pid, a
+// field's key or a control character is refused.
+func TestOwnerProblem(t *testing.T) {
+	for _, ok := range []string{"release-gate", "ENGINEER-4 #2107 run 4 (rapid)", "QA-2 probe"} {
+		assert.NoError(t, ownerProblem(ok), ok)
+	}
+	for _, bad := range []string{"rerun pid 999999 x", "pid", "x-pid 9", "boot=abc x", "a start=1", "t ticket=x", "exclusive=1", "priority=release", "beat=1", "tab\there", "nl\nhere"} {
+		assert.Error(t, ownerProblem(bad), "%q", bad)
+	}
+}
+
+// TestDeadDir_EmptyOwner (#2242 QA-3): an empty owner file is no owner: one
+// fresh (being written) stays, one older than orphanAge is reclaimed.
+func TestDeadDir_EmptyOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	slot := filepath.Join(slotsDir(dir), "1")
+	require.NoError(t, os.MkdirAll(slot, 0o755))
+	owner := filepath.Join(slot, "owner")
+	require.NoError(t, os.WriteFile(owner, nil, 0o644))
+	f := &fairLock{lock: dir, log: func(string, ...any) {}, proc: hostProc{}}
+	ok, _ := f.deadDir(slot)
+	assert.False(t, ok, "an empty owner file just written: a holder writing it")
+	old := time.Now().Add(-2 * orphanAge)
+	require.NoError(t, os.Chtimes(owner, old, old))
+	ok, _ = f.deadDir(slot)
+	assert.False(t, ok, "the slot directory is new: still not old")
+	require.NoError(t, os.Chtimes(slot, old, old))
+	ok, why := f.deadDir(slot)
+	assert.True(t, ok, "empty and older than orphanAge: no owner")
+	assert.Contains(t, why, "which has had no owner for")
+	f.reclaim()
+	assert.NoDirExists(t, slot, "reclaimed, not wedged forever")
+}

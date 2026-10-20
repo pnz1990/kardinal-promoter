@@ -73,6 +73,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ $# -gt 0 ] && [ -n "$lock" ] || usage
+# OWNER is free text at a record's start: one with a field's token in it
+# (the word pid, boot=, start=, ticket=, exclusive=, priority=, beat=) or a
+# control character is refused (#2242 QA-3), so no record reads two ways.
+bad_owner() {
+  [[ $1 == *[[:cntrl:]]* ]] && return 0
+  [[ $1 =~ (^|[^[:alnum:]_])pid([^[:alnum:]_]|$) ]] && return 0
+  case $1 in *boot=* | *start=* | *ticket=* | *exclusive=* | *priority=* | *beat=*) return 0 ;; esac
+  return 1
+}
+if bad_owner "$owner"; then
+  echo "loadlock: -o $owner: an owner may not hold the word pid, boot=, start=, ticket=, exclusive=, priority=, beat= or a control character" >&2
+  exit 2
+fi
 # A release ticket (class 0) is a release run's: -p release needs
 # RELEASE_GATE_PRIORITY_TOKEN to match the token file the coordinator keeps
 # next to the lock (DIR/.release-token, this user's, mode 600), or the run
@@ -134,13 +147,32 @@ read_start() {
   [ -n "${f[19]:-}" ] || return 1
   start_v=${f[19]}
 }
+# parse_record RECORD sets rec_pid, rec_time, rec_boot and rec_start from
+# the record's structured fields, which are at its end, after the owner
+# (free text): "<owner> pid N [time] [key=value...]". Read from the right
+# (#2242 QA-3): an owner with "pid N" or "boot=" in it never makes a live
+# holder look dead. It fails when the record has no pid.
+parse_record() {
+  local kv
+  local -a kvs
+  rec_pid='' rec_time='' rec_boot='' rec_start=''
+  [[ $1 =~ ^(.*[[:space:]])?pid\ ([0-9]+)(\ ([^[:space:]=]+))?(([[:space:]]+[a-z_]+=[^[:space:]]*)*)[[:space:]]*$ ]] || return 1
+  rec_pid=${BASH_REMATCH[2]} rec_time=${BASH_REMATCH[4]}
+  read -ra kvs <<<"${BASH_REMATCH[5]}"
+  for kv in "${kvs[@]}"; do
+    case $kv in
+      boot=*) rec_boot=${kv#boot=} ;;
+      start=*) rec_start=${kv#start=} ;;
+    esac
+  done
+}
 # record_dead RECORD [EPOCH] succeeds when RECORD names a process that is
 # gone; EPOCH is the record's time when the text has none (a ticket's).
 record_dead() {
-  local r=$1 at=${2:-} pid start btime hz
-  [[ $r =~ (^|[[:space:]])pid\ ([0-9]+)([[:space:]]|$) ]] || return 1
-  pid=${BASH_REMATCH[2]}
-  if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ -n "$this_boot" ] && [ "${BASH_REMATCH[2]}" != "$this_boot" ]; then
+  local at=${2:-} pid start btime hz
+  parse_record "$1" || return 1
+  pid=$rec_pid
+  if [ -n "$rec_boot" ] && [ -n "$this_boot" ] && [ "$rec_boot" != "$this_boot" ]; then
     return 0
   fi
   if ! read_start "$pid"; then
@@ -152,13 +184,13 @@ record_dead() {
   fi
   start=$start_v
   # A holder that could not read its own start time: boot id and pid only.
-  [[ $r =~ (^|[[:space:]])start=unknown([[:space:]]|$) ]] && return 1
-  if [[ $r =~ (^|[[:space:]])start=([0-9]+) ]]; then
-    [ "${BASH_REMATCH[2]}" != "$start" ]
+  [ "$rec_start" != unknown ] || return 1
+  if [[ $rec_start =~ ^[0-9]+$ ]]; then
+    [ "$rec_start" != "$start" ]
     return
   fi
-  if [[ $r =~ pid\ [0-9]+\ ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z) ]]; then
-    at=$(date -u -d "${BASH_REMATCH[1]}" +%s 2>/dev/null) || at=
+  if [[ $rec_time =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]]; then
+    at=$(date -u -d "$rec_time" +%s 2>/dev/null) || at=
   fi
   [[ $at =~ ^[0-9]+$ ]] || return 1
   btime=
@@ -169,6 +201,13 @@ record_dead() {
   [[ $btime =~ ^[0-9]+$ ]] || return 1
   [ $((btime + start / hz)) -gt $((at + 1)) ]
 }
+# LOADLOCK_TEST_JUDGE=RECORD (tests only, with LOADLOCK_TEST=1): print
+# whether RECORD is a gone process's ("dead") or not ("alive"), and exit:
+# test/hack and hack/release-gate judge one table of records.
+if [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "${LOADLOCK_TEST_JUDGE+x}" ]; then
+  if record_dead "$LOADLOCK_TEST_JUDGE" "${LOADLOCK_TEST_JUDGE_AT:-}"; then echo dead; else echo alive; fi
+  exit 0
+fi
 
 # Never start=0: a holder whose start time is unknown says so, and the others
 # judge it by its boot id and pid only.
@@ -386,7 +425,7 @@ reap_tickets() {
       warned="$warned $name"
       echo "loadlock: warning: ticket $name is a waiter on code from before #2226 ($text); it can move the lock from under its holder: rebase it onto main" >&2
     fi
-    [[ $text =~ (^|[[:space:]])pid\ [0-9]+ ]] || text="$text pid ${name##*-}"
+    parse_record "$text" || text="$text pid ${name##*-}"
     ns=${name#*-}
     ns=${ns%-*}
     if record_dead "$text" "$((10#$ns / 1000000000))"; then
@@ -419,21 +458,33 @@ capacity() {
 # file for a minute; it sets why_v. An owner file that is there but cannot
 # be read is a live holder's.
 dead_dir() {
-  local mtime
+  local mtime fmtime
   why_v=
   if [ -e "$1/owner" ]; then
     read_file "$1/owner" || return 1
-    record_dead "$file_v" || return 1
-    why_v=" of a holder that is gone: $file_v"
-    return 0
+    if [[ $file_v =~ [^[:space:]] ]]; then
+      record_dead "$file_v" || return 1
+      why_v=" of a holder that is gone: $file_v"
+      return 0
+    fi
+    # An empty owner file is no owner (#2242 QA-3: its writer was killed
+    # between the create and the write, or the host crashed): judged by age
+    # as a missing one, its own mtime too, so one being written stays.
   fi
   [ -d "$1" ] || return 1
   # stat is the one fork here: when it fails, the directory is not old.
   mtime=$(stat -c %Y "$1" 2>/dev/null) && [[ $mtime =~ ^[0-9]+$ ]] || return 1
+  if [ -e "$1/owner" ]; then
+    fmtime=$(stat -c %Y "$1/owner" 2>/dev/null) && [[ $fmtime =~ ^[0-9]+$ ]] || return 1
+    ((fmtime <= mtime)) || mtime=$fmtime
+  fi
   now
   [[ $now_v =~ ^[0-9]+$ ]] && [ $((now_v - mtime)) -ge 60 ] || return 1
   # Looked again: an owner written meanwhile is a holder's.
-  [ ! -e "$1/owner" ] || return 1
+  if [ -e "$1/owner" ]; then
+    read_file "$1/owner" || return 1
+    [[ ! $file_v =~ [^[:space:]] ]] || return 1
+  fi
   why_v=", which has had no owner for a minute"
 }
 
@@ -490,7 +541,13 @@ reclaim_turn() {
     # hack/release-gate does (#2242 QA-3); the minute rule takes a LOCK that
     # stays without an owner.
     if [ -e "$lock/owner" ]; then
-      read_file "$lock/owner" && [ " of a holder that is gone: $file_v" = "$judged" ] || judged=''
+      if ! read_file "$lock/owner"; then
+        judged='' # there, but cannot be read: a live holder's
+      elif [[ $file_v =~ [^[:space:]] ]]; then
+        [ " of a holder that is gone: $file_v" = "$judged" ] || judged=''
+      elif [[ $judged == " of a holder that is gone: "* ]]; then
+        judged='' # emptied since: a new LOCK being written
+      fi
     elif [[ $judged == " of a holder that is gone: "* ]]; then
       judged=''
     fi
