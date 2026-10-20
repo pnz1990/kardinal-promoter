@@ -144,6 +144,26 @@ func TestJudgeFairness(t *testing.T) {
 			want:   []string{backlog, backlog, backlog},
 		},
 		{
+			// e2e-live run 39436920566, 60 repositories: A's shortest
+			// median of the three fair runs, 27 s; B's slowest 15 s.
+			name:   "GitHub runner, 60 repositories, fair, A's shortest median",
+			loaded: []TenantBundle{tb("b1-2", 12, 22, 52, 15)},
+			a:      load(160, 27),
+			bc:     nightly,
+			judged: 1,
+		},
+		{
+			// e2e-live run 39436928686, 60 repositories, no fairqueue: the
+			// B Bundle closest to the bound, 42 s against A's median of
+			// 37 s (1.14); the bound is 35.3 s.
+			name:   "GitHub runner, 60 repositories, no fairqueue, closest",
+			loaded: []TenantBundle{tb("b1-2", 12, 50, 158, 43), tb("b2-2", 14, 52, 160, 50), tb("b3-2", 16, 54, 162, 42)},
+			a:      load(215, 37),
+			bc:     nightly,
+			judged: 3,
+			want:   []string{backlog, backlog, backlog},
+		},
+		{
 			// e2e-live runs 39429904153 and 39429908128, 90 repositories.
 			name:   "GitHub runner, 90 repositories, fair",
 			loaded: []TenantBundle{tb("b1-2", 12, 30, 66, 23)},
