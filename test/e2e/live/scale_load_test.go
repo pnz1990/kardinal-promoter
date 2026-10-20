@@ -7,6 +7,8 @@ package live
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,16 +183,24 @@ func TestScale_TwoTenants(t *testing.T) {
 }
 
 // TestScale_TenantFairness is #1577's acceptance: one namespace's large
-// promotion must not starve another's. Tenant A promotes a canary and a
-// TenantWave-wide wave on one branch (its pushes take turns, #1586). Once a
-// tenth of TenantWave steps exist, tenant B, in another namespace, promotes
-// one Bundle on each of TenantBBundles three-environment Pipelines, 2 s
-// apart. B's step latency (creation to Verified, the latency-slo invariant)
-// must stay at p99 within TenantStepP99 and B's Bundles at p99 within
-// TenantBundleP99 (35 s in full), every B Bundle must start while A runs,
-// or the test did not measure contention, and B must finish while A is
-// still running: a starved B outlasts A. A's wave time is noted (tenantAWaveSeconds)
-// to compare runs.
+// promotion must not starve another's. Tenant B, in another namespace, first
+// promotes one Bundle on each of TenantBBundles three-environment Pipelines,
+// 2 s apart, alone: its time alone on this controller and host. Then tenant A
+// promotes a canary and a TenantWave-wide wave on one branch (its pushes take
+// turns, #1586), and once a tenth of TenantWave steps exist B promotes a
+// second Bundle on each Pipeline, 2 s apart. Fairness is judged against B's
+// time alone and A's own steps (scale.JudgeFairness, #2252): none of B's
+// Bundles under A's load waits for all of it (no environment Verified until
+// A's load ended); when A's load is a backlog (A's median step more than
+// scale.BacklogFactor times B's slowest step alone), no step of B's takes
+// longer than A's median step, as a fair queue serves B ahead of A's
+// backlog; and contention was measured. A host where A's load builds no
+// backlog (32 cores) judges only starvation. B's step p99 (creation to
+// Verified, the latency-slo invariant) stays within TenantStepP99 and its
+// Bundles' p99 within TenantBundleP99, the second line of defence: on a
+// GitHub runner with controller-runtime's default queue instead of the fair
+// one, TenantStepP99 failed too (#2257). A's wave time is noted
+// (tenantAWaveSeconds) to compare runs.
 //
 // Covers SCALE-LOAD-FAIR-01.
 func TestScale_TenantFairness(t *testing.T) {
@@ -198,11 +208,12 @@ func TestScale_TenantFairness(t *testing.T) {
 	a := r.Fleet.Pipeline(t, "fair-a", scale.Waves(1, r.P.TenantWave))
 	tenantFairness(t, r, func() {
 		r.Fleet.MustCreateBundle(t, a.Name, scale.Tag(a.Name, 1))
-	})
+	}, scale.BacklogCheck{Why: "A's wave pushes one branch, so its steps wait for the branch's turn at low priority (#1586), " +
+		"not in the queue level B's steps are served from: there is no backlog for the fair queue to serve B ahead of"}, r.P.TenantStepP99)
 }
 
 // TestScale_TenantFairnessManyRepos is TestScale_TenantFairness with tenant
-// A's load spread over TenantWave five-environment Pipelines, each on its
+// A's load spread over TenantRepos five-environment Pipelines, each on its
 // own repository, all promoted at once: no branch turns order them, so all
 // of A's steps clone and push at normal priority, and only the work queue's
 // fairness between namespaces lets B's steps through (#1577).
@@ -210,21 +221,35 @@ func TestScale_TenantFairness(t *testing.T) {
 // Covers SCALE-LOAD-FAIR-01.
 func TestScale_TenantFairnessManyRepos(t *testing.T) {
 	r := scale.Begin(t)
-	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantWave, scale.Chain(5))
+	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantRepos, scale.Chain(5))
+	r.Note("tenantRepos", r.P.TenantRepos)
+	stepP99 := r.P.TenantStepP99
+	if r.P.TenantReposStepP99 > 0 {
+		stepP99 = r.P.TenantReposStepP99
+	}
 	tenantFairness(t, r, func() {
 		r.Fleet.Burst(t, names, len(names), 50)
-	})
+	}, scale.BacklogCheck{Ratio: r.P.TenantBacklogRatio, Why: fmt.Sprintf("profile %s sets no TenantBacklogRatio (%d repositories): "+
+		"at ci's 30 repositories A's backlog is too shallow to tell the fair queue from controller-runtime's default one on a GitHub "+
+		"runner (#2257), so ci judges starvation and TenantStepP99, and the nightly and full profiles judge the backlog",
+		r.P.Name, r.P.TenantRepos)}, stepP99)
 }
 
-// tenantFairness starts tenant A's load with startA, waits until a tenth
-// of TenantWave steps exist, starts tenant B's Bundles, and checks B's
-// latency and that B ran while A did.
-func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
+// tenantFairness times tenant B's Bundles alone, then starts tenant A's
+// load with startA, waits until a tenth of TenantWave steps exist, times
+// B's Bundles again under it, and judges them (scale.JudgeFairness).
+func tenantFairness(t *testing.T, r *scale.Run, startA func(), bc scale.BacklogCheck, stepP99 time.Duration) {
 	t.Helper()
 	ctx := context.Background()
 	tenantB := scale.NewFleet(t, r.E, r.Rand)
 	bNames := tenantB.Pipelines(t, "fair-b", r.P.TenantBBundles, scale.Chain(3))
 	r.Note("tenantWave", r.P.TenantWave)
+
+	// B alone, on the same controller and host: the baseline.
+	aloneB := promoteEach(t, tenantB, bNames, 1)
+	if !tenantB.WaitSettled(t, r.P.Settle) {
+		t.Fatalf("tenant B's Bundles alone did not settle")
+	}
 
 	aStart := time.Now()
 	startA()
@@ -242,53 +267,75 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 		}
 		time.Sleep(time.Second)
 	}
-	aDone := func() bool {
-		bundles, err := r.Fleet.Bundles(ctx)
-		if err != nil {
-			return false
-		}
-		for _, bundle := range bundles {
-			if !scale.TerminalPhase(bundle.Status.Phase) {
-				return false
-			}
-		}
-		return true
-	}
 	// One Bundle per B Pipeline, 2 s apart, so they meet A's load at
-	// different points and can all finish within it.
-	during := 0
-	for i, name := range bNames {
-		if i > 0 {
-			time.Sleep(2 * time.Second)
-		}
-		tenantB.MustCreateBundle(t, name, scale.Tag(name, 1))
-		if !aDone() {
-			during++
-		}
-	}
+	// different points.
+	loadedB := promoteEach(t, tenantB, bNames, 2)
 	if !tenantB.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant B's Bundles did not settle")
-	}
-	stillA := !aDone()
-	r.Note("tenantBBundlesDuringA", during)
-	r.Note("tenantAStillRunningAfterB", stillA)
-	if during < len(bNames) {
-		t.Errorf("tenant A's load ended before %d of tenant B's %d Bundles started: nothing was measured under contention",
-			len(bNames)-during, len(bNames))
-	}
-	if !stillA {
-		t.Errorf("tenant B's %d Bundles finished only after all of tenant A's load: B was starved", r.P.TenantBBundles)
 	}
 	if !r.Fleet.WaitSettled(t, r.P.Settle) {
 		t.Fatalf("tenant A's Bundles did not settle")
 	}
 	r.Note("tenantAWaveSeconds", int(time.Since(aStart).Seconds()))
+
+	load, err := r.Fleet.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alone, err := tenantB.Timing(ctx, aloneB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := tenantB.Timing(ctx, loadedB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fair := scale.JudgeFairness(alone, loaded, load, bc)
+	for _, c := range fair.Checks {
+		t.Log("fairness check " + c)
+	}
+	r.Note("fairnessChecks", strings.Join(fair.Checks, "; "))
+	r.Note("tenantAStepMedianSeconds", load.StepMedian.Seconds())
+	r.Note("tenantABacklog", fair.Backlog)
+	r.Note("tenantBAloneSeconds", fair.Alone.Seconds())
+	r.Note("tenantBSlowestStepAloneSeconds", fair.AloneStep.Seconds())
+	r.Note("tenantBUnderASeconds", fair.Worst.Seconds())
+	r.Note("tenantBSlowestStepUnderASeconds", fair.SlowestStep.Seconds())
+	r.Note("tenantBJudgedForStarvation", fair.Judged)
+	for _, b := range append(alone, loaded...) {
+		t.Logf("tenant B's Bundle %s: created %s before A's load ended; first environment Verified after %s, the last after %s; slowest step %s",
+			b.Name, load.End.Sub(b.Created), since(b.Created, b.First), since(b.Created, b.Last), b.SlowestStep)
+	}
+	for _, v := range fair.Violations {
+		t.Error(v)
+	}
 	r.Finish(scale.AllVerified)
 	// B's latency, with B's own targets.
 	t.Run("tenant-b", func(t *testing.T) {
-		slo := invariants.SLO{StepP99: r.P.TenantStepP99, BundleP99: r.P.TenantBundleP99}
+		slo := invariants.SLO{StepP99: stepP99, BundleP99: r.P.TenantBundleP99}
 		invariants.Check(t, r.E, invariants.Options{Namespace: tenantB.NS, Outcome: invariants.OutcomeAllVerified, Targets: tenantB.Targets(),
 			Image: scale.ImageRepo, SeedTag: scale.SeedTag, Start: r.Start, SLO: &slo,
 			Extra: map[string]interface{}{"tenant": "b"}})
 	})
+}
+
+// promoteEach creates the i-th Bundle of each of names, 2 s apart.
+func promoteEach(t *testing.T, f *scale.Fleet, names []string, i int) []scale.Created {
+	t.Helper()
+	out := make([]scale.Created, 0, len(names))
+	for n, name := range names {
+		if n > 0 {
+			time.Sleep(2 * time.Second)
+		}
+		out = append(out, f.MustCreateBundle(t, name, scale.Tag(name, i)))
+	}
+	return out
+}
+
+// since is at minus from, or "never" when at is zero.
+func since(from, at time.Time) string {
+	if at.IsZero() {
+		return "never"
+	}
+	return at.Sub(from).String()
 }
