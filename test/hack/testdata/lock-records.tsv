@@ -1,0 +1,33 @@
+# Lock records, and how each client judges them (#2242 QA-3): one table for
+# hack/loadlock.sh, hack/release-gate (fairlock.go) and hack/e2e/local-live.sh,
+# so they cannot drift. Columns, tab-separated: the lock clients' verdict
+# (loadlock.sh, fairlock.go), local-live.sh's, the record. Placeholders:
+# {LIVE} the test's pid, {START} its start time, {BOOT} this boot's id,
+# {GONE} a pid that has exited, {NOW} the time now, {NL} a newline. A record's structured
+# fields are at its end, after the owner (free text): read from the right.
+alive	alive	x pid {LIVE} {NOW} boot={BOOT} start={START}
+dead	dead	x pid {GONE} {NOW} boot={BOOT} start=1
+alive	alive	x pid {LIVE} {NOW} boot={BOOT} start={START} priority=normal beat=1 exclusive=1 ticket=1-0000000000000000001-{LIVE}
+dead	dead	x pid {LIVE} {NOW} boot=another-boot start={START}
+dead	dead	x pid {LIVE} {NOW} boot={BOOT} start=1
+alive	alive	x pid {LIVE} {NOW} boot={BOOT} start=unknown
+# Owners that hold a field's token: the fields at the end decide.
+alive	alive	rerun pid 999999 x pid {LIVE} {NOW} boot={BOOT} start={START}
+alive	alive	boot=abc x pid {LIVE} {NOW} boot={BOOT} start={START}
+alive	alive	start=1 x pid {LIVE} {NOW} boot={BOOT} start={START}
+alive	alive	x-pid 999999 y pid {LIVE} {NOW} boot={BOOT} start={START}
+alive	alive	pid 999999, x pid {LIVE} {NOW} boot={BOOT} start={START}
+alive	alive	x pid 5 boot=other pid {LIVE} {NOW} boot={BOOT} start={START}
+dead	dead	rerun pid {LIVE} x pid {GONE} {NOW} boot={BOOT} start=1
+# Older clients' records: no keys (local-live.sh has no record-time rule).
+alive	alive	x pid {LIVE} {NOW}
+dead	alive	x pid {LIVE} 2020-01-01T00:00:00Z
+dead	dead	x pid {GONE} {NOW}
+alive	alive	x pid {LIVE}
+dead	dead	x pid {GONE}
+# An older client's ticket text, then " pid N" (its name's) appended.
+dead	dead	ghost{NL} pid {GONE}
+alive	alive	ghost{NL} pid {LIVE}
+# No pid: never dead.
+alive	alive	a person, by hand
+alive	alive	x pid 123x {NOW}

@@ -154,9 +154,18 @@ func statStart(stat string) (uint64, bool) {
 const clockTicks = 100
 
 var (
-	recordPid  = regexp.MustCompile(`\bpid (\d+)\b`)
-	recordTime = regexp.MustCompile(`\bpid \d+ (\d{4}-\d\d-\d\dT[0-9:]+Z)\b`)
-	recordKey  = regexp.MustCompile(`\b(boot|start|ticket)=(\S+)`)
+	recordPid = regexp.MustCompile(`\bpid (\d+)\b`)
+	// recordFields is a record's structured fields, at its end after the
+	// owner (free text): "<owner> pid N [time] [key=value...]". Read from
+	// the right (the greedy prefix takes the last "pid N" followed by
+	// nothing but its time and keys): an owner with "pid N" or "boot=" in it
+	// never makes a live holder look dead (#2242 QA-3); hack/loadlock.sh's
+	// parse_record reads the same.
+	// (?s): an owner's text may hold a newline (an older client's ticket
+	// text, then " pid N" appended), as the shell's regex reads it.
+	recordFields = regexp.MustCompile(`(?s)^(?:.*\s)?pid (\d+)(?: ([^\s=]+))?((?:\s+[a-z_]+=\S*)*)\s*$`)
+	recordTime   = regexp.MustCompile(`^\d{4}-\d\d-\d\dT[0-9:]+Z$`)
+	recordKey    = regexp.MustCompile(`([a-z_]+)=(\S*)`)
 )
 
 // selfRecord is the key=value pairs this process appends to its records.
@@ -174,7 +183,7 @@ func selfRecord(p procFS) string {
 // names a process that is gone. at is the record's own time when the text
 // has none (a ticket's name).
 func recordDead(p procFS, record string, at time.Time) bool {
-	m := recordPid.FindStringSubmatch(record)
+	m := recordFields.FindStringSubmatch(strings.TrimSpace(record))
 	if m == nil {
 		return false
 	}
@@ -183,7 +192,7 @@ func recordDead(p procFS, record string, at time.Time) bool {
 		return false
 	}
 	keys := map[string]string{}
-	for _, kv := range recordKey.FindAllStringSubmatch(record, -1) {
+	for _, kv := range recordKey.FindAllStringSubmatch(m[3], -1) {
 		keys[kv[1]] = kv[2]
 	}
 	if b, ok := keys["boot"]; ok {
@@ -206,8 +215,8 @@ func recordDead(p procFS, record string, at time.Time) bool {
 	}
 	// An older client's record: a pid that started after the record was
 	// written is another process.
-	if t := recordTime.FindStringSubmatch(record); t != nil {
-		if parsed, err := time.Parse(time.RFC3339, t[1]); err == nil {
+	if recordTime.MatchString(m[2]) {
+		if parsed, err := time.Parse(time.RFC3339, m[2]); err == nil {
 			at = parsed
 		}
 	}
@@ -726,13 +735,36 @@ func release(lock, slot, held string) (bool, error) {
 // Any waiter calls it, under the reclaim flock; only the head takes a slot.
 // deadDir reports whether dir (a slot, or an older client's LOCK) is a
 // holder's that is gone, or has had no owner file for orphanAge, and why.
+//
+// An empty owner file is no owner (#2242 QA-3: its writer was killed
+// between the create and the write, or the host crashed): judged by age as
+// a missing one, by the newer of the directory's and the file's mtimes, so
+// one being written stays.
 func (f *fairLock) deadDir(dir string) (bool, string) {
-	owner, err := os.ReadFile(filepath.Join(dir, "owner"))
+	path := filepath.Join(dir, "owner")
+	owner, err := os.ReadFile(path)
+	empty := err == nil && strings.TrimSpace(string(owner)) == ""
 	switch {
-	case err == nil && recordDead(f.proc, string(owner), time.Time{}):
-		return true, " of a holder that is gone: " + strings.TrimSpace(string(owner))
-	case errors.Is(err, os.ErrNotExist):
-		if st, serr := os.Stat(dir); serr == nil && time.Since(st.ModTime()) >= orphanAge {
+	case err == nil && !empty:
+		if recordDead(f.proc, string(owner), time.Time{}) {
+			return true, " of a holder that is gone: " + strings.TrimSpace(string(owner))
+		}
+	case empty || errors.Is(err, os.ErrNotExist):
+		st, serr := os.Stat(dir)
+		if serr != nil {
+			return false, ""
+		}
+		newest := st.ModTime()
+		if empty {
+			fst, ferr := os.Stat(path)
+			if ferr != nil {
+				return false, ""
+			}
+			if fst.ModTime().After(newest) {
+				newest = fst.ModTime()
+			}
+		}
+		if time.Since(newest) >= orphanAge {
 			return true, fmt.Sprintf(", which has had no owner for %s", orphanAge)
 		}
 	}
@@ -749,8 +781,9 @@ func (f *fairLock) reclaim() {
 			// Only while its owner is still the dead one judged (read again
 			// just before): an older client may have put a new LOCK there.
 			now, err := os.ReadFile(filepath.Join(f.lock, "owner"))
-			same := errors.Is(err, os.ErrNotExist) && !strings.HasPrefix(why, " of a holder") ||
-				err == nil && why == " of a holder that is gone: "+strings.TrimSpace(string(now))
+			ownerless := errors.Is(err, os.ErrNotExist) || err == nil && strings.TrimSpace(string(now)) == ""
+			same := ownerless && !strings.HasPrefix(why, " of a holder") ||
+				err == nil && !ownerless && why == " of a holder that is gone: "+strings.TrimSpace(string(now))
 			if !same {
 				return
 			}
@@ -832,7 +865,7 @@ func reapTickets(p procFS, q string, log func(string, ...any), warned map[string
 			log("warning: ticket %s is a waiter on code from before #2226 (%s); it can move the lock from under its holder: rebase it onto main",
 				e.Name(), strings.TrimSpace(record))
 		}
-		if !recordPid.MatchString(record) {
+		if !recordFields.MatchString(strings.TrimSpace(record)) {
 			record += " pid " + parts[2] // an older client's ticket text has no pid
 		}
 		if recordDead(p, record, time.Unix(0, ns)) {
