@@ -6,6 +6,7 @@ package bundle_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -349,8 +350,10 @@ func pendingActions(b kardinalv1alpha1.Bundle, action string) []string {
 }
 
 // #1360: a Promoting Bundle whose Graph was built before the gates hash was
-// recorded is not re-translated on upgrade: the current hash is recorded,
-// and the next edit re-translates.
+// recorded is not re-translated for the gates on upgrade: the current hash
+// is recorded, and the next edit re-translates. (A Graph an earlier
+// controller rendered is re-translated once for its render version: #2271,
+// TestRenderVersion_StuckVersionRetranslatesOnce.)
 func TestGateEdit_UpgradeRecordsHash(t *testing.T) {
 	hold := gateTemplate("hold", "prod", false)
 	b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC())
@@ -369,6 +372,36 @@ func TestGateEdit_UpgradeRecordsHash(t *testing.T) {
 	require.NoError(t, c.Update(context.Background(), hold))
 	lcReconcile(t, r, "app-v1")
 	assert.Equal(t, 1, tr.calls)
+}
+
+// #2271: a Promoting Bundle whose Graph an earlier controller rendered (no
+// render version label) is re-translated once, recording the gates hash, and
+// not again; a Verified or a failed Bundle's Graph is never re-translated
+// for it.
+func TestRenderVersion_OnlyPromotingRetranslates(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		want  int
+	}{{"Promoting", 1}, {"Verified", 0}, {"Failed", 0}} {
+		t.Run(tc.phase, func(t *testing.T) {
+			hold := gateTemplate("hold", "prod", false)
+			b := lcBundle("app-v1", "image", tc.phase, time.Now().UTC())
+			b.Status.GraphRef = graph.GraphNameFrom("app", "app-v1")
+			b.Status.PipelineSpecHash = bundle.PipelineSpecHashFor(gateEditPipeline())
+			if tc.phase == "Failed" {
+				meta.SetStatusCondition(&b.Status.Conditions, metav1.Condition{Type: "Failed", Status: metav1.ConditionTrue, Reason: "StepFailed"})
+			}
+			c := lcClient(gateEditPipeline(), b, hold, lcStep("app-v1", "test", "s-test", "Verified"))
+			tr := &gateEditTranslator{c: c}
+			r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: &graphStatusReader{earlier: true,
+				g: &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: b.Status.GraphRef, Namespace: "default"}}}}
+			lcReconcile(t, r, "app-v1")
+			assert.Equal(t, tc.want, tr.calls)
+			if tc.want > 0 {
+				assert.NotEmpty(t, lcGet(t, c, "app-v1").Status.PolicyGatesHash, "the gates hash is recorded")
+			}
+		})
+	}
 }
 
 // The template index selects exactly the templates: the hash read through it
@@ -407,4 +440,271 @@ func TestGateEdit_RevertedEditRefreshesGeneration(t *testing.T) {
 	b := lcGet(t, g.c, "app-v1")
 	require.Len(t, b.Status.PendingAuditEvents, 1)
 	assert.Contains(t, b.Status.PendingAuditEvents[0].Spec.Message, "default/hold was edited back to the same rule (generation 1 to 3)")
+}
+
+// #2271: a version stuck under a rendering bug recovers on upgrade. Its
+// Graph was rendered by an older controller: without the VerifyOnlyGates
+// collection its verify gate needs, and without the render version label.
+// The new controller re-translates the Promoting Bundle once, with no change
+// to the Pipeline or a gate, and the Graph gets the current rendering and
+// label; a second reconcile writes nothing, and a Verified Bundle keeps its
+// Graph.
+func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
+	ctx := context.Background()
+	t0 := time.Now().UTC().Add(-time.Hour)
+	verify := gateTemplate("explore-qa", "prod", false)
+	verify.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1}
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	g := newGateEditRig(t, gateEditPipeline(), verify, cab, gateEditBundle("app-v1", "Available", t0))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", "app-v1")
+	read := func() *unstructured.Unstructured {
+		u, err := gvr.Get(ctx, name, metav1.GetOptions{})
+		require.NoError(t, err)
+		return u
+	}
+	nodeIDs := func(u *unstructured.Unstructured) []string {
+		nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+		var ids []string
+		for _, n := range nodes {
+			ids = append(ids, fmt.Sprint(n.(map[string]interface{})["id"]))
+		}
+		return ids
+	}
+	current := strconv.Itoa(graph.RenderVersion)
+	require.Contains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
+	require.Equal(t, current, read().GetLabels()[graph.LabelRenderVersion], "the Graph carries its render version")
+
+	// What an older controller left: a Graph without that collection and
+	// without the label.
+	old := func() {
+		u := read()
+		nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+		var kept []interface{}
+		for _, n := range nodes {
+			if n.(map[string]interface{})["id"] != graph.NodeVerifyOnlyGates {
+				kept = append(kept, n)
+			}
+		}
+		require.NoError(t, unstructured.SetNestedSlice(u.Object, kept, "spec", "nodes"))
+		labels := u.GetLabels()
+		delete(labels, graph.LabelRenderVersion)
+		u.SetLabels(labels)
+		_, err := gvr.Update(ctx, u, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+	old()
+	require.NotContains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
+	updates := g.writes("app-v1", "update")
+	hash := lcGet(t, g.c, "app-v1").Status.PolicyGatesHash
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "re-translated once, with no Pipeline or gate change")
+	assert.Contains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates, "the Graph has the current rendering")
+	assert.Equal(t, current, read().GetLabels()[graph.LabelRenderVersion])
+	got := lcGet(t, g.c, "app-v1")
+	assert.Equal(t, hash, got.Status.PolicyGatesHash, "the gates did not change")
+	assert.Empty(t, got.Status.PendingAuditEvents, "no gate changed: no GateChanged record")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "once")
+
+	// A Verified Bundle keeps the Graph it was promoted with.
+	setPhase(t, g.c, "app-v1", "Verified")
+	old()
+	updates = g.writes("app-v1", "update")
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, updates, g.writes("app-v1", "update"), "a Verified Bundle is not re-translated")
+	assert.NotContains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
+}
+
+// gateChangedSpecs are the GateChanged records of Bundle b, written
+// (AuditEvents) or still in its outbox.
+func gateChangedSpecs(t *testing.T, c client.Client, b string) []kardinalv1alpha1.AuditEventSpec {
+	t.Helper()
+	var out []kardinalv1alpha1.AuditEventSpec
+	for _, e := range lcGet(t, c, b).Status.PendingAuditEvents {
+		if e.Spec.Action == bundle.AuditActionGateChanged {
+			out = append(out, e.Spec)
+		}
+	}
+	var evs kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(context.Background(), &evs))
+	for _, ev := range evs.Items {
+		if ev.Spec.Action == bundle.AuditActionGateChanged && ev.Spec.BundleName == b {
+			out = append(out, ev.Spec)
+		}
+	}
+	return out
+}
+
+// #2271: the re-render of a Graph an earlier controller rendered records
+// the rule changes it applies. v0.12 kept the rule each template had when
+// the version started; a template edited since (window) takes its current
+// rule at the upgrade, and one deleted since (gone) no longer applies: one
+// GateChanged record names both, with no stamp before (v0.12 copies had
+// none) and the template's after. A template whose rule did not change
+// (cab), though its copy gains a stamp, is not in it. A second reconcile
+// records nothing more.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_UpgradeRecordsRuleChange(t *testing.T) {
+	ctx := context.Background()
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4 // the fake client sets none
+	g := newGateEditRig(t, gateEditPipeline(), cab, window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", "app-v1")
+
+	// What v0.12 left: no label, no stamps, window's rule from before an
+	// edit, and a template deleted since.
+	u, err := gvr.Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+	for _, n := range nodes {
+		node := n.(map[string]interface{})
+		if node["id"] != graph.NodePolicyGateData {
+			continue
+		}
+		def := node["def"].(map[string]interface{})
+		templates := def["templates"].([]interface{})
+		for _, raw := range templates {
+			tmpl := raw.(map[string]interface{})
+			delete(tmpl, "digest")
+			delete(tmpl, "generation")
+			delete(tmpl, "uid")
+			if tmpl["template"] == "window" {
+				tmpl["spec"].(map[string]interface{})["expression"] = "false"
+			}
+		}
+		def["templates"] = append(templates, map[string]interface{}{"template": "gone", "templateNamespace": "default",
+			"spec": map[string]interface{}{"expression": "true", "generated": true}})
+	}
+	require.NoError(t, unstructured.SetNestedSlice(u.Object, nodes, "spec", "nodes"))
+	labels := u.GetLabels()
+	delete(labels, graph.LabelRenderVersion)
+	u.SetLabels(labels)
+	_, err = gvr.Update(ctx, u, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1, "one record for the re-render")
+	var current kardinalv1alpha1.PolicyGate
+	require.NoError(t, g.c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "window"}, &current))
+	require.Equal(t, int64(4), current.Generation)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "gone", Namespace: "default"},
+		{Template: "window", Namespace: "default", NewDigest: graph.TemplateDigest(current), NewGeneration: 4},
+	}, got[0].Gates)
+	assert.Equal(t, "*", got[0].Environment, "window applies to prod, a deleted template to no environment: the record names several")
+	assert.Contains(t, got[0].Message, "on upgrade")
+	assert.Contains(t, got[0].Message, "default/window takes its current rule")
+	assert.Contains(t, got[0].Message, "default/gone no longer applies")
+	assert.NotContains(t, got[0].Message, "cab")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
+
+// renderOlder rewrites Bundle b's Graph to what an earlier controller left:
+// the render-version label set to label ("" removes it), and edit applied to
+// each PolicyGateData template entry.
+func (g *gateEditRig) renderOlder(t *testing.T, b, label string, edit func(tmpl map[string]interface{})) {
+	t.Helper()
+	ctx := context.Background()
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", b)
+	u, err := gvr.Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+	for _, n := range nodes {
+		node := n.(map[string]interface{})
+		if node["id"] != graph.NodePolicyGateData {
+			continue
+		}
+		for _, raw := range node["def"].(map[string]interface{})["templates"].([]interface{}) {
+			edit(raw.(map[string]interface{}))
+		}
+	}
+	require.NoError(t, unstructured.SetNestedSlice(u.Object, nodes, "spec", "nodes"))
+	labels := u.GetLabels()
+	if label == "" {
+		delete(labels, graph.LabelRenderVersion)
+	} else {
+		labels[graph.LabelRenderVersion] = label
+	}
+	u.SetLabels(labels)
+	_, err = gvr.Update(ctx, u, metav1.UpdateOptions{})
+	require.NoError(t, err)
+}
+
+// #2271: a template created under v0.12 after the version started reaches
+// it at the upgrade: one record says it now applies, in its environment,
+// with no stamp before. The Bundle is as v0.12 leaves a Promoting one (no
+// gates hash), so the render-version re-render, not a gate-change rebuild,
+// applies it.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_UpgradeRecordsCreatedTemplate(t *testing.T) {
+	ctx := context.Background()
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	g := newGateEditRig(t, gateEditPipeline(), cab, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	g.renderOlder(t, "app-v1", "", func(tmpl map[string]interface{}) {
+		delete(tmpl, "digest")
+		delete(tmpl, "generation")
+		delete(tmpl, "uid")
+	})
+	b := lcGet(t, g.c, "app-v1")
+	b.Status.PolicyGatesHash = ""
+	require.NoError(t, g.c.Status().Update(ctx, &b))
+	late := gateTemplate("late", "prod", false)
+	late.Generation = 3
+	require.NoError(t, g.c.Create(ctx, late))
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "late", Namespace: "default", NewDigest: graph.TemplateDigest(*late), NewGeneration: 3},
+	}, got[0].Gates)
+	assert.Equal(t, "prod", got[0].Environment)
+	assert.Contains(t, got[0].Message, "on upgrade")
+	assert.Contains(t, got[0].Message, "default/late now applies (generation 3)")
+}
+
+// #2271: at a later RenderVersion bump the copies carry a stamp: the record
+// names it as the one before, and the template's as the one after.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_UpgradeRecordsOldStamp(t *testing.T) {
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4
+	g := newGateEditRig(t, gateEditPipeline(), window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	g.renderOlder(t, "app-v1", strconv.Itoa(graph.RenderVersion-1), func(tmpl map[string]interface{}) {
+		tmpl["digest"], tmpl["generation"] = "sha256:old", "2"
+		tmpl["spec"].(map[string]interface{})["expression"] = "false"
+	})
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "window", Namespace: "default", OldDigest: "sha256:old", OldGeneration: 2, NewDigest: graph.TemplateDigest(*window), NewGeneration: 4},
+	}, got[0].Gates)
+	assert.Equal(t, "prod", got[0].Environment)
+	assert.Contains(t, got[0].Message, "default/window takes its current rule (generation 4)")
 }

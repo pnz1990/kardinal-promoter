@@ -262,3 +262,83 @@ func gateChangeClause(gc kardinalv1alpha1.AuditGateChange) string {
 	}
 	return key + " " + what
 }
+
+// upgradeGateChangeEntry returns the outbox entry recording the rule changes
+// that re-rendering a Promoting Bundle b's Graph for the current
+// graph.RenderVersion applied (#2271), and false when there are none. A
+// Graph an earlier controller rendered kept the rule each template had when
+// the version started (v0.12 did not carry template edits to versions in
+// flight), so a template edited, created or deleted since reaches the
+// version only now, at the upgrade: before and after are graph.TemplateRules
+// of the Graph before and after the re-render, stamps and newStamps their
+// graph.TemplateStamps, gates the templates it was built with. A change of
+// stamp alone (a copy made before #1360 gets one) is not a rule change.
+func upgradeGateChangeEntry(b *kardinalv1alpha1.Bundle, before, after map[string]string,
+	stamps, newStamps map[string]graph.TemplateStamp, gates []kardinalv1alpha1.PolicyGate, now time.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	byKey := map[string]kardinalv1alpha1.PolicyGate{}
+	for _, g := range gates {
+		byKey[g.Namespace+"/"+g.Name] = g
+	}
+	keys := map[string]bool{}
+	for k := range before {
+		keys[k] = true
+	}
+	for k := range after {
+		keys[k] = true
+	}
+	sorted := make([]string, 0, len(keys))
+	for k := range keys {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	var changes []kardinalv1alpha1.AuditGateChange
+	var clauses []string
+	env := ""
+	for _, key := range sorted {
+		old, had := before[key]
+		cur, has := after[key]
+		if had && has && old == cur {
+			continue
+		}
+		ns, name, _ := strings.Cut(key, "/")
+		gc := kardinalv1alpha1.AuditGateChange{Template: name, Namespace: ns,
+			OldDigest: stamps[key].Digest, OldGeneration: stamps[key].Generation}
+		e := rejectionEnvironment
+		switch {
+		case has:
+			gc.NewDigest, gc.NewGeneration = newStamps[key].Digest, newStamps[key].Generation
+			if g, ok := byKey[key]; ok {
+				gc.Manager, e = lastManager(g.ManagedFields), gateEnvironment(g)
+			}
+			if had {
+				clauses = append(clauses, fmt.Sprintf("%s takes its current rule (generation %d)", key, gc.NewGeneration))
+			} else {
+				clauses = append(clauses, fmt.Sprintf("%s now applies (generation %d)", key, gc.NewGeneration))
+			}
+		default:
+			clauses = append(clauses, key+" no longer applies")
+		}
+		switch {
+		case env == "":
+			env = e
+		case env != e:
+			env = rejectionEnvironment
+		}
+		changes = append(changes, gc)
+	}
+	if len(changes) == 0 {
+		return kardinalv1alpha1.PendingAuditEvent{}, false
+	}
+	entry := gateChangeRecord(b.Name, b.Spec.Pipeline, env, changes, 0, 0, metav1.NewTime(now))
+	noun := "template"
+	if len(changes) != 1 {
+		noun = "templates"
+	}
+	if len(clauses) > gateMessageChanges {
+		clauses = append(clauses[:gateMessageChanges], fmt.Sprintf("and %d more", len(clauses)-gateMessageChanges))
+	}
+	entry.Spec.Message = fmt.Sprintf("%d PolicyGate %s changed under version %s on upgrade: its Graph, rendered by an earlier controller, "+
+		"was rendered again (render version %d) and its gates took the current rules: %s",
+		len(changes), noun, b.Name, graph.RenderVersion, strings.Join(clauses, "; "))
+	return entry, true
+}

@@ -249,6 +249,27 @@ func u0120CheckoutChart(t *testing.T) string {
 	return c.Name + "-" + c.Version
 }
 
+// u012RunsIn waits until pipeline's status names bundle as the version that
+// runs in env. That is what kardinal verify <pipeline> <env> verifies
+// (runningBundle in cmd/kardinal/cmd/verify.go), and the Pipeline reconciler
+// writes it after the step in env is Verified: a verify run right after
+// WaitStepState can find no version there yet.
+func u012RunsIn(t *testing.T, e *framework.Env, ns, pipeline, env, bundle string) {
+	t.Helper()
+	framework.Eventually(t, time.Minute, fmt.Sprintf("Pipeline %s/%s names %s in %s", ns, pipeline, bundle, env), func(ctx context.Context) (bool, string) {
+		var p v1alpha1.Pipeline
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
+			return false, err.Error()
+		}
+		for _, s := range p.Status.Environments {
+			if s.Name == env {
+				return s.Bundle == bundle, fmt.Sprintf("status.environments[%s].bundle is %q", env, s.Bundle)
+			}
+		}
+		return false, fmt.Sprintf("status.environments has no %s", env)
+	})
+}
+
 // kroPods are the kro controller's Pods: uid → restarts.
 func kroPods(t *testing.T, e *framework.Env) map[types.UID]int32 {
 	t.Helper()
@@ -324,6 +345,15 @@ func kroErrors(t *testing.T, e *framework.Env, since time.Time, expected func(at
 // the reader ClusterRole: docs/upgrade.md's "Between the chart upgrade and
 // that start, kro cannot read those nodes" (#1283).
 var u012HealthRefForbidden = regexp.MustCompile(`apply \\"health[A-Z][A-Za-z0-9]*\\" \(ref\): get external ref .* is forbidden`)
+
+// u012HealthWatchForbidden matches the same gap in kro's watch manager: its
+// informer for a kind the removed health ref nodes read (the kinds the
+// deleted reader ClusterRole and the old kro-watch rules granted) cannot
+// list or watch it at the cluster scope any more, while Graphs still have
+// those nodes. Seen in one of four upgrade jobs (e2e-live 39476864470,
+// upgrade-v0121 on 1.35): three lines, 5 to 9 seconds before the nodes were
+// gone (#1283).
+var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-manager\tWatch error\t\{"gvr": "(apps/v1, Resource=deployments|argoproj\.io/v1alpha1, Resource=(applications|rollouts)|kustomize\.toolkit\.fluxcd\.io/v1, Resource=kustomizations|flagger\.app/v1beta1, Resource=canaries)", "error": "(failed to list \*v1\.PartialObjectMetadata: )?[a-z.]+ is forbidden: User \\"system:serviceaccount:[^\\"]+\\" cannot (list|watch) resource `)
 
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
 // released (its chart, CLI and kro) and follows "Upgrading from v0.12.0" in
@@ -526,6 +556,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 		e.WaitGateReady(t, s.held.NS, b, "prod", "release-window", false, "= false", gateTimeout)
 	}
 	e.WaitStepState(t, s.verify.NS, byPerson, byPersonB, "qa", "Verified", promoteTimeout)
+	u012RunsIn(t, e, s.verify.NS, byPerson, "qa", byPersonB)
 	out, err = from.cli(e, t, s.verify.NS, "--kubeconfig", carol, "verify", byPerson, "qa", "--check", "explore",
 		"--pass", "--summary", "checked before the upgrade")
 	require.NoError(t, err, out)
@@ -882,33 +913,54 @@ func u012Upgrade(t *testing.T, from u012From) {
 		require.Equal(t, 0, r.Code, r.Output())
 		e.WaitGateReady(t, s.approve.NS, b, "prod", "two-approvers", true, "(2 of 2)", gateTimeout)
 	}
-	// #1360: an edit of the false gate reaches the versions the release
-	// started. Their instances, copied without the template's revision, take
-	// the edited rule and the template's generation. A copy without that
-	// stamp is the baseline the next change is measured from, not a change,
-	// so this edit writes no GateChanged record (gateChangeEntry).
+	// #1360, #2271: an edit of the false gate reaches the versions the
+	// release started. The upgrade rendered their Graphs again once, which
+	// stamped the instances the release made, with no stamp, with the
+	// template's revision: the baseline the edit is measured from. The rule
+	// did not change at the upgrade, so it recorded no GateChanged; the edit
+	// writes one per held version, from that revision to the edited one.
+	var tmpl v1alpha1.PolicyGate
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: s.held.NS, Name: "release-window"}, &tmpl))
 	for _, b := range heldB {
 		g, ok, err := e.GateInstance(ctx, s.held.NS, b, "prod", "release-window")
 		require.NoError(t, err)
 		require.True(t, ok)
-		assert.NotContains(t, g.Annotations, "kardinal.io/gate-template-generation", "v%s copied the gate without the template's revision", fromVersion)
+		assert.Equal(t, fmt.Sprint(tmpl.Generation), g.Annotations["kardinal.io/gate-template-generation"],
+			"the upgrade stamped the instance v%s made with the template's revision", fromVersion)
 	}
+	heldChanges := func(ctx context.Context) (map[string][]v1alpha1.AuditEventSpec, error) {
+		var evs v1alpha1.AuditEventList
+		if err := e.Client.List(ctx, &evs, client.InNamespace(s.held.NS), client.MatchingLabels{"kardinal.io/action": "GateChanged"}); err != nil {
+			return nil, err
+		}
+		out := map[string][]v1alpha1.AuditEventSpec{}
+		for _, ev := range evs.Items {
+			out[ev.Spec.BundleName] = append(out[ev.Spec.BundleName], ev.Spec)
+		}
+		return out, nil
+	}
+	changed, err := heldChanges(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, changed, "the upgrade changed no rule, and recorded no GateChanged")
 	gen := editGate(t, e, s.held.NS, "release-window", "true")
 	for _, b := range heldB {
 		g := e.WaitGateReady(t, s.held.NS, b, "prod", "release-window", true, "= true", gateTimeout)
 		assert.Equal(t, fmt.Sprint(gen), g.Annotations["kardinal.io/gate-template-generation"], "the instance names the edited revision")
 		assert.Equal(t, gates[b], "PolicyGate "+s.held.NS+"/"+g.Name, "the edit updates the instance v%s's Graph made", fromVersion)
 	}
-	framework.Consistently(t, 15*time.Second, "no GateChanged record for a version the release built", func(ctx context.Context) (bool, string) {
-		var evs v1alpha1.AuditEventList
-		if err := e.Client.List(ctx, &evs, client.InNamespace(s.held.NS), client.MatchingLabels{"kardinal.io/action": "GateChanged"}); err != nil {
+	framework.Eventually(t, gateTimeout, "one GateChanged record per held version, from the upgrade's stamp to the edit", func(ctx context.Context) (bool, string) {
+		got, err := heldChanges(ctx)
+		if err != nil {
 			return false, err.Error()
 		}
-		var names []string
-		for _, ev := range evs.Items {
-			names = append(names, ev.Spec.BundleName)
+		for _, b := range heldB {
+			recs := got[b]
+			if len(recs) != 1 || len(recs[0].Gates) != 1 || recs[0].Gates[0].Template != "release-window" ||
+				recs[0].Gates[0].OldGeneration != tmpl.Generation || recs[0].Gates[0].NewGeneration != gen {
+				return false, fmt.Sprintf("%s: %+v", b, recs)
+			}
 		}
-		return len(evs.Items) == 0, fmt.Sprintf("GateChanged records for %v", names)
+		return len(got) == len(heldB), fmt.Sprintf("GateChanged records %+v", got)
 	})
 	// The verify gates: the AgentRun that was running finishes and counts;
 	// dave's Verdict joins carol's.
@@ -928,6 +980,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 	})
 	assert.True(t, runBefore.CreationTimestamp.Time.Before(upgradeStart), "the AgentRun was created before the upgrade began")
 	e.WaitGateReady(t, s.verify.NS, byRunB, "prod", "agent-check", true, "verified: 1 of 1", gateTimeout)
+	u012RunsIn(t, e, s.verify.NS, byPerson, "qa", byPersonB)
 	r := c.Exec(framework.CLIOptions{Kubeconfig: dave}, c.Args(s.verify.NS, "verify", byPerson, "qa", "--check", "explore",
 		"--pass", "--summary", "checked after the upgrade")...)
 	require.Equal(t, 0, r.Code, r.Output())
@@ -1037,7 +1090,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 	// node between the chart upgrade and the new controller's removal of
 	// those nodes. Only that read, and only before the nodes were gone.
 	leveled, allowed, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
-		return at.Before(refsGone) && u012HealthRefForbidden.MatchString(line)
+		return at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line))
 	})
 	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283)", leveled, allowed)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,10 +128,13 @@ type existsChecker struct{}
 func (existsChecker) GraphExists(_ context.Context, _, _ string) (bool, error) { return true, nil }
 
 // graphStatusReader is a GraphChecker that also returns the Graph with status,
-// like *graph.GraphClient.
+// like *graph.GraphClient. The Graph is one this controller rendered (it
+// carries graph.LabelRenderVersion) unless earlier is set: a Graph an
+// earlier controller rendered, which a Promoting Bundle re-translates once.
 type graphStatusReader struct {
-	g    *graph.Graph
-	gets int
+	g       *graph.Graph
+	gets    int
+	earlier bool
 }
 
 func (m *graphStatusReader) GraphExists(_ context.Context, _, _ string) (bool, error) {
@@ -141,6 +145,12 @@ func (m *graphStatusReader) Get(_ context.Context, _, name string) (*graph.Graph
 	m.gets++
 	if m.g == nil {
 		return nil, fmt.Errorf("get graph: %w", apierrors.NewNotFound(schema.GroupResource{Group: "kro.run", Resource: "graphs"}, name))
+	}
+	if !m.earlier {
+		if m.g.Labels == nil {
+			m.g.Labels = map[string]string{}
+		}
+		m.g.Labels[graph.LabelRenderVersion] = strconv.Itoa(graph.RenderVersion)
 	}
 	return m.g, nil
 }
