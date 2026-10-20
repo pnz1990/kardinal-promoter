@@ -885,3 +885,49 @@ func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
 		})
 	}
 }
+
+// TestLoadLock_StatThatCannotBeOpened: a holder whose /proc/<pid>/stat
+// cannot be opened (a full file table) is alive while /proc/<pid> is there
+// (LOADLOCK_TEST_PROC: pid 424242's directory with no stat); one whose
+// directory is gone is not.
+func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
+	proc := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "424242"), 0o755))
+	if _, err := os.Stat("/proc/424243"); err == nil {
+		t.Skip("pid 424243 runs on this host")
+	}
+	for _, tc := range []struct {
+		name    string
+		pid     int
+		reclaim bool
+	}{
+		{"its /proc directory is there: alive", 424242, false},
+		{"its /proc directory is gone: dead", 424243, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lock := filepath.Join(t.TempDir(), "LOADLOCK")
+			slot := filepath.Join(lock+".d", "1")
+			require.NoError(t, os.MkdirAll(slot, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte(fmt.Sprintf("x pid %d 2026-10-20T00:00:00Z start=5\n", tc.pid)), 0o644))
+			cmd := loadlock(t, lock, "true")
+			cmd.Env = append(cmd.Env, "LOADLOCK_TEST_PROC="+proc)
+			out := &syncBuf{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				require.True(t, tc.reclaim, "it took the lock from a live holder: %s", out.String())
+				require.NoError(t, err, "%s", out.String())
+				assert.Contains(t, out.String(), "removed lock slot "+slot)
+			case <-time.After(time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+				require.False(t, tc.reclaim, "the dead holder's slot was never reclaimed: %s", out.String())
+				assert.DirExists(t, slot)
+				assert.NotContains(t, out.String(), "removed lock slot")
+			}
+		})
+	}
+}
