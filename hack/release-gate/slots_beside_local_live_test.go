@@ -215,3 +215,67 @@ func TestMachineSlots_ReleaseUnderTheFlock(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(dir, "1"), "its slot goes without the flock")
 	assert.Contains(t, logged.String(), "giving the gate's cluster slots back without it")
 }
+
+// TestMachineSlots_TurnCheckedAgainUnderTheFlock (#2361 QA): the head and
+// the room are checked again under the flock, so a release ticket queued
+// while the gate waited for it goes first.
+func TestMachineSlots_TurnCheckedAgainUnderTheFlock(t *testing.T) {
+	dir := t.TempDir()
+	m := &machine{slotsDir: dir, slotMax: 2, owner: "the gate"}
+	f, err := os.OpenFile(filepath.Join(dir, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX))
+	type taken struct {
+		ok  bool
+		why string
+	}
+	got := make(chan taken, 1)
+	go func() {
+		_, ok, why := m.Slots(1)
+		got <- taken{ok, why}
+	}()
+	select {
+	case r := <-got:
+		t.Fatalf("the gate did not wait for the flock: %v %s", r.ok, r.why)
+	case <-time.After(300 * time.Millisecond): // past the check without it
+	}
+	ahead := fmt.Sprintf("0-%019d-%d", time.Now().UnixNano(), os.Getpid())
+	require.NoError(t, os.WriteFile(filepath.Join(slotQueue(dir), ahead),
+		[]byte(fmt.Sprintf("a release run pid %d now %s\n", os.Getpid(), selfRecord(hostProc{}))), 0o644))
+	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_UN))
+	var r taken
+	select {
+	case r = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no answer once the flock was free")
+	}
+	assert.False(t, r.ok, "it took a slot past the release ticket queued ahead of it")
+	assert.Contains(t, r.why, "waits behind "+ahead)
+	held, err := heldSlots(dir)
+	require.NoError(t, err)
+	assert.Zero(t, held)
+}
+
+// TestWithLockFlock_TimedOutAttemptsLetGo (#2361 QA): a call that timed out
+// waiting for the flock leaves an attempt behind, which lets the flock go
+// the moment it gets it: five of them once kept it from another client for
+// five handoffs (25s).
+func TestWithLockFlock_TimedOutAttemptsLetGo(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.OpenFile(filepath.Join(dir, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX))
+	flockWait = 50 * time.Millisecond
+	defer func() { flockWait = time.Minute }()
+	for i := 0; i < 5; i++ {
+		require.Error(t, withLockFlock(dir, func() error { return nil }), "the flock is held")
+	}
+	require.NoError(t, f.Close()) // the flock goes with it
+	flockWait = 3 * time.Second
+	start := time.Now()
+	ran := false
+	require.NoError(t, withLockFlock(dir, func() error { ran = true; return nil }))
+	assert.True(t, ran)
+	assert.Less(t, time.Since(start), time.Second, "the five timed-out attempts held it for no one")
+}
