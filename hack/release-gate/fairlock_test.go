@@ -886,7 +886,13 @@ func TestWithLockFlock_WaitCap(t *testing.T) {
 	ran := 0
 	var fl flocker // one waiter, retrying
 	start := time.Now()
-	err = fl.with(q, func() error { ran++; return nil })
+	res := make(chan error, 1)
+	go func() { res <- fl.with(q, func() error { ran++; return nil }) }()
+	select {
+	case err = <-res:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no cap: it waits for the flock as long as it is held")
+	}
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no flock on "+filepath.Join(q, ".reclaim")+" in 200ms: a waiter stopped (Ctrl-Z) or hung")
 	assert.Less(t, time.Since(start), 2*time.Second, "the cap, not a hang")
