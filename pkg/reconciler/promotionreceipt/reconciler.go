@@ -431,10 +431,26 @@ func (r *Reconciler) storeOCI(ctx context.Context, base, rc *v1alpha1.PromotionR
 		if err != nil {
 			return r.sinkFailed(ctx, base, rc, "OCIPushFailed", err, now)
 		}
-		rc.Status.Stored = append(rc.Status.Stored, v1alpha1.ReceiptStorage{Sink: v1alpha1.ReceiptSinkOCI, Ref: ref, Subject: s.Name, At: metav1.NewTime(now.UTC())})
+		rc.Status.Stored = storeReferrer(rc.Status.Stored, v1alpha1.ReceiptStorage{Sink: v1alpha1.ReceiptSinkOCI, Ref: ref, Subject: s.Name, At: metav1.NewTime(now.UTC())})
 	}
 	rc.Status.Attempts, rc.Status.NextRetryAt = 0, nil
 	return ctrlruntime.Result{}, r.patch(ctx, base, rc)
+}
+
+// storeReferrer records an OCI referrer in stored: in place of the entry for
+// the same subject when there is one, else appended. An entry is replaced
+// when its referrer is in a repository the sink no longer uses (its
+// sinks.oci.repository changed part-way through storing the receipt), so
+// stored keeps one OCI entry per subject, within status.stored's bound of
+// the CR, Rekor and a referrer for each of 100 images.
+func storeReferrer(stored []v1alpha1.ReceiptStorage, e v1alpha1.ReceiptStorage) []v1alpha1.ReceiptStorage {
+	for i := range stored {
+		if stored[i].Sink == v1alpha1.ReceiptSinkOCI && stored[i].Subject == e.Subject {
+			stored[i] = e
+			return stored
+		}
+	}
+	return append(stored, e)
 }
 
 func (r *Reconciler) keychain(ctx context.Context) (authn.Keychain, error) {
