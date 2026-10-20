@@ -60,11 +60,9 @@ func ApplicableGates(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alph
 
 // GatesHash returns the SHA-256 hex hash of the gates that apply to
 // pipeline's environments (ApplicableGates): namespace, name, generation,
-// labels and spec of each, and graph.RenderVersion. The generation is in it
-// so that an edit reverted before a Bundle saw it still changes the hash:
-// the Bundle's gate instances then get the template's new generation
-// (#2145). The render version is in it so that a controller that renders
-// Graphs differently re-translates every Promoting Bundle once (#2271).
+// labels and spec of each. The generation is in it so that an edit reverted
+// before a Bundle saw it still changes the hash: the Bundle's gate instances
+// then get the template's new generation (#2145).
 func GatesHash(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.PolicyGate) string {
 	if pipeline == nil {
 		return ""
@@ -80,12 +78,7 @@ func GatesHash(pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.Pol
 	for _, g := range ApplicableGates(pipeline, gates) {
 		entries = append(entries, entry{Namespace: g.Namespace, Name: g.Name, Generation: g.Generation, Labels: g.Labels, Spec: g.Spec})
 	}
-	// The render version too: a controller that renders Graphs differently
-	// re-translates the Promoting Bundles' Graphs once (graph.RenderVersion).
-	data, err := json.Marshal(struct {
-		Render int     `json:"render"`
-		Gates  []entry `json:"gates"`
-	}{graph.RenderVersion, entries})
+	data, err := json.Marshal(entries)
 	if err != nil {
 		return ""
 	}

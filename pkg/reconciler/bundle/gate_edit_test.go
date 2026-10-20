@@ -5,10 +5,8 @@ package bundle_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -352,8 +350,10 @@ func pendingActions(b kardinalv1alpha1.Bundle, action string) []string {
 }
 
 // #1360: a Promoting Bundle whose Graph was built before the gates hash was
-// recorded is not re-translated on upgrade: the current hash is recorded,
-// and the next edit re-translates.
+// recorded is not re-translated for the gates on upgrade: the current hash
+// is recorded, and the next edit re-translates. (A Graph an earlier
+// controller rendered is re-translated once for its render version: #2271,
+// TestRenderVersion_StuckVersionRetranslatesOnce.)
 func TestGateEdit_UpgradeRecordsHash(t *testing.T) {
 	hold := gateTemplate("hold", "prod", false)
 	b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC())
@@ -372,6 +372,36 @@ func TestGateEdit_UpgradeRecordsHash(t *testing.T) {
 	require.NoError(t, c.Update(context.Background(), hold))
 	lcReconcile(t, r, "app-v1")
 	assert.Equal(t, 1, tr.calls)
+}
+
+// #2271: a Promoting Bundle whose Graph an earlier controller rendered (no
+// render version label) is re-translated once, recording the gates hash, and
+// not again; a Verified or a failed Bundle's Graph is never re-translated
+// for it.
+func TestRenderVersion_OnlyPromotingRetranslates(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		want  int
+	}{{"Promoting", 1}, {"Verified", 0}, {"Failed", 0}} {
+		t.Run(tc.phase, func(t *testing.T) {
+			hold := gateTemplate("hold", "prod", false)
+			b := lcBundle("app-v1", "image", tc.phase, time.Now().UTC())
+			b.Status.GraphRef = graph.GraphNameFrom("app", "app-v1")
+			b.Status.PipelineSpecHash = bundle.PipelineSpecHashFor(gateEditPipeline())
+			if tc.phase == "Failed" {
+				meta.SetStatusCondition(&b.Status.Conditions, metav1.Condition{Type: "Failed", Status: metav1.ConditionTrue, Reason: "StepFailed"})
+			}
+			c := lcClient(gateEditPipeline(), b, hold, lcStep("app-v1", "test", "s-test", "Verified"))
+			tr := &gateEditTranslator{c: c}
+			r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: &graphStatusReader{earlier: true,
+				g: &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: b.Status.GraphRef, Namespace: "default"}}}}
+			lcReconcile(t, r, "app-v1")
+			assert.Equal(t, tc.want, tr.calls)
+			if tc.want > 0 {
+				assert.NotEmpty(t, lcGet(t, c, "app-v1").Status.PolicyGatesHash, "the gates hash is recorded")
+			}
+		})
+	}
 }
 
 // The template index selects exactly the templates: the hash read through it
@@ -412,34 +442,13 @@ func TestGateEdit_RevertedEditRefreshesGeneration(t *testing.T) {
 	assert.Contains(t, b.Status.PendingAuditEvents[0].Spec.Message, "default/hold was edited back to the same rule (generation 1 to 3)")
 }
 
-// oldGatesHash is translator.GatesHash as a controller before
-// graph.RenderVersion computed it: the applicable gates alone.
-func oldGatesHash(t *testing.T, pipeline *kardinalv1alpha1.Pipeline, gates []kardinalv1alpha1.PolicyGate) string {
-	t.Helper()
-	type entry struct {
-		Namespace  string                          `json:"namespace"`
-		Name       string                          `json:"name"`
-		Generation int64                           `json:"generation,omitempty"`
-		Labels     map[string]string               `json:"labels,omitempty"`
-		Spec       kardinalv1alpha1.PolicyGateSpec `json:"spec"`
-	}
-	entries := []entry{}
-	for _, g := range translator.ApplicableGates(pipeline, gates) {
-		entries = append(entries, entry{Namespace: g.Namespace, Name: g.Name, Generation: g.Generation, Labels: g.Labels, Spec: g.Spec})
-	}
-	raw, err := json.Marshal(entries)
-	require.NoError(t, err)
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
-}
-
 // #2271: a version stuck under a rendering bug recovers on upgrade. Its
-// Graph was rendered by an older controller (here: without the
-// VerifyOnlyGates collection its verify gate needs) and its stored gates
-// hash predates graph.RenderVersion. The new controller re-translates the
-// Promoting Bundle once, with no change to the Pipeline or a gate, and the
-// Graph gets the current rendering; a second reconcile writes nothing, and a
-// Verified Bundle is left alone.
+// Graph was rendered by an older controller: without the VerifyOnlyGates
+// collection its verify gate needs, and without the render version label.
+// The new controller re-translates the Promoting Bundle once, with no change
+// to the Pipeline or a gate, and the Graph gets the current rendering and
+// label; a second reconcile writes nothing, and a Verified Bundle keeps its
+// Graph.
 func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().UTC().Add(-time.Hour)
@@ -450,44 +459,54 @@ func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
 	g := newGateEditRig(t, gateEditPipeline(), verify, cab, gateEditBundle("app-v1", "Available", t0))
 	lcReconcile(t, g.r, "app-v1")
 	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
-	nodeIDs := func() []string {
-		got, err := g.gc.Get(ctx, "default", graph.GraphNameFrom("app", "app-v1"))
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", "app-v1")
+	read := func() *unstructured.Unstructured {
+		u, err := gvr.Get(ctx, name, metav1.GetOptions{})
 		require.NoError(t, err)
+		return u
+	}
+	nodeIDs := func(u *unstructured.Unstructured) []string {
+		nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
 		var ids []string
-		for _, n := range got.Spec.Nodes {
-			ids = append(ids, n.ID)
+		for _, n := range nodes {
+			ids = append(ids, fmt.Sprint(n.(map[string]interface{})["id"]))
 		}
 		return ids
 	}
-	require.Contains(t, nodeIDs(), graph.NodeVerifyOnlyGates)
+	current := strconv.Itoa(graph.RenderVersion)
+	require.Contains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
+	require.Equal(t, current, read().GetLabels()[graph.LabelRenderVersion], "the Graph carries its render version")
 
-	// What an older controller left: a Graph without that collection, and
-	// the hash it computed.
-	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
-	u, err := gvr.Get(ctx, graph.GraphNameFrom("app", "app-v1"), metav1.GetOptions{})
-	require.NoError(t, err)
-	nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
-	var kept []interface{}
-	for _, n := range nodes {
-		if n.(map[string]interface{})["id"] != graph.NodeVerifyOnlyGates {
-			kept = append(kept, n)
+	// What an older controller left: a Graph without that collection and
+	// without the label.
+	old := func() {
+		u := read()
+		nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+		var kept []interface{}
+		for _, n := range nodes {
+			if n.(map[string]interface{})["id"] != graph.NodeVerifyOnlyGates {
+				kept = append(kept, n)
+			}
 		}
+		require.NoError(t, unstructured.SetNestedSlice(u.Object, kept, "spec", "nodes"))
+		labels := u.GetLabels()
+		delete(labels, graph.LabelRenderVersion)
+		u.SetLabels(labels)
+		_, err := gvr.Update(ctx, u, metav1.UpdateOptions{})
+		require.NoError(t, err)
 	}
-	require.NoError(t, unstructured.SetNestedSlice(u.Object, kept, "spec", "nodes"))
-	_, err = gvr.Update(ctx, u, metav1.UpdateOptions{})
-	require.NoError(t, err)
-	require.NotContains(t, nodeIDs(), graph.NodeVerifyOnlyGates)
-	gates := []kardinalv1alpha1.PolicyGate{*verify, *cab}
-	b := lcGet(t, g.c, "app-v1")
-	b.Status.PolicyGatesHash = oldGatesHash(t, gateEditPipeline(), gates)
-	require.NoError(t, g.c.Status().Update(ctx, &b))
+	old()
+	require.NotContains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
 	updates := g.writes("app-v1", "update")
+	hash := lcGet(t, g.c, "app-v1").Status.PolicyGatesHash
 
 	lcReconcile(t, g.r, "app-v1")
 	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "re-translated once, with no Pipeline or gate change")
-	assert.Contains(t, nodeIDs(), graph.NodeVerifyOnlyGates, "the Graph has the current rendering")
+	assert.Contains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates, "the Graph has the current rendering")
+	assert.Equal(t, current, read().GetLabels()[graph.LabelRenderVersion])
 	got := lcGet(t, g.c, "app-v1")
-	assert.Equal(t, translator.GatesHash(gateEditPipeline(), gates), got.Status.PolicyGatesHash, "the current hash is recorded")
+	assert.Equal(t, hash, got.Status.PolicyGatesHash, "the gates did not change")
 	assert.Empty(t, got.Status.PendingAuditEvents, "no gate changed: no GateChanged record")
 
 	lcReconcile(t, g.r, "app-v1")
@@ -495,9 +514,9 @@ func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
 
 	// A Verified Bundle keeps the Graph it was promoted with.
 	setPhase(t, g.c, "app-v1", "Verified")
-	b = lcGet(t, g.c, "app-v1")
-	b.Status.PolicyGatesHash = oldGatesHash(t, gateEditPipeline(), gates)
-	require.NoError(t, g.c.Status().Update(ctx, &b))
+	old()
+	updates = g.writes("app-v1", "update")
 	lcReconcile(t, g.r, "app-v1")
-	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "a Verified Bundle is not re-translated")
+	assert.Equal(t, updates, g.writes("app-v1", "update"), "a Verified Bundle is not re-translated")
+	assert.NotContains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
 }

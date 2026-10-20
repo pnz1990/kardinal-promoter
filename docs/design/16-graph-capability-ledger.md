@@ -1261,8 +1261,8 @@ every gate where it was, so a working Graph's nodes do not change. The
 package's test renderer renders an optional with no value as null as kro does, and every test
 that renders a Graph checks no PolicyGate has a null `spec.approval` (`assertNoNullApproval`).
 A version already stuck when the fix ships recovers on upgrade: the fix bumps
-`graph.RenderVersion` (2), which `translator.GatesHash` includes, so each Promoting Bundle's Graph
-is re-translated once.
+`graph.RenderVersion` (2), which every Graph carries as its `kardinal.io/render-version` label, and
+the Bundle reconciler re-translates a Promoting Bundle's Graph whose label differs once.
 **Smallest change, no upstream work yet.** Nothing upstream is needed: omitting the field is
 what `CELOmitFunction` is for. Requiring that alpha gate of every kardinal install is not worth
 it while splitting the collections works.
@@ -1394,10 +1394,11 @@ Cadence):
 
 6. **Render version.** If the upgrade, or any change to `pkg/graph`, renders an existing
    Bundle's Graph differently (node IDs, templates, data), bump `graph.RenderVersion` and say so
-   in the changelog fragment. `translator.GatesHash` includes it, so the new controller
-   re-translates every Promoting Bundle's Graph once; without the bump a version stuck under the
-   old rendering stays stuck (#2271, G28). A change that leaves every existing Graph identical
-   needs no bump.
+   in the changelog fragment. Every Graph carries it as its `kardinal.io/render-version` label,
+   and the new controller re-translates every Promoting Bundle's Graph whose label differs once;
+   without the bump a version stuck under the old rendering stays stuck (#2271, G28). Verified,
+   failed and superseded Bundles keep their Graphs. A change that leaves every existing Graph
+   identical needs no bump.
 
 ## Upstream survey (2026-10-02)
 

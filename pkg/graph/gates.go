@@ -56,19 +56,24 @@ const (
 )
 
 // RenderVersion is the version of how the builder renders a Graph from the
-// same inputs. translator.GatesHash includes it, so a controller whose
-// RenderVersion differs re-translates every Promoting Bundle's Graph once
-// (the Bundle reconciler compares status.policyGatesHash): a version stuck
-// under a rendering bug picks up the fix on upgrade. A Graph whose rendering
-// did not change re-renders identically, which kro applies as a no-op.
+// same inputs. Every Graph carries it (LabelRenderVersion), and the Bundle
+// reconciler re-translates a Promoting Bundle's Graph that carries another
+// (or none) once: a version stuck under a rendering bug picks up the fix on
+// upgrade. A Graph whose rendering did not change re-renders identically,
+// which kro applies as a no-op. Verified, failed and superseded Bundles keep
+// the Graph they were promoted with.
 //
 // Bump it with every change that renders an existing Bundle's Graph
 // differently (node IDs, templates, data), and say so in the changelog
 // fragment; a change that leaves every existing Graph identical needs none.
 //
 //   - 2: the gate collections render spec.approval for all their items or
-//     for none (#2271).
+//     for none (#2271). Graphs before it carry no label.
 const RenderVersion = 2
+
+// LabelRenderVersion is the label of a Graph that holds the RenderVersion it
+// was rendered with.
+const LabelRenderVersion = "kardinal.io/render-version"
 
 // The annotations that stamp a gate instance with the template it was copied
 // from (#1360), as evidence of the rule a Bundle was held to: the template's

@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -471,6 +472,22 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		log.Info().Str("graph", graphName).Msg("graph recreated after external deletion")
 		return nil
 	}
+	if g != nil && b.Status.Phase == phasePromoting && g.Labels[graph.LabelRenderVersion] != strconv.Itoa(graph.RenderVersion) {
+		// Rendered by a controller that renders Graphs differently: the
+		// version in flight gets the current rendering once, so one stuck
+		// under a rendering bug recovers on upgrade (#2271).
+		gatesHash := r.gatesHashFor(ctx, log, pipeline)
+		if _, tErr := r.translate(ctx, log, pipeline, b); tErr != nil {
+			if skipTranslate(tErr) {
+				return nil
+			}
+			return fmt.Errorf("re-render graph %s: %w", name, tErr)
+		}
+		b.Status.PolicyGatesHash = gatesHash
+		log.Info().Str("graph", name).Str("renderVersion", g.Labels[graph.LabelRenderVersion]).
+			Int("currentRenderVersion", graph.RenderVersion).Msg("graph rendered by an earlier controller — re-translated in place")
+		return nil
+	}
 	if g != nil {
 		mirrorGraphConditions(b, g)
 		if err := r.checkGatesCreated(ctx, b, g); err != nil {
@@ -601,9 +618,7 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	}
 	what := "pipeline spec changed"
 	if !pipelineChanged {
-		// The gates hash covers graph.RenderVersion too: a controller that
-		// renders Graphs differently re-translates once (#2271).
-		what = "policy gates or the Graph rendering changed"
+		what = "policy gates changed"
 	}
 	log.Info().
 		Str("graph", b.Status.GraphRef).
