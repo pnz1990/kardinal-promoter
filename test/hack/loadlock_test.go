@@ -158,12 +158,12 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 		// the slot (any reordering of the clear before the close, #2316 QA).
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		cmd := loadlock(t, lock, "sleep", "30")
-		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_UNLOCK=2", "LOADLOCK_TEST_FLOCK_WAIT=10")
 		out := &syncBuf{}
 		cmd.Stdout, cmd.Stderr = out, out
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
-		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "2") },
 			10*time.Second, 5*time.Millisecond, "parked before the unlock")
 		start := time.Now()
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -183,25 +183,25 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 		// waits on a second fd while the first still holds it.
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		cmd := loadlock(t, lock, "sleep", "30")
-		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_UNLOCK=2", "LOADLOCK_TEST_FLOCK_WAIT=10")
 		out := &syncBuf{}
 		cmd.Stdout, cmd.Stderr = out, out
 		require.NoError(t, cmd.Start())
 		exited := make(chan error, 1)
 		go func() { exited <- cmd.Wait() }()
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
-		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "2") },
 			10*time.Second, 5*time.Millisecond, "parked after the unlock")
 		f, err := os.OpenFile(filepath.Join(lock+".queue", ".reclaim"), os.O_WRONLY|os.O_CREATE, 0o644)
 		require.NoError(t, err)
 		defer f.Close()
 		require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), "the flock is let go before the park")
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-		// The trap runs once the 1s park is done; the release then waits.
+		// The trap runs once the 2s park is done; the release then waits.
 		select {
 		case err := <-exited:
 			t.Fatalf("it ended (%v) while the test held the flock: released without it: %s", err, out.String())
-		case <-time.After(1500 * time.Millisecond):
+		case <-time.After(2500 * time.Millisecond):
 		}
 		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
 		assert.Len(t, slots, 1, "the slot stays until the release has the flock")
@@ -286,8 +286,22 @@ func lockDump(lock string) string {
 	return b.String()
 }
 
-// sleepingChild reports whether pid has a child running "sleep ARG".
+// sleepingChild reports whether pid has a child running "sleep ARG". It
+// reads pid's list of children, one file; without it, it scans /proc, which
+// on a busy host can take longer than the park it looks for (#2292).
 func sleepingChild(pid int, arg string) bool {
+	isSleep := func(dir string) bool {
+		cl, err := os.ReadFile(filepath.Join(dir, "cmdline"))
+		return err == nil && string(cl) == "sleep\x00"+arg+"\x00"
+	}
+	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid)); err == nil {
+		for _, c := range strings.Fields(string(b)) {
+			if isSleep(filepath.Join("/proc", c)) {
+				return true
+			}
+		}
+		return false
+	}
 	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
 	for _, st := range stats {
 		b, err := os.ReadFile(st)
@@ -296,11 +310,7 @@ func sleepingChild(pid int, arg string) bool {
 		}
 		// pid (comm) state ppid ...: comm can hold spaces, so from its ')'.
 		f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
-		if len(f) < 2 || f[1] != strconv.Itoa(pid) {
-			continue
-		}
-		cl, err := os.ReadFile(filepath.Join(filepath.Dir(st), "cmdline"))
-		if err == nil && string(cl) == "sleep\x00"+arg+"\x00" {
+		if len(f) >= 2 && f[1] == strconv.Itoa(pid) && isSleep(filepath.Dir(st)) {
 			return true
 		}
 	}
