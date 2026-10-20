@@ -294,6 +294,35 @@ func TestRenderCorpus_EveryNodeKind(t *testing.T) {
 	}
 }
 
+// TestNodeKinds_Fixture (QA-2 on #2353) pins nodeKinds itself on a fixture
+// package, so neither its follower nor its floor can be weakened unnoticed
+// while pkg/graph happens to need neither: an elided literal's ID is found,
+// and each ID form it cannot follow is reported (one of a call's two
+// results, assigned or declared; a range variable; +=), as is a Node*
+// constant no GraphNode uses.
+func TestNodeKinds_Fixture(t *testing.T) {
+	kinds, unknown := nodeKinds(t, filepath.Join("testdata", "nodekinds"))
+	var names []string
+	for kind := range kinds {
+		names = append(names, kind)
+	}
+	sort.Strings(names)
+	assert.Equal(t, []string{"Elided", "Unused", "Used"}, names, "the constant's and the elided literal's kinds, and the floor's")
+	var reported []string
+	for _, u := range unknown {
+		pos := regexp.MustCompile(`^testdata/nodekinds/nodes\.go:\d+:\d+: `).FindString(u)
+		require.NotEmpty(t, pos, "a position in the fixture: %s", u)
+		reported = append(reported, strings.TrimPrefix(u, pos))
+	}
+	assert.ElementsMatch(t, []string{
+		`NodeUnused ("Unused") is a node constant no GraphNode nodeKinds follows uses: it missed where the node is built`,
+		"a node ID assigned one of several results of a call (id, err = f()), which nodeKinds cannot follow",
+		"a node ID declared as one of several results of a call (var id, err = f()), which nodeKinds cannot follow",
+		"a node ID from a range, which nodeKinds cannot follow",
+		"a node ID changed by +=, which nodeKinds cannot follow",
+	}, reported)
+}
+
 // nodeKind is where a node kind is set, and whether it is a prefix ("x0"
 // helpers) rather than an ID.
 type nodeKind struct {
@@ -484,11 +513,13 @@ func (nk *nodeKindFinder) sites() []ast.Expr {
 			case *ast.AssignStmt:
 				for i, lhs := range n.Lhs {
 					sel, ok := lhs.(*ast.SelectorExpr)
-					if !ok || i >= len(n.Rhs) || len(n.Lhs) != len(n.Rhs) {
+					if !ok {
 						continue
 					}
 					if s := nk.info.Selections[sel]; s != nil && s.Kind() == types.FieldVal && s.Obj().Name() == "ID" && nk.isGraphNode(s.Recv()) {
-						out = append(out, n.Rhs[i])
+						if rhs, ok := nk.assigned(n, i); ok {
+							out = append(out, rhs)
+						}
 					}
 				}
 			}
@@ -496,6 +527,21 @@ func (nk *nodeKindFinder) sites() []ast.Expr {
 		})
 	}
 	return out
+}
+
+// assigned is the value assignment n gives its i-th left side. A form whose
+// value nodeKinds cannot read, an assignment of several results of one call
+// (id, err = f()) or an operator assignment (+=), is recorded in unknown.
+func (nk *nodeKindFinder) assigned(n *ast.AssignStmt, i int) (ast.Expr, bool) {
+	switch {
+	case len(n.Lhs) != len(n.Rhs):
+		nk.fail(n.Lhs[i], "a node ID assigned one of several results of a call (id, err = f()), which nodeKinds cannot follow")
+	case n.Tok != token.ASSIGN && n.Tok != token.DEFINE:
+		nk.fail(n.Lhs[i], "a node ID changed by "+n.Tok.String()+", which nodeKinds cannot follow")
+	default:
+		return n.Rhs[i], true
+	}
+	return nil, false
 }
 
 func (nk *nodeKindFinder) at(n ast.Node) string { return nk.fset.Position(n.Pos()).String() }
@@ -625,29 +671,41 @@ func (nk *nodeKindFinder) classifyVar(id *ast.Ident, obj types.Object) {
 		return
 	}
 	var values []ast.Expr
+	failed := len(nk.unknown)
 	for _, f := range nk.files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.AssignStmt:
-				if len(n.Lhs) == len(n.Rhs) {
-					for i, lhs := range n.Lhs {
-						if l, ok := lhs.(*ast.Ident); ok && nk.object(l) == v {
-							values = append(values, n.Rhs[i])
+				for i, lhs := range n.Lhs {
+					if l, ok := lhs.(*ast.Ident); ok && nk.object(l) == v {
+						if rhs, ok := nk.assigned(n, i); ok {
+							values = append(values, rhs)
 						}
 					}
 				}
 			case *ast.ValueSpec:
 				for i, name := range n.Names {
-					if nk.info.Defs[name] == v && i < len(n.Values) {
-						values = append(values, n.Values[i])
+					if nk.info.Defs[name] != v || len(n.Values) == 0 {
+						continue
+					}
+					if len(n.Values) != len(n.Names) {
+						nk.fail(name, "a node ID declared as one of several results of a call (var id, err = f()), which nodeKinds cannot follow")
+						continue
+					}
+					values = append(values, n.Values[i])
+				}
+			case *ast.RangeStmt:
+				for _, e := range []ast.Expr{n.Key, n.Value} {
+					if l, ok := e.(*ast.Ident); ok && nk.object(l) == v {
+						nk.fail(l, "a node ID from a range, which nodeKinds cannot follow")
 					}
 				}
 			}
 			return true
 		})
 	}
-	if len(values) == 0 {
-		nk.fail(id, "a variable assigned nowhere nodeKinds can see (a range variable, a multi-value assignment?)")
+	if len(values) == 0 && len(nk.unknown) == failed {
+		nk.fail(id, "a variable assigned nowhere nodeKinds can see")
 		return
 	}
 	for _, e := range values {
@@ -739,10 +797,12 @@ func (nk *nodeKindFinder) classifyField(sel *ast.SelectorExpr, field types.Objec
 				}
 			case *ast.AssignStmt:
 				for i, lhs := range n.Lhs {
-					if s, ok := lhs.(*ast.SelectorExpr); ok && len(n.Lhs) == len(n.Rhs) {
+					if s, ok := lhs.(*ast.SelectorExpr); ok {
 						if sl := nk.info.Selections[s]; sl != nil && sl.Obj() == field {
 							found = true
-							nk.classify(n.Rhs[i])
+							if rhs, ok := nk.assigned(n, i); ok {
+								nk.classify(rhs)
+							}
 						}
 					}
 				}
