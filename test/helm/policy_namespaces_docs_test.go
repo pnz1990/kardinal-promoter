@@ -82,7 +82,7 @@ func TestPolicyNamespacesQuery(t *testing.T) {
 }
 
 // pipelineJSON is a Pipeline as the API server lists it, with conditions
-// (type: status) in the map's sorted order, or no status when nil.
+// (type: status) in any order (Go's map order), or no status when nil.
 func pipelineJSON(ns, name string, conditions map[string]string) map[string]interface{} {
 	p := map[string]interface{}{"metadata": map[string]interface{}{"namespace": ns, "name": name}}
 	if conditions != nil {

@@ -358,11 +358,35 @@ func substitutePlaceholders(attr string) string {
 }
 
 // yamlBlockExprs returns the `expression:` values in a yaml code block. The
-// value may be quoted or a block scalar (| or >).
+// value may be quoted or a block scalar (| or >). The expressions of an
+// admission policy document (kind: ValidatingAdmissionPolicy or
+// MutatingAdmissionPolicy) are the API server's CEL, not a PolicyGate's, and
+// are skipped.
 func yamlBlockExprs(rel string, start int, block []string) []docExpr {
 	var out []docExpr
+	admission := make([]bool, len(block)) // the line is in an admission policy document
+	for from := 0; from < len(block); {
+		to := from
+		for to < len(block) && strings.TrimSpace(block[to]) != "---" {
+			to++
+		}
+		skip := false
+		for _, l := range block[from:to] {
+			if k, ok := strings.CutPrefix(l, "kind:"); ok {
+				k = strings.TrimSpace(k)
+				skip = k == "ValidatingAdmissionPolicy" || k == "MutatingAdmissionPolicy"
+			}
+		}
+		for j := from; j < to; j++ {
+			admission[j] = skip
+		}
+		from = to + 1
+	}
 	for i := 0; i < len(block); i++ {
 		line := block[i]
+		if admission[i] {
+			continue
+		}
 		idx := strings.Index(line, "expression:")
 		if idx < 0 || strings.TrimSpace(line[:idx]) != "" {
 			continue

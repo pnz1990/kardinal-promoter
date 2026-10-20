@@ -74,6 +74,7 @@ var Manifest = map[string][]Block{
 		// policy list, explain and simulate run; policy test needs a file the
 		// page does not write.
 		{Match: "# List all PolicyGates"},
+		{Match: "kubectl get pipelines -A -o jsonpath", Skip: "lists every namespace's Pipelines; TestPolicyNamespacesDocsOnAPIServer runs it on an API server (envtest)"},
 	},
 	"pause.md": {
 		{Match: "kardinal pause my-app --reason"},
