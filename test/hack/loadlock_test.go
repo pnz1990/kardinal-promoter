@@ -45,6 +45,7 @@ func exitCode(err error) int {
 // if it is still its own (the 07:19 incident: a lock another run held was
 // removed by a command chain whose mkdir had failed).
 func TestLoadLock(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	t.Run("runs the command holding the lock, then removes it", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		out, err := loadlock(t, lock, "bash", "-c", `cat "$0/owner"; exit 3`, lock).CombinedOutput()
@@ -158,6 +159,7 @@ func releaseToken(t *testing.T, lock string) string {
 // a lock or ticket of a process that is gone is removed (the lock was a
 // mutex with pollers: the release gate lost the race to later pollers).
 func TestLoadLock_Fair(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	t.Run("first come, first served", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		assert.Equal(t, []string{"w1", "w2", "w3"}, served(t, lock, []string{"w1"}, []string{"w2"}, []string{"w3"}))
@@ -821,6 +823,7 @@ if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; e
 // counting lock alone, on an idle host too: two -x runs (two scale suites)
 // never overlap, and no other run holds it beside one.
 func TestLoadLock_Exclusive(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	dir := t.TempDir()
 	lock := filepath.Join(dir, "LOADLOCK")
@@ -861,6 +864,7 @@ rmdir "$me"
 // a cat that fails on /proc, as a $(cat ...) whose fork failed does) never
 // makes a live holder look gone and its slot reclaimed.
 func TestLoadLock_ForkFailureIsNoDeath(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	lock := filepath.Join(t.TempDir(), "LOADLOCK")
 	bin := t.TempDir()
 	realCat, err := exec.LookPath("cat")
@@ -902,6 +906,7 @@ exec `+realCat+` "$@"
 // exclusive holder is not joined, a load it cannot read is a busy host's;
 // and it still gets the lock once the holder is done.
 func TestLoadLock_FailingToolsAreNoUnsafeAnswer(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	// All six fail; and cat and grep alone, so the waiter still finds its
 	// turn (find) and reaches the decisions (the script before #2242 QA's
 	// fix reclaimed the long-held slot and joined the exclusive holder).
@@ -983,6 +988,7 @@ func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
 // (LOADLOCK_TEST_PROC: pid 424242's directory with no stat); one whose
 // directory is gone is not.
 func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	proc := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(proc, "424242"), 0o755))
 	if _, err := os.Stat("/proc/424243"); err == nil {
@@ -1028,6 +1034,7 @@ func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
 // command without the flock: while flock fails, a waiter takes no slot and
 // runs nothing; once it works, the waiter gets the lock.
 func TestLoadLock_FlockThatFails(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	realFlock, err := exec.LookPath("flock")
 	require.NoError(t, err)
 	bin, dir := t.TempDir(), t.TempDir()
@@ -1066,6 +1073,7 @@ exec `+realFlock+` "$@"
 // (LOADLOCK_TEST_BEFORE_RM pauses between the judgement and the removal, and
 // the test puts another older client's LOCK there meanwhile).
 func TestLoadLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	gone := exec.Command("true")
 	require.NoError(t, gone.Run())
 	dir := t.TempDir()
@@ -1093,6 +1101,7 @@ func TestLoadLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
 // EPOCHREALTIME (an older bash) the ticket's time is date's, and a date that
 // fails ends the run: it never writes a 0 that jumps the queue.
 func TestLoadLock_TicketClockWithoutEpochRealtime(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	lock := filepath.Join(t.TempDir(), "LOADLOCK")
 	out, err := func() ([]byte, error) {
 		cmd := loadlock(t, lock, "true")
@@ -1119,6 +1128,7 @@ func TestLoadLock_TicketClockWithoutEpochRealtime(t *testing.T) {
 // waiter that resumes queues again in its place; a normal ticket that has
 // waited 2h sorts as a release one.
 func TestLoadLock_QueueNeverWedges(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a mode-000 file")
 	}
@@ -1215,7 +1225,9 @@ func TestLoadLock_QueueNeverWedges(t *testing.T) {
 			t.Fatalf("a: %s\nb: %s", a.out.String(), b.out.String())
 		}
 		require.NoError(t, a.cmd.Process.Signal(syscall.SIGCONT))
-		require.Eventually(t, func() bool { return strings.Contains(a.out.String(), "queued it again in its place") }, 15*time.Second, 50*time.Millisecond)
+		if !assert.Eventually(t, func() bool { return strings.Contains(a.out.String(), "queued it again in its place") }, 15*time.Second, 50*time.Millisecond, "a queues again") {
+			t.Fatalf("a: %s\nb: %s", a.out.String(), b.out.String())
+		}
 		require.NoError(t, os.WriteFile(stop, nil, 0o644))
 		require.NoError(t, holder.Wait())
 		require.True(t, runs(t, a, 20*time.Second), "a: %s", a.out.String())
