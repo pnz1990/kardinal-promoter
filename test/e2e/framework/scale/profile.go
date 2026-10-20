@@ -88,6 +88,14 @@ type Profile struct {
 	PackMaxRSSMiB       int
 	PackMaxRSSGrowthMiB int
 	PackMaxTime         time.Duration
+	// PackVersions versions in PackNamespaces namespaces, each with an
+	// Approval, a gate instance and two receipts, exported cluster-wide by
+	// TestScale_EvidencePackVersions (#2238) within PackVersionsMaxTime, with
+	// the memory checks of PackMaxRSSGrowthMiB (against a tenth of the
+	// versions) and PackMaxRSSMiB.
+	PackVersions        int
+	PackNamespaces      int
+	PackVersionsMaxTime time.Duration
 
 	// Settle bounds how long every Bundle of a test may take to reach a
 	// terminal phase once the test stops creating them.
@@ -142,6 +150,7 @@ var profiles = map[string]Profile{
 		// the events in memory grows by about 1 KiB each, +9 MiB from 1k to
 		// 10k. The export takes 1.2 s live.
 		PackEvents: 10_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 15 * time.Second,
+		PackVersions: 500, PackNamespaces: 10, PackVersionsMaxTime: 30 * time.Second,
 		TenantWave: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
 		Settle: 10 * time.Minute,
 		// Twice the stage time measured on a GitHub runner with the -race
@@ -163,6 +172,7 @@ var profiles = map[string]Profile{
 		RapidFire: 40, ChaosFor: 10 * time.Minute, ChaosPipelines: 40,
 		// 12.5 s live at 100k.
 		PackEvents: 100_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 2 * time.Minute,
+		PackVersions: 5_000, PackNamespaces: 50, PackVersionsMaxTime: 3 * time.Minute,
 		TenantWave: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
 		Settle:       45 * time.Minute,
 		SerialStep:   12 * time.Second,
