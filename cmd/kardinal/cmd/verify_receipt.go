@@ -365,6 +365,19 @@ func trustedRoot(ctx context.Context, path string) (sigroot.TrustedMaterial, err
 // from; tests replace it.
 var tufMirror = sigtuf.DefaultMirror
 
+// distinct is names without repeats, in their first order.
+func distinct(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := names[:0]
+	for _, n := range names {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // printReceipt is the human output: what was promoted, by whom, through
 // which gates, and who signed it.
 func printReceipt(w io.Writer, name string, v *receipt.Verified) {
@@ -428,10 +441,13 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 	if !r.DecisionSnapshot {
 		_, _ = fmt.Fprintln(w, "  gates read when the step was verified: it started before receipts were enabled")
 	}
-	if len(approvers) > 0 {
+	// One name each: an approval counts on every gate of the environment
+	// that reads approvals (the agent policy gate as well as the approval
+	// gate), and a verdict on every verify gate of its check.
+	if approvers = distinct(approvers); len(approvers) > 0 {
 		_, _ = fmt.Fprintf(w, "  approved by: %s\n", strings.Join(approvers, ", "))
 	}
-	if len(verifiers) > 0 {
+	if verifiers = distinct(verifiers); len(verifiers) > 0 {
 		_, _ = fmt.Fprintf(w, "  verdicts by: %s\n", strings.Join(verifiers, ", "))
 	}
 	_, _ = fmt.Fprintf(w, "  levels:      %s\n", strings.Join(p.VerifiedLevels, ", "))

@@ -337,11 +337,39 @@ func TestEvidencePack(t *testing.T) {
 	assert.NotContains(t, admission, "someone-elses", "only the chart's policies")
 	var controls struct {
 		Frameworks []struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			Controls []struct {
+				Evidence []struct {
+					Status string   `json:"status"`
+					Files  []string `json:"files"`
+				} `json:"evidence"`
+			} `json:"controls"`
 		} `json:"frameworks"`
 	}
 	require.NoError(t, json.Unmarshal(files["controls.json"], &controls))
 	assert.NotEmpty(t, controls.Frameworks)
+	// The mapping cites every file of records the pack writes, and only
+	// files of the pack (AGENT-EVIDENCE-04 checks the same on a live pack).
+	cited := map[string]bool{}
+	for _, f := range controls.Frameworks {
+		for _, c := range f.Controls {
+			for _, ev := range c.Evidence {
+				for _, name := range ev.Files {
+					assert.Contains(t, files, name, "controls.json cites %s, a file of the pack", name)
+					if ev.Status == "shipped" {
+						cited[name] = true
+					}
+				}
+			}
+		}
+	}
+	// Every file of records the pack writes, empty or not: a new kind's file
+	// is uncited until a row names it (QA-5 on #2279).
+	for _, f := range m.Files {
+		if strings.HasSuffix(f.Name, ".ndjson") {
+			assert.True(t, cited[f.Name], "no shipped row of controls.json cites %s (%d records)", f.Name, f.Records)
+		}
+	}
 
 	// Coverage: the oldest of each kind the cluster holds, whatever the period.
 	assert.Equal(t, time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC), m.Coverage.Oldest["AuditEvent"])

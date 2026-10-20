@@ -106,7 +106,7 @@ func approved(element string) Evidence {
 			"linked ticket was verified as the promotion's",
 		Kinds: []string{"PolicyGate", "Approval", "Pipeline", "ChangeRequest"},
 		Actions: []string{"ApprovalRecorded", "ApprovalRevoked", "GateEvaluated", "PRMerged",
-			"ChangeRequestApproved", "ChangeRequestRejected"},
+			"ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved", "ChangeRequestRejected"},
 		Status: Shipped,
 	}
 }
