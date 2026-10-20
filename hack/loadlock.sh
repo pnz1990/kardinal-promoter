@@ -168,7 +168,9 @@ write_view() {
     [ -f "$d/owner" ] && lines="$lines$(sed -E 's/(^|[[:space:]])pid ([0-9]+)/\1pid:\2/g' "$d/owner")"$'\n'
   done
   if [ -z "$lines" ]; then
-    [ ! -e "$lock" ] || rm -r "$lock"
+    # Only the view goes: a LOCK an older client made since holders_count
+    # looked has no marker, and is left alone.
+    [ ! -e "$lock/.counting" ] || rm -r "$lock"
     return 0
   fi
   if mkdir "$lock" 2>/dev/null; then

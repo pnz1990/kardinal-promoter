@@ -450,6 +450,11 @@ func writeView(lock string) error {
 		return errOlderHolder
 	}
 	if len(held) == 0 {
+		// Only the view goes: a LOCK an older client made since holders
+		// looked has no marker, and is left alone.
+		if _, err := os.Stat(filepath.Join(lock, viewMarker)); err != nil {
+			return nil
+		}
 		if err := os.RemoveAll(lock); err != nil {
 			return fmt.Errorf("remove %s: %w", lock, err)
 		}
