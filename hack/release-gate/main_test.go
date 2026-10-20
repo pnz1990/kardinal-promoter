@@ -1660,6 +1660,94 @@ func TestCIRunner_OnePollForAllSteps(t *testing.T) {
 	assert.Positive(t, resets.Load(), "the rate limit's reset was read to wait for it")
 }
 
+// TestCIRunner_DispatchOnce: GitHub's rate limit refusing the dispatch is
+// waited out (in the v0.12.0 gate every call of the account hit it); any
+// other dispatch error fails every CI step from one dispatch, not one
+// dispatch per step (after a 5xx GitHub may have started the run, and a
+// second dispatch would replace it).
+func TestCIRunner_DispatchOnce(t *testing.T) {
+	const steps = 8
+	for _, tt := range []struct {
+		name    string
+		refuse  []string // the dispatch's errors, in order, then success
+		wantErr string
+		calls   int
+	}{
+		{name: "rate limits", refuse: []string{
+			"HTTP 403: API rate limit exceeded for user ID 1.",
+			"HTTP 403: You have exceeded a secondary rate limit",
+			"HTTP 429: Too Many Requests",
+		}, calls: 4},
+		{name: "a 5xx", refuse: []string{"HTTP 502: Bad Gateway"}, wantErr: "dispatch e2e-live.yml: HTTP 502: Bad Gateway", calls: 1},
+		{name: "refused", refuse: []string{"HTTP 422: Workflow does not have 'workflow_dispatch' trigger"},
+			wantErr: "dispatch e2e-live.yml: HTTP 422", calls: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			refuse := tt.refuse
+			reply := func(call string) ([]byte, error) {
+				switch {
+				case call == "api repos/o/r/commits/br --jq .sha":
+					return []byte("abc\n"), nil
+				case call == "api rate_limit --jq .resources.core.reset":
+					return []byte(fmt.Sprint(time.Now().Add(time.Second).Unix())), nil
+				case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br "):
+					mu.Lock()
+					defer mu.Unlock()
+					if len(refuse) > 0 {
+						msg := refuse[0]
+						refuse = refuse[1:]
+						return nil, errors.New(msg)
+					}
+					return nil, nil
+				case strings.HasPrefix(call, "run list"):
+					now := time.Now().UTC().Format(time.RFC3339)
+					return []byte(`[{"databaseId":9,"headSha":"abc","createdAt":"` + now + `"}]`), nil
+				case call == "run view 9 --repo o/r --json status,attempt,jobs":
+					var jobs []string
+					for i := 0; i < steps; i++ {
+						jobs = append(jobs, fmt.Sprintf(`{"databaseId":%d,"name":"core %d/%d on Kubernetes 1.37","status":"completed","conclusion":"cancelled","url":"https://x/job/%d"}`,
+							100+i, i+1, steps, 100+i))
+					}
+					return []byte(`{"status":"completed","attempt":1,"jobs":[` + strings.Join(jobs, ",") + `]}`), nil
+				}
+				return nil, fmt.Errorf("no %s", call) // logs and images: not needed here
+			}
+			f := &fakeGH{reply: reply}
+			out := t.TempDir()
+			c := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 1, suites: []string{"core"}, minors: "1.37",
+				poll: time.Millisecond, jobWait: time.Minute, log: func(string, ...any) {},
+				wait: func(context.Context, time.Duration) error { return nil }}
+			var wg sync.WaitGroup
+			errs := make([]error, steps)
+			for i := 0; i < steps; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					st := Step{ID: fmt.Sprintf("ci-core-%d", i), CIJob: &ciJob{ID: fmt.Sprintf("core-137-%dof%d", i+1, steps), Suite: "core",
+						Minor: "1.37", Shard: fmt.Sprintf("%d/%d", i+1, steps)}}
+					dir := filepath.Join(out, st.ID)
+					require.NoError(t, os.MkdirAll(dir, 0o755))
+					errs[i] = c.Run(context.Background(), st, dir)
+				}(i)
+			}
+			wg.Wait()
+			assert.Equal(t, tt.calls, f.called("workflow run"), "dispatch calls for %d CI steps", steps)
+			for i, err := range errs {
+				require.Error(t, err, "step %d", i)
+				if tt.wantErr != "" {
+					assert.Contains(t, err.Error(), tt.wantErr, "step %d", i)
+					continue
+				}
+				assert.Contains(t, err.Error(), fmt.Sprintf("CI job https://x/job/%d: cancelled", 100+i), "the run was dispatched and its job seen")
+			}
+			if tt.wantErr == "" {
+				assert.FileExists(t, filepath.Join(out, "ci-run.json"))
+			}
+		})
+	}
+}
+
 func TestTransient(t *testing.T) {
 	for msg, want := range map[string]bool{
 		"HTTP 403: API rate limit exceeded for user ID 1.":             true,

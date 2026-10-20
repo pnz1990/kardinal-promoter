@@ -680,3 +680,34 @@ func TestE2EMatrixMinors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, string(out), "MINORS: 1.x is not a Kubernetes minor")
 }
+
+// TestE2ELiveGateBranchesKeepTheirRun: on the release gate's branches (main
+// and release/*, hack/release-gate -live ci) a dispatched e2e-live run takes
+// 16 runners, and a newer dispatch on the branch waits for it instead of
+// cancelling it, so nothing dispatched during a gate's hours cancels the
+// gate's jobs. On any other branch a dispatch takes 4 runners and replaces
+// the branch's older run.
+func TestE2ELiveGateBranchesKeepTheirRun(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "e2e-live.yml"))
+	require.NoError(t, err)
+	var wf struct {
+		Concurrency struct {
+			Group  string `json:"group"`
+			Cancel string `json:"cancel-in-progress"`
+		} `json:"concurrency"`
+		Jobs map[string]struct {
+			Strategy struct {
+				MaxParallel string `json:"max-parallel"`
+			} `json:"strategy"`
+		} `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	const otherBranch = "github.event_name == 'workflow_dispatch' && github.ref_name != 'main' && !startsWith(github.ref_name, 'release/')"
+	assert.Equal(t, "${{ "+otherBranch+" }}", wf.Concurrency.Cancel,
+		"only a dispatch on a branch other than main and release/* cancels the branch's running run")
+	assert.Contains(t, wf.Concurrency.Group, "github.ref_name", "one group per branch")
+	suite, ok := wf.Jobs["suite"]
+	require.True(t, ok, "e2e-live.yml has the suite job")
+	assert.Equal(t, "${{ ("+otherBranch+") && 4 || 16 }}", suite.Strategy.MaxParallel,
+		"the same branches take 16 runners")
+}

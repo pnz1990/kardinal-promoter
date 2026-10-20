@@ -60,10 +60,12 @@ permissions:
 # One scheduled run at a time: a nightly run that outlives its night is not
 # overlapped by the next one. A dispatched run is one per branch: a newer
 # dispatch on the same branch replaces the older one, so one branch never holds
-# several matrices of runners.
+# several matrices of runners. Except on main and release/*, the release
+# gate's branches (hack/release-gate -live ci): a newer dispatch there waits
+# for the running one, so a dispatch during a gate cannot cancel its jobs.
 concurrency:
   group: e2e-live-${{ github.event_name == 'schedule' && 'schedule' || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != 'main' && !startsWith(github.ref_name, 'release/') }}
 
 # bash (not the default `bash -e`) so every step runs with -eo pipefail.
 defaults:

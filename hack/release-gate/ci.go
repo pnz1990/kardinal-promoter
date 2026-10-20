@@ -74,6 +74,7 @@ type ciRunner struct {
 
 	mu         sync.Mutex
 	run        *ciRun
+	runErr     error // why ensureRun failed: kept, so the gate dispatches once, not once per CI step
 	imagesDone bool
 
 	// The shared look at the run (view): one gh call per poll interval for
@@ -90,20 +91,27 @@ type ciRunner struct {
 const workflow = "e2e-live.yml"
 
 // ensureRun dispatches e2e-live.yml once for the gate's commit and returns
-// the run.
+// the run. Its error is every CI step's: a later step does not dispatch
+// again, since a second dispatch after one that GitHub took would replace the
+// first run.
 func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.run != nil {
-		return c.run, nil
+	if c.run != nil || c.runErr != nil {
+		return c.run, c.runErr
 	}
+	r, err := c.findOrDispatch(ctx)
+	c.run, c.runErr = r, err
+	return r, err
+}
+
+func (c *ciRunner) findOrDispatch(ctx context.Context) (*ciRun, error) {
 	path := filepath.Join(c.out, "ci-run.json")
 	suites := strings.Join(c.suites, " ")
 	if data, err := os.ReadFile(path); err == nil {
 		var r ciRun
 		if json.Unmarshal(data, &r) == nil && r.SHA == c.sha && r.Suites == suites && r.Minors == c.minors && r.Count == c.count && r.ID != 0 {
-			c.run = &r
-			return c.run, nil
+			return &r, nil
 		}
 	}
 	head, err := c.call(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", c.repo, c.ref), "--jq", ".sha")
@@ -114,7 +122,7 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 		return nil, fmt.Errorf("branch %s on GitHub is at %.12s, not the gate's commit %.12s: push it, or pass -ref", c.ref, got, c.sha)
 	}
 	since := time.Now().UTC().Add(-time.Minute)
-	if _, err := c.gh(ctx, "workflow", "run", workflow, "--repo", c.repo, "--ref", c.ref,
+	if err := c.dispatch(ctx, "workflow", "run", workflow, "--repo", c.repo, "--ref", c.ref,
 		"-f", "suites="+suites, "-f", fmt.Sprintf("count=%d", c.count), "-f", "minors="+c.minors); err != nil {
 		return nil, fmt.Errorf("dispatch %s: %w", workflow, err)
 	}
@@ -136,13 +144,13 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 		sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 		for _, r := range runs {
 			if r.HeadSha == c.sha && !r.CreatedAt.Before(since) {
-				c.run = &ciRun{ID: r.DatabaseID, SHA: c.sha, Ref: c.ref, Suites: suites, Minors: c.minors, Count: c.count}
-				data, _ := json.MarshalIndent(c.run, "", "  ")
+				run := &ciRun{ID: r.DatabaseID, SHA: c.sha, Ref: c.ref, Suites: suites, Minors: c.minors, Count: c.count}
+				data, _ := json.MarshalIndent(run, "", "  ")
 				if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 					return nil, fmt.Errorf("save the run: %w", err)
 				}
 				c.log("CI run https://github.com/%s/actions/runs/%d", c.repo, r.DatabaseID)
-				return c.run, nil
+				return run, nil
 			}
 		}
 		select {
@@ -232,6 +240,31 @@ func (c *ciRunner) call(ctx context.Context, args ...string) ([]byte, error) {
 
 // callAttempts bounds the retries of a call that is not a poll.
 const callAttempts = 8
+
+// dispatch is the workflow dispatch, retried only while GitHub's rate limit
+// refuses it: a refused request dispatched nothing. Any other error is
+// returned at once: after a 5xx or a dropped connection GitHub may have taken
+// the dispatch, and dispatching again would start a second run.
+func (c *ciRunner) dispatch(ctx context.Context, args ...string) error {
+	for attempt := 1; ; attempt++ {
+		_, err := c.gh(ctx, args...)
+		if err == nil || !rateLimited(err) || attempt >= callAttempts {
+			return err
+		}
+		d := c.backoff(ctx, err, attempt)
+		c.log("dispatch %s: %v; retrying in %s", workflow, err, d)
+		if werr := c.sleepFor(ctx, d); werr != nil {
+			return werr
+		}
+	}
+}
+
+// rateLimited says whether GitHub refused a request for a primary or
+// secondary rate limit.
+func rateLimited(err error) bool {
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "rate limit") || strings.Contains(m, "http 429")
+}
 
 // transient says whether a gh error is worth retrying: GitHub's primary and
 // secondary rate limits (403, 429), its 5xx, and dropped connections.
