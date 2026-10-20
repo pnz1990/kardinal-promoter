@@ -327,15 +327,14 @@ jobs:
           # As in the shards: test/helm's PromQL tests need promtool, and
           # fail without it in CI (test/helm reads the docs since #2289), and
           # the packages the shards give 300s (test/helm #2156, test/hack
-          # #2292) get it here too. So does cmd/kardinal/cmd, which passed
-          # 120s here next to the other packages (#2194). Every other package
+          # #2292) get it here too. Every other package
           # keeps 120s.
           others=()
           slow=()
           for p in "${packages[@]}"; do
             case "$p" in
               ./test/helm/) bash hack/ci/install-promtool.sh; slow+=("$p") ;;
-              ./test/hack/ | ./cmd/kardinal/cmd/) slow+=("$p") ;;
+              ./test/hack/) slow+=("$p") ;;
               *) others+=("$p") ;;
             esac
           done
