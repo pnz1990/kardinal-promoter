@@ -1663,9 +1663,12 @@ func TestLoadLock_OwnerRefused(t *testing.T) {
 func TestLoadLock_EmptyOwnerIsNoOwner(t *testing.T) {
 	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	for _, tc := range []struct {
-		name string
-		old  bool
-	}{{"fresh: a holder writing it, it stays", false}, {"a minute old: no owner, reclaimed", true}} {
+		name    string
+		old     bool
+		newFile bool // the owner file written now in an old slot directory
+	}{{"fresh: a holder writing it, it stays", false, false}, {"a minute old: no owner, reclaimed", true, false},
+		// #2318 QA-2: the newer of the two mtimes counts.
+		{"written now in an old slot directory: it stays", true, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			lock := filepath.Join(t.TempDir(), "LOADLOCK")
 			slot := filepath.Join(lock+".d", "1")
@@ -1673,9 +1676,12 @@ func TestLoadLock_EmptyOwnerIsNoOwner(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), nil, 0o644))
 			if tc.old {
 				old := time.Now().Add(-2 * time.Minute)
-				require.NoError(t, os.Chtimes(filepath.Join(slot, "owner"), old, old))
+				if !tc.newFile {
+					require.NoError(t, os.Chtimes(filepath.Join(slot, "owner"), old, old))
+				}
 				require.NoError(t, os.Chtimes(slot, old, old))
 			}
+			reclaimed := tc.old && !tc.newFile
 			cmd := loadlock(t, lock, "true") // a busy host: one holder at a time
 			out := &syncBuf{}
 			cmd.Stdout, cmd.Stderr = out, out
@@ -1684,13 +1690,13 @@ func TestLoadLock_EmptyOwnerIsNoOwner(t *testing.T) {
 			go func() { done <- cmd.Wait() }()
 			select {
 			case err := <-done:
-				require.True(t, tc.old, "it took the lock beside a holder writing its owner: %s", out.String())
+				require.True(t, reclaimed, "it took the lock beside a holder writing its owner: %s", out.String())
 				require.NoError(t, err, "%s", out.String())
 				assert.Contains(t, out.String(), "which has had no owner for a minute")
 			case <-time.After(time.Second):
 				_ = cmd.Process.Kill()
 				<-done
-				require.False(t, tc.old, "an old empty owner wedged the lock: %s", out.String())
+				require.False(t, reclaimed, "an old empty owner wedged the lock: %s", out.String())
 				assert.DirExists(t, slot)
 			}
 		})

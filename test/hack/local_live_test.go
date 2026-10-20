@@ -1244,11 +1244,16 @@ exec `+realCat+` "$@"
 			empty   bool
 			age     bool
 			removed bool
+			newFile bool // an empty owner file written now in an old slot directory
 		}{
-			{"no owner file, fresh", false, false, false},
-			{"no owner file, 3 minutes old", false, true, true},
-			{"an empty owner file, fresh", true, false, false},
-			{"an empty owner file, 3 minutes old", true, true, true},
+			{"no owner file, fresh", false, false, false, false},
+			{"no owner file, 3 minutes old", false, true, true, false},
+			{"an empty owner file, fresh", true, false, false, false},
+			{"an empty owner file, 3 minutes old", true, true, true, false},
+			// #2318 QA-2: the newer of the two mtimes counts. A directory's
+			// mtime can be old while its owner file is being written now (a
+			// rewrite of an old slot's owner, outside the reclaim lock).
+			{"an empty owner file written now, its slot directory 3 minutes old", true, true, false, true},
 		} {
 			h := newLocalLiveHost(t)
 			d := filepath.Join(h.slots, "1")
@@ -1257,7 +1262,7 @@ exec `+realCat+` "$@"
 				require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), nil, 0o644))
 			}
 			if tc.age {
-				if tc.empty {
+				if tc.empty && !tc.newFile {
 					require.NoError(t, os.Chtimes(filepath.Join(d, "owner"), old, old))
 				}
 				require.NoError(t, os.Chtimes(d, old, old))

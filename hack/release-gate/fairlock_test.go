@@ -991,6 +991,11 @@ func TestDeadDir_EmptyOwner(t *testing.T) {
 	ok, _ = f.deadDir(slot)
 	assert.False(t, ok, "the slot directory is new: still not old")
 	require.NoError(t, os.Chtimes(slot, old, old))
+	now := time.Now() // #2318 QA-2: the newer of the two mtimes counts
+	require.NoError(t, os.Chtimes(owner, now, now))
+	ok, _ = f.deadDir(slot)
+	assert.False(t, ok, "the owner file is new (being written), though its directory is old")
+	require.NoError(t, os.Chtimes(owner, old, old))
 	ok, why := f.deadDir(slot)
 	assert.True(t, ok, "empty and older than orphanAge: no owner")
 	assert.Contains(t, why, "which has had no owner for")
