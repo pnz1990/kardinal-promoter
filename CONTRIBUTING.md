@@ -168,13 +168,16 @@ It covers:
   admission policies on the same two Kubernetes versions.
 
 It does not run what `hack/release-gate/not-run.txt` lists: receipts signed
-with a real cloud KMS key, a real EKS cluster, public-good sigstore, real
-ServiceNow and Jira, what `release.yml` publishes, and running the artifacts
-for platforms other than linux/amd64, which it only builds. Each line gives the item, why the gate
-does not run it, and the evidence that stands in for it: covered
-`test/e2e/coverage.tsv` rows, or `release.yml:<job>`. A line with no reason
-or evidence, or one citing a row or job that does not exist, stops the gate
-before it runs anything.
+with a real cloud KMS key, a real EKS cluster (for the EKS health adapter, and
+as a multi-cluster spoke), public-good sigstore, real ServiceNow and Jira,
+what `release.yml` publishes, running the artifacts for platforms other than
+linux/amd64, which it only builds, a 100,000-receipt stress run, and
+Kubernetes 1.36. Each line gives the item, why the gate does not run it, and
+the evidence that stands in for it: covered `test/e2e/coverage.tsv` rows,
+`release.yml:<job>`, or `matrix.txt:<suite> <minor>` (a job the nightly
+e2e-live run runs). A line with no reason or evidence, or one citing a row,
+job or matrix job that does not exist, stops the gate before it runs
+anything.
 
 The verdict is GO only when everything is proven:
 

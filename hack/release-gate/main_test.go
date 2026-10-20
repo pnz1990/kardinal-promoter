@@ -154,15 +154,20 @@ func TestPlanOfThisRepo(t *testing.T) {
 	_, err = readAllowlist(filepath.Join(root, "hack", "release-gate", "coverage-allow.txt"))
 	require.NoError(t, err)
 
-	// LoadRepo checked every row and job not-run.txt cites; it names the six
-	// categories QA-2's v0.13 gate audit found the gate never runs (#2303),
-	// one line each. A line added or removed changes this list too.
+	// LoadRepo checked every row, job and matrix line not-run.txt cites; it
+	// names the six categories QA-2's v0.13 gate audit found the gate never
+	// runs (#2303) and the three V013-READINESS adds (an EKS spoke, 100,000
+	// receipts, Kubernetes 1.36), one line each. A line added or removed
+	// changes this list too.
 	categories := []struct {
 		name  string
 		words []string
 	}{
 		{"cloud KMS keys", []string{"AWS KMS", "Google Cloud KMS"}},
-		{"EKS", []string{"EKS"}},
+		{"the EKS health adapter", []string{"EKS health adapter"}},
+		{"multi-cluster with an EKS spoke", []string{"Multi-cluster", "EKS"}},
+		{"the 100,000-receipt stress run", []string{"100,000", "receipt"}},
+		{"Kubernetes 1.36", []string{"Kubernetes 1.36"}},
 		{"the public-good sigstore", []string{"Fulcio", "Rekor", "TUF"}},
 		{"ticketing vendors", []string{"ServiceNow", "Jira"}},
 		{"publishing", []string{"ghcr.io", "cosign", "SLSA", "SBOM"}},
@@ -899,8 +904,8 @@ func TestRender(t *testing.T) {
 	assert.NotContains(t, b.String(), "pinned, not counted")
 }
 
-// notRunRoot is a checkout with a coverage.tsv, a release.yml and the given
-// not-run.txt.
+// notRunRoot is a checkout with a coverage.tsv, a release.yml, a matrix.txt
+// and the given not-run.txt.
 func notRunRoot(t *testing.T, notRun string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -908,6 +913,7 @@ func notRunRoot(t *testing.T, notRun string) string {
 		"test/e2e/coverage.tsv": "id\ttier\tsuite\tstatus\n" +
 			"SIGN-01\tcontract\tunit\tcovered\nLIVE-01\tlive\tcore\tcovered\nTODO-01\tlive\tcore\ttodo\n",
 		".github/workflows/release.yml": "on:\n  push: {}\njobs:\n  preflight:\n    runs-on: x\n  dry-run:\n    runs-on: x\n",
+		"hack/e2e/matrix.txt":           "core 1.35 1/2 -\ncore 1.36 1/2 -\ncore 1.36 2/2 -\ngitea 1.37 - -\n",
 		"hack/release-gate/not-run.txt": notRun,
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
@@ -956,12 +962,15 @@ func TestLoadRepoStopsOnABrokenNotRunList(t *testing.T) {
 // TestReadNotRun: every line names an item, a reason and evidence that
 // exists, or the gate does not start (QA-2's v0.13 gate audit, #2303).
 func TestReadNotRun(t *testing.T) {
-	got, err := readNotRun(notRunRoot(t, "# comment\n\nReal KMS | no cloud account | SIGN-01, release.yml:dry-run\nEKS|no AWS|LIVE-01\n"))
+	got, err := readNotRun(notRunRoot(t, "# comment\n\nReal KMS | no cloud account | SIGN-01, release.yml:dry-run\nEKS|no AWS|LIVE-01\n"+
+		"Kubernetes 1.36 | the gate runs 1.35 and 1.37 | matrix.txt:core  1.36, LIVE-01\n"))
 	require.NoError(t, err)
 	assert.Equal(t, []NotRunItem{
 		{Item: "Real KMS", Reason: "no cloud account", Evidence: []Evidence{{Row: "SIGN-01", Tier: "contract"}, {Job: "dry-run"}}},
 		{Item: "EKS", Reason: "no AWS", Evidence: []Evidence{{Row: "LIVE-01", Tier: "live"}}},
+		{Item: "Kubernetes 1.36", Reason: "the gate runs 1.35 and 1.37", Evidence: []Evidence{{Matrix: "core 1.36"}, {Row: "LIVE-01", Tier: "live"}}},
 	}, got)
+	assert.Equal(t, "nightly e2e-live `core 1.36` (hack/e2e/matrix.txt)", got[2].Evidence[0].String(), "the report says what runs it")
 
 	for _, empty := range []string{"", "# nothing\n\n   \n"} {
 		_, err = readNotRun(notRunRoot(t, empty))
@@ -978,6 +987,10 @@ func TestReadNotRun(t *testing.T) {
 		{"a row coverage.tsv does not have", "Real KMS | no cloud account | SIGN-02", "Real KMS cites SIGN-02, which is not a row of test/e2e/coverage.tsv"},
 		{"a row that is not covered", "Real KMS | no cloud account | TODO-01", "Real KMS cites TODO-01, whose status is todo, not covered"},
 		{"a job release.yml does not have", "Real KMS | no cloud account | release.yml:publish", "Real KMS cites release.yml job publish, which .github/workflows/release.yml does not have"},
+		{"a minor matrix.txt does not run the suite on", "Kubernetes 1.36 | not in the gate | matrix.txt:gitea 1.36",
+			"Kubernetes 1.36 cites matrix.txt:gitea 1.36, which no hack/e2e/matrix.txt line runs"},
+		{"a suite matrix.txt does not have", "Kubernetes 1.36 | not in the gate | matrix.txt:nosuch 1.36", "which no hack/e2e/matrix.txt line runs"},
+		{"a matrix reference without a minor", "Kubernetes 1.36 | not in the gate | matrix.txt:core", "matrix.txt:core, which no hack/e2e/matrix.txt line runs"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := readNotRun(notRunRoot(t, tc.line+"\n"))
