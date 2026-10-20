@@ -140,8 +140,8 @@ It covers:
 
 It does not run what `hack/release-gate/not-run.txt` lists: receipts signed
 with a real cloud KMS key, a real EKS cluster, public-good sigstore, real
-ServiceNow and Jira, what `release.yml` publishes, and the artifacts for
-platforms other than linux/amd64. Each line gives the item, why the gate
+ServiceNow and Jira, what `release.yml` publishes, and running the artifacts
+for platforms other than linux/amd64, which it only builds. Each line gives the item, why the gate
 does not run it, and the evidence that stands in for it: covered
 `test/e2e/coverage.tsv` rows, or `release.yml:<job>`. A line with no reason
 or evidence, or one citing a row or job that does not exist, stops the gate
