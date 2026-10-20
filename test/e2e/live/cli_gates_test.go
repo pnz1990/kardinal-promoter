@@ -235,9 +235,11 @@ func TestCLI_GatesExplainOverride(t *testing.T) {
 	// No Bundle yet.
 	assert.Equal(t, "No promotion for pipeline \"podinfo\" yet\n", c.Must(ns, "explain", pipelineName))
 	assert.Equal(t, "No promotion for \"prod\" in pipeline \"podinfo\" yet\n", c.Must(ns, "explain", pipelineName, "--env", "prod"))
+	// The refusals through why -o wide, explain's replacement (#1758): explain
+	// says the same after its deprecation notice (checked below).
 	refuses(t, c, ns, `environment "staging" not found in pipeline "podinfo" (environments: test, prod)`,
-		"explain", pipelineName, "--env", "staging")
-	refusesNotFound(t, c, ns, "", "nope", "explain", "nope")
+		"why", pipelineName, "staging", "-o", "wide")
+	refusesNotFound(t, c, ns, "", "nope", "why", "nope", "-o", "wide")
 
 	summary := regexp.MustCompile(`^Controller:  (\S+) in kardinal-system, (\d+)/(\d+) ready\nPipelines:   (\d+)(?: \((\d+) degraded: [^)\n]+\))?\n` +
 		`Versions:    (\d+) \((\d+) in flight\)\n\nNAMESPACE +PIPELINE +SUMMARY\n`)
