@@ -8,7 +8,6 @@ package live
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -178,18 +177,20 @@ func asServiceAccount(t *testing.T, e *framework.Env, ns, name string) client.Cl
 }
 
 // referrerResources are the resourceUris of the receipt referrers of
-// repo@digest in the suite's registry.
-func referrerResources(t *testing.T, repo, digest string) []string {
+// repo@digest in the suite's registry, and how many referrers the image has
+// in all (a referrer without the resource annotation is counted there only).
+func referrerResources(t *testing.T, repo, digest string) ([]string, int) {
 	t.Helper()
 	var out []string
 	reg := framework.NewRegistry(t)
-	_, err := (&receipt.Registry{Insecure: true}).Referrers(context.Background(), reg.HostRepository(repo), digest,
+	found, err := (&receipt.Registry{Insecure: true}).Referrers(context.Background(), reg.HostRepository(repo), digest,
 		func(res string) bool {
 			out = append(out, res)
 			return false // only the annotation: the receipts themselves are not fetched
 		})
 	require.NoError(t, err)
-	return out
+	require.False(t, found.Truncated)
+	return out, found.Entries
 }
 
 // packHolds lists the files of an extracted pack that contain one of
@@ -245,13 +246,16 @@ func packFiles(m map[string]interface{}) map[string]float64 {
 //     exempts only its own controller). verify-receipt --file pins the
 //     namespace: team A's receipt presented as team B's fails naming it, and
 //     a receipt does not verify with the other shard's key.
-//   - No AuditEvent outside a team's namespace names its version.
+//   - No AuditEvent outside a team's namespace names its version (its
+//     Bundle and Pipeline, or its ticket key), and some in it do: the same
+//     check pointed at the other team's namespace finds every one.
 //   - A third namespace on shard b whose gate reads team A's change request
 //     template by name gets no instance of it (templates are the
 //     namespace's own): its prod gate is blocked naming the template. Its
 //     version of team A's image keeps its receipt in the cluster, but gets
 //     no referrer in team A's repository (Stored=False,
-//     RepositoryNotAllowed): only team A's receipts are referrers there.
+//     RepositoryNotAllowed): only team A's receipts are referrers there, and
+//     no other referrer, annotated or not.
 //
 // Covers TENANCY-AUDITOR-01, TENANCY-RECORDS-01, TENANCY-RECORDS-02.
 func TestTenancy_Evidence(t *testing.T) {
@@ -375,19 +379,56 @@ func TestTenancy_Evidence(t *testing.T) {
 	t.Run("audit-events", func(t *testing.T) {
 		var all v1alpha1.AuditEventList
 		require.NoError(t, e.Client.List(ctx, &all))
-		seen := map[string]int{}
-		for _, ev := range all.Items {
-			raw, err := json.Marshal(ev)
-			require.NoError(t, err)
-			for _, tm := range []*team{a, b} {
-				if bytes.Contains(raw, []byte(tm.uid)) || bytes.Contains(raw, []byte(tm.correlation)) {
-					assert.Equal(t, tm.ns, ev.Namespace, "AuditEvent %s/%s names %s's version", ev.Namespace, ev.Name, tm.name)
+		// names reports whether ev records tm's version: its Bundle (an
+		// AuditEvent names the Bundle and Pipeline, not the UID) or its
+		// change's ticket key (the ChangeRequest records).
+		names := func(ev *v1alpha1.AuditEvent, tm *team) (bundle, ticket bool) {
+			bundle = ev.Spec.BundleName == tm.bundle && ev.Spec.PipelineName == pipelineName
+			ticket = strings.Contains(ev.Spec.Message, tm.ticket)
+			return bundle, ticket
+		}
+		// leaks are the AuditEvents that name a team's version outside the
+		// namespace home gives it. matched counts the ones in it, and
+		// tickets those naming its ticket, so the check cannot pass on an
+		// empty match set.
+		check := func(home func(*team) string) (leaks []string, matched, tickets map[string]int) {
+			matched, tickets = map[string]int{}, map[string]int{}
+			for i := range all.Items {
+				ev := &all.Items[i]
+				for _, tm := range []*team{a, b} {
+					bundle, ticket := names(ev, tm)
+					switch {
+					case !bundle && !ticket:
+					case ev.Namespace != home(tm):
+						leaks = append(leaks, fmt.Sprintf("%s/%s (%s %s) names %s's version", ev.Namespace, ev.Name,
+							ev.Spec.Action, ev.Spec.BundleName, tm.name))
+					default:
+						matched[tm.name]++
+						if ticket {
+							tickets[tm.name]++
+						}
+					}
 				}
 			}
-			seen[ev.Namespace]++
+			return leaks, matched, tickets
 		}
-		assert.NotZero(t, seen[a.ns], "team A's promotion wrote AuditEvents")
-		assert.NotZero(t, seen[b.ns], "team B's promotion wrote AuditEvents")
+		leaks, matched, tickets := check(func(tm *team) string { return tm.ns })
+		assert.Empty(t, leaks, "no AuditEvent outside a team's namespace names its version")
+		for _, tm := range []*team{a, b} {
+			assert.NotZero(t, matched[tm.name], "%s's AuditEvents are in its namespace", tm.name)
+			assert.NotZero(t, tickets[tm.name], "%s's change records name its ticket %s", tm.name, tm.ticket)
+		}
+		// The check reds: pointed at the other team's namespace, every one
+		// of a team's records is a leak.
+		swapped, _, _ := check(func(tm *team) string {
+			if tm == a {
+				return b.ns
+			}
+			return a.ns
+		})
+		assert.Len(t, swapped, matched[a.name]+matched[b.name], "the same check, pointed at the other team's namespace, fails")
+		t.Logf("AuditEvents of team A's version in its namespace: %d (%d naming the ticket); team B's: %d (%d); swapped: %d leaks",
+			matched[a.name], tickets[a.name], matched[b.name], tickets[b.name], len(swapped))
 	})
 
 	t.Run("change-requests-and-referrers", func(t *testing.T) {
@@ -421,8 +462,9 @@ func TestTenancy_Evidence(t *testing.T) {
 				require.NotNil(t, s, "%s %s: conditions %+v", tm.name, env, got.Status.Conditions)
 				assert.Equal(t, metav1.ConditionTrue, s.Status, "%s's %s receipt is a referrer of its own image: %s", tm.name, env, s.Message)
 			}
-			res := referrerResources(t, tm.repo, tm.digest)
+			res, entries := referrerResources(t, tm.repo, tm.digest)
 			assert.Len(t, res, 2, "%s's image has its test and prod receipts: %v", tm.name, res)
+			assert.Equal(t, len(res), entries, "%s's image has no other referrer, annotated or not", tm.name)
 			for _, uri := range res {
 				r, err := receipt.ParseResourceURI(uri)
 				require.NoError(t, err)
