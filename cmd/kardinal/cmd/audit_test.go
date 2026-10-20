@@ -32,6 +32,7 @@ import (
 // C09a-cli-17: --since takes a whole number of days or a Go duration, and
 // must be positive.
 func TestParseSinceDuration(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in      string
 		want    time.Duration
@@ -65,6 +66,7 @@ func TestParseSinceDuration(t *testing.T) {
 // C09a-cli-17: a promotion that started before the window and succeeded in it
 // does not push the success rate over 100%.
 func TestAuditSummary_SuccessRateOverCompleted(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	event := func(name, action string, at time.Time) sigs_client.Object {
 		return &v1alpha1.AuditEvent{

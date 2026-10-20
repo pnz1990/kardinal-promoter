@@ -81,6 +81,7 @@ func TestConfirm(t *testing.T) {
 //
 // Covers CLI-VERBS-01.
 func TestExitCode(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, 0, ExitCode(nil))
 	assert.Equal(t, 1, ExitCode(errors.New("x")))
 	assert.Equal(t, ExitHeld, ExitCode(&exitError{code: ExitHeld}))
@@ -413,6 +414,7 @@ var updateShipRechecks = flag.Bool("update-ship-rechecks", false, "rewrite testd
 //
 // Covers CLI-VERBS-01.
 func TestRechecks_Golden(t *testing.T) {
+	t.Parallel()
 	exprs := []string{
 		// Read a variable that changes with time: waits.
 		`!schedule.isWeekend && schedule.hour >= 9 && schedule.hour < 17`,
@@ -641,6 +643,7 @@ func TestShipSummary_Golden(t *testing.T) {
 //
 // Covers CLI-VERBS-01.
 func TestShipTiming(t *testing.T) {
+	t.Parallel()
 	t0 := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	m := func(d time.Duration) *metav1.Time { x := metav1.NewTime(t0.Add(d)); return &x }
 	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
@@ -748,6 +751,7 @@ func TestApprove_PinAndConfirm(t *testing.T) {
 // TestShortDuration: ship's times are to the second, and never negative: a
 // controller clock ahead of this one makes "for" 0s, not "-3s".
 func TestShortDuration(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		d    time.Duration
 		want string

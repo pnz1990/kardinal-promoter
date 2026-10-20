@@ -43,6 +43,7 @@ func buildCreateBundleScheme(t *testing.T) *runtime.Scheme {
 
 // TestCreateBundle_DryRunFlagRegistered verifies --dry-run is registered.
 func TestCreateBundle_DryRunFlagRegistered(t *testing.T) {
+	t.Parallel()
 	cmd := newCreateBundleCmd()
 	f := cmd.Flags().Lookup("dry-run")
 	require.NotNil(t, f, "--dry-run must be registered on 'create bundle'")
@@ -52,6 +53,7 @@ func TestCreateBundle_DryRunFlagRegistered(t *testing.T) {
 // TestCreateBundle_DryRun_NoAPICallsMade verifies that --dry-run does NOT call
 // c.Create (i.e., no Bundle is created on the cluster).
 func TestCreateBundle_DryRun_NoAPICallsMade(t *testing.T) {
+	t.Parallel()
 	pipe := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "nginx-demo",
@@ -83,6 +85,7 @@ func TestCreateBundle_DryRun_NoAPICallsMade(t *testing.T) {
 // TestCreateBundle_DryRun_OutputContainsKeyInfo verifies the dry-run output mentions
 // the pipeline name and dry-run indicator.
 func TestCreateBundle_DryRun_OutputContainsKeyInfo(t *testing.T) {
+	t.Parallel()
 	pipe := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "nginx-demo",
@@ -113,6 +116,7 @@ func TestCreateBundle_DryRun_OutputContainsKeyInfo(t *testing.T) {
 
 // TestCreateBundle_DryRun_PipelineNotFound returns an error when the Pipeline does not exist.
 func TestCreateBundle_DryRun_PipelineNotFound(t *testing.T) {
+	t.Parallel()
 	s := buildCreateBundleScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
@@ -126,6 +130,7 @@ func TestCreateBundle_DryRun_PipelineNotFound(t *testing.T) {
 // TestCreateBundle_DryRun_BuildError shows the Graph builder's error with the
 // dry-run context once, not "dry-run: graph build failed: build: ..." (B47).
 func TestCreateBundle_DryRun_BuildError(t *testing.T) {
+	t.Parallel()
 	pipe := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
@@ -143,6 +148,7 @@ func TestCreateBundle_DryRun_BuildError(t *testing.T) {
 
 // TestCreateBundle_DryRun_InvalidImage returns an error for malformed image refs.
 func TestCreateBundle_DryRun_InvalidImage(t *testing.T) {
+	t.Parallel()
 	s := buildCreateBundleScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
@@ -159,6 +165,7 @@ func TestCreateBundle_DryRun_InvalidImage(t *testing.T) {
 // are declared, so a Pipeline that declares prod before uat still shows
 // test, uat, prod.
 func TestCreateBundle_DryRun_EnvironmentsInPromotionOrder(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		envs []v1alpha1.EnvironmentSpec
@@ -198,6 +205,7 @@ func TestCreateBundle_DryRun_EnvironmentsInPromotionOrder(t *testing.T) {
 // from the Pipeline, it parsed hyphenated node IDs and came out empty for
 // every upstream-kro Graph.
 func TestCreateBundle_DryRun_DemoPipelinesListEveryEnvironment(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("../../../demo/manifests/*/pipeline.yaml")
 	require.NoError(t, err)
 	require.NotEmpty(t, files, "demo pipelines not found")
@@ -233,6 +241,7 @@ func TestCreateBundle_DryRun_DemoPipelinesListEveryEnvironment(t *testing.T) {
 // Before, it created a Bundle for a missing Pipeline, an image Bundle with no
 // image, and could not create a config Bundle or set provenance.
 func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
+	t.Parallel()
 	const img = "ghcr.io/org/app:v1"
 	tests := []struct {
 		name     string
@@ -316,6 +325,7 @@ func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
 
 // TestCreateBundle_ConfigAndProvenanceFlagsRegistered pins the #1285 flags.
 func TestCreateBundle_ConfigAndProvenanceFlagsRegistered(t *testing.T) {
+	t.Parallel()
 	cmd := newCreateBundleCmd()
 	for _, name := range []string{"config-repo", "config-commit", "commit", "author", "ci-run-url", "commit-time"} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "--%s", name)
@@ -324,6 +334,7 @@ func TestCreateBundle_ConfigAndProvenanceFlagsRegistered(t *testing.T) {
 
 // TestCreateBundle_CreatesBundle verifies that createBundleFn creates a Bundle CRD.
 func TestCreateBundle_CreatesBundle(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(policyPipeline("nginx-demo", "test")).Build()
 
@@ -346,6 +357,7 @@ func TestCreateBundle_CreatesBundle(t *testing.T) {
 // TestCreateBundle_RejectsMalformedImage verifies that image references with
 // invalid characters are rejected before creating a Bundle (#283).
 func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(policyPipeline("nginx-demo", "test")).Build()
 
@@ -373,6 +385,7 @@ func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
 // TestSplitImageRef verifies image reference parsing. A digest is returned as
 // the digest, never as the tag (C09a-cli-02).
 func TestSplitImageRef(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		img    string
 		repo   string
@@ -400,6 +413,7 @@ func TestSplitImageRef(t *testing.T) {
 // TestImageRepoPattern (C09a-cli-04): repositories with a registry port are
 // valid. (repo:tag@digest also needs the C09a-cli-02 split, lifecycle area.)
 func TestImageRepoPattern(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		repo string
 		want bool
@@ -435,6 +449,7 @@ func TestImageRepoPattern(t *testing.T) {
 // lists the Pipeline's environments in order with the gates the controller
 // would attach, including org gates from platform-policies.
 func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t,
 		policyPipeline("demo", "test", "uat", "prod"),
 		policyGate("no-weekend-deploys", "platform-policies", "prod", "!schedule.isWeekend", "kardinal.io/scope", "org"),
@@ -452,6 +467,7 @@ func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
 // compact threshold given with --graph-compact-above (default 100) and says
 // when the Graph would be compact.
 func TestCreateBundle_DryRun_CompactShape(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"))
 	for _, tc := range []struct {
 		above *int
@@ -471,6 +487,7 @@ func TestCreateBundle_DryRun_CompactShape(t *testing.T) {
 // spec.provenance.commitTime, where the lead time metrics start; a value that
 // is not RFC 3339 is refused before anything is created.
 func TestCreateBundle_CommitTime(t *testing.T) {
+	t.Parallel()
 	spec, err := createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image",
 		CommitTime: "2026-01-15T03:44:26+02:00"}.bundleSpec("app")
 	require.NoError(t, err)

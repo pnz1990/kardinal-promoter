@@ -149,6 +149,7 @@ func TestCheckRemoteHealthAccess(t *testing.T) {
 // token (which the controller refuses with eks) a FAIL. No request reaches
 // the cluster.
 func TestCheckRemoteHealthAccess_EKS(t *testing.T) {
+	t.Parallel()
 	srv, seen := fakeSSARServer(t)
 	env := v1alpha1.EnvironmentSpec{Name: "prod", Health: v1alpha1.HealthConfig{Type: "resource",
 		KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "hub", EKS: &v1alpha1.EKSCredentials{

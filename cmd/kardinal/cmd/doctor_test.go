@@ -65,6 +65,7 @@ func versionConfigMap(ns, version string) *corev1.ConfigMap {
 // E2E-07: version reports the kro version doctor finds, and reads the
 // controller ConfigMap from the controller namespace.
 func TestClusterVersions_ReportsKroAndControllerNamespace(t *testing.T) {
+	t.Parallel()
 	c := doctorClient(
 		versionConfigMap("kardinal", "v0.6.0"),
 		kroPod("kro-7d9f-abcde", corev1.PodRunning, "registry.k8s.io/kro/kro:v0.10.0-rc.0"),
@@ -84,6 +85,7 @@ func TestClusterVersions_ReportsKroAndControllerNamespace(t *testing.T) {
 // C09a-cli-11: the kro version is the tag of the kro image, not of whatever
 // container comes last in any pod whose name contains "kro".
 func TestKroVersion(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		pods      []sigs_client.Object
@@ -126,6 +128,7 @@ func TestKroVersion(t *testing.T) {
 
 // C09a-cli-10: the controller check reads the release namespace.
 func TestCheckController_ControllerNamespace(t *testing.T) {
+	t.Parallel()
 	c := doctorClient(versionConfigMap("kardinal", "v0.6.0"))
 
 	r := checkController(context.Background(), c, "kardinal")
@@ -140,6 +143,7 @@ func TestCheckController_ControllerNamespace(t *testing.T) {
 // The install hint pins the chart to a release CLI's version, so a v0.9.0-rc.1
 // CLI does not suggest the newest final chart.
 func TestInstallCommand(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name, version, want string
 	}{
@@ -177,6 +181,7 @@ func secretRefEnv(name, key string) corev1.EnvVar {
 // C09a-cli-10: the token check follows the controller Deployment's
 // GITHUB_TOKEN (inline value or any Secret name) in the release namespace.
 func TestCheckGitHubToken(t *testing.T) {
+	t.Parallel()
 	secret := func(name, key, value string) *corev1.Secret {
 		return &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kardinal"},
@@ -246,6 +251,7 @@ func TestCheckGitHubToken(t *testing.T) {
 // form, else KARDINAL_SCM_PROVIDER. A provider doctor does not know, or no
 // controller Deployment, is "SCM token".
 func TestCheckGitHubToken_ProviderLabel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		command   []string
@@ -287,6 +293,7 @@ func TestCheckGitHubToken_ProviderLabel(t *testing.T) {
 // Pipeline the controller refused fails whatever its phase, and one it has not
 // reconciled at its current generation warns.
 func TestCheckPipelineHealth(t *testing.T) {
+	t.Parallel()
 	withReady := func(phase string, status metav1.ConditionStatus, reason, msg string, observed int64) *v1alpha1.Pipeline {
 		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team-a", Generation: 2}}
 		p.Status.Phase = phase
@@ -357,6 +364,7 @@ func TestCheckPipelineHealth(t *testing.T) {
 
 // C09a-cli-11: the CRD check verifies each resource, not just the group.
 func TestCheckKardinalCRDs(t *testing.T) {
+	t.Parallel()
 	disco := func(names ...string) *fakediscovery.FakeDiscovery {
 		list := &metav1.APIResourceList{GroupVersion: v1alpha1.GroupVersion.String()}
 		for _, n := range names {
@@ -376,6 +384,7 @@ func TestCheckKardinalCRDs(t *testing.T) {
 
 // kardinalResources lists every CRD in config/crd/bases.
 func TestKardinalResources_MatchCRDs(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob(filepath.Join("..", "..", "..", "config", "crd", "bases", "kardinal.io_*.yaml"))
 	require.NoError(t, err)
 	var want []string
@@ -390,6 +399,7 @@ func TestKardinalResources_MatchCRDs(t *testing.T) {
 
 // kroMinVersion is the version hack/install-kro.sh installs.
 func TestKroMinVersion_MatchesInstallScript(t *testing.T) {
+	t.Parallel()
 	script, err := os.ReadFile(filepath.Join("..", "..", "..", "hack", "install-kro.sh"))
 	require.NoError(t, err)
 	m := regexp.MustCompile(`KRO_VERSION:-([0-9][0-9a-z.-]*)`).FindSubmatch(script)
@@ -456,5 +466,6 @@ func TestBuildRestConfig_ExplicitMissingKubeconfig(t *testing.T) {
 // C09a-cli-23, C4: every mark of a result has one width, so columns line
 // up: PASS, WARN and FAIL in plain output, ✓ ! ✕ on a terminal.
 func TestDoctorIcons_OneWidth(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, []string{"PASS", "WARN", "FAIL"}, []string{doctorIcon(doctorPass), doctorIcon(doctorWarn), doctorIcon(doctorFail)})
 }

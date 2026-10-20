@@ -20,6 +20,7 @@ import (
 // Pipeline's Bundles is returned with the Pipeline as context; there is no
 // unfiltered fallback.
 func TestGetBundles_ListErrorIsReturned(t *testing.T) {
+	t.Parallel()
 	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
 		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
 			return errors.New("bundles.kardinal.io is forbidden")

@@ -21,6 +21,7 @@ import (
 // TestPause_PatchesPipelinePaused verifies that pauseFn patches Pipeline.spec.paused=true
 // and creates a freeze PolicyGate (Graph-observable pause enforcement, PS-2 / BU-2 fix).
 func TestPause_PatchesPipelinePaused(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
@@ -50,6 +51,7 @@ func TestPause_PatchesPipelinePaused(t *testing.T) {
 // TestPause_Idempotent verifies that pauseFn is safe to call multiple times
 // (AlreadyExists on the freeze gate is silently swallowed).
 func TestPause_Idempotent(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
@@ -69,6 +71,7 @@ func TestPause_Idempotent(t *testing.T) {
 // TestResume_UnpausesPipeline verifies that resumeFn patches Pipeline.spec.paused=false
 // and deletes the freeze PolicyGate (PS-2 / BU-2 fix).
 func TestResume_UnpausesPipeline(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
@@ -105,6 +108,7 @@ func TestResume_UnpausesPipeline(t *testing.T) {
 // TestResume_Idempotent verifies that resumeFn is safe when the freeze gate is absent
 // (e.g. manual deletion or first resume after an older-format pause).
 func TestResume_Idempotent(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
@@ -127,6 +131,7 @@ func TestResume_Idempotent(t *testing.T) {
 // 2. resumeFn deletes the freeze gate
 // 3. The pipeline's Spec.Paused is set/unset correctly
 func TestPauseResume_FreezeGateCreatedAndDeleted(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
@@ -179,6 +184,7 @@ func TestPauseResume_FreezeGateCreatedAndDeleted(t *testing.T) {
 
 // TestPause_PipelineNotFound verifies pauseFn returns an error when the pipeline does not exist.
 func TestPause_PipelineNotFound(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
@@ -190,6 +196,7 @@ func TestPause_PipelineNotFound(t *testing.T) {
 
 // TestResume_PipelineNotFound verifies resumeFn returns an error when the pipeline does not exist.
 func TestResume_PipelineNotFound(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 

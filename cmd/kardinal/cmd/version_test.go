@@ -13,6 +13,7 @@ import (
 
 // TestVersionOutput_ThreeLines verifies that versionFn outputs CLI, Controller, and Graph lines.
 func TestVersionOutput_ThreeLines(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		controllerV string

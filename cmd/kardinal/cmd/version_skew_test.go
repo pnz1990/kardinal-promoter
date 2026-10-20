@@ -33,6 +33,7 @@ import (
 //
 // Covers CLI-VERSION-03.
 func TestVersionSkewWarning(t *testing.T) {
+	t.Parallel()
 	const helm = "helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter"
 	cases := []struct {
 		name, cli, controller, goos string

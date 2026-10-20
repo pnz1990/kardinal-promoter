@@ -109,6 +109,7 @@ func TestVerifyStanding(t *testing.T) {
 
 // TestVerifyTarget: <pipeline> <env> is the Bundle that runs there.
 func TestVerifyTarget(t *testing.T) {
+	t.Parallel()
 	c := verifyFixture(t)
 	cmd := newVerifyCmd()
 	b, env, err := verifyTarget(context.Background(), c, "default", cmd, []string{"app", "uat"}, "")

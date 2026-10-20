@@ -31,6 +31,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -241,10 +242,13 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 	t.Parallel()
 	custom := policyPipeline("demo", "test", "prod")
 	custom.Spec.PolicyNamespaces = []string{"custom-policies"}
+	// Gates that pass: the test is about which namespaces' gates attach, and
+	// a blocking one would also run the week-long next-window search, about
+	// 170 evaluations each (#2194).
 	gates := []sigs_client.Object{
-		policyGate("platform-gate", "platform-policies", "prod", "false"),
-		policyGate("custom-gate", "custom-policies", "prod", "false"),
-		policyGate("flag-gate", "flag-policies", "prod", "false"),
+		policyGate("platform-gate", "platform-policies", "prod", "true"),
+		policyGate("custom-gate", "custom-policies", "prod", "true"),
+		policyGate("flag-gate", "flag-policies", "prod", "true"),
 	}
 	tests := []struct {
 		name     string
@@ -281,6 +285,16 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 			}
 		})
 	}
+	// One blocking gate from a namespace other than the Pipeline's: the
+	// next-window search evaluates it in its own namespace too (QA-3 on #2194).
+	t.Run("a blocking gate from spec.policyNamespaces gets its next window", func(t *testing.T) {
+		t.Parallel()
+		c := policyClient(t, custom.DeepCopy(), policyGate("custom-gate", "custom-policies", "prod", "schedule.hour >= 14"))
+		out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
+		require.NoError(t, err)
+		assert.Contains(t, out, "RESULT: BLOCKED\nBlocked by: custom-gate\n")
+		assert.Contains(t, out, "Next window: Tuesday 14:00 UTC\n")
+	})
 }
 
 // The github-demo example gates must be the ones simulate reports for prod.
@@ -547,6 +561,7 @@ func TestPolicySimulate_NeverWritesToCluster(t *testing.T) {
 // The CLI reads the reconciler's status.reason; these are the prefixes it
 // depends on (policy_eval.go).
 func TestGateEvaluator_ReasonPrefixes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	msg, invalid, err := celSyntaxCheck(ctx, "schedule.hour >>> 9")
@@ -564,6 +579,63 @@ func TestGateEvaluator_ReasonPrefixes(t *testing.T) {
 	_, reason, err = localGateCheck(ctx, *policyGate("g", "default", "prod", `metrics["x"].result == "Pass"`), "prod", policyTestNow)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(reason, celEvalErrorPrefix), reason)
+}
+
+// TestSimulationStatus (#2194): the simulation writes a gate's status as the
+// API server's status subresource does: the status of the copy the patch
+// was made from lands, spec and metadata changes do not, the resource
+// version moves on and the caller gets the stored gate; a patch from a copy
+// older than the stored gate is a conflict; another kind takes the fake
+// client's own path.
+func TestSimulationStatus(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	gate := policyGate("g", "default", "prod", "true")
+	pipe := policyPipeline("demo", "test", "prod")
+	sim := newSimulationClient(buildPolicyScheme(t), nil, gate, pipe)
+	key := sigs_client.ObjectKeyFromObject(gate)
+
+	var g v1alpha1.PolicyGate
+	require.NoError(t, sim.Get(ctx, key, &g))
+	stale := g.DeepCopy()
+	base := g.DeepCopy()
+	g.Status.Ready, g.Status.Reason = true, "true = true"
+	g.Spec.Expression = "false" // not the status: dropped
+	g.Labels["x"] = "y"         // nor this
+	require.NoError(t, sim.Status().Patch(ctx, &g, sigs_client.MergeFromWithOptions(base, sigs_client.MergeFromWithOptimisticLock{})))
+	assert.True(t, g.Status.Ready, "the caller gets the stored gate")
+	assert.Equal(t, "true", g.Spec.Expression, "the stored spec, not the copy's")
+	assert.NotEqual(t, stale.ResourceVersion, g.ResourceVersion)
+
+	var got v1alpha1.PolicyGate
+	require.NoError(t, sim.Get(ctx, key, &got))
+	assert.True(t, got.Status.Ready)
+	assert.Equal(t, "true = true", got.Status.Reason)
+	assert.Equal(t, "true", got.Spec.Expression)
+	assert.NotContains(t, got.Labels, "x")
+
+	// A patch from the copy read before that write: refused with the
+	// optimistic lock; without it, only its own change lands, as the API
+	// server applies a merge patch.
+	staleBase := stale.DeepCopy()
+	stale.Status.BundleVersion = "late"
+	err := sim.Status().Patch(ctx, stale.DeepCopy(), sigs_client.MergeFromWithOptions(staleBase, sigs_client.MergeFromWithOptimisticLock{}))
+	assert.True(t, apierrors.IsConflict(err), "%v", err)
+	require.NoError(t, sim.Status().Patch(ctx, stale, sigs_client.MergeFrom(staleBase)))
+	require.NoError(t, sim.Get(ctx, key, &got))
+	assert.Equal(t, "late", got.Status.BundleVersion)
+	assert.Equal(t, "true = true", got.Status.Reason, "the newer write stays")
+	assert.True(t, got.Status.Ready)
+
+	// Another kind takes the fake client's own status writer. The overlay
+	// has no Pipeline status subresource, so that writer answers NotFound
+	// where the gate path would have written.
+	var p v1alpha1.Pipeline
+	require.NoError(t, sim.Get(ctx, sigs_client.ObjectKeyFromObject(pipe), &p))
+	pbase := p.DeepCopy()
+	p.Status.Phase = "Promoting"
+	err = sim.Status().Patch(ctx, &p, sigs_client.MergeFrom(pbase))
+	assert.True(t, apierrors.IsNotFound(err), "%v", err)
 }
 
 // ─── policy test (C09b-cli-10, C09b-cli-11) ─────────────────────────────────
@@ -724,6 +796,7 @@ func TestPolicyTest_WeekendGateAtFixedTimes(t *testing.T) {
 }
 
 func TestParsePolicyGateYAML(t *testing.T) {
+	t.Parallel()
 	quickstart, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "quickstart", "policy-gates.yaml"))
 	require.NoError(t, err)
 	tests := []struct {
@@ -759,6 +832,7 @@ func TestParsePolicyGateYAML(t *testing.T) {
 // ─── policy list (C09b-cli-12) ──────────────────────────────────────────────
 
 func TestPolicyList(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "quickstart", "policy-gates.yaml"))
 	require.NoError(t, err)
 	quickstart, err := parsePolicyGateYAML(data)
@@ -832,6 +906,7 @@ func TestPolicyList(t *testing.T) {
 // TestPolicyList_Fleet (#1565 QA): kardinal policy list --pipeline shows the
 // gates that apply to a fleet environment and to one of its targets only.
 func TestPolicyList_Fleet(t *testing.T) {
+	t.Parallel()
 	p := policyPipeline("web", "test", "prod")
 	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
 	c := policyClient(t, p,
@@ -852,6 +927,7 @@ func TestPolicyList_Fleet(t *testing.T) {
 // share instances. An instance without the namespace label (from an older
 // controller) is matched by scope: org in every namespace, team in its own.
 func TestPolicyList_LastEvaluated(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	// instance is labelled as an older controller labelled it, without
 	// kardinal.io/gate-template-namespace.
@@ -936,6 +1012,7 @@ func TestPolicyList_LastEvaluated(t *testing.T) {
 // namespaces are org. An instance the builder labels with its template's
 // namespace matches its template whatever scope it carries.
 func TestPolicyList_ScopeFromNamespace(t *testing.T) {
+	t.Parallel()
 	inst := policyGate("plain-platform-policies-test--demo-b", "default", "test", "true",
 		"kardinal.io/gate-template", "plain", "kardinal.io/gate-template-namespace", "platform-policies",
 		"kardinal.io/scope", "org", "kardinal.io/pipeline", "demo", "kardinal.io/bundle", "demo-b")
@@ -974,6 +1051,7 @@ func TestPolicyList_ScopeFromNamespace(t *testing.T) {
 // ─── validate CEL (C09b-cli-16) ─────────────────────────────────────────────
 
 func TestValidateCELExpression(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		expr    string
 		wantErr bool

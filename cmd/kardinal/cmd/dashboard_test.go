@@ -90,6 +90,7 @@ func TestDashboard(t *testing.T) {
 }
 
 func TestFindUITarget(t *testing.T) {
+	t.Parallel()
 	name, port := uiPortName, int32(8082)
 	yes, no := true, false
 	svc := func(n string, ports ...string) *corev1.Service {
@@ -187,6 +188,7 @@ func TestUILink(t *testing.T) {
 }
 
 func TestCheckUIAddress(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		address string
 		ok      bool

@@ -40,6 +40,7 @@ func logsTestScheme(t *testing.T) *runtime.Scheme {
 }
 
 func TestLogsFollowFlag(t *testing.T) {
+	t.Parallel()
 	// Verify that the --follow flag is registered on the logs command.
 	cmd := newLogsCmd()
 	followFlag := cmd.Flags().Lookup("follow")
@@ -48,6 +49,7 @@ func TestLogsFollowFlag(t *testing.T) {
 }
 
 func TestAllTerminal(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		states []string
@@ -140,6 +142,7 @@ func TestLogsFollowExitsOnTerminal(t *testing.T) {
 }
 
 func TestLogsStaticOutput(t *testing.T) {
+	t.Parallel()
 	// Verify that static (non-follow) output still works correctly.
 	scheme := logsTestScheme(t)
 	ps := &v1alpha1.PromotionStep{
@@ -179,6 +182,7 @@ func TestLogsStaticOutput(t *testing.T) {
 // seconds with one decimal, "-" for a step with no duration, and no table at
 // all when status.steps is empty (#974, #1318).
 func TestLogsStepTable(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		steps []v1alpha1.StepStatus
@@ -316,6 +320,7 @@ func TestLogsFollow_WaitsForInFlightBundle(t *testing.T) {
 
 // C09b-cli-25: truncation counts runes, so it never splits a UTF-8 character.
 func TestTruncateRunes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		n    int

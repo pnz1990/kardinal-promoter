@@ -31,6 +31,7 @@ import (
 )
 
 func TestFormatPipelineTable(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -107,6 +108,7 @@ func TestFormatPipelineTable(t *testing.T) {
 
 // TestFormatPipelineTable_NoSteps verifies that an empty step list shows "-" for all env columns.
 func TestFormatPipelineTable_NoSteps(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -218,6 +220,7 @@ func tableRow(t *testing.T, out, first string) map[string]string {
 // TestFormatPipelineTable_MultiPipeline verifies that multiple pipelines with different
 // environments produce a union-column table with "-" for absent environments.
 func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -287,6 +290,7 @@ func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
 }
 
 func TestFormatBundleTable(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	bundles := []v1alpha1.Bundle{
 		{
@@ -318,6 +322,7 @@ func TestFormatBundleTable(t *testing.T) {
 }
 
 func TestFormatStepsTable(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	steps := []v1alpha1.PromotionStep{
 		{
@@ -365,6 +370,7 @@ func TestFormatStepsTable(t *testing.T) {
 }
 
 func TestHumanAge(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		duration time.Duration
@@ -385,6 +391,7 @@ func TestHumanAge(t *testing.T) {
 }
 
 func TestWriteJSON_ProducesValidJSON(t *testing.T) {
+	t.Parallel()
 	data := []struct {
 		Name  string `json:"name"`
 		Phase string `json:"phase"`
@@ -400,6 +407,7 @@ func TestWriteJSON_ProducesValidJSON(t *testing.T) {
 }
 
 func TestWriteYAML_ProducesValidYAML(t *testing.T) {
+	t.Parallel()
 	data := []struct {
 		Name  string `json:"name" yaml:"name"`
 		Phase string `json:"phase" yaml:"phase"`
@@ -415,12 +423,14 @@ func TestWriteYAML_ProducesValidYAML(t *testing.T) {
 }
 
 func TestOutputFormat_DefaultIsTable(t *testing.T) {
+	t.Parallel()
 	// Default global output is "", which means table.
 	assert.Equal(t, "", cmd.OutputFormat())
 }
 
 // TestFormatPipelineTable_PausedBadge verifies that a paused pipeline shows [PAUSED] in the name.
 func TestFormatPipelineTable_PausedBadge(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -447,6 +457,7 @@ func TestFormatPipelineTable_PausedBadge(t *testing.T) {
 
 // TestFormatPipelineTable_NonPausedNoBadge verifies that a non-paused pipeline does NOT show [PAUSED].
 func TestFormatPipelineTable_NonPausedNoBadge(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -473,6 +484,7 @@ func TestFormatPipelineTable_NonPausedNoBadge(t *testing.T) {
 // TestFormatPipelineTable_ActiveBundlePrefersPromoting verifies that when both a Verified
 // step (old bundle) and a Promoting step (new bundle) exist, the Promoting bundle is shown.
 func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -549,6 +561,7 @@ func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
 // come, a dash when it is terminal or does not promote the environment. An
 // older Bundle's state is never shown next to it.
 func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	old, recent, newest := now.Add(-2*time.Hour), now.Add(-10*time.Minute), now.Add(-time.Minute)
 	pipelines := []v1alpha1.Pipeline{{
@@ -694,6 +707,7 @@ func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
 // TestFormatStepsTable_OnePerEnvWhenMultipleBundles verifies that when multiple
 // bundles have steps for the same environment, only the most active step is shown.
 func TestFormatStepsTable_OnePerEnvWhenMultipleBundles(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	old := metav1.NewTime(now.Add(-1 * time.Hour))
 	newTime := metav1.NewTime(now.Add(-30 * time.Second))
@@ -739,6 +753,7 @@ func TestFormatStepsTable_OnePerEnvWhenMultipleBundles(t *testing.T) {
 // TestFormatPipelineTableFull_ShowNamespace verifies that --all-namespaces
 // adds a NAMESPACE column to the output.
 func TestFormatPipelineTableFull_ShowNamespace(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -779,6 +794,7 @@ func TestFormatPipelineTableFull_ShowNamespace(t *testing.T) {
 // TestFormatPipelineTableFull_NoNamespaceByDefault verifies that the
 // pipeline table does NOT include a NAMESPACE column.
 func TestFormatPipelineTableFull_NoNamespaceByDefault(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -804,6 +820,7 @@ func TestFormatPipelineTableFull_NoNamespaceByDefault(t *testing.T) {
 // TestFormatBundleErrors_FailedBundle_ShowsError verifies that a Failed bundle
 // results in an ERROR: line containing the pipeline name and condition message.
 func TestFormatBundleErrors_FailedBundle_ShowsError(t *testing.T) {
+	t.Parallel()
 	bundles := []v1alpha1.Bundle{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1"},
@@ -837,6 +854,7 @@ func TestFormatBundleErrors_FailedBundle_ShowsError(t *testing.T) {
 // TestFormatBundleErrors_NoFailedBundles_NoOutput verifies that when no bundles
 // are in Failed phase, nothing is written.
 func TestFormatBundleErrors_NoFailedBundles_NoOutput(t *testing.T) {
+	t.Parallel()
 	bundles := []v1alpha1.Bundle{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1"},
@@ -853,6 +871,7 @@ func TestFormatBundleErrors_NoFailedBundles_NoOutput(t *testing.T) {
 // TestFormatBundleErrors_EmptyList_NoOutput verifies that an empty bundle list
 // produces no output.
 func TestFormatBundleErrors_EmptyList_NoOutput(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, cmd.FormatBundleErrors(&buf, nil, false))
 	assert.Empty(t, buf.String(), "no output expected for empty bundle list")
@@ -861,6 +880,7 @@ func TestFormatBundleErrors_EmptyList_NoOutput(t *testing.T) {
 // TestFormatBundleErrors_CircularDependency verifies that a CircularDependency
 // condition is surfaced with its specific message.
 func TestFormatBundleErrors_CircularDependency(t *testing.T) {
+	t.Parallel()
 	bundles := []v1alpha1.Bundle{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "loop-app-v1"},
@@ -891,6 +911,7 @@ func TestFormatBundleErrors_CircularDependency(t *testing.T) {
 // TestFormatBundleErrors_DuplicatePipeline_Deduplicates verifies that multiple
 // Failed bundles for the same pipeline produce only one error line.
 func TestFormatBundleErrors_DuplicatePipeline_Deduplicates(t *testing.T) {
+	t.Parallel()
 	bundles := []v1alpha1.Bundle{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1"},
@@ -926,6 +947,7 @@ func TestFormatBundleErrors_DuplicatePipeline_Deduplicates(t *testing.T) {
 // C09a-cli-16: the most recent Failed bundle per namespace/pipeline wins, and
 // -A shows the namespace.
 func TestFormatBundleErrors_MostRecentPerNamespacedPipeline(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	failed := func(ns, name string, age time.Duration, reason, msg string) v1alpha1.Bundle {
 		return v1alpha1.Bundle{
@@ -958,6 +980,7 @@ func TestFormatBundleErrors_MostRecentPerNamespacedPipeline(t *testing.T) {
 // Only cause conditions (InvalidSpec, Failed) give the message; a True
 // GraphSynced condition listed first does not hide the failure.
 func TestFormatBundleErrors_OnlyCauseConditions(t *testing.T) {
+	t.Parallel()
 	cond := func(typ, reason, msg string) metav1.Condition {
 		return metav1.Condition{Type: typ, Status: metav1.ConditionTrue, Reason: reason, Message: msg}
 	}
@@ -996,6 +1019,7 @@ func TestFormatBundleErrors_OnlyCauseConditions(t *testing.T) {
 // C09a-cli-07: with -A, same-named pipelines in different namespaces keep their
 // own bundle, environment state and subscription count.
 func TestFormatPipelineTableFull_AllNamespacesNoCrossTalk(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	pipe := func(ns string) v1alpha1.Pipeline {
 		return v1alpha1.Pipeline{
@@ -1036,6 +1060,7 @@ func TestFormatPipelineTableFull_AllNamespacesNoCrossTalk(t *testing.T) {
 // (including RollingBack) beat Pending, which beats Verified. A newer
 // AbortedByAlarm (post-merge) step beats an older Verified one; Failed does not.
 func TestStepStatePriority_AllStates(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	cases := []struct {
 		newer string
@@ -1075,6 +1100,7 @@ func TestStepStatePriority_AllStates(t *testing.T) {
 // stays RollingBack for good. Once the rollback Bundle's newer step is
 // Verified, that step is what the environment runs and what the views show.
 func TestStepStatePriority_RollingBackIsNotInFlight(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	step := func(name, state string, age time.Duration) v1alpha1.PromotionStep {
 		return v1alpha1.PromotionStep{
@@ -1101,6 +1127,7 @@ func TestStepStatePriority_RollingBackIsNotInFlight(t *testing.T) {
 // same pipeline that is not Superseded exists: a newer bundle that is
 // promoting or Verified makes the failure history, not the pipeline's state.
 func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	bundle := func(ns, pipeline, name, phase string, age time.Duration) v1alpha1.Bundle {
 		b := v1alpha1.Bundle{
@@ -1154,6 +1181,7 @@ func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
 //
 // Covers FLEET-05, FLEET-14.
 func TestFormatPipelineTable_Fleet(t *testing.T) {
+	t.Parallel()
 	p := v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "edge"}}
 	p.Spec.Environments = []v1alpha1.EnvironmentSpec{{Name: "test"},
 		{Name: "prod", Fleet: &v1alpha1.FleetSpec{MaxConcurrent: 2, Targets: []v1alpha1.FleetTarget{{Name: "a"}, {Name: "b"}, {Name: "c"}}}}}

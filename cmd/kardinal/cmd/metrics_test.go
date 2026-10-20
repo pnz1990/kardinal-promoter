@@ -21,6 +21,7 @@ import (
 // C09b-cli-14: the controller's metrics (last environment, 30 days) are shown
 // only when that is what was asked; other --env/--days are computed.
 func TestMetrics_EnvAndDaysHonoured(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	pipe := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
@@ -93,6 +94,7 @@ func metricValue(out, name string) string {
 // TestRenderFromCRD_Stability: the controller's change failure rate and
 // time to restore rows, and "-" when no failure has been restored.
 func TestRenderFromCRD_Stability(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name         string
@@ -124,6 +126,7 @@ func TestRenderFromCRD_Stability(t *testing.T) {
 // TestRenderFromCRD_NothingVerified: when every deployment failed, the
 // lead-time and staleness rows read "-" instead of 0.
 func TestRenderFromCRD_NothingVerified(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	dm := v1alpha1.PipelineDeploymentMetrics{Deployments: 2, FailedDeployments: 2, ChangeFailureRateMillis: 1000}
 	require.NoError(t, renderFromCRD(&buf, "demo", "prod", &dm, time.Now()))
@@ -138,6 +141,7 @@ func TestRenderFromCRD_NothingVerified(t *testing.T) {
 // where they start, and the automatic and overall rollback rates are two
 // rows.
 func TestRenderFromCRD_LeadTimeAndRollbacks(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		fromCommit int
 		note       string
@@ -163,6 +167,7 @@ func TestRenderFromCRD_LeadTimeAndRollbacks(t *testing.T) {
 // TestRenderFromCRD_OnlyRollbacks: a sample of rollbacks only has no lead
 // time, so the rows read "-" instead of 0 "from Bundle creation".
 func TestRenderFromCRD_OnlyRollbacks(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	dm := v1alpha1.PipelineDeploymentMetrics{SampleSize: 2, RollbackRateMillis: 1000}
 	require.NoError(t, renderFromCRD(&buf, "demo", "prod", &dm, time.Now()))
@@ -177,6 +182,7 @@ func TestRenderFromCRD_OnlyRollbacks(t *testing.T) {
 // the versions measured from their commit, and leaves rollbacks out of the
 // samples (a rollback's commit is the restored build's).
 func TestMetrics_LeadTimeNote(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	pipe := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},

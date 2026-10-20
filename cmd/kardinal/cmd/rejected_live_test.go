@@ -47,6 +47,7 @@ const (
 //
 // Covers BUNDLE-REJECT-07.
 func TestCurrentBundleByEnv_RejectedLive(t *testing.T) {
+	t.Parallel()
 	var bundles []v1alpha1.Bundle
 	var steps []v1alpha1.PromotionStep
 	for _, o := range rejectedLiveObjects() {
@@ -73,6 +74,7 @@ func TestCurrentBundleByEnv_RejectedLive(t *testing.T) {
 // TestStatus_RejectedLive: kardinal status shows the rejected change where it
 // is live, with a roll-back hint per environment.
 func TestStatus_RejectedLive(t *testing.T) {
+	t.Parallel()
 	out := runStatusPipeline(t, rejectedLiveObjects()...)
 	rows := statusRows(t, out)
 	require.Len(t, rows, 3, out)
@@ -86,6 +88,7 @@ func TestStatus_RejectedLive(t *testing.T) {
 // TestExplain_RejectedLive: kardinal explain shows the live rejected change
 // and the hint, for the environment asked about only.
 func TestExplain_RejectedLive(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t, rejectedLiveObjects()...)
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
@@ -102,6 +105,7 @@ func TestExplain_RejectedLive(t *testing.T) {
 // TestGetSteps_RejectedLive: kardinal get steps lists the live steps of a
 // Rejected Bundle with the hint, not its cancelled ones.
 func TestGetSteps_RejectedLive(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, getStepsOnce(&buf, policyClient(t, rejectedLiveObjects()...), "default", "demo"))
 	out := buf.String()
@@ -114,6 +118,7 @@ func TestGetSteps_RejectedLive(t *testing.T) {
 // TestLogs_RejectedLive: kardinal logs shows the live steps of a Rejected
 // Bundle, not its cancelled ones.
 func TestLogs_RejectedLive(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, logsFn(&buf, policyClient(t, rejectedLiveObjects()...), "default", "demo", "", ""))
 	out := buf.String()

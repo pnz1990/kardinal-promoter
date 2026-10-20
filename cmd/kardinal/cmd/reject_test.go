@@ -125,6 +125,7 @@ func TestReject(t *testing.T) {
 // TestReject_ConflictIsReported: the patch carries the resourceVersion the
 // CLI read, so a Bundle changed in between is reported, not overwritten.
 func TestReject_ConflictIsReported(t *testing.T) {
+	t.Parallel()
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: "default"},
 		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
@@ -140,6 +141,7 @@ func TestReject_ConflictIsReported(t *testing.T) {
 }
 
 func TestWhoAmI(t *testing.T) {
+	t.Parallel()
 	c := fake.NewClientBuilder().WithScheme(rejectScheme(t)).
 		WithInterceptorFuncs(whoAmIInterceptor("system:serviceaccount:ci:deployer", []string{"system:serviceaccounts"}, nil)).Build()
 	id, err := whoAmI(context.Background(), c)

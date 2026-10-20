@@ -40,6 +40,7 @@ func buildGetPipelinesScheme(t *testing.T) *runtime.Scheme {
 // TestGetPipelines_WatchFlagRegistered verifies that the --watch / -w flags
 // are correctly registered on the `get pipelines` command.
 func TestGetPipelines_WatchFlagRegistered(t *testing.T) {
+	t.Parallel()
 	cmd := newGetPipelinesCmd()
 	f := cmd.Flags().Lookup("watch")
 	require.NotNil(t, f, "--watch flag must be registered on 'get pipelines'")
@@ -53,6 +54,7 @@ func TestGetPipelines_WatchFlagRegistered(t *testing.T) {
 // TestGetSteps_WatchFlagRegistered verifies that the --watch / -w flags
 // are correctly registered on the `get steps` command.
 func TestGetSteps_WatchFlagRegistered(t *testing.T) {
+	t.Parallel()
 	cmd := newGetStepsCmd()
 	f := cmd.Flags().Lookup("watch")
 	require.NotNil(t, f, "--watch flag must be registered on 'get steps'")
@@ -65,6 +67,7 @@ func TestGetSteps_WatchFlagRegistered(t *testing.T) {
 // TestGetPipelinesOnce_TableOutput verifies that getPipelinesOnce produces
 // the expected pipeline table output (same as the non-watch path).
 func TestGetPipelinesOnce_TableOutput(t *testing.T) {
+	t.Parallel()
 	s := buildGetPipelinesScheme(t)
 
 	pipeline := &v1alpha1.Pipeline{
@@ -213,6 +216,7 @@ func TestWatchLoop(t *testing.T) {
 // Failed phase with a TranslationError condition, getPipelinesOnce appends an
 // ERROR: line after the pipeline table.
 func TestGetPipelinesOnce_FailedBundle_ShowsError(t *testing.T) {
+	t.Parallel()
 	s := buildGetPipelinesScheme(t)
 
 	pipeline := &v1alpha1.Pipeline{
@@ -270,6 +274,7 @@ func TestGetPipelinesOnce_FailedBundle_ShowsError(t *testing.T) {
 // TestGetPipelinesOnce_HealthyBundles_NoErrorSection verifies that when all bundles
 // are healthy, no ERROR: section is printed.
 func TestGetPipelinesOnce_HealthyBundles_NoErrorSection(t *testing.T) {
+	t.Parallel()
 	s := buildGetPipelinesScheme(t)
 
 	pipeline := &v1alpha1.Pipeline{
@@ -309,6 +314,7 @@ func TestGetPipelinesOnce_HealthyBundles_NoErrorSection(t *testing.T) {
 // pipeline's newest bundle: Waiting where it is still to come, a dash where it
 // failed before getting there, never the older bundle's Verified.
 func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
+	t.Parallel()
 	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
 	b1Everywhere := func() []sigs_client.Object {
 		return []sigs_client.Object{

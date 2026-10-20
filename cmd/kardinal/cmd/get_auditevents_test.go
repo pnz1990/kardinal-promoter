@@ -40,6 +40,7 @@ func buildGetAuditEventsScheme(t *testing.T) *runtime.Scheme {
 // TestGetAuditEventsFn_Basic verifies that AuditEvents are listed in timestamp
 // descending order with the expected column headers.
 func TestGetAuditEventsFn_Basic(t *testing.T) {
+	t.Parallel()
 	scheme := buildGetAuditEventsScheme(t)
 	now := time.Now().UTC()
 
@@ -97,6 +98,7 @@ func TestGetAuditEventsFn_Basic(t *testing.T) {
 
 // TestGetAuditEventsFn_PipelineFilter verifies that pipeline filter works.
 func TestGetAuditEventsFn_PipelineFilter(t *testing.T) {
+	t.Parallel()
 	scheme := buildGetAuditEventsScheme(t)
 	now := time.Now().UTC()
 
@@ -150,6 +152,7 @@ func TestGetAuditEventsFn_PipelineFilter(t *testing.T) {
 
 // TestGetAuditEventsFn_Empty verifies the empty state message.
 func TestGetAuditEventsFn_Empty(t *testing.T) {
+	t.Parallel()
 	scheme := buildGetAuditEventsScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
@@ -160,6 +163,7 @@ func TestGetAuditEventsFn_Empty(t *testing.T) {
 
 // TestGetAuditEventsFn_Limit verifies --limit truncates results.
 func TestGetAuditEventsFn_Limit(t *testing.T) {
+	t.Parallel()
 	scheme := buildGetAuditEventsScheme(t)
 	now := time.Now().UTC()
 

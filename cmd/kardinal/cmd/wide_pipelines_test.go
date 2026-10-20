@@ -34,6 +34,7 @@ func widePipeline(ns, name string, envs ...v1alpha1.EnvironmentSpec) v1alpha1.Pi
 // With consecutive entries the wave's b → c contradicted the chain and the
 // first appearance (a, b, c) won.
 func TestEnvColumnOrder_Edges(t *testing.T) {
+	t.Parallel()
 	wave := widePipeline("a", "wave", v1alpha1.EnvironmentSpec{Name: "a"}, v1alpha1.EnvironmentSpec{Name: "b", Wave: 1},
 		v1alpha1.EnvironmentSpec{Name: "c", Wave: 1})
 	chain := widePipeline("b", "chain", v1alpha1.EnvironmentSpec{Name: "a"}, v1alpha1.EnvironmentSpec{Name: "c", DependsOn: []string{"a"}},
@@ -42,6 +43,7 @@ func TestEnvColumnOrder_Edges(t *testing.T) {
 }
 
 func TestEnvColumnOrder(t *testing.T) {
+	t.Parallel()
 	short := widePipeline("a", "mc", v1alpha1.EnvironmentSpec{Name: "test"}, v1alpha1.EnvironmentSpec{Name: "prod"})
 	long := widePipeline("b", "app", v1alpha1.EnvironmentSpec{Name: "test"}, v1alpha1.EnvironmentSpec{Name: "uat"},
 		v1alpha1.EnvironmentSpec{Name: "prod"})
@@ -62,6 +64,7 @@ func TestEnvColumnOrder(t *testing.T) {
 // Pipeline (ENVS, PROGRESS) and a note; kardinal get pipelines <name>
 // shows every environment of that Pipeline.
 func TestPipelineTable_WideSummary(t *testing.T) {
+	t.Parallel()
 	at := metav1.NewTime(time.Now().Add(-time.Hour))
 	var fleetEnvs []v1alpha1.EnvironmentSpec
 	var objs []client.Object
@@ -119,6 +122,7 @@ func TestPipelineTable_WideSummary(t *testing.T) {
 // TestGetBundles_NewestFirst (#1579): kardinal get bundles lists the newest
 // Bundle first (kardinal.io/created-at), not by name.
 func TestGetBundles_NewestFirst(t *testing.T) {
+	t.Parallel()
 	t0 := time.Date(2026, 10, 9, 15, 0, 0, 0, time.UTC)
 	mk := func(name string, minute int) *v1alpha1.Bundle {
 		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default",
@@ -143,6 +147,7 @@ func TestGetBundles_NewestFirst(t *testing.T) {
 // sub-second kardinal.io/created-at, newest first; with that equal too, by
 // name, descending. -o json lists them in the same order.
 func TestGetBundles_SameSecond(t *testing.T) {
+	t.Parallel()
 	sec := time.Date(2026, 10, 9, 15, 0, 0, 0, time.UTC)
 	mk := func(name string, created time.Time, ms int) *v1alpha1.Bundle {
 		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default",

@@ -25,6 +25,7 @@ import (
 //
 // Covers RB-MULTI-03.
 func TestRollback_SaysWhenTagsPromoteThroughUpstream(t *testing.T) {
+	t.Parallel()
 	pinned := func(b *v1alpha1.Bundle) *v1alpha1.Bundle {
 		b.Spec.Images[0].Digest = "sha256:" + string(bytes.Repeat([]byte(b.Spec.Images[0].Tag), 64))
 		return b

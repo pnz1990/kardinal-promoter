@@ -32,7 +32,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
+	clienttesting "k8s.io/client-go/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -275,6 +277,10 @@ type simulationClient struct {
 
 func newSimulationClient(scheme *runtime.Scheme, cluster sigs_client.Reader, objs ...sigs_client.Object) *simulationClient {
 	overlay := fake.NewClientBuilder().WithScheme(scheme).
+		// A plain object tracker: the reconciler never server-side applies,
+		// and the default tracker's managed-fields bookkeeping on every status
+		// write was a third of each simulated gate's time (#2194).
+		WithObjectTracker(clienttesting.NewObjectTracker(scheme, serializer.NewCodecFactory(scheme).UniversalDecoder())).
 		WithObjects(objs...).
 		WithStatusSubresource(&v1alpha1.PolicyGate{}).
 		// The reconciler lists one Pipeline's Bundles by spec.pipeline (#1654).
@@ -285,6 +291,43 @@ func newSimulationClient(scheme *runtime.Scheme, cluster sigs_client.Reader, obj
 		s.cluster = &cachedReader{Reader: cluster, cache: map[string]cachedRead{}}
 	}
 	return s
+}
+
+// Status writes a PolicyGate's status the way the API server's status
+// subresource does, without the fake client's merge-patch machinery when
+// the patch is made from the stored gate itself: the reconciler's status
+// patches are merge patches from the copy it just read (the simulation is
+// its only writer), so the result is that copy's status on the stored gate.
+// The week-long next-window search writes a gate's status about 170 times
+// (#2194). A patch from an older copy, and other kinds, go to the overlay's
+// own status writer, which applies the patch as the API server would.
+func (s *simulationClient) Status() sigs_client.SubResourceWriter {
+	return simulationStatus{SubResourceWriter: s.Client.Status(), overlay: s.Client}
+}
+
+type simulationStatus struct {
+	sigs_client.SubResourceWriter
+	overlay sigs_client.Client
+}
+
+func (w simulationStatus) Patch(ctx context.Context, obj sigs_client.Object, patch sigs_client.Patch, opts ...sigs_client.SubResourcePatchOption) error {
+	g, ok := obj.(*v1alpha1.PolicyGate)
+	if !ok || len(opts) > 0 || patch.Type() != types.MergePatchType {
+		return w.SubResourceWriter.Patch(ctx, obj, patch, opts...)
+	}
+	var cur v1alpha1.PolicyGate
+	if err := w.overlay.Get(ctx, sigs_client.ObjectKeyFromObject(g), &cur); err != nil {
+		return err
+	}
+	if g.ResourceVersion != cur.ResourceVersion {
+		return w.SubResourceWriter.Patch(ctx, obj, patch, opts...)
+	}
+	g.Status.DeepCopyInto(&cur.Status)
+	if err := w.Update(ctx, &cur); err != nil {
+		return err
+	}
+	cur.DeepCopyInto(g) // the API server returns the stored gate
+	return nil
 }
 
 func (s *simulationClient) Get(ctx context.Context, key sigs_client.ObjectKey, obj sigs_client.Object, opts ...sigs_client.GetOption) error {

@@ -260,6 +260,7 @@ spec:
 
 // previewPipeline leaves the caller's Pipeline as it was.
 func TestPreviewPipeline_CopiesThePipeline(t *testing.T) {
+	t.Parallel()
 	p := verifiedPipeline()
 	preview, analyses, err := previewPipeline(p)
 	require.NoError(t, err)
@@ -272,6 +273,7 @@ func TestPreviewPipeline_CopiesThePipeline(t *testing.T) {
 // simulated still fails every version, so simulate of the earlier
 // environment is BLOCKED by verification too.
 func TestPreview_VerificationOfTheWholePipeline(t *testing.T) {
+	t.Parallel()
 	p := policyPipeline("demo", "test", "prod")
 	p.Spec.Environments[1].Verification = &v1alpha1.VerificationSpec{AnalysisTemplates: []v1alpha1.AnalysisTemplateRef{{Name: "smoke"}}}
 	c := verifyCluster(t, true, nil, p)

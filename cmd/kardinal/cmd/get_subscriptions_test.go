@@ -55,6 +55,7 @@ func makeTestSubscription(name, ns, pipeline string, subType v1alpha1.Subscripti
 }
 
 func TestFormatSubscriptionTable_empty(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	err := FormatSubscriptionTable(&buf, nil, false)
 	require.NoError(t, err)
@@ -70,6 +71,7 @@ func TestFormatSubscriptionTable_empty(t *testing.T) {
 }
 
 func TestFormatSubscriptionTable_rows(t *testing.T) {
+	t.Parallel()
 	subs := []v1alpha1.Subscription{
 		makeTestSubscription("oci-watcher", "default", "my-pipeline", v1alpha1.SubscriptionTypeImage, "Watching", "my-pipeline-bundle-001"),
 		makeTestSubscription("git-watcher", "default", "my-pipeline", v1alpha1.SubscriptionTypeGit, "Error", ""),
@@ -90,6 +92,7 @@ func TestFormatSubscriptionTable_rows(t *testing.T) {
 }
 
 func TestFormatSubscriptionTable_showNamespace(t *testing.T) {
+	t.Parallel()
 	subs := []v1alpha1.Subscription{
 		makeTestSubscription("watcher", "my-ns", "pipe", v1alpha1.SubscriptionTypeImage, "Watching", ""),
 	}
@@ -102,6 +105,7 @@ func TestFormatSubscriptionTable_showNamespace(t *testing.T) {
 }
 
 func TestFormatPipelineTableFull_subColumn(t *testing.T) {
+	t.Parallel()
 	pipe := v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "my-pipeline",
@@ -135,6 +139,7 @@ func TestFormatPipelineTableFull_subColumn(t *testing.T) {
 }
 
 func TestFormatPipelineTableFull_noSubsShowsZero(t *testing.T) {
+	t.Parallel()
 	pipe := v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "lonely-pipeline",
@@ -154,6 +159,7 @@ func TestFormatPipelineTableFull_noSubsShowsZero(t *testing.T) {
 }
 
 func TestFormatSubscriptionTable_noLastChecked(t *testing.T) {
+	t.Parallel()
 	sub := v1alpha1.Subscription{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "bare",

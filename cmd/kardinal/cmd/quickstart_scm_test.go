@@ -186,6 +186,7 @@ func TestQuickstart_RefusesNonGitHubRepo(t *testing.T) {
 //
 // Covers CLI-QUICKSTART-03.
 func TestGithubRepo(t *testing.T) {
+	t.Parallel()
 	for repo, want := range map[string]bool{
 		"https://github.com/me/kardinal-demo":         true,
 		"https://GitHub.com/me/kardinal-demo":         true,
@@ -205,6 +206,7 @@ func TestGithubRepo(t *testing.T) {
 //
 // Covers CLI-QUICKSTART-03.
 func TestSetsValue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		sets []string
 		want bool

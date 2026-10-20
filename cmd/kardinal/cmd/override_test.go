@@ -109,6 +109,7 @@ func TestOverrideFn_BasicOverride(t *testing.T) {
 // who the caller is, override fails and records nothing, rather than write
 // a name the identity policy would refuse.
 func TestOverrideFn_NoIdentityWritesNothing(t *testing.T) {
+	t.Parallel()
 	gate := makeTestGate("no-weekend-deploy", "default")
 	s := newOverrideTestScheme()
 	require.NoError(t, authenticationv1.AddToScheme(s))
@@ -144,6 +145,7 @@ func TestOverrideFn_InvalidExpiry(t *testing.T) {
 
 // TestOverrideFn_GateNotFound verifies that missing gate returns an error.
 func TestOverrideFn_GateNotFound(t *testing.T) {
+	t.Parallel()
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(overridePipeline("my-app")).
@@ -160,6 +162,7 @@ func TestOverrideFn_GateNotFound(t *testing.T) {
 // whatever --gate names, and nothing is written. An instance of another,
 // existing pipeline is refused too.
 func TestOverrideFn_Pipeline(t *testing.T) {
+	t.Parallel()
 	template := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploy", Namespace: "default"}}
 	inst := gateInstance("no-weekend-deploy-prod-b1", "no-weekend-deploy", "my-app", "prod")
 	tests := []struct {

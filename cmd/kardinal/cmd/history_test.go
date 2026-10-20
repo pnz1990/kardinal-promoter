@@ -21,6 +21,7 @@ import (
 
 // TestHistory_ListsPromotionSteps verifies that historyFn lists promotion steps for a pipeline.
 func TestHistory_ListsPromotionSteps(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	step1 := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{
@@ -57,6 +58,7 @@ func TestHistory_ListsPromotionSteps(t *testing.T) {
 
 // TestHistory_EnvFilter verifies that env filter works.
 func TestHistory_EnvFilter(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	stepDev := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{
@@ -91,6 +93,7 @@ func TestHistory_EnvFilter(t *testing.T) {
 // action=rollback. The builder labels PromotionSteps with pipeline, bundle and
 // environment only, so the action comes from the Bundle's provenance.
 func TestHistory_RollbackAction(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	stepFor := func(bundle string) *v1alpha1.PromotionStep {
 		return &v1alpha1.PromotionStep{
@@ -141,6 +144,7 @@ func TestHistory_RollbackAction(t *testing.T) {
 // TestHistory_Duration (E2E-13 / C09b-cli-13): DURATION is creation to
 // Verified (or to the last completed step), not the step's age.
 func TestHistory_Duration(t *testing.T) {
+	t.Parallel()
 	created := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 	at := func(d time.Duration) *metav1.Time { t := metav1.NewTime(created.Add(d)); return &t }
 	verified := func(d time.Duration) []metav1.Condition {
@@ -182,6 +186,7 @@ func TestHistory_Duration(t *testing.T) {
 // second are ordered by name, whatever order the API returns them in. The
 // limit keeps the first rows of that order.
 func TestHistory_Order(t *testing.T) {
+	t.Parallel()
 	created := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 	step := func(name string, age time.Duration) v1alpha1.PromotionStep {
 		return v1alpha1.PromotionStep{
@@ -212,6 +217,7 @@ func TestHistory_Order(t *testing.T) {
 // Graph was retired (#1492): its steps are gone and only its
 // status.retiredSteps are left.
 func TestHistory_RetiredBundle(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	at := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
 	b := &v1alpha1.Bundle{
