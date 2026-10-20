@@ -121,7 +121,9 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 		checkKroController(ctx, client),
 		checkKroCRDs(disco),
 		checkGitHubToken(ctx, client, controllerNS),
-		checkReceiptGrowth(ctx, client, ns, controllerNS),
+	}
+	if r, shown := checkReceiptGrowth(ctx, client, ns, controllerNS); shown {
+		results = append(results, r)
 	}
 	if pipeline != "" {
 		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))

@@ -26,8 +26,11 @@ const receiptGrowthWarnBytes = 1 << 30
 // the Pipelines' status.environments[].receipts it can read, and warns
 // when they pass receiptGrowthWarnBytes while the controller keeps every
 // receipt (no --receipt-retention-max-age). Without receipts it passes.
-func checkReceiptGrowth(ctx context.Context, client sigs_client.Client, ns, controllerNS string) doctorResult {
-	r := doctorResult{label: "Receipt storage"}
+// shown is false when there is nothing to report: no receipt, and the
+// controller does not sign them (or its Deployment cannot be read), so a
+// cluster without receipts sees no receipt line at all.
+func checkReceiptGrowth(ctx context.Context, client sigs_client.Client, ns, controllerNS string) (r doctorResult, shown bool) {
+	r = doctorResult{label: "Receipt storage"}
 	var list v1alpha1.PipelineList
 	scope := "all namespaces"
 	if err := client.List(ctx, &list); err != nil {
@@ -36,7 +39,7 @@ func checkReceiptGrowth(ctx context.Context, client sigs_client.Client, ns, cont
 		if err := client.List(ctx, &list, sigs_client.InNamespace(ns)); err != nil {
 			r.icon, r.warned = doctorWarn, true
 			r.detail = fmt.Sprintf("could not list Pipelines: %v", err)
-			return r
+			return r, true
 		}
 	}
 	var count, bytes int64
@@ -52,14 +55,14 @@ func checkReceiptGrowth(ctx context.Context, client sigs_client.Client, ns, cont
 	r.icon = doctorPass
 	if count == 0 {
 		r.detail = "no promotion receipts (" + scope + ")"
-		return r
+		return r, known
 	}
 	r.detail = fmt.Sprintf("%d receipts, %s (%s; retention %s)", count, humanBytes(bytes), scope, retention)
 	if bytes > receiptGrowthWarnBytes && known && retention == "off" {
 		r.icon, r.warned = doctorWarn, true
 		r.hint = "every receipt is kept and they share etcd's quota: set receipts.retention.maxAge (docs/receipts.md, Size)"
 	}
-	return r
+	return r, true
 }
 
 // receiptRetention is the controller's --receipt-retention-max-age, "off"

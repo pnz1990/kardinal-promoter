@@ -55,12 +55,44 @@ func TestDoctor_ReceiptGrowth(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(tc.objs...).Build()
-			r := checkReceiptGrowth(context.Background(), c, "team-a", "kardinal-system")
+			r, shown := checkReceiptGrowth(context.Background(), c, "team-a", "kardinal-system")
+			assert.True(t, shown, "receipts exist or the controller signs them")
 			assert.Equal(t, tc.warned, r.warned, r.detail)
 			assert.Contains(t, r.detail, tc.detail)
 			if tc.warned {
 				assert.Contains(t, r.hint, "receipts.retention.maxAge")
 			}
+		})
+	}
+}
+
+// TestDoctor_ReceiptGrowthHiddenWithoutReceipts (#2174 live core): a
+// cluster whose controller does not sign receipts and has none sees no
+// "Receipt storage" line, so doctor's output is unchanged for it; one with
+// receipts, or whose controller signs them, does.
+func TestDoctor_ReceiptGrowthHiddenWithoutReceipts(t *testing.T) {
+	controller := func(args ...string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter", Namespace: "kardinal-system"},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "controller", Args: args}}}}}}
+	}
+	withReceipts := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
+		Status: v1alpha1.PipelineStatus{Environments: []v1alpha1.PipelineEnvironmentStatus{
+			{Name: "prod", Receipts: &v1alpha1.EnvironmentReceipts{Count: 1, Bytes: 4096}}}}}
+	for name, tc := range map[string]struct {
+		objs  []sigs_client.Object
+		shown bool
+	}{
+		"receipts off, none":       {[]sigs_client.Object{controller("--receipts=false")}, false},
+		"no receipts flag, none":   {[]sigs_client.Object{controller()}, false},
+		"controller unreadable":    {nil, false},
+		"receipts on, none yet":    {[]sigs_client.Object{controller("--receipts=true")}, true},
+		"receipts off, some exist": {[]sigs_client.Object{controller("--receipts=false"), withReceipts}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(tc.objs...).Build()
+			_, shown := checkReceiptGrowth(context.Background(), c, "team-a", "kardinal-system")
+			assert.Equal(t, tc.shown, shown)
 		})
 	}
 }
