@@ -261,7 +261,10 @@ spec:
                 - mode
                 type: object
               stored:
-                description: Stored lists the sinks holding the signed receipt.
+                description: |-
+                  Stored lists the sinks holding the signed receipt: the CR, the
+                  transparency log, and an OCI referrer per image. A Bundle has at most
+                  100 images, so at most 102 (#2331).
                 items:
                   description: ReceiptStorage records one sink that holds the signed
                     receipt.
@@ -293,7 +296,7 @@ spec:
                   - at
                   - sink
                   type: object
-                maxItems: 16
+                maxItems: 102
                 type: array
             type: object
             x-kubernetes-validations:

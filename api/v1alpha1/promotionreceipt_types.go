@@ -140,8 +140,10 @@ type PromotionReceiptStatus struct {
 	// +optional
 	SignedBy *ReceiptSigner `json:"signedBy,omitempty"`
 
-	// Stored lists the sinks holding the signed receipt.
-	// +kubebuilder:validation:MaxItems=16
+	// Stored lists the sinks holding the signed receipt: the CR, the
+	// transparency log, and an OCI referrer per image. A Bundle has at most
+	// 100 images, so at most 102 (#2331).
+	// +kubebuilder:validation:MaxItems=102
 	// +optional
 	Stored []ReceiptStorage `json:"stored,omitempty"`
 
