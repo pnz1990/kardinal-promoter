@@ -325,3 +325,44 @@ func TestJudgeFairness_NoBaseline(t *testing.T) {
 	require.Len(t, f.Violations, 1)
 	assert.Contains(t, f.Violations[0], "b2-1, alone, did not end Verified")
 }
+
+// TestJudgeFairness_FullProfile: the release gate's full profile, 149
+// repositories on 32 cores, as measured (#2257, local-live, 2 runs each): B
+// alone 5 s with its slowest step 2 s, so A's median step of 8-9 s is a
+// backlog and the bound is 9.2 s (fair) or 10.1 s (no fairqueue).
+func TestJudgeFairness_FullProfile(t *testing.T) {
+	gateAlone := []TenantBundle{tb("b1-1", -30, -29, -25, 2), tb("b2-1", -28, -27, -24, 2)}
+	full := BacklogCheck{Ratio: 0.9}
+	for _, tc := range []struct {
+		name    string
+		loaded  []TenantBundle
+		a       TenantLoad
+		backlog bool
+		want    []string
+	}{
+		{"fair: B's slowest step 4 s against A's median 8 s", []TenantBundle{tb("b1-2", 10, 12, 25, 4)}, load(64, 8), true, nil},
+		{"no fairqueue: 21 s against 9 s", []TenantBundle{tb("b1-2", 10, 30, 76, 21)}, load(85, 9), true, []string{backlog}},
+		// The closest catch: 0.9 s over its bound.
+		{"no fairqueue: 11 s against 9 s", []TenantBundle{tb("b1-2", 10, 18, 53, 11)}, load(59, 9), true, []string{backlog}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := JudgeFairness(gateAlone, tc.loaded, tc.a, full)
+			assert.Equal(t, tc.backlog, f.Backlog)
+			require.Len(t, f.Violations, len(tc.want), "%q", f.Violations)
+			for i, kind := range tc.want {
+				assert.Contains(t, f.Violations[i], kind)
+			}
+		})
+	}
+
+	// B's alone step is whole seconds: read as 3 s instead of 2, the backlog
+	// line is 9 s, and neither A's 8 s (fair) nor its 9 s (no fairqueue) is
+	// a backlog. The check is then not judged, and says so; full's
+	// TenantStepP99 and TenantBundleP99 (Bundle p99 43 and 66 s against
+	// 35 s) still fail the default queue (QA-2 on #2257).
+	slowAlone := []TenantBundle{tb("b1-1", -30, -29, -25, 3), tb("b2-1", -28, -27, -24, 2)}
+	f := JudgeFairness(slowAlone, []TenantBundle{tb("b1-2", 10, 30, 76, 21)}, load(85, 9), full)
+	assert.False(t, f.Backlog)
+	assert.Empty(t, f.Violations)
+	assert.Contains(t, f.Checks[0], "not judged: A's median step (9s) is not more than 3 times B's slowest step alone (3s)")
+}
