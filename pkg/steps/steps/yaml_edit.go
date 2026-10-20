@@ -317,37 +317,107 @@ func compactSeqIndent(raw []byte) bool {
 var utf8BOM = []byte("\xef\xbb\xbf")
 
 // lineStyle is how a YAML file writes its lines, which the parser and the
-// encoder do not keep: whether it starts with a UTF-8 byte order mark, and
-// whether its dominant line ending is CRLF (#2182).
+// encoder do not keep: whether it starts with a UTF-8 byte order mark, the
+// file's own lines (orig, with their endings), and whether its dominant line
+// ending is CRLF (#2182).
 type lineStyle struct {
 	bom, crlf bool
+	// orig is the file without its byte order mark, its lines as written;
+	// norm is orig with every CRLF made LF, what the parser and the splice
+	// read.
+	orig, norm []byte
 }
 
 // normalizeLineStyle returns raw as the parser and the splice read it,
-// without a leading byte order mark and, when CRLF is its dominant line
-// ending, with LF line endings, and the style to restore. The dominant
-// ending is the one more lines end with; a tie is LF. A file with mixed line
-// endings is written with its dominant one throughout: the lines that ended
-// otherwise change.
+// without a leading byte order mark and with LF line endings, and the style
+// to restore. The dominant line ending is the one more lines end with; a tie
+// is LF.
 func normalizeLineStyle(raw []byte) ([]byte, lineStyle) {
 	var s lineStyle
 	if bytes.HasPrefix(raw, utf8BOM) {
 		s.bom, raw = true, raw[len(utf8BOM):]
 	}
 	crlf := bytes.Count(raw, []byte("\r\n"))
-	if lf := bytes.Count(raw, []byte("\n")) - crlf; crlf > lf {
-		s.crlf, raw = true, bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	s.crlf = crlf > bytes.Count(raw, []byte("\n"))-crlf
+	s.orig = raw
+	if crlf > 0 {
+		raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
 	}
+	s.norm = raw
 	return raw, s
 }
 
-// restore writes out, LF-encoded, in style s.
+// restore writes out, LF-encoded, in style s: the leading and trailing lines
+// out shares with the file are written as the file has them, each with its
+// own line ending (in a file with mixed endings, too); the lines in between,
+// which the edit wrote, end with the dominant one.
 func (s lineStyle) restore(out []byte) []byte {
+	head, tail := sharedLines(s.norm, out)
+	middle := out[head : len(out)-tail]
 	if s.crlf {
-		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+		middle = bytes.ReplaceAll(middle, []byte("\n"), []byte("\r\n"))
 	}
+	headLines := lineCount(s.norm[:head])
+	tailLines := lineCount(s.norm[len(s.norm)-tail:])
+	lines := splitLinesKeepEnds(s.orig)
+	res := make([]byte, 0, len(out)+len(out)/8+len(utf8BOM))
 	if s.bom {
-		out = append(append([]byte{}, utf8BOM...), out...)
+		res = append(res, utf8BOM...)
+	}
+	for _, l := range lines[:headLines] {
+		res = append(res, l...)
+	}
+	res = append(res, middle...)
+	for _, l := range lines[len(lines)-tailLines:] {
+		res = append(res, l...)
+	}
+	return res
+}
+
+// sharedLines is how many bytes of whole lines a and b share at their start
+// (head) and, after it, at their end (tail): a's head ends with a newline
+// (or is all of a and b) and its tail starts after one (or at its start).
+func sharedLines(a, b []byte) (head, tail int) {
+	n := min(len(a), len(b))
+	for head < n && a[head] == b[head] {
+		head++
+	}
+	if head < len(a) || head < len(b) {
+		head = bytes.LastIndexByte(a[:head], '\n') + 1
+	}
+	for tail < n-head && a[len(a)-1-tail] == b[len(b)-1-tail] {
+		tail++
+	}
+	if q := len(a) - tail; q > 0 && a[q-1] != '\n' {
+		i := bytes.IndexByte(a[q:], '\n')
+		if i < 0 {
+			return head, 0
+		}
+		tail = len(a) - (q + i + 1)
+	}
+	return head, tail
+}
+
+// lineCount is how many lines b holds: one per newline, and one more for a
+// last line without one.
+func lineCount(b []byte) int {
+	n := bytes.Count(b, []byte("\n"))
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		n++
+	}
+	return n
+}
+
+// splitLinesKeepEnds splits b after each newline, keeping it.
+func splitLinesKeepEnds(b []byte) [][]byte {
+	var out [][]byte
+	for len(b) > 0 {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			out = append(out, b)
+			break
+		}
+		out, b = append(out, b[:i+1]), b[i+1:]
 	}
 	return out
 }

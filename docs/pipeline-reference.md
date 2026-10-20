@@ -484,9 +484,10 @@ update:
   mapping or list, a file outside the repository) fails the step for good and no file is
   changed.
 - Comments, key order, the quoting of the replaced value and the file mode are kept, and so are
-  the file's line endings and a leading UTF-8 byte order mark: a CRLF file stays CRLF. A file
-  with mixed line endings is written with the one most of its lines use (LF on a tie), so its
-  other lines change to it. kustomize-set-image and helm-set-image keep them the same way. Every edited
+  the file's line endings and a leading UTF-8 byte order mark: a CRLF file stays CRLF. In a file
+  with mixed line endings every line the edit does not touch keeps its own, and the lines the
+  edit writes end with the one most of the file's lines use (LF on a tie). kustomize-set-image
+  and helm-set-image keep them the same way. Every edited
   file is parsed again before it is written and must still hold every value where it was set. The
   files are then written through new temporary files (never through a file or link already at that
   name) and renamed; if a rename fails, the files already replaced get their old content back.
