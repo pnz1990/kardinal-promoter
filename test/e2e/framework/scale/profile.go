@@ -200,10 +200,16 @@ var profiles = map[string]Profile{
 		PackEvents: 100_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 2 * time.Minute,
 		PackVersions: 5_000, PackNamespaces: 50, PackVersionsMaxTime: 100 * time.Second, ReceiptDrainVersions: 20 * time.Minute,
 		TenantWave: 149, TenantRepos: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
-		Settle:       45 * time.Minute,
-		SerialStep:   12 * time.Second,
-		SLOPipelines: 200,
-		SLO:          invariants.SLO{StepP50: 10 * time.Second, StepP99: 30 * time.Second, BundleP99: 2 * time.Minute},
+		// 149 repositories on the release gate's 32 cores are a backlog (A's
+		// median step 8-9 s against B's 2 s alone): with the fair queue B's
+		// slowest step took 0.5 of A's median (2 runs), without it 1.22 and
+		// 2.33, and TenantStepP99 and TenantBundleP99 failed both (B's step
+		// p99 11 and 21 s, Bundle p99 43 and 66 s; 4 s and 13-15 s fair).
+		TenantBacklogRatio: 0.9,
+		Settle:             45 * time.Minute,
+		SerialStep:         12 * time.Second,
+		SLOPipelines:       200,
+		SLO:                invariants.SLO{StepP50: 10 * time.Second, StepP99: 30 * time.Second, BundleP99: 2 * time.Minute},
 	},
 }
 

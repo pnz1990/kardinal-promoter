@@ -229,9 +229,10 @@ func TestScale_TenantFairnessManyRepos(t *testing.T) {
 	}
 	tenantFairness(t, r, func() {
 		r.Fleet.Burst(t, names, len(names), 50)
-	}, scale.BacklogCheck{Ratio: r.P.TenantBacklogRatio, Why: fmt.Sprintf("profile %s sets no TenantBacklogRatio: at %d repositories A's backlog is "+
-		"too shallow to tell the fair queue from controller-runtime's default one (#2257); TenantStepP99 judges this profile, "+
-		"and the nightly profile judges the backlog", r.P.Name, r.P.TenantRepos)}, stepP99)
+	}, scale.BacklogCheck{Ratio: r.P.TenantBacklogRatio, Why: fmt.Sprintf("profile %s sets no TenantBacklogRatio (%d repositories): "+
+		"at ci's 30 repositories A's backlog is too shallow to tell the fair queue from controller-runtime's default one on a GitHub "+
+		"runner (#2257), so ci judges starvation and TenantStepP99, and the nightly and full profiles judge the backlog",
+		r.P.Name, r.P.TenantRepos)}, stepP99)
 }
 
 // tenantFairness times tenant B's Bundles alone, then starts tenant A's

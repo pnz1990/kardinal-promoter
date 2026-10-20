@@ -47,6 +47,8 @@ func TestLoad(t *testing.T) {
 			assert.Equal(t, 100, p.ChainStages)
 			assert.Equal(t, 200, p.Pipelines)
 			assert.Equal(t, 1000, p.BurstBundles)
+			assert.Equal(t, 0.9, p.TenantBacklogRatio, "the release gate judges B's steps against A's backlog")
+			assert.Equal(t, 149, p.TenantRepos)
 		},
 	}, {
 		name: "ci leaves B's steps against A's backlog unjudged",
