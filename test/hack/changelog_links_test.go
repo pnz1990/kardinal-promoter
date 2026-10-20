@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"unicode"
 
@@ -253,7 +254,7 @@ func docsLinkProblem(docs, from, target string, redirects map[string]string) (pr
 	if anchor == "" || path.Ext(page) != ".md" {
 		return "", true
 	}
-	if !pageAnchors(string(data))[anchor] {
+	if !memoAnchors(string(data))[anchor] {
 		return fmt.Sprintf("no heading or id %q in %s", anchor, page), true
 	}
 	return "", true
@@ -269,11 +270,21 @@ func pageAnchors(text string) map[string]bool {
 	used, html := map[string]bool{}, []string{}
 	var titles []string
 	for _, line := range contentLines(text) {
-		for _, m := range htmlID.FindAllStringSubmatch(line, -1) {
-			html = append(html, m[1])
+		// Each regexp only on a line it can match: every link to a page
+		// reads its anchors (#2292).
+		if strings.Contains(line, `id="`) {
+			for _, m := range htmlID.FindAllStringSubmatch(line, -1) {
+				html = append(html, m[1])
+			}
 		}
-		m := atxHeading.FindStringSubmatch(line)
+		var m []string
+		if strings.HasPrefix(line, "#") {
+			m = atxHeading.FindStringSubmatch(line)
+		}
 		if m == nil {
+			if !strings.Contains(line, "{") {
+				continue
+			}
 			if a := attrID.FindStringSubmatch(line); a != nil {
 				used[a[1]] = true
 			}
@@ -292,6 +303,20 @@ func pageAnchors(text string) map[string]bool {
 		used[id] = true
 	}
 	return used
+}
+
+// anchorsMemo holds pageAnchors of each page text read: a page's links to
+// one page share them (#2292).
+var anchorsMemo sync.Map
+
+// memoAnchors is pageAnchors(text), computed once per text.
+func memoAnchors(text string) map[string]bool {
+	if v, ok := anchorsMemo.Load(text); ok {
+		return v.(map[string]bool)
+	}
+	a := pageAnchors(text)
+	anchorsMemo.Store(text, a)
+	return a
 }
 
 // idCount is an id with a _N suffix.
@@ -329,7 +354,9 @@ func contentLines(text string) []string {
 				fence = f
 				continue
 			}
-			line = htmlComment.ReplaceAllString(line, "")
+			if strings.Contains(line, "<!--") {
+				line = htmlComment.ReplaceAllString(line, "")
+			}
 			if i := strings.Index(line, "<!--"); i >= 0 {
 				comment, line = true, line[:i]
 			}

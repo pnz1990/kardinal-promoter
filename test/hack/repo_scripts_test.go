@@ -81,6 +81,7 @@ func TestDemoValidateFailsWhenAnAdapterHasTooFewTests(t *testing.T) {
 }
 
 func TestWorkflowBashSyntaxValidator(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	tests := []struct {
 		name     string
 		file     string

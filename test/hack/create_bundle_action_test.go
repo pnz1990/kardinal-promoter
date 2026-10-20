@@ -66,6 +66,7 @@ func TestCreateBundleActionPassesInputsViaEnv(t *testing.T) {
 // TestCreateBundleActionScript runs the action's shell tests, which drive
 // create-bundle.sh against a fake curl.
 func TestCreateBundleActionScript(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), ".github", "actions", "create-bundle", "test.sh"))
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+os.DevNull)
 	out, err := cmd.CombinedOutput()

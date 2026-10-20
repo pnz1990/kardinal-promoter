@@ -242,6 +242,7 @@ func TestReleaseRefusesTagsOffMain(t *testing.T) {
 // .0, or on another minor's branch, is refused; so is a dry run of a
 // version outside its branch's line.
 func TestReleaseMaintenanceBranch(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	script := preflightScript(t, "Check that the tagged commit is on main")
 
 	origin := t.TempDir()
@@ -724,6 +725,7 @@ func assertAbsoluteLinks(t *testing.T, notes string) int {
 // form, the rest and the code stay as they are, and a link outside the docs
 // fails the release with no notes (#1829).
 func TestReleaseNotesAbsoluteLinks(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	script := preflightScript(t, "Release notes from docs/changelog.md")
 	run := func(t *testing.T, section string) (string, error) {
 		dir := t.TempDir()
@@ -779,6 +781,7 @@ func TestReleaseNotesAbsoluteLinks(t *testing.T) {
 // real docs/changelog.md and docs/changelog.d: every link the next release's
 // body will carry is absolute and names a docs page or file.
 func TestReleaseNotesLinksFromTheFragments(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	script := preflightScript(t, "Release notes from docs/changelog.md")
 	root := repoRoot(t)
 	dir := t.TempDir()

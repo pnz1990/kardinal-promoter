@@ -68,6 +68,7 @@ func matrixMinors(t *testing.T, root string) map[string]map[string]bool {
 // rotation's length and every core slice within nine nights; and
 // all.sh -matrix with SAMPLE lists the same jobs, with their count.
 func TestNightlySample(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	root := repoRoot(t)
 	out, err := runSample(t, root, "-cycle")
 	require.NoError(t, err, out)

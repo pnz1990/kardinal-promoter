@@ -443,6 +443,7 @@ func TestLoadLock_Fair(t *testing.T) {
 // TestLoadLock_Races (#2202 QA): the reclaim and liveness races of the
 // first fair lock.
 func TestLoadLock_Races(t *testing.T) {
+	t.Parallel() // each lock its own temp dir: its CPU beside the others' sleeps and waits (#2292)
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	run := func(t *testing.T, lock, owner string, args ...string) *exec.Cmd {
 		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
@@ -726,6 +727,7 @@ func (s *syncBuf) String() string {
 // TestLoadLock_Counting: under load 32 two hold the lock at once and a third
 // waits; at load 32 or above one does. LOCK/owner lists every holder.
 func TestLoadLock_Counting(t *testing.T) {
+	t.Parallel() // each lock its own temp dir: its CPU beside the others' sleeps and waits (#2292)
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	start := func(t *testing.T, lock, owner, load string, args ...string) (*exec.Cmd, *syncBuf) {
 		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
@@ -841,6 +843,7 @@ func TestLoadLock_Counting(t *testing.T) {
 // testdata) and a bare mkdir LOCK. Older clients hold the lock alone, new
 // ones two at once on an idle host.
 func TestLoadLock_MixedClients(t *testing.T) {
+	t.Parallel() // each lock its own temp dir: its CPU beside the others' sleeps and waits (#2292)
 	root := repoRoot(t)
 	script := filepath.Join(root, "hack", "loadlock.sh")
 	old2202 := filepath.Join(root, "test", "hack", "testdata", "loadlock-2202.sh")
@@ -1141,7 +1144,10 @@ func TestLoadLock_FailingToolsAreNoUnsafeAnswer(t *testing.T) {
 	// turn (find) and reaches the decisions (the script before #2242 QA's
 	// fix reclaimed the long-held slot and joined the exclusive holder).
 	for _, tools := range [][]string{{"cat", "grep", "cut", "awk", "sed", "find"}, {"cat", "grep"}} {
-		t.Run(strings.Join(tools, ","), func(t *testing.T) { failingToolsAreNoUnsafeAnswer(t, tools) })
+		t.Run(strings.Join(tools, ","), func(t *testing.T) {
+			t.Parallel() // each its own lock (#2292)
+			failingToolsAreNoUnsafeAnswer(t, tools)
+		})
 	}
 }
 
@@ -1188,6 +1194,7 @@ func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
 		{"a load it cannot parse", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOAD=busy"}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel() // each its own lock (#2292)
 			dir := t.TempDir()
 			lock := filepath.Join(dir, "LOADLOCK")
 			stop, held, ran := filepath.Join(dir, "stop"), filepath.Join(dir, "held"), filepath.Join(dir, "ran")
@@ -1244,12 +1251,19 @@ func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
 			require.NoError(t, cmd.Start())
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
+			// A live holder's slot is waited on: a second shows it. A dead
+			// one's is reclaimed, and the run may take longer than that on a
+			// busy runner (the package's lock tests run side by side, #2292).
+			within := time.Second
+			if tc.reclaim {
+				within = 20 * time.Second
+			}
 			select {
 			case err := <-done:
 				require.True(t, tc.reclaim, "it took the lock from a live holder: %s", out.String())
 				require.NoError(t, err, "%s", out.String())
 				assert.Contains(t, out.String(), "removed lock slot "+slot)
-			case <-time.After(time.Second):
+			case <-time.After(within):
 				_ = cmd.Process.Kill()
 				<-done
 				require.False(t, tc.reclaim, "the dead holder's slot was never reclaimed: %s", out.String())

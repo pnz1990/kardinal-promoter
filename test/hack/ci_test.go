@@ -161,6 +161,7 @@ func TestCIChanges(t *testing.T) {
 // repository's docs. A new test that reads the docs and is in neither list
 // fails here, so a docs-only pull request cannot skip it and break main.
 func TestCIDocsTests(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	root := repoRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "hack", "ci", "docs-tests.txt"))
 	require.NoError(t, err)
@@ -371,6 +372,7 @@ func redMainRoutes(runs []string, issues, view string) []ghRoute {
 
 // TestRedMain (#1836) runs hack/ci/red-main.sh against a fake gh.
 func TestRedMain(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	tests := []struct {
 		name      string
 		runs      []string
@@ -454,6 +456,7 @@ func TestRedMain(t *testing.T) {
 // job that failed on attempt 1 and passed on attempt 2 is reported; a week
 // with none closes the issue.
 func TestFlakyReport(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	fixtures := map[string]string{
 		"runs.json": `{"workflow_runs": [
   {"id": 200, "head_sha": "s1", "run_attempt": 2},
