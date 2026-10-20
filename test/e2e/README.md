@@ -53,15 +53,23 @@ kubectl and helm, the minor's pinned node image (default the suite's first
 minor in `matrix.txt`), `up.sh`, then `run.sh`. The controller is built on the
 host (`KARDINAL_E2E_BUILD=host`) unless you set another build. It holds a
 cluster slot (`$RELEASE_GATE_SLOTS/1..4`, as `hack/release-gate -slots` takes
-them) for the whole run, and creates its cluster only while the host's
-one-minute load is under 48 and `fs.inotify.max_user_instances` has room for
-another kind node (it waits, checking every 30s). Only the heavy suites, scale
-and multi-cluster (`HEAVY_SUITES` in the script), also hold the heavy-load lock
-(`$LOADLOCK`, through `hack/loadlock.sh`); an ordinary live suite does not. It
-refuses to start without what it needs (`-no-lock` on a host of your own), and
-deletes the cluster `kardinal-e2e-ll-<owner>-<suite>-<minor>` (`$AGENT_ID`, or
-`-o`'s first word) and releases the slot and the lock when it ends, however it
-ends. It prints a pass/fail summary with the
+them) for the whole run; a slot whose owner is gone (its pid, boot id or start
+time no longer match) is reclaimed, a kept cluster's only once the cluster is
+gone. It creates its cluster only while the host's one-minute load is under 48
+and `fs.inotify.max_user_instances` has room for another kind node, and at
+least 60s after the last cluster start on the host: the check and the start are
+one step under a flock, so two runs never pass on one reading (it waits,
+checking every 30s). The heavy suites (`heavy` in `hack/e2e/matrix.txt`'s host
+column: scale, multi-cluster) also hold the heavy-load lock (`$LOADLOCK`,
+through `hack/loadlock.sh`), and drain the host: a waiting heavy run stops new
+runs from taking a slot (`$RELEASE_GATE_SLOTS/.drain`), starts once at most one
+other slot is in use and the load is under 16, and keeps the host to itself
+until it ends. It refuses to start without what it needs (`-no-lock` on a host
+of your own), and deletes the cluster `kardinal-e2e-ll-<owner>-<suite>-<minor>`
+(`$AGENT_ID`, or `-o`'s first word) and releases the slot, the marker and the
+lock when it ends, however it ends. A copy outside a checkout (the host's
+shared one) runs the checkout it is run from, and hands off to that checkout's
+own `local-live.sh` when it is at least as new (`LOCAL_LIVE_VERSION`). It prints a pass/fail summary with the
 commit, node image and tool pins, and `-pr N` posts it on pull request N.
 
 A cluster's state (its kubeconfig, the env file, the git server's and
