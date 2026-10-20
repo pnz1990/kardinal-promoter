@@ -870,17 +870,22 @@ func TestRollback_OnHealthFailureRelinkedRollbackIgnored(t *testing.T) {
 	a := rbAlarmPipeline(t, e, nil)
 	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	rbVerified(t, a, b1, "test")
-	broken := func(name string) string {
+	broken := func(name, tag string) string {
 		return e.CreateBundleObject(t, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: a.ns},
 			Spec: v1alpha1.BundleSpec{Pipeline: pipelineName, Type: "image",
-				Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.BrokenTag}}}})
+				Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: tag}}}})
 	}
-	b2 := broken(pipelineName + "-broken-a")
+	b2 := broken(pipelineName+"-broken-a", fixtures.BrokenTag)
 	e.WaitStepState(t, a.ns, pipelineName, b2, "test", "RollingBack", promoteTimeout)
 	earlier := lifecycle.AutoRollbackName(b2, lifecycle.RollbackSourceAlarm)
 	rbVerified(t, a, earlier, "test")
 
-	b3 := broken(pipelineName + "-broken-b")
+	// b3 is broken by another missing tag, so its rollout gets a ReplicaSet
+	// of its own. A rollout back onto b2's ReplicaSet may keep the
+	// Deployment's Progressing condition from the rollback before it, and
+	// then never reports ProgressDeadlineExceeded: the step only fails at
+	// its health timeout, as long as this test waits (#2249).
+	b3 := broken(pipelineName+"-broken-b", fixtures.BrokenTag+"-again")
 	rb := getBundle(t, e, a.ns, earlier)
 	orig := rb.DeepCopy()
 	rb.Annotations[lifecycle.AnnotationRollbackFrom] = b3 // the relink
