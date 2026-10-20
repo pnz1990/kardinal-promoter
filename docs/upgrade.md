@@ -1,6 +1,7 @@
 # Upgrade
 
-**Upgrading from v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
+**Upgrading from v0.12.0** to the next release: follow [Upgrading from v0.12.0](#upgrading-from-v0120).
+**From v0.11.0** to v0.12.0: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
 **From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
@@ -51,10 +52,105 @@ Bundle in flight (on any change to the Pipeline's spec, or a deleted Graph) it b
 shape, and kro then deletes every PromotionStep the compact Graph created: the Bundle promotes
 again from its first environment. Before you downgrade, let the Bundles of those Pipelines finish, or delete them.
 
-A controller older than this release puts a health ref node in each Graph it builds, read through the
-`<fullname>-graph-reader` ClusterRole, which this chart no longer ships. Downgrade the chart
-along with the controller (`helm rollback`), so the ClusterRole is back. When you upgrade again,
-the controller removes those nodes and their reader RoleBindings at startup.
+**From v0.12.0.** A controller older than v0.12.0 does not know the reader labels v0.12.0 puts
+on Graphs (`reads.kardinal.io/<namespace>` and `kardinal.io/reader-labels`), and keeps them when
+it updates a Graph. If it then adds a ref node that reads another namespace, the labels no longer
+name every namespace the Graph reads, and after you upgrade again a reader RoleBinding that
+Graph needs could be pruned until its next translation binds it again. Before you upgrade again
+after a downgrade, remove the marker, so the controller reads those Graphs in full:
+`kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
+
+**From v0.13.0** (not released yet). A controller older than v0.13.0 puts a health ref node in
+each Graph it builds, read through the `<fullname>-graph-reader` ClusterRole, which the v0.13.0
+chart no longer ships. Downgrade the chart along with the controller (`helm rollback`), so the
+ClusterRole is back. When you upgrade again, the controller removes those nodes and their reader
+RoleBindings at startup.
+
+## Upgrading from v0.12.0
+
+!!! note "v0.13.0 is not released yet"
+    These steps take a v0.12.0 installation to the next release, v0.13.0, once it is released:
+    `<version>` in the commands is that release's chart version. Until then v0.12.0 is the latest
+    release, and there is nothing to upgrade to.
+
+What v0.12.0 stored keeps working. Versions in flight keep their Graphs, PromotionSteps,
+PRStatuses and gate instances: at its first start the new controller removes the health ref nodes
+from those Graphs in place, and it rebuilds a version's gates only when one of its gates changes.
+The new kinds, PromotionReceipt and ChangeRequest, are only installed: receipts stay off until
+you set `receipts.enabled`, and no change request is opened until a gate reads one.
+
+v0.13.0 targets the same kro as v0.12.0 (`v0.10.0-rc.0`), so kro is not upgraded.
+
+**1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section
+lists every change since v0.12.0. Its "Before you upgrade" entries are the ones that can change
+something for you:
+
+- **`graph.readerNamespaces` is removed.** Setting it fails the upgrade
+  (`graph.readerNamespaces was removed (#1283)`). With `--reset-then-reuse-values` a value you
+  never set is dropped for you, v0.12.0's default (`argocd`, `flux-system`) included. If
+  `helm get values` shows it, you set it: write your values without it, and pass
+  `-f values-new.yaml` in place of `--reset-then-reuse-values` in step 3.
+
+    ```bash
+    helm get values kardinal-promoter --namespace kardinal-system -o yaml \
+      | yq 'del(.graph.readerNamespaces)' > values-new.yaml
+    ```
+
+    The new chart deletes the `<fullname>-graph-reader` ClusterRole. At its first start the new
+    controller removes the health ref nodes from existing Graphs and deletes the reader
+    RoleBindings v0.12.0 recorded. Between the chart upgrade and that start, kro cannot read those
+    nodes and may hold the Graphs that have them; their promotions go on once the nodes are
+    removed, within about a minute. `kardinal_health_ref_cleanup_pending` is `0` once nothing is
+    left ([Health ref cleanup after an upgrade](guides/monitoring.md#health-ref-cleanup-after-an-upgrade)).
+- **A rollback changes its target environment alone** when its images (and chart) are pinned by
+  digest and another version with the same artifacts was Verified in every environment upstream
+  of the target: `kardinal rollback <pipeline> prod` then leaves test and uat on what they
+  run. If your process relied on a rollback also rolling the upstream environments back, roll
+  each of them back on its own. Rollbacks created before the upgrade still go through the
+  upstream environments ([Multi-Environment Rollback](rollback.md#multi-environment-rollback)).
+- **Gate changes reach the versions in flight.** A version that was promoting when you upgraded
+  keeps the gates it has until one of its gates is created, edited or deleted; then it gets the
+  changed gates at once, and a `GateChanged` AuditEvent records it. If you relied on a version in
+  flight keeping an old gate, use `kardinal pause` or `kardinal hold` instead
+  ([When a new or edited gate takes effect](policy-gates.md#when-a-new-or-edited-gate-takes-effect)).
+- **`provenance.ciRunURL` refuses credential parameters.** Once the CRDs are applied, the Bundle
+  CRD refuses a CI run URL with user info, a credential query or fragment parameter (a name such
+  as `token`, `sig` or `X-Amz-Signature`) or a percent-encoded parameter name, and the Bundle API
+  (HTTP 400) and `kardinal create bundle` refuse a credential parameter. Remove it from the URL your
+  CI sends. A Bundle already stored with one stays writable while the URL is unchanged
+  ([Provenance](ci-integration.md#provenance)).
+
+**2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
+fields to Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals and
+ImageVerifications. Helm never upgrades CRDs, and Helm owns the fields of the CRDs the v0.12.0
+chart installed, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
+new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+The new chart also installs the `<release>-receipts` admission policy (only the controller may
+write a PromotionReceipt, whether or not receipts are on) and, with `rbac.userRoles.enabled`, the
+`<release>-auditor` and `<release>-auditor-cluster` ClusterRoles, which nothing binds until you do
+([User roles](guides/security.md#user-roles)).
+
+**4. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check, and every Pipeline is Ready.
 
 ## Upgrading from v0.11.0
 
@@ -534,7 +630,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
 - **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
-- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. This release ships no reader ClusterRole, so they grant nothing, but the controller cannot find them to delete them: list them, and delete the ones you do not want, as [RBAC requirements](guides/security.md#rbac-requirements) shows.
+- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. To v0.12.0, whose chart still ships the reader ClusterRole: in cluster mode its sweep deletes them once no Graph reads through them, and a binding that a Graph made by v0.8.1 still reads through stays until that Graph's Bundle is replaced. From v0.13.0 (not released yet), whose chart ships no reader ClusterRole: they grant nothing, but the controller cannot find them to delete them. In both cases, list them, and delete the ones you do not want, as [RBAC requirements](guides/security.md#rbac-requirements) shows.
 
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.

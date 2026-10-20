@@ -1231,6 +1231,15 @@ can wait out the backoff.
 when the Bundle reconciler sees the object behind its refusal go away; (b) the watch router
 blocks, or marks the Graph for a resync, instead of dropping a wake; (c) a modest default
 `ResyncPeriod`.
+**Cause, from the kro source** (v0.10.0-rc.0, #2201). No dropped event is needed. A hard apply
+error ends the reconcile's watch cycle with `watcher.Done(false)`
+(`pkg/controller/graph/controller.go`, `reconcileGraph`). `Coordinator.abort`
+(`pkg/watch/coordinator/coordinator.go`) then discards every watch the cycle declared that was not
+already committed, the one on the object whose apply failed included, and drops the Graph's entry
+when nothing was committed before. The delete of the blocking object then wakes nobody, and the
+Graph waits for its error backoff. The kro fix this points to keeps the watches a hard-failed cycle
+declared until the next successful cycle. Related:
+[kro#1464](https://github.com/kubernetes-sigs/kro/issues/1464) (the sibling-branch case).
 
 ---
 
@@ -1396,7 +1405,7 @@ blocks above.
 | G23 path glob in Graph CEL | A `Path()` library with `path.glob` and cost estimators | Yes, small; kardinal offers the PR |
 | G25 optional ref | `ref.optional: true` publishes `null` for a missing object or unserved kind | Not now: no kardinal feature needs it (the error-budget gate reads Prometheus) |
 | G26 missing key in an untyped field | Schema hints for preserve-unknown fields, or "no such key" on a ready node as a hard error | Yes, once custom steps ship: it turns a silent wait into an error |
-| G27 dropped wake after a failed apply | The watch router blocks or marks a resync instead of dropping a wake | Yes, once confirmed from logs; first try (a), kardinal nudging the Graph |
+| G27 dropped wake after a failed apply | kro keeps the watches a hard-failed cycle declared; or the watch router blocks or marks a resync instead of dropping a wake | Yes (#2201); first try (a), kardinal nudging the Graph |
 
 ### Hazards found
 

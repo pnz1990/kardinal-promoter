@@ -44,6 +44,12 @@ After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, p
 
 ## When a new or edited gate takes effect
 
+!!! info "Changed in v0.13.0 (unreleased)"
+    In v0.12.0 and earlier, a version in flight keeps the gates it started with: a new or edited
+    gate applies only to versions created after it, and gate copies carry no
+    `kardinal.io/gate-template-*` annotations and write no `GateChanged` record. The
+    [changelog](changelog.md) lists every change since v0.12.0.
+
 A version gets its gates when it starts promoting: kardinal copies every gate that applies to its
 environments into the version then. When you create, edit or delete a gate later, kardinal copies
 the gates again into every version that is still promoting, so:
@@ -191,7 +197,7 @@ spec:
 
 ### Org-level gates
 
-Created in the `platform-policies` namespace (configurable via `--policy-namespaces` controller flag). Org gates are mandatory: they are injected into every Pipeline that targets the matching environment. Teams cannot remove them. A gate in an org policy namespace is an org gate without the `kardinal.io/scope` label: `kardinal policy list` and its instances show `SCOPE org`. The label `kardinal.io/scope: org` makes a gate in another namespace an org gate too. `kardinal policy list` reads the org policy namespaces from its own `--policy-namespaces` flag: pass the controller's value when it is not the default.
+Created in the `platform-policies` namespace (configurable via `--policy-namespaces` controller flag). Org gates are mandatory: they are injected into every Pipeline that targets the matching environment. Teams cannot remove them. A gate in an org policy namespace is an org gate without the `kardinal.io/scope` label: `kardinal policy list` and its instances show `SCOPE org` (from v0.13.0, unreleased; v0.12.0 shows such a gate as `team` while it acts as an org gate). The label `kardinal.io/scope: org` makes a gate in another namespace an org gate too. `kardinal policy list` reads the org policy namespaces from its own `--policy-namespaces` flag: pass the controller's value when it is not the default.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -287,6 +293,7 @@ its in-flight versions. The [CEL context](reference/cel-context.md#actor) lists 
 | `actor.kind` | string | `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp |
 | `actor.verified` | bool | The version has a stamp |
 | `actor.agent` | string | The agent's name, when the kind is `agent` |
+| `actor.via` | string | `ui` or `api` when the controller wrote the version for its caller, `subscription` or `auto-rollback` for its own; else `""` |
 | `agent.registered` | bool | The agent's AgentIdentity is ready |
 | `agent.autonomy` | string | `auto`, `approve` or `deny`, now |
 
@@ -299,7 +306,18 @@ expression: actor.verified && actor.kind == "human"
 ---
 # Hold an agent's version once its agent is suspended or deregistered
 expression: actor.kind != "agent" || (agent.registered && !agent.suspended)
+---
+# Let the controller's automatic rollback through
+expression: actor.kind == "controller" && actor.via == "auto-rollback"
 ```
+
+!!! warning "Never trust a version's labels or annotations for who made it"
+    Whoever creates a Bundle writes its labels and annotations, `kardinal.io/rollback` and
+    `kardinal.io/rollback-from` included, and no admission rule checks them. A gate such as
+    `"kardinal.io/rollback" in bundle.labels` lets through any version that says it is a rollback.
+    Check the actor stamp instead, which the chart's admission lets only the controller write for
+    its own versions: `actor.kind == "controller" && actor.via == "auto-rollback"` for an automatic
+    rollback.
 
 For per-environment autonomy, set `agents` on the Pipeline's environment instead of writing
 gates ([Actor-aware policy](agentic/policy.md)).

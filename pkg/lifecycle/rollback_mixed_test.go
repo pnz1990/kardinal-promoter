@@ -249,7 +249,7 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 					b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
 					b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "v1"}
 					b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
-					return b
+					return stampAuto(b)
 				}(),
 				img("v2", 20, "a:2"), deployed("v2", 20)},
 			to:         "v1",

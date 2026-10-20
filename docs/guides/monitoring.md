@@ -154,7 +154,7 @@ max by (namespace) (kardinal_agent_index_bytes) / max by (namespace) (kardinal_a
 
 ### Health ref cleanup after an upgrade
 
-After an upgrade from a release with Graph health ref nodes, the leader removes those nodes from
+New in v0.13.0 (unreleased). After an upgrade from a release with Graph health ref nodes (v0.12.0 and earlier), the leader removes those nodes from
 existing Graphs and deletes the reader RoleBindings of earlier releases
 ([RBAC requirements](security.md#rbac-requirements)). It skips what it cannot clean and retries,
 waiting 10 seconds and doubling up to 5 minutes, until nothing is left.

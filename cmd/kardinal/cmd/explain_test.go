@@ -146,6 +146,7 @@ func TestExplain_ShowsAppliedGateInstances(t *testing.T) {
 }
 
 func TestExplain_Rows(t *testing.T) {
+	t.Parallel()
 	old := policyTestNow.Add(-2 * time.Hour)
 	recent := policyTestNow.Add(-time.Hour)
 	cases := []struct {

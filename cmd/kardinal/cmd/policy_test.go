@@ -1052,6 +1052,7 @@ func TestPolicyTest_FileFlag_Golden(t *testing.T) {
 // own, --soak-minutes replaces its soak, and a version that names no
 // Bundle of the pipeline is an error.
 func TestPolicySimulate_Version(t *testing.T) {
+	t.Parallel()
 	healthy := metav1.NewTime(policyTestNow.Add(-10 * time.Minute))
 	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "demo-v2", Namespace: "default",
 		Labels: map[string]string{"kardinal.io/pipeline": "demo", "hotfix": "true"}},
@@ -1106,6 +1107,7 @@ func TestPolicySimulate_Version(t *testing.T) {
 // agent, so the Pipeline's agents gates and actor.* and agent.* apply;
 // --as-human stamps a person, who gets no agent gate.
 func TestPolicySimulate_AsAgent(t *testing.T) {
+	t.Parallel()
 	p := policyPipeline("demo", "test", "prod")
 	p.Spec.Environments[1].Agents = v1alpha1.AutonomyDeny
 	id := &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "fixer", Generation: 1},

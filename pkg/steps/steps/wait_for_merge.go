@@ -91,7 +91,7 @@ func (s *waitForMergeStep) Execute(ctx context.Context, state *parentsteps.StepS
 		// opened (#2065) or one merged at once.
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepPending,
-			Message: fmt.Sprintf("PR #%d merged; recording the merge", prNum),
+			Message: fmt.Sprintf("PR #%d merged; recording the merge", prNum) + AdoptedSuffix(state.Outputs),
 		}, nil
 	}
 
@@ -124,4 +124,13 @@ func permanentSCMReason(err error) string {
 	default:
 		return fmt.Sprintf("HTTP %d: the repository or PR does not exist, or the SCM token cannot see it", apiErr.StatusCode)
 	}
+}
+
+// AdoptedSuffix is " (adopted PR: <AdoptedPRDetail>)" for a PR the step
+// adopted (#2092), "" for one it opened.
+func AdoptedSuffix(outputs map[string]string) string {
+	if d := AdoptedPRDetail(outputs); d != "" {
+		return " (adopted PR: " + d + ")"
+	}
+	return ""
 }

@@ -349,18 +349,24 @@ const prClockSkew = time.Minute
 
 // adoptMergedPR handles a run of a PR-opening step whose git-commit found
 // nothing to commit (#2065). The base branch already having the change is
-// not, by itself, a promotion without a PR: an earlier run may have opened
-// this promotion's PR (its head branch is deterministic) and a reviewer
-// merged it before the step recorded it, when the controller crashed after
-// open-pr. Such a PR is adopted when it is this promotion's: from the
-// repository's own branch, not a fork's, with the commit the step pushed
-// (pushedSHA) as its head, and opened after the step was created. Its
-// number and URL become the step's
-// outputs, so wait-for-merge hands it to the PRStatus, which records the
-// merge and the SCM-verified merger like any other (the PRMerged
-// AuditEvent, #1939). Without such a PR the step has no changes, as
-// before. A lookup that fails is retried, never taken as "no PR"; a
-// permanent one (401, 403, 404) fails the step.
+// not, by itself, a promotion without a PR: the step pushed its commit to
+// its branch (the head branch is deterministic), a PR of that branch was
+// merged before the step recorded it (the controller crashed after
+// git-push or open-pr), and the base branch has exactly the files kardinal
+// writes. Such a PR is adopted: from the repository's own branch, not a
+// fork's, opened after the step was created, whose head is a commit the
+// step pushed (pushedSHAs) or whose commits, as the SCM lists them, include
+// one (a reviewer's fixup on top, #2092). kardinal may not have opened it
+// (a person can open a PR of kardinal's branch), and it may carry commits
+// kardinal did not push, so the evidence says what is known: the PR's head,
+// who opened it, and every commit kardinal did not push with its author
+// (AdoptedPRDetail), in the step's message, the PRMerged AuditEvent and the
+// receipt. Its number and URL become the step's outputs, so wait-for-merge
+// hands it to the PRStatus, which records the merge and the SCM-verified
+// merger like any other (the PRMerged AuditEvent, #1939). Without such a PR
+// the step has no changes, as before. A lookup that fails is retried, never
+// taken as "no PR"; a permanent one (401, 403, 404 of the PR list) fails
+// the step.
 func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch string) (parentsteps.StepResult, error) {
 	noPR := parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}
 	finder, ok := state.SCM.(scm.MergedPRFinder)
@@ -371,10 +377,11 @@ func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch str
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
 	}
-	// Only a PR whose head is a commit this promotion pushed to its branch
-	// is its own: git-push records them (pushedSHA, and the pushedSHAs
-	// history, since a restarted run pushes a new commit) before open-pr
-	// runs. Without one there is nothing to compare, and nothing is adopted.
+	// Only a PR with a commit this promotion pushed to its branch, as its
+	// head or among its commits, is adopted: git-push records them
+	// (pushedSHA, and the pushedSHAs history, since a restarted run pushes
+	// a new commit) before open-pr runs. Without one there is nothing to
+	// compare, and nothing is adopted.
 	pushed := PushedSHAs(state.Outputs)
 	if len(pushed) == 0 {
 		return noPR, nil
@@ -402,14 +409,14 @@ func adoptMergedPR(ctx context.Context, state *parentsteps.StepState, branch str
 	}
 	zerolog.Ctx(ctx).Info().Int("pr", pr.Number).Str("branch", branch).
 		Msg("nothing to commit: this promotion's PR was merged before the step recorded it; adopting it")
+	outputs, err := adoptedOutputs(pr)
+	if err != nil {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: err.Error()}, err
+	}
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: fmt.Sprintf("PR #%d: %s (opened by an earlier run of this promotion, already merged)", pr.Number, pr.URL),
-		Outputs: map[string]string{
-			"prURL":         pr.URL,
-			"prNumber":      fmt.Sprintf("%d", pr.Number),
-			outputNoChanges: "false",
-		},
+		Message: fmt.Sprintf("adopted PR #%d (%s): %s, already merged", pr.Number, AdoptedPRDetail(outputs), pr.URL),
+		Outputs: outputs,
 	}, nil
 }
 

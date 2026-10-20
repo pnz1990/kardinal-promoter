@@ -42,18 +42,41 @@ v0.12.0 is the latest release. Besides everything earlier releases shipped (see 
 
 ## Planned
 
-Nothing below is in kardinal yet. Plans change with feedback; the [changelog](changelog.md) says
-what shipped.
+Plans change with feedback; the [changelog](changelog.md) says what shipped.
 
 ### v0.13: evidence
 
-- Verify SLSA provenance and in-toto attestations, and keyless (gitsign) commit signatures.
-  Commit signatures the SCM verified (`commits.requireSigned`) already ship:
+v0.13.0 is not released yet; v0.12.0 is the latest release.
+
+**Merged, ships in v0.13.0.** These are on main, and this site already documents them:
+
+- **Signed promotion receipts.** With `receipts.enabled` (off by default), each promotion into
+  each environment gets a signed in-toto receipt: the version, the actor and sponsor, every gate
+  with its result, the approvals and verdicts, the checks and the PR. Keyless or key signing,
+  OCI referrer and Rekor sinks, and `kardinal verify-receipt` to check one offline:
+  [Signed promotion receipts](receipts.md).
+- **Attestations.** Verified SLSA provenance (with the build level you grant each builder),
+  vulnerability scans with OpenVEX, and any in-toto predicate, read by gates as
+  `attestations.*`: [Attestations](image-verification.md#attestations).
+- **A compliance mapping and an evidence pack.** Which kardinal record evidences which control
+  of SOC 2, ISO/IEC 27001, NIST SP 800-53, DORA, the EU AI Act and ISO/IEC 42001, and
+  `kardinal audit evidence-pack`, a period's records in one archive for an auditor:
+  [Map to compliance controls](compliance.md).
+- **Change requests.** A gate waits for an approved ServiceNow change or Jira issue, which
+  kardinal opens for the promotion or links by its key: [Change Requests](change-requests.md).
+- **Approval fields.** An approval gate can require what an approve carries, such as a change
+  ticket ID or an acknowledgement: [Approval fields](approvals.md#approval-fields).
+
+The changelog's [Unreleased](changelog.md#unreleased) section lists every change since v0.12.0,
+including those to rollbacks, gates and the UI.
+
+**Still planned for v0.13:**
+
+- Keyless (gitsign) commit signatures, mapped to the agent that signed. Commit signatures the
+  SCM verified (`commits.requireSigned`) already ship:
   [Signed commits](image-verification.md#signed-commits).
-- A signed promotion receipt for each promotion into each environment: the version, the actor
-  and sponsor, every gate with its result, the approvers and verdicts.
-- A compliance mapping page and an evidence pack export.
-- A change request gate (ServiceNow, Jira), and structured approval fields such as a ticket ID.
+- Receipts signed with AWS KMS or Google Cloud KMS.
+- A maximum age for attestations, so a gate can refuse a stale scan.
 
 ### v0.14: adaptive
 
@@ -78,5 +101,5 @@ These concerns are intentionally delegated to dedicated tools — kardinal integ
 |---|---|
 | Traffic splitting / canary weights | Argo Rollouts, Flagger |
 | Load test gating | k6, Locust in CI |
-| SAST / vulnerability scan gating | Trivy, govulncheck in CI |
+| Running SAST and vulnerability scanners | Trivy, Grype, govulncheck in CI. From v0.13.0 (not released yet) kardinal can require a signed Trivy or Grype scan of each image, and a gate can judge its findings after VEX: [Attestations](image-verification.md#attestations) |
 | Code coverage gating | Codecov, SonarQube in CI |

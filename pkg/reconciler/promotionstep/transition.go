@@ -21,6 +21,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	builtinsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 // transition moves ps to state with message and patches its status against
@@ -419,5 +420,8 @@ func prMergedMessage(ps *v1alpha1.PromotionStep, message string) string {
 	if url := ps.Status.PRURL; url != "" {
 		msg += ": " + url
 	}
+	// A PR the step adopted (#2092) may not be kardinal's alone: say what
+	// is known of it.
+	msg += builtinsteps.AdoptedSuffix(o)
 	return msg
 }

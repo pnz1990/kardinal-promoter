@@ -65,7 +65,8 @@ Created by: alice
 ```
 
 When the version has [change request](change-requests.md) tickets in the environment, a
-`### Change Requests` section follows the gate table, one row per ticket:
+`### Change Requests` section follows the gate table, one row per ticket (new in v0.13.0,
+unreleased):
 
 ```markdown
 ### Change Requests
@@ -411,14 +412,26 @@ is to reset the branch to kardinal's commit (`git push --force origin
 help, because the branch still carries the other commit.
 - **Already merged** (the controller restarted after opening it, and a reviewer merged it in
   between): the retry finds nothing to commit, because the base branch has the change. It then
-  looks up the merged PR of its branch, with a commit the step pushed as its head
+  looks up the merged PR of its branch with a commit the step pushed
   (`status.outputs.pushedSHAs` keeps the last eight, each recorded before it is pushed: a
-  restarted run pushes a new commit, while the PR a reviewer merged carries an earlier one), and
-  records the
+  restarted run pushes a new commit, while the PR a reviewer merged carries an earlier one): as
+  its head, or, when a reviewer pushed a fixup on top before merging, among the PR's commits as
+  the SCM lists them (which outlive a squash or rebase merge and the branch's deletion; a list
+  longer than one page of 100, 50 on Forgejo and Gitea, is not used). It records the
   merge as for any PR: the step's outputs name the PR, its merge commit and who merged it (asked
   of the SCM), and the `PRMerged` AuditEvent is written. Only a PR opened after the PromotionStep
   was created, less a minute for clock skew, counts, so an earlier Bundle of the same name is
-  not taken for this one.
+  not taken for this one. kardinal does not claim an adopted PR as its own: a person may have
+  opened it from kardinal's branch, and it may carry commits kardinal did not push. The step's
+  message, the `PRMerged` AuditEvent and the receipt (`change.pr.adopted`) name its head, the SCM
+  account that opened it, and each commit kardinal did not push with its author, for example
+  `adopted PR #7 (head 5555…, opened by "bob", 1 commit not pushed by kardinal: 5555… by "bob")`.
+  The names are the SCM's free text, so they are quoted, without e-mail addresses, control,
+  directional-formatting (bidi) or zero-width characters, and cut at 128 bytes; a commit ID that is not 7 to 64 hex digits is recorded as
+  `(invalid)`; at most 20 commits are listed, then `+N more`, with the count exact. The step's
+  outputs keep them as `prAdoptedHead`, `prOpenedBy`, `prUnpushedCommits` and `prUnpushedCount`. An SCM
+  that has no commit list for a PR (HTTP 404), or a token that may list PRs but not their
+  commits (HTTP 403), adopts nothing by its commits.
 - **Neither, or no recorded commit:** the step records `noChanges`, as before.
 
 One case is accepted: a PR that someone opens by hand on kardinal's branch, in the repository

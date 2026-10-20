@@ -262,10 +262,10 @@ jobs:
           # controller with each ldflags mistake; it runs at ~115s of the
           # 120s budget on a runner, so it gets its own 300s (#2156) until
           # its slow tests are split. cmd/kardinal/cmd (the CLI's tests: MCP,
-          # policy simulate, previews, the evidence pack) grew from 75s to
-          # 120s on main in a day and times out next to the shard's other
-          # packages, so it gets 300s too (#2194). Every other package keeps
-          # 120s.
+          # policy simulate, previews, the evidence pack) took 84s next to the
+          # shard's other packages even after #2215 halved it: it keeps 300s
+          # too (#2194) until the MCP server's per-call globals are gone and
+          # its MCP tests can run in parallel. Every other package keeps 120s.
           cli=github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd
           others=()
           slow=()
@@ -471,8 +471,11 @@ jobs:
 
   # ── Fuzz targets: a short run of each on every PR (#1837) ───────────────────
   # The seed corpora (testdata/fuzz/) also run in "go test" above; this job
-  # explores past them for 20s per target. A failure prints the input and
-  # writes it under testdata/fuzz/<target>/: commit it with the fix.
+  # explores past them for 13s per target, every Fuzz target of the repo
+  # (test/hack TestFuzzTargetsAllRun checks; the release gate fuzzes each for
+  # longer), 78s in all as when it had four targets of 20s. A failure prints
+  # the input and writes it under testdata/fuzz/<target>/: commit it with the
+  # fix.
   fuzz:
     name: fuzz
     needs: changes
@@ -500,10 +503,11 @@ jobs:
         run: |
           set -eo pipefail
           for target in ./pkg/graph:FuzzBuild ./pkg/reconciler/policygate:FuzzCELContext \
-              ./pkg/steps/steps:FuzzYAMLUpdate ./pkg/steps/steps:FuzzKustomizeSetImage; do
+              ./pkg/steps/steps:FuzzYAMLUpdate ./pkg/steps/steps:FuzzKustomizeSetImage \
+              ./pkg/tmplsafe:FuzzTemplates ./pkg/reconciler/notificationhook:FuzzRenderTemplate; do
             pkg=${target%%:*} name=${target##*:}
             echo "::group::$name"
-            bash hack/ci/fuzz.sh "$pkg" "$name" 20s
+            bash hack/ci/fuzz.sh "$pkg" "$name" 13s
             echo "::endgroup::"
           done
 
