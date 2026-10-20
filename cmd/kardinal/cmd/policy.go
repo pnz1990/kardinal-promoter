@@ -92,7 +92,7 @@ template's per-Bundle instances.`,
 			if err != nil {
 				return fmt.Errorf("policy list: %w", err)
 			}
-			return policyListFn(cmd.OutOrStdout(), c, ns, pipeline, policyNS)
+			return policyListFn(contextOf(cmd), cmd.OutOrStdout(), c, ns, pipeline, policyNS)
 		},
 	}
 	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Show only the gates attached to this pipeline (or give it as the argument)")
@@ -102,8 +102,7 @@ template's per-Bundle instances.`,
 
 // policyListFn is the testable implementation of policy list. Graph-stamped
 // gate instances are never listed; see `kardinal explain` for those.
-func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, policyNS []string) error {
-	ctx := context.Background()
+func policyListFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipelineFilter string, policyNS []string) error {
 	if pipelineFilter == "" {
 		var gates v1alpha1.PolicyGateList
 		if err := c.List(ctx, &gates); err != nil {

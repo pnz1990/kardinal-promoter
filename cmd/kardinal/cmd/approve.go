@@ -255,6 +255,7 @@ func waitingBundle(ctx context.Context, c sigs_client.Client, ns, pipeline, env 
 // approvalVersion is what Bundle name ships, announced on stderr before a
 // decision on it.
 func approvalVersion(ctx context.Context, c sigs_client.Client, ns, name string) (string, error) {
+	env := envOf(ctx)
 	var b v1alpha1.Bundle
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -263,7 +264,7 @@ func approvalVersion(ctx context.Context, c sigs_client.Client, ns, name string)
 		return "", fmt.Errorf("approve: get bundle %s: %w", name, err)
 	}
 	version := createdOf(&b).Version
-	_, _ = fmt.Fprintf(errOut, "%s %s (%s)\n", sty.Dim("Version:"), versionOr(version, name), name)
+	_, _ = fmt.Fprintf(env.errOut, "%s %s (%s)\n", env.sty.Dim("Version:"), versionOr(version, name), name)
 	return version, nil
 }
 
@@ -293,7 +294,7 @@ func approveFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, bundl
 		}
 		return fmt.Errorf("approve: get bundle %s: %w", bundleName, err)
 	}
-	id, err := identityOf(ctx, c)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
 		return fmt.Errorf("approve: %w", err)
 	}

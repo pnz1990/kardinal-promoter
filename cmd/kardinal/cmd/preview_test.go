@@ -126,7 +126,7 @@ func TestPreview_Verification(t *testing.T) {
 			}
 
 			var list bytes.Buffer
-			require.NoError(t, policyListFn(&list, c, "default", "demo", nil))
+			require.NoError(t, policyListFn(t.Context(), &list, c, "default", "demo", nil))
 			assert.Contains(t, list.String(), "block-prod")
 			if tc.fails != "" {
 				assert.Contains(t, list.String(), "Verification fails: "+tc.fails)

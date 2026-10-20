@@ -379,7 +379,7 @@ func TestWatch_YAMLDocuments(t *testing.T) {
 	n := 0
 	require.NoError(t, watchLoop(ctx, &out, time.Millisecond, func() error {
 		n++
-		return statusPipelineWriter(&out, c, "default", "demo")
+		return statusPipelineWriter(t.Context(), &out, c, "default", "demo")
 	}))
 	assert.Equal(t, 1, n)
 	assert.True(t, strings.HasPrefix(out.String(), "---\n"), out.String())

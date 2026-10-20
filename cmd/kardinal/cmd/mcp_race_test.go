@@ -38,6 +38,7 @@ import (
 //
 // Covers MCP-CONCURRENT-01.
 func TestMCP_ConcurrentNamespaces(t *testing.T) {
+	t.Parallel()
 	pipe := func(ns, name string) *v1alpha1.Pipeline {
 		return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}}}}
@@ -46,15 +47,16 @@ func TestMCP_ConcurrentNamespaces(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 		return c.List(ctx, list, opts...)
 	}}
-	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, slow, pipe("team-a", "a-one"), pipe("team-b", "b-secret"), pipe("default", "d-one"))
 	// As the real client: the namespace is the persistent flag's, else the
 	// kubeconfig's.
-	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
+	var c sigs_client.Client
+	cs, fc := mcpClient(t, mcpOptions{allowWrite: true, client: func() (sigs_client.Client, string, error) {
 		if globalNamespace != "" {
 			return c, globalNamespace, nil
 		}
 		return c, "default", nil
-	})
+	}}, slow, pipe("team-a", "a-one"), pipe("team-b", "b-secret"), pipe("default", "d-one"))
+	c = fc
 	var wg sync.WaitGroup
 	errs := make(chan string, 400)
 	for i := range 100 {
@@ -101,6 +103,7 @@ func first(s []string) string {
 //
 // Covers MCP-CONCURRENT-01.
 func TestMCP_CallsWriteNoGlobal(t *testing.T) {
+	t.Parallel()
 	cs, _ := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
 	ns, kc, kctx, out, s, e := globalNamespace, globalKubeconfig, globalContext, globalOutput, sty, errOut
 	for _, tc := range []struct {
@@ -173,6 +176,7 @@ func (l *lockedBuffer) String() string {
 //
 // Covers MCP-CONCURRENT-01.
 func TestMCP_PanicEndsOneCall(t *testing.T) {
+	t.Parallel()
 	inBoom := func(opts []sigs_client.ListOption) bool {
 		lo := (&sigs_client.ListOptions{}).ApplyOptions(opts)
 		return lo.Namespace == "boom"

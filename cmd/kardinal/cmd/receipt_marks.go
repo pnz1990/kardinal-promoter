@@ -52,9 +52,10 @@ func receiptSigned(rc v1alpha1.PromotionReceipt) bool {
 // controller signed it (the mark on a terminal only), else its phase.
 // "Verified" is what kardinal verify-receipt says of a receipt it checked,
 // not the controller's signature (#2135).
-func receiptMark(rc v1alpha1.PromotionReceipt) string {
+func receiptMark(ctx context.Context, rc v1alpha1.PromotionReceipt) string {
+	env := envOf(ctx)
 	if receiptSigned(rc) {
-		return sty.Paint(display.ToneVerified, "signed"+sty.Sym(" ✓", ""))
+		return env.sty.Paint(display.ToneVerified, "signed"+env.sty.Sym(" ✓", ""))
 	}
 	if rc.Status.Phase == "" {
 		return "pending"

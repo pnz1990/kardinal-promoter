@@ -46,7 +46,7 @@ func TestCLI_BundleSelectorOnTheServer(t *testing.T) {
 				return err
 			}}).Build()
 	var buf bytes.Buffer
-	require.NoError(t, historyFn(&buf, c, "default", "app", "", 20))
+	require.NoError(t, historyFn(t.Context(), &buf, c, "default", "app", "", 20))
 	assert.Contains(t, buf.String(), "app-v1")
 	require.NotEmpty(t, listed)
 	for _, n := range listed {

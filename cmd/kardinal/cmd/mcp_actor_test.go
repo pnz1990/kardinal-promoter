@@ -89,6 +89,7 @@ func TestMCP_WritesStampTheActor(t *testing.T) {
 // TestMCP_AgentOutOfScope: an agent whose AgentIdentity does not cover the
 // pipeline is refused before anything is written, with the reason.
 func TestMCP_AgentOutOfScope(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, append(mcpFixture(), mcpIndex("other"))...)
 	res, body := call(t, cs, "ship", map[string]any{"pipeline": "app", "images": []string{"ghcr.io/acme/app:3.0"}})
 	assert.True(t, res.IsError)

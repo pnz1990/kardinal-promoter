@@ -28,14 +28,14 @@ func TestFreezeCommands(t *testing.T) {
 	now := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 
 	var out bytes.Buffer
-	require.NoError(t, freezeFn(&out, c, v1alpha1.FreezeAgents, "", "INC-4211", 0, now))
+	require.NoError(t, freezeFn(t.Context(), &out, c, v1alpha1.FreezeAgents, "", "INC-4211", 0, now))
 	assert.Contains(t, out.String(), "Frozen: kardinal-freeze-agents (agents, every namespace), until kardinal unfreeze kardinal-freeze-agents")
 	var cw v1alpha1.ChangeWindow
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents"}, &cw))
 	assert.Equal(t, "alice", cw.Spec.Freeze.CreatedBy)
 
 	out.Reset()
-	require.NoError(t, freezeFn(&out, c, v1alpha1.FreezeEveryone, "payments", "payments incident", 2*time.Hour, now))
+	require.NoError(t, freezeFn(t.Context(), &out, c, v1alpha1.FreezeEveryone, "payments", "payments incident", 2*time.Hour, now))
 	assert.Contains(t, out.String(), "kardinal-freeze-everyone-payments (everyone, namespaces payments), until 2026-10-14T11:00:00Z")
 
 	// The window reconciler marks them active.
@@ -61,9 +61,9 @@ func TestFreezeCommands(t *testing.T) {
 	assert.Equal(t, "checkout", cw.Spec.Freeze.Exemptions[0].Pipeline)
 
 	out.Reset()
-	require.NoError(t, unfreezeFn(&out, c, "kardinal-freeze-agents"))
+	require.NoError(t, unfreezeFn(t.Context(), &out, c, "kardinal-freeze-agents"))
 	assert.Contains(t, out.String(), "Freeze kardinal-freeze-agents lifted")
-	assert.Error(t, unfreezeFn(&out, c, "kardinal-freeze-agents"))
+	assert.Error(t, unfreezeFn(t.Context(), &out, c, "kardinal-freeze-agents"))
 
 	// #2034: the freeze audit finalizer keeps an unfrozen window for up to
 	// two minutes. kardinal freeze does not list it, and override --freeze
@@ -71,11 +71,11 @@ func TestFreezeCommands(t *testing.T) {
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone-payments"}, &cw))
 	cw.Finalizers = []string{"kardinal.io/freeze-audit"}
 	require.NoError(t, c.Update(ctx, &cw))
-	require.NoError(t, freezeFn(&out, c, v1alpha1.FreezeAgents, "", "INC-4212", 0, now))
+	require.NoError(t, freezeFn(t.Context(), &out, c, v1alpha1.FreezeAgents, "", "INC-4212", 0, now))
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-agents"}, &cw))
 	cw.Status.Active, cw.Status.ObservedGeneration = true, cw.Generation
 	require.NoError(t, c.Status().Update(ctx, &cw))
-	require.NoError(t, unfreezeFn(&out, c, "kardinal-freeze-everyone-payments"))
+	require.NoError(t, unfreezeFn(t.Context(), &out, c, "kardinal-freeze-everyone-payments"))
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "kardinal-freeze-everyone-payments"}, &cw), "kept by its finalizer")
 	out.Reset()
 	require.NoError(t, listFreezesFn(&out, c))
@@ -88,7 +88,7 @@ func TestFreezeCommands(t *testing.T) {
 	// Freezing that scope again while it is being lifted is refused, not an
 	// update that then vanishes (#2034 QA).
 	out.Reset()
-	err := freezeFn(&out, c, v1alpha1.FreezeEveryone, "payments", "again", 0, now)
+	err := freezeFn(t.Context(), &out, c, v1alpha1.FreezeEveryone, "payments", "again", 0, now)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "freeze kardinal-freeze-everyone-payments is being lifted; try again shortly (up to 2 minutes; the controller must be running)")
 }

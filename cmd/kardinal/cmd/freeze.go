@@ -97,7 +97,7 @@ the freezes.`,
 			if err := confirm(cmd, fmt.Sprintf("Freeze %s in %s? Their promotions hold until you unfreeze.", actors, where)); err != nil {
 				return err
 			}
-			return freezeFn(cmd.OutOrStdout(), c, actors, namespace, reason, dur, time.Now())
+			return freezeFn(contextOf(cmd), cmd.OutOrStdout(), c, actors, namespace, reason, dur, time.Now())
 		},
 	}
 	flags.add(cmd)
@@ -109,14 +109,13 @@ the freezes.`,
 
 // freezeFn is the testable implementation of freeze (lifecycle.Freeze, the
 // implementation the UI shares).
-func freezeFn(w io.Writer, c sigs_client.Client, actors, namespace, reason string, d time.Duration, now time.Time) error {
-	ctx := context.Background()
-	id, err := identityOf(ctx, c)
+func freezeFn(ctx context.Context, w io.Writer, c sigs_client.Client, actors, namespace, reason string, d time.Duration, now time.Time) error {
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
 		return fmt.Errorf("freeze: %w", err)
 	}
 	cw, created, err := lifecycle.Freeze(ctx, c, lifecycle.FreezeRequest{Actors: actors, Namespace: namespace,
-		Reason: reason, For: d, CreatedBy: id.Username, Stamp: bestStamp(c, actor.Where{Namespace: namespace}), Now: now})
+		Reason: reason, For: d, CreatedBy: id.Username, Stamp: bestStamp(ctx, c, actor.Where{Namespace: namespace}), Now: now})
 	if err != nil {
 		return fmt.Errorf("freeze: %w", err)
 	}
@@ -200,7 +199,7 @@ freeze is never deleted.`,
 			case len(args) == 0:
 				return fmt.Errorf("which freeze? Give its name (kardinal freeze lists them) or --agents / --everyone")
 			}
-			return unfreezeFn(cmd.OutOrStdout(), c, args[0])
+			return unfreezeFn(contextOf(cmd), cmd.OutOrStdout(), c, args[0])
 		},
 	}
 	flags.add(cmd)
@@ -208,12 +207,12 @@ freeze is never deleted.`,
 }
 
 // unfreezeFn is the testable implementation of unfreeze.
-func unfreezeFn(w io.Writer, c sigs_client.Client, name string) error {
+func unfreezeFn(ctx context.Context, w io.Writer, c sigs_client.Client, name string) error {
 	var lift *v1alpha1.FreezeLift
-	if id, err := identityOf(context.Background(), c); err == nil {
-		lift = &v1alpha1.FreezeLift{By: id.Username, Actor: bestStamp(c, actor.Where{})}
+	if id, err := callerIdentity(ctx, c); err == nil {
+		lift = &v1alpha1.FreezeLift{By: id.Username, Actor: bestStamp(ctx, c, actor.Where{})}
 	}
-	if err := lifecycle.Unfreeze(context.Background(), c, name, "", lift); err != nil {
+	if err := lifecycle.Unfreeze(ctx, c, name, "", lift); err != nil {
 		return fmt.Errorf("unfreeze: %w", err)
 	}
 	if _, err := fmt.Fprintf(w, "Freeze %s lifted. Held steps go on within a minute.\n", name); err != nil {
@@ -227,7 +226,7 @@ func unfreezeFn(w io.Writer, c sigs_client.Client, name string) error {
 func overrideFreezeFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, bundle, reason string,
 	d time.Duration, now time.Time) error {
 	ctx := context.Background()
-	id, err := identityOf(ctx, c)
+	id, err := callerIdentity(ctx, c)
 	if err != nil {
 		return fmt.Errorf("override: %w", err)
 	}

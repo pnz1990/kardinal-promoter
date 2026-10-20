@@ -169,7 +169,7 @@ func TestRollbackCmd_RestoresPreviousVerifiedBundle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := lcClient(t, tc.objs...)
 			var buf bytes.Buffer
-			err := rollbackFn(&buf, c, "default", "app", "prod", tc.to)
+			err := rollbackFn(t.Context(), &buf, c, "default", "app", "prod", tc.to)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				assert.Empty(t, newBundles(t, c, fixture...), "a refused rollback creates no Bundle")
@@ -215,7 +215,7 @@ func TestPromoteCmd_CopiesBundleVerifiedUpstream(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := lcClient(t, tc.objs...)
 			var buf bytes.Buffer
-			err := promoteFn(&buf, c, "default", "app", tc.env)
+			err := promoteFn(t.Context(), &buf, c, "default", "app", tc.env)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				assert.Empty(t, newBundles(t, c, "app-v1"), "a refused promote creates no Bundle")
@@ -251,10 +251,10 @@ func TestRollbackCmd_Hold(t *testing.T) {
 
 	c := lcClient(t, history...)
 	var buf bytes.Buffer
-	require.ErrorContains(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", " ", "alice", 0), "--reason")
+	require.ErrorContains(t, rollbackHoldFn(t.Context(), &buf, c, "default", "app", "prod", "", " ", "alice", 0), "--reason")
 	assert.Empty(t, newBundles(t, c, "app-v1", "app-v2"))
 
-	require.NoError(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "INC-42", "alice", 2*time.Hour))
+	require.NoError(t, rollbackHoldFn(t.Context(), &buf, c, "default", "app", "prod", "", "INC-42", "alice", 2*time.Hour))
 	created := newBundles(t, c, "app-v1", "app-v2")
 	require.Len(t, created, 1)
 	p := getP(c)
@@ -272,7 +272,7 @@ func TestRollbackCmd_Hold(t *testing.T) {
 	assert.Contains(t, out, "EXEMPT")
 	assert.Contains(t, out, "The hold expires at ")
 
-	require.ErrorIs(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "again", "alice", 0), lifecycle.ErrConflict)
+	require.ErrorIs(t, rollbackHoldFn(t.Context(), &buf, c, "default", "app", "prod", "", "again", "alice", 0), lifecycle.ErrConflict)
 
 	buf.Reset()
 	require.NoError(t, releaseHoldFn(&buf, c, "default", "app", "prod", ""))
@@ -330,7 +330,7 @@ func TestMutations_JSON(t *testing.T) {
 	var buf bytes.Buffer
 	c := lcClient(t, lcPipeline(), lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
 		lcStep("app-v1", "prod", "Verified", 5), lcStep("app-v2", "uat", "Verified", 15))
-	require.NoError(t, promoteFn(&buf, c, "default", "app", "prod"))
+	require.NoError(t, promoteFn(t.Context(), &buf, c, "default", "app", "prod"))
 	var promoted createdBundle
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &promoted), buf.String())
 	assert.Equal(t, createdBundle{Bundle: newBundles(t, c, "app-v1", "app-v2")[0].Name, Pipeline: "app", Namespace: "default",
@@ -338,7 +338,7 @@ func TestMutations_JSON(t *testing.T) {
 
 	buf.Reset()
 	c = lcClient(t, history()...)
-	require.NoError(t, rollbackFn(&buf, c, "default", "app", "prod", ""))
+	require.NoError(t, rollbackFn(t.Context(), &buf, c, "default", "app", "prod", ""))
 	var rolled createdBundle
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &rolled), buf.String())
 	assert.Equal(t, createdBundle{Bundle: newBundles(t, c, "app-v1", "app-v2")[0].Name, Pipeline: "app", Namespace: "default",
@@ -346,7 +346,7 @@ func TestMutations_JSON(t *testing.T) {
 
 	buf.Reset()
 	c = lcClient(t, history()...)
-	require.NoError(t, rollbackHoldFn(&buf, c, "default", "app", "prod", "", "INC-42", "alice", 0))
+	require.NoError(t, rollbackHoldFn(t.Context(), &buf, c, "default", "app", "prod", "", "INC-42", "alice", 0))
 	var held createdBundle
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &held), buf.String())
 	require.NotNil(t, held.Hold)

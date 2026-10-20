@@ -88,7 +88,6 @@ func mcpClient(t *testing.T, opts mcpOptions, funcs *interceptor.Funcs, objs ...
 // (the SDK's newest when empty).
 func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *interceptor.Funcs, objs ...sigs_client.Object) (*mcp.ClientSession, sigs_client.Client) {
 	t.Helper()
-	keepStyle(t)
 	b := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(objs...).
 		WithStatusSubresource(&v1alpha1.Pipeline{}, &v1alpha1.Bundle{}, &v1alpha1.PolicyGate{}).
 		WithIndex(&v1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline)
@@ -96,9 +95,15 @@ func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *intercept
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	c := b.Build()
-	setForTest(t, &newClient, func() (sigs_client.Client, string, error) { return c, "default", nil })
-	mcpProcessForTest(t)
-	stubIdentity(t, Identity{Username: "system:serviceaccount:agents:fixer"})
+	// The server's client and caller come with its options, and each call's
+	// output with its context: the test sets no package variable, so it may
+	// run in parallel (#2230).
+	if opts.client == nil {
+		opts.client = func() (sigs_client.Client, string, error) { return c, "default", nil }
+	}
+	if opts.identity == nil {
+		opts.identity = fixedIdentity(Identity{Username: "system:serviceaccount:agents:fixer"})
+	}
 	if opts.maxBytes == 0 {
 		opts.maxBytes = defaultMCPMaxBytes
 	}
@@ -111,6 +116,11 @@ func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *intercept
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
 	return cs, c
+}
+
+// fixedIdentity is an identity func that answers id.
+func fixedIdentity(id Identity) func(context.Context, sigs_client.Client) (Identity, error) {
+	return func(context.Context, sigs_client.Client) (Identity, error) { return id, nil }
 }
 
 // mcpProcessForTest is mcpProcess (what kardinal mcp sets when it starts),
@@ -145,6 +155,7 @@ var mcpWriteTools = []string{"approve", "freeze", "pause", "promote", "reject", 
 // --allow-write the write tools too, not read-only; it says what the
 // untrusted label means when the agent connects.
 func TestMCP_ToolListing(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		allowWrite bool
@@ -185,6 +196,7 @@ func TestMCP_ToolListing(t *testing.T) {
 // tool is refused with a tool error that names --allow-write, and nothing
 // is written.
 func TestMCP_WriteRefusedWithoutAllowWrite(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{}, nil, mcpFixture()...)
 	for _, tool := range mcpWriteTools {
 		res, body := call(t, cs, tool, map[string]any{"pipeline": "app", "environment": "prod", "version": "2.0",
@@ -204,6 +216,7 @@ func TestMCP_WriteRefusedWithoutAllowWrite(t *testing.T) {
 // and resume change the Pipeline, through the CLI's own commands; approve
 // needs the version the agent reviewed.
 func TestMCP_WriteTools(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
 	ctx := context.Background()
 
@@ -236,6 +249,7 @@ func TestMCP_WriteTools(t *testing.T) {
 // error of kind Forbidden that says who may not do what and which role to
 // ask for, for a read and for a write.
 func TestMCP_Forbidden(t *testing.T) {
+	t.Parallel()
 	forbid := func(verb string, gr schema.GroupResource, name string) error {
 		return apierrors.NewForbidden(gr, name, fmt.Errorf(`User "system:serviceaccount:agents:fixer" cannot %s resource "%s" in API group "%s" in the namespace "default"`,
 			verb, gr.Resource, gr.Group))
@@ -282,6 +296,7 @@ func TestMCP_Forbidden(t *testing.T) {
 //
 // Covers MCP-PAGE-01.
 func TestMCP_Paging(t *testing.T) {
+	t.Parallel()
 	objs := mcpFixture()
 	created := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 40 {
@@ -327,6 +342,7 @@ func TestMCP_Paging(t *testing.T) {
 //
 // Covers MCP-PAGE-01.
 func TestMCPResult_Truncated(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		v    any
@@ -365,6 +381,7 @@ func TestMCPResult_Truncated(t *testing.T) {
 // PR URL, a version's author) reaches the agent only as {"untrusted": ...},
 // in why, status, diff and history; kardinal's own words are plain.
 func TestMCP_UntrustedLabels(t *testing.T) {
+	t.Parallel()
 	cs, _ := mcpClient(t, mcpOptions{}, nil, mcpFixture()...)
 
 	_, body := call(t, cs, "why", map[string]any{"pipeline": "app", "environment": "prod"})
@@ -456,6 +473,7 @@ func TestLabelUntrusted(t *testing.T) {
 // gate on Saturday and when it would pass, and allowed on a Tuesday; for a
 // named version it evaluates that Bundle; it writes nothing.
 func TestMCP_Simulate(t *testing.T) {
+	t.Parallel()
 	cs, c := mcpClient(t, mcpOptions{}, nil, mcpFixture()...)
 	res, body := call(t, cs, "simulate", map[string]any{"pipeline": "app", "environment": "prod", "time": "Saturday 3pm"})
 	require.False(t, res.IsError, "%v", body)
@@ -485,11 +503,12 @@ func TestMCP_Simulate(t *testing.T) {
 	assert.Len(t, gatesNow.Items, 1, "no gate instance written")
 }
 
-// TestMCP_ConcurrentCalls: calls in parallel each get their own answer (the
-// commands share flag variables, so the server runs them one at a time),
-// and leave the package's flags as they were.
+// TestMCP_ConcurrentCalls: calls in parallel each get their own answer, in
+// JSON though the package's output flag is the table default (each call's
+// format comes with its context, #2230), and no call writes the flag.
 func TestMCP_ConcurrentCalls(t *testing.T) {
-	setForTest(t, &globalOutput, "")
+	t.Parallel()
+	before := globalOutput
 	cs, _ := mcpClient(t, mcpOptions{}, nil, mcpFixture()...)
 	var wg sync.WaitGroup
 	errs := make(chan error, 40)
@@ -522,7 +541,7 @@ func TestMCP_ConcurrentCalls(t *testing.T) {
 	for err := range errs {
 		assert.NoError(t, err)
 	}
-	assert.Equal(t, "json", globalOutput, "no call writes the output flag")
+	assert.Equal(t, before, globalOutput, "no call writes the output flag")
 }
 
 // TestMCP_PersistentFlags: every tool's command runs with the client the
@@ -569,15 +588,22 @@ var mcpHostile = []string{"--context=prod-cluster", "--kubeconfig=/tmp/evil.kube
 //
 // Covers MCP-ARGS-01.
 func TestMCP_HostileArguments(t *testing.T) {
-	setForTest(t, &globalKubeconfig, "")
-	setForTest(t, &globalContext, "")
-	cs, c := mcpClient(t, mcpOptions{allowWrite: true}, nil, mcpFixture()...)
+	t.Parallel()
+	// The server's flags as each call's client is built: a tool value that
+	// reached flag parsing would change them.
+	flags := globalKubeconfig + "|" + globalContext
 	var seen []string
-	inner := newClient
-	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
+	var c sigs_client.Client
+	cs, fc := mcpClient(t, mcpOptions{allowWrite: true, client: func() (sigs_client.Client, string, error) {
 		seen = append(seen, globalKubeconfig+"|"+globalContext)
-		return inner()
-	})
+		return c, "default", nil
+	}}, nil, mcpFixture()...)
+	c = fc
+	// A valid call builds its client with the server's flags: the record
+	// works, so an empty one below means no client was built.
+	res, body := call(t, cs, "status", map[string]any{"pipeline": "app"})
+	require.False(t, res.IsError, "%v", body)
+	require.Equal(t, []string{flags}, seen, "a valid call's client, with the server's flags")
 	// Each tool's arguments that name something, with a valid value.
 	named := map[string]map[string]any{
 		"why":      {"pipeline": "app", "environment": "prod", "namespace": "default"},
@@ -625,7 +651,7 @@ func TestMCP_HostileArguments(t *testing.T) {
 				assert.True(t, res.IsError, "%s %s=%q: %v", tool, field, bad, body)
 				assert.Contains(t, fmt.Sprint(body), field, "%s %s=%q: the error names the argument", tool, field, bad)
 				for _, s := range seen {
-					assert.Equal(t, "|", s, "%s %s=%q: a client for another kubeconfig or context", tool, field, bad)
+					assert.Equal(t, flags, s, "%s %s=%q: a client for another kubeconfig or context", tool, field, bad)
 				}
 			}
 		}

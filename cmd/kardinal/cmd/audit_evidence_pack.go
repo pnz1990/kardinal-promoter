@@ -106,7 +106,7 @@ the pack with your own identity (docs/compliance.md).`,
 				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: --include-commands exports container commands and arguments; "+
 					"their redaction is best-effort: a secret it does not recognise is exported")
 			}
-			if id, err := identityOf(ctx, c); err == nil {
+			if id, err := callerIdentity(ctx, c); err == nil {
 				opts.ExportedBy = id.Username
 			} else {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: the manifest names no exporter: %v\n", err)

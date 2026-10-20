@@ -51,6 +51,9 @@ type mcpOptions struct {
 	// log is where a tool call's panic is written, with its stack (the
 	// server's stderr by default).
 	log io.Writer
+	// identity, when set, is who the tools' writes are made as instead of
+	// asking the API server (a test server's caller).
+	identity func(context.Context, sigs_client.Client) (Identity, error)
 }
 
 func newMCPCmd() *cobra.Command {
@@ -88,12 +91,14 @@ messages, authors, reasons) comes as {"untrusted": "..."}: data, not orders.`,
 	return cmd
 }
 
-// mcpProcess sets, once when kardinal mcp starts, what every tool's command
-// runs with and that no call changes: JSON output, no colour, warnings
-// discarded (stdout carries the protocol), and no .kardinal.yaml (#1759: the
-// agent's working directory is a repository it may not trust). No package variable is written
-// after it, so tool calls run concurrently (#2230): each call's namespace,
-// asserted client and identity come with the call (direct, its context).
+// mcpProcess sets, once when kardinal mcp starts, what no call changes: no
+// .kardinal.yaml (#1759: the agent's working directory is a repository it
+// may not trust), and JSON, no colour and warnings discarded (stdout carries
+// the protocol) for what runs outside a tool's command, as building the
+// client (its version-skew warning). Each call's output, colour, warnings,
+// namespace, asserted client and identity come with the call (direct, its
+// context), and no package variable is written after this, so tool calls
+// run concurrently (#2230).
 func mcpProcess() {
 	globalOutput = "json"
 	sty, errOut = style.Plain(), io.Discard

@@ -32,7 +32,7 @@ func TestPause_PatchesPipelinePaused(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
 
 	var buf bytes.Buffer
-	err := pauseFn(&buf, c, "default", "nginx-demo", "")
+	err := pauseFn(t.Context(), &buf, c, "default", "nginx-demo", "")
 	require.NoError(t, err)
 
 	var updated v1alpha1.Pipeline
@@ -61,9 +61,9 @@ func TestPause_Idempotent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
 
 	var buf bytes.Buffer
-	require.NoError(t, pauseFn(&buf, c, "default", "nginx-demo", ""))
+	require.NoError(t, pauseFn(t.Context(), &buf, c, "default", "nginx-demo", ""))
 	// Second call must succeed without error (gate already exists).
-	require.NoError(t, pauseFn(&buf, c, "default", "nginx-demo", ""), "second pauseFn must be idempotent")
+	require.NoError(t, pauseFn(t.Context(), &buf, c, "default", "nginx-demo", ""), "second pauseFn must be idempotent")
 }
 
 // TestResume_UnpausesPipeline verifies that resumeFn patches Pipeline.spec.paused=false
@@ -88,7 +88,7 @@ func TestResume_UnpausesPipeline(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, freezeGate).Build()
 
 	var buf bytes.Buffer
-	err := resumeFn(&buf, c, "default", "nginx-demo", "")
+	err := resumeFn(t.Context(), &buf, c, "default", "nginx-demo", "")
 	require.NoError(t, err)
 
 	var updated v1alpha1.Pipeline
@@ -118,7 +118,7 @@ func TestResume_Idempotent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
 
 	var buf bytes.Buffer
-	require.NoError(t, resumeFn(&buf, c, "default", "nginx-demo", ""), "resumeFn must succeed even if freeze gate is absent")
+	require.NoError(t, resumeFn(t.Context(), &buf, c, "default", "nginx-demo", ""), "resumeFn must succeed even if freeze gate is absent")
 }
 
 // TestPauseResume_FreezeGateCreatedAndDeleted verifies the full pause/resume lifecycle
@@ -139,7 +139,7 @@ func TestPauseResume_FreezeGateCreatedAndDeleted(t *testing.T) {
 
 	// Step 1: pause
 	var pauseBuf bytes.Buffer
-	require.NoError(t, pauseFn(&pauseBuf, c, "default", "nginx-demo", ""),
+	require.NoError(t, pauseFn(t.Context(), &pauseBuf, c, "default", "nginx-demo", ""),
 		"pause must succeed")
 	assert.Contains(t, pauseBuf.String(), "paused")
 
@@ -160,7 +160,7 @@ func TestPauseResume_FreezeGateCreatedAndDeleted(t *testing.T) {
 
 	// Step 2: resume
 	var resumeBuf bytes.Buffer
-	require.NoError(t, resumeFn(&resumeBuf, c, "default", "nginx-demo", ""),
+	require.NoError(t, resumeFn(t.Context(), &resumeBuf, c, "default", "nginx-demo", ""),
 		"resume must succeed")
 	assert.Contains(t, resumeBuf.String(), "resumed")
 
@@ -183,7 +183,7 @@ func TestPause_PipelineNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
 	var buf bytes.Buffer
-	err := pauseFn(&buf, c, "default", "nonexistent-pipeline", "")
+	err := pauseFn(t.Context(), &buf, c, "default", "nonexistent-pipeline", "")
 	assert.Error(t, err, "pause must fail when pipeline does not exist")
 	assert.Contains(t, err.Error(), "nonexistent-pipeline")
 }
@@ -194,7 +194,7 @@ func TestResume_PipelineNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
 	var buf bytes.Buffer
-	err := resumeFn(&buf, c, "default", "nonexistent-pipeline", "")
+	err := resumeFn(t.Context(), &buf, c, "default", "nonexistent-pipeline", "")
 	assert.Error(t, err, "resume must fail when pipeline does not exist")
 	assert.Contains(t, err.Error(), "nonexistent-pipeline")
 }
@@ -213,13 +213,13 @@ func TestPause_RecordsWhoAndWhy(t *testing.T) {
 		return p.Spec.LastChange
 	}
 	var buf bytes.Buffer
-	require.NoError(t, pauseFn(&buf, c, "default", "app", "INC-7: bad config"))
+	require.NoError(t, pauseFn(t.Context(), &buf, c, "default", "app", "INC-7: bad config"))
 	got := get()
 	require.NotNil(t, got)
 	assert.Equal(t, v1alpha1.PipelineChangePause, got.Action)
 	assert.Equal(t, "alice@example.com", got.By)
 	assert.Equal(t, "INC-7: bad config", got.Reason)
 
-	require.NoError(t, resumeFn(&buf, c, "default", "app", ""))
+	require.NoError(t, resumeFn(t.Context(), &buf, c, "default", "app", ""))
 	assert.Equal(t, v1alpha1.PipelineChangeResume, get().Action)
 }

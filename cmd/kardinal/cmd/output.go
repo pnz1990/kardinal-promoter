@@ -14,6 +14,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -83,8 +84,9 @@ func styledSubStep(state string) string { return sty.State(display.SubStep(state
 // notice is line with its leading "ERROR:" in the failed tone or "WARNING:"
 // in the blocked tone, the colours of the notices kardinal prints after a
 // table; any other line is unchanged.
-func notice(line string) string {
-	for prefix, paint := range map[string]func(string) string{"ERROR:": sty.Error, "WARNING:": sty.Warning} {
+func notice(ctx context.Context, line string) string {
+	env := envOf(ctx)
+	for prefix, paint := range map[string]func(string) string{"ERROR:": env.sty.Error, "WARNING:": env.sty.Warning} {
 		if rest, ok := strings.CutPrefix(line, prefix); ok {
 			return paint(prefix) + rest
 		}

@@ -799,7 +799,7 @@ func TestPolicyList(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			require.NoError(t, policyListFn(&out, c, "default", tt.pipeline, nil))
+			require.NoError(t, policyListFn(t.Context(), &out, c, "default", tt.pipeline, nil))
 			s := out.String()
 			assert.Contains(t, s, "NAME")
 			assert.Contains(t, s, "CEL")
@@ -814,7 +814,7 @@ func TestPolicyList(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	require.NoError(t, policyListFn(&out, c, "default", "", nil))
+	require.NoError(t, policyListFn(t.Context(), &out, c, "default", "", nil))
 	rows := map[string]string{}
 	for _, line := range strings.Split(out.String(), "\n") {
 		if f := strings.Fields(line); len(f) > 0 {
@@ -826,7 +826,7 @@ func TestPolicyList(t *testing.T) {
 	assert.Regexp(t, `default\s+team\s+-\s+5m\s+-\s`, rows["unattached"])
 
 	var missing bytes.Buffer
-	assert.ErrorContains(t, policyListFn(&missing, c, "default", "nope", nil), `pipeline "nope" not found`)
+	assert.ErrorContains(t, policyListFn(t.Context(), &missing, c, "default", "nope", nil), `pipeline "nope" not found`)
 }
 
 // TestPolicyList_Fleet (#1565 QA): kardinal policy list --pipeline shows the
@@ -839,7 +839,7 @@ func TestPolicyList_Fleet(t *testing.T) {
 		policyGate("eu-only", "default", "prod-eu", "true"),
 		policyGate("unattached", "default", "staging", "true"))
 	var out bytes.Buffer
-	require.NoError(t, policyListFn(&out, c, "default", "web", nil))
+	require.NoError(t, policyListFn(t.Context(), &out, c, "default", "web", nil))
 	assert.Contains(t, out.String(), "fleet-gate")
 	assert.Contains(t, out.String(), "eu-only", "a gate of one target")
 	assert.NotContains(t, out.String(), "unattached")
@@ -899,7 +899,7 @@ func TestPolicyList_LastEvaluated(t *testing.T) {
 	lastEval := func(t *testing.T, pipeline string) map[string]string {
 		t.Helper()
 		var out bytes.Buffer
-		require.NoError(t, policyListFn(&out, c, "default", pipeline, nil))
+		require.NoError(t, policyListFn(t.Context(), &out, c, "default", pipeline, nil))
 		lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 		col := strings.Index(lines[0], "LAST-EVALUATED")
 		require.Positive(t, col, out.String())
@@ -951,7 +951,7 @@ func TestPolicyList_ScopeFromNamespace(t *testing.T) {
 	rows := func(t *testing.T, policyNS []string) map[string][]string {
 		t.Helper()
 		var out bytes.Buffer
-		require.NoError(t, policyListFn(&out, c, "default", "", policyNS))
+		require.NoError(t, policyListFn(t.Context(), &out, c, "default", "", policyNS))
 		got := map[string][]string{}
 		for _, l := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")[1:] {
 			f := strings.Fields(l)

@@ -95,7 +95,7 @@ func withCreatedAt(b *v1alpha1.Bundle, at time.Time) *v1alpha1.Bundle {
 func runExplain(t *testing.T, c sigs_client.Client, pipeline, env string, color bool) (string, error) {
 	t.Helper()
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", pipeline, env, color)
+	err := explainOnce(t.Context(), &buf, c, "default", pipeline, env, color)
 	return buf.String(), err
 }
 
@@ -708,7 +708,7 @@ func TestExplain_ChangeWindowGateOpens(t *testing.T) {
 	prevErr := errOut
 	errOut = &errb
 	t.Cleanup(func() { errOut = prevErr })
-	require.NoError(t, explainHinted(&out, policyClient(t, p, b, g, cw), "default", "demo", "prod", false))
+	require.NoError(t, explainHinted(t.Context(), &out, policyClient(t, p, b, g, cw), "default", "demo", "prod", false))
 	assert.Contains(t, out.String(), "ChangeWindow prod-hours blocks, opens at Thursday 04:25 UTC, in about 18m")
 	assert.Contains(t, errb.String(), "Wait: prod-hours opens by itself at Thursday 04:25 UTC, in about 18m")
 }

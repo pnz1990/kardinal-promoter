@@ -49,20 +49,18 @@ func mcpWorld(t *testing.T) (*scenario.World, *mcp.ClientSession, scenario.Ident
 	// The agent's RBAC: its own namespace, and reading the org's gates.
 	kube := w.ClientAsRBAC(&user.DefaultInfo{Name: agent.Username, Groups: agent.Groups}, []string{"team-a"}, []string{scenario.PolicyNS})
 	// As clusterClient: --namespace (the tools' namespace argument) wins
-	// over the kubeconfig's namespace.
-	setForTest(t, &newClient, func() (sigs_client.Client, string, error) {
+	// over the kubeconfig's namespace. The client and the caller come with
+	// the server's options: the test sets no package variable (#2230).
+	client := func() (sigs_client.Client, string, error) {
 		if globalNamespace != "" {
 			return kube, globalNamespace, nil
 		}
 		return kube, "team-a", nil
-	})
-	stubIdentity(t, Identity{Username: agent.Username, Groups: agent.Groups})
-	setForTest(t, &globalKubeconfig, "")
-	setForTest(t, &globalContext, "")
-	keepStyle(t)
+	}
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
-	ss, err := newMCPServer(mcpOptions{allowWrite: true, maxBytes: defaultMCPMaxBytes}).Connect(ctx, st, nil)
+	ss, err := newMCPServer(mcpOptions{allowWrite: true, maxBytes: defaultMCPMaxBytes, client: client,
+		identity: fixedIdentity(Identity{Username: agent.Username, Groups: agent.Groups})}).Connect(ctx, st, nil)
 	require.NoError(t, err)
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "hostile-agent", Version: "1"}, nil).Connect(ctx, ct, nil)
 	require.NoError(t, err)
@@ -134,6 +132,7 @@ func toolArgs(t *testing.T, cs *mcp.ClientSession) map[string]struct {
 // nothing cluster-scoped changes; and what the agent reads back carries the
 // injection only labelled untrusted. Covers MCP-HOSTILE-01.
 func TestMCP_HostileInputs(t *testing.T) {
+	t.Parallel()
 	w, cs, agent := mcpWorld(t)
 	tools := toolArgs(t, cs)
 	require.Len(t, tools, len(mcpReadTools)+len(mcpWriteTools))
@@ -154,7 +153,7 @@ func TestMCP_HostileInputs(t *testing.T) {
 		res, body := call(t, cs, name, baseArgs(name))
 		assert.False(t, res.IsError, "%s with valid arguments: %v", name, body)
 	}
-	calls, refused, fresh := 0, 0, 0
+	calls, refused, fresh, wrote := 0, 0, 0, 0
 	snap := w.Snapshot()
 	accepted := map[string]int{}
 	hostile := scenario.HostileInputs()
@@ -210,12 +209,16 @@ func TestMCP_HostileInputs(t *testing.T) {
 					parts := strings.SplitN(k, "/", 3)
 					assert.Equal(t, "team-a", parts[1], "%s wrote %s: outside the agent's namespace", what, k)
 				}
+				if len(changed) > 0 {
+					wrote++
+				}
 				checkStamped(t, w, what, before, changed, agent.Username)
 				assert.Empty(t, w.LongStrings(changed, 4096), "%s: stored text past 4 KiB", what)
 			}
 		}
 	}
-	t.Logf("%d calls, %d refused; accepted: %v", calls, refused, accepted)
+	t.Logf("%d calls, %d refused, %d wrote; accepted: %v", calls, refused, wrote, accepted)
+	assert.NotZero(t, wrote, "no call wrote, so no stamp was checked")
 
 	// What the agent reads back: an injection it (or anyone) wrote is
 	// labelled untrusted wherever it appears.

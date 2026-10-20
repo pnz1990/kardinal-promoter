@@ -67,7 +67,7 @@ func TestRollback_SaysWhenTagsPromoteThroughUpstream(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := lcClient(t, append(history(tc.pin, tc.pipeline, tc.env), tc.gates...)...)
 			var buf bytes.Buffer
-			require.NoError(t, rollbackFn(&buf, c, "default", "app", tc.env, ""))
+			require.NoError(t, rollbackFn(t.Context(), &buf, c, "default", "app", tc.env, ""))
 			if tc.want == "" {
 				assert.NotContains(t, buf.String(), "Note:")
 				return
