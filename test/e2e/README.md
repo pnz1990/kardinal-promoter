@@ -153,6 +153,7 @@ pattern of its tests.
 | Suite | Components | Tests |
 |---|---|---|
 | `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestSCM_*`, `TestForgejo_*`, `TestGiteaFamily_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
+| `compact` | Forgejo | `TestCompact_*`: a Pipeline of 300 environments (30 waves of 10) promoted end to end through its compact Graph, which stays under the size guard. 15 to 30 minutes on a GitHub-hosted runner, so a job of its own; the test logs each wave's times |
 | `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitea_*`, `TestGiteaFamily_*` |
 | `gitlab` | GitLab CE, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitLab_*` |
 | `github` | GitHub (branches of `pnz1990/kardinal-demo`), Argo CD, the webhook receiver (the other API host `TestGitHub_SCMAPIURL` points the controller at) | `TestCore_*`, `TestSCM_*`, `TestGitHub_*` |

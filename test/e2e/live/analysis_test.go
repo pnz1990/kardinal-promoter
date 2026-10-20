@@ -568,7 +568,7 @@ func TestGraph_AnalysisFailsClosedWithoutRolloutsCompact(t *testing.T) {
 // Pending, every post hook and analysis started after its step entered
 // Verifying, and the Graph stays under the guard and is Ready at the end.
 //
-// It does not run in parallel (a 150-overlay repo, see TestGraph_CompactShape300).
+// It does not run in parallel (a 150-overlay repo, see TestCompact_Shape300).
 //
 // Covers HOOK-COMPACT-02.
 func TestRollouts_CompactShape150HooksAndAnalysis(t *testing.T) {

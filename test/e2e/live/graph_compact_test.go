@@ -103,7 +103,7 @@ func TestGraph_CompactShapeSmall(t *testing.T) {
 // environments.
 const compactHealthDeployment = "compact-health"
 
-// TestGraph_CompactShape300 promotes a Bundle through a Pipeline of 300
+// TestCompact_Shape300 promotes a Bundle through a Pipeline of 300
 // environments (30 waves of 10), each with a PolicyGate, the shape a large
 // fleet runs and one the node-per-environment Graph cannot hold (etcd refuses
 // it). The Graph is compact automatically (more than 100 environments): about
@@ -111,13 +111,16 @@ const compactHealthDeployment = "compact-health"
 // Verified with the new version in git, every gate instance exists and the
 // Graph is Ready only at the end.
 //
-// It does not run in parallel: committing 300 overlays in one git server
-// request, then 300 promotions, would slow the git server down for every
-// other test of the suite (their repo creation timed out). Go runs the
-// suite's serial tests first, alone.
+// It is the compact suite's only test (#2349): it takes 15 to 30 minutes on a
+// GitHub-hosted runner, nearly all of it in the waves' steps (ten writers
+// pushing one branch of a repo that grows by ten commits a wave; the Graph
+// reaches the next wave within seconds, logWaveTimes), and in the core suite
+// it pushed its shard past the 60-minute job limit. It does not run in
+// parallel: committing 300 overlays in one git server request, then 300
+// promotions, would slow the git server down for any other test.
 //
 // Covers GRAPH-COMPACT-02.
-func TestGraph_CompactShape300(t *testing.T) {
+func TestCompact_Shape300(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
 	const waves, perWave = 30, 10
@@ -298,7 +301,7 @@ func stepUIDs(t *testing.T, e *framework.Env, ns, bundle string) map[string]type
 // the shape mid-flight would delete every PromotionStep of the old shape.
 // The second wave's gates hold the Bundle while the Pipeline is edited.
 //
-// It does not run in parallel (100-overlay repos, see TestGraph_CompactShape300).
+// It does not run in parallel (100-overlay repos, see TestCompact_Shape300).
 //
 // Covers GRAPH-COMPACT-03.
 func TestGraph_ShapeKeptAcrossThreshold(t *testing.T) {

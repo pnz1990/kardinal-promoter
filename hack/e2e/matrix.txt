@@ -36,6 +36,9 @@ core              1.36        3/3    -
 core              1.37        1/3    -
 core              1.37        2/3    -
 core              1.37        3/3    -
+# A 300-environment Pipeline, 15 to 30 minutes on a runner: in the core
+# suite it pushed its shard past the 60-minute job limit (#2349).
+compact           1.37        -      -
 gitlab            1.37        -      -
 gitea             1.37        -      -
 github            1.37        -      -
