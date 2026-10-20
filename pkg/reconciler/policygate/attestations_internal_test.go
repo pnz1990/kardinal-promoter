@@ -252,3 +252,51 @@ func TestAttestationContext_UnverifiedImageDropsLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestAttestationContext_Stale (#2044): attestations.<name>.stale is true
+// when any image's result is past its maxAge, staleAt is the earliest, and
+// each image has its own; a name without maxAge is never stale.
+func TestAttestationContext_Stale(t *testing.T) {
+	v := attestedIV("app-v1-verify", "app-v1", time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC), "Verified")
+	at := func(s string) *metav1.Time {
+		tm, err := time.Parse(time.RFC3339, s)
+		require.NoError(t, err)
+		m := metav1.NewTime(tm)
+		return &m
+	}
+	for i := range v.Status.Attestations {
+		r := &v.Status.Attestations[i]
+		if r.Name != "vulns" {
+			continue
+		}
+		if strings.HasSuffix(r.Image, "@sha256:aa") {
+			r.StaleAt = at("2026-10-15T09:00:00Z")
+		} else {
+			r.StaleAt, r.Stale = at("2026-10-15T08:00:00Z"), true
+		}
+	}
+	r := attestationReconciler(t, v)
+	gate := &kardinalv1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "prod-gate", Namespace: "default",
+		Labels: map[string]string{labelPipeline: "app", labelEnvironment: "prod", labelBundle: "app-v1"}}}
+	for _, tc := range []struct {
+		expr string
+		want bool
+	}{
+		{"attestations.vulns.stale", true},
+		{"!attestations.vulns.stale && attestations.vulns.effective.critical == 0", false},
+		{"attestations.vulns.staleAt == '2026-10-15T08:00:00Z'", true},
+		{"attestations.vulns.images.exists(i, !i.stale)", true},
+		{"attestations.vulns.images.all(i, has(i.staleAt))", true},
+		{"!attestations.provenance.stale", true}, // no maxAge: never stale
+		{"has(attestations.provenance.staleAt)", false},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			gate.Spec.Expression = tc.expr
+			celCtx, _, err := r.buildContext(t.Context(), gate, "app-v1")
+			require.NoError(t, err)
+			ok, reason, err := r.eval.evaluate(t.Context(), tc.expr, celCtx)
+			require.NoError(t, err, reason)
+			assert.Equal(t, tc.want, ok, reason)
+		})
+	}
+}

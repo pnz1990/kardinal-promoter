@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/openvex/go-vex/pkg/vex"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -46,13 +48,16 @@ const (
 )
 
 // verifiedStatement is one attestation bundle that verified: who signed
-// it, when (its verified timestamp; zero when it has none), its place in
+// it, when (its earliest verified timestamp; zero when it has none), its place in
 // the referrers, and its statement's predicate as canonical JSON.
 type verifiedStatement struct {
 	authority, signer, issuer, payloadDigest string
-	at                                       time.Time
-	index                                    int
-	predicate                                []byte
+	// shortCert: verified against a certificate that lives at most
+	// maxCertLifetime (a Fulcio one), whose validity bounds at.
+	shortCert bool
+	at        time.Time
+	index     int
+	predicate []byte
 }
 
 // verifyStatements verifies bundles for the image digest against auths and
@@ -87,8 +92,13 @@ func verifyStatements(digest string, bundles [][]byte, predicateType string, aut
 				break
 			}
 			vs := verifiedStatement{authority: a.name, signer: signer, issuer: certIssuer(res), index: i}
+			if a.identity != nil {
+				vs.shortCert = shortLived(&bun)
+			}
+			// The earliest verified time: a later log entry or timestamp
+			// over the same signature only shows it existed then.
 			for _, ts := range res.VerifiedTimestamps {
-				if ts.Timestamp.After(vs.at) {
+				if vs.at.IsZero() || ts.Timestamp.Before(vs.at) {
 					vs.at = ts.Timestamp
 				}
 			}
@@ -148,11 +158,12 @@ func namedAuthorities(auths []authority, names []string) []authority {
 }
 
 // evaluateAttestation is the result of policy p for image img, from the
-// bundles its referrers hold: the newest verified attestation of the type,
-// with its SLSA level and vulnerability counts when the policy asks, and
-// the agent of agents its signer maps to.
+// bundles its referrers hold: the verified attestation of the type that
+// choose picks from them (newest last; nil picks the newest), with its SLSA
+// level and vulnerability counts when the policy asks, and the agent of
+// agents its signer maps to.
 func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolicy, bundles [][]byte, auths []authority,
-	agents []v1alpha1.AgentIdentity) v1alpha1.AttestationResult {
+	agents []v1alpha1.AgentIdentity, choose func([]verifiedStatement) int) v1alpha1.AttestationResult {
 	res := v1alpha1.AttestationResult{Name: p.Name, Image: img.Repository + "@" + img.Digest, PredicateType: p.PredicateType}
 	pa := namedAuthorities(auths, p.Authorities)
 	found, reasons := verifyStatements(img.Digest, bundles, p.PredicateType, pa)
@@ -160,8 +171,17 @@ func evaluateAttestation(img v1alpha1.VerifiedImage, p v1alpha1.AttestationPolic
 		res.Message = clip("no verified attestation of " + p.PredicateType + reasonSuffix(reasons))
 		return res
 	}
-	newest := found[len(found)-1]
+	pick := len(found) - 1
+	if choose != nil {
+		pick = choose(found)
+	}
+	newest := found[pick]
 	res.Verified, res.Authority, res.Signer, res.Digest, res.Count = true, newest.authority, clip(newest.signer), newest.payloadDigest, len(found)
+	if !newest.at.IsZero() {
+		t := metav1.NewTime(newest.at.UTC())
+		res.VerifiedAt = &t
+	}
+	res.StatementTime, res.TimeSource = dating(newest, p)
 	res.Predicate = string(newest.predicate)
 	if len(newest.predicate) > maxPredicateBytes {
 		res.Predicate, res.PredicateOmitted = "", "64 KiB"

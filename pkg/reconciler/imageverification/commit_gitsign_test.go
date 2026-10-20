@@ -282,11 +282,11 @@ func TestEvaluateAttestation_Agent(t *testing.T) {
 	p := v1alpha1.AttestationPolicy{Name: "provenance", PredicateType: predicateType, Authorities: []string{"builder"}}
 
 	res := evaluateAttestation(img, p, [][]byte{b}, []authority{auth},
-		[]v1alpha1.AgentIdentity{*agentIdentity("builder-bot", true, false, v1alpha1.AgentSigningIdentity{Issuer: gitsignIssuer, Subject: gitsignIdentity})})
+		[]v1alpha1.AgentIdentity{*agentIdentity("builder-bot", true, false, v1alpha1.AgentSigningIdentity{Issuer: gitsignIssuer, Subject: gitsignIdentity})}, nil)
 	require.True(t, res.Verified, res.Message)
 	assert.Equal(t, "builder-bot", res.Agent)
 
-	res = evaluateAttestation(img, p, [][]byte{b}, []authority{auth}, nil)
+	res = evaluateAttestation(img, p, [][]byte{b}, []authority{auth}, nil, nil)
 	require.True(t, res.Verified, res.Message)
 	assert.Empty(t, res.Agent)
 }

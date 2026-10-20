@@ -473,9 +473,11 @@ expression that reads a name is an evaluation error and the gate blocks (fail cl
 | `attestations.<name>.before.critical` | int | `2` | A scan; before VEX |
 | `attestations.<name>.effectiveIDs` | list | `["CVE-2026-1234"]` | A scan; effective critical and high IDs, at most 50 |
 | `attestations.<name>.scannedAt` | string | `"2026-10-14T09:00:00Z"` | A scan; RFC 3339 |
+| `attestations.<name>.stale` | bool | `false` | Each policy name; `true` when any image's result is past the policy's [`maxAge`](../image-verification.md#attestation-age); always `false` without `maxAge` |
+| `attestations.<name>.staleAt` | string | `"2026-10-15T09:00:00Z"` | With `maxAge`: when the first image's result goes stale, RFC 3339 |
 | `attestations.<name>.scanner` | string | `"trivy"` | A scan, when every image has the same one |
 | `attestations.<name>.predicate` | string | `'{"result":"PASSED"}'` | Canonical JSON, at most 64 KiB; read it with `json.unmarshal(...)`; when every image has the same one |
-| `attestations.<name>.images` | list | `[{"image": "ghcr.io/myorg/app@sha256:...", "verified": true, ...}]` | Each image's own result: `image`, `verified`, and `signer`, `agent`, `authority`, `digest`, `predicate`, `slsa`, `vulns` as above, when it has them |
+| `attestations.<name>.images` | list | `[{"image": "ghcr.io/myorg/app@sha256:...", "verified": true, ...}]` | Each image's own result: `image`, `verified`, `stale`, and `staleAt`, `signer`, `agent`, `authority`, `digest`, `predicate`, `slsa`, `vulns` as above, when it has them |
 
 A version with several images folds them into one value per name: `verified` when every
 image is, the lowest build level, the summed counts and the oldest scan. A field that names one
@@ -494,6 +496,11 @@ expression: 'attestations.provenance.slsa.buildLevel >= 3 && attestations.proven
 ```yaml
 # No critical and at most two high vulnerabilities after VEX
 expression: 'attestations.vulns.effective.critical == 0 && attestations.vulns.effective.high <= 2'
+```
+
+```yaml
+# A scan no older than its policy's maxAge
+expression: '!attestations.vulns.stale && attestations.vulns.effective.high == 0'
 ```
 
 ```yaml
