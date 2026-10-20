@@ -264,7 +264,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create report: %w", err)
 	}
-	if err := Render(f, steps, results, *out, cov, p, time.Since(start)); err != nil {
+	if err := Render(f, steps, results, *out, cov, repo.NotRunItems, p, time.Since(start)); err != nil {
 		_ = f.Close()
 		return err
 	}

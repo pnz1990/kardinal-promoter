@@ -153,6 +153,27 @@ func TestPlanOfThisRepo(t *testing.T) {
 	}
 	_, err = readAllowlist(filepath.Join(root, "hack", "release-gate", "coverage-allow.txt"))
 	require.NoError(t, err)
+
+	// LoadRepo checked every row and job not-run.txt cites; it names what
+	// QA-2's v0.13 gate audit found the gate never runs (#2303).
+	var items []string
+	for _, it := range r.NotRunItems {
+		items = append(items, it.Item)
+	}
+	all := strings.Join(items, "\n")
+	for _, want := range []string{"AWS KMS", "Google Cloud KMS", "EKS", "Fulcio", "Rekor", "TUF", "ServiceNow", "Jira",
+		"ghcr.io", "cosign", "darwin/amd64", "darwin/arm64", "windows/amd64", "linux/arm64"} {
+		assert.Contains(t, all, want, "hack/release-gate/not-run.txt")
+	}
+	rows, err := coverageRows(root)
+	require.NoError(t, err)
+	for _, it := range r.NotRunItems {
+		for _, e := range it.Evidence {
+			if e.Row != "" {
+				assert.Equal(t, "covered", rows[e.Row].status, "%s cites %s", it.Item, e.Row)
+			}
+		}
+	}
 }
 
 func TestPlanCI(t *testing.T) {
@@ -583,8 +604,12 @@ func TestRender(t *testing.T) {
 	cov := Coverage{Rows: 10, ByStatus: map[string]int{"covered": 8, "todo": 2}, ByResult: map[string]int{"passed": 7, "not run": 3}}
 	p := Provenance{SHA: "0123456789abcdef", Describe: "v0.11.0-5-g0123456", PrevRelease: "v0.11.0", GoVersion: "go1.26.9",
 		Tools: [][2]string{{"kro", "v0.10.0-rc.0"}, {"KIND_NODE_1_37", "kindest/node:v1.37.0@sha256:c"}}, Images: readImages(out)}
+	notRun := []NotRunItem{
+		{Item: "Real KMS signing", Reason: "no cloud account", Evidence: []Evidence{{Row: "RECEIPT-SIGN-06", Tier: "contract"}, {Job: "dry-run"}}},
+		{Item: "Public-good sigstore", Reason: "a private sigstore only", Evidence: []Evidence{{Row: "RECEIPT-LIVE-05", Tier: "live"}}},
+	}
 	var b bytes.Buffer
-	require.NoError(t, Render(&b, steps, results, out, cov, p, 90*time.Minute))
+	require.NoError(t, Render(&b, steps, results, out, cov, notRun, p, 90*time.Minute))
 	s := b.String()
 	assert.Contains(t, s, "# Release gate: 0123456789ab\n")
 	assert.Contains(t, s, "**Verdict: NO-GO.** `0123456789abcdef` (v0.11.0-5-g0123456)")
@@ -600,6 +625,73 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, s, "- Image trivy scanned: `ctl:abc sha256:111 (host build)`")
 	assert.Contains(t, s, "- KIND_NODE_1_37: `kindest/node:v1.37.0@sha256:c`")
 	assert.Contains(t, s, "- Previous release: v0.11.0")
+	assert.Contains(t, s, "by `make release-gate`. It does not prove the 2 items [not run by this gate](#not-run-by-this-gate).\n")
+	assert.Contains(t, s, "\n## Not run by this gate\n\n")
+	assert.Contains(t, s, "| Not run | Why | Evidence instead |\n|---|---|---|\n"+
+		"| Real KMS signing | no cloud account | RECEIPT-SIGN-06 (contract), release.yml job `dry-run` |\n"+
+		"| Public-good sigstore | a private sigstore only | RECEIPT-LIVE-05 (live) |\n")
+	assert.Less(t, strings.Index(s, "## Coverage"), strings.Index(s, "## Not run by this gate"))
+	assert.Less(t, strings.Index(s, "## Not run by this gate"), strings.Index(s, "## Provenance"))
+
+	b.Reset()
+	require.NoError(t, Render(&b, steps, results, out, cov, nil, p, 90*time.Minute))
+	assert.Contains(t, b.String(), "\n## Not run by this gate\n\nNothing is listed in hack/release-gate/not-run.txt.\n",
+		"the section is there with an empty list too")
+	assert.NotContains(t, b.String(), "It does not prove")
+}
+
+// notRunRoot is a checkout with a coverage.tsv, a release.yml and the given
+// not-run.txt.
+func notRunRoot(t *testing.T, notRun string) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, data := range map[string]string{
+		"test/e2e/coverage.tsv": "id\ttier\tsuite\tstatus\n" +
+			"SIGN-01\tcontract\tunit\tcovered\nLIVE-01\tlive\tcore\tcovered\nTODO-01\tlive\tcore\ttodo\n",
+		".github/workflows/release.yml": "on:\n  push: {}\njobs:\n  preflight:\n    runs-on: x\n  dry-run:\n    runs-on: x\n",
+		"hack/release-gate/not-run.txt": notRun,
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(data), 0o644))
+	}
+	return root
+}
+
+// TestReadNotRun: every line names an item, a reason and evidence that
+// exists, or the gate does not start (QA-2's v0.13 gate audit, #2303).
+func TestReadNotRun(t *testing.T) {
+	got, err := readNotRun(notRunRoot(t, "# comment\n\nReal KMS | no cloud account | SIGN-01, release.yml:dry-run\nEKS|no AWS|LIVE-01\n"))
+	require.NoError(t, err)
+	assert.Equal(t, []NotRunItem{
+		{Item: "Real KMS", Reason: "no cloud account", Evidence: []Evidence{{Row: "SIGN-01", Tier: "contract"}, {Job: "dry-run"}}},
+		{Item: "EKS", Reason: "no AWS", Evidence: []Evidence{{Row: "LIVE-01", Tier: "live"}}},
+	}, got)
+
+	got, err = readNotRun(notRunRoot(t, "# nothing\n"))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	for _, tc := range []struct{ name, line, err string }{
+		{"no reason", "Real KMS |  | SIGN-01", "not-run.txt:1: Real KMS has no reason"},
+		{"no evidence", "Real KMS | no cloud account | ", "Real KMS has no evidence"},
+		{"only commas for evidence", "Real KMS | no cloud account | , ,", "Real KMS has no evidence"},
+		{"no item", " | no cloud account | SIGN-01", "not-run.txt:1: no item"},
+		{"two fields", "Real KMS | SIGN-01", "want item | reason | evidence, got 2 fields"},
+		{"a | in a field", "Real KMS | no cloud | account | SIGN-01", "got 4 fields"},
+		{"a row coverage.tsv does not have", "Real KMS | no cloud account | SIGN-02", "Real KMS cites SIGN-02, which is not a row of test/e2e/coverage.tsv"},
+		{"a row that is not covered", "Real KMS | no cloud account | TODO-01", "Real KMS cites TODO-01, whose status is todo, not covered"},
+		{"a job release.yml does not have", "Real KMS | no cloud account | release.yml:publish", "Real KMS cites release.yml job publish, which .github/workflows/release.yml does not have"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := readNotRun(notRunRoot(t, tc.line+"\n"))
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+
+	root := notRunRoot(t, "")
+	require.NoError(t, os.Remove(filepath.Join(root, "hack", "release-gate", "not-run.txt")))
+	_, err = readNotRun(root)
+	assert.ErrorContains(t, err, "read the gate's not-run list", "no list is no claim about what the gate does not run")
 }
 
 func TestReadCoverage(t *testing.T) {
@@ -984,7 +1076,7 @@ func TestRenderAreaSpan(t *testing.T) {
 		{ID: "b", Status: statusPass, Started: t0.Add(10 * time.Minute), Seconds: 3600},
 	}
 	var b bytes.Buffer
-	require.NoError(t, Render(&b, steps, results, t.TempDir(), Coverage{ByStatus: map[string]int{}}, Provenance{SHA: "x"}, time.Hour))
+	require.NoError(t, Render(&b, steps, results, t.TempDir(), Coverage{ByStatus: map[string]int{}}, nil, Provenance{SHA: "x"}, time.Hour))
 	assert.Contains(t, b.String(), "| Live e2e | PASS | 2 of 2 | 0 | 0 | 0 | 0 | 1h10m0s |")
 }
 
@@ -1100,11 +1192,11 @@ func TestVerdictCoverage(t *testing.T) {
 	assert.Equal(t, "NO-GO", verdictOf([]Result{{Status: statusFail}}, ok))
 
 	var b bytes.Buffer
-	require.NoError(t, Render(&b, nil, nil, t.TempDir(), Coverage{ProofError: "no live suite ran", ByStatus: map[string]int{}}, Provenance{SHA: "x"}, 0))
+	require.NoError(t, Render(&b, nil, nil, t.TempDir(), Coverage{ProofError: "no live suite ran", ByStatus: map[string]int{}}, nil, Provenance{SHA: "x"}, 0))
 	assert.Contains(t, b.String(), "**Verdict: NO-GO.**")
 	assert.Contains(t, b.String(), "**No coverage proof: no live suite ran.**")
 	b.Reset()
-	require.NoError(t, Render(&b, nil, nil, t.TempDir(), Coverage{ByStatus: map[string]int{}, Unproven: map[string]string{"CORE-01": "not run"}}, Provenance{SHA: "x"}, 0))
+	require.NoError(t, Render(&b, nil, nil, t.TempDir(), Coverage{ByStatus: map[string]int{}, Unproven: map[string]string{"CORE-01": "not run"}}, nil, Provenance{SHA: "x"}, 0))
 	assert.Contains(t, b.String(), "**1 covered rows are not proven** (NO-GO): CORE-01 (not run).")
 
 	dir := t.TempDir()

@@ -110,6 +110,8 @@ report has:
 - a pass or fail row for each area;
 - test totals, and every skipped test by name;
 - the coverage proof;
+- what the gate does not run, each with the evidence that stands in for
+  it;
 - durations;
 - the commit, the tool versions, and the IDs of the images the live suites
   ran and trivy scanned;
@@ -129,6 +131,15 @@ It covers:
 - helm lint and template of every values profile in
   `hack/release-gate/profiles`, and envtest: every CRD and the chart's
   admission policies on the same two Kubernetes versions.
+
+It does not run what `hack/release-gate/not-run.txt` lists: receipts signed
+with a real cloud KMS key, a real EKS cluster, public-good sigstore, real
+ServiceNow and Jira, what `release.yml` publishes, and the artifacts for
+platforms other than linux/amd64. Each line gives the item, why the gate
+does not run it, and the evidence that stands in for it: covered
+`test/e2e/coverage.tsv` rows, or `release.yml:<job>`. A line with no reason
+or evidence, or one citing a row or job that does not exist, stops the gate
+before it runs anything.
 
 The verdict is GO only when everything is proven:
 

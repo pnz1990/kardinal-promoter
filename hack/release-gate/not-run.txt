@@ -1,0 +1,15 @@
+# What a release ships that the release gate does not run. The report lists
+# each line under "Not run by this gate", so a GO verdict does not read as
+# proof of them.
+#
+# One line each: item | why the gate does not run it | evidence instead.
+# The evidence is comma-separated: test/e2e/coverage.tsv row IDs (each must
+# be covered), or release.yml:<job> for a job of .github/workflows/release.yml.
+# A line without a reason or evidence, or citing a row or job that does not
+# exist, stops the gate before it runs anything.
+Receipts signed with a real AWS KMS or Google Cloud KMS key | the gate has no cloud account or key, and makes no cloud calls | RECEIPT-SIGN-06, RECEIPT-SIGN-03
+The EKS health adapter against a real EKS cluster (terraform/eks-e2e) | the gate has no AWS account; every cluster it runs is kind | HEALTH-EKS-01, HEALTH-EKS-02, HEALTH-EKS-03
+Public-good sigstore: Fulcio, Rekor and the TUF CDN | the gate signs and verifies only against the private sigstore the receipts-keyless suite runs in its cluster | RECEIPT-LIVE-05, RECEIPT-VERIFY-04, TUF-FETCH-03, EVIDENCE-AIRGAP-04
+Real ServiceNow and Jira instances | the gate has no vendor instance or credential; the live suites run against hack/e2e/ticketapi, a fake written from the vendor references | CHANGE-REQUEST-06, CHANGE-REQUEST-08, CHANGE-REQUEST-02, CHANGE-REQUEST-07
+The ghcr.io image and chart push, cosign signing, SLSA provenance and SBOM attestation | they publish, so only release.yml's release job runs them, on the tag | release.yml:dry-run
+The CLI for darwin/amd64, darwin/arm64, windows/amd64 and linux/arm64, and the controller and render images for linux/arm64 | the gate builds and runs linux/amd64 only | release.yml:dry-run
