@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -90,7 +91,9 @@ func (h *localLiveHost) cmd(t *testing.T, env []string, args ...string) *exec.Cm
 		"KIND_CLUSTER=", "KEEP=", "AGENT_BADGE=", "RETRY=0.05", "OWNER=test", "AGENT_ID=",
 		"LOCAL_LIVE_E2E_DIR="+filepath.Join(h.dir, "e2e"), "FAKE="+h.fake,
 		"LOADLOCK="+h.lock, "RELEASE_GATE_SLOTS="+h.slots,
-		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots)
+		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots,
+		// An idle host with room for clusters, unless a test says otherwise.
+		"LOCAL_LIVE_TEST=1", "LOCAL_LIVE_TEST_LOAD=0", "LOCAL_LIVE_TEST_INOTIFY=8192")
 	cmd.Env = append(cmd.Env, env...)
 	return cmd
 }
@@ -116,8 +119,8 @@ func TestLocalLive(t *testing.T) {
 		assert.Contains(t, up, "E2E_OUT="+e2eOut, "the cluster's state is in the shared state directory")
 		assert.Contains(t, up, "KIND_K8S=1.35", "the suite's first minor in matrix.txt")
 		assert.Contains(t, up, "BUILD=host")
-		assert.Contains(t, up, "LOCKED=yes")
-		assert.Contains(t, up, "SLOT=1")
+		assert.NotContains(t, up, "LOCKED=yes", "an ordinary suite does not take the heavy-load lock")
+		assert.Contains(t, up, "SLOT=1", "only a cluster slot")
 		assert.Contains(t, string(out), "local live: core on Kubernetes 1.35: PASS")
 		assert.Contains(t, string(out), "2 pass")
 		assert.Equal(t, cluster+"\n", h.read("deleted"))
@@ -199,12 +202,74 @@ func TestLocalLive(t *testing.T) {
 			assert.Contains(t, string(out), "cluster  "+tc.want+"\n", "%v %v", tc.env, tc.args)
 		}
 	})
-	t.Run("refuses to run on a shared host without the lock", func(t *testing.T) {
+	t.Run("a heavy suite takes the heavy-load lock and a slot", func(t *testing.T) {
 		h := newLocalLiveHost(t)
-		out, err := h.cmd(t, []string{"LOADLOCK="}, "core").CombinedOutput()
+		out, err := h.cmd(t, nil, "scale").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		up := h.read("up")
+		assert.Contains(t, up, "LOCKED=yes", "the scale suite runs under hack/loadlock.sh")
+		assert.Contains(t, up, "SLOT=1")
+		assert.NoDirExists(t, h.lock)
+	})
+	t.Run("a heavy suite refuses to run on a shared host without the lock", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		out, err := h.cmd(t, []string{"LOADLOCK="}, "scale").CombinedOutput()
 		assert.Equal(t, 2, exitCode(err), "%s", out)
 		assert.Contains(t, string(out), "LOADLOCK is not set")
 		assert.Empty(t, h.read("up"))
+	})
+	t.Run("an ordinary suite runs without the lock set", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		out, err := h.cmd(t, []string{"LOADLOCK="}, "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.NotContains(t, h.read("up"), "LOCKED=yes")
+	})
+	for _, tc := range []struct{ name, env, why string }{
+		{"a busy host", "LOCAL_LIVE_TEST_LOAD=60", "the one-minute load is 60, not under 48"},
+		{"too few inotify instances", "LOCAL_LIVE_TEST_INOTIFY=64", "fs.inotify.max_user_instances is 64"},
+	} {
+		t.Run("waits to create its cluster on "+tc.name, func(t *testing.T) {
+			h := newLocalLiveHost(t)
+			cmd := h.cmd(t, []string{tc.env}, "core")
+			out := &liveOut{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			require.Eventually(t, func() bool { return strings.Contains(out.String(), "waiting to create") }, 10*time.Second, 20*time.Millisecond)
+			assert.Contains(t, out.String(), tc.why)
+			assert.Empty(t, h.read("up"), "no cluster yet")
+			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+			_ = cmd.Wait()
+			assert.NoDirExists(t, filepath.Join(h.slots, "1"), "its slot is given back")
+		})
+	}
+	t.Run("a copy outside a checkout runs the checkout it is run from, with the loadlock.sh next to it", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		shared := filepath.Join(t.TempDir(), "bin")
+		require.NoError(t, os.MkdirAll(shared, 0o755))
+		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(shared, "local-live.sh"), src, 0o755))
+		// The shared loadlock.sh: records that it ran, then runs CMD.
+		require.NoError(t, os.WriteFile(filepath.Join(shared, "loadlock.sh"), []byte(`#!/usr/bin/env bash
+echo shared >>"$FAKE/loadlock"
+while [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+`), 0o755))
+		cmd := h.cmd(t, nil, "scale")
+		cmd.Args[1] = filepath.Join(shared, "local-live.sh")
+		cmd.Dir = repoRoot(t)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Equal(t, "shared\n", h.read("loadlock"), "the heavy suite ran under the shared loadlock.sh")
+		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "the checkout's matrix: scale's minor")
+
+		cmd = h.cmd(t, nil, "-n", "core")
+		cmd.Args[1] = filepath.Join(shared, "local-live.sh")
+		cmd.Dir = t.TempDir() // not a checkout
+		out, err = cmd.CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), "run it from a kardinal-promoter checkout")
 	})
 	t.Run("an existing cluster is not taken over", func(t *testing.T) {
 		h := newLocalLiveHost(t)
@@ -216,4 +281,22 @@ func TestLocalLive(t *testing.T) {
 		assert.NoDirExists(t, h.lock)
 		assert.NoDirExists(t, filepath.Join(h.slots, "1"))
 	})
+}
+
+// liveOut is a run's output, written by the run while the test reads it.
+type liveOut struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (o *liveOut) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.b.Write(p)
+}
+
+func (o *liveOut) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.b.String()
 }
