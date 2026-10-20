@@ -4,9 +4,16 @@
 package notificationhook_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"net/http"
 	"os"
 	"os/exec"
@@ -102,6 +109,12 @@ func TestSignedRequestsDoc_GoVerifier(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, funcSource(t, string(self), "verify"), funcSource(t, "\n"+block, "verify"),
 		"docs/notifications.md's verify and this file's differ: change both")
+	// The comparison is constant time: a plain == would leak where the
+	// signatures first differ.
+	assert.Contains(t, block, "hmac.Equal(", "the docs' verify compares the signatures with hmac.Equal")
+	// The block compiles as it is shown, imports included: a missing or an
+	// unused import is an error.
+	typeCheck(t, block)
 
 	key := []byte(signingKey)
 	body := []byte(`{"event":"Bundle.Verified","bundle":"my-app-abc12"}`)
@@ -164,4 +177,129 @@ func TestSignedRequestsDoc_ShellLine(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	assert.Equal(t, notificationhook.Sign([]byte(key), body, at), strings.TrimSpace(string(out)))
+}
+
+// typeCheck type-checks src, a Go snippet with its imports, as the only file
+// of a package, against the standard library's export data.
+func typeCheck(t *testing.T, src string) {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "verify.go", "package receiver\n\n"+src, 0)
+	require.NoError(t, err, "the docs' Go block parses")
+	conf := types.Config{Importer: importer.ForCompiler(fset, "gc", nil)}
+	_, err = conf.Check("receiver", fset, []*ast.File{f}, nil)
+	require.NoError(t, err, "the docs' Go block type-checks as written")
+}
+
+// scriptCase is one request a script verifier is run on, and whether it
+// must accept it.
+type scriptCase struct {
+	Name    string            `json:"name"`
+	Key     string            `json:"key"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+	Want    bool              `json:"want"`
+}
+
+// scriptCases are requests signed with Sign at the real clock (the scripts
+// read it), and the malformed ones a receiver must refuse without raising.
+// tsHeader and sigHeader are the header names as the language's framework
+// presents them.
+func scriptCases(tsHeader, sigHeader string) []scriptCase {
+	key := signingKey
+	body := `{"event":"Bundle.Verified","bundle":"my-app-abc12"}`
+	now := time.Now()
+	signed := func(at time.Time) map[string]string {
+		return map[string]string{
+			tsHeader:  strconv.FormatInt(at.Unix(), 10),
+			sigHeader: notificationhook.Sign([]byte(key), []byte(body), at),
+		}
+	}
+	with := func(h map[string]string, k, v string) map[string]string {
+		c := map[string]string{}
+		for hk, hv := range h {
+			c[hk] = hv
+		}
+		if v == "" {
+			delete(c, k)
+		} else {
+			c[k] = v
+		}
+		return c
+	}
+	good := signed(now)
+	return []scriptCase{
+		{"what the controller signs", key, good, body, true},
+		{"a changed body", key, good, `{"event":"Bundle.Failed"}`, false},
+		{"another key", strings.Repeat("x", 32), good, body, false},
+		{"6 minutes late: a replay", key, signed(now.Add(-6 * time.Minute)), body, false},
+		{"6 minutes early: a skewed clock", key, signed(now.Add(6 * time.Minute)), body, false},
+		{"a timestamp that is not a number", key, with(good, tsHeader, "yesterday"), body, false},
+		{"a signed number", key, with(good, tsHeader, "+"+good[tsHeader]), body, false},
+		{"non-ASCII digits", key, with(good, tsHeader, "\u0661\u0662\u0663"), body, false},
+		{"no timestamp", key, with(good, tsHeader, ""), body, false},
+		{"no signature", key, with(good, sigHeader, ""), body, false},
+		{"a non-ASCII signature as long as a real one", key, with(good, sigHeader, "sha256="+strings.Repeat("\u00e9", 64)), body, false},
+	}
+}
+
+// runScriptVerifier runs the docs' verifier of a language: the fenced block
+// of lang that contains defines, then harness, which reads the cases as JSON
+// on stdin and prints a JSON list of verify's answers. A verifier that raises
+// fails the run.
+func runScriptVerifier(t *testing.T, tool, lang, defines, harness, file string, cases []scriptCase) {
+	t.Helper()
+	if _, err := exec.LookPath(tool); err != nil {
+		t.Skipf("%s is not on PATH, so the docs' %s verifier is not run: %v", tool, lang, err)
+	}
+	block := fence(t, signedRequestsSection(t), lang, defines)
+	dir := t.TempDir()
+	script := filepath.Join(dir, file)
+	require.NoError(t, os.WriteFile(script, []byte(block+"\n"+harness), 0o600))
+	in, err := json.Marshal(cases)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	args := []string{script}
+	if tool == "python3" {
+		args = append([]string{"-I"}, args...) // isolated: no site packages, no cwd on sys.path
+	}
+	cmd := exec.CommandContext(ctx, tool, args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(string(in))
+	out, err := cmd.Output()
+	var stderr string
+	if ee, ok := err.(*exec.ExitError); ok {
+		stderr = string(ee.Stderr)
+	}
+	require.NoError(t, err, "the docs' %s verifier raised:\n%s", lang, stderr)
+	var got []bool
+	require.NoError(t, json.Unmarshal(out, &got), "%s printed %q", tool, out)
+	require.Len(t, got, len(cases))
+	for i, c := range cases {
+		assert.Equal(t, c.Want, got[i], "%s verifier, %s", lang, c.Name)
+	}
+}
+
+// TestSignedRequestsDoc_PythonVerifier: the docs' Python verify, run with
+// python3, accepts what Sign signs and refuses a tampered or malformed
+// request without raising.
+func TestSignedRequestsDoc_PythonVerifier(t *testing.T) {
+	t.Parallel()
+	runScriptVerifier(t, "python3", "python", "def verify(", `
+import json, sys
+cases = json.load(sys.stdin)
+print(json.dumps([verify(c["key"].encode(), c["headers"], c["body"].encode()) is True for c in cases]))
+`, "verify.py", scriptCases("X-Kardinal-Timestamp", "X-Kardinal-Signature"))
+}
+
+// TestSignedRequestsDoc_NodeVerifier: the docs' Node.js verify, run with
+// node, accepts what Sign signs and refuses a tampered or malformed request
+// without throwing.
+func TestSignedRequestsDoc_NodeVerifier(t *testing.T) {
+	t.Parallel()
+	runScriptVerifier(t, "node", "js", "function verify(", `
+const cases = JSON.parse(require("fs").readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(cases.map((c) => verify(c.key, c.headers, Buffer.from(c.body, "utf8")) === true)));
+`, "verify.js", scriptCases("x-kardinal-timestamp", "x-kardinal-signature"))
 }
