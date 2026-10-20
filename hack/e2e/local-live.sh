@@ -289,8 +289,12 @@ mkdir -p "$HOME"
 # never make a live run look gone or the host look free. A file that is
 # there but cannot be read is the safe answer: its run is alive, the host is
 # draining, busy or full.
+# proc is where pids' records are judged from: /proc (LOCAL_LIVE_TEST_PROC,
+# tests only, with LOCAL_LIVE_TEST=1: a /proc whose pids it makes).
+proc=/proc
+[ "${LOCAL_LIVE_TEST:-}" != 1 ] || proc=${LOCAL_LIVE_TEST_PROC:-$proc}
 this_boot=
-{ read -r this_boot </proc/sys/kernel/random/boot_id; } 2>/dev/null || this_boot=
+{ read -r this_boot <"$proc/sys/kernel/random/boot_id"; } 2>/dev/null || this_boot=
 # read_file FILE sets file_v to FILE's text, trailing newlines dropped; it
 # fails when FILE cannot be opened (a missing file, or a read that failed).
 read_file() {
@@ -306,7 +310,7 @@ read_file() {
 read_start() {
   local stat rest f
   start_v=''
-  { IFS= read -r stat <"/proc/$1/stat"; } 2>/dev/null || return 1
+  { IFS= read -r stat <"$proc/$1/stat"; } 2>/dev/null || return 1
   rest=${stat##*)}
   read -ra f <<<"$rest"
   [ -n "${f[19]:-}" ] || return 1
@@ -339,7 +343,7 @@ record_gone() {
   if ! read_start "$pid"; then
     # Its stat could not be opened: gone, unless /proc/<pid> is there (a
     # full file table fails the open as a failed fork does).
-    [ ! -d "/proc/$pid" ] || return 1
+    [ ! -d "$proc/$pid" ] || return 1
     return 0
   fi
   if [[ $r =~ (^|[[:space:]])start=([0-9]+)([[:space:]]|$) ]]; then

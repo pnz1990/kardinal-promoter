@@ -736,6 +736,23 @@ exec `+realCat+` "$@"
 			_ = cmd.Wait()
 		})
 	})
+	t.Run("a pid whose stat cannot be opened is alive while its /proc directory is there", func(t *testing.T) {
+		// LOCAL_LIVE_TEST_PROC: a /proc where pid 424242 is there with no
+		// stat to open (a full file table), and pid 424243 is not.
+		h := newLocalLiveHost(t)
+		proc := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(proc, "424242"), 0o755))
+		for n, pid := range map[string]int{"1": 424242, "2": 424243} {
+			d := filepath.Join(h.slots, n)
+			require.NoError(t, os.MkdirAll(d, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), []byte(fmt.Sprintf("a run pid %d now start=5\n", pid)), 0o644))
+		}
+		out, err := h.cmd(t, []string{"LOCAL_LIVE_TEST_PROC=" + proc, "SLOT_MAX=3"}, "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.DirExists(t, filepath.Join(h.slots, "1"), "the pid whose /proc directory is there keeps its slot")
+		assert.NotContains(t, string(out), "reclaimed cluster slot "+filepath.Join(h.slots, "1"))
+		assert.Contains(t, string(out), "reclaimed cluster slot "+filepath.Join(h.slots, "2"), "the pid that is gone does not")
+	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)
 		for _, n := range []string{"1", "2", "3", "4"} {
