@@ -54,7 +54,7 @@ Setting up the kardinal demo in kind-kardinal
   - Argo CD v3.5.3: installed
   - Git server kardinal-git/kardinal-git (http://kardinal-git.kardinal-git.svc.cluster.local:3000/kardinal/kardinal-demo.git): installed, repository kardinal/kardinal-demo seeded
   - Secret kardinal-system/kardinal-scm-token: created (the controller's token on the git server, for PRs)
-  - kardinal-promoter 0.12.1: installed
+  - kardinal-promoter 0.12.2: installed
   - Secret default/git-token: created (the Pipeline's token on the git server)
   - Argo CD ApplicationSet argocd/kardinal-test-app (http://kardinal-git.kardinal-git.svc.cluster.local:3000/kardinal/kardinal-demo.git): applied
   - PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
@@ -305,7 +305,7 @@ Setting up the kardinal demo in kind-kardinal
   - kro 0.10.0-rc.0: installed
   - Argo CD v3.5.3: installed
   - Secret kardinal-system/kardinal-scm-token: created from $GITHUB_TOKEN (the controller's token for PRs)
-  - kardinal-promoter 0.12.1: installed
+  - kardinal-promoter 0.12.2: installed
   - Secret default/github-token: created from $GITHUB_TOKEN
   - Argo CD ApplicationSet argocd/kardinal-test-app (https://github.com/<you>/kardinal-demo): applied
   - PolicyGate default/prod-approval (prod waits for your approval, as kubernetes-admin): applied
