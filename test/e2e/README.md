@@ -61,8 +61,9 @@ the same lock and slot as the whole suite, and its summary and comment say
 for the whole run. `SLOT_MAX` is `$SLOT_MAX`, else `SLOT_MAX=N` in the host's
 `host.env` next to the slots directory, else 2, and 1 to 4 or the run refuses.
 Slots are first come, first served: waiters queue in
-`$RELEASE_GATE_SLOTS/.queue` (release gates first), and only the first takes a
-slot, however often the others poll. A slot whose owner is gone (its pid, boot
+`$RELEASE_GATE_SLOTS/.queue`, release runs first (`-p release`, as
+`hack/release-gate -priority release`; it also queues a heavy suite's lock
+ticket first), and only the first takes a slot, however often the others poll. A slot whose owner is gone (its pid, boot
 id or start time no longer match) is reclaimed, a kept cluster's only once the
 cluster is gone. It creates its cluster only while the host's one-minute load is under 48
 and `fs.inotify.max_user_instances` has room for another kind node, and at

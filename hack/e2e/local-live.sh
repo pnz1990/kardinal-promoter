@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-run REGEX] [-count N] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
+# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-run REGEX] [-count N] [-p release|normal] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
 #
 # Runs one live e2e suite on this host as its CI job does (e2e-live.yml:
 # hack/e2e/tools.sh's pinned kind, kubectl and helm, a kind cluster on
@@ -60,6 +60,10 @@
 #              its summary and comment say "targeted": never a proof of the
 #              whole suite
 #   -count N   go test -count N (1 to 100; default $COUNT, else 1)
+#   -p P       release or normal (default): a release run's cluster slot
+#              ticket, and its heavy-load lock ticket (hack/loadlock.sh -p),
+#              are served before every normal one, as hack/release-gate
+#              -priority release's
 #   -shard i/n run only the ith of n parts of the suite (run.sh SHARD);
 #              default the whole suite
 #   -badge B   the first line of the comment, e.g. "[🔨 ENGINEER-4]"
@@ -177,14 +181,15 @@ if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
   test_mode=1
   LOAD_RETRY=${LOCAL_LIVE_TEST_LOAD_RETRY:-$LOAD_RETRY}
 fi
-usage() { die "usage: $0 [-pr N] [-shard i/n] [-run REGEX] [-count N] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
+usage() { die "usage: $0 [-pr N] [-shard i/n] [-run REGEX] [-count N] [-p release|normal] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
 
-pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse='' run_re='' count=''
+pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse='' run_re='' count='' priority=normal
 while [ $# -gt 0 ]; do
   case $1 in
     -pr | --pr) [ $# -ge 2 ] || usage; pr=$2; shift 2 ;;
     -shard | --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
     -run | --run) [ $# -ge 2 ] || usage; run_re=$2; shift 2 ;;
+    -p) [ $# -ge 2 ] || usage; priority=$2; shift 2 ;;
     -count | --count) [ $# -ge 2 ] || usage; count=$2; shift 2 ;;
     -reuse | --reuse) [ $# -ge 2 ] || usage; reuse=$2; shift 2 ;;
     -badge | --badge) [ $# -ge 2 ] || usage; badge=$2; shift 2 ;;
@@ -201,6 +206,8 @@ SUITE=$1 MINOR=${2:-}
 [ -z "$pr" ] || [[ "$pr" =~ ^[1-9][0-9]*$ ]] || die "-pr $pr: want a pull request number"
 [ -z "$shard" ] || [[ "$shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || die "-shard $shard: want i/n"
 [ -z "$count" ] || { [[ $count =~ ^[1-9][0-9]?$|^100$ ]] || die "-count $count: want 1 to 100"; }
+# A release run's tickets (class 0) go before the others' (1).
+case $priority in release) slot_class=0 ;; normal) slot_class=1 ;; *) die "-p $priority: want release or normal" ;; esac
 # A targeted run says so wherever its result is shown.
 targeted=''
 [ -z "$run_re" ] || targeted=" (targeted: -run $run_re)"
@@ -313,7 +320,7 @@ if [ -z "$nolock" ] && [ -n "$heavy" ] && [ -z "${_LOCAL_LIVE_LOCKED:-}" ]; then
   # holders (#2242); a single-holder loadlock.sh is alone anyway.
   alone=()
   ! grep -q 'exclusive=1' "$LOADLOCK_SH" || alone=(-x)
-  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" "${alone[@]}" -r "$RETRY" -- \
+  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" -p "$priority" "${alone[@]}" -r "$RETRY" -- \
     env _LOCAL_LIVE_LOCKED=1 bash "$SELF" "${ARGS[@]}"
 fi
 
@@ -671,7 +678,7 @@ take_slots() {
   else
     ns=$(date +%s%N) && [[ $ns =~ ^[0-9]+$ ]] || die "cannot read the time for a cluster slot ticket"
   fi
-  printf -v slot_ticket '1-%019d-%d' "$((10#$ns))" "$$"
+  printf -v slot_ticket '%s-%019d-%d' "$slot_class" "$((10#$ns))" "$$"
   write_slot_ticket
   if [ -n "$heavy" ]; then
     # Drain: no new run takes a slot from now on, for DRAIN_DEADLINE at most.

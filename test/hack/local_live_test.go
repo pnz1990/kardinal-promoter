@@ -316,6 +316,7 @@ exec "$@"
 		assert.Empty(t, h.read("old"), "the older checkout's own script is not run")
 		assert.Equal(t, "shared\n", h.read("loadlock"), "the heavy suite ran under the shared loadlock.sh")
 		assert.Contains(t, h.read("loadlock-args"), " -x ", "a heavy suite holds a counting lock alone")
+		assert.Contains(t, h.read("loadlock-args"), " -p normal ", "a normal run's lock ticket")
 		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "the checkout's matrix: scale's minor")
 
 		cmd = h.cmd(t, nil, "-n", "core")
@@ -583,6 +584,35 @@ exec "$@"
 		assert.Contains(t, runs[1], "-gitea-", "the first waiter ran first, though it polls every 3s")
 		assert.Contains(t, runs[2], "-flux-")
 		assert.Contains(t, fout.String(), "waits behind 1-", "the later waiter queued behind it")
+	})
+	t.Run("-p release: a release run's slot ticket is served before an older normal one", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		holder := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(holder, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+		normal := h.cmd(t, []string{"SLOT_MAX=1"}, "gitea")
+		nout := &liveOut{}
+		normal.Stdout, normal.Stderr = nout, nout
+		require.NoError(t, normal.Start())
+		require.Eventually(t, func() bool { return strings.Contains(nout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		release := h.cmd(t, []string{"SLOT_MAX=1"}, "-p", "release", "flux")
+		rout := &liveOut{}
+		release.Stdout, release.Stderr = rout, rout
+		require.NoError(t, release.Start())
+		require.Eventually(t, func() bool {
+			tickets, _ := filepath.Glob(filepath.Join(h.slots, ".queue", "0-*"))
+			return len(tickets) == 1
+		}, 10*time.Second, 20*time.Millisecond, "the release run's ticket, class 0")
+		require.NoError(t, os.RemoveAll(holder))
+		waitLive(t, release, rout)
+		waitLive(t, normal, nout)
+		runs := strings.Split(h.read("up"), "KUBECONFIG=")
+		require.Len(t, runs, 3, "%s", h.read("up"))
+		assert.Contains(t, runs[1], "-flux-", "the release run first, though it queued second")
+		assert.Contains(t, runs[2], "-gitea-")
+		out, err := h.cmd(t, nil, "-p", "urgent", "gitea").CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), "-p urgent: want release or normal")
 	})
 	t.Run("a release gate's ticket is served first, and a gone waiter's ticket is removed", func(t *testing.T) {
 		h := newLocalLiveHost(t)
