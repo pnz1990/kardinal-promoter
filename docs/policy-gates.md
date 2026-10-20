@@ -260,17 +260,69 @@ A gate read through `spec.policyNamespaces` is copied into the Pipeline's namesp
 everyone who may read that namespace sees its expression, name and labels. So a namespace other
 than the org policy namespaces must agree to be named there, in one of two ways:
 
-- its Namespace carries the label `kardinal.io/policy-shareable: "true"`, which whoever may edit the
-  Namespace sets (`kubectl label namespace shared-gates kardinal.io/policy-shareable=true`);
+- its Namespace carries the label `kardinal.io/policy-shareable: "true"`
+  (`kubectl label namespace shared-gates kardinal.io/policy-shareable=true`);
 - it is listed in the controller's `--policy-shareable-namespaces` (Helm
   `controller.policyShareableNamespaces`).
 
+The label agrees for every Pipeline of the cluster, not one team's. It is exactly as strong as
+the right to edit that Namespace's labels: `update` or `patch` on `namespaces`, granted cluster-wide
+or in that namespace. Kubernetes' stock `admin` and `edit` roles do not grant it, but platforms that
+let tenants edit their Namespace's labels (a self-service ClusterRole, Capsule, the Hierarchical
+Namespace Controller) hand the consent to whoever has that right. On such a cluster, either list the
+namespaces in `controller.policyShareableNamespaces` only, or limit who may set the label with a
+ValidatingAdmissionPolicy:
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: policy-shareable-label
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["namespaces"]
+  variables:
+    - name: label
+      expression: '"kardinal.io/policy-shareable"'
+    - name: before
+      expression: 'oldObject != null && has(oldObject.metadata.labels) && variables.label in oldObject.metadata.labels ? oldObject.metadata.labels[variables.label] : ""'
+    - name: after
+      expression: 'has(object.metadata.labels) && variables.label in object.metadata.labels ? object.metadata.labels[variables.label] : ""'
+  validations:
+    - expression: 'variables.before == variables.after || "platform-admins" in request.userInfo.groups'
+      message: only platform-admins may set kardinal.io/policy-shareable
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: policy-shareable-label
+spec:
+  policyName: policy-shareable-label
+  validationActions: ["Deny"]
+```
+
 A Pipeline whose `spec.policyNamespaces` names a namespace that has not agreed gets the condition
-`PolicyNamespacesShared=False` (reason `NotShared`), naming each such namespace, and one Warning
-Event `PolicyNamespaceNotShared`. A namespace that does not exist, or that the controller may not
-read, is named too. In this release the gates of that namespace are still read and `Ready` is
-unchanged; a later release refuses them (#2286). The controller checks again every 5 minutes, so
-a label added later clears the condition within that time.
+`PolicyNamespacesShared=False` with reason `NotShared`, naming each such namespace, and one Warning
+Event `PolicyNamespaceNotShared` each time that list changes. A namespace that does not exist is
+named like one that is not labelled; the controller log tells them apart. In this release the gates
+of those namespaces are still read and `Ready` is unchanged; a later release refuses them (#2286).
+
+The controller reads the named Namespaces again every 5 minutes, so a label added or removed later
+shows within that time. When a read fails (an API error other than not found), the namespace keeps
+the result of its last read: the condition's reason becomes `PolicyNamespaceUnreadable`, its list
+stays as it was, and the read is retried within a minute. An API blip neither raises nor clears the
+warning.
+
+To list the Pipelines that name a namespace that has not agreed (every one a later release refuses):
+
+```bash
+kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.conditions[?(@.type=="PolicyNamespacesShared")].status}{"\n"}{end}' | awk -F'\t' '$2=="False"{print $1}'
+```
 
 The Graph creates every gate instance in the Pipeline namespace and labels it
 `kardinal.io/gate-template-namespace` with its template's namespace. A gate from an org policy

@@ -149,9 +149,10 @@ type Reconciler struct {
 	// does not carry yet is Ready=False. Nil is graph.DefaultCompactAbove.
 	CompactAbove *int
 
-	// Reader reads the Argo CD Applications a fleet selector matches. It is
-	// not cached: the controller does not watch Applications, whose CRD may
-	// be missing. Nil uses Client.
+	// Reader reads the Argo CD Applications a fleet selector matches, and the
+	// Namespaces spec.policyNamespaces names (their consent label, #2286). It
+	// is not cached: the controller does not watch Applications, whose CRD
+	// may be missing, nor Namespaces. Nil uses Client.
 	Reader client.Reader
 	// FleetApplicationNamespaces are the namespaces a fleet selector of kind
 	// Application may read (--fleet-application-namespaces); empty is
@@ -344,9 +345,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	desiredConflict := pathConflict(&p, peers)
 	// spec.policyNamespaces entries that have not agreed to be read (#2286):
 	// a warning only, re-checked as Namespaces are not watched.
-	desiredShared := r.policyNamespacesShared(ctx, &p)
-	if desiredShared != nil && (result.RequeueAfter == 0 || policyNamespaceRecheck < result.RequeueAfter) {
-		result.RequeueAfter = policyNamespaceRecheck
+	desiredShared, sharedRecheck := r.policyNamespacesShared(ctx, &p)
+	if sharedRecheck > 0 && (result.RequeueAfter == 0 || sharedRecheck < result.RequeueAfter) {
+		result.RequeueAfter = sharedRecheck
 	}
 
 	// Retired Bundles (#1492) keep their steps in status.retiredSteps.

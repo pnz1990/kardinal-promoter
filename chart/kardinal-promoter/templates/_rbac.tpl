@@ -303,8 +303,10 @@ rules exist for. A new client call needs a row there and a rule here.
 # Bundle reconciler the namespace of a Bundle before translating it, and the
 # PromotionStep reconciler the namespace of a deleted step that holds a PR, to
 # tell whether it is being deleted (pkg/reconciler/graphcleanup,
-# pkg/reconciler/bundle, pkg/reconciler/promotionstep). Namespace mode: only
-# the watched namespace.
+# pkg/reconciler/bundle, pkg/reconciler/promotionstep). The Pipeline
+# reconciler reads the namespaces spec.policyNamespaces names, for their
+# kardinal.io/policy-shareable label (pkg/reconciler/pipeline). Namespace
+# mode: only the watched namespace.
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
