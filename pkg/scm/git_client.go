@@ -463,9 +463,18 @@ func (c *GoGitClient) push(ctx context.Context, dir, remote, branch string, auth
 // concurrentUpdateReasons are the ref update failures a server reports when
 // another writer moved the branch while this push was in flight: the push
 // lost a race and can be retried on the new head, like a non-fast-forward.
+// git's receive-pack, which GitHub, GitLab (Gitaly), Forgejo and Bitbucket
+// apply a push with, gives the ref transaction's error: "cannot lock ref
+// 'R': is at X but expected Y" (GitHub's refusal of a lost race, #2351),
+// "cannot lock ref 'R': Unable to create 'R.lock': File exists" (another
+// update holds the lock: RebaseOnRemote waits for it, notMovedWait),
+// "cannot update ref 'R': is at X but expected Y", "... reference already
+// exists" and "... reference is missing but expected X"; older servers
+// "failed to update ref" or "failed to lock".
 var concurrentUpdateReasons = []string{
 	"non-fast-forward", "fetch first", "failed to update ref", "failed to lock",
-	"cannot lock ref", "stale info", "reference already exists", "incorrect old value",
+	"cannot lock ref", "but expected", "stale info", "reference already exists",
+	"incorrect old value",
 }
 
 // isConcurrentUpdate reports whether a push error is a lost race on the ref.
