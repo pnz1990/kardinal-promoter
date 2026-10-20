@@ -1389,9 +1389,6 @@ Cadence):
    G9 and G10: the per-object call count and the inventory entry size.
 5. Re-read the entries above for anything the new tag closes, and the hazards in the upstream
    survey (`graphcleanup` depends on the finalizer name and the `status.managedResources` shape).
-
----
-
 6. **Render version.** If the upgrade, or any change to `pkg/graph`, renders an existing
    Bundle's Graph differently (node IDs, templates, data), bump `graph.RenderVersion` and say so
    in the changelog fragment. Every Graph carries it as its `kardinal.io/render-version` label,
@@ -1399,6 +1396,8 @@ Cadence):
    without the bump a version stuck under the old rendering stays stuck (#2271, G28). Verified,
    failed and superseded Bundles keep their Graphs. A change that leaves every existing Graph
    identical needs no bump.
+
+---
 
 ## Upstream survey (2026-10-02)
 
