@@ -19,8 +19,9 @@ import (
 // GITHUB_BASE_REF for a pull request, else GITHUB_REF_NAME), graph.RenderLabel
 // is the label the branch's newest release tag writes, or a label main never
 // uses, "N-vX.Y.Z". A bare integer that differs from the tag's is refused: it
-// is one main uses or will use for another rendering. Skips elsewhere and
-// when the tags are not fetched.
+// is one main uses or will use for another rendering. Skips elsewhere, and
+// without the tags outside CI; in CI (CI set) a release branch without them
+// fails: ci.yml must fetch the history and the tags for it (#2328).
 func TestRenderLabelOnReleaseBranch(t *testing.T) {
 	branch := os.Getenv("GITHUB_BASE_REF")
 	if branch == "" {
@@ -29,6 +30,14 @@ func TestRenderLabelOnReleaseBranch(t *testing.T) {
 	m := regexp.MustCompile(`^release/(v\d+\.\d+)$`).FindStringSubmatch(branch)
 	if m == nil {
 		t.Skipf("not a release branch: %q", branch)
+	}
+	untagged := func(format string, args ...interface{}) {
+		t.Helper()
+		if os.Getenv("CI") != "" {
+			t.Fatalf(format+": on CI a release branch's checkout must fetch the history and the tags "+
+				"(fetch-depth: 0, fetch-tags: true; #2328), or this guard cannot run", args...)
+		}
+		t.Skipf(format, args...)
 	}
 	root := repoRoot(t)
 	out, _ := exec.Command("git", "-C", root, "tag", "--merged", "HEAD", "--list", m[1]+".*", "--sort=-v:refname").Output()
@@ -40,11 +49,11 @@ func TestRenderLabelOnReleaseBranch(t *testing.T) {
 		}
 	}
 	if tag == "" {
-		t.Skipf("no release tag of %s fetched", m[1])
+		untagged("no release tag of %s reachable from HEAD", m[1])
 	}
 	src, err := exec.Command("git", "-C", root, "show", tag+":pkg/graph/gates.go").Output()
 	if err != nil {
-		t.Skipf("%s has no pkg/graph/gates.go: %v", tag, err)
+		untagged("cannot read %s's pkg/graph/gates.go: %v", tag, err)
 	}
 	released := "" // a release before #2271 writes no label
 	if l := regexp.MustCompile(`(?m)^const RenderLabel = "([^"]+)"`).FindSubmatch(src); l != nil {
