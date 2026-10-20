@@ -25,7 +25,7 @@ func loadlock(t *testing.T, lock string, args ...string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", "test",
 		"-r", "0.05", "--"}, args...)...)
-	cmd.Env = append(os.Environ(), "LOADLOCK=")
+	cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
 	return cmd
 }
 
@@ -49,7 +49,7 @@ func TestLoadLock(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		out, err := loadlock(t, lock, "bash", "-c", `cat "$0/owner"; exit 3`, lock).CombinedOutput()
 		assert.Equal(t, 3, exitCode(err), "the command's status: %s", out)
-		assert.Contains(t, string(out), "test pid ", "the owner names the holder")
+		assert.Contains(t, string(out), "test pid:", "the view names the holder (pid:N, which older clients do not parse)")
 		assert.NoDirExists(t, lock)
 	})
 	t.Run("waits while another holder has it", func(t *testing.T) {
@@ -70,10 +70,11 @@ func TestLoadLock(t *testing.T) {
 	})
 	t.Run("a lock that is not its own any more is left", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
-		out, err := loadlock(t, lock, "bash", "-c", `echo other > "$0/owner"`, lock).CombinedOutput()
+		// The holder's record is its slot's owner file (LOCK/owner is the view).
+		out, err := loadlock(t, lock, "bash", "-c", `echo other > "$0.d/1/owner"`, lock).CombinedOutput()
 		require.NoError(t, err, "%s", out)
 		assert.Contains(t, string(out), "not ours any more")
-		owner, rerr := os.ReadFile(filepath.Join(lock, "owner"))
+		owner, rerr := os.ReadFile(filepath.Join(lock+".d", "1", "owner"))
 		require.NoError(t, rerr)
 		assert.Equal(t, "other\n", string(owner))
 	})
@@ -83,7 +84,7 @@ func TestLoadLock(t *testing.T) {
 		require.NoError(t, cmd.Start())
 		require.Eventually(t, func() bool {
 			owner, err := os.ReadFile(filepath.Join(lock, "owner"))
-			return err == nil && strings.HasPrefix(string(owner), "test pid ")
+			return err == nil && strings.HasPrefix(string(owner), "test pid:")
 		}, 10*time.Second, 20*time.Millisecond)
 		start := time.Now()
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -94,7 +95,7 @@ func TestLoadLock(t *testing.T) {
 	})
 	t.Run("no lock, no run", func(t *testing.T) {
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "--", "true")
-		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
 		_, err := cmd.CombinedOutput()
 		assert.Equal(t, 2, exitCode(err))
 	})
@@ -125,7 +126,7 @@ func served(t *testing.T, lock string, waiters ...[]string) []string {
 		args := append(append([]string{filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", w[0], "-r", "0.05"},
 			w[1:]...), "--", "bash", "-c", `echo "$0" >> "$1"; sleep 0.1`, w[0], ran)
 		cmd := exec.Command("bash", args...)
-		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
 		require.NoError(t, cmd.Start())
 		cmds = append(cmds, cmd)
 		require.Eventually(t, func() bool { return tickets(lock) == i+1 }, 10*time.Second, 10*time.Millisecond, "%s queued", w[0])
@@ -168,7 +169,7 @@ func TestLoadLock_Fair(t *testing.T) {
 		out, err := loadlock(t, lock, "bash", "-c", `cat "$0/owner"`, lock).CombinedOutput()
 		require.NoError(t, err, "%s", out)
 		assert.Contains(t, string(out), "removed "+lock+" of a holder that is gone")
-		assert.Contains(t, string(out), "test pid ", "it took the lock")
+		assert.Contains(t, string(out), "test pid:", "it took the lock")
 		assert.NoFileExists(t, ghost)
 	})
 	t.Run("an unknown priority is refused", func(t *testing.T) {
@@ -186,7 +187,7 @@ func TestLoadLock_Races(t *testing.T) {
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	run := func(t *testing.T, lock, owner string, args ...string) *exec.Cmd {
 		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
-		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
 		return cmd
 	}
 	t.Run("25 locks at once, 8 waiters each on a dead holder: one holder at a time, none wedged", func(t *testing.T) {
@@ -332,14 +333,16 @@ func TestLoadLock_Races(t *testing.T) {
 	t.Run("an owner file that cannot be written gives the lock up and fails", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		require.NoError(t, os.Mkdir(lock+".queue", 0o755))
+		require.NoError(t, os.Mkdir(lock+".d", 0o755))
 		ran := filepath.Join(t.TempDir(), "ran")
-		// umask 277: the lock directory mkdir makes is read-only to its owner.
+		// umask 277: the slot directory mkdir makes is read-only to its owner.
 		cmd := exec.Command("sh", "-c", `umask 277; exec bash "$@"`, "sh", script, "-l", lock, "-o", "me", "-r", "0.05", "--", "touch", ran)
-		cmd.Env = append(os.Environ(), "LOADLOCK=")
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
 		out, err := cmd.CombinedOutput()
 		assert.Equal(t, 1, exitCode(err), "%s", out)
-		assert.Contains(t, string(out), "cannot write "+lock+"/owner; gave the lock up")
+		assert.Contains(t, string(out), "cannot write "+lock+".d/1/owner; gave the lock up")
 		assert.NoDirExists(t, lock, "no ownerless lock is left")
+		assert.NoDirExists(t, filepath.Join(lock+".d", "1"), "nor an ownerless slot")
 		assert.NoFileExists(t, ran, "the command did not run")
 	})
 	t.Run("a holder whose start time is unknown is judged by boot id and pid", func(t *testing.T) {
@@ -447,4 +450,574 @@ func (s *syncBuf) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// TestLoadLock_Counting: under load 32 two hold the lock at once and a third
+// waits; at load 32 or above one does. LOCK/owner lists every holder.
+func TestLoadLock_Counting(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
+	start := func(t *testing.T, lock, owner, load string, args ...string) (*exec.Cmd, *syncBuf) {
+		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD="+load)
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		return cmd, out
+	}
+	t.Run("two holders on an idle host, a third waits", func(t *testing.T) {
+		dir := t.TempDir()
+		lock := filepath.Join(dir, "LOADLOCK")
+		stop := filepath.Join(dir, "stop")
+		t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) }) // holders never outlive the test
+		hold := `while [ ! -e "$0" ]; do sleep 0.02; done`
+		a, _ := start(t, lock, "a", "0", "sh", "-c", hold, stop)
+		b, _ := start(t, lock, "b", "0", "sh", "-c", hold, stop)
+		require.Eventually(t, func() bool {
+			o, err := os.ReadFile(filepath.Join(lock, "owner"))
+			return err == nil && strings.Count(strings.TrimSpace(string(o)), "\n") == 1
+		}, 10*time.Second, 20*time.Millisecond, "LOCK/owner lists two holders")
+		ran := filepath.Join(dir, "c-ran")
+		c, _ := start(t, lock, "c", "0", "touch", ran)
+		time.Sleep(500 * time.Millisecond)
+		assert.NoFileExists(t, ran, "a third holder")
+		require.NoError(t, os.WriteFile(stop, nil, 0o644))
+		for _, cmd := range []*exec.Cmd{a, b, c} {
+			require.NoError(t, cmd.Wait())
+		}
+		assert.FileExists(t, ran)
+		assert.NoDirExists(t, lock, "no holder, no lock")
+	})
+	t.Run("one holder on a busy host", func(t *testing.T) {
+		dir := t.TempDir()
+		lock := filepath.Join(dir, "LOADLOCK")
+		stop := filepath.Join(dir, "stop")
+		t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+		a, _ := start(t, lock, "a", "32", "sh", "-c", `while [ ! -e "$0" ]; do sleep 0.02; done`, stop)
+		require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(lock, "owner")); return err == nil }, 10*time.Second, 20*time.Millisecond)
+		ran := filepath.Join(dir, "b-ran")
+		b, _ := start(t, lock, "b", "32", "touch", ran)
+		time.Sleep(500 * time.Millisecond)
+		assert.NoFileExists(t, ran, "a second holder at load 32")
+		require.NoError(t, os.WriteFile(stop, nil, 0o644))
+		require.NoError(t, a.Wait())
+		require.NoError(t, b.Wait())
+		assert.FileExists(t, ran)
+	})
+	t.Run("20 locks at once on an idle host, 8 waiters each on dead holders: at most two, none wedged", func(t *testing.T) {
+		// 20 in CI's package budget; LOADLOCK_STRESS_LOCKS=50 for the
+		// review-size run.
+		locks := 20
+		if v := os.Getenv("LOADLOCK_STRESS_LOCKS"); v != "" {
+			n, err := strconv.Atoi(v)
+			require.NoError(t, err)
+			locks = n
+		}
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		var cmds []*exec.Cmd
+		var dirs []string
+		for l := 0; l < locks; l++ {
+			dir := t.TempDir()
+			lock := filepath.Join(dir, "LOADLOCK")
+			for _, n := range []string{"1", "2"} {
+				require.NoError(t, os.MkdirAll(filepath.Join(lock+".d", n), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(lock+".d", n, "owner"),
+					[]byte(fmt.Sprintf("gone pid %d 2026-10-19T00:00:00Z\n", gone.Process.Pid)), 0o644))
+			}
+			require.NoError(t, os.Mkdir(lock, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(lock, ".counting"), nil, 0o644))
+			dirs = append(dirs, dir)
+			for i := 0; i < 8; i++ {
+				// Two places in the critical section; a third holder finds both
+				// taken. Held long enough (0.5s) that the next waiter's turn
+				// comes while it holds, on a busy CI runner too.
+				cmd := exec.Command("bash", script, "-l", lock, "-o", fmt.Sprintf("w%d", i), "-r", "0.05", "--", "sh", "-c",
+					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi; sleep 0.5; rmdir "$0/$p"`, dir)
+				cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
+				require.NoError(t, cmd.Start())
+				cmds = append(cmds, cmd)
+			}
+		}
+		done := make(chan struct{})
+		go func() {
+			for _, c := range cmds {
+				_ = c.Wait()
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Minute):
+			for _, c := range cmds {
+				_ = c.Process.Kill()
+			}
+			t.Fatal("waiters never got their lock")
+		}
+		two := 0
+		for _, dir := range dirs {
+			assert.NoFileExists(t, filepath.Join(dir, "overflow"), "a third holder in %s", dir)
+			assert.NoDirExists(t, filepath.Join(dir, "LOADLOCK"), "a lock left behind in %s", dir)
+			if _, err := os.Stat(filepath.Join(dir, "two")); err == nil {
+				two++
+			}
+		}
+		assert.Positive(t, two, "two did hold a lock at once")
+	})
+}
+
+// TestLoadLock_MixedClients (#2242 QA): the counting lock among the clients
+// agents still run: #2202's and #2226's hack/loadlock.sh (copies in
+// testdata) and a bare mkdir LOCK. Older clients hold the lock alone, new
+// ones two at once on an idle host.
+func TestLoadLock_MixedClients(t *testing.T) {
+	root := repoRoot(t)
+	script := filepath.Join(root, "hack", "loadlock.sh")
+	old2202 := filepath.Join(root, "test", "hack", "testdata", "loadlock-2202.sh")
+	old2226 := filepath.Join(root, "test", "hack", "testdata", "loadlock-2226.sh")
+	env := append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
+
+	t.Run("an older client never takes over a view whose dead first holder another slot outlives", func(t *testing.T) {
+		dir := t.TempDir()
+		lock := filepath.Join(dir, "LOADLOCK")
+		stop := filepath.Join(dir, "stop")
+		// However the test ends, the holders end before their directory goes.
+		t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+		hold := `while [ ! -e "$0" ]; do sleep 0.02; done`
+		a := exec.Command("bash", script, "-l", lock, "-o", "a", "-r", "0.05", "--", "sh", "-c", hold, stop)
+		a.Env = env
+		a.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		require.NoError(t, a.Start())
+		require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(lock+".d", "1", "owner")); return err == nil }, 30*time.Second, 20*time.Millisecond)
+		b := exec.Command("bash", script, "-l", lock, "-o", "b", "-r", "0.05", "--", "sh", "-c", hold, stop)
+		b.Env = env
+		require.NoError(t, b.Start())
+		require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(lock+".d", "2", "owner")); return err == nil }, 30*time.Second, 20*time.Millisecond)
+		// a dies holding slot 1: its slot and the view's first line stay.
+		require.NoError(t, syscall.Kill(-a.Process.Pid, syscall.SIGKILL))
+		_ = a.Wait()
+		view := readFile(t, filepath.Join(lock, "owner"))
+		assert.NotRegexp(t, `(^|\s)pid \d+`, view, "the view has no pid N an older client would judge")
+		for _, old := range []string{old2202, old2226} {
+			ran := filepath.Join(dir, "ran-"+filepath.Base(old))
+			o := exec.Command("bash", old, "-l", lock, "-o", "older", "-r", "0.05", "--", "touch", ran)
+			o.Env = env
+			out := &syncBuf{}
+			o.Stdout, o.Stderr = out, out
+			require.NoError(t, o.Start())
+			time.Sleep(time.Second)
+			assert.NoFileExists(t, ran, "%s ran while slot 2's holder runs: %s", filepath.Base(old), out.String())
+			_ = o.Process.Kill()
+			_ = o.Wait()
+		}
+		require.NoError(t, os.WriteFile(stop, nil, 0o644))
+		require.NoError(t, b.Wait())
+	})
+
+	t.Run("a new holder SIGKILLed with an older client at the head: a new waiter behind it reclaims, and nobody wedges", func(t *testing.T) {
+		// #2242 QA: an older client cannot judge the view's holders (pid:N),
+		// and new clients reclaimed only at the head.
+		for _, old := range []string{old2226, old2202} {
+			t.Run(filepath.Base(old), func(t *testing.T) {
+				dir := t.TempDir()
+				lock := filepath.Join(dir, "LOADLOCK")
+				held, order := filepath.Join(dir, "held"), filepath.Join(dir, "order")
+				dead := exec.Command("bash", script, "-l", lock, "-o", "dead", "-r", "0.05", "--", "sh", "-c", `touch "$0"; sleep 60`, held)
+				dead.Env = env
+				dead.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+				require.NoError(t, dead.Start())
+				require.Eventually(t, func() bool { _, err := os.Stat(held); return err == nil }, 20*time.Second, 20*time.Millisecond)
+				require.NoError(t, syscall.Kill(-dead.Process.Pid, syscall.SIGKILL)) // no EXIT trap
+				_ = dead.Wait()
+				require.FileExists(t, filepath.Join(lock, ".counting"), "the dead holder's view stays")
+				start := func(c string, args ...string) (*exec.Cmd, *syncBuf) {
+					cmd := exec.Command("bash", append(args, "--", "sh", "-c", `echo "$1" >>"$0"`, order, c)...)
+					cmd.Env = env
+					out := &syncBuf{}
+					cmd.Stdout, cmd.Stderr = out, out
+					require.NoError(t, cmd.Start())
+					return cmd, out
+				}
+				o, oout := start("older", old, "-l", lock, "-o", "older", "-r", "0.05")
+				require.Eventually(t, func() bool {
+					tickets, _ := filepath.Glob(filepath.Join(lock+".queue", "[0-9]-*"))
+					return len(tickets) == 1
+				}, 10*time.Second, 20*time.Millisecond, "the older client queues first")
+				n, nout := start("new", script, "-l", lock, "-o", "new", "-r", "0.05")
+				for _, w := range []struct {
+					cmd *exec.Cmd
+					out *syncBuf
+				}{{o, oout}, {n, nout}} {
+					done := make(chan error, 1)
+					go func() { done <- w.cmd.Wait() }()
+					select {
+					case err := <-done:
+						require.NoError(t, err, "%s", w.out.String())
+					case <-time.After(15 * time.Second):
+						_ = o.Process.Kill()
+						_ = n.Process.Kill()
+						<-done
+						t.Fatalf("wedged: older: %s new: %s", oout.String(), nout.String())
+					}
+				}
+				assert.Equal(t, "older\nnew\n", readFile(t, order), "the queue's order is kept")
+				assert.Contains(t, nout.String(), "removed lock slot", "the new waiter behind reclaimed the dead holder")
+				assert.NoDirExists(t, lock)
+			})
+		}
+	})
+
+	t.Run("20 locks, new, older and bare-mkdir clients at once: never an older client with anyone, never three", func(t *testing.T) {
+		rounds := 1 // CI time; LOADLOCK_STRESS=10 for the review-size run
+		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
+			n, err := strconv.Atoi(v)
+			require.NoError(t, err)
+			rounds = n
+		}
+		// LOADLOCK_STRESS_LOCKS sizes a round for a busy host (the
+		// review-size run holds the host's LOADLOCK).
+		locks := 20
+		if v := os.Getenv("LOADLOCK_STRESS_LOCKS"); v != "" {
+			n, err := strconv.Atoi(v)
+			require.NoError(t, err)
+			locks = n
+		}
+		// crit KIND DIR [CLIENT]: the critical section. A new client may share it
+		// with one other new client; an older one with nobody.
+		crit := filepath.Join(t.TempDir(), "crit.sh")
+		// One listing, counted in the shell: a fork that fails on a busy
+		// host is a crit error, never a violation, and the violation names
+		// the markers it counted.
+		require.NoError(t, os.WriteFile(crit, []byte(`kind=$1 d=$2 me=$d/$kind.$$.${3:-new}
+mkdir "$me" || { echo "crit: mkdir $me failed" >>"$d/crit-error"; exit 1; }
+seen=$(cd "$d" && echo new.* old.*) || { echo "crit: listing failed" >>"$d/crit-error"; rmdir "$me"; exit 1; }
+n_new=0 n_all=0
+for m in $seen; do
+  case $m in new.\*|old.\*) ;; new.*) n_new=$((n_new + 1)); n_all=$((n_all + 1)) ;; old.*) n_all=$((n_all + 1)) ;; esac
+done
+if [ "$kind" = new ]; then ok=$([ "$n_new" -le 2 ] && [ "$n_new" -eq "$n_all" ] && echo y); else ok=$([ "$n_all" -eq 1 ] && echo y); fi
+[ "$ok" = y ] || echo "$kind.$$ counted: $seen; slots: $(cat "$d"/LOADLOCK.d/*/owner 2>&1 | tr '\n' '|') LOCK/owner: $(cat "$d/LOADLOCK/owner" 2>&1 | tr '\n' '|')" >>"$d/violation"
+sleep 0.05
+rmdir "$me"
+`), 0o755))
+		for r := 0; r < rounds; r++ {
+			var cmds []*exec.Cmd
+			var outs []*syncBuf
+			var dirs []string
+			for l := 0; l < locks; l++ {
+				dir := t.TempDir()
+				lock := filepath.Join(dir, "LOADLOCK")
+				dirs = append(dirs, dir)
+				add := func(args ...string) {
+					c := exec.Command(args[0], args[1:]...)
+					c.Env = env
+					o := &syncBuf{}
+					c.Stdout, c.Stderr = o, o
+					cmds, outs = append(cmds, c), append(outs, o)
+				}
+				for i := 0; i < 4; i++ {
+					add("bash", script, "-l", lock, "-o", fmt.Sprintf("new%d", i), "-r", "0.05", "--", "sh", crit, "new", dir)
+				}
+				add("bash", old2202, "-l", lock, "-o", "old2202", "-r", "0.05", "--", "sh", crit, "old", dir, "old2202")
+				add("bash", old2226, "-l", lock, "-o", "old2226", "-r", "0.05", "--", "sh", crit, "old", dir, "old2226")
+				for i := 0; i < 2; i++ {
+					// The bare mkdir an agent's brief once described.
+					add("sh", "-c", `until mkdir "$0" 2>/dev/null; do sleep 0.02; done
+echo "manual pid $$ now" >"$0/owner"
+sh "$1" old "$2" manual
+if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; else echo "manual: not ours any more"; fi`, lock, crit, dir)
+				}
+			}
+			for _, c := range cmds {
+				require.NoError(t, c.Start())
+			}
+			done := make(chan struct{})
+			go func() {
+				for _, c := range cmds {
+					_ = c.Wait()
+				}
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Minute):
+				for _, c := range cmds {
+					_ = c.Process.Kill()
+				}
+				t.Fatalf("round %d: clients never got their lock", r)
+			}
+			violations, notOurs, left := 0, 0, 0
+			for i, dir := range dirs {
+				if b, err := os.ReadFile(filepath.Join(dir, "violation")); err == nil {
+					violations++
+					t.Logf("round %d %s: %s", r, dir, b)
+					// What its clients said: reclaims, fork failures.
+					for _, o := range outs[i*8 : i*8+8] {
+						for _, l := range strings.Split(o.String(), "\n") {
+							if !strings.Contains(l, "checking again") && strings.TrimSpace(l) != "" {
+								t.Logf("  client: %s", l)
+							}
+						}
+					}
+				}
+				if b, err := os.ReadFile(filepath.Join(dir, "crit-error")); err == nil {
+					t.Logf("round %d %s: a crit error (not counted): %s", r, dir, b)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "LOADLOCK")); err == nil {
+					left++
+				}
+			}
+			for _, o := range outs {
+				if strings.Contains(o.String(), "not ours any more") {
+					notOurs++
+				}
+			}
+			assert.Zero(t, violations, "round %d: locks whose exclusivity broke", r)
+			assert.Zero(t, notOurs, "round %d: holders whose lock was taken from them", r)
+			assert.Zero(t, left, "round %d: locks left behind", r)
+		}
+	})
+}
+
+// TestLoadLock_Exclusive (#2244 QA, item 5): loadlock.sh -x holds the
+// counting lock alone, on an idle host too: two -x runs (two scale suites)
+// never overlap, and no other run holds it beside one.
+func TestLoadLock_Exclusive(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "LOADLOCK")
+	crit := filepath.Join(t.TempDir(), "crit.sh")
+	// One listing, counted in the shell (a failed fork is no violation).
+	require.NoError(t, os.WriteFile(crit, []byte(`kind=$1 d=$2 me=$d/$kind.$$
+mkdir "$me" || exit 1
+seen=$(cd "$d" && echo x.* n.*) || { rmdir "$me"; exit 1; }
+n_x=0 n_all=0
+for m in $seen; do
+  case $m in x.\*|n.\*) ;; x.*) n_x=$((n_x + 1)); n_all=$((n_all + 1)) ;; n.*) n_all=$((n_all + 1)) ;; esac
+done
+if [ "$kind" = x ]; then [ "$n_all" -eq 1 ] || echo "x.$$ counted: $seen" >>"$d/violation"; else [ "$n_x" -eq 0 ] && [ "$n_all" -le 2 ] || echo "n.$$ counted: $seen" >>"$d/violation"; fi
+sleep 0.05
+rmdir "$me"
+`), 0o755))
+	var cmds []*exec.Cmd
+	for i := 0; i < 9; i++ {
+		args := []string{script, "-l", lock, "-o", fmt.Sprintf("w%d", i), "-r", "0.05"}
+		kind := "n"
+		if i%3 == 0 {
+			args, kind = append(args, "-x"), "x"
+		}
+		cmd := exec.Command("bash", append(args, "--", "sh", crit, kind, dir)...)
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
+		require.NoError(t, cmd.Start())
+		cmds = append(cmds, cmd)
+	}
+	for _, c := range cmds {
+		require.NoError(t, c.Wait())
+	}
+	assert.NoFileExists(t, filepath.Join(dir, "violation"), "an exclusive holder shared the lock")
+	assert.NoDirExists(t, lock)
+}
+
+// TestLoadLock_ForkFailureIsNoDeath (#2242 stress at load 300): judging a
+// holder's record forks nothing, so a fork that fails on a busy host (here:
+// a cat that fails on /proc, as a $(cat ...) whose fork failed does) never
+// makes a live holder look gone and its slot reclaimed.
+func TestLoadLock_ForkFailureIsNoDeath(t *testing.T) {
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	bin := t.TempDir()
+	realCat, err := exec.LookPath("cat")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "cat"), []byte(`#!/bin/sh
+case "$*" in */proc/*) echo "bash: fork: Resource temporarily unavailable" >&2; exit 1 ;; esac
+exec `+realCat+` "$@"
+`), 0o755))
+	held := filepath.Join(t.TempDir(), "held")
+	holder := loadlock(t, lock, "sh", "-c", `touch "$0"; sleep 3`, held)
+	require.NoError(t, holder.Start())
+	require.Eventually(t, func() bool { _, err := os.Stat(held); return err == nil }, 10*time.Second, 20*time.Millisecond)
+	waiter := loadlock(t, lock, "true")
+	waiter.Env = append(waiter.Env, "PATH="+bin+":"+os.Getenv("PATH"))
+	out := &syncBuf{}
+	waiter.Stdout, waiter.Stderr = out, out
+	require.NoError(t, waiter.Start())
+	time.Sleep(time.Second)
+	assert.DirExists(t, filepath.Join(lock+".d", "1"), "the live holder keeps its slot")
+	assert.NotContains(t, out.String(), "removed lock slot")
+	assert.NotContains(t, out.String(), "of a waiter that is gone", "nor its own ticket (the old $(cat ...) judged this waiter gone)")
+	require.NoError(t, holder.Wait())
+	done := make(chan error, 1)
+	go func() { done <- waiter.Wait() }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "%s", out.String())
+	case <-time.After(20 * time.Second):
+		_ = waiter.Process.Kill()
+		<-done
+		t.Fatalf("the waiter never got the lock: %s", out.String())
+	}
+}
+
+// TestLoadLock_FailingToolsAreNoUnsafeAnswer (#2242 QA): every decision on
+// the lock's state uses shell builtins, so a waiter whose cat, grep, cut,
+// awk, sed and find all fail (forks failing on a busy host) never takes an
+// unsafe answer: a live, long-held holder's slot is not reclaimed, an
+// exclusive holder is not joined, a load it cannot read is a busy host's;
+// and it still gets the lock once the holder is done.
+func TestLoadLock_FailingToolsAreNoUnsafeAnswer(t *testing.T) {
+	// All six fail; and cat and grep alone, so the waiter still finds its
+	// turn (find) and reaches the decisions (the script before #2242 QA's
+	// fix reclaimed the long-held slot and joined the exclusive holder).
+	for _, tools := range [][]string{{"cat", "grep", "cut", "awk", "sed", "find"}, {"cat", "grep"}} {
+		t.Run(strings.Join(tools, ","), func(t *testing.T) { failingToolsAreNoUnsafeAnswer(t, tools) })
+	}
+}
+
+func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
+	failing := t.TempDir()
+	for _, tool := range tools {
+		require.NoError(t, os.WriteFile(filepath.Join(failing, tool),
+			[]byte("#!/bin/sh\necho \"bash: fork: Resource temporarily unavailable\" >&2\nexit 1\n"), 0o755))
+	}
+	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
+	run := func(lock string, env []string, args ...string) (*exec.Cmd, *syncBuf) {
+		c := exec.Command("bash", append([]string{script, "-l", lock, "-o", "t", "-r", "0.05"}, args...)...)
+		c.Env = append(append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1"), env...)
+		o := &syncBuf{}
+		c.Stdout, c.Stderr = o, o
+		require.NoError(t, c.Start())
+		return c, o
+	}
+	waitFor := func(t *testing.T, c *exec.Cmd, out *syncBuf) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- c.Wait() }()
+		select {
+		case err := <-done:
+			require.NoError(t, err, "%s", out.String())
+		case <-time.After(20 * time.Second):
+			_ = c.Process.Kill()
+			<-done
+			t.Fatalf("never got the lock: %s", out.String())
+		}
+	}
+	withFailing := func(env ...string) []string {
+		return append(env, "PATH="+failing+":"+os.Getenv("PATH"))
+	}
+	for _, tc := range []struct {
+		name                 string
+		holderEnv, waiterEnv []string
+		holderArgs           []string
+		old                  bool // the slot's directory is two minutes old: a long-held slot
+	}{
+		{"a live holder's long-held slot on a busy host", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOAD=99"}, nil, true},
+		{"an exclusive holder on an idle host", []string{"LOADLOCK_TEST_LOAD=0"}, []string{"LOADLOCK_TEST_LOAD=0"}, []string{"-x"}, false},
+		{"a load it cannot read", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOADAVG=/nonexistent/loadavg"}, nil, false},
+		{"a load it cannot parse", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOAD=busy"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			lock := filepath.Join(dir, "LOADLOCK")
+			stop, held, ran := filepath.Join(dir, "stop"), filepath.Join(dir, "held"), filepath.Join(dir, "ran")
+			t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+			h, hout := run(lock, tc.holderEnv, append(tc.holderArgs, "--", "sh", "-c",
+				`touch "$1"; while [ ! -e "$0" ]; do sleep 0.02; done`, stop, held)...)
+			require.Eventually(t, func() bool { _, err := os.Stat(held); return err == nil }, 20*time.Second, 20*time.Millisecond)
+			if tc.old {
+				old := time.Now().Add(-2 * time.Minute)
+				require.NoError(t, os.Chtimes(filepath.Join(lock+".d", "1"), old, old))
+			}
+			w, wout := run(lock, withFailing(tc.waiterEnv...), "--", "touch", ran)
+			time.Sleep(1500 * time.Millisecond)
+			assert.NoFileExists(t, ran, "the waiter took the lock beside its holder: %s", wout.String())
+			assert.DirExists(t, filepath.Join(lock+".d", "1"), "the live holder keeps its slot")
+			assert.NotContains(t, wout.String(), "removed")
+			require.NoError(t, os.WriteFile(stop, nil, 0o644))
+			waitFor(t, h, hout)
+			waitFor(t, w, wout)
+			assert.FileExists(t, ran, "it gets the lock once the holder is done")
+			assert.NoDirExists(t, lock)
+		})
+	}
+}
+
+// TestLoadLock_StatThatCannotBeOpened: a holder whose /proc/<pid>/stat
+// cannot be opened (a full file table) is alive while /proc/<pid> is there
+// (LOADLOCK_TEST_PROC: pid 424242's directory with no stat); one whose
+// directory is gone is not.
+func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
+	proc := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "424242"), 0o755))
+	if _, err := os.Stat("/proc/424243"); err == nil {
+		t.Skip("pid 424243 runs on this host")
+	}
+	for _, tc := range []struct {
+		name    string
+		pid     int
+		reclaim bool
+	}{
+		{"its /proc directory is there: alive", 424242, false},
+		{"its /proc directory is gone: dead", 424243, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lock := filepath.Join(t.TempDir(), "LOADLOCK")
+			slot := filepath.Join(lock+".d", "1")
+			require.NoError(t, os.MkdirAll(slot, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte(fmt.Sprintf("x pid %d 2026-10-20T00:00:00Z start=5\n", tc.pid)), 0o644))
+			cmd := loadlock(t, lock, "true")
+			cmd.Env = append(cmd.Env, "LOADLOCK_TEST_PROC="+proc)
+			out := &syncBuf{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				require.True(t, tc.reclaim, "it took the lock from a live holder: %s", out.String())
+				require.NoError(t, err, "%s", out.String())
+				assert.Contains(t, out.String(), "removed lock slot "+slot)
+			case <-time.After(time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+				require.False(t, tc.reclaim, "the dead holder's slot was never reclaimed: %s", out.String())
+				assert.DirExists(t, slot)
+				assert.NotContains(t, out.String(), "removed lock slot")
+			}
+		})
+	}
+}
+
+// TestLoadLock_FlockThatFails (#2242 QA): with_flock never runs its
+// command without the flock: while flock fails, a waiter takes no slot and
+// runs nothing; once it works, the waiter gets the lock.
+func TestLoadLock_FlockThatFails(t *testing.T) {
+	realFlock, err := exec.LookPath("flock")
+	require.NoError(t, err)
+	bin, dir := t.TempDir(), t.TempDir()
+	failing := filepath.Join(dir, "failing")
+	require.NoError(t, os.WriteFile(failing, nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "flock"), []byte(`#!/bin/sh
+[ ! -e "`+failing+`" ] || { echo "flock: fork: Resource temporarily unavailable" >&2; exit 1; }
+exec `+realFlock+` "$@"
+`), 0o755))
+	lock, ran := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "ran")
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", "w", "-r", "0.05", "--", "touch", ran)
+	cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0", "PATH="+bin+":"+os.Getenv("PATH"))
+	out := &syncBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	require.NoError(t, cmd.Start())
+	time.Sleep(1500 * time.Millisecond)
+	assert.NoFileExists(t, ran, "it ran without the flock: %s", out.String())
+	slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+	assert.Empty(t, slots, "a slot taken without the flock")
+	require.NoError(t, os.Remove(failing))
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "%s", out.String())
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("never got the lock once flock worked: %s", out.String())
+	}
+	assert.FileExists(t, ran)
 }

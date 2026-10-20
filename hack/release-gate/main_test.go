@@ -217,6 +217,8 @@ func (h *fakeHost) Lock(context.Context) error {
 	return nil
 }
 
+func (h *fakeHost) LockExclusive(ctx context.Context) error { return h.Lock(ctx) }
+
 func (h *fakeHost) Unlock() {
 	h.mu.Lock()
 	h.locked = false
@@ -448,8 +450,8 @@ func TestGateRun_Interrupt(t *testing.T) {
 
 func TestMachineLock(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "LOADLOCK")
-	a := &machine{lockDir: dir, owner: "a", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}}
-	b := &machine{lockDir: dir, owner: "b", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}}
+	a := &machine{lockDir: dir, owner: "a", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}, lockLoad: busy}
+	b := &machine{lockDir: dir, owner: "b", lockRetry: 5 * time.Millisecond, log: func(string, ...any) {}, lockLoad: busy}
 	require.NoError(t, a.Lock(context.Background()))
 	owner, err := os.ReadFile(filepath.Join(dir, "owner"))
 	require.NoError(t, err)

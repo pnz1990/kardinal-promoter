@@ -58,6 +58,9 @@ type Host interface {
 	Slots(n int) (release func(), ok bool, why string)
 	// Lock takes the heavy-load lock, waiting for it until ctx ends.
 	Lock(ctx context.Context) error
+	// LockExclusive takes it as its only holder (a heavy live suite: the
+	// counting lock's second holder waits).
+	LockExclusive(ctx context.Context) error
 	Unlock()
 }
 
@@ -354,8 +357,12 @@ func (g *Gate) runStep(ctx context.Context, st Step) Result {
 		return r
 	}
 	if st.Heavy {
-		g.Log("%s: taking the heavy-load lock", st.ID)
-		if err := g.Host.Lock(ctx); err != nil {
+		g.Log("%s: taking the heavy-load lock%s", st.ID, map[bool]string{true: " alone", false: ""}[st.Exclusive])
+		lock := g.Host.Lock
+		if st.Exclusive {
+			lock = g.Host.LockExclusive
+		}
+		if err := lock(ctx); err != nil {
 			r.Status, r.Reason = statusFail, "heavy-load lock: "+err.Error()
 			_ = g.save(r)
 			return r
@@ -452,7 +459,9 @@ type machine struct {
 	lockClass string // classRelease or classNormal ("": normal)
 	proc      procFS // nil: the host's /proc
 	heldMu    sync.Mutex
-	held      string // the owner record this gate wrote when it took the lock
+	held      string         // the owner record this gate wrote when it took the lock
+	slot      string         // the slot directory of the lock it holds
+	lockLoad  func() float64 // nil: /proc/loadavg (tests set it)
 	log       func(format string, args ...any)
 }
 
@@ -522,7 +531,12 @@ func memAvailableGB() (float64, bool) {
 // (fairlock.go): a ticket of lockClass, served release tickets first, then
 // in order. While it waits it wakes on the queue's changes, or every
 // lockRetry.
-func (m *machine) Lock(ctx context.Context) error {
+func (m *machine) Lock(ctx context.Context) error { return m.lock(ctx, false) }
+
+// LockExclusive is Lock as the lock's only holder.
+func (m *machine) LockExclusive(ctx context.Context) error { return m.lock(ctx, true) }
+
+func (m *machine) lock(ctx context.Context, exclusive bool) error {
 	if m.lockDir == "" {
 		return nil
 	}
@@ -534,30 +548,35 @@ func (m *machine) Lock(ctx context.Context) error {
 	if poll <= 0 {
 		poll = 10 * time.Second
 	}
-	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc}
+	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc, load: m.lockLoad,
+		exclusive: exclusive}
 	if err := f.acquire(ctx); err != nil {
 		return err
 	}
 	m.heldMu.Lock()
-	m.held = f.held
+	m.held, m.slot = f.held, f.slot
 	m.heldMu.Unlock()
 	return nil
 }
 
-// Unlock removes the lock, only if this gate holds it.
+// Unlock gives up this gate's slot of the lock, only if it still holds it.
 func (m *machine) Unlock() {
 	if m.lockDir == "" {
 		return
 	}
 	m.heldMu.Lock()
-	held := m.held
+	held, slot := m.held, m.slot
+	m.held, m.slot = "", ""
 	m.heldMu.Unlock()
-	holder, err := os.ReadFile(filepath.Join(m.lockDir, "owner"))
-	if err != nil || held == "" || strings.TrimSpace(string(holder)) != held {
+	if held == "" {
 		m.log("heavy-load lock %s is not ours any more; left as it is", m.lockDir)
 		return
 	}
-	if err := os.RemoveAll(m.lockDir); err != nil {
-		m.log("remove the heavy-load lock: %v", err)
+	ours, err := release(m.lockDir, slot, held)
+	if err != nil {
+		m.log("release the heavy-load lock: %v", err)
+	}
+	if !ours {
+		m.log("heavy-load lock %s is not ours any more; left as it is", m.lockDir)
 	}
 }
