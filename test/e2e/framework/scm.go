@@ -187,27 +187,62 @@ func (e *Env) WaitControllerLog(t *testing.T, since time.Time, timeout time.Dura
 	return e.ControllerLog(since).Wait(t, timeout, "controller log: "+what, match)
 }
 
-// Wait waits until a line read from now on matches match, and returns it.
+// logReadSlack is how long past its deadline a log wait keeps reading: one
+// read of the pod log is an API server call that, on a loaded host, can take
+// seconds by itself (#2172: a 5s wait spent on one read). The wait's
+// deadline applies to the line's own timestamp, not to the reads.
+const logReadSlack = 30 * time.Second
+
+// Wait waits for a line read from now on that matches match, and returns
+// it. The line must be logged within timeout of the call (by its own
+// timestamp); reads that fail or are slow are retried for up to
+// logReadSlack more, so a slow API server does not fail the wait.
 func (r *LogReader) Wait(t *testing.T, timeout time.Duration, what string, match func(LogLine) bool) LogLine {
 	t.Helper()
-	var found LogLine
-	read := 0
-	Eventually(t, timeout, what, func(ctx context.Context) (bool, string) {
-		lines, err := r.Next(ctx)
-		if err != nil {
-			return false, err.Error()
-		}
-		read += len(lines)
-		for _, l := range lines {
-			if match(l) {
-				found = l
-				return true, ""
-			}
-		}
-		return false, fmt.Sprintf("%d lines since %s, none matches", read, r.since.UTC().Format(time.RFC3339Nano))
-	})
+	found, err := r.waitFor(time.Now().Add(timeout), timeout+logReadSlack, match)
+	if err != nil {
+		t.Fatalf("waiting %s for %s: %v", timeout, what, err)
+	}
 	t.Logf("%s: %s", what, found)
 	return found
+}
+
+// waitFor reads until a line matching match is found, and fails when it was
+// logged after deadline, when lines logged after deadline match nothing
+// (so it would be late), or after budget.
+func (r *LogReader) waitFor(deadline time.Time, budget time.Duration, match func(LogLine) bool) (LogLine, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	read := 0
+	var last string
+	for {
+		lines, err := r.Next(ctx)
+		if err != nil {
+			last = err.Error()
+		} else {
+			read += len(lines)
+			last = fmt.Sprintf("%d lines since %s, none matches", read, r.since.UTC().Format(time.RFC3339Nano))
+			for _, l := range lines {
+				if !match(l) {
+					if l.At.After(deadline) {
+						return LogLine{}, fmt.Errorf("no matching line by %s (lines logged after it match nothing)",
+							deadline.UTC().Format(time.RFC3339Nano))
+					}
+					continue
+				}
+				if l.At.After(deadline) {
+					return LogLine{}, fmt.Errorf("the line was logged at %s, %s after the deadline: %s",
+						l.At.UTC().Format(time.RFC3339Nano), l.At.Sub(deadline).Round(time.Millisecond), l)
+				}
+				return l, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return LogLine{}, fmt.Errorf("timed out reading the log; last seen: %s", last)
+		case <-time.After(Poll):
+		}
+	}
 }
 
 // Lines reads the lines written since the previous call that match match.
