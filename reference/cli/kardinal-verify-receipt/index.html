@@ -21,7 +21,8 @@
 <a id=__codelineno-2-13 name=__codelineno-2-13 href=#__codelineno-2-13></a>      --repository string     Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's
 <a id=__codelineno-2-14 name=__codelineno-2-14 href=#__codelineno-2-14></a>      --require strings       Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, SLSA_BUILD_LEVEL_3, ...); !LEVEL must be absent
 <a id=__codelineno-2-15 name=__codelineno-2-15 href=#__codelineno-2-15></a>      --subject string        The image digest (sha256:...) or commit the receipt must be about (required with --file)
-<a id=__codelineno-2-16 name=__codelineno-2-16 href=#__codelineno-2-16></a>      --trusted-root string   Sigstore trusted_root.json (default: the public-good root, fetched with TUF)
+<a id=__codelineno-2-16 name=__codelineno-2-16 href=#__codelineno-2-16></a>      --timeout duration      Give up past this (reading the cluster, the registry and its credentials, the trusted root): cannot verify, a failure (default 1m0s)
+<a id=__codelineno-2-17 name=__codelineno-2-17 href=#__codelineno-2-17></a>      --trusted-root string   Sigstore trusted_root.json (default: the public-good root, fetched with TUF)
 </code></pre></div> <h3 id=options-inherited-from-parent-commands>Options inherited from parent commands<a class=headerlink href=#options-inherited-from-parent-commands title="Permanent link">&para;</a></h3> <div class=highlight><pre><span></span><code><a id=__codelineno-3-1 name=__codelineno-3-1 href=#__codelineno-3-1></a>      --context string      Kubeconfig context override
 <a id=__codelineno-3-2 name=__codelineno-3-2 href=#__codelineno-3-2></a>      --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
 <a id=__codelineno-3-3 name=__codelineno-3-3 href=#__codelineno-3-3></a>  -n, --namespace string    Kubernetes namespace (default: current context namespace)
