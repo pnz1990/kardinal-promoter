@@ -43,12 +43,13 @@ var errOut io.Writer = os.Stderr
 // to render for a terminal.
 var detectStyle = style.Detect
 
-// useStyle sets sty for cmd's stdout, errOut to its stderr, and cmd's
-// version skew check.
+// useStyle sets sty for cmd's stdout, errOut to its stderr, cmd's version
+// skew check, and no default said yet (noticeDefault).
 func useStyle(cmd *cobra.Command) {
 	sty = detectStyle(cmd.OutOrStdout())
 	errOut = cmd.ErrOrStderr()
 	skewCheck = &versionSkew{cmd: cmd}
+	noticed = map[string]bool{}
 	// Without a UTF-8 locale (or with TERM=dumb) the stream takes ASCII
 	// only: what the CLI prints from the cluster is folded too. -o json and
 	// yaml keep the cluster's text exact.

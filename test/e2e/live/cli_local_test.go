@@ -192,6 +192,81 @@ func TestCLI_Version(t *testing.T) {
 	assert.NotContains(t, r.Stderr, skew, "the controller in kardinal-system is %s", controllerVersion(t, e))
 }
 
+// TestCLI_RepoDefaults (#1759): in a repository with .kardinal.yaml
+// (pipeline and namespace), kardinal pause, resume and history need neither:
+// the file names them, KARDINAL_PIPELINE wins over the file, and one
+// argument that is an environment of the default pipeline is that
+// environment. Without any default the error names the argument, the
+// variable and the file, and a file that names a context is refused. Each
+// default used is said on stderr with its source.
+// Covers CLI-DEFAULTS-02.
+func TestCLI_RepoDefaults(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	cli := e.CLI(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	p := barePipeline(t, e, ns, "web")
+	waitPipelineValid(t, e, ns, p.Name)
+	repo := func(content string) string {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+		if content != "" {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".kardinal.yaml"), []byte(content), 0o600))
+		}
+		sub := filepath.Join(dir, "deploy", "k8s")
+		require.NoError(t, os.MkdirAll(sub, 0o755))
+		return sub
+	}
+	paused := func() bool {
+		var got v1alpha1.Pipeline
+		require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "web"}, &got))
+		return got.Spec.Paused
+	}
+
+	// The file, found from a subdirectory: pipeline and namespace.
+	dir := repo("pipeline: web\nnamespace: " + ns + "\n")
+	file := filepath.Join(filepath.Dir(filepath.Dir(dir)), ".kardinal.yaml")
+	r := cli.Exec(framework.CLIOptions{Dir: dir}, "--context", e.Context, "pause", "--reason", "e2e")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stdout, "Pipeline web paused.")
+	// Each default is said on stderr, with where it came from (QA on #2179).
+	assert.Contains(t, r.Stderr, "using pipeline web (from "+file+")\n")
+	assert.Contains(t, r.Stderr, "using namespace "+ns+" (from "+file+")\n")
+	assert.NotContains(t, r.Stdout, "using ")
+	assert.True(t, paused())
+
+	// KARDINAL_PIPELINE over the file: a pipeline that does not exist.
+	r = cli.Exec(framework.CLIOptions{Dir: dir, Env: []string{"KARDINAL_PIPELINE=nope"}}, "--context", e.Context, "resume")
+	assert.NotEqual(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "nope")
+	assert.True(t, paused(), "the file's pipeline is untouched")
+	// KARDINAL_PIPELINE and KARDINAL_NAMESPACE, no file.
+	r = cli.Exec(framework.CLIOptions{Dir: repo(""), Env: []string{"KARDINAL_PIPELINE=web", "KARDINAL_NAMESPACE=" + ns}},
+		"--context", e.Context, "resume")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "using pipeline web (from KARDINAL_PIPELINE)\nusing namespace "+ns+" (from KARDINAL_NAMESPACE)\n")
+	assert.False(t, paused())
+
+	// One argument that is an environment of the default pipeline.
+	want := cli.Must(ns, "history", "web", "test")
+	r = cli.Exec(framework.CLIOptions{Dir: dir}, "--context", e.Context, "history", "test")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Equal(t, want, r.Stdout)
+
+	// No default at all; a file that names a context.
+	r = cli.Exec(framework.CLIOptions{Dir: repo("")}, "--context", e.Context, "-n", ns, "history")
+	assert.Equal(t, 1, r.Code)
+	assert.Contains(t, r.Stderr, `a pipeline name is required: give it as an argument (history <pipeline>), `+
+		`set KARDINAL_PIPELINE, or write "pipeline: <name>" in .kardinal.yaml at the repository's root`)
+	r = cli.Exec(framework.CLIOptions{Dir: repo("pipeline: web\ncontext: prod\n")}, "--context", e.Context, "-n", ns, "history")
+	assert.Equal(t, 1, r.Code)
+	assert.Contains(t, r.Stderr, "a repository file never picks a cluster")
+	// The pipeline as the one argument, and -n, go without that file.
+	r = cli.Exec(framework.CLIOptions{Dir: repo("pipeline: web\ncontext: prod\n")}, "--context", e.Context, "-n", ns, "history", "web")
+	require.Equal(t, 0, r.Code, r.Output())
+}
+
 // TestCLI_GlobalFlags checks how the global flags pick the cluster and the
 // namespace. By default the CLI uses $KUBECONFIG's current context and that
 // context's namespace; --context picks another context, -n and --namespace

@@ -55,7 +55,7 @@ the change has not landed yet. -w refreshes every 3 seconds.`,
 		Example: `  kardinal explain my-app
   kardinal explain my-app prod -w`,
 		Annotations: map[string]string{ReferenceAnnotation: explainReference, outputAnnotation: "true"},
-		Args:        cobra.RangeArgs(1, 2),
+		Args:        pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, envFlag)
 			if err != nil {

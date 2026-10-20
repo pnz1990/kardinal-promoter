@@ -105,10 +105,14 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
 
   # in CI: the Bundle's name and the outcome as JSON
   kardinal ship my-app --image "$IMAGE" --wait -o json | jq -r .result`,
-		Args: cobra.ExactArgs(1),
+		Args: pipelineArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if quiet && !wait {
 				return fmt.Errorf("ship: --quiet quiets --wait's progress; add --wait")
+			}
+			pipeline, err := pipelineOf(args)
+			if err != nil {
+				return fmt.Errorf("ship: %w", err)
 			}
 			c, ns, err := buildClient()
 			if err != nil {
@@ -118,9 +122,9 @@ merged (4), is replaced or rejected (5), or --timeout passes (6).`,
 				if wait {
 					return fmt.Errorf("ship: --dry-run creates nothing to --wait for; drop one of them")
 				}
-				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], opts)
+				return createBundleDryRun(cmd.OutOrStdout(), c, ns, pipeline, opts)
 			}
-			return shipFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], opts, wait, timeout, stopAtGate, quiet)
+			return shipFn(cmd.Context(), cmd.OutOrStdout(), c, ns, pipeline, opts, wait, timeout, stopAtGate, quiet)
 		},
 	}
 	addBundleFlags(cmd, &opts, &dryRun)
