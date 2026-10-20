@@ -451,9 +451,11 @@ func serverMinor(t *testing.T, e *framework.Env) int {
 //     created for each and only the two documented warnings.
 //   - In-flight state: the steps, PRStatuses and gate instances keep their
 //     uid and creationTimestamp, the gates are re-evaluated at startup, the
-//     MetricCheck result is refreshed, a template edit doesn't change the
-//     in-flight instance, and kardinal override releases it: prod opens its
-//     PR and the Bundle finishes after the merge. test kept the old image, as
+//     MetricCheck result is refreshed, and kardinal override releases the
+//     Bundle the gate holds: prod opens its PR. A template edit then reaches
+//     the Bundle still promoting (the instance takes the new expression and
+//     generation, and keeps the override), and the Bundle finishes after the
+//     merge. test kept the old image, as
 //     the guide warns, and a new Bundle writes it.
 //   - Step 11: both paused Pipelines stay held, resume releases them, and the
 //     leftover command removes what a Superseded Bundle left after deletion.
@@ -823,16 +825,25 @@ spec:
 		assert.NotContains(t, kroNS.Labels, l)
 	}
 
-	// Gate instances keep their old expression; override releases the Bundle.
-	e.Kubectl(t, ns, "", "patch", "policygate", "upgrade-hold", "--type", "merge", "-p", `{"spec":{"expression":"true"}}`)
+	// The guide's override releases the Bundle the gate still holds.
 	e.NoStep(t, ns, u.main, b1, "prod", holdFor)
-	held = e.WaitGate(t, ns, b1, "prod", "upgrade-hold", time.Second, "with the expression it was built with",
+	held = e.WaitGate(t, ns, b1, "prod", "upgrade-hold", time.Second, "still holding with the expression it was built with",
 		func(g *v1alpha1.PolicyGate) bool { return g.Spec.Expression == "false" && !g.Status.Ready })
 	out = e.MustShell(t, framework.Fill(t, framework.GuideBlock(t, "kardinal override"),
 		"kardinal override", "kardinal -n "+ns+" override", "<pipeline>", u.main, "<env>", "prod",
 		"<gate>", "upgrade-hold", "<why>", "upgrade e2e"))
 	assert.Contains(t, out, fmt.Sprintf("Override applied: gate=%s pipeline=%s stage=prod", held.Name, u.main))
 	e.WaitStepState(t, ns, u.main, b1, "prod", "WaitingForMerge", promoteTimeout)
+	// A template edit reaches the Bundle still promoting, as the guide says
+	// (#1360): its instance takes the edited expression and the template's
+	// generation, and keeps the override.
+	gen := editGate(t, e, ns, "upgrade-hold", "true")
+	edited := e.WaitGate(t, ns, b1, "prod", "upgrade-hold", gateTimeout, "with the edited expression",
+		func(g *v1alpha1.PolicyGate) bool {
+			return g.Spec.Expression == "true" && g.Annotations["kardinal.io/gate-template-generation"] == fmt.Sprint(gen)
+		})
+	assert.Equal(t, held.UID, edited.UID, "the edit updates the instance v0.8.1 made")
+	assert.Len(t, edited.Spec.Overrides, 1, "the override stays on the instance")
 	pr := e.WaitPR(t, u.repo, time.Minute, "prod PR", func(pr gitserver.PR) bool { return pr.State == "open" })
 	require.NoError(t, e.Git.MergePR(ctx, u.repo, pr.Number))
 	e.WaitStepState(t, ns, u.main, b1, "prod", "Verified", promoteTimeout)
