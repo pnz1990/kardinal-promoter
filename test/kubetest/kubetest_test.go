@@ -14,6 +14,7 @@
 package kubetest_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/stretchr/testify/assert"
@@ -133,6 +136,10 @@ const probeEnv = "KUBETEST_PROBE"
 // line to each time they are called.
 const probeMarkerEnv = "KUBETEST_PROBE_MARKER"
 
+// probeFakesEnv lists the variables TestIsolate_NoCredentials started its
+// child with a fake credential in.
+const probeFakesEnv = "KUBETEST_PROBE_FAKES"
+
 // runChild runs this test binary's test name with only env (and nothing of
 // this process's environment) and returns its output.
 func runChild(t *testing.T, name string, env []string) string {
@@ -172,13 +179,16 @@ func TestIsolate_GivenHome(t *testing.T) {
 	}
 }
 
-// TestIsolate_NoCredentials (#2321): a guarded test binary started with the
-// developer's git credential helper and docker logins, in $HOME or named by
-// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and DOCKER_CONFIG, reaches none of
-// them. A git push to a server that asks for a password calls no helper
-// (and the commit before it still has an identity), and the registry
-// keychain kardinal reads registries with answers anonymous, for a registry
-// with a credential helper and for one with a stored login.
+// TestIsolate_NoCredentials (#2321, QA-3 on #2358): a guarded test binary
+// started with the developer's credentials in every place kubetest.Isolated
+// lists (git's global, system and repository config, docker's and podman's
+// registry logins, AWS, Google, Azure and GitHub credentials, a netrc, an ssh
+// agent and ssh commands), each a fake, reaches none of them. Its
+// environment is what Isolated says. A git push to a server that asks for a
+// password calls no credential helper and sends no extra header; the
+// registry keychain kardinal reads registries with answers anonymous for
+// every login; the AWS default credential chain finds none, and calls no
+// instance metadata.
 func TestIsolate_NoCredentials(t *testing.T) {
 	if os.Getenv(probeEnv) == "no-credentials" {
 		noCredentials(t)
@@ -186,24 +196,57 @@ func TestIsolate_NoCredentials(t *testing.T) {
 	}
 	marker := filepath.Join(t.TempDir(), "calls")
 	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "git-helper"), []byte(
-		"#!/bin/sh\necho git >> \""+marker+"\"\necho username=u\necho password=p\n"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker-credential-kardinalprobe"), []byte(
-		"#!/bin/sh\necho docker >> \""+marker+"\"\necho '{\"ServerURL\":\"helper.example.invalid\",\"Username\":\"u\",\"Secret\":\"p\"}'\n"), 0o755))
+	helper := func(name, what, out string) string {
+		p := filepath.Join(bin, name)
+		require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\necho "+what+" >> \""+marker+"\"\n"+out), 0o755))
+		return p
+	}
+	gitHelper := helper("git-helper", "git", "echo username=u\necho password=p\n")
+	helper("docker-credential-kardinalprobe", "docker", `echo '{"ServerURL":"helper.example.invalid","Username":"u","Secret":"p"}'`+"\n")
+	askpass := helper("askpass", "askpass", "echo p\n")
+	sshCmd := helper("fake-ssh", "ssh", "exit 1\n")
+	write := func(path, content string) string {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		return path
+	}
+	podman := func(registry string) string {
+		return `{"auths":{"` + registry + `":{"auth":"dTpw"}}}`
+	}
 	real := t.TempDir() // the developer's $HOME
-	gitconfig := filepath.Join(real, ".gitconfig")
-	require.NoError(t, os.WriteFile(gitconfig, []byte("[credential]\n\thelper = !"+filepath.Join(bin, "git-helper")+"\n"), 0o600))
+	gitconfig := write(filepath.Join(real, ".gitconfig"), "[credential]\n\thelper = !"+gitHelper+"\n")
 	docker := filepath.Join(real, ".docker")
-	require.NoError(t, os.MkdirAll(docker, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(docker, "config.json"), []byte(
-		`{"credHelpers":{"helper.example.invalid":"kardinalprobe"},"auths":{"static.example.invalid":{"auth":"dTpw"}}}`), 0o600))
+	write(filepath.Join(docker, "config.json"), `{"credHelpers":{"helper.example.invalid":"kardinalprobe"},"auths":{"static.example.invalid":{"auth":"dTpw"}}}`)
+	runtimeDir, configDir := t.TempDir(), t.TempDir()
+	write(filepath.Join(runtimeDir, "containers", "auth.json"), podman("xdgrun.example.invalid"))
+	write(filepath.Join(configDir, "containers", "auth.json"), podman("xdgcfg.example.invalid"))
+	aws := t.TempDir()
 
-	base := []string{probeEnv + "=no-credentials", probeMarkerEnv + "=" + marker, "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+	base := []string{probeEnv + "=no-credentials", probeMarkerEnv + "=" + marker, "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"REGISTRY_AUTH_FILE=" + write(filepath.Join(t.TempDir(), "auth.json"), podman("regauth.example.invalid")),
+		"XDG_RUNTIME_DIR=" + runtimeDir, "XDG_CONFIG_HOME=" + configDir,
+		"AWS_ACCESS_KEY_ID=AKIAFAKEFAKEFAKEFAKE", "AWS_SECRET_ACCESS_KEY=fake", "AWS_SESSION_TOKEN=fake", "AWS_PROFILE=fake",
+		"AWS_SHARED_CREDENTIALS_FILE=" + write(filepath.Join(aws, "credentials"), "[fake]\naws_access_key_id = AKIAFAKEFAKEFAKEFAKE\naws_secret_access_key = fake\n"),
+		"AWS_CONFIG_FILE=" + write(filepath.Join(aws, "config"), "[profile fake]\nregion = us-east-1\n"),
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI=http://127.0.0.1:1/creds",
+		"GOOGLE_APPLICATION_CREDENTIALS=" + write(filepath.Join(t.TempDir(), "sa.json"), `{"type":"service_account"}`),
+		"CLOUDSDK_CONFIG=" + t.TempDir(), "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE=/nonexistent/token",
+		"AZURE_CLIENT_ID=fake", "AZURE_CLIENT_SECRET=fake",
+		"GH_TOKEN=fake", "GITHUB_TOKEN=fake", "NETRC=" + write(filepath.Join(t.TempDir(), "netrc"), "machine 127.0.0.1 login u password p\n"),
+		"SSH_AUTH_SOCK=/nonexistent/agent.sock", "GIT_SSH_COMMAND=" + sshCmd, "GIT_SSH=" + sshCmd,
+		"GIT_ASKPASS=" + askpass, "SSH_ASKPASS=" + askpass, "GNUPGHOME=" + t.TempDir()}
 	for name, env := range map[string][]string{
 		"in $HOME":     {"HOME=" + real},
 		"by variables": {"HOME=" + t.TempDir(), "GIT_CONFIG_GLOBAL=" + gitconfig, "GIT_CONFIG_SYSTEM=" + gitconfig, "DOCKER_CONFIG=" + docker},
 	} {
-		out := runChild(t, "TestIsolate_NoCredentials", append(append([]string{}, base...), env...))
+		env = append(append([]string{}, base...), env...)
+		var fakes []string
+		for _, kv := range env[2:] { // all but the probe's own
+			if k, _, _ := strings.Cut(kv, "="); k != "PATH" && k != "HOME" {
+				fakes = append(fakes, k)
+			}
+		}
+		out := runChild(t, "TestIsolate_NoCredentials", append(env, probeFakesEnv+"="+strings.Join(fakes, ",")))
 		assert.Contains(t, out, "--- PASS: TestIsolate_NoCredentials", "%s: the probe ran", name)
 		calls, _ := os.ReadFile(marker)
 		assert.Empty(t, string(calls), "%s: a credential helper was called", name)
@@ -212,7 +255,48 @@ func TestIsolate_NoCredentials(t *testing.T) {
 
 // noCredentials is TestIsolate_NoCredentials' child, in a guarded binary.
 func noCredentials(t *testing.T) {
+	home := os.Getenv("HOME")
+	for _, r := range kubetest.Isolated {
+		if prefix, ok := strings.CutSuffix(r.Name, "*"); ok {
+			for _, kv := range os.Environ() {
+				k, _, _ := strings.Cut(kv, "=")
+				if strings.HasPrefix(k, prefix) && !isolatedSets(k) {
+					t.Errorf("%s is set: Isolated clears %s (%s)", k, r.Name, r.Why)
+				}
+			}
+			continue
+		}
+		v, set := os.LookupEnv(r.Name)
+		if r.Unset {
+			assert.False(t, set, "%s is set: Isolated clears it (%s)", r.Name, r.Why)
+			continue
+		}
+		want := r.Value
+		if want == "~" {
+			want = home
+		} else if rest, ok := strings.CutPrefix(want, "~/"); ok {
+			want = filepath.Join(home, rest)
+		}
+		assert.Equal(t, want, v, "%s (%s)", r.Name, r.Why)
+	}
+
+	// Every variable the parent planted a fake in is cleared, or holds what
+	// Isolated sets, whether or not a rule names it: a rule dropped from the
+	// table fails here too.
+	for _, k := range strings.Split(os.Getenv(probeFakesEnv), ",") {
+		if v, set := os.LookupEnv(k); set && !isolatedSets(k) {
+			t.Errorf("%s=%s survived Isolate", k, v)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(os.Getenv("DOCKER_CONFIG"), "config.json"))
+	require.NoError(t, err, "a docker config.json, so go-containerregistry never falls back to podman's logins")
+	assert.JSONEq(t, "{}", string(b))
+
+	var sent []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a := r.Header.Get("Authorization"); a != "" {
+			sent = append(sent, a)
+		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="probe"`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -224,20 +308,58 @@ func noCredentials(t *testing.T) {
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		return cmd.CombinedOutput()
 	}
-	out, err := git("init", "-q")
-	require.NoError(t, err, "%s", out)
-	out, err = git("commit", "-q", "--allow-empty", "-m", "probe")
-	require.NoError(t, err, "a commit identity: %s", out)
-	out, err = git("push", srv.URL+"/r.git", "HEAD:refs/heads/main")
+	for _, args := range [][]string{{"init", "-q"},
+		// The repository's own helper and header, as actions/checkout stores
+		// the job token.
+		{"config", "--local", "credential.helper", "!" + filepath.Join(strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0], "git-helper")},
+		{"config", "--local", "http.extraheader", "Authorization: Basic ZmFrZTpmYWtl"},
+		{"commit", "-q", "--allow-empty", "-m", "probe"}} {
+		out, err := git(args...)
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	out, err := git("push", srv.URL+"/r.git", "HEAD:refs/heads/main")
 	require.Error(t, err, "the server refuses every request: %s", out)
+	assert.Empty(t, sent, "git sent an Authorization header: the repository's extra header or a helper's login")
 
-	for _, registry := range []string{"helper.example.invalid", "static.example.invalid"} {
+	for _, registry := range []string{"helper.example.invalid", "static.example.invalid", "regauth.example.invalid",
+		"xdgrun.example.invalid", "xdgcfg.example.invalid"} {
 		reg, err := name.NewRegistry(registry)
 		require.NoError(t, err)
 		auth, err := authn.DefaultKeychain.Resolve(reg)
 		require.NoError(t, err, registry)
 		assert.Equal(t, authn.Anonymous, auth, "%s: no login", registry)
 	}
+
+	// The AWS default chain, which kardinal's EKS health and CloudWatch
+	// metrics load. Never against the real instance metadata service: refuse
+	// to run unless it is disabled, and point the chain's endpoint at a
+	// local server that counts the calls.
+	require.Equal(t, "true", os.Getenv("AWS_EC2_METADATA_DISABLED"), "instance metadata must be off before the chain runs")
+	imdsCalls := 0
+	imds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		imdsCalls++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer imds.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithEC2IMDSEndpoint(imds.URL))
+	require.NoError(t, err)
+	creds, err := cfg.Credentials.Retrieve(ctx)
+	assert.Error(t, err, "the AWS default chain found credentials: %s", creds.Source)
+	assert.Zero(t, imdsCalls, "the AWS chain asked the instance metadata service")
+
 	calls, _ := os.ReadFile(os.Getenv(probeMarkerEnv))
-	assert.Empty(t, string(calls), "no credential helper was called")
+	assert.Empty(t, string(calls), "no credential helper or ssh command was called")
+}
+
+// isolatedSets reports whether Isolated sets k (a rule after the prefix
+// that clears it).
+func isolatedSets(k string) bool {
+	for _, r := range kubetest.Isolated {
+		if r.Name == k && !r.Unset {
+			return true
+		}
+	}
+	return false
 }

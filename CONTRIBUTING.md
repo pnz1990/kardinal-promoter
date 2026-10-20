@@ -42,11 +42,14 @@ home kubeconfig (`clientcmd.RecommendedHomeFile`, computed from the real `$HOME`
 `TestMain`) at nothing, and unsets `KUBERNETES_SERVICE_HOST` and `USE_EXISTING_CLUSTER`, for the
 tests and every process they start. So a unit test can never reach the cluster your machine points
 at, not even one that clears `KUBECONFIG`; a test that needs a cluster gives its kubeconfig
-explicitly. Go's caches and env file are kept by path. git gets a global config with a commit
-identity and nothing else (`GIT_CONFIG_GLOBAL`, and no system config) and docker an empty
-`DOCKER_CONFIG`, so no test reaches your credential helpers or registry logins; a test that needs
-either writes its own and sets the variable. A child test binary handed a home by its parent
-(`kubetest.HomeEnv`) uses it, so one that exits early leaves no scratch home behind.
+explicitly. The guard also keeps your credentials from the tests: `kubetest.Isolated` is the one
+list of what it sets and clears, and why. git gets a global config with a commit identity and
+nothing else, no system config, and a repository's own `credential.helper` and
+`http.extraheader` reset; docker an empty config (`{}`), and no podman logins; no AWS (and no
+instance metadata), Google, Azure or GitHub credentials, no netrc, ssh agent or ssh command. A test
+that needs one writes its own and sets the variable (`t.Setenv`). Go's caches and env file are
+kept by path. A child test binary handed a home by its parent (`kubetest.HomeEnv`) uses it, so one
+that exits early leaves no scratch home behind.
 `clientcmd.RecommendedHomeFile` is refused outside the e2e builds, a loader in a package-level var
 (a function literal called there too) or `init` is refused, and so is a read of the home directory
 there (`os.Getenv("HOME")`, `os.UserHomeDir`, ...), a test that sets `KUBECONFIG` or `HOME` to "" or
