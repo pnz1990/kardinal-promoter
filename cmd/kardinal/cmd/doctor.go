@@ -559,8 +559,13 @@ The policy namespaces check lists the Pipelines whose spec.policyNamespaces
 names a namespace that has not agreed to share its PolicyGates (the
 condition PolicyNamespacesShared=False), with those namespaces: a WARN
 against a v0.13 controller, which still reads their gates, and a FAIL against
-v0.14 and later, which refuse them (their new versions wait). Run it before
-upgrading to v0.14. Against a controller older than v0.13, which does not
-check, it is a WARN saying so: upgrade to v0.13 and run it again.
+v0.14 and later, which refuse them (their new versions wait); a release
+candidate or a build after a release tag counts as that release. Run it
+before upgrading to v0.14. Against a controller older than v0.13, which does
+not check, it is a WARN saying so: upgrade to v0.13 and run it again. It
+reads the condition as the controller last wrote it (the controller reads
+the named Namespaces again every 5 minutes), in every namespace or, when you
+may not list Pipelines cluster-wide, in the current one: a clean result
+there is a WARN, since the other namespaces were not checked.
 
 Use 'kardinal doctor' as the first troubleshooting step.`

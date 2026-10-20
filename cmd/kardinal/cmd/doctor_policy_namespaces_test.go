@@ -71,11 +71,21 @@ func TestDoctor_PolicyNamespaces(t *testing.T) {
 		"an unknown version warns": {estate, "unknown", true, doctorWarn, "v0.14.0 refuses them"},
 		"a dev build warns":        {estate, "v0.14.0-dev", true, doctorWarn, "v0.14.0 refuses them"},
 		"a later dev build warns":  {estate, "v0.15.0-dev", true, doctorWarn, "v0.14.0 refuses them"},
+		// A release candidate is its release; a git-describe version is at
+		// least its base (QA-5 on #2365).
+		"a v0.13 release candidate checks":  {estate, "v0.13.0-rc.1", true, doctorWarn, "v0.14.0 refuses them: team-b/web"},
+		"a v0.14 release candidate refuses": {estate, "v0.14.0-rc.1", true, doctorFail, "refused, their new versions wait"},
+		"commits after v0.13 check":         {estate, "v0.13.0-5-gabc1234", true, doctorWarn, "v0.14.0 refuses them"},
+		"commits after v0.14 refuse":        {estate, "v0.14.0-2-g1234abc", true, doctorFail, "refused, their new versions wait"},
+		"commits after v0.12 do not check":  {estate, "v0.12.3-7-gabc1234", true, doctorWarn, "does not check spec.policyNamespaces consent"},
+		"a v0.13 pseudo-version is unknown": {estate, "v0.13.1-0.20261020120000-abcdefabcdef", true, doctorWarn, "v0.14.0 refuses them"},
 		"none affected": {clean, "v0.13.0", true,
-			doctorPass, "every spec.policyNamespaces entry agreed (2 Pipelines, all namespaces)"},
+			doctorPass, "every spec.policyNamespaces entry agreed (2 Pipelines, all namespaces, as the controller last checked)"},
 		"a controller before v0.13 does not check": {estate, "v0.12.3", true, doctorWarn,
 			"controller v0.12.3 does not check spec.policyNamespaces consent"},
 		"only the current namespace": {estate, "v0.13.0", false, doctorWarn, "team-b/web (team-a) (namespace team-b)"},
+		"a clean namespace only is not a PASS": {clean, "v0.13.0", false, doctorWarn,
+			"checked namespace team-b only: every spec.policyNamespaces entry agreed (0 Pipelines, namespace team-b"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
