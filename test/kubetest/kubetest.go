@@ -40,8 +40,23 @@ const NoKubeconfig = "/nonexistent/kardinal-unit-tests/kubeconfig"
 // directory that does not exist.
 const noHomeKube = "/nonexistent/kardinal-unit-tests/home/.kube"
 
-// home is the scratch $HOME Isolate made, "" before.
-var home string
+// HomeEnv names a directory a parent test hands a child process it starts
+// (a test binary run again, the controller's main with -help) for the
+// child's Isolate to use as its scratch $HOME: one the parent removes, so a
+// child that exits before Run returns leaves nothing behind (QA-3 on #2216).
+const HomeEnv = "KUBETEST_HOME"
+
+// gitIdentity is the only git configuration a guarded test gets: the commit
+// identity its repositories use. No credential helpers, signing or aliases
+// from the developer's config, and no system config.
+const gitIdentity = "[user]\n\tname = kardinal unit tests\n\temail = unit-tests@kardinal-promoter.invalid\n"
+
+// home is the scratch $HOME Isolate uses, "" before; ownHome is whether
+// Isolate made it (and Run removes it).
+var (
+	home    string
+	ownHome bool
+)
 
 // Isolate points the ambient kubeconfig of this process, and of every
 // process it starts, at nothing:
@@ -54,12 +69,17 @@ var home string
 //     on #2216);
 //   - no in-cluster service address, so the in-cluster fallback fails too;
 //   - no USE_EXISTING_CLUSTER, with which envtest would take the ambient
-//     config and install CRDs into that cluster.
+//     config and install CRDs into that cluster;
+//   - git and docker given only what the tests need (#2321): a global
+//     gitconfig in the scratch $HOME with a commit identity and nothing else
+//     (GIT_CONFIG_GLOBAL, and no system config), so no test reaches the
+//     developer's credential helpers, and an empty DOCKER_CONFIG, so no
+//     registry login either. A test that needs either writes its own and
+//     points the variable at it (t.Setenv).
 //
-// What the tests' tools find under the real $HOME is passed by path, as
-// hack/e2e/local-live.sh does: Go's module and build caches and its env
-// file, git's global config and the docker config. Calling it again is a
-// no-op.
+// Go's module and build caches and its env file, under the real $HOME, are
+// passed by path, as hack/e2e/local-live.sh does. The scratch $HOME is the
+// one HomeEnv names, when a parent gave one. Calling it again is a no-op.
 func Isolate() {
 	_ = os.Setenv("KUBECONFIG", NoKubeconfig)
 	_ = os.Unsetenv("KUBERNETES_SERVICE_HOST")
@@ -71,19 +91,33 @@ func Isolate() {
 	if home != "" {
 		return
 	}
-	keepHomeTools()
-	dir, err := os.MkdirTemp("", "kardinal-unit-home-")
-	if err != nil {
-		dir = filepath.Dir(noHomeKube) // no scratch directory: a $HOME that does not exist
-	} else {
+	keepGoPaths()
+	dir := os.Getenv(HomeEnv)
+	if !dirExists(dir) {
+		var err error
+		if dir, err = os.MkdirTemp("", "kardinal-unit-home-"); err != nil {
+			dir = filepath.Dir(noHomeKube) // no scratch directory: a $HOME that does not exist
+		} else {
+			ownHome = true
+		}
+	}
+	if dirExists(dir) {
 		home = dir
 	}
 	_ = os.Setenv("HOME", dir)
+	gitconfig := filepath.Join(dir, ".gitconfig")
+	_ = os.WriteFile(gitconfig, []byte(gitIdentity), 0o600)
+	_ = os.Setenv("GIT_CONFIG_GLOBAL", gitconfig)
+	_ = os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	docker := filepath.Join(dir, ".docker")
+	_ = os.MkdirAll(docker, 0o700)
+	_ = os.Setenv("DOCKER_CONFIG", docker)
+	_ = os.Unsetenv("GNUPGHOME")
 }
 
-// keepHomeTools sets, from the real $HOME and before Isolate replaces it,
-// the paths that Go, git and docker would otherwise derive from $HOME.
-func keepHomeTools() {
+// keepGoPaths sets, from the real $HOME and before Isolate replaces it,
+// the paths that Go would otherwise derive from $HOME.
+func keepGoPaths() {
 	realHome, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -111,22 +145,6 @@ func keepHomeTools() {
 	if cache != "" {
 		setIfUnset("GOCACHE", get("GOCACHE", filepath.Join(cache, "go-build")))
 	}
-	gitConfigs := []string{filepath.Join(realHome, ".gitconfig")}
-	if cfg != "" {
-		gitConfigs = append(gitConfigs, filepath.Join(cfg, "git", "config"))
-	}
-	for _, f := range gitConfigs {
-		if _, err := os.Stat(f); err == nil {
-			setIfUnset("GIT_CONFIG_GLOBAL", f) // the commit identity tests' git repositories use
-			break
-		}
-	}
-	if d := filepath.Join(realHome, ".docker"); dirExists(d) {
-		setIfUnset("DOCKER_CONFIG", d)
-	}
-	if d := filepath.Join(realHome, ".gnupg"); dirExists(d) {
-		setIfUnset("GNUPGHOME", d) // git's signing key, when its config signs commits
-	}
 }
 
 // goEnvFile is the go env file's KEY=VALUE lines (go env -w).
@@ -153,6 +171,9 @@ func setIfUnset(k, v string) {
 }
 
 func dirExists(p string) bool {
+	if p == "" {
+		return false
+	}
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
 }
@@ -162,7 +183,7 @@ func dirExists(p string) bool {
 func Run(m *testing.M) int {
 	Isolate()
 	code := m.Run()
-	if home != "" {
+	if ownHome {
 		_ = os.RemoveAll(home)
 	}
 	return code

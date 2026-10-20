@@ -35,16 +35,23 @@ every one whose tests can reach a kube config loader or a package that starts pr
 (client-go's default loading rules or `BuildConfigFromFlags`, controller-runtime's `GetConfig`,
 `rest.InClusterConfig`, envtest; resolved by import path, under every build tag set but `e2e`),
 needs a `TestMain` calling `kubetest.Main` (`test/kubetest`) in a file without build constraints,
-or `kubetest.Run` or `kubetest.Isolate` before `m.Run`. Before any test runs, the guard points
+or `kubetest.Run` or `kubetest.Isolate` as one of its own statements (not deferred, not inside an
+`if` or a helper) before any statement that uses its `*testing.M`. Before any test runs, the guard points
 `KUBECONFIG` at a path that does not exist, `$HOME` at an empty scratch directory and client-go's
 home kubeconfig (`clientcmd.RecommendedHomeFile`, computed from the real `$HOME` before any
 `TestMain`) at nothing, and unsets `KUBERNETES_SERVICE_HOST` and `USE_EXISTING_CLUSTER`, for the
 tests and every process they start. So a unit test can never reach the cluster your machine points
 at, not even one that clears `KUBECONFIG`; a test that needs a cluster gives its kubeconfig
-explicitly. Go's caches and env file, git's global config and the docker config are kept by path.
+explicitly. Go's caches and env file are kept by path. git gets a global config with a commit
+identity and nothing else (`GIT_CONFIG_GLOBAL`, and no system config) and docker an empty
+`DOCKER_CONFIG`, so no test reaches your credential helpers or registry logins; a test that needs
+either writes its own and sets the variable. A child test binary handed a home by its parent
+(`kubetest.HomeEnv`) uses it, so one that exits early leaves no scratch home behind.
 `clientcmd.RecommendedHomeFile` is refused outside the e2e builds, a loader in a package-level var
-(a function literal called there too) or `init` is refused, and so is a test that sets
-`KUBECONFIG` or `HOME` to "" or unsets them. The e2e suites (`test/e2e/live`, every file only an
+(a function literal called there too) or `init` is refused, and so is a read of the home directory
+there (`os.Getenv("HOME")`, `os.UserHomeDir`, ...), a test that sets `KUBECONFIG` or `HOME` to "" or
+unsets them, and a child process started with an environment built from scratch and no `HOME`
+(a controller-runtime child would load the login account's `~/.kube/config`). The e2e suites (`test/e2e/live`, every file only an
 `e2e` build has) talk to their own kind clusters and are not checked. A helper only
 tests call belongs in an `export_test.go` of its package. Intentional exceptions go in
 `hack/hygiene/allow.txt` with a reason.
