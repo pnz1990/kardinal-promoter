@@ -268,6 +268,7 @@ nav:
       - Error-budget gate: design/26-error-budget-gate.md
       - StepTemplate custom steps: design/27-step-templates.md
       - Analytics by actor and promotion identity: design/28-actor-analytics.md
+      - Agent index admission cost: design/29-agent-index-scale.md
 
 extra:
   social:
