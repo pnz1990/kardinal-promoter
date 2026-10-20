@@ -150,7 +150,13 @@ kubectl -n kardinal-system create secret generic receipt-key --from-file=cosign.
 `status.pendingReceipt` and `status.receiptError` fields.
 
 No promotion waits for a receipt, and no gate reads one. A receipt that cannot be signed or
-stored is retried with backoff and counted in `kardinal_receipts_failed_total{sink}`.
+stored is retried with backoff (30 seconds, doubling, at most an hour) and counted in
+`kardinal_receipts_failed_total{sink}`. When Fulcio, Rekor or the timestamp authority answers 429
+or 503 with `Retry-After`, the receipt waits the longer of that wait (at most 5 minutes) and its
+backoff, so a short `Retry-After` never makes it retry faster. Each wait gets a random part of up
+to the same length again, so the receipts of a burst do not all retry at once: a wait is between
+the backoff and twice it, at most two hours. `status.lastAttemptAt` and `status.nextRetryAt` show when the last failed attempt
+ran and when the next one runs.
 A receipt that can never be built (its statement is over the 256 KiB cap after every cut, or
 the version's Bundle or Pipeline is gone) does not hold the step either: the step is Verified
 without a PromotionReceipt, its `status.receiptError` says why, a `ReceiptFailed` AuditEvent

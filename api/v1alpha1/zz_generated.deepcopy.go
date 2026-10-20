@@ -4407,6 +4407,10 @@ func (in *PromotionReceiptStatus) DeepCopyInto(out *PromotionReceiptStatus) {
 		in, out := &in.NextRetryAt, &out.NextRetryAt
 		*out = (*in).DeepCopy()
 	}
+	if in.LastAttemptAt != nil {
+		in, out := &in.LastAttemptAt, &out.LastAttemptAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

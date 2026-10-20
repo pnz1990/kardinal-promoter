@@ -150,9 +150,15 @@ type PromotionReceiptStatus struct {
 	// +optional
 	Attempts int `json:"attempts,omitempty"`
 
-	// NextRetryAt is when a failed sign or sink is tried again.
+	// NextRetryAt is when a failed sign or sink is tried again: after the
+	// backoff, or after the Retry-After that Fulcio, Rekor or the timestamp
+	// authority answered (at most 5 minutes), with jitter.
 	// +optional
 	NextRetryAt *metav1.Time `json:"nextRetryAt,omitempty"`
+
+	// LastAttemptAt is when the last failed sign or store attempt ran.
+	// +optional
+	LastAttemptAt *metav1.Time `json:"lastAttemptAt,omitempty"`
 
 	// PRComment is true once the receipt reconciler commented on the
 	// promotion's PR, so a retry does not comment twice.

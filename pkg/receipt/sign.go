@@ -133,6 +133,9 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 		return nil, err
 	}
 	opts := sign.BundleOptions{Context: ctx}
+	// Every Fulcio, timestamp authority and Rekor request goes through rt,
+	// which records a server's Retry-After for the reconciler's retry.
+	rt := newRetryAfterTransport(s.Transport)
 	var keypair sign.Keypair
 	signedBy := v1alpha1.ReceiptSigner{Mode: s.Mode}
 	switch s.Mode {
@@ -147,7 +150,7 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 		}
 		keypair = kp
 		opts.CertificateProvider = sign.NewFulcio(&sign.FulcioOptions{
-			BaseURL: s.FulcioURL, Timeout: s.timeout(), Retries: 1, Transport: s.Transport,
+			BaseURL: s.FulcioURL, Timeout: s.timeout(), Retries: 1, Transport: rt,
 		})
 		opts.CertificateProviderOptions = &sign.CertificateProviderOptions{IDToken: strings.TrimSpace(string(token))}
 	case v1alpha1.ReceiptSigningKey:
@@ -173,13 +176,13 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 	}
 	if s.TSAURL != "" {
 		opts.TimestampAuthorities = []*sign.TimestampAuthority{sign.NewTimestampAuthority(&sign.TimestampAuthorityOptions{
-			URL: s.TSAURL, Timeout: s.timeout(), Retries: 1, Transport: s.Transport,
+			URL: s.TSAURL, Timeout: s.timeout(), Retries: 1, Transport: rt,
 		})}
 	}
 	if s.RekorURL != "" {
 		switch s.RekorVersion {
 		case 0, 1:
-			rc, err := s.rekorClient()
+			rc, err := s.rekorClient(rt)
 			if err != nil {
 				return nil, err
 			}
@@ -187,7 +190,7 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 				BaseURL: s.RekorURL, Timeout: s.timeout(), Client: rc.Entries,
 			})}
 		case 2:
-			w, err := newRekorV2Writer(s.RekorURL, s.Transport, s.timeout())
+			w, err := newRekorV2Writer(s.RekorURL, rt, s.timeout())
 			if err != nil {
 				return nil, err
 			}
@@ -200,7 +203,11 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 	}
 	pb, err := sign.Bundle(&sign.DSSEData{Data: statement, PayloadType: PayloadType}, keypair, opts)
 	if err != nil {
-		return nil, fmt.Errorf("sign receipt: %w", err)
+		err = fmt.Errorf("sign receipt: %w", err)
+		if d := rt.longest(); d > 0 {
+			return nil, &RetryAfterError{After: d, Err: err}
+		}
+		return nil, err
 	}
 	b, err := bundle.NewBundle(pb)
 	if err != nil {
@@ -225,9 +232,9 @@ func (s *Signer) Sign(ctx context.Context, statement []byte) (*Signed, error) {
 	return out, nil
 }
 
-// rekorClient is a Rekor v1 client on s.Transport (rekor's own
-// constructor builds its transport, so it cannot be egress-guarded).
-func (s *Signer) rekorClient() (*rekorclient.Rekor, error) {
+// rekorClient is a Rekor v1 client on rt, s.Transport's wrapper (rekor's
+// own constructor builds its transport, so it cannot be egress-guarded).
+func (s *Signer) rekorClient(rt http.RoundTripper) (*rekorclient.Rekor, error) {
 	u, err := url.Parse(s.RekorURL)
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("invalid Rekor URL %q", s.RekorURL)
@@ -235,7 +242,6 @@ func (s *Signer) rekorClient() (*rekorclient.Rekor, error) {
 	if u.Path == "" {
 		u.Path = rekorclient.DefaultBasePath
 	}
-	rt := s.Transport
 	if rt == nil {
 		rt = http.DefaultTransport
 	}

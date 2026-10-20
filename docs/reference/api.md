@@ -1554,7 +1554,8 @@ PromotionReceipt is the signed record of one promotion (docs/receipts.md). It ha
 | `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
-| `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a failed sign or sink is tried again. |
+| `status.lastAttemptAt` | string (date-time) |  | LastAttemptAt is when the last failed sign or store attempt ran. |
+| `status.nextRetryAt` | string (date-time) |  | NextRetryAt is when a failed sign or sink is tried again: after the backoff, or after the Retry-After that Fulcio, Rekor or the timestamp authority answered (at most 5 minutes), with jitter. |
 | `status.phase` | string |  | Phase is Pending, Signed, Stored or Failed. One of: `Pending`, `Signed`, `Stored`, `Failed`. |
 | `status.prComment` | boolean |  | PRComment is true once the receipt reconciler commented on the promotion's PR, so a retry does not comment twice. |
 | `status.signedBy` | object |  | SignedBy says who signed the receipt. |

@@ -451,8 +451,48 @@ func scaleSteps(r *Repo, o Options) []Step {
 		}
 		st.Script, st.Cleanup = script, deleteClusters(cluster)
 		steps = append(steps, st)
+		if p == "soak" {
+			steps = append(steps, receiptBurstStep(r))
+		}
 	}
 	return steps
+}
+
+// Receipt burst at full size (#2062): the soak set's one run of
+// TestReceiptsKeyless_Burst with the plan's 500 receipts against a Fulcio
+// rate-limited to 10 requests a second. The nightly receipts-keyless suite
+// runs it with 100 receipts at 1 a second; it is never a per-PR run.
+const (
+	burstFullReceipts = 500
+	burstFullRPS      = 10
+)
+
+// receiptBurstStep runs the receipts-keyless suite's burst test at full
+// size, on the suite's minor in matrix.txt.
+func receiptBurstStep(r *Repo) Step {
+	st := Step{
+		ID: "receipts-burst-full", Area: areaScale,
+		Title:    fmt.Sprintf("receipt burst, %d receipts against Fulcio at %d rps", burstFullReceipts, burstFullRPS),
+		Clusters: 1, Heavy: true, Tests: "e2e/test.json", MinTests: 1,
+	}
+	minor := ""
+	for _, l := range r.Matrix {
+		if l.Suite == "receipts-keyless" {
+			minor = l.Minor
+			break
+		}
+	}
+	if minor == "" {
+		st.Missing = "no receipts-keyless suite in hack/e2e/matrix.txt"
+		return st
+	}
+	cluster := "kp-rg-receipts-burst"
+	env := []string{fmt.Sprintf("KARDINAL_E2E_RECEIPT_BURST=%d", burstFullReceipts),
+		fmt.Sprintf("KARDINAL_E2E_RECEIPT_BURST_RPS=%d", burstFullRPS), "KARDINAL_E2E_TIMEOUT=2h"}
+	script := liveScript("receipts-keyless", cluster, minor, 1, env)
+	st.Script = strings.Replace(script, "unset RUN SHARD\n", "unset SHARD\nexport RUN='^TestReceiptsKeyless_Burst$'\n", 1)
+	st.Cleanup = deleteClusters(cluster)
+	return st
 }
 
 func unitSteps(r *Repo, o Options) []Step {

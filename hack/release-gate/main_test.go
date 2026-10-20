@@ -111,6 +111,7 @@ func TestPlan(t *testing.T) {
 	assert.True(t, full.Heavy && soak.Heavy)
 	assert.Contains(t, full.Script, "KIND_K8S=1.37")
 	assert.Contains(t, soak.Script, "export RUN='^TestScale_LoadSustained$'")
+	assert.Contains(t, ids["receipts-burst-full"].Missing, "no receipts-keyless suite", "fakeRepo has no keyless suite")
 	assert.False(t, ids["fuzz-FuzzA"].Heavy)
 	assert.True(t, byID(Plan(fakeRepo(), Options{FuzzTime: "5m", Floor: 35, Newest: 37}))["fuzz-FuzzA"].Heavy)
 	assert.Equal(t, "upgrade-v0110", upgradeSuite("v0.11.0"))
@@ -1067,4 +1068,23 @@ func TestTransient(t *testing.T) {
 	} {
 		assert.Equal(t, want, transient(errors.New(msg)), msg)
 	}
+}
+
+// TestPlanReceiptBurst (#2062): the soak set runs TestReceiptsKeyless_Burst
+// once at full size (500 receipts, Fulcio at 10 rps) on the
+// receipts-keyless suite's minor, holding the heavy-load lock; without the
+// soak profile there is no such step.
+func TestPlanReceiptBurst(t *testing.T) {
+	r := fakeRepo()
+	r.Matrix = append(r.Matrix, MatrixLine{"receipts-keyless", "1.35", "-"})
+	burst := byID(Plan(r, fakeOptions()))["receipts-burst-full"]
+	assert.Empty(t, burst.Missing)
+	assert.True(t, burst.Heavy)
+	for _, want := range []string{"export KARDINAL_E2E_RECEIPT_BURST=500", "export KARDINAL_E2E_RECEIPT_BURST_RPS=10",
+		"export RUN='^TestReceiptsKeyless_Burst$'", "KIND_K8S=1.35", "bash hack/e2e/up.sh receipts-keyless"} {
+		assert.Contains(t, burst.Script, want)
+	}
+	assert.Contains(t, burst.Cleanup, "kp-rg-receipts-burst")
+	assert.NotContains(t, byID(Plan(r, Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full"},
+		ImageBuild: "host", Floor: 35, Newest: 37})), "receipts-burst-full", "only in the soak set")
 }
