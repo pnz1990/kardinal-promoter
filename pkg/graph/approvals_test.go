@@ -58,7 +58,8 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 	}
 	require.Len(t, byName, 3)
 	assert.Equal(t, graph.NodeApprovalGates, byName["two-approvers"]["node"])
-	assert.Equal(t, graph.NodeApprovalGates, byName["one-ok"]["node"], "an expression on approvals.* reads them too")
+	assert.Equal(t, graph.NodeApprovalReadGates, byName["one-ok"]["node"],
+		"an expression on approvals.* reads them too; without a policy, in the collection that renders none (#2271)")
 	assert.Equal(t, graph.NodePolicyGates, byName["weekday"]["node"])
 
 	spec := byName["two-approvers"]["spec"].(map[string]interface{})
@@ -75,7 +76,7 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 	assert.Equal(t, []string{"bob", "alice"}, users, "prod's Approvals of this Bundle UID from allowed approvers, in name order")
 
 	counted := byName["one-ok"]["spec"].(map[string]interface{})
-	assert.Nil(t, counted["approval"], "no policy on a gate that only reads approvals.*")
+	assert.NotContains(t, counted, "approval", "no policy on a gate that only reads approvals.*: no field, not null (#2271)")
 	require.Len(t, counted["approvals"], 1, "test's Approvals")
 	assert.NotContains(t, byName["weekday"]["spec"], "approvals")
 

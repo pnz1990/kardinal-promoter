@@ -134,6 +134,43 @@ func TestBuilder_VerifyGateWithApprovals(t *testing.T) {
 	assert.Nil(t, got["approvers"]["verify"])
 	assert.Empty(t, got["explore"]["approvals"])
 	assert.Len(t, got["explore"]["verdicts"], 1)
+	assert.NotContains(t, got["explore"], "approval", "the verify gate has no policy: no field, not null (#2271)")
+	assert.NotNil(t, got["approvers"]["approval"])
+}
+
+// TestBuilder_VerifyGateWithApprovalPolicy (#2271): a verify gate with its
+// own spec.approval is in VerifyApprovalGates, which renders the policy; a
+// verify gate without one stays in VerifyGates, which renders no
+// spec.approval, whatever the other gates of the Graph have.
+func TestBuilder_VerifyGateWithApprovalPolicy(t *testing.T) {
+	p := makeLinearPipeline("app", "uat", "prod")
+	plain := verifyGateFor("prod", kardinalv1alpha1.GateVerifyPolicy{Check: "explore"})
+	both := verifyGateFor("prod", kardinalv1alpha1.GateVerifyPolicy{Check: "smoke"})
+	both.Name = "smoke-and-approve"
+	both.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1, AllowedGroups: []string{"release-managers"}}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app"),
+		PolicyGates: []kardinalv1alpha1.PolicyGate{plain, both}})
+	require.NoError(t, err)
+	assertKroValid(t, res.Graph)
+	nodes := nodeByID(res.Graph.Spec.Nodes)
+	require.Contains(t, nodes, graph.NodeVerifyGates)
+	require.Contains(t, nodes, graph.NodeVerifyApprovalGates)
+	assert.NotContains(t, nodes[graph.NodeVerifyGates].Template["spec"], "approval")
+	assert.Contains(t, nodes[graph.NodeVerifyApprovalGates].Template["spec"], "approval")
+	got := map[string]renderedObject{}
+	for _, o := range renderObjectsWith(t, res.Graph, map[string]interface{}{graph.ApprovalsNodeID: []interface{}{}}) {
+		if o.Object["kind"] == "PolicyGate" {
+			got[fmt.Sprint(objLabels(o.Object)["kardinal.io/gate-template"])] = o
+		}
+	}
+	require.Contains(t, got, "explore")
+	require.Contains(t, got, "smoke-and-approve")
+	assert.Equal(t, graph.NodeVerifyGates, got["explore"].NodeID)
+	assert.Equal(t, graph.NodeVerifyApprovalGates, got["smoke-and-approve"].NodeID)
+	assert.NotContains(t, got["explore"].Object["spec"], "approval")
+	policy := got["smoke-and-approve"].Object["spec"].(map[string]interface{})["approval"].(map[string]interface{})
+	assert.EqualValues(t, 1, policy["required"])
+	assert.NotNil(t, got["smoke-and-approve"].Object["spec"].(map[string]interface{})["verify"])
 }
 
 // TestBuilder_VerifyGateRefused: a verify gate that could never pass is a
