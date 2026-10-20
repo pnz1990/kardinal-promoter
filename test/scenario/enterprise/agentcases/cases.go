@@ -631,7 +631,7 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 	sort.Slice(full, func(i, j int) bool { return full[i] < full[j] })
 	t.Logf("admission over the index (%d KiB): p50 %s, p99 %s, max %s", fullBytes>>10, median(full),
 		full[len(full)*99/100], full[len(full)-1])
-	assertLinearAdmission(t, api, send, prs, idx, half, empty, fullBytes, halfBytes, emptyBytes, sz.Identities >= fullAgents.Identities)
+	assertLinearAdmission(t, api, send, prs, idx, half, empty, fullBytes, halfBytes, emptyBytes, isFullSize(sz))
 }
 
 // growthRounds, growthSample and growthChunks size assertLinearAdmission:
@@ -697,18 +697,20 @@ func assertLinearAdmission(t *testing.T, api *scenario.APIServer, send func(prob
 // shapeBound is the bound the median ratio is held to, and what it means.
 // At the quick size it is growthShape's: half the growth from the empty
 // index to the full one quadratic. At the full size (2,000 AgentIdentities,
-// a 407 KiB index) it is a quadratic cost's own ratio, (F+H)/(H+E), about 3,
-// until #2071: there the admission cost grows as about size^1.14 (main's
-// full-size CI runs, #2071), about 1.2 on this ratio, and a CI runner moves
-// a run's median by about 0.35 even with interleaved chunks (#2270: medians
-// 1.22, 1.27 and 1.54 of three runs, rounds from 0.77 to 1.82), so no bound
-// that means half the growth quadratic holds there without failing a
-// healthy run. The full size still fails a cost that became quadratic.
+// a 407 KiB index) it is, until #2071, three quarters of the growth
+// quadratic, about 2.2 from the run's own sizes: there the admission cost
+// grows as about size^1.14 (main's full-size CI runs, #2071), about 1.2 on
+// this ratio, and a CI runner moves a run's median by about 0.35 even with
+// interleaved chunks (#2270: medians 1.22, 1.27 and 1.54 of three runs,
+// rounds from 0.77 to 1.82), so half the growth quadratic (1.66) would fail
+// a healthy run. 2.2 is 0.66 over the highest healthy median and under the
+// 2.33 of 80% quadratic; a wholly quadratic cost's median is about 3. (A
+// bound of 3 itself, that median, would let half of its runs pass.)
 func shapeBound(halfQuadratic float64, fullSize bool, emptyBytes, halfBytes, fullBytes int) (float64, string) {
 	if !fullSize {
 		return halfQuadratic, "half the growth quadratic"
 	}
-	return float64(fullBytes+halfBytes) / float64(halfBytes+emptyBytes), "a quadratic cost, at the full size until #2071"
+	return quadraticShareRatio(0.75, emptyBytes, halfBytes, fullBytes), "three quarters of the growth quadratic, at the full size until #2071"
 }
 
 // growthRound is one round's p50 admission cost at the empty, half and full
@@ -738,8 +740,22 @@ func growthShape(rounds []growthRound, emptyBytes, halfBytes, fullBytes int) (ra
 		ratios = append(ratios, upper/lower)
 	}
 	sorted := slices.Sorted(slices.Values(ratios))
-	return sorted[len(sorted)/2], (2*f + h + e) / (f + h + 2*e), ratios
+	return sorted[len(sorted)/2], quadraticShareRatio(0.5, emptyBytes, halfBytes, fullBytes), ratios
 }
+
+// quadraticShareRatio is growthShape's ratio for a cost share of whose
+// growth from the empty index to the full one is quadratic and the rest
+// linear: (F+E)(1-share)/share + F + H over (F+E)(1-share)/share + H + E;
+// (2F+H+E)/(F+H+2E) for half, (4F+3H+E)/(F+3H+4E) for three quarters.
+func quadraticShareRatio(share float64, emptyBytes, halfBytes, fullBytes int) float64 {
+	e, h, f := float64(emptyBytes), float64(halfBytes), float64(fullBytes)
+	lin := (f + e) * (1 - share) / share
+	return (lin + f + h) / (lin + h + e)
+}
+
+// isFullSize reports whether sz is the full enterprise size, whose growth
+// check shapeBound holds to its interim bound.
+func isFullSize(sz agentSize) bool { return sz.Identities >= fullAgents.Identities }
 
 // subset keeps every k-th entry of m, by key order.
 func subset(m map[string]v1alpha1.AgentIndexEntry, k int) map[string]v1alpha1.AgentIndexEntry {
