@@ -31,6 +31,17 @@ const (
 	// instances of gates that read the Bundle's Verdicts (verify.go), with
 	// their Approvals when they read those too.
 	NodeVerifyGates = "VerifyGates"
+	// NodeApprovalReadGates and NodeVerifyOnlyGates are, in a Graph where a
+	// gate has spec.approval, the approval gates without one (they only read
+	// approvals.*) and the verify gates without one. ApprovalGates and
+	// VerifyGates then render spec.approval, and these do not: a collection
+	// renders it for all its items or for none. kro renders an optional with
+	// no value as null (unless its alpha CELOmitFunction gate is on), and the
+	// CRD refuses a null spec.approval, so such an instance in a mixed
+	// collection was never created (#2271, ledger G28). A Graph where no gate
+	// has spec.approval keeps every gate where it was.
+	NodeApprovalReadGates = "ApprovalReadGates"
+	NodeVerifyOnlyGates   = "VerifyOnlyGates"
 	// NodePRStatusData holds one entry per environment's PRStatus.
 	NodePRStatusData = "PRStatusData"
 	// NodePRStatuses creates one PRStatus per NodePRStatusData item.
@@ -39,6 +50,26 @@ const (
 	iterGate = "Gate"
 	iterPR   = "PR"
 )
+
+// RenderVersion is the version of how the builder renders a Graph from the
+// same inputs. Every Graph carries it (LabelRenderVersion), and the Bundle
+// reconciler re-translates a Promoting Bundle's Graph that carries another
+// (or none) once: a version stuck under a rendering bug picks up the fix on
+// upgrade. A Graph whose rendering did not change re-renders identically,
+// which kro applies as a no-op. Verified, failed and superseded Bundles keep
+// the Graph they were promoted with.
+//
+// Bump it with every change that renders an existing Bundle's Graph
+// differently (node IDs, templates, data), and say so in the changelog; a
+// change that leaves every existing Graph identical needs none.
+//
+//   - 2: the gate collections render spec.approval for all their items or
+//     for none (#2271). Graphs before it carry no label.
+const RenderVersion = 2
+
+// LabelRenderVersion is the label of a Graph that holds the RenderVersion it
+// was rendered with.
+const LabelRenderVersion = "kardinal.io/render-version"
 
 // gateCollections collects a Graph's PolicyGate instances as data for the
 // PolicyGates and SkipPermissionGates collections.
@@ -52,11 +83,12 @@ type gateCollections struct {
 	pipeline, bundle string
 	templates        []interface{}
 	index            map[string]int
-	// gates, skipGates, approvalGates and verifyGates hold the items of
-	// each collection node, in chunks of at most MaxCollectionItems (kro's
-	// default forEach limit).
-	gates, skipGates, approvalGates, verifyGates [][]interface{}
-	instances                                    []kardinalv1alpha1.PolicyGate
+	// gates, skipGates, approvalGates, approvalReadGates, verifyGates and
+	// verifyOnlyGates hold the items of each collection node, in chunks of
+	// at most MaxCollectionItems (kro's default forEach limit).
+	gates, skipGates, approvalGates, approvalReadGates [][]interface{}
+	verifyGates, verifyOnlyGates                       [][]interface{}
+	instances                                          []kardinalv1alpha1.PolicyGate
 	// collection is the collection node of each instance name.
 	collection map[string]string
 	what       map[string]string
@@ -69,7 +101,8 @@ type gateCollections struct {
 	// bundleUID are the Bundle's.
 	approvals, agentRuns bool
 	namespace, bundleUID string
-	// approvalPolicies is whether a template has spec.approval. kro types
+	// approvalPolicies is whether a gate of the Graph has spec.approval
+	// (set before the first add: it decides where a gate goes). kro types
 	// the templates list from its data, so spec.?approval compiles only when
 	// one of them has the field.
 	approvalPolicies bool
@@ -100,9 +133,6 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		c.templates = append(c.templates, tmpl)
 	}
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
-	if gate.Spec.Approval != nil {
-		c.approvalPolicies = true
-	}
 	var collection string
 	switch {
 	case len(skipped) > 0 && needsApprovals(gate):
@@ -118,7 +148,13 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		// A verify gate that reads approvals too copies them (every item of
 		// the collection says whether it does, so the field is always there).
 		item["readsApprovals"] = needsApprovals(gate)
-		collection = appendChunked(&c.verifyGates, item, NodeVerifyGates)
+		if c.approvalPolicies && gate.Spec.Approval == nil {
+			collection = appendChunked(&c.verifyOnlyGates, item, NodeVerifyOnlyGates)
+		} else {
+			collection = appendChunked(&c.verifyGates, item, NodeVerifyGates)
+		}
+	case needsApprovals(gate) && c.approvalPolicies && gate.Spec.Approval == nil:
+		collection = appendChunked(&c.approvalReadGates, item, NodeApprovalReadGates)
 	case needsApprovals(gate):
 		collection = appendChunked(&c.approvalGates, item, NodeApprovalGates)
 	default:
@@ -279,8 +315,14 @@ func (c *gateCollections) collectionIDs() []string {
 	for i := range c.approvalGates {
 		ids = append(ids, chunkID(NodeApprovalGates, i))
 	}
+	for i := range c.approvalReadGates {
+		ids = append(ids, chunkID(NodeApprovalReadGates, i))
+	}
 	for i := range c.verifyGates {
 		ids = append(ids, chunkID(NodeVerifyGates, i))
+	}
+	for i := range c.verifyOnlyGates {
+		ids = append(ids, chunkID(NodeVerifyOnlyGates, i))
 	}
 	return ids
 }
@@ -306,12 +348,22 @@ func (c *gateCollections) nodes() []GraphNode {
 	for i, items := range c.approvalGates {
 		field := chunkID("approvalGates", i)
 		data[field] = items
-		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalGates, i), field))
+		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalGates, i), field, c.approvalPolicies))
+	}
+	for i, items := range c.approvalReadGates {
+		field := chunkID("approvalReadGates", i)
+		data[field] = items
+		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalReadGates, i), field, false))
 	}
 	for i, items := range c.verifyGates {
 		field := chunkID("verifyGates", i)
 		data[field] = items
-		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyGates, i), field))
+		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyGates, i), field, c.approvalPolicies))
+	}
+	for i, items := range c.verifyOnlyGates {
+		field := chunkID("verifyOnlyGates", i)
+		data[field] = items
+		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyOnlyGates, i), field, false))
 	}
 	return append([]GraphNode{{ID: NodePolicyGateData, Def: data}}, out...)
 }
@@ -408,9 +460,9 @@ func approvalPolicyFromData(p map[string]interface{}) *kardinalv1alpha1.GateAppr
 // read is present in every template entry (approvalPolicyData always sets the
 // four policy fields; when is read optionally), so the collection never goes
 // data-pending (K3, G11).
-func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
+func (c *gateCollections) approvalCollectionNode(id, field string, policy bool) GraphNode {
 	n := c.collectionNode(id, field, false)
-	spec := c.liveSpec()
+	spec := c.liveSpec(policy)
 	spec["approvals"] = approvalsOfItem(c.approvalPolicies)
 	n.Template["spec"] = spec
 	return n
@@ -421,9 +473,9 @@ func (c *gateCollections) approvalCollectionNode(id, field string) GraphNode {
 // live list of the Bundle's Verdicts for its check, read from the
 // VerdictsNodeID selector ref (verdictsOfItem), and the Approvals for the
 // items that read them.
-func (c *gateCollections) verifyCollectionNode(id, field string) GraphNode {
+func (c *gateCollections) verifyCollectionNode(id, field string, policy bool) GraphNode {
 	n := c.collectionNode(id, field, false)
-	spec := c.liveSpec()
+	spec := c.liveSpec(policy)
 	if c.approvals {
 		inner := strings.TrimSuffix(strings.TrimPrefix(approvalsOfItem(c.approvalPolicies), "${"), "}")
 		spec["approvals"] = "${" + iterGate + ".readsApprovals ? (" + inner + ") : []}"
@@ -434,10 +486,11 @@ func (c *gateCollections) verifyCollectionNode(id, field string) GraphNode {
 	return n
 }
 
-// liveSpec is the template-copied part of a live gate instance's spec. A
-// gate that only reads approvals.* in its expression has no policy: a
-// missing optional renders as null, which leaves the field unset.
-func (c *gateCollections) liveSpec() map[string]interface{} {
+// liveSpec is the template-copied part of a live gate instance's spec, with
+// spec.approval when policy: the collection's items all have one. kro
+// renders an optional with no value as null, which the CRD refuses, so a
+// collection of items without a policy must not render the field (#2271).
+func (c *gateCollections) liveSpec(policy bool) map[string]interface{} {
 	tmpl := func(f string) string {
 		return fmt.Sprintf("${%s.templates[%s.t].spec.%s}", NodePolicyGateData, iterGate, f)
 	}
@@ -447,7 +500,7 @@ func (c *gateCollections) liveSpec() map[string]interface{} {
 		"recheckInterval": tmpl("recheckInterval"),
 		"generated":       true,
 	}
-	if c.approvalPolicies {
+	if policy {
 		spec["approval"] = fmt.Sprintf("${%s.templates[%s.t].spec.?approval}", NodePolicyGateData, iterGate)
 	}
 	return spec

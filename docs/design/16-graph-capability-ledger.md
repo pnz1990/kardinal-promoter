@@ -1226,6 +1226,39 @@ field a schema (`schemaHints` on the node, used by the type checker so a bad pat
 compile), or (b) treat "no such key" on an object whose node is ready (its `readyWhen` true) as a
 hard error with a condition naming the path, instead of data pending.
 
+## G28: An optional field with no value renders as null, not as an omitted field
+**Need.** A collection's template copies a field from its item's template entry only for the
+items that have it: `spec.approval` of a gate instance, for the verify gates and the approval
+gates in one collection with and without a policy. #2271 (found by the agent-evidence journey,
+#2062) showed the need.
+**kro today** (read at v0.10.0-rc.0):
+- **`x.?f` with no value is null:** a template field whose expression is an optional with no
+  value converts to `nil` (`pkg/cel/conversion/conversions.go`, `case types.OptionalType`), so
+  the applied object carries `f: null`. It becomes an omitted field only with the alpha
+  `CELOmitFunction` feature gate (off by default; `hack/install-kro.sh` turns on `GraphKind`
+  only).
+- **The API server refuses it** when the CRD's field is not nullable: "spec.approval in body
+  must be of type object: null". The create fails on every reconcile, so the instance never
+  exists and whatever waits on it waits for ever.
+- **Whole-object copies are not affected:** `spec: ${data.templates[i.t].spec}` copies a map,
+  and a key the entry lacks stays absent.
+**Minimal Graph that shows it.** A collection over two items whose data entries differ in one
+key, templating `f: ${data.entries[item.t].?f}` into a CRD field that is not nullable: the
+item whose entry lacks `f` is refused.
+**kardinal workaround.** A collection renders an optional field for all its items or for none.
+In a Graph where a gate has `spec.approval`, `ApprovalGates` and `VerifyGates` render it and hold
+only gates with one; the approval and verify gates without one go to `ApprovalReadGates` and
+`VerifyOnlyGates`, which render none (`pkg/graph/gates.go`). A Graph where no gate has one keeps
+every gate where it was, so a working Graph's nodes do not change. The
+package's test renderer renders an optional with no value as null as kro does, and every test
+that renders a Graph checks no PolicyGate has a null `spec.approval` (`assertNoNullApproval`).
+A version already stuck when the fix ships recovers on upgrade: the fix bumps
+`graph.RenderVersion` (2), which every Graph carries as its `kardinal.io/render-version` label, and
+the Bundle reconciler re-translates a Promoting Bundle's Graph whose label differs once.
+**Smallest change, no upstream work yet.** Nothing upstream is needed: omitting the field is
+what `CELOmitFunction` is for. Requiring that alpha gate of every kardinal install is not worth
+it while splitting the collections works.
+
 ---
 
 ## Notes: constraints we design around
@@ -1348,6 +1381,13 @@ Cadence):
    G9 and G10: the per-object call count and the inventory entry size.
 5. Re-read the entries above for anything the new tag closes, and the hazards in the upstream
    survey (`graphcleanup` depends on the finalizer name and the `status.managedResources` shape).
+6. **Render version.** If the upgrade, or any change to `pkg/graph`, renders an existing
+   Bundle's Graph differently (node IDs, templates, data), bump `graph.RenderVersion` and say so
+   in the changelog fragment. Every Graph carries it as its `kardinal.io/render-version` label,
+   and the new controller re-translates every Promoting Bundle's Graph whose label differs once;
+   without the bump a version stuck under the old rendering stays stuck (#2271, G28). Verified,
+   failed and superseded Bundles keep their Graphs. A change that leaves every existing Graph
+   identical needs no bump.
 
 ---
 
@@ -1390,6 +1430,7 @@ blocks above.
 | G23 path glob in Graph CEL | A `Path()` library with `path.glob` and cost estimators | Yes, small; kardinal offers the PR |
 | G25 optional ref | `ref.optional: true` publishes `null` for a missing object or unserved kind | Not now: no kardinal feature needs it (the error-budget gate reads Prometheus) |
 | G26 missing key in an untyped field | Schema hints for preserve-unknown fields, or "no such key" on a ready node as a hard error | Yes, once custom steps ship: it turns a silent wait into an error |
+| G28 optional with no value renders null | `CELOmitFunction` (alpha) omits the field | No: kardinal keeps each collection uniform |
 
 ### Hazards found
 

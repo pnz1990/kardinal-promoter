@@ -43,6 +43,23 @@ func renderObjects(t *testing.T, g *graph.Graph) []renderedObject {
 	return renderObjectsWith(t, g, nil)
 }
 
+// assertNoNullApproval: a rendered PolicyGate never has a null
+// spec.approval. kro renders an optional with no value as null (its alpha
+// CELOmitFunction gate is off), and the CRD refuses it, so such an instance
+// is never created (#2271). The renderer here renders it null too, so every
+// test that renders a Graph checks it.
+func assertNoNullApproval(t *testing.T, node string, obj map[string]interface{}) {
+	t.Helper()
+	if obj["kind"] != "PolicyGate" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]interface{})
+	if v, ok := spec["approval"]; ok {
+		require.NotNil(t, v, "node %s renders PolicyGate %v with spec.approval null, which the API server refuses (#2271)",
+			node, obj["metadata"].(map[string]interface{})["name"])
+	}
+}
+
 // renderObjectsWith is renderObjects with the values of ref nodes (by node
 // ID) in scope, as kro reads them from the cluster.
 func renderObjectsWith(t *testing.T, g *graph.Graph, refs map[string]interface{}) []renderedObject {
@@ -98,6 +115,7 @@ func renderObjectsWith(t *testing.T, g *graph.Graph, refs map[string]interface{}
 				vars[iter] = item
 				obj, ok := renderValue(t, n.Template, vars).(map[string]interface{})
 				require.True(t, ok)
+				assertNoNullApproval(t, n.ID, obj)
 				out = append(out, renderedObject{NodeID: n.ID, Object: obj})
 			}
 		}
