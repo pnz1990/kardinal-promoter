@@ -53,7 +53,7 @@ Admin and debug:
   mcp            Serve kardinal to an AI agent over MCP (stdio)
   metrics        Show promotion metrics (DORA-style) for a pipeline
   refresh        Force re-reconciliation of a Pipeline
-  validate       Validate Pipeline and PolicyGate YAML before applying to the cluster
+  validate       Validate kardinal YAML before applying to the cluster
   verify-receipt Verify a signed promotion receipt: its signature, subject, environment and levels
 
 Flags:
