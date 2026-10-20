@@ -1221,14 +1221,14 @@ func TestReleaseDryRun(t *testing.T) {
 
 // TestReleaseUpgradeSuiteForPreviousRelease: hack/release-gate gives NO-GO
 // ("upgrade from vX | MISSING") when hack/e2e/matrix.txt has no
-// upgrade-v<X> suite for the previous release. The previous release is the
-// newest final release in docs/changelog.md older than Chart.yaml's version,
-// as the gate's newest tag merged into the commit is. Its suite runs on the
-// oldest and the newest KIND_NODE_1_* minors, hack/e2e/up.sh runs its
-// TestUpgradeV<X>_ test, which exists, and it installs that release
-// (components/kardinal-v<X>.sh, and the V<X>_ pins of hack/e2e/versions.env
-// name it). Every upgrade suite runs once (run.sh and all.sh COUNT=1): its
-// test upgrades its cluster.
+// upgrade-v<X> suite for the previous release: the gate's, the newest final
+// tag merged into the commit and not on it, where the tags are fetched, else
+// the newest final release in docs/changelog.md older than Chart.yaml's
+// version. Its suite runs on the oldest and the newest KIND_NODE_1_*
+// minors, hack/e2e/up.sh runs its TestUpgradeV<X>_ test, which exists, and
+// it installs that release (components/kardinal-v<X>.sh, and the V<X>_ pins
+// of hack/e2e/versions.env name it). Every upgrade suite runs once (run.sh
+// and all.sh COUNT=1): its test upgrades its cluster.
 func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 	root := repoRoot(t)
 	parse := func(v string) [3]int {
@@ -1257,17 +1257,35 @@ func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 	current := parse(string(cv[1]))
 	changelog, err := os.ReadFile(filepath.Join(root, "docs", "changelog.md"))
 	require.NoError(t, err)
-	prev := ""
-	for _, m := range regexp.MustCompile(`(?m)^## \[v(\d+\.\d+\.\d+)\]`).FindAllSubmatch(changelog, -1) {
-		v := string(m[1])
-		if less(parse(v), current) && (prev == "" || less(parse(prev), parse(v))) {
-			prev = v
+	// Where the tags are fetched, the gate's own previous release: the
+	// newest final vX.Y.Z tag merged into HEAD that does not point at HEAD
+	// (hack/release-gate previousRelease). Between a patch release's tag and
+	// its successor's pins the changelog and the chart still name the tagged
+	// release, which the commits after the tag upgrade from.
+	prev, from := "", "git tags"
+	cmd := exec.Command("git", "tag", "--merged", "HEAD", "--no-contains", "HEAD", "--list", "v*", "--sort=-v:refname")
+	cmd.Dir = root
+	if out, err := cmd.Output(); err == nil {
+		for _, tag := range strings.Fields(string(out)) {
+			if regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(tag) {
+				prev = strings.TrimPrefix(tag, "v")
+				break
+			}
 		}
 	}
-	require.NotEmpty(t, prev, "docs/changelog.md has a release older than the chart's %s", cv[1])
+	if prev == "" {
+		from = "docs/changelog.md"
+		for _, m := range regexp.MustCompile(`(?m)^## \[v(\d+\.\d+\.\d+)\]`).FindAllSubmatch(changelog, -1) {
+			v := string(m[1])
+			if less(parse(v), current) && (prev == "" || less(parse(prev), parse(v))) {
+				prev = v
+			}
+		}
+	}
+	require.NotEmpty(t, prev, "no release before this commit in git tags or in docs/changelog.md (chart %s)", cv[1])
 	digits := strings.ReplaceAll(prev, ".", "")
 	suite := "upgrade-v" + digits
-	t.Logf("chart %s, previous release v%s: suite %s", cv[1], prev, suite)
+	t.Logf("chart %s, previous release v%s (%s): suite %s", cv[1], prev, from, suite)
 
 	tv := toolVersions(t)
 	newest := 0
@@ -1319,6 +1337,9 @@ func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 	assert.True(t, strings.HasSuffix(pins["CONTROLLER_IMAGE"], ":v"+prev), "versions.env V%s_CONTROLLER_IMAGE is v%s's: %q", digits, prev, pins["CONTROLLER_IMAGE"])
 	assert.Contains(t, pins["CLI_URL"], "/releases/download/v"+prev+"/", "versions.env V%s_CLI_URL is v%s's", digits, prev)
 	assert.Regexp(t, sha256Hex, pins["CLI_SHA256"], "versions.env V%s_CLI_SHA256", digits)
+	if d, ok := pins["CONTROLLER_DIGEST"]; ok {
+		assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, d, "versions.env V%s_CONTROLLER_DIGEST is the released image's index digest", digits)
+	}
 	assert.NotEmpty(t, pins["KRO_VERSION"], "versions.env V%s_KRO_VERSION", digits)
 
 	// Every upgrade suite runs once.
