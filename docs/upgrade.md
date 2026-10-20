@@ -68,7 +68,8 @@ targets the same kro as v0.12.1, so kro is not upgraded. The upgrade suite runs 
 written (`TestUpgradeV0121_Estate`, on the oldest and newest supported Kubernetes minors) while
 versions are in flight, with the same checks as the upgrade from v0.12.0: versions in flight,
 the gates that hold them, approvals, Verdicts, a running AgentRun, freezes and a rollback all
-carry over and finish.
+carry over and finish. An automatic rollback v0.12.1 started (`onHealthFailure: rollback`) is
+the same rollback after the upgrade: the new controller does not start another one.
 
 **1. Read the upgrade notes.** The [changelog](changelog.md)'s v0.12.2 section lists its
 security fix: kardinal adopts an existing automatic rollback only when the controller created it,
