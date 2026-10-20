@@ -210,10 +210,14 @@ var profiles = map[string]Profile{
 func init() {
 	// nightly is ci with TestScale_TenantFairnessManyRepos' backlog deep
 	// enough to judge B's steps against A's (#2257): twice ci's
-	// repositories. On a GitHub runner, with the fair queue B's slowest
-	// step took 0.62 of A's median step there, and 1.2 to 1.38 without it.
-	// It adds about 90 to 130 s to the scale suite, so PRs keep ci and the
-	// scheduled e2e-live run takes nightly.
+	// repositories. On a GitHub runner (3 runs each), with the fair queue
+	// B's slowest step took 0.56 to 0.63 of A's median step there; without
+	// it (controller-runtime's default queue) 1.24 to 1.38, and every B
+	// Bundle's slowest step 1.14 or more: the ratio bound, 0.9, is between.
+	// B's step p99 took 15 to 24 s with the fair queue and 46 to 54 s
+	// without, so TenantReposStepP99 is 35 s. It adds about 45 to 150 s to
+	// the scale suite (ManyRepos 262-327 s against 177-219 s), so PRs keep
+	// ci and the scheduled e2e-live run takes nightly.
 	nightly := profiles["ci"]
 	nightly.TenantRepos, nightly.TenantBacklogRatio, nightly.TenantReposStepP99 = 60, 0.9, 35*time.Second
 	profiles["nightly"] = nightly

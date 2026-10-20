@@ -28,11 +28,12 @@ import (
 //   - without the fair queue (controller-runtime's default queue), B's steps
 //     wait their turn behind A's backlog like A's own. With
 //     TestScale_TenantFairnessManyRepos at 60 repositories on a GitHub
-//     runner, B's slowest step took 1.2 to 1.38 times A's median step
-//     without it, and 0.62 with it. At ci's 30 repositories the two overlap
-//     (up to 1.0 with the fair queue, 1.26 without), so the ci profile does
-//     not judge it (Profile.TenantBacklogRatio) and its absolute
-//     TenantStepP99 is what fails the default queue there.
+//     runner, B's slowest step took 1.24 to 1.38 times A's median step
+//     without it, and 0.56 to 0.63 with it. At ci's 30 repositories the two
+//     overlap (up to 1.0 with the fair queue, 1.22 to 1.26 without), so the
+//     ci profile does not judge it (Profile.TenantBacklogRatio) and its
+//     absolute TenantStepP99 is what fails the default queue there, by 2 to
+//     4 s: the nightly profile is the dependable check.
 // On a host where A's load builds no backlog (A's steps run about as fast
 // as B's alone, as on 32 cores at ci's sizes), there is no queue to be
 // unfair in, and only starvation is judged. Every verdict lists the checks
