@@ -39,10 +39,12 @@ esac
 `
 
 // docker knows the fake clusters' nodes: ps lists them, inspect finds them.
-// FAKE_DOCKER_DOWN makes docker info fail, FAKE_DOCKER_ERR every inspect.
+// FAKE_DOCKER_DOWN makes docker info fail, FAKE_DOCKER_ERR every inspect,
+// FAKE_DOCKER_HANG every call hang.
 // Its tools are the system's (command -p): a run's failing tools are not
 // docker's.
 const localLiveDocker = `#!/usr/bin/env bash
+[ -z "${FAKE_DOCKER_HANG:-}" ] || exec sleep 1000 # a daemon that does not answer
 f=$FAKE/clusters; command -p touch "$f"
 case "$1" in
   info) [ -z "${FAKE_DOCKER_DOWN:-}" ] ;;
@@ -1185,6 +1187,28 @@ exec `+realCat+` "$@"
 		letGo()
 		waitLive(t, cmd, out)
 		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "it runs once the flock is let go")
+	})
+	t.Run("a docker that does not answer is asked DOCKER_WAIT at most: the kept slot stays, no cluster starts (#2282 QA)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		d := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), []byte("KEEP kept-x, kept by someone\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "cluster"), []byte("kardinal-e2e-kept-x\n"), 0o644))
+		cmd := h.cmd(t, []string{"FAKE_DOCKER_HANG=1", "LOCAL_LIVE_TEST_DOCKER_WAIT=1"}, "gitea")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() })
+		if !assert.Eventually(t, func() bool {
+			return strings.Contains(out.String(), "docker does not answer; kept cluster slot "+d) &&
+				strings.Contains(out.String(), "docker ps failed: the kind nodes running cannot be counted")
+		}, 15*time.Second, 50*time.Millisecond, "a hung docker is not answering, never a silent block") {
+			t.Fatalf("%s", out.String())
+		}
+		assert.DirExists(t, d, "the kept cluster's slot stays")
+		assert.Empty(t, h.read("up"), "no cluster starts")
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own

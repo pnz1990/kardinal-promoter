@@ -91,6 +91,21 @@ func TestFairLock_ReleaseJumpsTheQueue(t *testing.T) {
 	assert.Equal(t, []string{"release", "normal-1", "normal-2"}, got)
 }
 
+// TestFairLock_HeadCheckedAgainUnderTheFlock (#2282 QA): a release ticket
+// that comes between a waiter's head check and its turn goes first: the
+// turn checks the head again under the flock. The gap is widened to 30ms,
+// which made the stale head take the lock every time without the check.
+func TestFairLock_HeadCheckedAgainUnderTheFlock(t *testing.T) {
+	afterHeadCheck = func() { time.Sleep(30 * time.Millisecond) }
+	defer func() { afterHeadCheck = nil }()
+	for i := 0; i < 3; i++ {
+		dir := filepath.Join(t.TempDir(), "LOADLOCK")
+		got := order(t, dir, lockAs(dir, "holder", classNormal),
+			lockAs(dir, "normal-1", classNormal), lockAs(dir, "normal-2", classNormal), lockAs(dir, "release", classRelease))
+		assert.Equal(t, []string{"release", "normal-1", "normal-2"}, got, "round %d", i)
+	}
+}
+
 // deadPid is the pid of a process that has exited.
 func deadPid(t *testing.T) int {
 	t.Helper()

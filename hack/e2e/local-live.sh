@@ -468,8 +468,10 @@ slot_ticket='' slot_ticket_text=''
 FLOCK_WAIT=60
 [ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_FLOCK_WAIT:-} =~ ^[0-9]+$ ]] || FLOCK_WAIT=$LOCAL_LIVE_TEST_FLOCK_WAIT
 # Docker answers within DOCKER_WAIT seconds, or counts as not answering: it
-# is asked under these flocks.
+# is asked under these flocks. LOCAL_LIVE_TEST_DOCKER_WAIT sets it, in the
+# test mode.
 DOCKER_WAIT=10
+[ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_DOCKER_WAIT:-} =~ ^[0-9]+$ ]] || DOCKER_WAIT=$LOCAL_LIVE_TEST_DOCKER_WAIT
 with_flock() {
   local name=$1 fd rc
   shift

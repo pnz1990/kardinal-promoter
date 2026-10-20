@@ -284,6 +284,9 @@ func (f *fairLock) acquire(ctx context.Context) error {
 		_ = os.Chtimes(ticket, now, now)
 		reapTickets(f.proc, q, f.log, f.warned, name)
 		first := firstTicket(q)
+		if afterHeadCheck != nil {
+			afterHeadCheck()
+		}
 		if first == name {
 			// The flock only when a take may succeed: a waiter stopped
 			// while it waits seldom holds it.
@@ -488,8 +491,15 @@ func startFlock(path string) (*flockAttempt, error) {
 }
 
 // flockHandoff is how long a flock granted to a pending attempt waits for
-// its waiter to take it before it is given back.
+// its waiter to take it before it is given back: other waiters may wait that
+// long for it (the rare case of an attempt that timed out, then was granted
+// while its waiter slept between polls), the price of not leaking one
+// attempt per retry.
 const flockHandoff = 5 * time.Second
+
+// afterHeadCheck, nil but in tests, runs between a waiter's head check
+// outside the flock and its turn (a test widens the gap).
+var afterHeadCheck func()
 
 // flockWait is how long a waiter waits for the reclaim flock (tests set it).
 var flockWait = time.Minute
@@ -539,6 +549,11 @@ func (f *fairLock) mayTake() bool {
 // reports whether it holds the lock now.
 func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
 	err = f.fl.with(q, func() error {
+		// Still the head? A release ticket (or an aged one) that came since
+		// the check outside the flock goes first (#2282 QA).
+		if firstTicket(q) != name {
+			return nil
+		}
 		f.reclaim()
 		held, exclusive := holders(f.lock)
 		load := hostLoad()

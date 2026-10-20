@@ -457,6 +457,10 @@ reclaim_turn() {
 
 take_turn() {
   local d n
+  # Still the head? A release ticket (or an aged one) that came since the
+  # check outside the flock goes first (#2282 QA).
+  first_ticket
+  [ "$first" = "$ticket" ] || return 1
   reclaim_turn
   count_holders
   capacity
@@ -551,6 +555,9 @@ while :; do
   fi
   reap_tickets
   first_ticket
+  # LOADLOCK_TEST_AFTER_HEAD (tests only, with LOADLOCK_TEST=1) widens the
+  # gap between the head check and the turn, seconds.
+  if [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "${LOADLOCK_TEST_AFTER_HEAD:-}" ]; then sleep "$LOADLOCK_TEST_AFTER_HEAD"; fi
   if [ "$first" = "$ticket" ]; then
     ! may_take || ! head_turn || break
   elif reclaim_due; then

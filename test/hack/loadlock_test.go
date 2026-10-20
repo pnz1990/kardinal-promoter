@@ -119,6 +119,12 @@ func tickets(lock string) int {
 // starts; it then frees the lock and returns the order they ran in.
 func served(t *testing.T, lock string, waiters ...[]string) []string {
 	t.Helper()
+	return servedWith(t, lock, nil, waiters...)
+}
+
+// servedWith is served, each waiter with env too.
+func servedWith(t *testing.T, lock string, env []string, waiters ...[]string) []string {
+	t.Helper()
 	token := releaseToken(t, lock)
 	require.NoError(t, os.Mkdir(lock, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
@@ -128,8 +134,8 @@ func served(t *testing.T, lock string, waiters ...[]string) []string {
 		args := append(append([]string{filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", w[0], "-r", "0.05"},
 			w[1:]...), "--", "bash", "-c", `echo "$0" >> "$1"; sleep 0.1`, w[0], ran)
 		cmd := exec.Command("bash", args...)
-		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99", // a busy host: one holder at a time
-			"RELEASE_GATE_PRIORITY_TOKEN="+token)
+		cmd.Env = append(append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99", // a busy host: one holder at a time
+			"RELEASE_GATE_PRIORITY_TOKEN="+token), env...)
 		require.NoError(t, cmd.Start())
 		cmds = append(cmds, cmd)
 		require.Eventually(t, func() bool { return tickets(lock) == i+1 }, 10*time.Second, 10*time.Millisecond, "%s queued", w[0])
@@ -184,6 +190,13 @@ func TestLoadLock_Fair(t *testing.T) {
 		assert.Contains(t, string(out), "removed "+lock+" of a holder that is gone")
 		assert.Contains(t, string(out), "test pid:", "it took the lock")
 		assert.NoFileExists(t, ghost)
+	})
+	t.Run("a release ticket that comes between a waiter's head check and its turn goes first (#2282 QA)", func(t *testing.T) {
+		// The gap widened to 0.3s: the turn checks the head again under the
+		// flock, or the stale head takes the lock.
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		assert.Equal(t, []string{"gate", "w1", "w2"},
+			servedWith(t, lock, []string{"LOADLOCK_TEST_AFTER_HEAD=0.3"}, []string{"w1"}, []string{"w2"}, []string{"gate", "-p", "release"}))
 	})
 	t.Run("-p release needs the coordinator's token (#2282 QA)", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
