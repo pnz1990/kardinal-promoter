@@ -276,8 +276,8 @@ var kroLevel = regexp.MustCompile(`^\S+\t([A-Z]+)\t`)
 // whole log: kro logs its start at info and little after it, so none means
 // another format, which the check cannot read. errs are the lines at error
 // level or above written from since on, but the benign ones
-// (invariants.Benign).
-func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, errs []string) {
+// (invariants.Benign) and the ones expected (expected, counted in allowed).
+func kroErrors(t *testing.T, e *framework.Env, since time.Time, expected func(at time.Time, line string) bool) (leveled, allowed int, errs []string) {
 	t.Helper()
 	ctx := context.Background()
 	var pods corev1.PodList
@@ -308,12 +308,22 @@ func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, er
 						continue line
 					}
 				}
+				if expected != nil && expected(at, text) {
+					allowed++
+					continue
+				}
 				errs = append(errs, p.Name+"/"+c.Name+": "+text)
 			}
 		}
 	}
-	return leveled, errs
+	return leveled, allowed, errs
 }
+
+// u012HealthRefForbidden matches kro failing to read a v0.12 health ref node
+// ("health" + the environment, upper first) because the new chart deleted
+// the reader ClusterRole: docs/upgrade.md's "Between the chart upgrade and
+// that start, kro cannot read those nodes" (#1283).
+var u012HealthRefForbidden = regexp.MustCompile(`apply \\"health[A-Z][A-Za-z0-9]*\\" \(ref\): get external ref .* is forbidden`)
 
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
 // released (its chart, CLI and kro) and follows "Upgrading from v0.12.0" in
@@ -762,6 +772,8 @@ func u012Upgrade(t *testing.T, from u012From) {
 			return len(left) == 0, strings.Join(left, ", ")
 		})
 	}
+	refsGone := time.Now()
+	t.Logf("the health ref nodes and reader RoleBindings were gone %s after the upgrade started", refsGone.Sub(upgradeStart).Round(time.Second))
 
 	// Right after the upgrade: every in-flight version is the same Bundle
 	// with the same Graph, steps and PRs, and every gate instance, Approval,
@@ -1021,10 +1033,15 @@ func u012Upgrade(t *testing.T, from u012From) {
 		SeedTag: scale.SeedTag, Start: testStart, AllowEmpty: false, Logs: logs,
 		Skip: map[string]string{"env-content": "the rollbacks restore older versions on purpose; their content is checked above"}})
 	logs.Stop()
-	leveled, kroErrs := kroErrors(t, e, upgradeStart)
-	t.Logf("kro: %d log lines with a level", leveled)
+	// The one error the guide expects (#1283): kro cannot read a health ref
+	// node between the chart upgrade and the new controller's removal of
+	// those nodes. Only that read, and only before the nodes were gone.
+	leveled, allowed, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
+		return at.Before(refsGone) && u012HealthRefForbidden.MatchString(line)
+	})
+	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283)", leveled, allowed)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")
-	assert.Empty(t, kroErrs, "kro logged no error from the upgrade on")
+	assert.Empty(t, kroErrs, "kro logged no other error from the upgrade on")
 	assert.Equal(t, kroBefore, kroPods(t, e), "kro's Pods did not restart")
 }
 
