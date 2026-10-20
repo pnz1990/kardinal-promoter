@@ -63,16 +63,22 @@ done
 [ $# -gt 0 ] && [ -n "$lock" ] || usage
 
 proc=/proc
-boot_id() { cat "$proc/sys/kernel/random/boot_id" 2>/dev/null; }
-# start_of PID prints the start time of PID (stat field 22, counted after the
-# command's last ')'), or fails when PID does not run.
-start_of() {
+# The judging of records below forks nothing (builtins and redirections
+# only): on a busy host a fork can fail, and a failed $(cat ...) must never
+# make a live holder look gone (#2242 stress at load 300). This boot's id is
+# read once.
+this_boot=
+{ read -r this_boot <"$proc/sys/kernel/random/boot_id"; } 2>/dev/null || this_boot=
+# read_start PID sets start_v to PID's start time (stat field 22, counted
+# after the command's last ')'), or fails when PID does not run.
+read_start() {
   local stat rest f
-  stat=$(cat "$proc/$1/stat" 2>/dev/null) || return 1
+  start_v=
+  { IFS= read -r stat <"$proc/$1/stat"; } 2>/dev/null || return 1
   rest=${stat##*)}
   read -ra f <<<"$rest"
   [ -n "${f[19]:-}" ] || return 1
-  echo "${f[19]}"
+  start_v=${f[19]}
 }
 # record_dead RECORD [EPOCH] succeeds when RECORD names a process that is
 # gone; EPOCH is the record's time when the text has none (a ticket's).
@@ -80,10 +86,11 @@ record_dead() {
   local r=$1 at=${2:-} pid start btime hz
   [[ $r =~ (^|[[:space:]])pid\ ([0-9]+)([[:space:]]|$) ]] || return 1
   pid=${BASH_REMATCH[2]}
-  if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ "${BASH_REMATCH[2]}" != "$(boot_id)" ]; then
+  if [[ $r =~ (^|[[:space:]])boot=([^[:space:]]+) ]] && [ -n "$this_boot" ] && [ "${BASH_REMATCH[2]}" != "$this_boot" ]; then
     return 0
   fi
-  start=$(start_of "$pid") || return 0
+  read_start "$pid" || return 0
+  start=$start_v
   # A holder that could not read its own start time: boot id and pid only.
   [[ $r =~ (^|[[:space:]])start=unknown([[:space:]]|$) ]] && return 1
   if [[ $r =~ (^|[[:space:]])start=([0-9]+) ]]; then
@@ -102,8 +109,8 @@ record_dead() {
 
 # Never start=0: a holder whose start time is unknown says so, and the others
 # judge it by its boot id and pid only.
-self_start=$(start_of $$) || self_start=unknown
-tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$(boot_id) start=$self_start"
+read_start $$ && self_start=$start_v || self_start=unknown
+tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$this_boot start=$self_start"
 # -x: hold the lock alone (a heavy live suite): this run takes a slot only when
 # none is held, and while its record (exclusive=1) holds one no one takes the
 # other.

@@ -150,6 +150,7 @@ func TestRecordDead(t *testing.T) {
 	p := fakeProc{boot: "b-now", booted: booted, starts: map[int]uint64{
 		42: 1000,           // started 10s after boot
 		43: 100 * 3600 * 2, // started 2h after boot
+		45: 0,              // runs; its start time cannot be read now
 	}}
 	for _, tc := range []struct {
 		name, record string
@@ -166,11 +167,19 @@ func TestRecordDead(t *testing.T) {
 		{"no pid: never dead", "a person, by hand", time.Time{}, false},
 		{"start unknown: boot id and pid only", "x pid 42 2026-10-19T00:00:10Z boot=b-now start=unknown", time.Time{}, false},
 		{"start unknown, another boot", "x pid 42 2026-10-19T00:00:10Z boot=b-old start=unknown", time.Time{}, true},
+		// #2242: a read that fails on a busy host never makes a live holder
+		// look gone.
+		{"its start time cannot be read now", "x pid 45 2026-10-19T00:00:10Z boot=b-now start=1000", time.Time{}, false},
+		{"an older client's, its start time cannot be read now", "x pid 45 2026-10-19T00:00:10Z", time.Time{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.dead, recordDead(p, tc.record, tc.at))
 		})
 	}
+	noBoot := p
+	noBoot.boot = ""
+	assert.False(t, recordDead(noBoot, "x pid 42 2026-10-19T00:00:10Z boot=b-old start=1000", time.Time{}),
+		"this boot's id cannot be read: no record is judged another boot's")
 	start, ok := statStart("1234 (a (weird) name) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 777 19 20")
 	require.True(t, ok)
 	assert.Equal(t, uint64(777), start, "field 22, counted after the command's last ')'")

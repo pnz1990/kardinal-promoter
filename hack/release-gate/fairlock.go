@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -75,9 +76,14 @@ const orphanAge = time.Minute
 
 // procFS reads what the dead-record checks need from /proc (tests fake it).
 type procFS interface {
+	// BootID is this boot's id, or "" when it cannot be read (then no
+	// record is judged another boot's).
 	BootID() string
 	// Start is pid's start time in clock ticks since boot (stat field 22);
-	// ok is false when pid does not run.
+	// ok is false when pid does not run. ticks is 0 when pid runs but its
+	// start time cannot be read now (it is judged by boot id and pid only,
+	// as start=unknown is): a failed read on a busy host must never make a
+	// live holder look gone (#2242).
 	Start(pid int) (ticks uint64, ok bool)
 	// BootTime is when this boot started (/proc/stat btime).
 	BootTime() time.Time
@@ -86,17 +92,26 @@ type procFS interface {
 // hostProc is the real /proc.
 type hostProc struct{}
 
-func (hostProc) BootID() string {
+var hostBootID = sync.OnceValue(func() string {
 	b, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	return strings.TrimSpace(string(b))
-}
+})
+
+func (hostProc) BootID() string { return hostBootID() }
 
 func (hostProc) Start(pid int) (uint64, bool) {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH):
 		return 0, false
+	case err != nil:
+		return 0, true // runs, as far as this read can tell
 	}
-	return statStart(string(b))
+	start, ok := statStart(string(b))
+	if !ok {
+		return 0, true
+	}
+	return start, true
 }
 
 func (hostProc) BootTime() time.Time {
@@ -141,7 +156,7 @@ var (
 // start=unknown, and the others judge its records by boot id and pid only.
 func selfRecord(p procFS) string {
 	start, ok := p.Start(os.Getpid())
-	if !ok {
+	if !ok || start == 0 {
 		return fmt.Sprintf("boot=%s start=unknown", p.BootID())
 	}
 	return fmt.Sprintf("boot=%s start=%d", p.BootID(), start)
@@ -163,12 +178,17 @@ func recordDead(p procFS, record string, at time.Time) bool {
 	for _, kv := range recordKey.FindAllStringSubmatch(record, -1) {
 		keys[kv[1]] = kv[2]
 	}
-	if b, ok := keys["boot"]; ok && b != p.BootID() {
-		return true
+	if b, ok := keys["boot"]; ok {
+		if cur := p.BootID(); cur != "" && b != cur {
+			return true
+		}
 	}
 	start, running := p.Start(pid)
 	if !running {
 		return true
+	}
+	if start == 0 {
+		return false // runs; its start time cannot be read now
 	}
 	if s, ok := keys["start"]; ok {
 		if s == "unknown" {
