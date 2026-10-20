@@ -172,7 +172,9 @@ jq -c '{run: .metadata.name, ns: .metadata.namespace, agent: .status.agent, spon
 The version's receipt names the same agent and sponsor in its signed statement (`kardinal
 verify-receipt` prints `verdicts by: agent <agent> for <sponsor>`), and so do the gate
 instance's `spec.verdicts[].actor` and the VerdictRecorded AuditEvent. An AgentRun the cluster no
-longer holds is left out, and the command warns how many Verdicts name one.
+longer holds is left out, and the command warns how many Verdicts name one. An AgentRun deleted and
+created again after its Verdict was recorded has an empty `status.agent` and `status.sponsor` (#2345):
+the receipt, the gate instance and the AuditEvent still name its agent.
 
 `manifest.json`'s `coverage` says what the pack cannot hold:
 
