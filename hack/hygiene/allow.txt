@@ -12,7 +12,7 @@ deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificat
 deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate.EvaluateForTest  # test/e2e/journeys_test.go evaluates gate expressions with it
 deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate.OverrideKey  # cmd/kardinal-controller tests check status.overrides keys with it
 deadcode github.com/kardinal-promoter/kardinal-promoter/pkg/scm.IsSSHTransport  # pkg/renderjob tests check the ssh transport stays installed
-deadcode github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale.KnownBug  # live tests call it while they reproduce an open bug (test/e2e/README.md)
+deadcode github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale.KnownBug  # the documented hook for reproducing an open bug (test/e2e/README.md); no test calls it while none is reproduced
 
 file docs/assets/fonts/Archivo-OFL.txt  # the font's license, shipped with it
 file docs/assets/fonts/AtkinsonHyperlegibleMono-OFL.txt  # the font's license, shipped with it
