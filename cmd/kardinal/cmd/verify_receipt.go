@@ -35,6 +35,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tuffetch"
 )
 
 // verifyReceiptOptions are the flags of kardinal verify-receipt.
@@ -295,6 +296,7 @@ func trustedRoot(path string) (sigroot.TrustedMaterial, error) {
 		return tr, nil
 	}
 	opts := sigtuf.DefaultOptions().WithDisableLocalCache()
+	opts.Fetcher = &tuffetch.Fetcher{} // a 404 ends a download; every download is bounded (#2218)
 	tr, err := sigroot.FetchTrustedRootWithOptions(opts)
 	if err != nil {
 		return nil, fmt.Errorf("fetch the public-good trusted root (or give --trusted-root): %w", err)
