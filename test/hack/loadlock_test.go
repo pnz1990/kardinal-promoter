@@ -1185,7 +1185,8 @@ func TestLoadLock_QueueNeverWedges(t *testing.T) {
 	})
 	t.Run("a stray ticket naming pid 1 is removed once stale", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
-		p := ticketAt(t, lock, 0, time.Unix(0, 1), 1, "stray\n", 0o644)
+		// Queued a minute ago: pid 1 started before it, so only its age says it is stale.
+		p := ticketAt(t, lock, 0, time.Now().Add(-time.Minute), 1, "stray\n", 0o644)
 		old := time.Now().Add(-time.Hour)
 		require.NoError(t, os.Chtimes(p, old, old))
 		w := start(t, lock, "LOADLOCK_TEST_STALE=600")
