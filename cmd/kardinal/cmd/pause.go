@@ -41,16 +41,20 @@ and the targets in flight finish. Resume with kardinal resume (--env <fleet>).`,
   kardinal pause my-app --env prod      # prod is a fleet: stop starting targets
   kardinal resume my-app --env prod`,
 		Annotations: map[string]string{ReferenceAnnotation: pauseReference},
-		Args:        cobra.ExactArgs(1),
+		Args:        pipelineArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, err := pipelineOf(args)
+			if err != nil {
+				return fmt.Errorf("pause: %w", err)
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("pause: %w", err)
 			}
 			if env != "" {
-				return fleetPauseFn(cmd.OutOrStdout(), c, ns, args[0], env, true, reason)
+				return fleetPauseFn(cmd.OutOrStdout(), c, ns, pipeline, env, true, reason)
 			}
-			return pauseFn(cmd.OutOrStdout(), c, ns, args[0], reason)
+			return pauseFn(cmd.OutOrStdout(), c, ns, pipeline, reason)
 		},
 	}
 	cmd.Flags().StringVar(&env, "env", "", "pause only this fleet environment: no further target starts")
@@ -112,16 +116,20 @@ promotions start again. With --env <fleet>, resume a fleet paused with
 kardinal pause --env <fleet>.`,
 		Example: `  kardinal resume my-app
   kardinal resume my-app --env prod`,
-		Args: cobra.ExactArgs(1),
+		Args: pipelineArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			pipeline, err := pipelineOf(args)
+			if err != nil {
+				return fmt.Errorf("resume: %w", err)
+			}
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("resume: %w", err)
 			}
 			if env != "" {
-				return fleetPauseFn(cmd.OutOrStdout(), c, ns, args[0], env, false, reason)
+				return fleetPauseFn(cmd.OutOrStdout(), c, ns, pipeline, env, false, reason)
 			}
-			return resumeFn(cmd.OutOrStdout(), c, ns, args[0], reason)
+			return resumeFn(cmd.OutOrStdout(), c, ns, pipeline, reason)
 		},
 	}
 	cmd.Flags().StringVar(&env, "env", "", "resume only this fleet environment")

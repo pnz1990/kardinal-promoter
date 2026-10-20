@@ -858,7 +858,9 @@ func TestRollback_OnHealthFailureForgedRollbackIgnored(t *testing.T) {
 // controller's own, finished automatic rollback of an earlier failure,
 // whose kardinal.io/rollback-from someone with Bundle patch relinked to the
 // release failing now, is not taken for that release's rollback: the step
-// creates the release's own, under its own name.
+// creates the release's own, under its own name. Since #2225 the relink
+// itself is refused by the chart's admission, and the rollback records b2 in
+// its immutable spec.provenance.rollbackFrom.
 //
 // Covers RB-AUTO-FORGED-11.
 func TestRollback_OnHealthFailureRelinkedRollbackIgnored(t *testing.T) {
@@ -882,7 +884,13 @@ func TestRollback_OnHealthFailureRelinkedRollbackIgnored(t *testing.T) {
 	rb := getBundle(t, e, a.ns, earlier)
 	orig := rb.DeepCopy()
 	rb.Annotations[lifecycle.AnnotationRollbackFrom] = b3 // the relink
-	require.NoError(t, e.Client.Patch(ctx, rb, client.MergeFrom(orig)))
+	// Since #2225 the chart's bundle-creator policy refuses it on a Bundle
+	// the controller created; the rollback stays bound to b2 either way, by
+	// its name and its spec.provenance.rollbackFrom.
+	err := e.Client.Patch(ctx, rb, client.MergeFrom(orig))
+	require.Error(t, err, "the relink is refused")
+	assert.Contains(t, err.Error(), "cannot be added, changed or removed on a Bundle the controller created")
+	assert.Equal(t, b2, getBundle(t, e, a.ns, earlier).Spec.Provenance.RollbackFrom)
 
 	ps := e.WaitStepState(t, a.ns, pipelineName, b3, "test", "RollingBack", promoteTimeout)
 	own := lifecycle.AutoRollbackName(b3, lifecycle.RollbackSourceAlarm)

@@ -524,6 +524,16 @@ type PromotionStepStatus struct {
 	// +optional
 	Receipt string `json:"receipt,omitempty"`
 
+	// FreezeExemptions are the freezes the step went on through under an
+	// exemption (kardinal override --freeze), as it recorded them with its
+	// FreezeExempted condition; the step's receipt records them. A step with
+	// the condition and none recorded (it was let through by v0.12, which
+	// did not record them) has a receipt that says they are unknown and
+	// still claims KARDINAL_FREEZE_EXEMPTED.
+	// +optional
+	// +kubebuilder:validation:MaxItems=8
+	FreezeExemptions []StepFreezeExemption `json:"freezeExemptions,omitempty"`
+
 	// ReceiptError says why the step has no PromotionReceipt: its receipt
 	// could not be built at Verified, and never will be (the statement is
 	// over the size cap after every cut, or the Bundle or Pipeline is gone).
@@ -582,4 +592,25 @@ type StepFreeze struct {
 	// Since is when the freeze started (the ChangeWindow's spec.start).
 	// +optional
 	Since *metav1.Time `json:"since,omitempty"`
+}
+
+// ConditionFreezeExempted is the PromotionStep condition (True) of a step
+// that went on through a freeze under an exemption.
+const ConditionFreezeExempted = "FreezeExempted"
+
+// StepFreezeExemption is a freeze a step went on through under an
+// exemption.
+type StepFreezeExemption struct {
+	// Freeze is the freezing ChangeWindow.
+	// +kubebuilder:validation:MaxLength=253
+	Freeze string `json:"freeze"`
+	// Actors is whom the freeze holds: agents or everyone.
+	// +kubebuilder:validation:MaxLength=16
+	Actors string `json:"actors"`
+	// Exemption is the spec.freeze.exemptions entry that let the step
+	// through: who made it, why, and its actor stamp.
+	Exemption FreezeExemption `json:"exemption"`
+	// Until is when the exemption stops counting: its expiresAt, or earlier
+	// with the controller's cap.
+	Until metav1.Time `json:"until"`
 }

@@ -32,7 +32,6 @@ import (
 	"github.com/rs/zerolog"
 	sigroot "github.com/sigstore/sigstore-go/pkg/root"
 	sigtuf "github.com/sigstore/sigstore-go/pkg/tuf"
-	tuffetcher "github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -87,6 +86,7 @@ import (
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/tracing"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/tuffetch"
 
 	// Embed the IANA timezone database. The runtime image has no tzdata, and
 	// ChangeWindow spec.schedule.timezone ("America/Los_Angeles") needs it:
@@ -1129,12 +1129,16 @@ func main() {
 		InstanceSigners: splitCSV(scmInstanceSigners),
 		PublicGoodRoot: ivrecon.PublicGoodRoot(func() (sigroot.TrustedMaterial, error) {
 			// In memory: the controller's root file system is read-only.
-			// Every TUF request is time-bounded and egress-guarded.
+			// Every TUF request is time-bounded and egress-guarded, a 404
+			// ends a download at once, and the whole fetch is bounded
+			// (pkg/tuffetch, #2218).
+			ctx, cancel := context.WithTimeout(context.Background(), ivrecon.PublicGoodFetchDeadline)
+			defer cancel()
 			opts := sigtuf.DefaultOptions().WithDisableLocalCache()
-			opts.Fetcher = tuffetcher.NewDefaultFetcher().NewFetcherWithHTTPClient(&http.Client{
+			opts.Fetcher = &tuffetch.Fetcher{Context: ctx, Client: &http.Client{
 				Timeout:   ivrecon.PublicGoodFetchTimeout,
 				Transport: egress.NewTransport(http.ProxyFromEnvironment),
-			})
+			}}
 			return sigroot.FetchTrustedRootWithOptions(opts)
 		}),
 	}).SetupWithManager(mgr); err != nil {

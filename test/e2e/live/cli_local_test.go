@@ -192,6 +192,81 @@ func TestCLI_Version(t *testing.T) {
 	assert.NotContains(t, r.Stderr, skew, "the controller in kardinal-system is %s", controllerVersion(t, e))
 }
 
+// TestCLI_RepoDefaults (#1759): in a repository with .kardinal.yaml
+// (pipeline and namespace), kardinal pause, resume and history need neither:
+// the file names them, KARDINAL_PIPELINE wins over the file, and one
+// argument that is an environment of the default pipeline is that
+// environment. Without any default the error names the argument, the
+// variable and the file, and a file that names a context is refused. Each
+// default used is said on stderr with its source.
+// Covers CLI-DEFAULTS-02.
+func TestCLI_RepoDefaults(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	cli := e.CLI(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	p := barePipeline(t, e, ns, "web")
+	waitPipelineValid(t, e, ns, p.Name)
+	repo := func(content string) string {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+		if content != "" {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".kardinal.yaml"), []byte(content), 0o600))
+		}
+		sub := filepath.Join(dir, "deploy", "k8s")
+		require.NoError(t, os.MkdirAll(sub, 0o755))
+		return sub
+	}
+	paused := func() bool {
+		var got v1alpha1.Pipeline
+		require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: "web"}, &got))
+		return got.Spec.Paused
+	}
+
+	// The file, found from a subdirectory: pipeline and namespace.
+	dir := repo("pipeline: web\nnamespace: " + ns + "\n")
+	file := filepath.Join(filepath.Dir(filepath.Dir(dir)), ".kardinal.yaml")
+	r := cli.Exec(framework.CLIOptions{Dir: dir}, "--context", e.Context, "pause", "--reason", "e2e")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stdout, "Pipeline web paused.")
+	// Each default is said on stderr, with where it came from (QA on #2179).
+	assert.Contains(t, r.Stderr, "using pipeline web (from "+file+")\n")
+	assert.Contains(t, r.Stderr, "using namespace "+ns+" (from "+file+")\n")
+	assert.NotContains(t, r.Stdout, "using ")
+	assert.True(t, paused())
+
+	// KARDINAL_PIPELINE over the file: a pipeline that does not exist.
+	r = cli.Exec(framework.CLIOptions{Dir: dir, Env: []string{"KARDINAL_PIPELINE=nope"}}, "--context", e.Context, "resume")
+	assert.NotEqual(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "nope")
+	assert.True(t, paused(), "the file's pipeline is untouched")
+	// KARDINAL_PIPELINE and KARDINAL_NAMESPACE, no file.
+	r = cli.Exec(framework.CLIOptions{Dir: repo(""), Env: []string{"KARDINAL_PIPELINE=web", "KARDINAL_NAMESPACE=" + ns}},
+		"--context", e.Context, "resume")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stderr, "using pipeline web (from KARDINAL_PIPELINE)\nusing namespace "+ns+" (from KARDINAL_NAMESPACE)\n")
+	assert.False(t, paused())
+
+	// One argument that is an environment of the default pipeline.
+	want := cli.Must(ns, "history", "web", "test")
+	r = cli.Exec(framework.CLIOptions{Dir: dir}, "--context", e.Context, "history", "test")
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Equal(t, want, r.Stdout)
+
+	// No default at all; a file that names a context.
+	r = cli.Exec(framework.CLIOptions{Dir: repo("")}, "--context", e.Context, "-n", ns, "history")
+	assert.Equal(t, 1, r.Code)
+	assert.Contains(t, r.Stderr, `a pipeline name is required: give it as an argument (history <pipeline>), `+
+		`set KARDINAL_PIPELINE, or write "pipeline: <name>" in .kardinal.yaml at the repository's root`)
+	r = cli.Exec(framework.CLIOptions{Dir: repo("pipeline: web\ncontext: prod\n")}, "--context", e.Context, "-n", ns, "history")
+	assert.Equal(t, 1, r.Code)
+	assert.Contains(t, r.Stderr, "a repository file never picks a cluster")
+	// The pipeline as the one argument, and -n, go without that file.
+	r = cli.Exec(framework.CLIOptions{Dir: repo("pipeline: web\ncontext: prod\n")}, "--context", e.Context, "-n", ns, "history", "web")
+	require.Equal(t, 0, r.Code, r.Output())
+}
+
 // TestCLI_GlobalFlags checks how the global flags pick the cluster and the
 // namespace. By default the CLI uses $KUBECONFIG's current context and that
 // context's namespace; --context picks another context, -n and --namespace
@@ -357,8 +432,8 @@ func readFile(t *testing.T, path string) string {
 // and helm skips the Kustomize scaffold. A URL that is not https:// is asked
 // again; end of input without one fails. Before its git Secret exists the
 // applied Pipeline is Ready=False/GitCredentialMissing with the command that
-// creates it.
-// Covers CLI-INIT-01, PIPE-GITCRED-01.
+// creates it. An http:// URL needs --insecure-http, which warns.
+// Covers CLI-INIT-01, CLI-INIT-03, PIPE-GITCRED-01.
 func TestCLI_Init(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -472,6 +547,24 @@ func TestCLI_Init(t *testing.T) {
 	assert.Contains(t, r.Stderr, `kardinal init asks its questions on a terminal, and its input ended at "Git repository URL" (a git repository URL is required (https://host/owner/repo or git@host:owner/repo.git))`)
 	assert.Contains(t, r.Stderr, "give the answers as flags: kardinal init --name my-app --repo https://github.com/myorg/gitops")
 	assert.Empty(t, r.Stdout)
+
+	// http:// (#1949): refused without --insecure-http, with a message
+	// naming it; with the flag, written as given, a warning on stderr, and
+	// the API server takes the Pipeline.
+	httpRepo := "http://forgejo-http.forgejo.svc:3000/o/r"
+	r = init(t.TempDir(), "", "--name", "web-http", "--repo", httpRepo, "--stdout")
+	assert.Equal(t, 1, r.Code)
+	assert.Contains(t, r.Stderr, `init: --repo "`+httpRepo+`" is http://, which sends the git token in clear text; `+
+		"use https:// or ssh, or pass --insecure-http for a git server without TLS (a local or in-cluster Forgejo or Gitea)\n")
+	assert.Empty(t, r.Stdout)
+	httpDir := t.TempDir()
+	r = init(httpDir, "", "-n", ns, "--name", "web-http", "--repo", httpRepo, "--insecure-http")
+	require.Equal(t, 0, r.Code, r.Stderr)
+	assert.Equal(t, "warning: --repo is http://: the controller sends the git token to it in clear text; "+
+		"use it only for a git server on a network you trust\n", r.Stderr)
+	assert.Contains(t, readFile(t, filepath.Join(httpDir, "pipeline.yaml")), "    url: "+httpRepo+"\n")
+	out, err = cli.Kubectl(httpDir, "apply", "--dry-run=server", "-f", "pipeline.yaml")
+	require.NoError(t, err, out)
 
 	// Flags, against the cluster (C6): no questions; the Argo CD Application
 	// <name>-<env> is found for the health check; the git Secret is created

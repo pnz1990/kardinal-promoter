@@ -55,7 +55,7 @@ func rollbackDetail(b *v1alpha1.Bundle) (env, detail string) {
 	default:
 		detail = "is a rollback"
 	}
-	if from := b.Annotations[lifecycle.AnnotationRollbackFrom]; from != "" {
+	if from := lifecycle.RollbackFromOf(b); from != "" {
 		detail += fmt.Sprintf(" (rolling back %s)", from)
 	}
 	return env, detail

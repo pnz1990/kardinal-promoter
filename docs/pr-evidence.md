@@ -402,8 +402,23 @@ What the retry does:
   PR would carry kardinal's evidence without kardinal's change, and its merge would count as the
   environment's approval. Before every PR it opens, kardinal checks that the branch's head is, or
   contains, its commit.
+- **Someone pushed onto kardinal's branch before kardinal pushes it again** (the controller
+  restarted after its push, or the step re-pushes): kardinal force-pushes its PR branch only when
+  the branch does not exist or its head is one of the commits this promotion pushed. It reads the
+  head first and pushes with a lease on it, so a commit pushed in between is not overwritten
+  either. Otherwise it pushes nothing. A push is recorded before it is made, so a controller that
+  dies right after one finds it again. A head that is not one of those commits but holds exactly
+  what kardinal is about to push (its commit has the same tree and the same parents, as when a
+  deleted PromotionStep's own push is found by the step created again) is pushed over:
+  kardinal records it in `status.outputs.adoptedSHAs` (not with its own pushes, since someone
+  else may have made it) and force-pushes with a lease on it. To compare, kardinal fetches the
+  head's commit object alone (partial clone, `filter=tree:0`, where the git server supports it)
+  and never keeps its files; without partial clone it reads at most 64 MiB of the head and refuses
+  a larger one. Any other content, another parent (the base branch moved since), or a head too
+  large to compare is refused: delete the branch (`git push origin :refs/heads/<branch>`) and the
+  step pushes again.
 
-In both cases the step fails against its normal retry budget, about 4.5 minutes, and then is
+In each case the step fails against its normal retry budget, about 4.5 minutes, and then is
 Failed. Each try is a `PRBranchForeignCommit` Warning Event. The step's message names the head
 and kardinal's commit, and the head is kept in `status.outputs.prForeignHead`. The way to go on
 is to reset the branch to kardinal's commit (`git push --force origin

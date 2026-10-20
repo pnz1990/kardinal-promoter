@@ -45,7 +45,7 @@ func newHistoryCmd() *cobra.Command {
 the PR, how long it took, and when it started.`,
 		Example: `  kardinal history my-app
   kardinal history my-app prod --limit 5`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, envFlag)
 			if err != nil {

@@ -100,6 +100,12 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	if res, stop, err := beforePush(ctx, state, !force); stop {
 		return res, err
 	}
+	// kardinal's PR branch is force-pushed only over its own commits: read
+	// its head first, and push with a lease on it (#2095).
+	lease, leased, res, err := prBranchLease(ctx, state, branch, force)
+	if err != nil {
+		return res, err
+	}
 	// The commit about to be pushed to the PR branch joins the step's push
 	// history before the push: a controller that dies after the push and
 	// before the step's next status write still has it, and a PR a reviewer
@@ -116,7 +122,15 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 			}
 		}
 	}
-	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
+	if leased {
+		err = state.GitClient.(scm.LeasedPusher).PushLeased(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), lease)
+		if errors.Is(err, scm.ErrLeaseBroken) {
+			// Someone pushed between the read and the push.
+			return foreignPush(ctx, state, branch)
+		}
+	} else {
+		err = state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
+	}
 	rebases := 0
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
 		var restart string
@@ -173,6 +187,122 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	}, nil
 }
 
+// prBranchLease reads the head of kardinal's PR branch before a force-push
+// (force), when the git client can read it and push with a lease. leased
+// says the push is to be made with PushLeased on lease (the head read, ""
+// for an absent branch). A head that is not one of the step's own pushes
+// (PushedSHAs) is someone else's commit: nothing is pushed over it, and the
+// step fails with ForeignPRHeadError against its retry budget (#2095).
+func prBranchLease(ctx context.Context, state *parentsteps.StepState, branch string,
+	force bool) (lease string, leased bool, res parentsteps.StepResult, err error) {
+	if !force {
+		return "", false, res, nil
+	}
+	hr, readable := state.GitClient.(scm.BranchHeadReader)
+	_, leases := state.GitClient.(scm.LeasedPusher)
+	if !readable || !leases {
+		return "", false, res, nil
+	}
+	head, err := hr.RemoteBranchHead(ctx, state.Git.URL, branch, state.Git.Auth())
+	if err != nil {
+		return "", false, parentsteps.StepResult{Status: parentsteps.StepFailed,
+			Message: fmt.Sprintf("read the head of kardinal's branch %s before the push: %v", branch, err)}, fmt.Errorf("read the head of %s: %w", branch, err)
+	}
+	if head != "" && !OwnPush(state.Outputs, head) {
+		adopted, res, err := adoptSameContent(ctx, state, branch, head)
+		if err != nil || !adopted {
+			if err == nil {
+				res, err = foreignHead(state, branch, head)
+			}
+			return "", false, res, err
+		}
+	}
+	return head, true, res, nil
+}
+
+// adoptSameContent adopts head, a commit of kardinal's PR branch the step
+// did not push, when it has the tree and the parents of the commit about
+// to be pushed (scm.HeadContentComparer): the branch already holds exactly
+// what kardinal would push, as when a deleted PromotionStep's own push is
+// found by the step kro created again (STEP-DELETE-PR-04), so pushing over
+// it loses nothing. head is recorded as adopted (OutputAdoptedSHAs, not the
+// push history: it is not kardinal's provenance) before anything else, and
+// the push is then leased on it. Without a
+// comparer or a recorder nothing is adopted (#2095).
+func adoptSameContent(ctx context.Context, state *parentsteps.StepState, branch, head string) (bool, parentsteps.StepResult, error) {
+	cmp, ok := state.GitClient.(scm.HeadContentComparer)
+	if !ok || state.RecordPushed == nil {
+		return false, parentsteps.StepResult{}, nil
+	}
+	same, err := cmp.SameContentAsHead(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), head)
+	if err != nil {
+		return false, parentsteps.StepResult{Status: parentsteps.StepFailed,
+			Message: fmt.Sprintf("read the head %s of kardinal's branch %s: %v", head, branch, err)}, fmt.Errorf("read the head of %s: %w", branch, err)
+	}
+	if !same {
+		return false, parentsteps.StepResult{}, nil
+	}
+	adopted := strings.Join(appendPushed(splitSHAs(state.Outputs[OutputAdoptedSHAs]), head), ",")
+	if err := state.RecordPushed(ctx, map[string]string{OutputAdoptedSHAs: adopted}); err != nil {
+		return false, parentsteps.StepResult{Status: parentsteps.StepFailed,
+			Message: fmt.Sprintf("recording the head %s of %s, which holds this promotion's change, failed: %v", head, branch, err)}, err
+	}
+	if state.Outputs == nil {
+		state.Outputs = map[string]string{}
+	}
+	state.Outputs[OutputAdoptedSHAs] = adopted
+	return true, parentsteps.StepResult{}, nil
+}
+
+// OutputAdoptedSHAs (status.outputs.adoptedSHAs) lists, oldest first, the
+// last maxPushedSHAs heads of the step's PR branch that git-push found with
+// the content it was about to push and pushed over (adoptSameContent,
+// #2095). They are not provenance: someone else may have made them, so
+// nothing that trusts pushedSHAs (an adopted merged PR, a signed commit's
+// record, #2114) reads them.
+const OutputAdoptedSHAs = "adoptedSHAs"
+
+// splitSHAs is a comma-separated list of commits.
+func splitSHAs(list string) []string {
+	var out []string
+	for _, sha := range strings.Split(list, ",") {
+		if sha != "" {
+			out = append(out, sha)
+		}
+	}
+	return out
+}
+
+// OwnPush reports whether commit sha is one the step pushed (PushedSHAs):
+// kardinal's PR branch at sha carries no one else's commit. git-push and the
+// PR branch's rebuild (refreshPRBranch) both check it (#2095).
+func OwnPush(outputs map[string]string, sha string) bool {
+	return slices.ContainsFunc(PushedSHAs(outputs), func(p string) bool { return scm.SameCommit(p, sha) })
+}
+
+// foreignPush is the result of a leased push the remote refused: the
+// branch's head moved since it was read. The head is read again for the
+// error.
+func foreignPush(ctx context.Context, state *parentsteps.StepState, branch string) (parentsteps.StepResult, error) {
+	head, err := state.GitClient.(scm.BranchHeadReader).RemoteBranchHead(ctx, state.Git.URL, branch, state.Git.Auth())
+	if err != nil || head == "" {
+		head = "(moved during the push)"
+	}
+	return foreignHead(state, branch, head)
+}
+
+// foreignHead is the failed step of a push that found someone else's commit
+// at the head of kardinal's PR branch.
+func foreignHead(state *parentsteps.StepState, branch, head string) (parentsteps.StepResult, error) {
+	pushed := PushedSHAs(state.Outputs)
+	last := ""
+	if len(pushed) > 0 {
+		last = pushed[len(pushed)-1]
+	}
+	ferr := &parentsteps.ForeignPRHeadError{Branch: branch, Head: head, Pushed: last, Push: true}
+	return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: ferr.Error()}, ferr
+}
+
 // beforePush runs state.BeforePush. stop is true when the push must not be
 // made: a stale promotion fails the step permanently, any other error is
 // returned for a retry.
@@ -206,12 +336,7 @@ const maxPushedSHAs = 8
 // pushedSHAs history, and pushedSHA (a step from before the history, or
 // its latest push).
 func PushedSHAs(outputs map[string]string) []string {
-	var out []string
-	for _, sha := range strings.Split(outputs[OutputPushedSHAs], ",") {
-		if sha != "" {
-			out = append(out, sha)
-		}
-	}
+	out := splitSHAs(outputs[OutputPushedSHAs])
 	if sha := outputs[OutputPushedSHA]; sha != "" && !slices.Contains(out, sha) {
 		out = append(out, sha)
 	}

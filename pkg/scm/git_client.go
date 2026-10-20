@@ -54,6 +54,22 @@ var ErrAlreadyCommitted = fmt.Errorf("%w: HEAD is this promotion's commit from a
 // the push would not be a fast-forward (another writer pushed first).
 var ErrNonFastForward = errors.New("non-fast-forward: remote branch has new commits")
 
+// ErrLeaseBroken is a PushLeased refused because the remote branch is not
+// at the commit leased (absent, for an empty lease): someone pushed to it.
+var ErrLeaseBroken = errors.New("the remote branch is not at the commit leased")
+
+// LeasedPusher is implemented by git clients that can force-push only while
+// the remote branch is still where the caller read it (git push
+// --force-with-lease): git-push pushes kardinal's PR branch so, and never
+// over a commit pushed after its read (#2095).
+type LeasedPusher interface {
+	// PushLeased pushes HEAD of dir to branch on remote when the branch's
+	// head is expect, forcing it, or, with expect "", when it does not
+	// exist (or is an ancestor of HEAD). Otherwise it returns
+	// ErrLeaseBroken and pushes nothing.
+	PushLeased(ctx context.Context, dir, remote, branch string, auth GitAuth, expect string) error
+}
+
 // GoGitClient implements GitClient using the go-git library.
 // All git operations run in-process — no git binary is required in the controller container.
 type GoGitClient struct{}
@@ -334,6 +350,31 @@ func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, a
 // commits that HEAD does not contain. force=true overwrites the remote branch;
 // callers use it only for branches kardinal owns (kardinal/...).
 func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch string, auth GitAuth, force bool) (err error) {
+	return c.push(ctx, dir, remote, branch, auth, force, "")
+}
+
+// PushLeased implements LeasedPusher: a force-push that requires the remote
+// branch to be at expect in the push's own reference advertisement, and
+// whose update the server applies only from that old value; with expect ""
+// a push without force, which never overwrites a commit.
+func (c *GoGitClient) PushLeased(ctx context.Context, dir, remote, branch string, auth GitAuth, expect string) error {
+	if expect == "" {
+		err := c.push(ctx, dir, remote, branch, auth, false, "")
+		if errors.Is(err, ErrNonFastForward) {
+			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrLeaseBroken)
+		}
+		return err
+	}
+	err := c.push(ctx, dir, remote, branch, auth, true, expect)
+	if errors.Is(err, ErrNonFastForward) {
+		return fmt.Errorf("git push %s %s: %w", remote, branch, ErrLeaseBroken)
+	}
+	return err
+}
+
+// push is Push, and with lease (a commit) a force-push that requires the
+// remote branch to be at lease.
+func (c *GoGitClient) push(ctx context.Context, dir, remote, branch string, auth GitAuth, force bool, lease string) (err error) {
 	ctx, span := tracing.Start(ctx, "git push", attribute.String("server.address", tracing.HostOf(remote)),
 		attribute.String("kardinal.git.branch", branch), attribute.Bool("kardinal.git.force", force))
 	defer func() { tracing.End(span, err) }()
@@ -391,10 +432,18 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch string, auth
 		Auth:         am,
 		ProxyOptions: proxyOpts,
 	}
+	if lease != "" {
+		// Checked against this push's own advertisement, which the server
+		// then updates from (its old value), so a push in between fails.
+		pushOpts.RequireRemoteRefs = []config.RefSpec{config.RefSpec(lease + ":" + target.String())}
+	}
 
 	if err := repo.PushContext(ctx, pushOpts); err != nil {
 		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 			return nil
+		}
+		if lease != "" && strings.Contains(err.Error(), "required to be") {
+			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrLeaseBroken)
 		}
 		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || isConcurrentUpdate(err.Error()) {
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)

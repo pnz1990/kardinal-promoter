@@ -93,23 +93,20 @@ func (f *ForgejoProvider) OpenPR(ctx context.Context, repo, title, body, head, b
 		fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner, name), payload, &result); err != nil {
 		// Forgejo/Gitea returns 409 when a PR already exists for the same head/base.
 		if isForgejoExistingPRErr(err) {
-			return f.adoptRefused(ctx, repo, head, base, err)
+			return f.refusedExisting(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open PR %s: %w", repo, err)
 	}
 	return result.HTMLURL, result.Number, nil
 }
 
-// isForgejoExistingPRErr returns true when Forgejo rejected the PR creation
-// because one already exists.
+// isForgejoExistingPRErr reports whether Forgejo or Gitea refused the PR
+// creation as a duplicate: a 409 whose body says "pull request already
+// exists for these targets". Any other 409, or a "409" in the request path
+// (a repository named app409), keeps its own reason (#2079).
 func isForgejoExistingPRErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "409") ||
-		strings.Contains(msg, "already exists") ||
-		strings.Contains(msg, "pull request already exists")
+	apiErr, ok := statusIs(err, http.StatusConflict)
+	return ok && strings.Contains(apiErr.Body, "pull request already exists for these targets")
 }
 
 // splitRepo splits "owner/repo" into owner and repo name.

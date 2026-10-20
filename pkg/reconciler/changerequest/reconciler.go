@@ -107,6 +107,7 @@ const (
 	ReasonCreating      = "Creating"
 	ReasonRead          = "Read"
 	ReasonError         = "ProviderError"
+	ReasonIgnoredFilter = "ProviderIgnoredFilter"
 )
 
 // The AuditEvent actions of a ChangeRequest (spec 23 section 9).
@@ -527,6 +528,9 @@ func (r *Reconciler) fail(st *kardinalv1alpha1.ChangeRequestStatus, cr *kardinal
 	case errors.Is(err, egress.ErrBlockedAddress):
 		retry = max(refusedRetry, poll)
 		setCondition(st, cr.Generation, CondRefused, true, "EgressRefused", msg, now)
+	case errors.Is(err, ErrIgnoredFilter):
+		retry = max(refusedRetry, poll)
+		setCondition(st, cr.Generation, CondProviderError, true, ReasonIgnoredFilter, msg, now)
 	case errors.As(err, &rerr):
 		retry = max(rerr.After, poll)
 		setCondition(st, cr.Generation, CondProviderError, true, "Retry", msg, now)

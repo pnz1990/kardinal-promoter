@@ -163,10 +163,28 @@ func findMergedPR(ctx context.Context, l prLister, repo, head, base string, head
 // are few.
 const maxPRCommitChecks = 3
 
-// adoptRefused is the open PR of the repository's branch head into base,
-// after the SCM refused to create it as a duplicate (createErr). A refusal
-// that has no such PR behind it keeps the SCM's reason.
-func adoptRefused(ctx context.Context, l prLister, repo, head, base string, createErr error) (string, int, error) {
+// ExistingPRError is OpenPR's answer when the SCM refused to open the PR
+// because one is open for the branch already: PR is that PR, from the
+// repository's own branch (never a fork's of a branch with the same name),
+// and Cause the SCM's refusal. OpenPR does not adopt it: whether it is the
+// caller's own is the caller's to decide (open-pr adopts it only when its
+// head is, or contains, the commit kardinal pushed, #2079).
+type ExistingPRError struct {
+	PR    FoundPR
+	Cause error
+}
+
+func (e *ExistingPRError) Error() string {
+	return fmt.Sprintf("the SCM refused to open the PR: PR #%d of the branch is open already (%s): %v", e.PR.Number, e.PR.URL, e.Cause)
+}
+
+func (e *ExistingPRError) Unwrap() error { return e.Cause }
+
+// refusedExisting is OpenPR's error after the SCM refused to create the PR of
+// the repository's branch head into base as a duplicate (createErr): an
+// *ExistingPRError with the open PR, or, when there is none, an error that
+// keeps the SCM's reason.
+func refusedExisting(ctx context.Context, l prLister, repo, head, base string, createErr error) (string, int, error) {
 	pr, err := findOpenPR(ctx, l, repo, head, base)
 	switch {
 	case err != nil:
@@ -175,7 +193,7 @@ func adoptRefused(ctx context.Context, l prLister, repo, head, base string, crea
 		return "", 0, fmt.Errorf("the SCM refused to open the PR of %s into %s, but no open PR from this repository's branch exists: %w; refused with: %w",
 			head, base, errNoOpenPR, createErr)
 	}
-	return pr.URL, pr.Number, nil
+	return "", 0, &ExistingPRError{PR: *pr, Cause: createErr}
 }
 
 // --- GitHub ---
@@ -230,8 +248,8 @@ func (g *GitHubProvider) FindMergedPR(ctx context.Context, repo, head, base stri
 	return findMergedPR(ctx, g, repo, head, base, headSHAs, since)
 }
 
-func (g *GitHubProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
-	return adoptRefused(ctx, g, repo, head, base, createErr)
+func (g *GitHubProvider) refusedExisting(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
+	return refusedExisting(ctx, g, repo, head, base, createErr)
 }
 
 // --- GitLab ---
@@ -283,8 +301,8 @@ func (g *GitLabProvider) FindMergedPR(ctx context.Context, repo, head, base stri
 	return findMergedPR(ctx, g, repo, head, base, headSHAs, since)
 }
 
-func (g *GitLabProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
-	return adoptRefused(ctx, g, repo, head, base, createErr)
+func (g *GitLabProvider) refusedExisting(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
+	return refusedExisting(ctx, g, repo, head, base, createErr)
 }
 
 // --- Forgejo and Gitea ---
@@ -361,8 +379,8 @@ func (f *ForgejoProvider) FindMergedPR(ctx context.Context, repo, head, base str
 	return findMergedPR(ctx, f, repo, head, base, headSHAs, since)
 }
 
-func (f *ForgejoProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
-	return adoptRefused(ctx, f, repo, head, base, createErr)
+func (f *ForgejoProvider) refusedExisting(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
+	return refusedExisting(ctx, f, repo, head, base, createErr)
 }
 
 // --- Bitbucket Cloud ---
@@ -436,8 +454,8 @@ func (b *BitbucketProvider) FindMergedPR(ctx context.Context, repo, head, base s
 	return findMergedPR(ctx, b, repo, head, base, headSHAs, since)
 }
 
-func (b *BitbucketProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
-	return adoptRefused(ctx, b, repo, head, base, createErr)
+func (b *BitbucketProvider) refusedExisting(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
+	return refusedExisting(ctx, b, repo, head, base, createErr)
 }
 
 // --- Bitbucket Data Center ---
@@ -523,8 +541,8 @@ func (b *BitbucketDCProvider) FindMergedPR(ctx context.Context, repo, head, base
 	return findMergedPR(ctx, b, repo, head, base, headSHAs, since)
 }
 
-func (b *BitbucketDCProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
-	return adoptRefused(ctx, b, repo, head, base, createErr)
+func (b *BitbucketDCProvider) refusedExisting(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
+	return refusedExisting(ctx, b, repo, head, base, createErr)
 }
 
 // --- Azure DevOps ---
@@ -625,8 +643,8 @@ func (a *AzureDevOpsProvider) FindMergedPR(ctx context.Context, repo, head, base
 	return findMergedPR(ctx, a, repo, head, base, headSHAs, since)
 }
 
-func (a *AzureDevOpsProvider) adoptRefused(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
-	return adoptRefused(ctx, a, repo, head, base, createErr)
+func (a *AzureDevOpsProvider) refusedExisting(ctx context.Context, repo, head, base string, createErr error) (string, int, error) {
+	return refusedExisting(ctx, a, repo, head, base, createErr)
 }
 
 // --- wrappers ---

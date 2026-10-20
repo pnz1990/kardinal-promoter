@@ -14,6 +14,10 @@
 //   - committed build output of the docs site: mkdocs.yml's site_dir (site/
 //     by default), or a sitemap.xml or search/search_index.json anywhere.
 //     docs.yml builds and deploys the site from source.
+//   - committed binaries and large files: any ELF file, and any file over
+//     maxFileSize (a `go build` at the root committed a 4.8 MB release-gate
+//     binary, #2202). A large asset that belongs in the repo goes in the
+//     allowlist with its reason.
 //
 // hack/hygiene/allow.txt lists the intentional exceptions, each with its
 // reason; an entry that no longer matches anything is reported too, so the
@@ -130,6 +134,47 @@ func buildOutput(r *repo) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// fileFindings is every file check's findings.
+func fileFindings(root string, r *repo) []string {
+	return append(append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...),
+		bulkyFiles(root, r)...)
+}
+
+// maxFileSize is the largest tracked file that needs no allowlist entry.
+const maxFileSize = 1_000_000
+
+// bulkyFiles reports tracked ELF binaries and files over maxFileSize.
+func bulkyFiles(root string, r *repo) []string {
+	var out []string
+	for _, f := range r.files {
+		p := filepath.Join(root, f)
+		st, err := os.Lstat(p)
+		if err != nil || !st.Mode().IsRegular() {
+			continue
+		}
+		if head, err := readHead(p, 4); err == nil && bytes.Equal(head, []byte("\x7fELF")) {
+			out = append(out, "file "+f+": a committed ELF binary (build output?): git rm it and add it to .gitignore")
+			continue
+		}
+		if st.Size() > maxFileSize {
+			out = append(out, fmt.Sprintf("file %s: %d bytes, over %d: git rm it, or allow it in %s with a reason", f, st.Size(), maxFileSize, allowFile))
+		}
+	}
+	return out
+}
+
+// readHead reads the first n bytes of file p.
+func readHead(p string, n int) ([]byte, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	b := make([]byte, n)
+	m, err := f.Read(b)
+	return b[:m], err
 }
 
 // orphanPages lists docs pages that are neither in mkdocs.yml nor linked from
@@ -348,7 +393,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	found := append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...)
+	found := fileFindings(*root, r)
 	kinds := map[string]bool{"file": true}
 	if !*skipDeadcode {
 		dc, err := deadcode(*root, *bin)

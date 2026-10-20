@@ -52,12 +52,12 @@ func AutoRollbackName(bundle, source string) string {
 // is safe to roll back to, instead of adopting it or retrying forever.
 func AutoRollbackNameIn(ctx context.Context, c client.Reader, ns, pipeline, bundle, source, env string) (string, error) {
 	plain := AutoRollbackName(bundle, source)
-	free, err := rollbackNameFree(ctx, c, ns, plain, pipeline, env)
+	free, err := rollbackNameFree(ctx, c, ns, plain, pipeline, env, bundle)
 	if err != nil || free {
 		return plain, err
 	}
 	own := AutoRollbackName(bundle, source+"-"+env)
-	free, err = rollbackNameFree(ctx, c, ns, own, pipeline, env)
+	free, err = rollbackNameFree(ctx, c, ns, own, pipeline, env, bundle)
 	if err != nil {
 		return "", err
 	}
@@ -71,7 +71,7 @@ func AutoRollbackNameIn(ctx context.Context, c client.Reader, ns, pipeline, bund
 // rollbackNameFree reports whether name, one of the names of the automatic
 // rollback of a failing Bundle in env, is free for it: no Bundle has it, or
 // the one that has it is that rollback (IsRollbackOf).
-func rollbackNameFree(ctx context.Context, c client.Reader, ns, name, pipeline, env string) (bool, error) {
+func rollbackNameFree(ctx context.Context, c client.Reader, ns, name, pipeline, env, from string) (bool, error) {
 	var b v1alpha1.Bundle
 	err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b)
 	switch {
@@ -80,21 +80,43 @@ func rollbackNameFree(ctx context.Context, c client.Reader, ns, name, pipeline, 
 	case err != nil:
 		return false, fmt.Errorf("get bundle %s: %w", name, err)
 	}
-	return IsRollbackOf(&b, pipeline, env), nil
+	return IsRollbackOf(&b, pipeline, env, from), nil
 }
 
 // IsRollbackOf reports whether b, a Bundle at one of the names the
-// controller creates the automatic rollback of a failing Bundle in env of
+// controller creates the automatic rollback of failing Bundle from in env of
 // pipeline at (AutoRollbackNameIn), is that rollback: the controller's
 // stamp (IsAutoRollback, which only the controller can write, #2187),
-// spec.pipeline the pipeline, and intent.targetEnvironment env. The name
-// binds it to the failing Bundle; the labels and kardinal.io/rollback-from
-// do not decide it, since anyone who may patch Bundles can rewrite them
-// (#2223). A Bundle at the name that is not is someone else's, or another
+// spec.pipeline the pipeline, intent.targetEnvironment env, and boundTo
+// from. A Bundle at the name that is not is someone else's, or another
 // environment's (#2090).
-func IsRollbackOf(b *v1alpha1.Bundle, pipeline, env string) bool {
+func IsRollbackOf(b *v1alpha1.Bundle, pipeline, env, from string) bool {
 	return IsAutoRollback(b) && b.Spec.Pipeline == pipeline &&
-		b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment == env
+		b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment == env && boundTo(b, from)
+}
+
+// boundTo reports whether automatic rollback b, found at one of the names
+// of the rollback of from, is from's: spec.provenance.rollbackFrom names it,
+// or, for a rollback created before v0.13.0 without that field, the name
+// alone binds it (#2223). The field is immutable with spec.provenance, so a
+// name the hashed form of AutoRollbackName shares with another Bundle's
+// rollback, or a relinked kardinal.io/rollback-from, cannot bind it (#2225).
+func boundTo(b *v1alpha1.Bundle, from string) bool {
+	if p := b.Spec.Provenance; p != nil && p.RollbackFrom != "" {
+		return p.RollbackFrom == from
+	}
+	return true
+}
+
+// RollbackFromOf is the Bundle rollback Bundle b rolls back from:
+// spec.provenance.rollbackFrom, which cannot change, or, for a rollback
+// created before v0.13.0, its kardinal.io/rollback-from annotation; "" for
+// neither (#2225).
+func RollbackFromOf(b *v1alpha1.Bundle) string {
+	if p := b.Spec.Provenance; p != nil && p.RollbackFrom != "" {
+		return p.RollbackFrom
+	}
+	return b.Annotations[AnnotationRollbackFrom]
 }
 
 // IsControllerRollback reports whether b is a rollback the controller wrote:
@@ -145,7 +167,9 @@ const (
 // not decide it: anyone who may patch Bundles can rewrite them, also on a
 // stamped rollback of an earlier failure, which would then pass for this
 // one's and leave the environment on the failing version (#2187 QA). The
-// pipeline is the immutable spec.pipeline.
+// pipeline is the immutable spec.pipeline, and a rollback created since
+// v0.13.0 is bound by its immutable spec.provenance.rollbackFrom too
+// (boundTo, #2225).
 func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from string) (string, error) {
 	for _, src := range []string{RollbackSourceAlarm, RollbackSourcePolicy} {
 		for _, name := range []string{AutoRollbackName(from, src), AutoRollbackName(from, src+"-"+env)} {
@@ -157,7 +181,7 @@ func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from 
 			case err != nil:
 				return "", fmt.Errorf("get bundle %s: %w", name, err)
 			}
-			if !IsAutoRollback(&b) || b.Spec.Pipeline != pipeline {
+			if !IsAutoRollback(&b) || b.Spec.Pipeline != pipeline || !boundTo(&b, from) {
 				continue
 			}
 			if b.Spec.Intent == nil || b.Spec.Intent.TargetEnvironment == env {
@@ -174,7 +198,7 @@ func FindRollback(ctx context.Context, c client.Reader, ns, pipeline, env, from 
 // another environment's, created by a concurrent reconcile, or someone
 // else's. The caller retries, and AutoRollbackNameIn then names env's own
 // or stops for a human.
-func RollbackTaken(ctx context.Context, c client.Reader, ns, name, pipeline, env string) (bool, error) {
-	free, err := rollbackNameFree(ctx, c, ns, name, pipeline, env)
+func RollbackTaken(ctx context.Context, c client.Reader, ns, name, pipeline, env, from string) (bool, error) {
+	free, err := rollbackNameFree(ctx, c, ns, name, pipeline, env, from)
 	return !free, err
 }

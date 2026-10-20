@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -530,7 +531,7 @@ func TestAzureDevOpsProvider_PRURL(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			prURL, n, err := scm.NewAzureDevOpsProvider("pat", srv.URL, "").OpenPR(context.Background(), "org/proj/repo", "t", "b", "kardinal/b/prod", "main")
+			prURL, n, err := existing(scm.NewAzureDevOpsProvider("pat", srv.URL, "").OpenPR(context.Background(), "org/proj/repo", "t", "b", "kardinal/b/prod", "main"))
 			require.NoError(t, err)
 			assert.Equal(t, 7, n)
 			assert.Equal(t, tc.wantURL, prURL)
@@ -646,7 +647,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"number":3,"html_url":"https://github.com/o/r/pull/3","head":{"ref":"kardinal/b/prod","repo":{"full_name":"o/r"}},"base":{"ref":"main"}}]`))
 		}))
 		defer srv.Close()
-		u, n, err := scm.NewGitHubProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+		u, n, err := existing(scm.NewGitHubProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main"))
 		require.NoError(t, err)
 		assert.Equal(t, 3, n)
 		assert.Equal(t, "https://github.com/o/r/pull/3", u)
@@ -665,7 +666,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"iid":4,"web_url":"https://gitlab.com/g/p/-/merge_requests/4","state":"opened","source_branch":"kardinal/b/prod","target_branch":"main","source_project_id":1,"target_project_id":1}]`))
 		}))
 		defer srv.Close()
-		_, n, err := scm.NewGitLabProvider("t", srv.URL, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main")
+		_, n, err := existing(scm.NewGitLabProvider("t", srv.URL, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main"))
 		require.NoError(t, err)
 		assert.Equal(t, 4, n)
 	})
@@ -684,7 +685,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				`"links":{"html":{"href":"https://bitbucket.org/ws/r/pull-requests/5"}}}]}`))
 		}))
 		defer srv.Close()
-		_, n, err := scm.NewBitbucketProvider("t", srv.URL, "").OpenPR(context.Background(), "ws/r", "t", "b", head, "main")
+		_, n, err := existing(scm.NewBitbucketProvider("t", srv.URL, "").OpenPR(context.Background(), "ws/r", "t", "b", head, "main"))
 		require.NoError(t, err)
 		assert.Equal(t, 5, n)
 	})
@@ -724,7 +725,7 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(prs)
 		}))
 		defer srv.Close()
-		_, n, err := scm.NewForgejoProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+		_, n, err := existing(scm.NewForgejoProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main"))
 		require.NoError(t, err)
 		assert.Equal(t, 6, n)
 	})
@@ -748,7 +749,7 @@ func TestFindExistingPR_SameBaseOnly(t *testing.T) {
 		{
 			name: "github",
 			open: func(u string) (string, int, error) {
-				return scm.NewGitHubProvider("t", u, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+				return existing(scm.NewGitHubProvider("t", u, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main"))
 			},
 			refuse: func(w http.ResponseWriter) {
 				w.WriteHeader(http.StatusUnprocessableEntity)
@@ -770,7 +771,7 @@ func TestFindExistingPR_SameBaseOnly(t *testing.T) {
 		{
 			name: "gitlab",
 			open: func(u string) (string, int, error) {
-				return scm.NewGitLabProvider("t", u, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main")
+				return existing(scm.NewGitLabProvider("t", u, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main"))
 			},
 			refuse: func(w http.ResponseWriter) {
 				w.WriteHeader(http.StatusConflict)
@@ -792,7 +793,7 @@ func TestFindExistingPR_SameBaseOnly(t *testing.T) {
 		{
 			name: "forgejo",
 			open: func(u string) (string, int, error) {
-				return scm.NewForgejoProvider("t", u, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+				return existing(scm.NewForgejoProvider("t", u, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main"))
 			},
 			refuse: func(w http.ResponseWriter) {
 				w.WriteHeader(http.StatusConflict)
@@ -913,4 +914,141 @@ func apiURLFor(providerType string) string {
 		return "https://git.example.com"
 	}
 	return ""
+}
+
+// TestOpenPR_DuplicateDetectionIsNarrow (#2079): OpenPR takes a refused
+// create for a duplicate only on the provider's own status and phrase
+// (GitHub 422 "A pull request already exists for", GitLab 409 "Another open
+// merge request already exists for this source branch", Forgejo/Gitea 409
+// "pull request already exists for these targets", Azure DevOps 409
+// TF401179). Then it names the open PR as an *scm.ExistingPRError and adopts
+// nothing itself. A 409 (or 422) for another cause, or a status code that
+// appears only in the request path (a repository named app409), is the
+// SCM's own error, with no lookup.
+//
+// Covers SCM-DUP-PR-01.
+func TestOpenPR_DuplicateDetectionIsNarrow(t *testing.T) {
+	const head = "kardinal/b/prod"
+	type provider struct {
+		name, repo, dupBody, otherBody string
+		dupCode                        int
+		list                           string // the open PR of the branch, as the list API returns it
+		open                           func(u, repo string) (string, int, error)
+	}
+	providers := []provider{
+		{name: "github", repo: "o/app409", dupCode: 422,
+			dupBody:   `{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"custom","message":"A pull request already exists for o:kardinal/b/prod."}]}`,
+			otherBody: `{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"custom","message":"No commits between main and kardinal/b/prod"}]}`,
+			list:      `[{"number":3,"html_url":"https://github.com/o/app409/pull/3","head":{"ref":"kardinal/b/prod","sha":"abc","repo":{"full_name":"o/app409"}},"base":{"ref":"main"}}]`,
+			open: func(u, repo string) (string, int, error) {
+				return scm.NewGitHubProvider("t", u, "").OpenPR(context.Background(), repo, "t", "b", head, "main")
+			}},
+		{name: "gitlab", repo: "g/app409", dupCode: 409,
+			dupBody:   `{"message":["Another open merge request already exists for this source branch: !4"]}`,
+			otherBody: `{"message":"409 Conflict: Resource lock"}`,
+			list:      `[{"iid":4,"web_url":"https://gitlab.com/g/app409/-/merge_requests/4","state":"opened","source_branch":"kardinal/b/prod","target_branch":"main","source_project_id":1,"target_project_id":1}]`,
+			open: func(u, repo string) (string, int, error) {
+				return scm.NewGitLabProvider("t", u, "").OpenPR(context.Background(), repo, "t", "b", head, "main")
+			}},
+		{name: "forgejo and gitea", repo: "o/app409", dupCode: 409,
+			dupBody:   `{"message":"pull request already exists for these targets [id: 6, issue_id: 7, head_repo_id: 1, base_repo_id: 1, head_branch: kardinal/b/prod, base_branch: main]"}`,
+			otherBody: `{"message":"branch already exists"}`,
+			list: `[{"number":6,"html_url":"https://f.example/o/app409/pulls/6","state":"open","head":{"ref":"kardinal/b/prod","label":"kardinal/b/prod","repo_id":1},` +
+				`"base":{"ref":"main","repo_id":1}}]`,
+			open: func(u, repo string) (string, int, error) {
+				return scm.NewForgejoProvider("t", u, "").OpenPR(context.Background(), repo, "t", "b", head, "main")
+			}},
+	}
+	for _, p := range providers {
+		for _, tc := range []struct {
+			name      string
+			code      int
+			body      string
+			wantPR    bool
+			wantLists int
+		}{
+			{name: "the duplicate refusal", code: p.dupCode, body: p.dupBody, wantPR: true, wantLists: 1},
+			{name: "the same status for another cause", code: p.dupCode, body: p.otherBody},
+			{name: "another status, 409 only in the path", code: http.StatusInternalServerError, body: `{"message":"oops"}`},
+		} {
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				lists := 0
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodPost {
+						w.WriteHeader(tc.code)
+						_, _ = w.Write([]byte(tc.body))
+						return
+					}
+					if strings.Contains(r.URL.Path, "/repos/o/app409/pulls") || strings.Contains(r.URL.Path, "merge_requests") || strings.Contains(r.URL.Path, "/pulls") {
+						lists++
+						if r.URL.Query().Get("page") == "2" {
+							_, _ = w.Write([]byte(`[]`))
+							return
+						}
+						_, _ = w.Write([]byte(p.list))
+						return
+					}
+					http.NotFound(w, r)
+				}))
+				defer srv.Close()
+				_, _, err := p.open(srv.URL, p.repo)
+				require.Error(t, err)
+				var ex *scm.ExistingPRError
+				if tc.wantPR {
+					require.ErrorAs(t, err, &ex)
+					assert.NotZero(t, ex.PR.Number)
+					assert.Contains(t, ex.Error(), "is open already")
+				} else {
+					assert.False(t, errors.As(err, &ex), "not taken for a duplicate: %v", err)
+					assert.Contains(t, err.Error(), strings.TrimSpace(tc.body), "the SCM's own reason")
+				}
+				assert.Equal(t, tc.wantLists > 0, lists > 0, "a lookup only for the duplicate refusal")
+			})
+		}
+	}
+}
+
+// TestOpenPR_AzureDevOpsDuplicateIsNarrow (#2079): Azure DevOps takes a
+// refused create for a duplicate only on a 409 that names TF401179 or
+// GitPullRequestExistsException; another 409, or "409" in the path, is the
+// SCM's own error.
+//
+// Covers SCM-DUP-PR-01.
+func TestOpenPR_AzureDevOpsDuplicateIsNarrow(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		code       int
+		wantPR     bool
+	}{
+		{name: "TF401179", code: 409, wantPR: true,
+			body: `{"$id":"1","message":"TF401179: An active pull request for the source and target branch already exists.","typeName":"Microsoft.TeamFoundation.Git.Server.GitPullRequestExistsException","typeKey":"GitPullRequestExistsException"}`},
+		{name: "another 409", code: 409, body: `{"message":"TF401028: The reference has already been updated by another client."}`},
+		{name: "409 only in the path", code: 500, body: `{"message":"oops"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost:
+					w.WriteHeader(tc.code)
+					_, _ = w.Write([]byte(tc.body))
+				case strings.HasSuffix(r.URL.Path, "/repositories/app409"):
+					_, _ = w.Write([]byte(`{"id":"repo-id"}`))
+				default:
+					_, _ = w.Write([]byte(`{"value":[{"pullRequestId":7,"status":"active","sourceRefName":"refs/heads/kardinal/b/prod","targetRefName":"refs/heads/main",` +
+						`"lastMergeSourceCommit":{"commitId":"abc"},"repository":{"id":"repo-id","webUrl":"https://dev.azure.com/org/proj/_git/app409"}}]}`))
+				}
+			}))
+			defer srv.Close()
+			_, _, err := scm.NewAzureDevOpsProvider("pat", srv.URL, "").OpenPR(context.Background(), "org/proj/app409", "t", "b", "kardinal/b/prod", "main")
+			require.Error(t, err)
+			var ex *scm.ExistingPRError
+			if tc.wantPR {
+				require.ErrorAs(t, err, &ex)
+				assert.Equal(t, 7, ex.PR.Number)
+				return
+			}
+			assert.False(t, errors.As(err, &ex), "%v", err)
+			assert.Contains(t, err.Error(), tc.body)
+		})
+	}
 }

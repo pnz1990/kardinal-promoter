@@ -395,7 +395,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		// is not this one's (#2082, #2090): the next reconcile names env's
 		// own, or refuses.
 		taken, takenErr := lifecycle.RollbackTaken(ctx, r.Client, rp.Namespace, rollbackName,
-			rp.Spec.PipelineName, rp.Spec.Environment)
+			rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
 		if takenErr != nil {
 			return "", nil, takenErr
 		}

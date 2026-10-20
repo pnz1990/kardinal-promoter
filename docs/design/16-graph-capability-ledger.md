@@ -1204,42 +1204,35 @@ hard error with a condition naming the path, instead of data pending.
 
 ---
 
-## G27: Under load, a Graph whose applies failed can miss the event that would end its backoff
-**Need.** When what blocked a Graph's apply goes away, the Graph applies again at once, under
-load too. Examples: a squatter object deleted, an admission policy relaxed, a quota raised, a CRD
-installed. #2159 (TestGraph_GateSquatterRefused) showed the need; #2201 tracks it.
-**kro today** (read at v0.10.0-rc.0, not yet confirmed from a failing run's logs):
-- **Error backoff:** an apply that admission refuses is a hard error. The Graph reconciler
-  returns it (`pkg/controller/graph/controller.go`, `Reconcile`), so controller-runtime's
-  default per-item rate limiter requeues the Graph, from 5 ms doubling up to 1000 s. Only
-  `ErrNotReady` takes kro's own capped soft backoff (`pkg/controller/backoff`).
-- **Drift watch:** kro watches every object it applies before it applies it
-  (`pkg/graphengine/executor/simple.go`, `applyScalarTemplate` → `watchObject`). A delete of
-  the blocking object would normally wake the Graph at once.
-- **Dropped events:** the watch router drops an enqueue when its event buffer is full
-  (`pkg/graphengine/watchrouter/controller.go:176`, "event buffer full; dropping enqueue"),
-  and resync is off by default (`Config.ResyncPeriod`). A dropped wake leaves the Graph to its
-  next backoff retry, which after a run of failures can be minutes away.
-**Minimal Graph that shows it.** A template node whose object an admission policy refuses.
-Keep it refused through enough reconciles to grow the backoff, while many other Graphs write
-children so the router's buffer fills, then lift the refusal. The Graph applies only at its next
-backoff retry.
+## G27: A Graph whose apply failed hard does not watch the object that blocked it
+**Need.** When what blocked a Graph's apply goes away, the Graph applies again at once. Examples:
+a squatter object deleted, an admission policy relaxed, a quota raised. #2159
+(TestGraph_GateSquatterRefused) showed the need; #2201 tracks it.
+**kro today** (read at v0.10.0-rc.0):
+- **Watches are dropped on a hard failure:** kro declares a watch on every object it applies,
+  before it applies it (`pkg/graphengine/executor/simple.go`, `applyScalarTemplate` →
+  `watchObject`). But when the apply fails hard (an admission refusal is one), the Graph
+  reconciler ends the cycle with `watcher.Done(false)` (`pkg/controller/graph/controller.go`,
+  after `ex.Apply`). The coordinator's `abort` then discards every watch of that cycle that the
+  previous committed cycle did not have (`pkg/watch/coordinator/coordinator.go`, `abort`). The
+  refused object's watch is one of them, so a delete of it never wakes the Graph, under any load.
+- **Backoff:** the hard error goes to controller-runtime's default per-item rate limiter, which
+  requeues the Graph from 5 ms, doubling up to 1000 s. Only `ErrNotReady` takes kro's own capped
+  soft backoff. Load only makes this longer: every child status write is another failed
+  reconcile.
+- **Not the event buffer:** the watch router can drop enqueues when its buffer is full
+  (`pkg/graphengine/watchrouter/controller.go:176`), but here there is no watch left to deliver,
+  so raising the buffer would not help.
+**Minimal Graph that shows it.** A template node whose object an admission policy refuses, kept
+refused through a few reconciles; then lift the refusal. The Graph applies only at its next
+backoff retry, whatever the load.
 **kardinal workaround.** In the live test, the Graph is annotated after the squatter is deleted
-(`framework.NudgeGraph`, #2200). Nothing in the product does this yet. A user who fixes the cause
-can wait out the backoff.
+(`framework.NudgeGraph`, #2200). Nothing in the product does this yet: a user who fixes the
+cause waits out the backoff.
 **Smallest change, no upstream work yet.** One of: (a) kardinal nudges a Graph (an annotation)
-when the Bundle reconciler sees the object behind its refusal go away; (b) the watch router
-blocks, or marks the Graph for a resync, instead of dropping a wake; (c) a modest default
-`ResyncPeriod`.
-**Cause, from the kro source** (v0.10.0-rc.0, #2201). No dropped event is needed. A hard apply
-error ends the reconcile's watch cycle with `watcher.Done(false)`
-(`pkg/controller/graph/controller.go`, `reconcileGraph`). `Coordinator.abort`
-(`pkg/watch/coordinator/coordinator.go`) then discards every watch the cycle declared that was not
-already committed, the one on the object whose apply failed included, and drops the Graph's entry
-when nothing was committed before. The delete of the blocking object then wakes nobody, and the
-Graph waits for its error backoff. The kro fix this points to keeps the watches a hard-failed cycle
-declared until the next successful cycle. Related:
-[kro#1464](https://github.com/kubernetes-sigs/kro/issues/1464) (the sibling-branch case).
+when the Bundle reconciler sees the object behind its refusal go away; (b) kro keeps the watches
+a failed cycle declared up to the failing node, or commits them on a hard apply error too;
+(c) a soft, capped requeue for an admission refusal instead of the error backoff.
 
 ---
 
@@ -1405,7 +1398,7 @@ blocks above.
 | G23 path glob in Graph CEL | A `Path()` library with `path.glob` and cost estimators | Yes, small; kardinal offers the PR |
 | G25 optional ref | `ref.optional: true` publishes `null` for a missing object or unserved kind | Not now: no kardinal feature needs it (the error-budget gate reads Prometheus) |
 | G26 missing key in an untyped field | Schema hints for preserve-unknown fields, or "no such key" on a ready node as a hard error | Yes, once custom steps ship: it turns a silent wait into an error |
-| G27 dropped wake after a failed apply | kro keeps the watches a hard-failed cycle declared; or the watch router blocks or marks a resync instead of dropping a wake | Yes (#2201); first try (a), kardinal nudging the Graph |
+| G27 no watch on what blocked a hard-failed apply | Keep (or commit) the watches a failed cycle declared | Yes; first try (a), kardinal nudging the Graph |
 
 ### Hazards found
 

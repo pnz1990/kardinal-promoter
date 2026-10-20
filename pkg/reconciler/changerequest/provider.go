@@ -74,6 +74,13 @@ type Provider interface {
 // ErrCredentials is a provider's refusal of the credential (HTTP 401 or 403).
 var ErrCredentials = errors.New("the provider refused the credential")
 
+// ErrIgnoredFilter is a search answer the query excludes: kardinal's own
+// ticket of another promotion (another correlation id or label). The
+// provider ignored part of the filter, so neither adopting the answer nor
+// creating a ticket is safe: the call is retried (condition ProviderError,
+// reason ProviderIgnoredFilter).
+var ErrIgnoredFilter = errors.New("the provider ignored the search filter")
+
 // ErrNotFound is a ticket the provider does not have.
 var ErrNotFound = errors.New("ticket not found")
 

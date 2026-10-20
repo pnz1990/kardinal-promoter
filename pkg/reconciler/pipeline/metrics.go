@@ -424,7 +424,7 @@ func computeStability(pipelineName string, finalEnvs []string, bundles []kardina
 		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && !final[b.Spec.Intent.TargetEnvironment] {
 			continue
 		}
-		if d := byBundle[b.Annotations[lifecycle.AnnotationRollbackFrom]]; d != nil {
+		if d := byBundle[lifecycle.RollbackFromOf(b)]; d != nil {
 			d.failed = true
 		}
 	}

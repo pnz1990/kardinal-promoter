@@ -33,6 +33,14 @@ validate checks it before anything is written. Running init again with the
 same answers changes nothing ("unchanged") and succeeds; a file with
 another Pipeline is not overwritten without --force.
 
+An http:// --repo is refused unless --insecure-http is given: the controller
+authenticates to the repository with the git token, and over http the token
+crosses the network in clear text. --insecure-http is for a git server
+without TLS, such as a local or in-cluster Forgejo or Gitea; init then warns
+on stderr. The host is not considered (localhost in a Pipeline is the
+controller's own loopback, and a private name or address is no guarantee),
+and the other rules still apply.
+
 --create-secret creates the git Secret (key token) from $GITHUB_TOKEN, else
 from gh auth token, labelled kardinal.io/referenceable=true so the Pipeline
 may use it; an existing Secret is kept (and labelled). --apply creates the
@@ -70,10 +78,11 @@ kardinal init [flags]
       --force                  Overwrite the file, and replace a Pipeline of the same name with --apply
       --gitops-dir string      Directory for the GitOps scaffold (default ".gitops")
   -h, --help                   help for init
+      --insecure-http          Allow an http:// repository URL, for a git server without TLS; the git token is then sent in clear text
       --name string            Application and Pipeline name (default my-app)
       --no-detect              Do not look in the cluster for Argo CD Applications or Flux Kustomizations
       --prod-approval string   Approval of the last environment: pr-review (default) or auto
-      --repo string            GitOps repository https:// URL; with it, init asks nothing
+      --repo string            GitOps repository https:// or ssh URL; with it, init asks nothing
       --scaffold-gitops        Create GitOps repo structure (environments/<env>/kustomization.yaml)
       --secret string          Name of the Secret holding the git token (default "github-token")
       --stdout                 Print the Pipeline YAML to stdout instead of writing a file (a scaffold still writes its files)

@@ -504,6 +504,21 @@ func (g *RewritingGit) Push(ctx context.Context, dir, remote, branch string, aut
 	return nil
 }
 
+// PushLeased is GoGitClient.PushLeased, a side effect of the controller like
+// Push (#2095).
+func (g *RewritingGit) PushLeased(ctx context.Context, dir, remote, branch string, auth scm.GitAuth, expect string) error {
+	if g.dying != nil && g.dying() {
+		return fmt.Errorf("git push %s: connection reset", branch)
+	}
+	if err := g.GoGitClient.PushLeased(ctx, dir, remote, branch, auth, expect); err != nil {
+		return err
+	}
+	if g.effect != nil {
+		g.effect("git push " + branch)
+	}
+	return nil
+}
+
 // file:// remotes need no credentials: auth is dropped so the token of the
 // https URL is not offered to the file transport.
 func (g *RewritingGit) Clone(ctx context.Context, url, branch, dir string, auth scm.GitAuth) error {

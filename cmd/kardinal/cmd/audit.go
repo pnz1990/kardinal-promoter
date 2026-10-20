@@ -124,7 +124,7 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		if b.Spec.Intent != nil {
 			env = b.Spec.Intent.TargetEnvironment
 		}
-		rolledBack[rollbackKey{b.Spec.Pipeline, b.Annotations[lifecycle.AnnotationRollbackFrom], env}] = true
+		rolledBack[rollbackKey{b.Spec.Pipeline, lifecycle.RollbackFromOf(&b), env}] = true
 		if !b.CreationTimestamp.Before(&cutoff) {
 			triggered[bundleKey{b.Spec.Pipeline, b.Name}] = env
 			rollbacks++

@@ -34,6 +34,9 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
@@ -57,6 +60,10 @@ const (
 	LevelOverridden  = "KARDINAL_OVERRIDDEN"
 	// LevelVerifiedByAgent: a verify gate counted a passing Verdict.
 	LevelVerifiedByAgent = "KARDINAL_VERIFIED_BY_AGENT"
+	// LevelFreezeExempted: the promotion went on through a freeze under an
+	// exemption (kardinal override --freeze). Like KARDINAL_OVERRIDDEN, a
+	// verifier usually requires it absent: --require '!FREEZE_EXEMPTED'.
+	LevelFreezeExempted = "KARDINAL_FREEZE_EXEMPTED"
 )
 
 // Statement is an in-toto v1 statement with the VSA predicate.
@@ -120,14 +127,37 @@ type Record struct {
 	// on them: the inputs its gates read as changeRequests.<name>.
 	ChangeRequests []ChangeRequest `json:"changeRequests,omitempty"`
 	Change         Change          `json:"change"`
-	Controller     string          `json:"controller,omitempty"`
-	Chart          string          `json:"chart,omitempty"`
-	Truncated      bool            `json:"truncated"`
+	// FreezeExemptions are the freezes the promotion went on through under
+	// an exemption: who made it, why, and until when.
+	FreezeExemptions []FreezeExemption `json:"freezeExemptions,omitempty"`
+	// FreezeExemptionsUnknown: the step went on through a freeze under an
+	// exemption, and which one was not recorded (a step let through by
+	// v0.12). The receipt claims KARDINAL_FREEZE_EXEMPTED all the same.
+	FreezeExemptionsUnknown bool   `json:"freezeExemptionsUnknown,omitempty"`
+	Controller              string `json:"controller,omitempty"`
+	Chart                   string `json:"chart,omitempty"`
+	Truncated               bool   `json:"truncated"`
 	// Redacted are the JSON paths of the strings redacted before signing
 	// (the userinfo of a URL, the value of a credential parameter such as
 	// ?token=): a receipt is signed and may be published for good, so a
 	// credential a Bundle carried is never in it.
 	Redacted []string `json:"redacted,omitempty"`
+}
+
+// FreezeExemption is a freeze the promotion went on through.
+type FreezeExemption struct {
+	// Freeze is the freezing ChangeWindow; Actors whom it held (agents or
+	// everyone).
+	Freeze string `json:"freeze"`
+	Actors string `json:"actors"`
+	// CreatedBy and Actor are who made the exemption, as admission verified
+	// them; Reason why; Until when it stopped counting.
+	CreatedBy   string          `json:"createdBy,omitempty"`
+	Actor       *v1alpha1.Actor `json:"actor,omitempty"`
+	Reason      string          `json:"reason"`
+	Environment string          `json:"environment,omitempty"`
+	Bundle      string          `json:"bundle,omitempty"`
+	Until       string          `json:"until"`
 }
 
 // Version is the promoted Bundle.
@@ -416,6 +446,19 @@ func statement(in Input) (Statement, error) {
 	if b.Spec.Provenance != nil {
 		rec.RollbackOf = b.Spec.Provenance.RollbackOf
 	}
+	// A step let through a freeze by v0.12 has the condition and no
+	// record: its exemptions are unknown, and the receipt says so and
+	// claims KARDINAL_FREEZE_EXEMPTED (a verifier that refuses exempted
+	// promotions refuses it: fail closed).
+	if c := meta.FindStatusCondition(ps.Status.Conditions, v1alpha1.ConditionFreezeExempted); c != nil &&
+		c.Status == metav1.ConditionTrue && len(ps.Status.FreezeExemptions) == 0 {
+		rec.FreezeExemptionsUnknown = true
+	}
+	for _, x := range ps.Status.FreezeExemptions {
+		rec.FreezeExemptions = append(rec.FreezeExemptions, FreezeExemption{Freeze: x.Freeze, Actors: x.Actors,
+			CreatedBy: x.Exemption.CreatedBy, Actor: x.Exemption.Actor, Reason: x.Exemption.Reason,
+			Environment: x.Exemption.Environment, Bundle: x.Exemption.Bundle, Until: stamp(x.Until.Time)})
+	}
 	policy := ResourceDescriptor{URI: fmt.Sprintf("kardinal://%s/namespaces/%s/pipelines/%s", in.ClusterID, ns, ps.Spec.PipelineName)}
 	var facts *v1alpha1.DecisionFacts
 	if d := in.Decision; d != nil {
@@ -620,44 +663,31 @@ func GateFacts(gates []v1alpha1.DecisionGate) v1alpha1.DecisionFacts {
 // them computed from its gates. Nothing is claimed that the full record
 // does not show.
 func levels(rec Record, facts *v1alpha1.DecisionFacts) []string {
-	out := []string{}
+	var passed, approved, overridden, verified bool
 	if facts != nil {
-		if facts.Passed {
-			out = append(out, LevelGatesPassed)
-		}
-		if facts.Approved {
-			out = append(out, LevelApproved)
-		}
-		if facts.VerifiedByAgent {
-			out = append(out, LevelVerifiedByAgent)
-		}
-		if rec.Checks.Health != nil && rec.Checks.Health.Result == "Healthy" {
-			out = append(out, LevelHealthy)
-		}
-		if facts.Overridden {
-			out = append(out, LevelOverridden)
-		}
-		return out
-	}
-	passed, approved, overridden, verified := len(rec.Gates) > 0, false, false, false
-	for _, g := range rec.Gates {
-		if g.Result != "pass" {
-			passed = false
-		}
-		if g.Override != nil {
-			overridden = true
-		}
-		for _, a := range g.Approvals {
-			if a.Counted && a.Decision == "approve" {
-				approved = true
+		passed, approved, overridden, verified = facts.Passed, facts.Approved, facts.Overridden, facts.VerifiedByAgent
+	} else {
+		passed = len(rec.Gates) > 0
+		for _, g := range rec.Gates {
+			if g.Result != "pass" {
+				passed = false
 			}
-		}
-		for _, v := range g.Verdicts {
-			if v.Counted && v.Result == "pass" {
-				verified = true
+			if g.Override != nil {
+				overridden = true
+			}
+			for _, a := range g.Approvals {
+				if a.Counted && a.Decision == "approve" {
+					approved = true
+				}
+			}
+			for _, v := range g.Verdicts {
+				if v.Counted && v.Result == "pass" {
+					verified = true
+				}
 			}
 		}
 	}
+	out := []string{}
 	if passed {
 		out = append(out, LevelGatesPassed)
 	}
@@ -672,6 +702,9 @@ func levels(rec Record, facts *v1alpha1.DecisionFacts) []string {
 	}
 	if overridden {
 		out = append(out, LevelOverridden)
+	}
+	if len(rec.FreezeExemptions) > 0 || rec.FreezeExemptionsUnknown {
+		out = append(out, LevelFreezeExempted)
 	}
 	return out
 }

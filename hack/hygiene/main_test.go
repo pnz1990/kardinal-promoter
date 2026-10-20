@@ -177,6 +177,24 @@ func TestRepoIsClean(t *testing.T) {
 	require.NoError(t, err)
 	allow, err := readAllow(filepath.Join(root, allowFile))
 	require.NoError(t, err)
-	found := append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...)
-	assert.Empty(t, filter(found, allow, map[string]bool{"file": true}))
+	assert.Empty(t, filter(fileFindings(root, r), allow, map[string]bool{"file": true}))
+}
+
+// TestBulkyFiles: a committed ELF binary, and a file over maxFileSize, are
+// reported; small text files and a large file under the limit are not.
+func TestBulkyFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(name string, data []byte) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), data, 0o644))
+	}
+	write("release-gate", append([]byte("\x7fELF"), make([]byte, 100)...))
+	write("docs/big.webp", make([]byte, maxFileSize+1))
+	write("docs/ok.webp", make([]byte, maxFileSize))
+	write("README.md", []byte("hello"))
+	r := &repo{files: []string{"README.md", "docs/big.webp", "docs/ok.webp", "release-gate"}}
+	got := bulkyFiles(root, r)
+	require.Len(t, got, 2, "%v", got)
+	assert.True(t, strings.HasPrefix(got[0], "file docs/big.webp: "), got[0])
+	assert.True(t, strings.HasPrefix(got[1], "file release-gate: a committed ELF binary"), got[1])
 }

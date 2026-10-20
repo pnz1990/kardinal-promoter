@@ -1,0 +1,48 @@
+{
+  "result": [
+    {
+      "number": "CHG0042001",
+      "sys_id": "5d1f0c3a9b8e4f7a8c2d6e1b0a9f8e7d",
+      "sys_class_name": "change_request",
+      "type": "normal",
+      "state": "-4",
+      "approval": "requested",
+      "risk": "3",
+      "impact": "2",
+      "priority": "3",
+      "active": "true",
+      "short_description": "Promote checkout 1.4.2 to prod",
+      "description": "",
+      "correlation_id": "",
+      "correlation_display": "",
+      "sys_created_by": "svc.kardinal",
+      "sys_created_on": "2026-09-30 14:05:11",
+      "sys_updated_by": "svc.kardinal",
+      "sys_updated_on": "2026-09-30 14:07:42",
+      "sys_mod_count": "2",
+      "opened_at": "2026-09-30 14:05:11",
+      "start_date": "",
+      "end_date": "",
+      "close_code": "",
+      "close_notes": "",
+      "opened_by": {
+        "link": "https://example.service-now.com/api/now/table/sys_user/2f6e1d0c9b8a4e7f6d5c4b3a2918f7e6",
+        "value": "2f6e1d0c9b8a4e7f6d5c4b3a2918f7e6"
+      },
+      "assignment_group": {
+        "link": "https://example.service-now.com/api/now/table/sys_user_group/7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a29",
+        "value": "7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a29"
+      },
+      "cmdb_ci": {
+        "link": "https://example.service-now.com/api/now/table/cmdb_ci/8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d",
+        "value": "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d"
+      },
+      "sys_domain": {
+        "link": "https://example.service-now.com/api/now/table/sys_user_group/global",
+        "value": "global"
+      },
+      "assigned_to": "",
+      "watch_list": ""
+    }
+  ]
+}

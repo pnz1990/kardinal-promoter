@@ -142,6 +142,30 @@ func (e *Env) Events(ctx context.Context, ns, kind, name string) ([]eventsv1.Eve
 	return out, nil
 }
 
+// WaitEvents waits until an Event regarding kind/name matches match, and
+// returns every Event regarding it then. The controller records Events
+// through an asynchronous broadcaster, after the status write a test may
+// have waited for, so one list can run before the Event exists (#2188).
+func (e *Env) WaitEvents(t *testing.T, ns, kind, name string, timeout time.Duration, what string,
+	match func(eventsv1.Event) bool) []eventsv1.Event {
+	t.Helper()
+	var evs []eventsv1.Event
+	Eventually(t, timeout, what, func(ctx context.Context) (bool, string) {
+		list, err := e.Events(ctx, ns, kind, name)
+		if err != nil {
+			return false, err.Error()
+		}
+		evs = list
+		for _, ev := range list {
+			if match(ev) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("%d events of %s %s", len(list), kind, name)
+	})
+	return evs
+}
+
 // Table is what `kubectl get` prints for a resource: the API server's Table
 // rendering, keyed by object name.
 type Table struct {
@@ -564,3 +588,29 @@ func (e *Env) RecordStepStates(t *testing.T, ns string) *StateLog {
 
 // JoinStates renders a state sequence for a failure message.
 func JoinStates(states []string) string { return strings.Join(states, " -> ") }
+
+// NudgeGraph annotates the Bundle's Graph, so kro reconciles it now. kro
+// watches each object it applies, but when an apply fails hard (an admission
+// refusal) it aborts that reconcile's watches (Done(false): kro
+// pkg/watch/coordinator abort), so a change to the refused object never
+// wakes the Graph, under any load. The Graph applies again only at its next
+// controller-runtime error-backoff retry, up to 1000s later; load only makes
+// the backoff longer, as more events mean more failed reconciles. A Graph
+// update event always wakes it (#2159, #2201).
+func (e *Env) NudgeGraph(t *testing.T, ns, bundle string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var b v1alpha1.Bundle
+	if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundle}, &b); err != nil {
+		t.Fatalf("read bundle %s/%s: %v", ns, bundle, err)
+	}
+	if b.Status.GraphRef == "" {
+		t.Fatalf("bundle %s/%s has no Graph yet", ns, bundle)
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"e2e.kardinal.io/nudged-at":%q}}}`, time.Now().UTC().Format(time.RFC3339Nano))
+	if _, err := e.Dynamic.Resource(GraphGVR).Namespace(ns).Patch(ctx, b.Status.GraphRef, types.MergePatchType, []byte(patch),
+		metav1.PatchOptions{}); err != nil {
+		t.Fatalf("nudge graph %s/%s: %v", ns, b.Status.GraphRef, err)
+	}
+}

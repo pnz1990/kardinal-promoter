@@ -224,7 +224,7 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		// rollback (#2082, #2090): the next reconcile names env's own, or
 		// stops for a human.
 		taken, takenErr := lifecycle.RollbackTaken(ctx, r.apiReader(), ps.Namespace, name,
-			ps.Spec.PipelineName, ps.Spec.Environment)
+			ps.Spec.PipelineName, ps.Spec.Environment, ps.Spec.BundleName)
 		if takenErr != nil {
 			return "", nil, takenErr
 		}

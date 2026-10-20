@@ -208,6 +208,14 @@ func (j *Jira) Find(ctx context.Context, req Request) (Reading, bool, error) {
 		return Reading{}, false, nil
 	}
 	r, err := j.reading(base, jc, req, out.Issues[0])
+	if err == nil && r.CorrelationID != req.CorrelationID {
+		// A site that ignored the label clause answers with another of
+		// kardinal's issues: another promotion's, never this one's. Creating
+		// one now could duplicate this promotion's, which the search did not
+		// show.
+		return Reading{}, false, fmt.Errorf("jira: search issues: the answer, %s, does not carry this promotion's label: %w",
+			r.Ticket.Key, ErrIgnoredFilter)
+	}
 	return r, err == nil, err
 }
 

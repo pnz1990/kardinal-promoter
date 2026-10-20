@@ -477,6 +477,31 @@ spec:
       expression: >-
         has(object.metadata.annotations) && 'kardinal.io/created-by' in object.metadata.annotations ?
         object.metadata.annotations['kardinal.io/created-by'] : ''
+    # A Bundle the controller created (its spec.actor kind is controller;
+    # spec.actor cannot change): an automatic rollback, a rollback or
+    # promotion for the UI or the Bundle API, a Subscription's version.
+    - name: controllerMade
+      expression: >-
+        request.operation == 'UPDATE' && has(oldObject.spec.actor) && has(oldObject.spec.actor.kind) &&
+        oldObject.spec.actor.kind == 'controller'
+    # On an update, its rollback markers are as they were: the
+    # kardinal.io/rollback-from annotation and the kardinal.io/rollback and
+    # kardinal.io/pipeline labels.
+    - name: rollbackMarkersKept
+      expression: >-
+        request.operation != 'UPDATE' ||
+        (has(object.metadata.annotations) && 'kardinal.io/rollback-from' in object.metadata.annotations ?
+          object.metadata.annotations['kardinal.io/rollback-from'] : '') ==
+        (has(oldObject.metadata.annotations) && 'kardinal.io/rollback-from' in oldObject.metadata.annotations ?
+          oldObject.metadata.annotations['kardinal.io/rollback-from'] : '') &&
+        (has(object.metadata.labels) && 'kardinal.io/rollback' in object.metadata.labels ?
+          object.metadata.labels['kardinal.io/rollback'] : '') ==
+        (has(oldObject.metadata.labels) && 'kardinal.io/rollback' in oldObject.metadata.labels ?
+          oldObject.metadata.labels['kardinal.io/rollback'] : '') &&
+        (has(object.metadata.labels) && 'kardinal.io/pipeline' in object.metadata.labels ?
+          object.metadata.labels['kardinal.io/pipeline'] : '') ==
+        (has(oldObject.metadata.labels) && 'kardinal.io/pipeline' in oldObject.metadata.labels ?
+          oldObject.metadata.labels['kardinal.io/pipeline'] : '')
   validations:
     # kardinal.io/created-by is who created the Bundle; an approval gate's
     # excludeAuthor compares approvers with it. Optional, but when set it
@@ -494,6 +519,16 @@ spec:
           'kardinal.io/created-by' in oldObject.metadata.annotations ?
           oldObject.metadata.annotations['kardinal.io/created-by'] : '')
       message: the kardinal.io/created-by annotation cannot be added, changed or removed after the Bundle is created
+      reason: Forbidden
+    # Rollback decisions read these markers (the planner's rolled-back-from,
+    # notifications, metrics): on a Bundle the controller created only the
+    # controller changes them, so they cannot be relinked to another
+    # version (#2225).
+    - expression: >-
+        !variables.controllerMade || variables.controller || variables.rollbackMarkersKept
+      message: >-
+        the kardinal.io/rollback-from annotation and the kardinal.io/rollback and kardinal.io/pipeline labels
+        cannot be added, changed or removed on a Bundle the controller created
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "bundle-creator") }}

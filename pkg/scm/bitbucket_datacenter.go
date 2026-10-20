@@ -192,7 +192,7 @@ func (b *BitbucketDCProvider) OpenPR(ctx context.Context, repo, title, body, hea
 		// branch twice, an archived repository); only a duplicate is reused.
 		if apiErr, ok := statusIs(err, http.StatusConflict); ok &&
 			(strings.Contains(apiErr.Body, "DuplicatePullRequestException") || strings.Contains(apiErr.Body, "existingPullRequest")) {
-			return b.adoptRefused(ctx, repo, head, base, err)
+			return b.refusedExisting(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open Bitbucket Data Center PR %s: %w", repo, err)
 	}
