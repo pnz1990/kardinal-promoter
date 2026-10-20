@@ -94,3 +94,37 @@ func TestGrowthShape(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { check(t, tc, uneven, 1.68) })
 	}
 }
+
+// TestShapeBound (#2270): the quick size holds the median to growthShape's
+// bound; the full size, until #2071, to a quadratic cost's ratio, which a
+// CI run's rounds at the full size pass and a quadratic cost fails.
+func TestShapeBound(t *testing.T) {
+	bound, meaning := shapeBound(1.58, false, 665, 6938, 13023)
+	assert.InDelta(t, 1.58, bound, 1e-9)
+	assert.Equal(t, "half the growth quadratic", meaning)
+
+	// The full size's index: empty, half and full, in bytes.
+	const e, h, f = 360, 208_900, 417_000
+	bound, meaning = shapeBound((2.0*f+h+e)/(f+h+2.0*e), true, e, h, f)
+	assert.InDelta(t, 3.0, bound, 0.01)
+	assert.Contains(t, meaning, "#2071")
+	ms := func(rs ...[3]float64) []growthRound {
+		out := make([]growthRound, 0, len(rs))
+		for _, r := range rs {
+			d := func(v float64) time.Duration { return time.Duration(v * float64(time.Millisecond)) }
+			out = append(out, growthRound{empty: d(r[0]), half: d(r[1]), full: d(r[2])})
+		}
+		return out
+	}
+	// A CI run at the full size with block timing, its median 1.67 over the
+	// half-quadratic bound (1.66): under the full size's bound.
+	ci := ms([3]float64{0.359, 26.02, 52.74}, [3]float64{0.360, 23.58, 62.34}, [3]float64{0.339, 21.52, 60.70},
+		[3]float64{0.347, 32.15, 44.00}, [3]float64{0.313, 26.69, 71.08})
+	ratio, _, ratios := growthShape(ci, e, h, f)
+	assert.Less(t, ratio, bound, "round ratios %.2f", ratios)
+	// A quadratic cost, 0.35ms empty and 60ms full, fails it.
+	q := func(b float64) float64 { return 0.35 + 59.65*(b*b-e*e)/(f*f-e*e) }
+	r := [3]float64{q(e), q(h), q(f)}
+	ratio, _, ratios = growthShape(ms(r, r, r, r, r), e, h, f)
+	assert.GreaterOrEqual(t, ratio, bound, "round ratios %.2f", ratios)
+}
