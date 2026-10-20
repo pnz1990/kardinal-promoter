@@ -52,8 +52,9 @@ v0.13.0 is not released yet; v0.12.1 is the latest release.
 
 - **Signed promotion receipts.** With `receipts.enabled` (off by default), each promotion into
   each environment gets a signed in-toto receipt: the version, the actor and sponsor, every gate
-  with its result, the approvals and verdicts, the checks and the PR. Keyless or key signing,
-  OCI referrer and Rekor sinks, and `kardinal verify-receipt` to check one offline:
+  with its result, the approvals and verdicts, the checks, the SLSA build level, any freeze
+  exemption and the PR. Keyless, key or KMS (AWS, Google Cloud) signing, OCI referrer and Rekor
+  sinks, and `kardinal verify-receipt` to check one offline:
   [Signed promotion receipts](receipts.md).
 - **Attestations.** Verified SLSA provenance (with the build level you grant each builder),
   vulnerability scans with OpenVEX, and any in-toto predicate, read by gates as
@@ -75,7 +76,6 @@ including those to rollbacks, gates and the UI.
 - Keyless (gitsign) commit signatures, mapped to the agent that signed. Commit signatures the
   SCM verified (`commits.requireSigned`) already ship:
   [Signed commits](image-verification.md#signed-commits).
-- Receipts signed with AWS KMS or Google Cloud KMS.
 - A maximum age for attestations, so a gate can refuse a stale scan.
 
 ### v0.14: adaptive

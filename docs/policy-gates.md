@@ -313,8 +313,11 @@ expression: actor.kind == "controller" && actor.via == "auto-rollback"
 
 !!! warning "Never trust a version's labels or annotations for who made it"
     Whoever creates a Bundle writes its labels and annotations, `kardinal.io/rollback` and
-    `kardinal.io/rollback-from` included, and no admission rule checks them. A gate such as
-    `"kardinal.io/rollback" in bundle.labels` lets through any version that says it is a rollback.
+    `kardinal.io/rollback-from` included, and no admission rule checks what they say when the
+    Bundle is created. (From v0.13.0, unreleased: on a Bundle the controller created, only the controller may change those
+    two and `kardinal.io/pipeline` afterwards: [Rollback](rollback.md#what-happens-in-git).) A gate
+    such as `"kardinal.io/rollback" in bundle.labels` lets through any version that says it is a
+    rollback.
     Check the actor stamp instead, which the chart's admission lets only the controller write for
     its own versions: `actor.kind == "controller" && actor.via == "auto-rollback"` for an automatic
     rollback.
