@@ -362,13 +362,13 @@ func TestTenancy_Evidence(t *testing.T) {
 			}
 			r := verify(me.ns, keys[me.shard])
 			require.Zero(t, r.Code, r.Output())
-			assert.Contains(t, r.Output(), "VERIFIED receipt")
+			assert.Contains(t, r.Output(), "every check below that was made passed")
 			r = verify(other.ns, keys[me.shard])
 			assert.NotZero(t, r.Code, "%s's receipt presented as %s's:\n%s", me.name, other.name, r.Output())
 			assert.Contains(t, r.Output(), "not namespace "+other.ns)
 			r = verify(me.ns, keys[other.shard])
 			assert.NotZero(t, r.Code, "%s's receipt with shard %s's key:\n%s", me.name, other.shard, r.Output())
-			assert.NotContains(t, r.Output(), "VERIFIED receipt")
+			assert.NotContains(t, r.Output(), "every check below that was made passed")
 		}
 	})
 
