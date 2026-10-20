@@ -141,6 +141,7 @@ func TestGraph_CompactShape300(t *testing.T) {
 	for _, s := range steps.Items {
 		assert.Equal(t, "Verified", s.Status.State, s.Name)
 	}
+	logWaveTimes(t, steps.Items, perWave)
 	var gates v1alpha1.PolicyGateList
 	require.NoError(t, e.Client.List(ctx, &gates, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
 	assert.Len(t, gates.Items, len(envs), "one gate instance per environment")
@@ -156,6 +157,55 @@ func TestGraph_CompactShape300(t *testing.T) {
 		st, reason, msg := graphCondition(bundleGraph(t, e, ns, bundle), "Ready")
 		return st == "True", st + " " + reason + ": " + msg
 	})
+}
+
+// logWaveTimes logs, for each wave of a wavePipeline's verified steps, when
+// its first step was created (the Graph reached the wave), how long its steps
+// took from creation to Verified (status.stateTransitionTime), and the gap
+// from the previous wave's last Verified to this wave's first step: where a
+// slow run's time goes (#2349).
+func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
+	t.Helper()
+	type wave struct {
+		created, verified time.Time
+		longest           time.Duration
+	}
+	waves := map[int]*wave{}
+	for _, s := range steps {
+		var w, r int
+		if _, err := fmt.Sscanf(s.Spec.Environment, "w%02d-r%d", &w, &r); err != nil || s.Status.StateTransitionTime == nil {
+			continue
+		}
+		created, verified := s.CreationTimestamp.Time, s.Status.StateTransitionTime.Time
+		if waves[w] == nil {
+			waves[w] = &wave{created: created, verified: verified}
+		}
+		wv := waves[w]
+		if created.Before(wv.created) {
+			wv.created = created
+		}
+		if verified.After(wv.verified) {
+			wv.verified = verified
+		}
+		wv.longest = max(wv.longest, verified.Sub(created))
+	}
+	var start, prev time.Time
+	var lines []string
+	for w := 1; waves[w] != nil; w++ {
+		wv := waves[w]
+		if w == 1 {
+			start = wv.created
+		}
+		gap := time.Duration(0)
+		if !prev.IsZero() {
+			gap = wv.created.Sub(prev)
+		}
+		lines = append(lines, fmt.Sprintf("wave %02d: reached at +%s, %d steps verified in %s (longest step %s), gap after the previous wave %s",
+			w, wv.created.Sub(start).Round(time.Second), perWave, wv.verified.Sub(wv.created).Round(time.Second),
+			wv.longest.Round(time.Second), gap.Round(time.Second)))
+		prev = wv.verified
+	}
+	t.Logf("wave times (#2349):\n%s", strings.Join(lines, "\n"))
 }
 
 // wavePipeline sets up a Pipeline of waves × perWave environments
