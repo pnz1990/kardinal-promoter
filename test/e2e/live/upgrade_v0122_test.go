@@ -66,7 +66,12 @@ func u012Extras(cases ...func(t *testing.T, e *framework.Env, from u012From) fun
 
 // u0122NullApproval is what the API server answers kro for a gate instance
 // rendered with spec.approval: null (#2271): the PolicyGate CRD refuses it.
+// The Graph's condition message carries it as is; kro's log line carries it
+// inside a JSON string, its quotes escaped (u0122NullApprovalLogged).
 const u0122NullApproval = `spec.approval in body must be of type object: "null"`
+
+// u0122NullApprovalLogged is u0122NullApproval as kro's log lines carry it.
+const u0122NullApprovalLogged = `spec.approval in body must be of type object: \"null\"`
 
 // u0122Stuck is upgrade-v0122's own case: a version stuck under #2271
 // across the upgrade. Under v0.12.2, prod of a Pipeline has an approval gate
@@ -99,7 +104,7 @@ func (s *u0122Stuck) expected(text string, at time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ns != "" && !s.created.IsZero() && at.Before(s.created) &&
-		strings.Contains(text, s.ns) && strings.Contains(text, u0122NullApproval)
+		strings.Contains(text, s.ns) && strings.Contains(text, u0122NullApprovalLogged)
 }
 
 // u0122Graph is the Graph of bundle in ns: there is exactly one.
