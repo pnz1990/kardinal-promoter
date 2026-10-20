@@ -188,6 +188,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *priority == "release" {
+		if err := releaseTokenProblem(*lock, *slots); err != nil {
+			return err
+		}
+	}
 	tools, err := os.ReadFile(filepath.Join(root, "hack", "tool-versions.env"))
 	if err != nil {
 		return fmt.Errorf("read tool versions: %w", err)
@@ -278,6 +283,37 @@ func run() error {
 	}
 	if v != "GO" {
 		return fmt.Errorf("verdict %s", v)
+	}
+	return nil
+}
+
+// releaseTokenProblem refuses -priority release unless
+// $RELEASE_GATE_PRIORITY_TOKEN matches the token file the coordinator keeps
+// next to the heavy-load lock (or, with no lock, the slots directory):
+// DIR/.release-token, this user's, mode 600 (#2282 QA: no one else jumps the
+// queues by saying so). hack/loadlock.sh and hack/e2e/local-live.sh check the
+// same.
+func releaseTokenProblem(lock, slots string) error {
+	dir := lock
+	if dir == "" {
+		dir = slots
+	}
+	if dir == "" {
+		return nil // no shared queue to jump
+	}
+	path := filepath.Join(filepath.Dir(filepath.Clean(dir)), ".release-token")
+	refuse := fmt.Errorf("-priority release needs RELEASE_GATE_PRIORITY_TOKEN matching %s (mode 600): refusing to jump the queue", path)
+	st, err := os.Stat(path)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		return refuse
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || int(sys.Uid) != os.Getuid() {
+		return refuse
+	}
+	b, err := os.ReadFile(path)
+	want := strings.TrimSpace(strings.SplitN(string(b), "\n", 2)[0]) // its first line, as the shell's read
+	if err != nil || want == "" || os.Getenv("RELEASE_GATE_PRIORITY_TOKEN") != want {
+		return refuse
 	}
 	return nil
 }

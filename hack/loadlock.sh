@@ -28,6 +28,15 @@
 #     when its pid is gone or started after the record's time. A lock without
 #     a pid is never taken over, unless it has had no owner file for a minute.
 #   - A waiter whose ticket is gone writes it again under its name.
+#   - Each waiter touches its ticket on every poll (a heartbeat, beat=1); a
+#     ticket untouched for 10 minutes (30 for an older client's, which
+#     touches none) is a stopped, hung or stray waiter's, and any waiter
+#     removes it whatever its pid. A ticket that cannot be read is judged by
+#     its name's pid and time.
+#   - A normal ticket that has waited 2 hours sorts as a release one, and
+#     -p release needs RELEASE_GATE_PRIORITY_TOKEN matching the token file
+#     next to LOCK (DIR/.release-token, mode 600): release tickets never
+#     starve the others, and no one else jumps the queue.
 #   - A waiter wakes on the queue's changes (inotifywait, when installed) or
 #     every RETRY seconds (10).
 # Clients that take the lock without a ticket (code from before the queue)
@@ -62,6 +71,22 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ $# -gt 0 ] && [ -n "$lock" ] || usage
+# A release ticket (class 0) is a release run's: -p release needs
+# RELEASE_GATE_PRIORITY_TOKEN to match the token file the coordinator keeps
+# next to the lock (DIR/.release-token, this user's, mode 600), or the run
+# refuses (#2282 QA: no one else jumps the queue by saying so).
+prio=normal
+if [ "$class" = 0 ]; then
+  prio=release
+  case $lock in */*) token_file=${lock%/*}/.release-token ;; *) token_file=.release-token ;; esac
+  want=''
+  { read -r want <"$token_file"; } 2>/dev/null || want=''
+  mode=$(stat -c %a "$token_file" 2>/dev/null) || mode=''
+  if [ -z "$want" ] || [ "$mode" != 600 ] || [ ! -O "$token_file" ] || [ "${RELEASE_GATE_PRIORITY_TOKEN:-}" != "$want" ]; then
+    echo "loadlock: -p release needs RELEASE_GATE_PRIORITY_TOKEN matching $token_file (mode 600): refusing to jump the queue" >&2
+    exit 2
+  fi
+fi
 
 proc=/proc
 # LOADLOCK_TEST_PROC (tests only, with LOADLOCK_TEST=1): pids the test makes
@@ -146,7 +171,11 @@ record_dead() {
 # Never start=0: a holder whose start time is unknown says so, and the others
 # judge it by its boot id and pid only.
 read_start $$ && self_start=$start_v || self_start=unknown
-tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$this_boot start=$self_start"
+# priority= says the ticket's class; beat=1 that its waiter touches it on
+# every poll (a heartbeat: one untouched for STALE_BEAT seconds is a stopped or
+# hung waiter's, and any waiter removes it; its waiter queues it again in its
+# place when it resumes).
+tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$this_boot start=$self_start priority=$prio beat=1"
 # -x: hold the lock alone (a heavy live suite): this run takes a slot only when
 # none is held, and while its record (exclusive=1) holds one no one takes the
 # other.
@@ -187,11 +216,14 @@ slot=
 # with_flock CMD... runs CMD under flock on queue/.reclaim, which serializes
 # every change to the lock, its slots and its view. CMD never runs without
 # the flock: when flock fails (a fork that failed), with_flock fails.
+# It waits for the flock 60s at most: a waiter stopped (Ctrl-Z) while it
+# held it would wedge every other one, so they say so and try again.
 with_flock() {
   local fd rc
   exec {fd}>"$queue/.reclaim" || return 1
-  if ! flock -x "$fd"; then
+  if ! flock -x -w 60 "$fd"; then
     exec {fd}>&-
+    echo "loadlock: no flock on $queue/.reclaim in 60s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it" >&2
     return 1
   fi
   "$@"
@@ -285,14 +317,34 @@ stop() {
 trap 'stop 130' INT
 trap 'stop 143' TERM
 
-# reap_tickets removes the tickets of waiters that are gone.
+# A ticket untouched for STALE_BEAT seconds (one with beat=1) or STALE_OLD
+# (an older client's, which touches none) is a stopped, hung or stray
+# waiter's: removed, whatever its pid (#2282 QA: a head that does not move
+# wedged everyone). LOADLOCK_TEST_STALE sets both, in tests.
+STALE_BEAT=600
+STALE_OLD=1800
+if [ "${LOADLOCK_TEST:-}" = 1 ] && [[ ${LOADLOCK_TEST_STALE:-} =~ ^[0-9]+$ ]]; then
+  STALE_BEAT=$LOADLOCK_TEST_STALE STALE_OLD=$LOADLOCK_TEST_STALE
+fi
+
+# reap_tickets removes the tickets of waiters that are gone, and stale ones.
+# A ticket that cannot be read is judged by its name's pid and time.
 reap_tickets() {
-  local t name text ns
+  local t name text ns mtime limit now=${EPOCHSECONDS:-}
   for t in "$queue"/[0-9]-*; do
     [ -e "$t" ] || continue
     name=${t##*/}
-    read_file "$t" || continue
-    text=$file_v
+    [ "$name" != "$ticket" ] || continue
+    if read_file "$t"; then text=$file_v; else text='(a ticket that cannot be read)'; fi
+    # stat is the one fork here: when it fails, the ticket is not stale.
+    if [[ $now =~ ^[0-9]+$ ]] && mtime=$(stat -c %Y "$t" 2>/dev/null) && [[ $mtime =~ ^[0-9]+$ ]]; then
+      limit=$STALE_OLD
+      [[ $text != *beat=1* ]] || limit=$STALE_BEAT
+      if ((now - mtime > limit)); then
+        rm -f "$t" && echo "loadlock: removed the ticket $name, untouched for $((now - mtime))s (a waiter that is stopped, hung or gone; it queues again when it resumes)" >&2
+        continue
+      fi
+    fi
     if [[ $text != *boot=* ]] && [[ " $warned " != *" $name "* ]]; then
       warned="$warned $name"
       echo "loadlock: warning: ticket $name is a waiter on code from before #2226 ($text); it can move the lock from under its holder: rebase it onto main" >&2
@@ -424,6 +476,34 @@ take_turn() {
   return 1
 }
 
+# reclaim_due succeeds when a holder looks gone (judged again under the
+# flock): only then does a waiter that is not the head take the flock, so
+# a waiter stopped while it waits seldom holds it.
+reclaim_due() {
+  local d
+  count_holders
+  if [ "$held_n" = exclusive ]; then
+    dead_dir "$lock"
+    return
+  fi
+  for d in "$slots"/*; do
+    [ -d "$d" ] || continue
+    dead_dir "$d" && return 0
+  done
+  return 1
+}
+
+# may_take succeeds when the head may find a slot it can take (judged again
+# under the flock): a holder looks gone, or fewer than the capacity hold it.
+may_take() {
+  reclaim_due && return 0
+  count_holders
+  capacity
+  [ "$held_n" != exclusive ] && [ "$held_n" -lt "$cap_v" ] || return 1
+  [ -z "$alone" ] || [ "$held_n" -eq 0 ] || return 1
+  [ -z "$held_x" ]
+}
+
 # head_turn runs take_turn under the flock; a failed owner write ends the run.
 head_turn() {
   local rc=0
@@ -433,14 +513,22 @@ head_turn() {
   return "$rc"
 }
 
-# first_ticket sets first to the ticket that sorts first (bytewise).
+# first_ticket sets first to the ticket that sorts first (bytewise), a
+# normal ticket that has waited AGE_PROMOTE seconds (2h) sorting as a release
+# one (#2282 QA: release tickets never starve the others).
+AGE_PROMOTE=7200
 first_ticket() {
-  local t name LC_ALL=C
+  local t name key first_key='' rest ns now_ns='' LC_ALL=C
+  [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]] && now_ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
   first=
   for t in "$queue"/[0-9]-*; do
     [ -e "$t" ] || continue
-    name=${t##*/}
-    if [ -z "$first" ] || [[ $name < $first ]]; then first=$name; fi
+    name=${t##*/} key=${t##*/}
+    rest=${name#*-} ns=${rest%%-*}
+    if [ "${name%%-*}" = 1 ] && [ -n "$now_ns" ] && [[ $ns =~ ^[0-9]+$ ]] && ((10#$now_ns - 10#$ns > AGE_PROMOTE * 1000000000)); then
+      key=0-$rest
+    fi
+    if [ -z "$first" ] || [[ $key < $first_key ]]; then first=$name first_key=$key; fi
   done
 }
 
@@ -450,12 +538,15 @@ while :; do
   if [ ! -e "$queue/$ticket" ]; then
     write_ticket
     echo "loadlock: ticket $ticket was gone; queued it again in its place" >&2
+  else
+    # The heartbeat (a builtin write: its time is the ticket's mtime).
+    printf '%s\n' "$tag" >"$queue/$ticket" 2>/dev/null || true
   fi
   reap_tickets
   first_ticket
   if [ "$first" = "$ticket" ]; then
-    head_turn && break
-  else
+    ! may_take || ! head_turn || break
+  elif reclaim_due; then
     with_flock reclaim_turn || true
   fi
   holder='?'

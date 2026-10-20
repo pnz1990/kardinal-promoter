@@ -787,3 +787,84 @@ func TestFairLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
 		})
 	}
 }
+
+// TestFairLock_QueueNeverWedges (#2282 QA): a ticket that cannot be read is
+// judged by its name's pid and time; one untouched for staleBeat (a stopped,
+// hung or stray waiter's, live pid or not) is removed, but never the
+// reaper's own; waiters touch theirs on every poll; a normal ticket that
+// has waited agePromote sorts as a release one.
+func TestFairLock_QueueNeverWedges(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	q := t.TempDir()
+	put := func(class string, at time.Time, pid int, text string, mode os.FileMode, touched time.Time) string {
+		p := filepath.Join(q, fmt.Sprintf("%s-%019d-%d", class, at.UnixNano(), pid))
+		require.NoError(t, os.WriteFile(p, []byte(text), 0o644))
+		require.NoError(t, os.Chtimes(p, touched, touched))
+		require.NoError(t, os.Chmod(p, mode))
+		return p
+	}
+	now, old := time.Now(), time.Now().Add(-time.Hour)
+	live := fmt.Sprintf("w pid %d now %s beat=1\n", os.Getpid(), selfRecord(hostProc{}))
+	unreadableGone := put(classNormal, now.Add(-time.Minute), gone.Process.Pid, "x", 0o000, now)
+	unreadableLive := put(classNormal, now.Add(-time.Second), os.Getpid(), "x", 0o000, now)
+	staleLive := put(classNormal, now.Add(-2*time.Minute), os.Getpid(), live, 0o644, old)
+	strayPid1 := put(classRelease, now.Add(-3*time.Minute), 1, "stray\n", 0o644, old)
+	ownStale := put(classNormal, now.Add(-4*time.Minute), os.Getpid(), live, 0o644, old)
+	fresh := put(classNormal, now.Add(-5*time.Minute), os.Getpid(), live, 0o644, now)
+	var logs []string
+	reapTickets(hostProc{}, q, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }, nil, filepath.Base(ownStale))
+	assert.NoFileExists(t, unreadableGone, "an unreadable ticket of a pid that is gone")
+	assert.FileExists(t, unreadableLive, "an unreadable ticket of a live pid, touched now")
+	assert.NoFileExists(t, staleLive, "a live pid's ticket untouched for an hour")
+	assert.NoFileExists(t, strayPid1, "a stray ticket naming pid 1, untouched")
+	assert.FileExists(t, ownStale, "never the reaper's own")
+	assert.FileExists(t, fresh)
+	assert.Contains(t, strings.Join(logs, "\n"), "untouched for")
+
+	// Aging: the fresh normal ticket is 5 min old; one 3h old sorts before
+	// a release ticket of a minute ago.
+	require.NoError(t, os.Chmod(unreadableLive, 0o644))
+	for _, p := range []string{unreadableLive, ownStale, fresh} {
+		require.NoError(t, os.Remove(p))
+	}
+	aged := put(classNormal, now.Add(-3*time.Hour), os.Getpid(), live, 0o644, now)
+	put(classRelease, now.Add(-time.Minute), os.Getpid(), live, 0o644, now)
+	assert.Equal(t, filepath.Base(aged), firstTicket(q), "a normal ticket that waited 2h goes first")
+
+	// A waiter touches its ticket on every poll: with staleBeat short, it
+	// keeps its place behind a live holder while a stopped one's goes.
+	staleBeat = 300 * time.Millisecond
+	defer func() { staleBeat = 10 * time.Minute }()
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	h := lockAs(dir, fmt.Sprintf("h pid %d now", os.Getpid()), classNormal)
+	require.NoError(t, h.Lock(context.Background()))
+	require.NoError(t, os.MkdirAll(queueDir(dir), 0o755))
+	stopped := filepath.Join(queueDir(dir), fmt.Sprintf("1-%019d-%d", now.Add(-time.Minute).UnixNano(), os.Getpid()))
+	require.NoError(t, os.WriteFile(stopped, []byte(live), 0o644))
+	require.NoError(t, os.Chtimes(stopped, old, old))
+	w := lockAs(dir, fmt.Sprintf("w pid %d now", os.Getpid()), classNormal)
+	w.lockRetry = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { done <- w.Lock(context.Background()) }()
+	require.Eventually(t, func() bool { _, err := os.Stat(stopped); return errors.Is(err, os.ErrNotExist) }, 5*time.Second, 20*time.Millisecond, "the stopped waiter's ticket goes")
+	time.Sleep(time.Second) // longer than staleBeat: the waiter's own must stay
+	entries, err := os.ReadDir(queueDir(dir))
+	require.NoError(t, err)
+	var mine []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			mine = append(mine, e.Name())
+			info, err := e.Info()
+			require.NoError(t, err)
+			assert.Less(t, time.Since(info.ModTime()), staleBeat, "touched on every poll")
+		}
+	}
+	assert.Len(t, mine, 1, "the waiter's own ticket stays")
+	h.Unlock()
+	require.NoError(t, <-done)
+	w.Unlock()
+}

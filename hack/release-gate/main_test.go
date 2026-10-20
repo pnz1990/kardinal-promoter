@@ -456,7 +456,7 @@ func TestMachineLock(t *testing.T) {
 	require.NoError(t, a.Lock(context.Background()))
 	owner, err := os.ReadFile(filepath.Join(dir, "owner"))
 	require.NoError(t, err)
-	assert.Regexp(t, `^a boot=\S+ start=\d+ ticket=1-\d{19}-\d+\n$`, string(owner), "the owner, with its process and ticket")
+	assert.Regexp(t, `^a boot=\S+ start=\d+ priority=normal beat=1 ticket=1-\d{19}-\d+\n$`, string(owner), "the owner, with its process, class and ticket")
 
 	got := make(chan error, 1)
 	go func() { got <- b.Lock(context.Background()) }()
@@ -693,13 +693,14 @@ func TestMachineSlots_Queue(t *testing.T) {
 	q := slotQueue(dir)
 	require.NoError(t, os.MkdirAll(q, 0o755))
 	live := fmt.Sprintf("ENGINEER-1 local-live gitea 1.37 pid %d now %s", os.Getpid(), selfRecord(hostProc{}))
-	older := filepath.Join(q, fmt.Sprintf("1-%019d-%d", 1, os.Getpid()))
+	// Older by a minute (one older than agePromote would sort as a release one).
+	older := filepath.Join(q, fmt.Sprintf("1-%019d-%d", time.Now().Add(-time.Minute).UnixNano(), os.Getpid()))
 	require.NoError(t, os.WriteFile(older, []byte(live+"\n"), 0o644))
 
 	m := &machine{slotsDir: dir, slotMax: 2, owner: fmt.Sprintf("gate pid %d now", os.Getpid())}
 	_, ok, why := m.Slots(1)
 	assert.False(t, ok, "an older waiter is first")
-	assert.Contains(t, why, "waits behind 1-0000000000000000001-")
+	assert.Contains(t, why, "waits behind "+filepath.Base(older))
 	ticket := m.slotTicket
 	require.FileExists(t, filepath.Join(q, ticket), "the gate keeps its place")
 	_, ok, _ = m.Slots(1)
@@ -1283,4 +1284,27 @@ func TestPlanReceiptBurst(t *testing.T) {
 	assert.Contains(t, burst.Cleanup, "kp-rg-receipts-burst")
 	assert.NotContains(t, byID(Plan(r, Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full"},
 		ImageBuild: "host", Floor: 35, Newest: 37})), "receipts-burst-full", "only in the soak set")
+}
+
+// TestReleaseTokenProblem (#2282 QA): -priority release needs
+// $RELEASE_GATE_PRIORITY_TOKEN to match DIR/.release-token (mode 600) next
+// to the lock, else next to the slots directory.
+func TestReleaseTokenProblem(t *testing.T) {
+	host := t.TempDir()
+	lock, slots := filepath.Join(host, "LOADLOCK"), filepath.Join(host, "CLUSTER-SLOTS")
+	token := filepath.Join(host, ".release-token")
+	t.Setenv("RELEASE_GATE_PRIORITY_TOKEN", "")
+	assert.Error(t, releaseTokenProblem(lock, slots), "no token file")
+	require.NoError(t, os.WriteFile(token, []byte("s3cret\n"), 0o600))
+	assert.Error(t, releaseTokenProblem(lock, slots), "no token")
+	t.Setenv("RELEASE_GATE_PRIORITY_TOKEN", "a-guess")
+	assert.Error(t, releaseTokenProblem(lock, slots), "a wrong token")
+	t.Setenv("RELEASE_GATE_PRIORITY_TOKEN", "s3cret")
+	require.NoError(t, releaseTokenProblem(lock, slots), "the token")
+	require.NoError(t, releaseTokenProblem("", slots), "next to the slots directory, with no lock")
+	require.NoError(t, os.Chmod(token, 0o644))
+	err := releaseTokenProblem(lock, slots)
+	require.Error(t, err, "a token file others can read")
+	assert.Contains(t, err.Error(), "-priority release needs RELEASE_GATE_PRIORITY_TOKEN matching "+token)
+	assert.NoError(t, releaseTokenProblem("", ""), "no shared queue to jump")
 }

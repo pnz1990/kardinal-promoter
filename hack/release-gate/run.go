@@ -518,18 +518,24 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 		if class == "" {
 			class = classNormal
 		}
-		m.slotTicket, m.slotRecord = newTicketName(class), m.owner+" "+selfRecord(proc)
+		m.slotTicket = newTicketName(class)
+		m.slotRecord = m.owner + " " + selfRecord(proc) + " priority=" + priorityOf(class) + " beat=1"
 	}
 	if _, err := os.Stat(filepath.Join(q, m.slotTicket)); err != nil {
+		// Gone (removed as stale while the gate did not ask): queued again
+		// in its place.
 		if err := writeTicket(q, m.slotTicket, m.slotRecord); err != nil {
 			return nil, false, fmt.Sprintf("queue for a cluster slot: %v", err)
 		}
+	} else {
+		now := time.Now() // the heartbeat
+		_ = os.Chtimes(filepath.Join(q, m.slotTicket), now, now)
 	}
 	logf := m.log
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	reapTickets(proc, q, logf, nil)
+	reapTickets(proc, q, logf, nil, m.slotTicket)
 	// A heavy local-live suite draining the host (DIR/.drain, written by
 	// hack/e2e/local-live.sh) keeps every other run's cluster off it, the
 	// gate's too, unless the gate wrote it. A marker that is there but

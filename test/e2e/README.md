@@ -63,7 +63,14 @@ for the whole run. `SLOT_MAX` is `$SLOT_MAX`, else `SLOT_MAX=N` in the host's
 Slots are first come, first served: waiters queue in
 `$RELEASE_GATE_SLOTS/.queue`, release runs first (`-p release`, as
 `hack/release-gate -priority release`; it also queues a heavy suite's lock
-ticket first), and only the first takes a slot, however often the others poll. A slot whose owner is gone (its pid, boot
+ticket first), and only the first takes a slot, however often the others poll. `-p release`
+needs `RELEASE_GATE_PRIORITY_TOKEN` matching the coordinator's token file
+(`$RELEASE_GATE_SLOTS/../.release-token`, mode 600), and a normal ticket that
+has waited 2 hours goes first anyway. Waiters touch their tickets on every
+poll: one untouched for 10 minutes (a waiter stopped with Ctrl-Z, hung, or a
+stray file) is removed, and its waiter queues again in its place when it
+resumes. A steady stream of heavy suites keeps light runs mostly out by
+design: each drains the host while it waits and runs. A slot whose owner is gone (its pid, boot
 id or start time no longer match) is reclaimed, a kept cluster's only once the
 cluster is gone. It creates its cluster only while the host's one-minute load is under 48
 and `fs.inotify.max_user_instances` has room for another kind node, and at

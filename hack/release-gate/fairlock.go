@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,8 +44,16 @@ import (
 //     record's own time. A lock without a pid is never taken over, unless it
 //     has no owner file at all for a minute (a holder that died between its
 //     mkdir and its owner write).
-//   - A waiter whose ticket is gone (cleaned by hand) writes it again under
-//     its name, so it keeps its place.
+//   - A waiter whose ticket is gone (cleaned by hand, or as stale) writes it
+//     again under its name, so it keeps its place.
+//   - Each waiter touches its ticket on every poll (a heartbeat, beat=1); a
+//     ticket untouched for staleBeat (staleOld for an older client's, which
+//     touches none) is a stopped, hung or stray waiter's, and any waiter
+//     removes it whatever its pid. A ticket that cannot be read is judged by
+//     its name's pid and time.
+//   - A normal ticket that has waited agePromote sorts as a release one, and
+//     -priority release needs $RELEASE_GATE_PRIORITY_TOKEN matching the
+//     token file next to the lock (releaseTokenProblem).
 //   - A waiter wakes on inotify events in the queue and the lock's
 //     directory, or every poll at the latest.
 //
@@ -248,7 +255,7 @@ func (f *fairLock) acquire(ctx context.Context) error {
 	}
 	name := newTicketName(f.class)
 	ticket := filepath.Join(q, name)
-	record := f.owner + " " + selfRecord(f.proc)
+	record := f.owner + " " + selfRecord(f.proc) + " priority=" + priorityOf(f.class) + " beat=1"
 	if f.exclusive {
 		record += " exclusive=1"
 	}
@@ -270,14 +277,22 @@ func (f *fairLock) acquire(ctx context.Context) error {
 			}
 			f.log("ticket %s was gone; queued it again in its place", name)
 		}
-		reapTickets(f.proc, q, f.log, f.warned)
+		// The heartbeat: a ticket untouched for staleBeat is a stopped or
+		// hung waiter's, and any waiter removes it (#2282 QA).
+		now := time.Now()
+		_ = os.Chtimes(ticket, now, now)
+		reapTickets(f.proc, q, f.log, f.warned, name)
 		first := firstTicket(q)
 		if first == name {
-			took, err := f.tryHead(q, name, record)
-			if err != nil || took {
-				return err
+			// The flock only when a take may succeed: a waiter stopped
+			// while it waits seldom holds it.
+			if f.mayTake() {
+				took, err := f.tryHead(q, name, record)
+				if err != nil || took {
+					return err
+				}
 			}
-		} else {
+		} else if f.reclaimDue() {
 			// Any waiter removes the holders that are gone (#2242 QA: an
 			// older client at the head cannot judge the view's holders, so
 			// a new holder that died without its cleanup would wedge the
@@ -393,17 +408,79 @@ func capacity(load float64) int {
 
 // withLockFlock runs fn under flock on q/.reclaim, which serializes every
 // change to the lock, its slots and its view.
+//
+// It waits for the flock flockWait at most: a waiter stopped (Ctrl-Z) while
+// it held it would wedge every other one, so they say so and try again.
 func withLockFlock(q string, fn func() error) error {
 	rf, err := os.OpenFile(filepath.Join(q, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("open reclaim lock: %w", err)
 	}
-	defer func() { _ = rf.Close() }()
-	if err := unix.Flock(int(rf.Fd()), unix.LOCK_EX); err != nil {
-		return fmt.Errorf("flock reclaim lock: %w", err)
+	got := make(chan error, 1)
+	go func() { got <- unix.Flock(int(rf.Fd()), unix.LOCK_EX) }()
+	select {
+	case err := <-got:
+		if err != nil {
+			_ = rf.Close()
+			return fmt.Errorf("flock reclaim lock: %w", err)
+		}
+	case <-time.After(flockWait):
+		// Given back as soon as it comes.
+		go func() {
+			if <-got == nil {
+				_ = unix.Flock(int(rf.Fd()), unix.LOCK_UN)
+			}
+			_ = rf.Close()
+		}()
+		return fmt.Errorf("no flock on %s in %s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it", rf.Name(), flockWait)
 	}
-	defer func() { _ = unix.Flock(int(rf.Fd()), unix.LOCK_UN) }()
+	defer func() {
+		_ = unix.Flock(int(rf.Fd()), unix.LOCK_UN)
+		_ = rf.Close()
+	}()
 	return fn()
+}
+
+// flockWait is how long a waiter waits for the reclaim flock.
+const flockWait = time.Minute
+
+// reclaimDue reports whether a holder looks gone (judged again under the
+// flock): only then does a waiter that is not the head take the flock.
+func (f *fairLock) reclaimDue() bool {
+	if _, exclusive := holders(f.lock); exclusive {
+		ok, _ := f.deadDir(f.lock)
+		return ok
+	}
+	entries, _ := os.ReadDir(slotsDir(f.lock))
+	for _, e := range entries {
+		if ok, _ := f.deadDir(filepath.Join(slotsDir(f.lock), e.Name())); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// mayTake reports whether the head may find a slot it can take (judged
+// again under the flock): a holder looks gone, or fewer than the capacity
+// hold the lock and none holds it alone.
+func (f *fairLock) mayTake() bool {
+	if f.reclaimDue() {
+		return true
+	}
+	held, exclusive := holders(f.lock)
+	load := hostLoad()
+	if f.load != nil {
+		load = f.load()
+	}
+	if exclusive || len(held) >= capacity(load) || f.exclusive && len(held) > 0 {
+		return false
+	}
+	for _, h := range held {
+		if strings.Contains(h, "exclusive=1") {
+			return false
+		}
+	}
+	return true
 }
 
 // tryHead is the head waiter's turn, under the reclaim flock: it removes the
@@ -582,19 +659,23 @@ func release(lock, slot, held string) (bool, error) {
 // have had no owner file for orphanAge, and an older client's exclusive lock
 // in the same cases; then it refreshes the view when it removed a slot.
 // Any waiter calls it, under the reclaim flock; only the head takes a slot.
-func (f *fairLock) reclaim() {
-	dead := func(dir string) (bool, string) {
-		owner, err := os.ReadFile(filepath.Join(dir, "owner"))
-		switch {
-		case err == nil && recordDead(f.proc, string(owner), time.Time{}):
-			return true, " of a holder that is gone: " + strings.TrimSpace(string(owner))
-		case errors.Is(err, os.ErrNotExist):
-			if st, serr := os.Stat(dir); serr == nil && time.Since(st.ModTime()) >= orphanAge {
-				return true, fmt.Sprintf(", which has had no owner for %s", orphanAge)
-			}
+// deadDir reports whether dir (a slot, or an older client's LOCK) is a
+// holder's that is gone, or has had no owner file for orphanAge, and why.
+func (f *fairLock) deadDir(dir string) (bool, string) {
+	owner, err := os.ReadFile(filepath.Join(dir, "owner"))
+	switch {
+	case err == nil && recordDead(f.proc, string(owner), time.Time{}):
+		return true, " of a holder that is gone: " + strings.TrimSpace(string(owner))
+	case errors.Is(err, os.ErrNotExist):
+		if st, serr := os.Stat(dir); serr == nil && time.Since(st.ModTime()) >= orphanAge {
+			return true, fmt.Sprintf(", which has had no owner for %s", orphanAge)
 		}
-		return false, ""
 	}
+	return false, ""
+}
+
+func (f *fairLock) reclaim() {
+	dead := f.deadDir
 	if _, exclusive := holders(f.lock); exclusive {
 		if ok, why := dead(f.lock); ok {
 			if beforeReclaimRemove != nil {
@@ -641,29 +722,47 @@ func (f *fairLock) reclaim() {
 // there meanwhile).
 var beforeReclaimRemove func()
 
-// reapTickets removes the tickets of waiters that are gone.
-// It warns once (warned) about each ticket of a waiter on code from before
-// #2226 (no boot id): its reaper can move the lock from under its holder.
-func reapTickets(p procFS, q string, log func(string, ...any), warned map[string]bool) {
+// reapTickets removes the tickets of waiters that are gone, and stale ones:
+// a ticket untouched for staleBeat (one with beat=1) or staleOld (an older
+// client's, which touches none) is a stopped, hung or stray waiter's,
+// whatever its pid (#2282 QA: a head that does not move wedged everyone);
+// its waiter queues it again in its place when it resumes. A ticket that
+// cannot be read is judged by its name's pid and time. self, this waiter's
+// own ticket, is never removed. It warns once (warned) about each ticket of
+// a waiter on code from before #2226 (no boot id).
+func reapTickets(p procFS, q string, log func(string, ...any), warned map[string]bool, self string) {
 	entries, err := os.ReadDir(q)
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
 		parts := strings.Split(e.Name(), "-")
-		if len(parts) != 3 || strings.HasPrefix(e.Name(), ".") {
+		if len(parts) != 3 || strings.HasPrefix(e.Name(), ".") || e.Name() == self {
 			continue
 		}
 		ns, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {
 			continue
 		}
-		text, err := os.ReadFile(filepath.Join(q, e.Name()))
-		if err != nil {
-			continue
-		}
+		path := filepath.Join(q, e.Name())
+		text, err := os.ReadFile(path)
 		record := string(text)
-		if !strings.Contains(record, "boot=") && warned != nil && !warned[e.Name()] {
+		if err != nil {
+			record = "(a ticket that cannot be read)"
+		}
+		if st, serr := os.Stat(path); serr == nil {
+			limit := staleOld
+			if strings.Contains(record, "beat=1") {
+				limit = staleBeat
+			}
+			if age := time.Since(st.ModTime()); age > limit {
+				if os.Remove(path) == nil {
+					log("removed the ticket %s, untouched for %s (a waiter that is stopped, hung or gone; it queues again when it resumes)", e.Name(), age.Round(time.Second))
+				}
+				continue
+			}
+		}
+		if err == nil && !strings.Contains(record, "boot=") && warned != nil && !warned[e.Name()] {
 			warned[e.Name()] = true
 			log("warning: ticket %s is a waiter on code from before #2226 (%s); it can move the lock from under its holder: rebase it onto main",
 				e.Name(), strings.TrimSpace(record))
@@ -672,11 +771,30 @@ func reapTickets(p procFS, q string, log func(string, ...any), warned map[string
 			record += " pid " + parts[2] // an older client's ticket text has no pid
 		}
 		if recordDead(p, record, time.Unix(0, ns)) {
-			if os.Remove(filepath.Join(q, e.Name())) == nil {
+			if os.Remove(path) == nil {
 				log("removed the ticket %s of a waiter that is gone", e.Name())
 			}
 		}
 	}
+}
+
+// staleBeat and staleOld are how long a ticket may go untouched: a
+// heartbeat ticket (beat=1), an older client's. Tests set them.
+var (
+	staleBeat = 10 * time.Minute
+	staleOld  = 30 * time.Minute
+)
+
+// agePromote is how long a normal ticket waits before it sorts as a release
+// one (#2282 QA: release tickets never starve the others).
+const agePromote = 2 * time.Hour
+
+// priorityOf is a class's name in a record.
+func priorityOf(class string) string {
+	if class == classRelease {
+		return "release"
+	}
+	return "normal"
 }
 
 // firstTicket is the name of the ticket that sorts first in q, or "".
@@ -685,17 +803,25 @@ func firstTicket(q string) string {
 	if err != nil {
 		return ""
 	}
-	var names []string
+	first, firstKey := "", ""
+	now := time.Now().UnixNano()
 	for _, e := range entries {
-		if n := e.Name(); !strings.HasPrefix(n, ".") {
-			names = append(names, n)
+		n := e.Name()
+		if strings.HasPrefix(n, ".") {
+			continue
+		}
+		key := n
+		// A normal ticket that has waited agePromote sorts as a release one.
+		if parts := strings.SplitN(n, "-", 3); len(parts) == 3 && parts[0] == classNormal {
+			if ns, err := strconv.ParseInt(parts[1], 10, 64); err == nil && now-ns > int64(agePromote) {
+				key = classRelease + "-" + parts[1] + "-" + parts[2]
+			}
+		}
+		if first == "" || key < firstKey {
+			first, firstKey = n, key
 		}
 	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
+	return first
 }
 
 // watchDirs returns a channel that receives when an entry of one of dirs is

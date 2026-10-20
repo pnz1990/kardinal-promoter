@@ -210,6 +210,11 @@ SUITE=$1 MINOR=${2:-}
 [ -z "$count" ] || { [[ $count =~ ^[1-9][0-9]?$|^100$ ]] || die "-count $count: want 1 to 100"; }
 # A release run's tickets (class 0) go before the others' (1).
 case $priority in release) slot_class=0 ;; normal) slot_class=1 ;; *) die "-p $priority: want release or normal" ;; esac
+# A release run's tickets need RELEASE_GATE_PRIORITY_TOKEN to match the
+# token file the coordinator keeps next to the slots directory
+# (DIR/../.release-token, this user's, mode 600), as hack/loadlock.sh's and
+# the release gate's -priority release (#2282 QA): no one else jumps the
+# queues by saying so. Checked below, once the slots directory is known.
 # A targeted run says so wherever its result is shown.
 targeted=''
 [ -z "$run_re" ] || targeted=" (targeted: -run $run_re)"
@@ -260,6 +265,15 @@ COUNT=${count:-${COUNT:-1}}
 [[ $COUNT =~ ^[1-9][0-9]?$|^100$ ]] || die "COUNT=$COUNT: want 1 to 100"
 RETRY=${RETRY:-10}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
+if [ "$priority" = release ] && [ -z "$nolock" ]; then
+  release_token=${SLOTS_DIR%/}
+  if [[ $release_token == */* ]]; then release_token=${release_token%/*}/.release-token; else release_token=.release-token; fi
+  want=''
+  { read -r want <"$release_token"; } 2>/dev/null || want=''
+  mode=$(stat -c %a "$release_token" 2>/dev/null) || mode=''
+  [ -n "$want" ] && [ "$mode" = 600 ] && [ -O "$release_token" ] && [ "${RELEASE_GATE_PRIORITY_TOKEN:-}" = "$want" ] ||
+    die "-p release needs RELEASE_GATE_PRIORITY_TOKEN matching $release_token (mode 600): refusing to jump the queue"
+fi
 # The host's cluster slots: $SLOT_MAX, else SLOT_MAX=N in the host's
 # host.env next to the slots directory (DIR/../host.env, where the host's
 # capacity is tuned, not in this script), else 2; 1 to 4 (MAX_SLOTS), or
@@ -443,7 +457,7 @@ draining=''
 # host is the head while its drain lasts: the waiters ahead of it wait for
 # the drain, and it waits only for the clusters running.
 slot_queue=$SLOTS_DIR/.queue
-slot_ticket=''
+slot_ticket='' slot_ticket_text=''
 
 # with_flock NAME CMD... runs CMD under flock on SLOTS_DIR/NAME; never
 # without it: when flock fails (a fork that failed), with_flock fails.
@@ -570,22 +584,35 @@ in_use() {
 write_slot_ticket() {
   local _
   for _ in 1 2 3; do
-    mkdir -p "$slot_queue" && printf '%s\n' "$slot_tag" >"$slot_queue/.$slot_ticket" 2>/dev/null &&
+    mkdir -p "$slot_queue" && printf '%s\n' "$slot_ticket_text" >"$slot_queue/.$slot_ticket" 2>/dev/null &&
       mv "$slot_queue/.$slot_ticket" "$slot_queue/$slot_ticket" 2>/dev/null && return 0
   done
   die "cannot write the cluster slot ticket $slot_queue/$slot_ticket"
 }
 
-# reap_slot_tickets removes the tickets of waiters that are gone (a ticket's
-# text without a pid is judged by the pid in its name).
-# shellcheck disable=SC2329 # called by try_slots, through with_flock
+# A ticket untouched for SLOT_STALE seconds is a stopped, hung or stray
+# waiter's: removed, whatever its pid (#2282 QA: a head that does not move
+# wedged everyone); its waiter queues it again in its place when it resumes
+# (waiters touch theirs on every poll). LOCAL_LIVE_TEST_STALE sets it, in
+# the test mode.
+SLOT_STALE=600
+[ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_STALE:-} =~ ^[0-9]+$ ]] || SLOT_STALE=$LOCAL_LIVE_TEST_STALE
+
+# reap_slot_tickets removes the tickets of waiters that are gone, and stale
+# ones; never this run's own. A ticket that cannot be read, or whose text
+# has no pid, is judged by the pid in its name.
 reap_slot_tickets() {
-  local t name text
+  local t name text mtime now=${EPOCHSECONDS:-}
   for t in "$slot_queue"/[0-9]-*; do
     [ -e "$t" ] || continue
     name=${t##*/}
-    read_file "$t" || continue
-    text=$file_v
+    [ "$name" != "$slot_ticket" ] || continue
+    # stat is the one fork here: when it fails, the ticket is not stale.
+    if [[ $now =~ ^[0-9]+$ ]] && mtime=$(stat -c %Y "$t" 2>/dev/null) && [[ $mtime =~ ^[0-9]+$ ]] && ((now - mtime > SLOT_STALE)); then
+      rm -f "$t" && log "removed the cluster slot ticket $name, untouched for $((now - mtime))s (a waiter that is stopped, hung or gone; it queues again when it resumes)"
+      continue
+    fi
+    if read_file "$t"; then text=$file_v; else text='(a ticket that cannot be read)'; fi
     [[ $text =~ (^|[[:space:]])pid\ [0-9]+ ]] || text="$text pid ${name##*-}"
     if record_gone "$text"; then
       rm -f "$t" && log "removed the cluster slot ticket $name of a waiter that is gone"
@@ -593,16 +620,52 @@ reap_slot_tickets() {
   done
 }
 
-# first_slot_ticket sets first_v to the ticket that sorts first (bytewise).
-# shellcheck disable=SC2329 # called by try_slots, through with_flock
+# first_slot_ticket sets first_v to the ticket that sorts first (bytewise),
+# a normal ticket that has waited AGE_PROMOTE seconds (2h) sorting as a
+# release one (#2282 QA: release tickets never starve the others).
+AGE_PROMOTE=7200
 first_slot_ticket() {
-  local t name LC_ALL=C
+  local t name key first_key='' rest tns now_ns='' LC_ALL=C
+  [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]] && now_ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
   first_v=''
   for t in "$slot_queue"/[0-9]-*; do
     [ -e "$t" ] || continue
-    name=${t##*/}
-    if [ -z "$first_v" ] || [[ $name < $first_v ]]; then first_v=$name; fi
+    name=${t##*/} key=${t##*/}
+    rest=${name#*-} tns=${rest%%-*}
+    if [ "${name%%-*}" = 1 ] && [ -n "$now_ns" ] && [[ $tns =~ ^[0-9]+$ ]] && ((10#$now_ns - 10#$tns > AGE_PROMOTE * 1000000000)); then
+      key=0-$rest
+    fi
+    if [ -z "$first_v" ] || [[ $key < $first_key ]]; then first_v=$name first_key=$key; fi
   done
+}
+
+# slots_room succeeds when this run's slots could be taken now (judged again
+# under the flock); otherwise it sets why.
+slots_room() {
+  in_use
+  if [ -n "$heavy" ] && ((in_use_v > HEAVY_OTHER_SLOTS)); then
+    why="$in_use_v other cluster slots are in use; a heavy suite starts with at most $HEAVY_OTHER_SLOTS"
+    return 1
+  fi
+  if ((in_use_v + need_slots > SLOT_MAX)); then
+    why="$in_use_v cluster slots are in use in $SLOTS_DIR, and the host has $SLOT_MAX"
+    return 1
+  fi
+}
+
+# slots_reclaim_due succeeds when a slot's owner (or the drain marker's run)
+# looks gone, or a slot is a kept cluster's (judged again under the flock):
+# only then does a waiter that is not the head take the flock, so a waiter
+# stopped while it waits seldom holds it.
+slots_reclaim_due() {
+  local d
+  for d in "$SLOTS_DIR"/[0-9]*; do
+    [ -d "$d" ] || continue
+    read_file "$d/owner" || continue
+    [[ $file_v == KEEP\ * ]] && return 0
+    record_gone "$file_v" && return 0
+  done
+  read_file "$SLOTS_DIR/.drain" && record_gone "$file_v"
 }
 
 # try_slots, under the .reclaim flock and in this shell (it sets taken):
@@ -614,7 +677,6 @@ try_slots() {
   local i d
   why=''
   reclaim_slots
-  reap_slot_tickets
   if [ ! -e "$slot_queue/$slot_ticket" ]; then
     write_slot_ticket
     log "cluster slot ticket $slot_ticket was gone; queued it again in its place"
@@ -681,6 +743,7 @@ take_slots() {
     ns=$(date +%s%N) && [[ $ns =~ ^[0-9]+$ ]] || die "cannot read the time for a cluster slot ticket"
   fi
   printf -v slot_ticket '%s-%019d-%d' "$slot_class" "$((10#$ns))" "$$"
+  slot_ticket_text="$slot_tag priority=$priority beat=1"
   write_slot_ticket
   if [ -n "$heavy" ]; then
     # Drain: no new run takes a slot from now on, for DRAIN_DEADLINE at most.
@@ -689,7 +752,32 @@ take_slots() {
     drain_since=${EPOCHSECONDS:-}
     [ -n "$drain_since" ] || printf -v drain_since '%(%s)T' -1
   fi
-  while ! with_flock .reclaim try_slots; do
+  while :; do
+    # The heartbeat (a builtin write: its time is the ticket's mtime); a
+    # ticket removed as stale is queued again in its place.
+    if [ -e "$slot_queue/$slot_ticket" ]; then
+      printf '%s\n' "$slot_ticket_text" >"$slot_queue/$slot_ticket" 2>/dev/null || true
+    else
+      write_slot_ticket
+      log "cluster slot ticket $slot_ticket was gone; queued it again in its place"
+    fi
+    reap_slot_tickets
+    first_slot_ticket
+    # The flock only when it can matter (a waiter stopped while it waits
+    # seldom holds it): to reclaim, or for the head's take when there is
+    # room; everything is judged again under it.
+    if [ -z "$draining" ] && [ -e "$SLOTS_DIR/.drain" ]; then
+      read_file "$SLOTS_DIR/.drain" || file_v='(a marker that cannot be read)'
+      why="a heavy suite is draining the host: $file_v"
+      ! slots_reclaim_due || with_flock .reclaim reclaim_slots || true
+    elif [ -z "$draining" ] && [ "$first_v" != "$slot_ticket" ]; then
+      why="cluster slot ticket $slot_ticket waits behind ${first_v:-?}"
+      ! slots_reclaim_due || with_flock .reclaim reclaim_slots || true
+    elif ! slots_reclaim_due && ! slots_room; then
+      : # why says it
+    elif with_flock .reclaim try_slots; then
+      break
+    fi
     drain_expired
     [ "$why" = "$said" ] || log "waiting for a cluster slot: $why; checking every ${RETRY}s"
     said=$why
