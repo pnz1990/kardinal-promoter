@@ -42,11 +42,15 @@ const guideChartV0120 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --versio
 // u012From is the v0.12 release an upgrade-v012x suite upgrades from: the
 // prefix of its pins in hack/e2e/versions.env (V0120 for v0.12.0), which its
 // component installs it by, the CLI that runs it (Env.KardinalV0120, …) and
-// the chart reference its "Upgrading from" guide names.
+// the chart reference its "Upgrading from" guide names. extra, when set,
+// is a case of the suite's own: it runs before the estate's versions start,
+// under the release, and returns the checks to make after the upgrade, once
+// the held gates are checked.
 type u012From struct {
 	pins       string
 	cli        func(e *framework.Env, t *testing.T, ns string, args ...string) (string, error)
 	guideChart string
+	extra      func(t *testing.T, e *framework.Env, from u012From) (after func())
 }
 
 // u012Pins is the release from installs: its chart version ("0.12.0"),
@@ -424,6 +428,10 @@ func u012Upgrade(t *testing.T, from u012From) {
 	shipped := s.pipeline(t, s.frozen, "shipped", u0120Envs("test", "prod"))
 	fixer := policyAgent(t, e, s.frozen.NS, "fixer", "sponsor-"+s.frozen.NS+"@example.com", v1alpha1.AutonomyAuto)
 	t.Logf("estate: %d Pipelines in %d namespaces", len(s.repos), len(s.fleets()))
+	var extraAfter func()
+	if from.extra != nil {
+		extraAfter = from.extra(t, e, from)
+	}
 
 	// Versions that finish before the upgrade: two on steady (the rollback after
 	// the upgrade returns prod to the first), and rollback-pre's two.
@@ -741,6 +749,9 @@ func u012Upgrade(t *testing.T, from u012From) {
 		return true, ""
 	})
 	e.StepHeld(t, s.frozen.NS, shipped, agentB, "test", "frozen by "+freeze, 10*time.Second)
+	if extraAfter != nil {
+		extraAfter()
+	}
 
 	// ── Everything in flight finishes ───────────────────────────────────
 	var reviewRepos []gitserver.Repo
