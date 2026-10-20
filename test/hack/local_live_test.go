@@ -222,6 +222,67 @@ func TestLocalLive(t *testing.T) {
 		assert.NoDirExists(t, h.lock)
 		assert.NoDirExists(t, filepath.Join(h.slots, "1"))
 	})
+	t.Run("a signal while it makes its cluster slot gives the slot back (#2316 follow-up)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		// bash runs a signal's trap once the command it waits for is done:
+		// a mkdir that makes the slot and then sleeps (in front of PATH while
+		// the run takes its slots) is the moment after the mkdir, before the
+		// owner write.
+		h := newLocalLiveHost(t)
+		bin := t.TempDir()
+		mkdir, err := exec.LookPath("mkdir")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "mkdir"), []byte("#!/bin/sh\n"+mkdir+` "$@" || exit
+case "$*" in */slots/[0-9]) sleep 1 ;; esac
+`), 0o755))
+		cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_FAIL_PATH=" + bin}, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		slot := filepath.Join(h.slots, "1")
+		require.Eventually(t, func() bool { _, err := os.Stat(slot); return err == nil }, 10*time.Second, 5*time.Millisecond)
+		_, oerr := os.Stat(filepath.Join(slot, "owner"))
+		require.ErrorIs(t, oerr, os.ErrNotExist, "the signal comes before the owner write")
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err = cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.NoDirExists(t, slot, "the slot: %s", out.String())
+		assert.Empty(t, h.read("up"), "no cluster started")
+	})
+	t.Run("a signal while its mkdir loses the slot to another taker leaves that taker's slot (#2352 QA)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		// The mkdir in front of PATH makes slot 1 with another live run's
+		// record in it, sleeps, and fails, as a mkdir that lost the race
+		// does: the signal's trap runs with making still naming slot 1.
+		// release_slots gives up only a slot with no owner yet or this run's.
+		h := newLocalLiveHost(t)
+		bin := t.TempDir()
+		mkdir, err := exec.LookPath("mkdir")
+		require.NoError(t, err)
+		rec := filepath.Join(t.TempDir(), "record")
+		other := liveRecord(t, "another taker") + "\n"
+		require.NoError(t, os.WriteFile(rec, []byte(other), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "mkdir"), []byte("#!/bin/sh\ncase \"$*\" in\n*/slots/1) "+mkdir+` "$1" || exit; cat "$OTHER_RECORD" >"$1/owner"; sleep 1; exit 1 ;;
+esac
+exec `+mkdir+` "$@"
+`), 0o755))
+		cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_FAIL_PATH=" + bin, "OTHER_RECORD=" + rec}, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		owner := filepath.Join(h.slots, "1", "owner")
+		require.Eventually(t, func() bool { b, err := os.ReadFile(owner); return err == nil && string(b) == other },
+			10*time.Second, 5*time.Millisecond)
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err = cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		b, rerr := os.ReadFile(owner)
+		require.NoError(t, rerr, "the other taker's slot is left: %s", out.String())
+		assert.Equal(t, other, string(b))
+		assert.Empty(t, h.read("up"), "no cluster started")
+	})
 	t.Run("the owner names the cluster, so two agents' runs do not collide", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
