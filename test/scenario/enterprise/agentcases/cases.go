@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -622,16 +623,15 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 		t.Logf("  %-48s %d", k, verdicts[k])
 	}
 
-	// The single-pass ratio this check used before #2028, logged to compare.
-	tenth := idx.DeepCopy()
-	tenth.Status.Users, tenth.Status.Groups = subset(idx.Status.Users, 10), subset(idx.Status.Groups, 10)
+	half := idx.DeepCopy()
+	half.Status.Users, half.Status.Groups = subset(idx.Status.Users, 2), subset(idx.Status.Groups, 2)
 	empty := idx.DeepCopy()
 	empty.Status.Users, empty.Status.Groups = nil, nil
-	fullBytes, smallBytes, emptyBytes := jsonSize(t, idx.Status), jsonSize(t, tenth.Status), jsonSize(t, empty.Status)
+	fullBytes, halfBytes, emptyBytes := jsonSize(t, idx.Status), jsonSize(t, half.Status), jsonSize(t, empty.Status)
 	sort.Slice(full, func(i, j int) bool { return full[i] < full[j] })
 	t.Logf("admission over the index (%d KiB): p50 %s, p99 %s, max %s", fullBytes>>10, median(full),
 		full[len(full)*99/100], full[len(full)-1])
-	assertLinearAdmission(t, api, send, prs, idx, tenth, empty, fullBytes, smallBytes, emptyBytes)
+	assertLinearAdmission(t, api, send, prs, idx, half, empty, fullBytes, halfBytes, emptyBytes)
 }
 
 // growthRounds and growthSample size assertLinearAdmission: the rounds whose
@@ -642,20 +642,22 @@ const (
 )
 
 // assertLinearAdmission checks that the actor policy's admission cost grows
-// at most linearly with the AgentIndex (#1936 makes it linear; #2028 made
-// the check stable). It times the same requests against the full index, a
-// tenth of it and an empty one, interleaved in growthRounds rounds (the
-// order rotates, so drift on a shared runner hits all three alike), takes in
-// each round the cost above the empty index's (the fixed cost of a request,
-// which dominates the small index's) and the ratio of the full index's to
-// the tenth's, and asserts that the median of the round ratios stays under
-// twice the ratio of the index sizes above the empty one. A linear cost
-// gives about the size ratio; a quadratic one its square.
+// at most linearly with the AgentIndex (#1936 makes it linear). It times the
+// same requests against the full index, half of it and an empty one,
+// interleaved in growthRounds rounds (the order rotates, so drift on a
+// shared runner hits all three alike), and asserts growthShape's median
+// round ratio stays under its bound.
+//
+// Before #2270 it compared the full index with a tenth of it above the
+// empty one: the tenth costs a millisecond or two more than the empty
+// index, the size of a shared runner's noise, so the ratio of those
+// differences failed a linear cost (3x CPU overcommit: 5 of 6 runs; CI:
+// #2284, an empty-index round of 12ms above the tenth's 5ms).
 func assertLinearAdmission(t *testing.T, api *scenario.APIServer, send func(probe) (time.Duration, error), prs []probe,
-	full, tenth, empty *v1alpha1.AgentIndex, fullBytes, smallBytes, emptyBytes int) {
+	full, half, empty *v1alpha1.AgentIndex, fullBytes, halfBytes, emptyBytes int) {
 	t.Helper()
 	sample := prs[:min(len(prs), growthSample)]
-	indexes := []*v1alpha1.AgentIndex{full, tenth, empty}
+	indexes := []*v1alpha1.AgentIndex{full, half, empty}
 	timeOf := func(idx *v1alpha1.AgentIndex) time.Duration {
 		require.NoError(t, api.SetAgentIndex(idx))
 		var ds []time.Duration
@@ -665,34 +667,48 @@ func assertLinearAdmission(t *testing.T, api *scenario.APIServer, send func(prob
 		}
 		return median(ds)
 	}
-	var ratios []float64
-	var singlePass float64
+	rounds := make([]growthRound, 0, growthRounds)
 	for r := 0; r < growthRounds; r++ {
 		p50 := map[*v1alpha1.AgentIndex]time.Duration{}
 		for k := range indexes {
 			idx := indexes[(r+k)%len(indexes)]
 			p50[idx] = timeOf(idx)
 		}
-		above := func(idx *v1alpha1.AgentIndex) float64 {
-			// A floor of a microsecond keeps a round where the small index
-			// costs no more than the empty one from dividing by zero.
-			return max(float64(p50[idx]-p50[empty]), float64(time.Microsecond))
-		}
-		ratios = append(ratios, above(full)/above(tenth))
-		if r == 0 {
-			singlePass = float64(p50[full]) / float64(p50[tenth])
-		}
-		t.Logf("admission round %d: p50 %s at %d KiB, %s at %d KiB, %s empty (%d KiB): ratio above empty %.2f",
-			r, p50[full], fullBytes>>10, p50[tenth], smallBytes>>10, p50[empty], emptyBytes>>10, ratios[r])
+		rounds = append(rounds, growthRound{empty: p50[empty], half: p50[half], full: p50[full]})
+		t.Logf("admission round %d: p50 %s empty (%d KiB), %s at %d KiB, %s at %d KiB",
+			r, p50[empty], emptyBytes>>10, p50[half], halfBytes>>10, p50[full], fullBytes>>10)
 	}
-	sorted := append([]float64(nil), ratios...)
-	sort.Float64s(sorted)
-	got := sorted[len(sorted)/2]
-	bound := 2 * float64(fullBytes-emptyBytes) / float64(smallBytes-emptyBytes)
-	t.Logf("admission growth: median ratio %.2f over %d rounds (min %.2f, max %.2f), bound %.2f; single-pass ratio (before #2028) %.2f",
-		got, growthRounds, sorted[0], sorted[len(sorted)-1], bound, singlePass)
-	assert.Less(t, got, bound, "admission cost grows faster than linearly with the index (median ratio %.2f, round ratios %v)",
-		got, ratios)
+	ratio, bound, ratios := growthShape(rounds, emptyBytes, halfBytes, fullBytes)
+	t.Logf("admission growth: median ratio %.2f of the upper half's cost per byte to the lower half's, round ratios %.2f, bound %.2f (linear 1)",
+		ratio, ratios, bound)
+	assert.Less(t, ratio, bound, "admission cost grows faster than linearly with the index (median ratio %.2f, round ratios %.2f)",
+		ratio, ratios)
+}
+
+// growthRound is one round's p50 admission cost at the empty, half and full
+// index.
+type growthRound struct{ empty, half, full time.Duration }
+
+// growthShape returns the median over rounds of the admission cost per
+// index byte over the index's upper half (half to full) divided by its
+// lower half's (empty to half), each round's ratio, and the bound the
+// median must stay under. A linear cost gives about 1, a quadratic one
+// (F+H)/(H+E), about 2.6 for the enterprise index; the bound is the ratio of
+// a cost half of whose growth from the empty index to the full one is
+// quadratic, (2F+H+E)/(F+H+2E), about 1.58. Both halves span thousands of
+// bytes, so neither difference is a few milliseconds of noise; a round
+// whose half index costs no more than the empty one (a stall timing the
+// empty one) is floored at a microsecond, a high ratio the median
+// discards.
+func growthShape(rounds []growthRound, emptyBytes, halfBytes, fullBytes int) (ratio, bound float64, ratios []float64) {
+	e, h, f := float64(emptyBytes), float64(halfBytes), float64(fullBytes)
+	for _, r := range rounds {
+		lower := max(float64(r.half-r.empty), float64(time.Microsecond)) / (h - e)
+		upper := float64(r.full-r.half) / (f - h)
+		ratios = append(ratios, upper/lower)
+	}
+	sorted := slices.Sorted(slices.Values(ratios))
+	return sorted[len(sorted)/2], (2*f + h + e) / (f + h + 2*e), ratios
 }
 
 // subset keeps every k-th entry of m, by key order.
