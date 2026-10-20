@@ -617,15 +617,18 @@ func TestLoadLock_MixedClients(t *testing.T) {
 		// crit KIND DIR [CLIENT]: the critical section. A new client may share it
 		// with one other new client; an older one with nobody.
 		crit := filepath.Join(t.TempDir(), "crit.sh")
+		// One listing, counted in the shell: a fork that fails on a busy
+		// host is a crit error, never a violation, and the violation names
+		// the markers it counted.
 		require.NoError(t, os.WriteFile(crit, []byte(`kind=$1 d=$2 me=$d/$kind.$$.${3:-new}
-mkdir "$me"
-n_new=$(find "$d" -maxdepth 1 -name 'new.*' | wc -l)
-n_all=$(find "$d" -maxdepth 1 \( -name 'new.*' -o -name 'old.*' \) | wc -l)
-if [ "$kind" = new ]; then
-  [ "$n_new" -le 2 ] && [ "$n_new" -eq "$n_all" ] || { echo "$kind.$$ saw: $(ls "$d" | tr '\n' ' ') LOCK/owner: $(cat "$d/LOADLOCK/owner" 2>&1 | tr '\n' '|')" >>"$d/violation"; }
-else
-  [ "$n_all" -eq 1 ] || { echo "$kind.$$ saw: $(ls "$d" | tr '\n' ' ') LOCK/owner: $(cat "$d/LOADLOCK/owner" 2>&1 | tr '\n' '|')" >>"$d/violation"; }
-fi
+mkdir "$me" || { echo "crit: mkdir $me failed" >>"$d/crit-error"; exit 1; }
+seen=$(cd "$d" && echo new.* old.*) || { echo "crit: listing failed" >>"$d/crit-error"; rmdir "$me"; exit 1; }
+n_new=0 n_all=0
+for m in $seen; do
+  case $m in new.\*|old.\*) ;; new.*) n_new=$((n_new + 1)); n_all=$((n_all + 1)) ;; old.*) n_all=$((n_all + 1)) ;; esac
+done
+if [ "$kind" = new ]; then ok=$([ "$n_new" -le 2 ] && [ "$n_new" -eq "$n_all" ] && echo y); else ok=$([ "$n_all" -eq 1 ] && echo y); fi
+[ "$ok" = y ] || echo "$kind.$$ counted: $seen; slots: $(cat "$d"/LOADLOCK.d/*/owner 2>&1 | tr '\n' '|') LOCK/owner: $(cat "$d/LOADLOCK/owner" 2>&1 | tr '\n' '|')" >>"$d/violation"
 sleep 0.05
 rmdir "$me"
 `), 0o755))
@@ -676,10 +679,21 @@ if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; e
 				t.Fatalf("round %d: clients never got their lock", r)
 			}
 			violations, notOurs, left := 0, 0, 0
-			for _, dir := range dirs {
+			for i, dir := range dirs {
 				if b, err := os.ReadFile(filepath.Join(dir, "violation")); err == nil {
 					violations++
 					t.Logf("round %d %s: %s", r, dir, b)
+					// What its clients said: reclaims, fork failures.
+					for _, o := range outs[i*8 : i*8+8] {
+						for _, l := range strings.Split(o.String(), "\n") {
+							if !strings.Contains(l, "checking again") && strings.TrimSpace(l) != "" {
+								t.Logf("  client: %s", l)
+							}
+						}
+					}
+				}
+				if b, err := os.ReadFile(filepath.Join(dir, "crit-error")); err == nil {
+					t.Logf("round %d %s: a crit error (not counted): %s", r, dir, b)
 				}
 				if _, err := os.Stat(filepath.Join(dir, "LOADLOCK")); err == nil {
 					left++
