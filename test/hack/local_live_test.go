@@ -345,12 +345,13 @@ exec "$@"
 	t.Run("a copy outside a checkout never hands off to a copy that does not keep the run off the user's kubeconfig", func(t *testing.T) {
 		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
 		require.NoError(t, err)
-		require.Contains(t, string(src), "\nLOCAL_LIVE_VERSION=3\n")
+		require.Contains(t, string(src), "\nLOCAL_LIVE_VERSION=4\n")
 		require.Contains(t, string(src), "\nLOCAL_LIVE_ISOLATION=kubeconfig,home\n")
 		for _, tc := range []struct{ name, own string }{
 			// a89b89b6f: version 2, no scratch HOME, no top KUBECONFIG=/dev/null.
 			{"version 2, as a89b89b6f", "LOCAL_LIVE_VERSION=2\n"},
-			{"as new, without the isolation line", "LOCAL_LIVE_VERSION=3\n"},
+			{"as new, without the isolation line", "LOCAL_LIVE_VERSION=4\n"},
+			{"version 3, without the slot queue", "LOCAL_LIVE_VERSION=3\nLOCAL_LIVE_ISOLATION=kubeconfig,home\n"},
 			{"newer, without the isolation line", "LOCAL_LIVE_VERSION=9\n"},
 			{"newer, with another isolation", "LOCAL_LIVE_VERSION=9\nLOCAL_LIVE_ISOLATION=kubeconfig\n"},
 		} {
@@ -381,7 +382,7 @@ exec "$@"
 				require.NoError(t, err, "%s", out)
 				assert.Empty(t, h.read("own"), "the checkout's copy is not run")
 				assert.Contains(t, h.read("run"), "RUN_HOME="+filepath.Join(h.state, "kardinal-e2e-ll-test-gitea-37", "runs"), "the shared copy ran it, with a scratch HOME")
-				if strings.Contains(tc.own, "=9") || strings.Contains(tc.own, "=3") {
+				if strings.Contains(tc.own, "VERSION=9") || strings.Contains(tc.own, "VERSION=4") {
 					assert.Contains(t, string(out), "does not keep the run off the user's kubeconfig")
 				}
 			})
