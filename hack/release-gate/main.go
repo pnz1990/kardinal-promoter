@@ -38,6 +38,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -87,7 +88,7 @@ func run() error {
 		priority  = flag.String("priority", "normal", "the heavy-load lock queue class: release (a release gate: served before every other waiter) or normal")
 		slots     = flag.String("slots", os.Getenv("RELEASE_GATE_SLOTS"), "the host's shared cluster slots: a cluster step takes DIR/1..-slot-max with mkdir (default $RELEASE_GATE_SLOTS); cluster steps need it or -no-slots")
 		noSlots   = flag.Bool("no-slots", false, "start clusters without taking the host's cluster slots (a host of your own)")
-		slotMax   = flag.Int("slot-max", 4, "how many cluster slots the host has")
+		slotMax   = flag.Int("slot-max", slotMaxDefault(), "how many cluster slots the host has (default $SLOT_MAX, else 2, as hack/e2e/local-live.sh): no cluster starts while that many slot directories are held, one above it too")
 		live      = flag.String("live", "local", "where the live suites run: local (kind on this host) or ci (one e2e-live.yml dispatch; scale stays local)")
 		ref       = flag.String("ref", "", "with -live ci, the pushed branch at this commit (default the current branch)")
 		ghRepo    = flag.String("repo", "pnz1990/kardinal-promoter", "with -live ci, the GitHub repository")
@@ -275,6 +276,15 @@ func run() error {
 		return fmt.Errorf("verdict %s", v)
 	}
 	return nil
+}
+
+// slotMaxDefault is $SLOT_MAX when it is a positive number, else 2: the
+// host's cluster slots, the default hack/e2e/local-live.sh uses too.
+func slotMaxDefault() int {
+	if n, err := strconv.Atoi(os.Getenv("SLOT_MAX")); err == nil && n > 0 {
+		return n
+	}
+	return 2
 }
 
 // hostRulesProblem refuses heavy steps without the heavy-load lock and

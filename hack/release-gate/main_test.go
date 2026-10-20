@@ -655,7 +655,7 @@ func TestMachineSlots(t *testing.T) {
 	require.True(t, ok)
 	_, ok, why := b.Slots(2)
 	assert.False(t, ok, "one slot left")
-	assert.Contains(t, why, "fewer than 2 of the host's 3 cluster slots")
+	assert.Contains(t, why, "2 cluster slots are in use in "+dir+", and the host has 3")
 	entries, _ := os.ReadDir(dir)
 	assert.Len(t, entries, 2, "a failed take leaves no slot behind")
 	relB, ok, _ := b.Slots(1)
@@ -677,6 +677,63 @@ func TestMachineSlots(t *testing.T) {
 	none, ok, _ := (&machine{}).Slots(5)
 	assert.True(t, ok, "no slots directory: no limit")
 	none()
+}
+
+// TestMachineSlots_AboveSlotMaxCount (#2244): a slot directory above
+// slot-max (a run with a larger SLOT_MAX took it) is never taken, and counts:
+// the host runs slot-max clusters at most.
+func TestMachineSlots_AboveSlotMaxCount(t *testing.T) {
+	dir := t.TempDir()
+	m := &machine{slotsDir: dir, slotMax: 2, owner: "gate"}
+	for _, n := range []string{"3", "4"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, n), 0o755))
+	}
+	_, ok, why := m.Slots(1)
+	assert.False(t, ok, "slots 1 and 2 are free, but two clusters run")
+	assert.Contains(t, why, "2 cluster slots are in use")
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, "4")))
+	release, ok, why := m.Slots(1)
+	require.True(t, ok, why)
+	assert.DirExists(t, filepath.Join(dir, "1"), "slot 1, never one above slot-max")
+	release()
+	_, ok, _ = m.Slots(2)
+	assert.False(t, ok, "slot 3 and two more would be three")
+	assert.NoDirExists(t, filepath.Join(dir, "1"))
+
+	t.Setenv("SLOT_MAX", "")
+	assert.Equal(t, 2, slotMaxDefault(), "the host's default, as local-live.sh's")
+	t.Setenv("SLOT_MAX", "3")
+	assert.Equal(t, 3, slotMaxDefault())
+	t.Setenv("SLOT_MAX", "zero")
+	assert.Equal(t, 2, slotMaxDefault())
+}
+
+// TestDrainLive (#2244 QA): a .drain record is judged by local-live.sh's
+// record rule: another boot's, a gone pid's, or a reused pid's (another
+// start time) is not live.
+func TestDrainLive(t *testing.T) {
+	proc := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "sys", "kernel", "random"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "sys", "kernel", "random", "boot_id"), []byte("b-now\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "4242"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "4242", "stat"),
+		[]byte("4242 (a (weird) name) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 777 19 20\n"), 0o644))
+	for _, tc := range []struct {
+		name, record string
+		live         bool
+	}{
+		{"the drainer runs", "E local-live scale 1.37 draining the host for a heavy suite, pid 4242 now boot=b-now start=777", true},
+		{"its pid was reused: another start time", "E local-live scale 1.37 draining the host for a heavy suite, pid 4242 now boot=b-now start=776", false},
+		{"another boot's", "E local-live scale 1.37 draining the host for a heavy suite, pid 4242 now boot=b-old start=777", false},
+		{"its pid is gone", "E local-live scale 1.37 draining the host for a heavy suite, pid 4243 now boot=b-now start=777", false},
+		{"an older record: pid only", "E local-live scale 1.37 draining the host, pid 4242 now", true},
+		{"no pid", "a person, by hand", true},
+		{"this process's", fmt.Sprintf("gate pid %d now", os.Getpid()), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.live, drainLive(tc.record, proc))
+		})
+	}
 }
 
 // TestMachineSlots_HonourTheDrain (#2244 QA): while a heavy local-live

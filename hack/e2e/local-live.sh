@@ -32,7 +32,8 @@
 #
 # A copy outside a checkout (the host's shared one) runs the checkout it is
 # run from; when that checkout's local-live.sh is at least as new
-# (LOCAL_LIVE_VERSION), the copy runs it instead.
+# (LOCAL_LIVE_VERSION) and keeps the run off the user's kubeconfig
+# (LOCAL_LIVE_ISOLATION), the copy runs it instead.
 #
 # A cluster's state (up.sh's E2E_OUT: its kubeconfig, the env file the
 # tests source, the git server's and Argo CD's generated secrets) lives in
@@ -72,7 +73,9 @@
 #                later -reuse
 #   KARDINAL_E2E_STATE  STATE (default: e2e-state next to $LOADLOCK, the
 #                host's shared directory; test/e2e/results with -no-lock)
-#   SLOT_MAX     the host's cluster slots (default 4)
+#   SLOT_MAX     the host's cluster slots (default 2): no run starts a
+#                cluster while SLOT_MAX slots are in use, counting any slot
+#                directory above SLOT_MAX a run with a larger one took
 #   OWNER        who holds the lock and slot (default $AGENT_ID or $USER)
 #   RETRY        seconds between tries for a slot, and the longest a lock
 #                waiter sleeps (default 10; hack/loadlock.sh wakes sooner)
@@ -87,11 +90,19 @@ set -euo pipefail
 # production cluster): nothing before the run's own kind kubeconfig can reach
 # one. The run below points KUBECONFIG at its cluster's file, and HOME at a
 # scratch directory, so no ~/.kube/config fallback exists for any child.
+# The isolation covers HOME and KUBECONFIG; a child that looks the real home
+# up in the password database on purpose (getent passwd, bash ~user, Go's
+# os/user) still finds it. Nothing in the tree does.
 export KUBECONFIG=/dev/null
 
 # LOCAL_LIVE_VERSION orders copies of this script: the shared copy runs a
-# checkout's own when it is at least as new.
-LOCAL_LIVE_VERSION=2
+# checkout's own when it is at least as new, and only when it says
+# LOCAL_LIVE_ISOLATION=kubeconfig,home (#2233, #2244 QA): a copy at 3 or
+# above must keep the KUBECONFIG and HOME isolation above and below, and the
+# line; one without the line (version 2's a89b89b6f had none of it) is
+# never run by a copy that has it.
+LOCAL_LIVE_VERSION=3
+LOCAL_LIVE_ISOLATION=kubeconfig,home
 # The load gate: a cluster starts only while the one-minute load is under
 # MAX_LOAD (HEAVY_MAX_LOAD for a heavy suite, which also needs at most
 # HEAVY_OTHER_SLOTS other slots in use), checked every LOAD_RETRY seconds,
@@ -125,7 +136,10 @@ if [ ! -f "$REPO_ROOT/hack/e2e/matrix.txt" ]; then
   own=$REPO_ROOT/hack/e2e/local-live.sh
   own_version=$(sed -n 's/^LOCAL_LIVE_VERSION=\([0-9]*\)$/\1/p' "$own" 2>/dev/null | head -1)
   if [ "${own_version:-0}" -ge "$LOCAL_LIVE_VERSION" ]; then
-    exec bash "$own" "$@"
+    if grep -qx "LOCAL_LIVE_ISOLATION=$LOCAL_LIVE_ISOLATION" "$own" 2>/dev/null; then
+      exec bash "$own" "$@"
+    fi
+    echo "local-live: $own (version $own_version) does not keep the run off the user's kubeconfig (no LOCAL_LIVE_ISOLATION=$LOCAL_LIVE_ISOLATION); running this copy instead" >&2
   fi
 fi
 E2E_DIR=${LOCAL_LIVE_E2E_DIR:-$REPO_ROOT/hack/e2e}
@@ -202,7 +216,7 @@ export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$owner_part-$SUITE-${MINOR#1
 case $KIND_CLUSTER in kardinal-e2e-*) ;; *) die "KIND_CLUSTER=$KIND_CLUSTER must start with kardinal-e2e-" ;; esac
 COUNT=${COUNT:-1}
 RETRY=${RETRY:-10}
-SLOT_MAX=${SLOT_MAX:-4}
+SLOT_MAX=${SLOT_MAX:-2}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
 need_slots=1
 [ "$SUITE" != multi-cluster ] || need_slots=2
@@ -416,6 +430,12 @@ try_slots() {
   fi
   if [ -n "$heavy" ] && [ "$(in_use)" -gt "$HEAVY_OTHER_SLOTS" ]; then
     why="$(in_use) other cluster slots are in use; a heavy suite starts with at most $HEAVY_OTHER_SLOTS"
+    return 1
+  fi
+  # Every slot directory counts, one above SLOT_MAX too (a run with a larger
+  # SLOT_MAX took it): the host runs SLOT_MAX clusters at most.
+  if [ $(($(in_use) + need_slots)) -gt "$SLOT_MAX" ]; then
+    why="$(in_use) cluster slots are in use in $SLOTS_DIR, and the host has $SLOT_MAX"
     return 1
   fi
   for ((i = 1; i <= SLOT_MAX && ${#taken[@]} < need_slots; i++)); do

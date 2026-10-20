@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -107,7 +108,7 @@ func (h *localLiveHost) cmd(t *testing.T, env []string, args ...string) *exec.Cm
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(h.dir, "bin")+":"+os.Getenv("PATH"),
 		"KUBECONFIG=/dev/null", "KARDINAL_E2E_TOOLS=path", "KARDINAL_E2E_BUILD=", "KARDINAL_E2E_STATE=",
-		"KIND_CLUSTER=", "KEEP=", "AGENT_BADGE=", "RETRY=0.05", "OWNER=test", "AGENT_ID=",
+		"KIND_CLUSTER=", "KEEP=", "AGENT_BADGE=", "RETRY=0.05", "OWNER=test", "AGENT_ID=", "SLOT_MAX=", "DRAIN_DEADLINE=",
 		"LOCAL_LIVE_E2E_DIR="+filepath.Join(h.dir, "e2e"), "FAKE="+h.fake,
 		"LOADLOCK="+h.lock, "RELEASE_GATE_SLOTS="+h.slots,
 		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots,
@@ -273,6 +274,7 @@ func TestLocalLive(t *testing.T) {
 # a counting lock: [-x] holds it alone (exclusive=1)
 echo shared >>"$FAKE/loadlock"
 echo "$*" >>"$FAKE/loadlock-args"
+echo "KUBECONFIG=$KUBECONFIG" >>"$FAKE/loadlock-env"
 while [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
@@ -292,11 +294,18 @@ exec "$@"
 			out, err := git.CombinedOutput()
 			require.NoError(t, err, "git %v: %s", args, out)
 		}
-		cmd := h.cmd(t, nil, "scale")
+		// The caller's KUBECONFIG is a production-like file (#2244 QA): a
+		// tool run before the run's own kubeconfig is set must not see it.
+		prod := filepath.Join(t.TempDir(), "prod-kubeconfig")
+		require.NoError(t, os.WriteFile(prod, []byte("production\n"), 0o600))
+		cmd := h.cmd(t, []string{"KUBECONFIG=" + prod}, "scale")
 		cmd.Args[1] = filepath.Join(shared, "local-live.sh")
 		cmd.Dir = old
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
+		assert.Equal(t, "KUBECONFIG=/dev/null\n", h.read("loadlock-env"), "the lock, run before the cluster exists, sees no kubeconfig")
+		assert.NotContains(t, h.read("up"), prod)
+		assert.NotContains(t, h.read("run"), prod)
 		assert.Empty(t, h.read("old"), "the older checkout's own script is not run")
 		assert.Equal(t, "shared\n", h.read("loadlock"), "the heavy suite ran under the shared loadlock.sh")
 		assert.Contains(t, h.read("loadlock-args"), " -x ", "a heavy suite holds a counting lock alone")
@@ -324,6 +333,51 @@ exec "$@"
 		require.NoError(t, err, "%s", out)
 		assert.Empty(t, h.read("loadlock"), "the checkout's own script ran, with its own loadlock.sh")
 		assert.Contains(t, h.read("up"), "LOCKED=yes")
+	})
+	t.Run("a copy outside a checkout never hands off to a copy that does not keep the run off the user's kubeconfig", func(t *testing.T) {
+		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
+		require.NoError(t, err)
+		require.Contains(t, string(src), "\nLOCAL_LIVE_VERSION=3\n")
+		require.Contains(t, string(src), "\nLOCAL_LIVE_ISOLATION=kubeconfig,home\n")
+		for _, tc := range []struct{ name, own string }{
+			// a89b89b6f: version 2, no scratch HOME, no top KUBECONFIG=/dev/null.
+			{"version 2, as a89b89b6f", "LOCAL_LIVE_VERSION=2\n"},
+			{"as new, without the isolation line", "LOCAL_LIVE_VERSION=3\n"},
+			{"newer, without the isolation line", "LOCAL_LIVE_VERSION=9\n"},
+			{"newer, with another isolation", "LOCAL_LIVE_VERSION=9\nLOCAL_LIVE_ISOLATION=kubeconfig\n"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				shared := filepath.Join(t.TempDir(), "bin")
+				require.NoError(t, os.MkdirAll(shared, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(shared, "local-live.sh"), src, 0o755))
+				co := t.TempDir()
+				for _, f := range []string{"hack/e2e/matrix.txt", "hack/tool-versions.env", "hack/loadlock.sh"} {
+					b, err := os.ReadFile(filepath.Join(repoRoot(t), f))
+					require.NoError(t, err)
+					require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(co, f)), 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(co, f), b, 0o755))
+				}
+				require.NoError(t, os.WriteFile(filepath.Join(co, "hack", "e2e", "local-live.sh"),
+					[]byte("#!/usr/bin/env bash\n"+tc.own+"echo own >>\"$FAKE/own\"\n"), 0o755))
+				for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "co"}} {
+					git := exec.Command("git", args...)
+					git.Dir = co
+					out, err := git.CombinedOutput()
+					require.NoError(t, err, "git %v: %s", args, out)
+				}
+				cmd := h.cmd(t, nil, "gitea")
+				cmd.Args[1] = filepath.Join(shared, "local-live.sh")
+				cmd.Dir = co
+				out, err := cmd.CombinedOutput()
+				require.NoError(t, err, "%s", out)
+				assert.Empty(t, h.read("own"), "the checkout's copy is not run")
+				assert.Contains(t, h.read("run"), "RUN_HOME="+filepath.Join(h.state, "kardinal-e2e-ll-test-gitea-37", "runs"), "the shared copy ran it, with a scratch HOME")
+				if strings.Contains(tc.own, "=9") || strings.Contains(tc.own, "=3") {
+					assert.Contains(t, string(out), "does not keep the run off the user's kubeconfig")
+				}
+			})
+		}
 	})
 	t.Run("a waiting heavy suite drains the host: no new run starts, and it starts with one other slot in use", func(t *testing.T) {
 		h := newLocalLiveHost(t)
@@ -422,16 +476,21 @@ exec "$@"
 		home := t.TempDir() // the user's: a kubeconfig of another cluster
 		require.NoError(t, os.MkdirAll(filepath.Join(home, ".kube"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(home, ".kube", "config"), []byte("production\n"), 0o600))
-		out, err := h.cmd(t, []string{"HOME=" + home, "KUBECONFIG="}, "gitea").CombinedOutput()
-		require.NoError(t, err, "%s", out)
-		kubeconfig := filepath.Join(h.state, "kardinal-e2e-ll-test-gitea-37", "kubeconfig")
-		up, run := h.read("up"), h.read("run")
-		assert.Contains(t, up, "KUBECONFIG="+kubeconfig+"\n", "up.sh")
-		assert.Contains(t, run, "RUN_KUBECONFIG="+kubeconfig+"\n", "run.sh and its test binary")
-		assert.NotContains(t, up, "HOME="+home+"\n", "a scratch HOME")
-		assert.NotContains(t, up, "HOMEKUBE=yes")
-		assert.NotContains(t, run, "RUN_HOMEKUBE=yes")
-		assert.NotContains(t, run, "RUN_HOME="+home+"\n")
+		// The caller's KUBECONFIG unset, and set to the production file.
+		for _, kc := range []string{"", filepath.Join(home, ".kube", "config")} {
+			require.NoError(t, os.RemoveAll(h.fake))
+			require.NoError(t, os.MkdirAll(h.fake, 0o755))
+			out, err := h.cmd(t, []string{"HOME=" + home, "KUBECONFIG=" + kc}, "gitea").CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			kubeconfig := filepath.Join(h.state, "kardinal-e2e-ll-test-gitea-37", "kubeconfig")
+			up, run := h.read("up"), h.read("run")
+			assert.Contains(t, up, "KUBECONFIG="+kubeconfig+"\n", "up.sh (caller KUBECONFIG=%q)", kc)
+			assert.Contains(t, run, "RUN_KUBECONFIG="+kubeconfig+"\n", "run.sh and its test binary")
+			assert.NotContains(t, up, "HOME="+home+"\n", "a scratch HOME")
+			assert.NotContains(t, up, "HOMEKUBE=yes", "no ~/.kube/config under the scratch HOME")
+			assert.NotContains(t, run, "RUN_HOMEKUBE=yes")
+			assert.NotContains(t, run, "RUN_HOME="+home+"\n")
+		}
 	})
 	t.Run("a heavy suite gives up draining after the deadline, naming what blocked it", func(t *testing.T) {
 		h := newLocalLiveHost(t)
@@ -442,7 +501,15 @@ exec "$@"
 		require.NoError(t, os.WriteFile(filepath.Join(h.slots, "4", "cluster"), []byte("kardinal-e2e-kept-here\n"), 0o644))
 		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-kept-here\n"), 0o644))
 		start := time.Now()
-		out, err := h.cmd(t, []string{"DRAIN_DEADLINE=1"}, "scale").CombinedOutput()
+		// Its own timeout (#2244 QA): a run that never gives up fails this
+		// test in seconds, not at the package's timeout.
+		cmd := h.cmd(t, []string{"DRAIN_DEADLINE=1"}, "scale")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		var timedOut atomic.Bool
+		timer := time.AfterFunc(30*time.Second, func() { timedOut.Store(true); _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+		out, err := cmd.CombinedOutput()
+		timer.Stop()
+		require.False(t, timedOut.Load(), "the heavy run never gave up draining: %s", out)
 		assert.Equal(t, 1, exitCode(err), "%s", out)
 		assert.Less(t, time.Since(start), 15*time.Second)
 		assert.Contains(t, string(out), "gave up draining the host after 1s")
@@ -485,6 +552,23 @@ exec "$@"
 		assert.Contains(t, string(out), "its cluster kardinal-e2e-still-here still runs; the slot stays")
 		assert.DirExists(t, filepath.Join(h.slots, "1"))
 	})
+	t.Run("slot directories above SLOT_MAX count: no run starts while SLOT_MAX clusters run", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		for _, n := range []string{"3", "4"} { // two runs with a larger SLOT_MAX
+			require.NoError(t, os.MkdirAll(filepath.Join(h.slots, n), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(h.slots, n, "owner"), []byte(fmt.Sprintf("other run pid %d now\n", os.Getpid())), 0o644))
+		}
+		cmd := h.cmd(t, nil, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "2 cluster slots are in use") }, 10*time.Second, 20*time.Millisecond)
+		assert.Contains(t, out.String(), "and the host has 2", "SLOT_MAX's default")
+		assert.Empty(t, h.read("up"))
+		require.NoError(t, os.RemoveAll(filepath.Join(h.slots, "4")))
+		require.NoError(t, cmd.Wait(), "%s", out.String())
+		assert.Contains(t, h.read("up"), "SLOT=1\n", "slot 1, beside the other run's 3")
+	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)
 		for _, n := range []string{"1", "2", "3", "4"} {
@@ -495,7 +579,7 @@ exec "$@"
 		out := &liveOut{}
 		cmd.Stdout, cmd.Stderr = out, out
 		require.NoError(t, cmd.Start())
-		require.Eventually(t, func() bool { return strings.Contains(out.String(), "slots in") }, 10*time.Second, 20*time.Millisecond)
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "4 cluster slots are in use") }, 10*time.Second, 20*time.Millisecond)
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 		_ = cmd.Wait()
 		for _, n := range []string{"1", "2", "3", "4"} {
