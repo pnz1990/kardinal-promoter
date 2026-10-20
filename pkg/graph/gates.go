@@ -77,7 +77,9 @@ const RenderVersion = 2
 // release with the patch release, for example "3-v0.12.4". v0.12.3 labelled
 // its Graphs 2, which main used for another rendering, so the upgrade from it
 // to main re-rendered nothing until main moved to 3 (#2346).
-// TestRenderLabelOnReleaseBranch (test/hack) checks it in CI.
+// TestRenderLabelOnReleaseBranch (test/hack) checks it against the newest
+// release tag on CI runs for release/v0.12, whose checkout must fetch the
+// history and the tags (#2328); without them the test fails there.
 const RenderLabel = "2"
 
 // LabelRenderVersion is the label of a Graph that holds the RenderVersion it

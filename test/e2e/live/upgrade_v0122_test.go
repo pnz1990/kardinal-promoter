@@ -7,7 +7,9 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -67,11 +69,8 @@ func u012Extras(cases ...func(t *testing.T, e *framework.Env, from u012From) fun
 // u0122NullApproval is what the API server answers kro for a gate instance
 // rendered with spec.approval: null (#2271): the PolicyGate CRD refuses it.
 // The Graph's condition message carries it as is; kro's log line carries it
-// inside a JSON string, its quotes escaped (u0122NullApprovalLogged).
+// inside its JSON error field (u0122OnlyRefusal).
 const u0122NullApproval = `spec.approval in body must be of type object: "null"`
-
-// u0122NullApprovalLogged is u0122NullApproval as kro's log lines carry it.
-const u0122NullApprovalLogged = `spec.approval in body must be of type object: \"null\"`
 
 // u0122Stuck is upgrade-v0122's own case: a version stuck under #2271
 // across the upgrade. Under v0.12.2, prod of a Pipeline has an approval gate
@@ -104,7 +103,29 @@ func (s *u0122Stuck) expected(text string, at time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ns != "" && !s.created.IsZero() && at.Before(s.created) &&
-		strings.Contains(text, s.ns) && strings.Contains(text, u0122NullApprovalLogged)
+		u0122OnlyRefusal(text, s.ns)
+}
+
+// u0122OnlyRefusal says whether kro's log line text (the kubelet's timestamp
+// cut off: time, level, message and its JSON fields, tab-separated) holds,
+// as its only error, the refusal of ns's explore-qa instance for a null
+// spec.approval (#2271): a line that bundles it with another error is not
+// expected, so the kro check still reports it (QA-5 on #2360).
+func u0122OnlyRefusal(text, ns string) bool {
+	f := strings.SplitN(text, "\t", 4)
+	if len(f) != 4 {
+		return false
+	}
+	var fields map[string]interface{}
+	if json.Unmarshal([]byte(f[3]), &fields) != nil {
+		return false
+	}
+	msg, _ := fields["error"].(string)
+	q := regexp.QuoteMeta(ns)
+	return regexp.MustCompile(`^(apply: )?apply "VerifyGates\d*": item ` + q + `/explore-qa-` + q + `-prod--[a-z0-9-]+: ` +
+		`PolicyGate\.kardinal\.io "explore-qa-` + q + `-prod--[a-z0-9-]+" is invalid: \[spec\.approval: Invalid value: "null": ` +
+		`spec\.approval in body must be of type object: "null", <nil>: Invalid value: null: some validation rules were not ` +
+		`checked because the object was invalid; correct the existing errors to complete validation\]$`).MatchString(msg)
 }
 
 // u0122Graph is the Graph of bundle in ns: there is exactly one.
