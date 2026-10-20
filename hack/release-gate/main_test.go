@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -676,6 +677,43 @@ func TestMachineSlots(t *testing.T) {
 	none, ok, _ := (&machine{}).Slots(5)
 	assert.True(t, ok, "no slots directory: no limit")
 	none()
+}
+
+// TestMachineSlots_HonourTheDrain (#2244 QA): while a heavy local-live
+// suite drains the host (DIR/.drain naming a live process), the gate takes
+// no cluster slot; a marker of a process that is gone, or of the gate
+// itself, does not stop it.
+func TestMachineSlots_HonourTheDrain(t *testing.T) {
+	dir := t.TempDir()
+	m := &machine{slotsDir: dir, slotMax: 4, owner: "gate"}
+	sleeper := exec.Command("sleep", "30")
+	require.NoError(t, sleeper.Start())
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	for _, tc := range []struct {
+		name, drain string
+		takes       bool
+	}{
+		{"a live heavy run drains", fmt.Sprintf("ENGINEER-1 local-live scale 1.37 draining the host, pid %d now", sleeper.Process.Pid), false},
+		{"a gone heavy run's marker", fmt.Sprintf("ENGINEER-1 local-live scale 1.37 draining the host, pid %d now", gone.Process.Pid), true},
+		{"the gate's own marker", fmt.Sprintf("gate pid %d now", os.Getpid()), true},
+		{"no marker", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(filepath.Join(dir, ".drain"))
+			if tc.drain != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".drain"), []byte(tc.drain+"\n"), 0o644))
+			}
+			release, ok, why := m.Slots(1)
+			assert.Equal(t, tc.takes, ok, why)
+			if ok {
+				release()
+			} else {
+				assert.Contains(t, why, "a heavy suite is draining the host")
+			}
+		})
+	}
 }
 
 // fakeGH answers gh calls from a script of responses keyed by the call.

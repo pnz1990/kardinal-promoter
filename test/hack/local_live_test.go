@@ -35,11 +35,15 @@ esac
 `
 
 // docker knows the fake clusters' nodes: ps lists them, inspect finds them.
+// FAKE_DOCKER_DOWN makes docker info fail, FAKE_DOCKER_ERR every inspect.
 const localLiveDocker = `#!/usr/bin/env bash
 f=$FAKE/clusters; touch "$f"
 case "$1" in
+  info) [ -z "${FAKE_DOCKER_DOWN:-}" ] ;;
   ps) sed 's/$/-control-plane/' "$f" ;;
-  inspect) grep -qx "${2%-control-plane}" "$f" ;;
+  inspect)
+    if [ -n "${FAKE_DOCKER_ERR:-}" ]; then echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1; fi
+    grep -qx "${2%-control-plane}" "$f" || { echo "Error: No such object: $2" >&2; exit 1; } ;;
 esac
 `
 
@@ -59,6 +63,8 @@ set -eu
   echo "REUSE=${KARDINAL_E2E_REUSE:-}"
   echo "SHARD=$SHARD"
   echo "AT=$(date +%s%N)"
+  echo "HOME=$HOME"
+  [ -e "$HOME/.kube/config" ] && echo "HOMEKUBE=yes"
   [ -d "$LOCK_UNDER_TEST" ] && echo "LOCKED=yes"
   ls "$SLOTS_UNDER_TEST" | sed 's/^/SLOT=/'
 } >>"$FAKE/up"
@@ -71,6 +77,7 @@ fi
 `
 
 const localLiveRun = `#!/usr/bin/env bash
+{ echo "RUN_KUBECONFIG=$KUBECONFIG"; echo "RUN_HOME=$HOME"; [ -e "$HOME/.kube/config" ] && echo "RUN_HOMEKUBE=yes"; } >>"$FAKE/run"
 echo '{"suite":"'"$1"'","results":[{"test":"TestA","action":"pass"},{"test":"TestB","action":"pass"}]}' >"$E2E_OUT/summary.json"
 echo "| TestA | pass |" >"$GITHUB_STEP_SUMMARY"
 [ -z "${FAKE_SLEEP:-}" ] || sleep "$FAKE_SLEEP"
@@ -406,6 +413,74 @@ exec "$@"
 			assert.Contains(t, string(out), "reclaimed cluster slot "+filepath.Join(h.slots, n))
 		}
 		assert.DirExists(t, filepath.Join(h.slots, "4"), "a kept cluster that is there keeps its slot")
+	})
+	t.Run("children see the run's kind kubeconfig, never ~/.kube/config", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		home := t.TempDir() // the user's: a kubeconfig of another cluster
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".kube"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(home, ".kube", "config"), []byte("production\n"), 0o600))
+		out, err := h.cmd(t, []string{"HOME=" + home, "KUBECONFIG="}, "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		kubeconfig := filepath.Join(h.state, "kardinal-e2e-ll-test-gitea-37", "kubeconfig")
+		up, run := h.read("up"), h.read("run")
+		assert.Contains(t, up, "KUBECONFIG="+kubeconfig+"\n", "up.sh")
+		assert.Contains(t, run, "RUN_KUBECONFIG="+kubeconfig+"\n", "run.sh and its test binary")
+		assert.NotContains(t, up, "HOME="+home+"\n", "a scratch HOME")
+		assert.NotContains(t, up, "HOMEKUBE=yes")
+		assert.NotContains(t, run, "RUN_HOMEKUBE=yes")
+		assert.NotContains(t, run, "RUN_HOME="+home+"\n")
+	})
+	t.Run("a heavy suite gives up draining after the deadline, naming what blocked it", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		for n, owner := range map[string]string{"3": fmt.Sprintf("other run pid %d now", os.Getpid()), "4": "KEEP kept-here, kept by someone"} {
+			require.NoError(t, os.MkdirAll(filepath.Join(h.slots, n), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(h.slots, n, "owner"), []byte(owner+"\n"), 0o644))
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(h.slots, "4", "cluster"), []byte("kardinal-e2e-kept-here\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-kept-here\n"), 0o644))
+		start := time.Now()
+		out, err := h.cmd(t, []string{"DRAIN_DEADLINE=1"}, "scale").CombinedOutput()
+		assert.Equal(t, 1, exitCode(err), "%s", out)
+		assert.Less(t, time.Since(start), 15*time.Second)
+		assert.Contains(t, string(out), "gave up draining the host after 1s")
+		assert.Contains(t, string(out), "kept cluster kardinal-e2e-kept-here holds slot 4; delete it or run with -reuse kardinal-e2e-kept-here")
+		assert.Contains(t, string(out), "slot 3 is held by other run pid")
+		assert.Contains(t, string(out), "the one-minute load is")
+		assert.NoFileExists(t, filepath.Join(h.slots, ".drain"), "the marker is given back")
+		assert.NoDirExists(t, h.lock, "and the heavy-load lock")
+		assert.Empty(t, h.read("up"))
+	})
+	t.Run("a kept cluster's slot is reclaimed only on a definite no such object", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, env, warn string
+		}{
+			{"docker does not answer", "FAKE_DOCKER_DOWN=1", "docker does not answer"},
+			{"docker inspect fails otherwise", "FAKE_DOCKER_ERR=1", "cannot tell whether cluster kardinal-e2e-kept-gone"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				require.NoError(t, os.MkdirAll(filepath.Join(h.slots, "1"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(h.slots, "1", "owner"), []byte("KEEP kept-gone, kept by someone\n"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(h.slots, "1", "cluster"), []byte("kardinal-e2e-kept-gone\n"), 0o644))
+				out, err := h.cmd(t, []string{tc.env}, "gitea").CombinedOutput()
+				require.NoError(t, err, "%s", out)
+				assert.Contains(t, string(out), tc.warn)
+				assert.DirExists(t, filepath.Join(h.slots, "1"), "the slot stays")
+			})
+		}
+	})
+	t.Run("a SIGKILLed KEEP run's slot stays while its cluster runs", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		require.NoError(t, os.MkdirAll(filepath.Join(h.slots, "1"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(h.slots, "1", "owner"), []byte(fmt.Sprintf("killed run pid %d now\n", gone.Process.Pid)), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(h.slots, "1", "cluster"), []byte("kardinal-e2e-still-here\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-still-here\n"), 0o644))
+		out, err := h.cmd(t, nil, "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Contains(t, string(out), "its cluster kardinal-e2e-still-here still runs; the slot stays")
+		assert.DirExists(t, filepath.Join(h.slots, "1"))
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)

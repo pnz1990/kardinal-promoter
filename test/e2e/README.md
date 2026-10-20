@@ -64,7 +64,11 @@ column: scale, multi-cluster) also hold the heavy-load lock (`$LOADLOCK`,
 through `hack/loadlock.sh`), and drain the host: a waiting heavy run stops new
 runs from taking a slot (`$RELEASE_GATE_SLOTS/.drain`), starts once at most one
 other slot is in use and the load is under 16, and keeps the host to itself
-until it ends. It refuses to start without what it needs (`-no-lock` on a host
+until it ends; after 30 minutes of draining (`DRAIN_DEADLINE`) it gives up,
+naming the slots and kept clusters that blocked it. `hack/release-gate` takes
+no cluster slot while a heavy suite drains the host. Every child of the run
+gets the run's own kind kubeconfig as `KUBECONFIG` and a scratch `HOME`, so no
+command can fall back to your `~/.kube/config`. It refuses to start without what it needs (`-no-lock` on a host
 of your own), and deletes the cluster `kardinal-e2e-ll-<owner>-<suite>-<minor>`
 (`$AGENT_ID`, or `-o`'s first word) and releases the slot, the marker and the
 lock when it ends, however it ends. A copy outside a checkout (the host's

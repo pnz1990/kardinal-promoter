@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -485,6 +486,12 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 	if m.slotsDir == "" {
 		return func() {}, true, ""
 	}
+	// A heavy local-live suite draining the host (DIR/.drain, written by
+	// hack/e2e/local-live.sh) keeps every other run's cluster off it, the
+	// gate's too, unless the gate wrote it.
+	if drain, err := os.ReadFile(filepath.Join(m.slotsDir, ".drain")); err == nil && drainLive(string(drain)) {
+		return nil, false, "a heavy suite is draining the host: " + strings.TrimSpace(string(drain))
+	}
 	var taken []string
 	release := func() {
 		for _, d := range taken {
@@ -509,6 +516,24 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 		return nil, false, fmt.Sprintf("fewer than %d of the host's %d cluster slots in %s are free", n, m.slotMax, m.slotsDir)
 	}
 	return release, true, ""
+}
+
+var drainPid = regexp.MustCompile(`\bpid (\d+)\b`)
+
+// drainLive reports whether a .drain record names a live process other than
+// this one (a record without a pid counts as live; local-live.sh reclaims a
+// dead one).
+func drainLive(record string) bool {
+	m := drainPid.FindStringSubmatch(record)
+	if m == nil {
+		return true
+	}
+	pid, err := strconv.Atoi(m[1])
+	if err != nil || pid == os.Getpid() {
+		return false
+	}
+	_, err = os.Stat(fmt.Sprintf("/proc/%d", pid))
+	return err == nil
 }
 
 func memAvailableGB() (float64, bool) {

@@ -83,6 +83,11 @@
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
 set -euo pipefail
+# Never the user's kubeconfig (on a shared host, the default context can be a
+# production cluster): nothing before the run's own kind kubeconfig can reach
+# one. The run below points KUBECONFIG at its cluster's file, and HOME at a
+# scratch directory, so no ~/.kube/config fallback exists for any child.
+export KUBECONFIG=/dev/null
 
 # LOCAL_LIVE_VERSION orders copies of this script: the shared copy runs a
 # checkout's own when it is at least as new.
@@ -96,6 +101,9 @@ HEAVY_MAX_LOAD=16
 HEAVY_OTHER_SLOTS=1
 LOAD_RETRY=30
 START_SPACING=60
+# DRAIN_DEADLINE: how long a heavy suite may drain the host waiting for its
+# start before it gives up (seconds; DRAIN_DEADLINE in the env overrides it).
+DRAIN_DEADLINE=${DRAIN_DEADLINE:-1800}
 if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
   LOAD_RETRY=${LOCAL_LIVE_TEST_LOAD_RETRY:-$LOAD_RETRY}
 fi
@@ -238,6 +246,22 @@ export KUBECONFIG=$E2E_OUT/kubeconfig
 RUN_DIR=$E2E_OUT/runs/$stamp
 mkdir -p "$RUN_DIR"
 LOG=$RUN_DIR/run.log
+# Children get a scratch HOME (#2233: a kubectl fell back to the host's
+# ~/.kube/config): the caches and logins they need are passed by path.
+real_home=$HOME
+export GOPATH=${GOPATH:-$(go env GOPATH 2>/dev/null || echo "$real_home/go")}
+export GOMODCACHE=${GOMODCACHE:-$(go env GOMODCACHE 2>/dev/null || echo "$GOPATH/pkg/mod")}
+export GOCACHE=${GOCACHE:-$(go env GOCACHE 2>/dev/null || echo "$real_home/.cache/go-build")}
+export DOCKER_CONFIG=${DOCKER_CONFIG:-$real_home/.docker}
+export GH_CONFIG_DIR=${GH_CONFIG_DIR:-$real_home/.config/gh}
+export NPM_CONFIG_CACHE=${NPM_CONFIG_CACHE:-$real_home/.npm}
+if [ -d "$real_home/.cache/ms-playwright" ]; then
+  export PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH:-$real_home/.cache/ms-playwright}
+fi
+export HOME=$RUN_DIR/home
+mkdir -p "$HOME"
+[ "$KUBECONFIG" = "$E2E_OUT/kubeconfig" ] && [ ! -e "$HOME/.kube/config" ] ||
+  die "refusing to run: KUBECONFIG is $KUBECONFIG, not the run's own $E2E_OUT/kubeconfig"
 boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
 # start_of PID prints PID's start time (/proc/<pid>/stat field 22, counted
 # after the command's last ')'), or fails when PID does not run.
@@ -318,22 +342,48 @@ release_slots() {
 # with none) is never reclaimed.
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 reclaim_slots() {
-  local d owner cluster
+  local d owner cluster state docker_ok=1
+  docker info >/dev/null 2>&1 || docker_ok=''
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
     owner=$(cat "$d/owner" 2>/dev/null) || continue
-    if [[ $owner == KEEP\ * ]]; then
-      cluster=$(cat "$d/cluster" 2>/dev/null)
-      if [ -n "$cluster" ] && ! docker inspect "$cluster-control-plane" >/dev/null 2>&1; then
-        rm -r "$d" && log "reclaimed cluster slot $d: its kept cluster $cluster is gone"
-      fi
-    elif record_gone "$owner"; then
-      rm -r "$d" && log "reclaimed cluster slot $d of a run that is gone: $owner"
+    [[ $owner == KEEP\ * ]] || record_gone "$owner" || continue
+    # A kept cluster's slot, or a dead run's (a SIGKILLed KEEP run's cluster
+    # may still run): reclaimed only when the cluster is definitely gone.
+    cluster=$(cat "$d/cluster" 2>/dev/null)
+    if [ -z "$cluster" ]; then
+      [[ $owner == KEEP\ * ]] || { rm -r "$d" && log "reclaimed cluster slot $d of a run that is gone: $owner"; }
+      continue
     fi
+    if [ -z "$docker_ok" ]; then
+      log "warning: docker does not answer; kept cluster slot $d ($cluster) as it is"
+      continue
+    fi
+    state=$(cluster_state "$cluster")
+    case $state in
+      gone) rm -r "$d" && log "reclaimed cluster slot $d: its cluster $cluster is gone ($owner)" ;;
+      running) [[ $owner == KEEP\ * ]] || log "warning: cluster slot $d's run is gone but its cluster $cluster still runs; the slot stays: delete the cluster to free it" ;;
+      *) log "warning: cannot tell whether cluster $cluster of slot $d is there ($state); the slot stays" ;;
+    esac
   done
   owner=$(cat "$SLOTS_DIR/.drain" 2>/dev/null) || return 0
   if record_gone "$owner"; then
     rm -f "$SLOTS_DIR/.drain" && log "removed the drain marker of a heavy run that is gone: $owner"
+  fi
+}
+
+# cluster_state prints running when CLUSTER's node is there, gone only on a
+# definite "no such object" or "not found" from docker (or podman), and the
+# error otherwise.
+# shellcheck disable=SC2329 # called by reclaim_slots, through with_flock
+cluster_state() {
+  local out
+  if out=$(docker inspect "$1-control-plane" 2>&1 >/dev/null); then
+    echo running
+  elif grep -qiE 'no such object|not found|no such container' <<<"$out"; then
+    echo gone
+  else
+    echo "${out:-docker inspect failed}" | head -1
   fi
 }
 
@@ -390,11 +440,13 @@ take_slots() {
   done
   [ "${#taken[@]}" -lt "$need_slots" ] || return 0
   if [ -n "$heavy" ]; then
-    # Drain: no new run takes a slot from now on.
+    # Drain: no new run takes a slot from now on, for DRAIN_DEADLINE at most.
     echo "$drain_tag" >"$SLOTS_DIR/.drain"
     draining=1
+    drain_since=$(date +%s)
   fi
   while ! with_flock .reclaim try_slots; do
+    drain_expired
     [ "$why" = "$said" ] || log "waiting for a cluster slot: $why; checking every ${RETRY}s"
     said=$why
     sleep "$RETRY" &
@@ -405,6 +457,31 @@ take_slots() {
 }
 
 why=''
+drain_since=''
+
+# drain_expired ends a heavy run that has drained the host for DRAIN_DEADLINE
+# without starting: it says what blocked it, gives the marker and (exiting)
+# the heavy-load lock back, and fails.
+drain_expired() {
+  local d owner cluster
+  [ -n "$drain_since" ] || return 0
+  [ $(($(date +%s) - drain_since)) -ge "$DRAIN_DEADLINE" ] || return 0
+  log "the heavy suite $SUITE drained the host for ${DRAIN_DEADLINE}s without starting: $why"
+  for d in "$SLOTS_DIR"/[0-9]*; do
+    [ -d "$d" ] || continue
+    [[ " ${taken[*]} " != *" $d "* ]] || continue
+    owner=$(cat "$d/owner" 2>/dev/null || echo '?')
+    cluster=$(cat "$d/cluster" 2>/dev/null || true)
+    if [[ $owner == KEEP\ * ]]; then
+      log "  kept cluster $cluster holds slot ${d##*/}; delete it or run with -reuse $cluster"
+    else
+      log "  slot ${d##*/} is held by $owner"
+    fi
+  done
+  log "  the one-minute load is $(cut -d' ' -f1 /proc/loadavg)"
+  echo "local-live: the heavy suite $SUITE gave up draining the host after ${DRAIN_DEADLINE}s; see the log above" >&2
+  exit 1
+}
 
 # room says why another cluster may not start now, or nothing when it may:
 # the one-minute load is at MAX_LOAD (HEAVY_MAX_LOAD for a heavy suite) or
@@ -450,6 +527,7 @@ start_turn() {
 wait_for_room() {
   local said=
   while ! with_flock .start start_turn; do
+    drain_expired
     [ "$why" = "$said" ] || log "waiting to create $KIND_CLUSTER: $why; checking every ${LOAD_RETRY}s"
     said=$why
     sleep "$LOAD_RETRY" &
