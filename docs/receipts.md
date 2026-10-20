@@ -284,10 +284,24 @@ checkout-1-5-0-prod   checkout   prod   checkout-1-5-0   Stored   2m
 - **Conditions**: `Signed`, `Stored` and `PRCommented`, with reasons naming a failing sink.
 - **Signed once**: the controller decides each step on the API server's copy of the receipt,
   not on its cache, which can lag its own last status write. So a receipt is signed, pushed
-  and commented once, however busy the API server is. A status write that meets a conflict
-  after signing re-reads the receipt and records the same signature, rather than signing again
-  (a second certificate and, with Rekor, a second log entry). A controller that crashes
-  between signing and its status write signs again on restart: both signatures verify.
+  and commented once for each status write that lands, however busy the API server is. A
+  status write after signing that fails for a transient reason (a conflict, a server error, a
+  timeout, throttling, a lost connection) is tried again on a fresh read for about three seconds, and records the
+  same signature rather than signing again (a second certificate and, with Rekor, a second log
+  entry). Two cases still sign again: a controller that crashes between signing and its status
+  write, and a write that keeps failing past those seconds. Both signatures verify; in keyless
+  mode each has its own certificate and Rekor entry.
+- **A refused status write**: when the API server refuses the write after a signature or a PR
+  comment (a 403 for a missing RBAC rule on `promotionreceipts/status` or an admission policy,
+  a 422 or 400 for an invalid status, a 413 for one too large), the controller does not retry
+  it with backoff, which would sign again every few minutes. The receipt waits for its next
+  change or the controller's resync (every 10 hours by default), then signs (or comments)
+  again. Any other failure (a server error or a lost connection past those seconds, a 401
+  while a rotated token is reloaded) is retried with backoff as before. Each refusal is a Warning Event `StatusWriteRefused` on the
+  receipt (`kubectl get events --field-selector reason=StatusWriteRefused`), a count in
+  `kardinal_receipt_status_writes_refused_total{step}`, and an error line in the controller's
+  log. Fix the cause, then restart the controller: only the controller may change a receipt,
+  so its restart is what tries the receipt again.
 - **No owner**: a receipt outlives its Bundle, the Graph and the step. Deleting a Bundle does
   not delete its receipts. kardinal keeps every receipt unless you set
   `receipts.retention.maxAge` (for example `8760h`): the leader then deletes the receipts

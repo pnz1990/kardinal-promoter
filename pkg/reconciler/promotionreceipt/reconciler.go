@@ -33,20 +33,26 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
+	"k8s.io/client-go/tools/events"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -181,7 +187,17 @@ type Reconciler struct {
 	// JitterFn is the random part added to a retry's delay d, in [0, d]
 	// (nil: random); tests fix it.
 	JitterFn func(d time.Duration) time.Duration
+	// SleepFn waits d between tries of a status write (nil: a timer that
+	// ctx ends early); tests record the waits instead.
+	SleepFn func(ctx context.Context, d time.Duration) error
+	// Recorder emits the Warning Event for a status write refused after a
+	// signature or a PR comment. Nil records none.
+	Recorder events.EventRecorder
 }
+
+// ReasonStatusWriteRefused is the Warning Event's reason when the API server
+// refuses the status write that records a signature or a PR comment.
+const ReasonStatusWriteRefused = "StatusWriteRefused"
 
 func (r *Reconciler) now() time.Time {
 	if r.NowFn != nil {
@@ -337,7 +353,7 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 	// signing again: a second signature would be a second certificate and,
 	// with Rekor, a second public log entry.
 	if err := r.patchKeeping(ctx, base, rc, record); err != nil {
-		return ctrlruntime.Result{}, err
+		return ctrlruntime.Result{}, r.refused(ctx, rc, metricSigning, "Sign", err)
 	}
 	observability.ReceiptsTotal.WithLabelValues(signed.SignedBy.Mode).Inc()
 	observability.ReceiptBytesTotal.Add(float64(len(rc.Spec.Statement) + len(signed.Bundle)))
@@ -512,23 +528,71 @@ func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionRe
 		return true
 	}
 	commented(rc)
-	return ctrlruntime.Result{}, r.patchKeeping(ctx, base, rc, commented)
+	if err := r.patchKeeping(ctx, base, rc, commented); err != nil {
+		return ctrlruntime.Result{}, r.refused(ctx, rc, metricPRComment, "Comment", err)
+	}
+	return ctrlruntime.Result{}, nil
 }
 
-// patchKeeping patches rc's status like patch, and on a conflict re-reads
-// the receipt and re-applies apply to it, so what an external call just did
-// (a signature, a PR comment) is recorded rather than done again. apply
-// returns false when the stored receipt already has it.
+// refused returns err, the failed status write after an external call (a
+// signature, a PR comment) that patchKeeping could not record. A refusal
+// the API server names (a 403 for a missing RBAC rule on
+// promotionreceipts/status or an admission policy, a 422 or 400 for an
+// invalid status, a 413 for one too large) would be refused again: retried
+// with backoff it would sign again every few minutes, each time a new
+// certificate and Rekor entry, for as long as it lasts. So it is a terminal
+// error, tried again at the receipt's next change or a resync (every 10
+// hours by default), and counted and announced (a Warning Event on the
+// receipt). Every other error (a server error or a connection lost past
+// patchKeeping's tries, a 401 while a rotated token is reloaded, the
+// reconcile's context ended) comes back as it is, retried with backoff.
+func (r *Reconciler) refused(ctx context.Context, rc *v1alpha1.PromotionReceipt, step, action string, err error) error {
+	if !refusal(err) || ctx.Err() != nil {
+		return err
+	}
+	observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(step).Inc()
+	zerolog.Ctx(ctx).Error().Err(err).Str("receipt", rc.Name).Str("step", step).
+		Msg("the status write after the receipt's " + step + " was refused: not retried until the receipt changes or a resync")
+	kubeevent.Emit(r.Recorder, rc, corev1.EventTypeWarning, ReasonStatusWriteRefused, action,
+		fmt.Sprintf("the status write after the %s was refused, so it is not recorded and is retried only when the receipt changes or the controller resyncs: %v", step, err))
+	return reconcile.TerminalError(err)
+}
+
+// keepTries and keepWait bound patchKeeping: up to keepTries status writes
+// in all, the wait before each one after a server error, a timeout or
+// throttling doubling from keepWait (about 3 s in all). After a conflict the
+// write is tried again at once, on a fresh read.
+const (
+	keepTries = 6
+	keepWait  = 100 * time.Millisecond
+)
+
+// patchKeeping patches rc's status like patch, so that what an external
+// call just did (a signature, a PR comment) is recorded rather than done
+// again: on a conflict, a server error, a timeout, throttling or a failed
+// connection it re-reads the receipt from the API server and re-applies
+// apply to it, up to keepTries writes. apply returns false when the stored
+// receipt already has it (a write that failed may have landed). A write
+// that still fails returns its error, and the next reconcile does the call
+// again: a second signature, which verifies like the first (#2313).
 func (r *Reconciler) patchKeeping(ctx context.Context, base, rc *v1alpha1.PromotionReceipt,
 	apply func(*v1alpha1.PromotionReceipt) bool) error {
 	err := r.patch(ctx, base, rc)
-	for i := 0; i < 5 && apierrors.IsConflict(err); i++ {
+	wait := keepWait
+	for try := 1; try < keepTries && transient(err); try++ {
+		if !apierrors.IsConflict(err) {
+			if serr := r.sleep(ctx, wait); serr != nil {
+				return err
+			}
+			wait *= 2
+		}
 		var cur v1alpha1.PromotionReceipt
 		if gerr := r.reader().Get(ctx, ctrl.ObjectKeyFromObject(rc), &cur); gerr != nil {
 			if apierrors.IsNotFound(gerr) {
 				return nil
 			}
-			return fmt.Errorf("re-read promotion receipt %s: %w", rc.Name, gerr)
+			err = fmt.Errorf("re-read promotion receipt %s: %w", rc.Name, gerr)
+			continue
 		}
 		curBase := cur.DeepCopy()
 		if !apply(&cur) {
@@ -537,6 +601,42 @@ func (r *Reconciler) patchKeeping(ctx context.Context, base, rc *v1alpha1.Promot
 		err = r.patch(ctx, curBase, &cur)
 	}
 	return err
+}
+
+// transient reports whether a status write or read that failed with err
+// may succeed when tried again shortly.
+func transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apierrors.IsConflict(err) || apierrors.IsInternalError(err) || apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) ||
+		apierrors.IsUnexpectedServerError(err) || utilnet.IsTimeout(err) || utilnet.IsConnectionRefused(err) ||
+		utilnet.IsConnectionReset(err) || utilnet.IsProbableEOF(err) || utilnet.IsHTTP2ConnectionLost(err) ||
+		errors.Is(err, syscall.EPIPE)
+}
+
+// refusal reports whether the API server refused a write and would refuse it
+// again: forbidden (RBAC, an admission policy), invalid, a bad request, or
+// too large.
+func refusal(err error) bool {
+	return apierrors.IsForbidden(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) ||
+		apierrors.IsRequestEntityTooLargeError(err)
+}
+
+// sleep waits d, or until ctx ends.
+func (r *Reconciler) sleep(ctx context.Context, d time.Duration) error {
+	if r.SleepFn != nil {
+		return r.SleepFn(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (r *Reconciler) scmFor(ctx context.Context, rc *v1alpha1.PromotionReceipt) (scm.SCMProvider, error) {

@@ -23,8 +23,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -42,10 +46,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
@@ -551,6 +557,331 @@ func TestReconcile_OnceDespiteALaggingCache(t *testing.T) {
 			assert.True(t, rc.Status.PRComment)
 			assert.Len(t, s.comments, 1, "commented once")
 			_, err := receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestReconcile_SignWriteRetried (#2313, QA-3 on #2315): the status write
+// right after a signature is tried again, on a fresh read, when it fails for
+// a transient reason (a server error, a timeout, throttling), after waits
+// doubling from keepWait, up to keepTries writes: the signature made is the
+// one recorded, and a write that landed despite its error is kept. A
+// permanent refusal is not retried. A write that still fails returns its
+// error, and the next reconcile signs again (the documented limit, like a
+// crash between the signature and its write).
+//
+// Covers RECEIPT-SIGN-09.
+func TestReconcile_SignWriteRetried(t *testing.T) {
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "promotionreceipts"}
+	internal := apierrors.NewInternalError(errors.New("etcdserver: leader changed"))
+	for _, tc := range []struct {
+		name    string
+		fail    []error // the sign write's errors, in turn
+		landed  bool    // the first failed write was applied all the same
+		waits   []time.Duration
+		writes  int
+		wantErr bool
+		signs   int // after a second reconcile
+	}{
+		{name: "a server error, then the write lands", fail: []error{internal},
+			waits: []time.Duration{keepWait}, writes: 2, signs: 1},
+		{name: "a timeout and throttling, then the write lands",
+			fail:  []error{apierrors.NewServerTimeout(gr, "patch", 1), apierrors.NewTooManyRequests("slow down", 1)},
+			waits: []time.Duration{keepWait, 2 * keepWait}, writes: 3, signs: 1},
+		{name: "a server error on a write that landed", fail: []error{internal}, landed: true,
+			waits: []time.Duration{keepWait}, writes: 1, signs: 1},
+		{name: "server errors past the budget", fail: []error{internal, internal, internal, internal, internal, internal},
+			waits: []time.Duration{keepWait, 2 * keepWait, 4 * keepWait, 8 * keepWait, 16 * keepWait}, writes: keepTries, wantErr: true, signs: 2},
+		{name: "a permanent refusal", fail: []error{apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied"))},
+			writes: 1, wantErr: true, signs: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			fail, writes := tc.fail, 0
+			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if obj.(*v1alpha1.PromotionReceipt).Status.Phase != v1alpha1.ReceiptSigned {
+						return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					}
+					writes++
+					if len(fail) == 0 {
+						return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					}
+					err := fail[0]
+					fail = fail[1:]
+					if tc.landed {
+						require.NoError(t, c.SubResource(sub).Patch(ctx, obj, patch, opts...))
+					}
+					return err
+				}}).Build()
+			signs := 0
+			key := SecretKey(c, "kardinal-system", "receipt-key", "cosign.key")
+			var waits []time.Duration
+			r := &Reconciler{Client: c, APIReader: c, SCM: &commentSCM{}, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				SleepFn: func(_ context.Context, d time.Duration) error {
+					waits = append(waits, d)
+					return nil
+				},
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			_, err := r.Reconcile(context.Background(), req)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.waits, waits, "waits before the tries")
+			assert.Equal(t, tc.writes, writes, "status writes after the signature")
+			assert.Equal(t, 1, signs, "one signature in the first reconcile")
+			fail = nil
+			for range 3 {
+				_, err = r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			var rc v1alpha1.PromotionReceipt
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &rc))
+			assert.Equal(t, tc.signs, signs, "signatures in all")
+			assert.Equal(t, v1alpha1.ReceiptStored, rc.Status.Phase)
+			_, err = receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestReconcile_RefusedWriteIsTerminal (QA-2 on #2323): the API server
+// refuses the status write right after a signature, or after a PR comment
+// (a 403 for a missing RBAC rule on promotionreceipts/status, a 422 for an
+// invalid status). The reconcile returns a terminal error, so the controller
+// does not requeue it: driven as controller-runtime drives it (requeued
+// after an error unless it is terminal), the receipt is signed once over
+// many rounds, not once a backoff. Each refusal is counted
+// (kardinal_receipt_status_writes_refused_total{step}) and announced with a
+// Warning Event on the receipt. Once the receipt changes and the write is
+// allowed, the step is done again and recorded: the documented second
+// signature. Every error that is not a refusal the API server names (a
+// server error past patchKeeping's tries, a lost connection or a broken
+// pipe, a 401, a cancelled reconcile) comes back as it is, for backoff, with
+// no Event and no count; a lost connection that recovers within the tries is
+// recorded in place, signed once.
+//
+// Covers RECEIPT-SIGN-10.
+func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "promotionreceipts"}
+	transport := func(err error) error {
+		return &url.Error{Op: "Patch", URL: "https://10.96.0.1/apis/kardinal.io/v1alpha1/namespaces/payments/promotionreceipts/checkout-1-5-0-prod/status", Err: err}
+	}
+	brokenPipe := transport(&net.OpError{Op: "write", Net: "tcp", Err: os.NewSyscallError("write", syscall.EPIPE)})
+	lost := transport(errors.New("http2: client connection lost"))
+	always := func(err error) func(int) error { return func(int) error { return err } }
+	for _, tc := range []struct {
+		name     string
+		step     string              // the write that fails: signing or pr-comment
+		fail     func(try int) error // its error at each try (nil: it lands)
+		terminal bool
+		cancel   bool // the reconcile's context ends as the write fails
+		signs    int  // in the first reconcile
+		tries    int  // writes of the failing step
+	}{
+		{name: "a 403 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("cannot patch resource \"promotionreceipts/status\"")))},
+		{name: "a 422 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewInvalid(schema.GroupKind{Group: "kardinal.io", Kind: "PromotionReceipt"}, "checkout-1-5-0-prod", nil))},
+		{name: "a 413 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewRequestEntityTooLargeError("limit is 3145728"))},
+		{name: "a 403 after the PR comment", step: metricPRComment, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied by admission")))},
+		{name: "a 500 past the tries", step: metricSigning, signs: 1, tries: keepTries,
+			fail: always(apierrors.NewInternalError(errors.New("etcdserver: request timed out")))},
+		{name: "a broken pipe past the tries", step: metricSigning, signs: 1, tries: keepTries, fail: always(brokenPipe)},
+		{name: "a 400 after the signature", step: metricSigning, terminal: true, signs: 1, tries: 1,
+			fail: always(apierrors.NewBadRequest("status.stored: invalid"))},
+		{name: "a 401", step: metricSigning, signs: 1, tries: 1, fail: always(apierrors.NewUnauthorized("token expired"))},
+		{name: "a DNS failure", step: metricSigning, signs: 1, tries: 1,
+			fail: always(transport(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "kubernetes.default.svc", IsNotFound: true}}))},
+		{name: "a refusal as the reconcile is cancelled", step: metricSigning, signs: 1, tries: 1, cancel: true,
+			fail: always(fmt.Errorf("patch promotion receipt status: %w", apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied"))))},
+		{name: "the reconcile cancelled", step: metricSigning, signs: 1, tries: 1, cancel: true, fail: always(transport(context.Canceled))},
+		{name: "a lost connection that recovers", step: metricSigning, signs: 1, tries: 2, fail: func(try int) error {
+			if try == 1 {
+				return lost
+			}
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			failing, tries := true, 0
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					rc := obj.(*v1alpha1.PromotionReceipt)
+					step := ""
+					switch {
+					case rc.Status.Phase == v1alpha1.ReceiptSigned:
+						step = metricSigning
+					case rc.Status.PRComment:
+						step = metricPRComment
+					}
+					if failing && step == tc.step {
+						tries++
+						if err := tc.fail(tries); err != nil {
+							if tc.cancel {
+								cancel()
+							}
+							return err
+						}
+					}
+					return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+				}}).Build()
+			signs := 0
+			key := SecretKey(c, "kardinal-system", "receipt-key", "cosign.key")
+			rec := events.NewFakeRecorder(10)
+			s := &commentSCM{}
+			r := &Reconciler{Client: c, APIReader: c, SCM: s, Recorder: rec, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				SleepFn: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			refusedBefore := testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step))
+			// Driven as controller-runtime does: after a nil error the next
+			// round comes from the status write's event, until the receipt is
+			// done; after an error it is requeued, unless the error is
+			// terminal. A non-terminal error is checked and the drive stops.
+			var err error
+			for round := 0; round < 8; round++ {
+				if _, err = r.Reconcile(ctx, req); err != nil {
+					break
+				}
+			}
+			terminal := err != nil && errors.Is(err, reconcile.TerminalError(nil))
+			assert.Equal(t, tc.terminal, terminal, "terminal: %v", err)
+			assert.Equal(t, tc.signs, signs, "signed once, not once a backoff")
+			assert.Equal(t, tc.tries, tries, "writes of the %s step", tc.step)
+			if !tc.terminal {
+				assert.Equal(t, refusedBefore, testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step)), "not counted as refused")
+				assert.Empty(t, rec.Events, "no StatusWriteRefused Event")
+				if tc.fail(keepTries+1) == nil {
+					require.NoError(t, err, "recorded in place")
+					var got v1alpha1.PromotionReceipt
+					require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+					assert.Equal(t, v1alpha1.ReceiptStored, got.Status.Phase)
+				} else {
+					require.Error(t, err, "comes back for backoff")
+				}
+				return
+			}
+			assert.Equal(t, refusedBefore+1, testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step)))
+			require.Len(t, rec.Events, 1)
+			ev := <-rec.Events
+			assert.Contains(t, ev, "Warning "+ReasonStatusWriteRefused+" ")
+			assert.Contains(t, ev, "retried only when the receipt changes or the controller resyncs")
+
+			// The receipt changes (or a resync comes) once the write is
+			// allowed: the step is done again, and recorded.
+			failing = false
+			for range 3 {
+				_, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			var got v1alpha1.PromotionReceipt
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, v1alpha1.ReceiptStored, got.Status.Phase)
+			assert.True(t, got.Status.PRComment)
+			if tc.step == metricSigning {
+				assert.Equal(t, 2, signs, "signed again at the change: the documented limit")
+				assert.Len(t, s.comments, 1)
+			} else {
+				assert.Equal(t, 1, signs)
+				assert.Len(t, s.comments, 2, "the provider cannot search: commented again at the change")
+			}
+			_, err = receipt.Verify([]byte(got.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestReconcile_ConflictReReadsTheAPIServer (QA-3 on #2315): the status
+// write after a signature meets a real conflict (another writer's update
+// lands between the read and the write), and the cache has not seen that
+// update yet. The re-read goes to the API server (APIReader), so the write
+// converges and the receipt is signed once; re-read through the cache, every
+// try conflicts again and the error comes back after keepTries writes.
+//
+// Covers RECEIPT-SIGN-08.
+func TestReconcile_ConflictReReadsTheAPIServer(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		apiReader bool
+	}{
+		{name: "the API server's copy", apiReader: true},
+		{name: "the cache's copy", apiReader: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			// stale is what the cache returns: the receipt before the
+			// other writer's update, until the next reconcile.
+			var stale *v1alpha1.PromotionReceipt
+			writes := 0
+			inner := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					if obj.(*v1alpha1.PromotionReceipt).Status.Phase == v1alpha1.ReceiptSigned {
+						writes++
+						if writes == 1 {
+							var cur v1alpha1.PromotionReceipt
+							require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), &cur))
+							stale = cur.DeepCopy()
+							cur.Annotations = map[string]string{"touched": "by another writer"}
+							require.NoError(t, c.Update(ctx, &cur))
+						}
+					}
+					return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+				}}).Build()
+			cache := interceptor.NewClient(inner, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption) error {
+				if rc, ok := obj.(*v1alpha1.PromotionReceipt); ok && stale != nil {
+					stale.DeepCopyInto(rc)
+					return nil
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}})
+			signs := 0
+			key := SecretKey(inner, "kardinal-system", "receipt-key", "cosign.key")
+			r := &Reconciler{Client: cache, SCM: &commentSCM{}, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			if tc.apiReader {
+				r.APIReader = inner
+			}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			_, err := r.Reconcile(context.Background(), req)
+			assert.Equal(t, 1, signs)
+			if !tc.apiReader {
+				require.Error(t, err)
+				assert.True(t, apierrors.IsConflict(err), "a conflict: %v", err)
+				assert.Equal(t, keepTries, writes, "every try conflicts")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 2, writes, "the second write lands")
+			var rc v1alpha1.PromotionReceipt
+			require.NoError(t, inner.Get(context.Background(), req.NamespacedName, &rc))
+			assert.Equal(t, "by another writer", rc.Annotations["touched"])
+			_, err = receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
 			require.NoError(t, err)
 		})
 	}
