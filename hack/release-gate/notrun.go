@@ -43,6 +43,8 @@ const releaseJobPrefix = "release.yml:"
 // be covered, or release.yml:<job>. A line without a reason or evidence, a
 // row that is not in coverage.tsv or not covered, and a job release.yml
 // does not have are errors, so the list cannot cite evidence that is gone.
+// An empty list is an error too: every release ships things the gate does
+// not run, so an empty list would read as proof of them.
 func readNotRun(root string) ([]NotRunItem, error) {
 	path := filepath.Join(root, "hack", "release-gate", "not-run.txt")
 	data, err := os.ReadFile(path)
@@ -103,6 +105,10 @@ func readNotRun(root string) ([]NotRunItem, error) {
 		}
 		out = append(out, it)
 	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s lists nothing: every release ships things the gate does not run (cloud KMS keys, "+
+			"EKS, the public-good sigstore, ticketing vendors, publishing, other platforms), and an empty list reads as proof of them", path)
+	}
 	return out, nil
 }
 
@@ -158,7 +164,8 @@ func renderNotRun(b *strings.Builder, items []NotRunItem) {
 		return
 	}
 	b.WriteString("The verdict covers only what the steps above ran. The gate does not run these " +
-		"(hack/release-gate/not-run.txt); the last column is the evidence that stands in for each.\n\n" +
+		"(hack/release-gate/not-run.txt); the last column is the evidence that stands in for each. " +
+		"A contract row is a unit or contract test, not a live run; a live row is a live e2e test.\n\n" +
 		"| Not run | Why | Evidence instead |\n|---|---|---|\n")
 	for _, it := range items {
 		ev := make([]string, len(it.Evidence))

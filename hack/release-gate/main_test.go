@@ -154,16 +154,33 @@ func TestPlanOfThisRepo(t *testing.T) {
 	_, err = readAllowlist(filepath.Join(root, "hack", "release-gate", "coverage-allow.txt"))
 	require.NoError(t, err)
 
-	// LoadRepo checked every row and job not-run.txt cites; it names what
-	// QA-2's v0.13 gate audit found the gate never runs (#2303).
-	var items []string
-	for _, it := range r.NotRunItems {
-		items = append(items, it.Item)
+	// LoadRepo checked every row and job not-run.txt cites; it names the six
+	// categories QA-2's v0.13 gate audit found the gate never runs (#2303),
+	// one line each. A line added or removed changes this list too.
+	categories := []struct {
+		name  string
+		words []string
+	}{
+		{"cloud KMS keys", []string{"AWS KMS", "Google Cloud KMS"}},
+		{"EKS", []string{"EKS"}},
+		{"the public-good sigstore", []string{"Fulcio", "Rekor", "TUF"}},
+		{"ticketing vendors", []string{"ServiceNow", "Jira"}},
+		{"publishing", []string{"ghcr.io", "cosign", "SLSA", "SBOM"}},
+		{"other platforms", []string{"darwin/amd64", "darwin/arm64", "windows/amd64", "linux/arm64"}},
 	}
-	all := strings.Join(items, "\n")
-	for _, want := range []string{"AWS KMS", "Google Cloud KMS", "EKS", "Fulcio", "Rekor", "TUF", "ServiceNow", "Jira",
-		"ghcr.io", "cosign", "darwin/amd64", "darwin/arm64", "windows/amd64", "linux/arm64"} {
-		assert.Contains(t, all, want, "hack/release-gate/not-run.txt")
+	require.Len(t, r.NotRunItems, len(categories), "hack/release-gate/not-run.txt: one line per category")
+	for _, c := range categories {
+		n := 0
+		for _, it := range r.NotRunItems {
+			all := true
+			for _, w := range c.words {
+				all = all && strings.Contains(it.Item, w)
+			}
+			if all {
+				n++
+			}
+		}
+		assert.Equal(t, 1, n, "one not-run.txt line names %s (%v)", c.name, c.words)
 	}
 	rows, err := coverageRows(root)
 	require.NoError(t, err)
@@ -627,6 +644,7 @@ func TestRender(t *testing.T) {
 	assert.Contains(t, s, "- Previous release: v0.11.0")
 	assert.Contains(t, s, "by `make release-gate`. It does not prove the 2 items [not run by this gate](#not-run-by-this-gate).\n")
 	assert.Contains(t, s, "\n## Not run by this gate\n\n")
+	assert.Contains(t, s, "A contract row is a unit or contract test, not a live run")
 	assert.Contains(t, s, "| Not run | Why | Evidence instead |\n|---|---|---|\n"+
 		"| Real KMS signing | no cloud account | RECEIPT-SIGN-06 (contract), release.yml job `dry-run` |\n"+
 		"| Public-good sigstore | a private sigstore only | RECEIPT-LIVE-05 (live) |\n")
@@ -657,6 +675,43 @@ func notRunRoot(t *testing.T, notRun string) string {
 	return root
 }
 
+// TestLoadRepoStopsOnABrokenNotRunList: LoadRepo, where the gate starts,
+// returns readNotRun's error, so a broken not-run.txt stops the gate before
+// it runs anything instead of leaving the report's section empty.
+func TestLoadRepoStopsOnABrokenNotRunList(t *testing.T) {
+	root := func(notRun string) string {
+		t.Helper()
+		r := notRunRoot(t, notRun)
+		for name, data := range map[string]string{
+			"hack/e2e/matrix.txt":    "core 1.37 - -\n",
+			"hack/tool-versions.env": "KIND_NODE_1_37=kindest/node:v1.37.0\n",
+		} {
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(r, name)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(r, name), []byte(data), 0o644))
+		}
+		for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "x"}} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = r
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(out))
+		}
+		return r
+	}
+	r, err := LoadRepo(root("Real KMS | no cloud account | SIGN-01\n"))
+	require.NoError(t, err)
+	require.Len(t, r.NotRunItems, 1)
+	for _, tc := range []struct{ name, notRun, err string }{
+		{"malformed", "Real KMS | SIGN-01\n", "want item | reason | evidence"},
+		{"a missing row", "Real KMS | no cloud account | SIGN-02\n", "SIGN-02, which is not a row"},
+		{"empty", "# nothing\n", "lists nothing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadRepo(root(tc.notRun))
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
 // TestReadNotRun: every line names an item, a reason and evidence that
 // exists, or the gate does not start (QA-2's v0.13 gate audit, #2303).
 func TestReadNotRun(t *testing.T) {
@@ -667,9 +722,10 @@ func TestReadNotRun(t *testing.T) {
 		{Item: "EKS", Reason: "no AWS", Evidence: []Evidence{{Row: "LIVE-01", Tier: "live"}}},
 	}, got)
 
-	got, err = readNotRun(notRunRoot(t, "# nothing\n"))
-	require.NoError(t, err)
-	assert.Empty(t, got)
+	for _, empty := range []string{"", "# nothing\n\n   \n"} {
+		_, err = readNotRun(notRunRoot(t, empty))
+		assert.ErrorContains(t, err, "not-run.txt lists nothing", "an empty list would read as proof of everything")
+	}
 
 	for _, tc := range []struct{ name, line, err string }{
 		{"no reason", "Real KMS |  | SIGN-01", "not-run.txt:1: Real KMS has no reason"},
