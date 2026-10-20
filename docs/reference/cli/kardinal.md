@@ -8,7 +8,7 @@ kardinal promotes versions of your application through environments, with
 gates, pull requests and health checks, on Kubernetes.
 
 Getting started:
-  kardinal quickstart --repo <your fork>                 try it on a local cluster
+  kardinal quickstart --local                            try it on a local cluster
   kardinal init --name my-app --repo <gitops repo>       write a Pipeline for your repository
   kardinal ship my-app --image app:1.4 --wait            ship a version and follow it
   kardinal why my-app prod                               why it waits, and what moves it on

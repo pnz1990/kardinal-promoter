@@ -91,6 +91,18 @@ func Scheme() *runtime.Scheme {
 // test when the variable is unset or names a non-kind context.
 func New(t *testing.T) *Env {
 	t.Helper()
+	return newEnv(t, true)
+}
+
+// NewWithoutGit is New for a suite without a git server of its own (the
+// quickstart-local suite, whose CLI installs one): Env.Git is nil.
+func NewWithoutGit(t *testing.T) *Env {
+	t.Helper()
+	return newEnv(t, false)
+}
+
+func newEnv(t *testing.T, withGit bool) *Env {
+	t.Helper()
 	kubeContext, ok, err := kindcontext.FromEnv(os.Getenv(kindcontext.EnvVar))
 	if err != nil {
 		t.Fatal(err)
@@ -119,9 +131,11 @@ func New(t *testing.T) *Env {
 	if err != nil {
 		t.Fatalf("dynamic client: %v", err)
 	}
-	git, err := gitserver.FromEnv()
-	if err != nil {
-		t.Fatalf("git server: %v", err)
+	var git gitserver.Server
+	if withGit {
+		if git, err = gitserver.FromEnv(); err != nil {
+			t.Fatalf("git server: %v", err)
+		}
 	}
 	cli := os.Getenv(EnvCLI)
 	if cli == "" {

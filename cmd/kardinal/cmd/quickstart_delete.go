@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -56,8 +57,10 @@ var quickstartDeleteWait = 2 * time.Minute
 // (its Bundles first, waiting for the controller to close their PRs, then the
 // Pipeline, the gate, the ApplicationSet and the git Secret), and nothing
 // else. An object quickstart did not apply is kept, and so is the git Secret
-// while another Pipeline uses it. A re-run deletes nothing.
-func quickstartDeleteFn(ctx context.Context, w io.Writer, confirm func(string) error) error {
+// while another Pipeline uses it. With local (--local --delete) it then
+// removes the git server and what quickstart --local installed
+// (deleteLocal). A re-run deletes nothing.
+func quickstartDeleteFn(ctx context.Context, w io.Writer, confirm func(string) error, local bool) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -65,15 +68,49 @@ func quickstartDeleteFn(ctx context.Context, w io.Writer, confirm func(string) e
 	if err != nil {
 		return err
 	}
+	// Every command it prints names that context (quickstart_hints.go).
+	hints := newHinter(kctx)
+	w = hints.writer(w)
+	defer func() { err = hints.err(err) }()
 	c, err := quickstartClient(only)
 	if err != nil {
 		return fmt.Errorf("quickstart --delete: %w", err)
 	}
-	if err := confirm(fmt.Sprintf("Delete the kardinal demo (Pipeline %s/%s, its versions, gate, ApplicationSet and git Secret) from %s?",
-		quickstartNS, quickstartPipeline, kctx)); err != nil {
+	q := &quickstart{ctx: ctx, w: w, c: c, kctx: kctx, gitSecret: quickstartSecret, o: quickstartOptions{local: local}}
+	question := fmt.Sprintf("Delete the kardinal demo (Pipeline %s/%s, its versions, gate, ApplicationSet and git Secret) from %s?",
+		quickstartNS, quickstartPipeline, kctx)
+	var plan localPlan
+	if local {
+		q.gitSecret = localGitSecret
+		// helm and kubectl run with the checked context alone.
+		kubeconfig, err := writeHelmKubeconfig(only)
+		if err != nil {
+			return fmt.Errorf("quickstart --local --delete: %w", err)
+		}
+		defer func() { _ = os.Remove(kubeconfig) }()
+		q.kubeconfig = kubeconfig
+		id, err := q.localID()
+		if err != nil {
+			return fmt.Errorf("quickstart --local --delete: %w", err)
+		}
+		if plan, err = q.planLocal(id); err != nil {
+			return fmt.Errorf("quickstart --local --delete: %w", err)
+		}
+		// The whole list first: the confirmation is of exactly this.
+		_, _ = fmt.Fprintf(w, "quickstart --local --delete will, in %s:\n  delete the demo (Pipeline %s/%s, its versions, gate %s, "+
+			"ApplicationSet argocd/%s, Secret %s/%s)\n", kctx, quickstartNS, quickstartPipeline, quickstartGate, quickstartAppSet,
+			quickstartNS, localGitSecret)
+		for _, l := range plan.lines() {
+			_, _ = fmt.Fprintf(w, "  %s\n", l)
+		}
+		if id == "" {
+			_, _ = fmt.Fprintf(w, "  (no quickstart --local install here: no namespace %s with its record)\n", localGitNS)
+		}
+		question = "Go ahead?"
+	}
+	if err := confirm(question); err != nil {
 		return err
 	}
-	q := &quickstart{ctx: ctx, w: w, c: c, kctx: kctx}
 	_, _ = fmt.Fprintf(w, "Removing the kardinal demo from %s\n", kctx)
 
 	pipeline := &unstructured.Unstructured{}
@@ -112,11 +149,19 @@ func quickstartDeleteFn(ctx context.Context, w io.Writer, confirm func(string) e
 	if err := q.deleteGitSecret(); err != nil {
 		return err
 	}
+	if local {
+		return q.deleteLocal(plan)
+	}
 	_, _ = fmt.Fprintf(w, `Kept: kro, Argo CD, kardinal-promoter and its Secret %s/%s, and the namespaces the
 Applications deployed to. To remove those too:
   kubectl delete namespace %s
 To set the demo up again: kardinal quickstart --repo <your fork of kardinal-demo>
 `, quickstartControllerNS, quickstartSCMSecret, strings.Join(quickstartWorkloadNamespaces(), " "))
+	var ns corev1.Namespace
+	if err := q.c.Get(ctx, types.NamespacedName{Name: localGitNS}, &ns); err == nil && ns.Labels[quickstartMark] == quickstartMarkValue {
+		_, _ = fmt.Fprintf(w, "Kept: the git server of quickstart --local (namespace %s). kardinal quickstart --local --delete removes it, "+
+			"and what quickstart --local installed.\n", localGitNS)
+	}
 	return nil
 }
 
@@ -265,9 +310,9 @@ func (q *quickstart) demoLeft(ofOurPipeline bool) (string, error) {
 // deleteGitSecret deletes the demo's git Secret when quickstart created it
 // (quickstartMark) and no Pipeline other than a deleted one refers to it.
 func (q *quickstart) deleteGitSecret() error {
-	what := "Secret " + quickstartNS + "/" + quickstartSecret
+	what := "Secret " + quickstartNS + "/" + q.gitSecret
 	var s corev1.Secret
-	if err := q.c.Get(q.ctx, types.NamespacedName{Namespace: quickstartNS, Name: quickstartSecret}, &s); err != nil {
+	if err := q.c.Get(q.ctx, types.NamespacedName{Namespace: quickstartNS, Name: q.gitSecret}, &s); err != nil {
 		if apierrors.IsNotFound(err) {
 			q.say(what, "already gone")
 			return nil
@@ -285,7 +330,7 @@ func (q *quickstart) deleteGitSecret() error {
 	var users []string
 	for i := range pipelines.Items {
 		p := &pipelines.Items[i]
-		if p.DeletionTimestamp == nil && referencesSecret(p, quickstartSecret) {
+		if p.DeletionTimestamp == nil && referencesSecret(p, q.gitSecret) {
 			users = append(users, p.Name)
 		}
 	}

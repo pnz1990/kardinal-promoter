@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+images:
+- name: ghcr.io/pnz1990/kardinal-test-app
+  newName: ghcr.io/pnz1990/kardinal-test-app
+  newTag: sha-9349a3f

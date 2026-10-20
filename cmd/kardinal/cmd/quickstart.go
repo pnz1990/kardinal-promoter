@@ -134,23 +134,27 @@ var quickstartLookPath = exec.LookPath
 type quickstartOptions struct {
 	repo, image, chart, chartVersion string
 	sets                             []string
-	noArgoCD, noWait, delete         bool
+	noArgoCD, noWait, delete, local  bool
 	timeout                          time.Duration
 }
 
 func newQuickstartCmd() *cobra.Command {
 	o := quickstartOptions{timeout: 15 * time.Minute}
 	cmd := &cobra.Command{
-		Use:   "quickstart --repo <your fork of kardinal-demo>",
+		Use:   "quickstart --local | --repo <your fork of kardinal-demo>",
 		Short: "Install kardinal on a local cluster and promote a first version",
 		Long: `Set up a demo on a local cluster (kind, k3d, minikube, Docker or Rancher
-Desktop; any other context is refused before anything is written): kro, Argo
-CD, kardinal, the git Secret, the Argo CD Applications of your kardinal-demo
-fork, a Pipeline with an approval gate on prod, and a first version, which it
-follows until prod waits for your approval. A re-run changes nothing.`,
+Desktop; any other context is refused first): kro, Argo CD, kardinal, the demo's
+git repository (--local: on a git server in the cluster, no account needed;
+--repo: your GitHub fork), a Pipeline gated on prod, and a first version,
+followed until prod waits for your approval. A re-run changes nothing.`,
 		Example: `  kind create cluster --name kardinal
-  kardinal quickstart --repo https://github.com/<you>/kardinal-demo
+  kardinal quickstart --local
   kardinal approve demo prod
+  kardinal quickstart --local --delete
+
+  # With your GitHub fork of kardinal-demo instead (GITHUB_TOKEN or gh auth login):
+  kardinal quickstart --repo https://github.com/<you>/kardinal-demo
   kardinal quickstart --delete`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -159,12 +163,13 @@ follows until prod waits for your approval. A re-run changes nothing.`,
 			ctx, stop := signal.NotifyContext(contextOf(cmd), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			if o.delete {
-				return quickstartDeleteFn(ctx, cmd.OutOrStdout(), func(q string) error { return confirm(cmd, q) })
+				return quickstartDeleteFn(ctx, cmd.OutOrStdout(), deleteAsk(cmd, o.local), o.local)
 			}
 			return quickstartFn(ctx, cmd.OutOrStdout(), o)
 		},
 	}
 	f := cmd.Flags()
+	f.BoolVar(&o.local, "local", false, "Keep the demo's git repository on a git server in the cluster (Forgejo, reachable only inside it), seeded with kardinal-demo: no GitHub account, fork or token; with --delete, also remove the server and what quickstart --local installed")
 	f.StringVar(&o.repo, "repo", "", "Your GitHub fork of github.com/pnz1990/kardinal-demo (the token needs contents and pull requests read and write on it); another git host needs --set scm.provider")
 	f.StringVar(&o.image, "image", quickstartImage, "The first version to ship")
 	f.StringVar(&o.chart, "chart", "", "The kardinal-promoter Helm chart, an OCI reference or a directory (default: the published chart, ghcr.io/pnz1990/charts)")
@@ -175,6 +180,7 @@ follows until prod waits for your approval. A re-run changes nothing.`,
 	f.Var(durationValue{&o.timeout}, "timeout", "How long to follow the first version")
 	f.BoolVar(&o.delete, "delete", false, "Delete the demo quickstart applied (its versions, Pipeline, gate, ApplicationSet and git Secret); keep kro, Argo CD and kardinal")
 	addYesFlag(cmd)
+	cmd.MarkFlagsMutuallyExclusive("local", "repo")
 	cmd.MarkFlagsMutuallyExclusive("delete", "repo")
 	cmd.MarkFlagsMutuallyExclusive("delete", "image")
 	cmd.MarkFlagsMutuallyExclusive("delete", "chart")
@@ -185,6 +191,19 @@ follows until prod waits for your approval. A re-run changes nothing.`,
 	cmd.MarkFlagsMutuallyExclusive("delete", "timeout")
 	withReference(cmd, quickstartReference)
 	return cmd
+}
+
+// deleteAsk is quickstart --delete's confirmation. --local --delete
+// uninstalls cluster components, so without a terminal to ask on it goes
+// ahead only with --yes; --delete asks on a terminal, as before.
+func deleteAsk(cmd *cobra.Command, local bool) func(string) error {
+	return func(q string) error {
+		if yes, _ := cmd.Flags().GetBool("yes"); local && !yes && !promptable() {
+			return fmt.Errorf("kardinal quickstart --local --delete uninstalls what it lists above: run it on a terminal " +
+				"to confirm, or pass --yes; nothing was deleted")
+		}
+		return confirm(cmd, q)
+	}
 }
 
 // localContextName reports whether name is a context name quickstart accepts.
@@ -303,20 +322,25 @@ func targetOverrides(environ []string) []string {
 	return out
 }
 
-// toolEnv is the environment helm and kubectl run with: scrubbedEnv, and
-// KUBERC=off, so no kuberc alias or default changes what kubectl runs.
+// toolEnv is the environment helm and kubectl run with: scrubbedEnv,
+// KUBERC=off, so no kuberc alias or default changes what kubectl runs, and
+// KUBECONFIG set to an empty file, so a command that lacks quickstart's
+// --kubeconfig fails instead of reaching the default kubeconfig's context.
 func toolEnv(environ []string) []string {
-	return append(scrubbedEnv(environ), "KUBERC=off")
+	return append(scrubbedEnv(environ), "KUBERC=off", "KUBECONFIG="+os.DevNull)
 }
 
 // scrubbedEnv is environ without what could point helm or kubectl at
 // another cluster or change their commands: the targetOverrides, KUBECONFIG
-// (quickstart passes --kubeconfig) and KUBERC (quickstartRun sets it off).
+// (quickstart passes --kubeconfig), KUBERC (quickstartRun sets it off), and
+// KUBERNETES_SERVICE_HOST and _PORT, so a run in a pod never falls back to
+// the pod's cluster.
 func scrubbedEnv(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" || k == "KUBERC" {
+		if strings.HasPrefix(k, "HELM_KUBE") || k == "KUBERNETES_MASTER" || k == "KUBECONFIG" || k == "KUBERC" ||
+			k == "KUBERNETES_SERVICE_HOST" || k == "KUBERNETES_SERVICE_PORT" {
 			continue
 		}
 		out = append(out, kv)
@@ -429,7 +453,7 @@ var quickstartClient = func(only *clientcmdapi.Config) (sigs_client.Client, erro
 }
 
 // quickstartFn is kardinal quickstart.
-func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
+func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -438,17 +462,24 @@ func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(o.repo, "https://") && !strings.HasPrefix(o.repo, "http://") {
-		return fmt.Errorf("quickstart needs --repo, your fork of github.com/pnz1990/kardinal-demo: kardinal quickstart --repo https://github.com/<you>/kardinal-demo")
+	// Every command it prints names that context (quickstart_hints.go).
+	hints := newHinter(kctx)
+	w = hints.writer(w)
+	defer func() { err = hints.err(err) }()
+	if o.local {
+		o.repo = localRepoURL
+	} else if !strings.HasPrefix(o.repo, "https://") && !strings.HasPrefix(o.repo, "http://") {
+		return fmt.Errorf("quickstart needs --local (a git server in the cluster, no account needed) or --repo, your fork of " +
+			"github.com/pnz1990/kardinal-demo: kardinal quickstart --local")
 	}
 	for _, tool := range []string{"helm", "kubectl"} {
 		if _, err := quickstartLookPath(tool); err != nil {
 			return fmt.Errorf("quickstart needs %s on PATH to install kro, Argo CD and kardinal: see https://helm.sh/docs/intro/install/ and https://kubernetes.io/docs/tasks/tools/", tool)
 		}
 	}
-	if _, _, err := gitToken(); err != nil {
+	if _, _, err := gitToken(); err != nil && !o.local {
 		return fmt.Errorf("quickstart needs a GitHub token with contents and pull requests read and write on %s: "+
-			"export GITHUB_TOKEN=<token>, or log in with gh auth login", o.repo)
+			"export GITHUB_TOKEN=<token>, or log in with gh auth login (or run kardinal quickstart --local, which needs none)", o.repo)
 	}
 	c, err := quickstartClient(only)
 	if err != nil {
@@ -456,7 +487,7 @@ func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
 	}
 	// quickstart installs kardinal for GitHub; a fork elsewhere needs the
 	// provider set by hand (or a kardinal already installed for it).
-	if !githubRepo(o.repo) && !setsValue(o.sets, "scm.provider") {
+	if !o.local && !githubRepo(o.repo) && !setsValue(o.sets, "scm.provider") {
 		if _, installed := kardinalInstalled(ctx, c); !installed {
 			return fmt.Errorf("quickstart supports GitHub forks of kardinal-demo, and %s is not on github.com, so nothing was changed: "+
 				"fork https://github.com/pnz1990/kardinal-demo on GitHub and pass --repo https://github.com/<you>/kardinal-demo, "+
@@ -472,18 +503,43 @@ func quickstartFn(ctx context.Context, w io.Writer, o quickstartOptions) error {
 		return fmt.Errorf("quickstart: %w", err)
 	}
 	defer func() { _ = os.Remove(kubeconfig) }()
-	q := &quickstart{ctx: ctx, w: w, c: c, kctx: kctx, kubeconfig: kubeconfig, o: o}
+	q := &quickstart{ctx: ctx, w: w, c: c, kctx: kctx, kubeconfig: kubeconfig, o: o, gitSecret: quickstartSecret}
 	_, _ = fmt.Fprintf(w, "Setting up the kardinal demo in %s\n", kctx)
 
-	// 2. kro, Argo CD, kardinal: each only when it is not there.
-	for _, step := range []func() error{q.kro, q.argoCD, q.kardinal} {
+	// 2. kro, Argo CD, kardinal: each only when it is not there. With
+	// --local, the git server comes first: the controller's token is one of
+	// its users'.
+	steps := []func() error{q.kro, q.argoCD, q.kardinal}
+	if o.local {
+		// Every check that can refuse --local runs before anything is
+		// installed, so a refusal changes nothing; then the install is
+		// marked (localBegin) before its first part.
+		q.gitSecret = localGitSecret
+		if err := q.localPreflight(); err != nil {
+			return err
+		}
+		if err := q.localBegin(); err != nil {
+			return err
+		}
+		steps = []func() error{q.kro, q.argoCD, q.gitServer, q.kardinal}
+	}
+	for _, step := range steps {
 		if err := step(); err != nil {
 			return err
 		}
 	}
-	// 3. The demo: Secret, Applications, gate, Pipeline.
+	// 3. The demo: Secret, Applications, gate, Pipeline. With --local the
+	// Applications' namespaces are created first, marked, unless they
+	// exist: --local --delete deletes only the ones it created.
 	if err := q.secret(); err != nil {
 		return err
+	}
+	if o.local {
+		for _, ns := range quickstartWorkloadNamespaces() {
+			if err := q.ownNamespace(ns); err != nil {
+				return err
+			}
+		}
 	}
 	for _, step := range []func() error{q.applicationSet, q.gate, q.pipeline} {
 		if err := step(); err != nil {
@@ -507,6 +563,13 @@ type quickstart struct {
 	// kubeconfig is the file with only kctx that helm and kubectl use.
 	kubeconfig string
 	o          quickstartOptions
+	// gitSecret is the demo Pipeline's git Secret: quickstartSecret, or
+	// localGitSecret with --local.
+	gitSecret string
+	// id is the install ID of quickstart --local (localBegin): the label
+	// quickstartIDLabel of everything it creates, which --local --delete
+	// requires before it removes anything.
+	id string
 }
 
 // say writes one line of quickstart's progress: what, and what happened.
@@ -575,9 +638,12 @@ func (q *quickstart) kro() error {
 		q.say(what, "already installed")
 		return nil
 	}
-	args := append([]string{"upgrade", "--install", "kro", kroChart, "--version", quickstartKroVersion,
+	if err := q.ownNamespace(kroNamespace); err != nil {
+		return err
+	}
+	args := append(append([]string{"upgrade", "--install", "kro", kroChart, "--version", quickstartKroVersion,
 		"--namespace", kroNamespace, "--create-namespace",
-		"--wait", "--timeout", "180s"}, q.helmFlags()...)
+		"--wait", "--timeout", "180s"}, q.helmLabels()...), q.helmFlags()...)
 	for _, v := range kroHelmValues {
 		args = append(args, "--set", v)
 	}
@@ -608,7 +674,11 @@ func (q *quickstart) argoCD() error {
 		q.say(what, "skipped (--no-argocd)")
 		return nil
 	}
-	if _, err := quickstartRun(q.ctx, "kubectl", append([]string{"create", "namespace", "argocd"}, q.kubectlFlags()...)...); err != nil &&
+	if q.o.local {
+		if err := q.ownNamespace("argocd"); err != nil {
+			return err
+		}
+	} else if _, err := quickstartRun(q.ctx, "kubectl", append([]string{"create", "namespace", "argocd"}, q.kubectlFlags()...)...); err != nil &&
 		!strings.Contains(err.Error(), "AlreadyExists") {
 		return fmt.Errorf("quickstart: install Argo CD: %w", err)
 	}
@@ -656,6 +726,7 @@ func (q *quickstart) kardinal() error {
 		what += " " + version
 	}
 	if name, ok := kardinalInstalled(q.ctx, q.c); ok {
+		// With --local, localPreflight checked it is set up for the git server.
 		q.say("kardinal-promoter", "already installed ("+quickstartControllerNS+"/"+name+")")
 		return nil
 	}
@@ -666,8 +737,16 @@ func (q *quickstart) kardinal() error {
 	if chart == "" {
 		chart = quickstartChart
 	}
-	args := []string{"upgrade", "--install", "kardinal-promoter", chart, "--namespace", quickstartControllerNS, "--create-namespace",
-		"--set", "scm.provider=github", "--set", "scm.secretRef.name=" + quickstartSCMSecret, "--wait", "--timeout", "300s"}
+	scmValues := []string{"scm.provider=github"}
+	if q.o.local {
+		scmValues = localHelmValues()
+	}
+	args := []string{"upgrade", "--install", "kardinal-promoter", chart, "--namespace", quickstartControllerNS, "--create-namespace"}
+	for _, v := range scmValues {
+		args = append(args, "--set", v)
+	}
+	args = append(args, "--set", "scm.secretRef.name="+quickstartSCMSecret, "--wait", "--timeout", "300s")
+	args = append(args, q.helmLabels()...)
 	if version != "" {
 		args = append(args, "--version", version)
 	}
@@ -787,14 +866,22 @@ func (q *quickstart) scmSecret() error {
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("quickstart: get %s: %w", what, HumanError(err))
 	}
-	token, from, err := gitToken()
-	if err != nil {
-		return fmt.Errorf("quickstart: %w", err)
+	if q.o.local {
+		if err := q.ownNamespace(quickstartControllerNS); err != nil {
+			return err
+		}
+		// Unlabelled referenceable: no Pipeline may use the controller's token.
+		return q.localSecret(quickstartControllerNS, quickstartSCMSecret, "kardinal-controller",
+			"the controller's token on the git server, for PRs", nil)
 	}
 	ns := &corev1.Namespace{}
 	ns.Name = quickstartControllerNS
 	if err := q.c.Create(q.ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("quickstart: create namespace %s: %w", quickstartControllerNS, HumanError(err))
+	}
+	token, from, err := gitToken()
+	if err != nil {
+		return fmt.Errorf("quickstart: %w", err)
 	}
 	sec := &corev1.Secret{}
 	sec.Name, sec.Namespace = quickstartSCMSecret, quickstartControllerNS
@@ -809,6 +896,10 @@ func (q *quickstart) scmSecret() error {
 // secret creates the git Secret of the demo Pipeline (createGitSecret: kept
 // when it exists, labelled referenceable when it is not).
 func (q *quickstart) secret() error {
+	if q.o.local {
+		return q.localSecret(quickstartNS, localGitSecret, "pipeline-"+quickstartPipeline,
+			"the Pipeline's token on the git server", map[string]string{v1alpha1.LabelSecretReferenceable: "true"})
+	}
 	// One it creates is marked as quickstart's, in the Create itself, so
 	// quickstart --delete deletes it and never a Secret of the same name
 	// someone else made.
@@ -879,11 +970,11 @@ func (q *quickstart) applicationSet() error {
 	}
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet",
-		"metadata": map[string]any{"name": quickstartAppSet, "namespace": "argocd"},
+		"metadata": q.withIDLabels(map[string]any{"name": quickstartAppSet, "namespace": "argocd"}),
 		"spec": map[string]any{
 			"generators": []any{map[string]any{"list": map[string]any{"elements": envs}}},
 			"template": map[string]any{
-				"metadata": map[string]any{"name": quickstartAppSet + "-{{env}}"},
+				"metadata": q.withIDLabels(map[string]any{"name": quickstartAppSet + "-{{env}}"}),
 				"spec": map[string]any{
 					"project": "default",
 					"source": map[string]any{"repoURL": q.o.repo, "targetRevision": "main", "path": "environments/{{env}}",
@@ -939,7 +1030,7 @@ func (q *quickstart) pipeline() error {
 		"apiVersion": v1alpha1.GroupVersion.String(), "kind": "Pipeline",
 		"metadata": map[string]any{"name": quickstartPipeline, "namespace": quickstartNS},
 		"spec": map[string]any{
-			"git":          map[string]any{"url": q.o.repo, "secretRef": map[string]any{"name": quickstartSecret}},
+			"git":          map[string]any{"url": q.o.repo, "secretRef": map[string]any{"name": q.gitSecret}},
 			"environments": envs,
 		},
 	}}
@@ -1016,6 +1107,11 @@ Next:
   Open the UI:     kardinal dashboard
   Ship the next:   kardinal ship %[1]s --image %[2]s --wait
 `, quickstartPipeline, nextImage(q.o.image))
+	if q.o.local {
+		_, _ = fmt.Fprintf(q.w, `  See the repo:    kubectl -n %s port-forward svc/%s 3000, then http://127.0.0.1:3000/%s/%s
+  Remove it all:   kardinal quickstart --local --delete
+`, localGitNS, localGitName, localGitUser, localGitRepo)
+	}
 }
 
 // quickstartReference is the detail of quickstart for its reference page.
@@ -1057,6 +1153,37 @@ It ships the first version (--image) unless demo has one, and follows it
 until prod waits for your approval (--no-wait does not follow). It does not
 change your kubeconfig. A re-run changes nothing.
 
+With --local instead of --repo, the demo's repository is on a git server in
+the cluster, and no GitHub account or token is needed. First it checks, and
+stops with nothing changed: helm is 3.13 or later (it labels its releases),
+the namespace kardinal-git is its own or absent, the cluster has a default
+StorageClass, and a kardinal-promoter already installed is one for the local
+git server. Then it marks the install: an install ID, the label
+kardinal.io/quickstart-id of every namespace it creates (kardinal-git,
+kro-system, argocd, kardinal-system, kardinal-test-app-<env>; one that
+exists is left unmarked), of the ApplicationSet and its Applications, and of
+the Helm releases of kro and kardinal-promoter it installs (helm --labels),
+recorded in the ConfigMap
+kardinal-git/kardinal-quickstart. Before kardinal it installs, in the
+namespace kardinal-git:
+  a single-pod Forgejo (the image hack/e2e/versions.env pins, by digest),
+    with a 1Gi volume of the default StorageClass (it stops before it creates
+    anything without one), behind a ClusterIP Service: reachable only inside
+    the cluster, with no port published on this machine
+  its user kardinal (a random password nobody keeps) and the repository
+    kardinal/kardinal-demo, seeded with kardinal-demo's environments by
+    kubectl exec of a script that holds no secret
+Then the controller's Secret kardinal-system/kardinal-scm-token and the git
+Secret default/git-token each get a token of that user (scopes
+write:repository and write:issue), read from kubectl exec's output and
+written straight into the Secret: never printed, passed as an argument or
+written to a file. kardinal-promoter is installed with scm.provider=forgejo,
+the server as scm.apiURL and scm.allowedRepositories limited to the demo
+repository; one already installed for another git server is refused. The
+ApplicationSet and the Pipeline use the repository's in-cluster URL.
+kubectl -n kardinal-git port-forward svc/kardinal-git 3000 shows it in a
+browser at http://127.0.0.1:3000 (the forward listens on 127.0.0.1).
+
 Then: kardinal approve demo prod ships it to prod; kardinal dashboard opens
 the UI; the Next lines show the command that ships the next version. To get
 PR evidence for prod, set its approval to pr-review in the Pipeline.
@@ -1072,4 +1199,18 @@ uses it. Without a Pipeline demo, only versions with that label go. Do
 not add the label by hand: --delete deletes what carries it. It keeps kro, Argo CD, kardinal-promoter with its
 token Secret, and the kardinal-test-app-<env> namespaces, and prints the
 command that deletes those. It asks first on a terminal (--yes does not).
-A re-run deletes nothing.`
+A re-run deletes nothing.
+
+kardinal quickstart --local --delete first prints everything it will remove
+and keep, then asks; without a terminal it goes ahead only with --yes. It
+removes only what carries the install ID of the record in kardinal-git (the
+namespace's ID and the record's must match). It deletes the demo the same
+way, then the namespaces kardinal-test-app-<env> it created (once Argo CD
+has deleted their Applications) and each of kardinal-promoter, kro (their
+Helm release carries the ID) and Argo CD (its namespace does) with its CRDs
+and the namespace it created for it: helm uninstall, Argo CD's release
+manifests. A part stays, CRDs and all, while any object of its API groups
+(kardinal.io; argoproj.io; kro.run and internal.kro.run), in any namespace,
+is not the demo's: deleting a CRD deletes every object of its kind, and the
+reason is printed. Then it deletes the namespace kardinal-git with the git
+server, its repository and the record.`
