@@ -28,7 +28,24 @@ make hygiene
 
 `make hygiene` fails on a Go function no main or test reaches, a docs page that is neither in
 `mkdocs.yml` nor linked, a docs asset or a script under `hack/` or `scripts/` that nothing names,
-and an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`). A helper only
+an unused file, export or dependency in `web/` (knip, after `npm ci` in `web/`), and a Go test
+package without the kube guard. Every test package under `cmd/` and `test/` (their tests run the
+CLI, kubectl, helm and kind), every other one whose code or tests start processes (`os/exec`), and
+every one whose tests can reach a kube config loader or a package that starts processes
+(client-go's default loading rules or `BuildConfigFromFlags`, controller-runtime's `GetConfig`,
+`rest.InClusterConfig`, envtest; resolved by import path, under every build tag set but `e2e`),
+needs a `TestMain` calling `kubetest.Main` (`test/kubetest`) in a file without build constraints,
+or `kubetest.Run` or `kubetest.Isolate` before `m.Run`. Before any test runs, the guard points
+`KUBECONFIG` at a path that does not exist, `$HOME` at an empty scratch directory and client-go's
+home kubeconfig (`clientcmd.RecommendedHomeFile`, computed from the real `$HOME` before any
+`TestMain`) at nothing, and unsets `KUBERNETES_SERVICE_HOST` and `USE_EXISTING_CLUSTER`, for the
+tests and every process they start. So a unit test can never reach the cluster your machine points
+at, not even one that clears `KUBECONFIG`; a test that needs a cluster gives its kubeconfig
+explicitly. Go's caches and env file, git's global config and the docker config are kept by path.
+`clientcmd.RecommendedHomeFile` is refused outside the e2e builds, a loader in a package-level var
+(a function literal called there too) or `init` is refused, and so is a test that sets
+`KUBECONFIG` or `HOME` to "" or unsets them. The e2e suites (`test/e2e/live`, every file only an
+`e2e` build has) talk to their own kind clusters and are not checked. A helper only
 tests call belongs in an `export_test.go` of its package. Intentional exceptions go in
 `hack/hygiene/allow.txt` with a reason.
 

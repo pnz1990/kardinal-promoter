@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/test/kubetest"
 )
 
 // MatrixRows returns the scenario matrix: the pairwise rows of Dimensions
@@ -145,8 +146,10 @@ func splitByWeight(combos []Combo, weights map[string]float64, parts int) []int 
 // (World.runJobs). The controller's own step sequences never contain
 // render-manifests, so the mark changes nothing for them.
 func MainWithRenderJobs(m *testing.M) {
+	// No scenario reaches the ambient kubeconfig (test/kubetest).
+	kubetest.Isolate()
 	if err := os.Setenv(steps.RenderJobEnv, "1"); err != nil {
 		panic(err)
 	}
-	os.Exit(m.Run())
+	os.Exit(kubetest.Run(m))
 }

@@ -20,6 +20,9 @@
 //     maxFileSize (a `go build` at the root committed a 4.8 MB release-gate
 //     binary, #2202). A large asset that belongs in the repo goes in the
 //     allowlist with its reason.
+//   - test packages that can reach the ambient kubeconfig without the
+//     kubetest guard, and kube config loaders that run before any guard
+//     can (kubeguard.go).
 //
 // hack/hygiene/allow.txt lists the intentional exceptions, each with its
 // reason; an entry that no longer matches anything is reported too, so the
@@ -350,8 +353,8 @@ func readAllow(file string) (map[string]bool, error) {
 		}
 		entry, reason, ok := strings.Cut(line, "#")
 		fields := strings.Fields(entry)
-		if !ok || strings.TrimSpace(reason) == "" || len(fields) != 2 || (fields[0] != "deadcode" && fields[0] != "file") {
-			return nil, fmt.Errorf("%s:%d: want \"deadcode|file <name>  # <reason>\", got %q", file, n, line)
+		if !ok || strings.TrimSpace(reason) == "" || len(fields) != 2 || (fields[0] != "deadcode" && fields[0] != "file" && fields[0] != "kubeguard") {
+			return nil, fmt.Errorf("%s:%d: want \"deadcode|file|kubeguard <name>  # <reason>\", got %q", file, n, line)
 		}
 		allow[fields[0]+" "+fields[1]] = true
 	}
@@ -401,7 +404,13 @@ func main() {
 		os.Exit(1)
 	}
 	found := fileFindings(*root, r)
-	kinds := map[string]bool{"file": true}
+	kinds := map[string]bool{"file": true, "kubeguard": true, "kubeguard-home": true, "kubeguard-init": true, "kubeguard-env": true}
+	kg, err := kubeGuard(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	found = append(found, kg...)
 	if !*skipDeadcode {
 		dc, err := deadcode(*root, *bin)
 		if err != nil {
@@ -416,7 +425,7 @@ func main() {
 		fmt.Println(p)
 	}
 	if len(problems) > 0 {
-		fmt.Fprintf(os.Stderr, "%d dead function(s) or file(s); exceptions go in %s with a reason\n", len(problems), allowFile)
+		fmt.Fprintf(os.Stderr, "%d dead function(s), file(s) or unguarded test package(s); exceptions go in %s with a reason\n", len(problems), allowFile)
 		os.Exit(1)
 	}
 	fmt.Println("no dead code and no dead files")
