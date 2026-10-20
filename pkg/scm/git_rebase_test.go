@@ -210,6 +210,55 @@ func TestGoGitClient_RebaseOnRemote_UpdateInFlight(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "the wait ends with the context")
 }
 
+// TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock (#2351): the race
+// TestGoGitClient_ConcurrentWritersLoseNothing lost once, made certain. The
+// remote's refs/heads/main.lock stands for another writer's update in
+// flight: git-receive-pack refuses this writer's push ("cannot lock ref
+// ... File exists", a lost race), and the fetch after it still sees the
+// branch where it was. The other update lands 300ms later; RebaseOnRemote,
+// fetching again meanwhile, rebases onto it and the push lands, keeping
+// both writers' changes. Before #2351 the rebase said "rebase onto main at
+// <base>: the remote branch did not move", the message CI saw.
+//
+// Covers SCM-GIT-REBASE-INFLIGHT-01.
+func TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n", "environments/b/kustomization.yaml": "b: 1\n"})
+	mine, theirs := filepath.Join(t.TempDir(), "mine"), filepath.Join(t.TempDir(), "theirs")
+	for dir, env := range map[string]string{mine: "a", theirs: "b"} {
+		require.NoError(t, c.Clone(ctx, "file://"+remote, "main", dir, scm.GitAuth{}))
+		writeFiles(t, dir, map[string]string{"environments/" + env + "/kustomization.yaml": env + ": 2\n"})
+		require.NoError(t, c.CommitAll(ctx, dir, "promote "+env, "k", "k@example.com"))
+	}
+	lock := filepath.Join(remote, "refs", "heads", "main.lock")
+	require.NoError(t, os.WriteFile(lock, nil, 0o600))
+
+	_, before := remoteFiles(t, remote, "main")
+	err := c.Push(ctx, mine, "origin", "main", scm.GitAuth{}, false)
+	require.ErrorIs(t, err, scm.ErrNonFastForward, "a push refused while the lock is held is a lost race")
+	_, after := remoteFiles(t, remote, "main")
+	require.Equal(t, before, after, "refused by the server's lock: the branch has not moved")
+
+	landed := make(chan error, 1)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if err := os.Remove(lock); err != nil {
+			landed <- err
+			return
+		}
+		landed <- c.Push(ctx, theirs, "origin", "main", scm.GitAuth{}, false)
+	}()
+	_, err = c.RebaseOnRemote(ctx, mine, "origin", "main", scm.GitAuth{})
+	require.NoError(t, <-landed)
+	require.NoError(t, err, "the other update landed within the wait")
+	require.NoError(t, c.Push(ctx, mine, "origin", "main", scm.GitAuth{}, false))
+	files, commits := remoteFiles(t, remote, "main")
+	assert.Equal(t, "a: 2\n", files["environments/a/kustomization.yaml"])
+	assert.Equal(t, "b: 2\n", files["environments/b/kustomization.yaml"])
+	assert.Equal(t, 3, commits)
+}
+
 // TestGoGitClient_ConcurrentWritersLoseNothing: ten writers, each changing
 // its own path, push to one branch at once and rebase until their push
 // lands. Every change is on the branch and history is linear.
