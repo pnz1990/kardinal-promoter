@@ -237,7 +237,12 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	}
 	assert.NotContains(t, levels, receipt.LevelOverridden)
 	assert.NotContains(t, levels, receipt.LevelFreezeExempted)
-	require.Len(t, ivDone.Status.Attestations, 3, "provenance, scan and VEX were verified")
+	verified := map[string]bool{}
+	for _, at := range ivDone.Status.Attestations {
+		verified[at.Name] = at.Verified
+	}
+	assert.Equal(t, map[string]bool{"provenance": true, "vulns": true}, verified,
+		"the provenance and the scan verified (the VEX is the scan's, not an attestation result of its own)")
 
 	// 5. The evidence pack, exported by an auditor.
 	auditor := "auditor-" + a.ns + "@example.com"
