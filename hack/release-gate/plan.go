@@ -10,10 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The areas of the report, in its order.
@@ -163,6 +165,9 @@ func LoadRepo(root string) (*Repo, error) {
 	if r.ToolVersions, err = readEnv(filepath.Join(root, "hack", "tool-versions.env")); err != nil {
 		return nil, err
 	}
+	if err := r.checkPins(); err != nil {
+		return nil, err
+	}
 	if r.FuzzTargets, err = findFuzzTargets(root); err != nil {
 		return nil, err
 	}
@@ -229,6 +234,9 @@ func readMatrix(path string) ([]MatrixLine, map[string]string, error) {
 		}
 		if comment[suite] == "" {
 			return nil, nil, fmt.Errorf("%s: %s is pinned to its minors without a reason: say why in a comment right above its first line", path, suite)
+		}
+		if !strings.ContainsFunc(comment[suite], unicode.IsLetter) {
+			return nil, nil, fmt.Errorf("%s: %s is pinned with the reason %q, which names no cause: say why in words", path, suite, comment[suite])
 		}
 		pins[suite] = comment[suite]
 	}
@@ -338,6 +346,54 @@ func Plan(r *Repo, o Options) []Step {
 	steps = append(steps, e2eSteps(r, o)...)
 	steps = append(steps, scaleSteps(r, o)...)
 	return steps
+}
+
+// checkPins refuses a pin that would keep a suite out of the gate: every
+// minor a pinned suite lists must be a KIND_NODE_1_<minor> of
+// hack/tool-versions.env, and one of them the floor or the newest minor the
+// gate runs, so the suite runs at least once. core, which the gate runs on
+// both, cannot be pinned, and an upgrade suite cannot be pinned off the
+// floor, the oldest Kubernetes an upgrade must work on.
+func (r *Repo) checkPins() error {
+	floor, newest := r.KubeMinors()
+	known := map[string]bool{}
+	for k := range r.ToolVersions {
+		if m := kindNode.FindStringSubmatch(k); m != nil && m[1] == "" {
+			known["1."+m[2]] = true
+		}
+	}
+	gate := []string{fmt.Sprintf("1.%d", floor), fmt.Sprintf("1.%d", newest)}
+	suites := make([]string, 0, len(r.Pinned))
+	for s := range r.Pinned {
+		suites = append(suites, s)
+	}
+	sort.Strings(suites)
+	for _, suite := range suites {
+		if suite == "core" {
+			return fmt.Errorf("hack/e2e/matrix.txt: core cannot be pinned: the gate runs it on the floor (%s) and the newest (%s) minor", gate[0], gate[1])
+		}
+		var minors []string
+		for _, l := range r.Matrix {
+			if l.Suite == suite && !slices.Contains(minors, l.Minor) {
+				minors = append(minors, l.Minor)
+			}
+		}
+		for _, m := range minors {
+			if !known[m] {
+				return fmt.Errorf("hack/e2e/matrix.txt: %s is pinned to %s, which hack/tool-versions.env has no KIND_NODE_1_%s for",
+					suite, m, strings.TrimPrefix(m, "1."))
+			}
+		}
+		if !slices.Contains(minors, gate[0]) && !slices.Contains(minors, gate[1]) {
+			return fmt.Errorf("hack/e2e/matrix.txt: %s is pinned to %s, none of the minors the gate runs (%s and %s): it would run nowhere",
+				suite, strings.Join(minors, ", "), gate[0], gate[1])
+		}
+		if isUpgrade(suite) && !slices.Contains(minors, gate[0]) {
+			return fmt.Errorf("hack/e2e/matrix.txt: %s is pinned off the floor minor %s: an upgrade must be proven on the oldest supported Kubernetes",
+				suite, gate[0])
+		}
+	}
+	return nil
 }
 
 // pinnedOff is why suite cannot run on minor, or "": matrix.txt pins it to

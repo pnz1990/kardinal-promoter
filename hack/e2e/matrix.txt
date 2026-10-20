@@ -19,8 +19,11 @@
 #   whatever its lines say, and the nightly sample on the minors they don't
 #   list; a pinned suite runs on its own minors only, and the gate reports
 #   the other minor as pinned, with the comment right above the suite's
-#   first line as the reason (one is required). Every line of a suite says
-#   pinned, or none does.
+#   first line as the reason (one is required, in words). Every line of a
+#   suite says pinned, or none does. A pinned suite lists only minors of
+#   hack/tool-versions.env, one of them the oldest or the newest; core cannot
+#   be pinned, and an upgrade suite cannot be pinned off the oldest. The
+#   release gate refuses any other pin before it runs.
 # The scale suite's ci profile (test/e2e/README.md#scale-suite): its
 # controller is built with -race on the runner, whatever KARDINAL_E2E_BUILD.
 scale             1.37        -      heavy

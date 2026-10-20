@@ -346,9 +346,99 @@ func TestReadMatrix(t *testing.T) {
 		{"some lines pinned", "# Knative\nkeyless 1.35 - - pinned\nkeyless 1.37 - -\n", "every line of keyless says pinned, or none"},
 		{"another fifth column", "keyless 1.35 - - only\n", "for a suite that runs only on the minors it lists, pinned"},
 		{"six columns", "keyless 1.35 - - pinned x\n", "want suite, Kubernetes minor, shard, host"},
+		{"a reason with no letters", "#.\nkeyless 1.35 - - pinned\n", `keyless is pinned with the reason ".", which names no cause`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := readMatrix(write(t, tc.data))
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
+// TestCheckPins: a pin cannot keep a suite out of the gate (QA-2 on #2309).
+// The gate runs the floor (1.35) and the newest (1.37) minor of
+// tool-versions.env.
+func TestCheckPins(t *testing.T) {
+	tools := map[string]string{"KIND_NODE_1_35": "a", "KIND_NODE_1_36": "b", "KIND_NODE_1_37": "c", "KIND_NODE_FLUX_1_38": "d"}
+	repo := func(lines ...string) *Repo {
+		r := &Repo{ToolVersions: tools, Pinned: map[string]string{}}
+		for _, l := range lines {
+			f := strings.Fields(l)
+			r.Matrix = append(r.Matrix, MatrixLine{f[0], f[1], "-"})
+			if len(f) == 3 {
+				r.Pinned[f[0]] = "why"
+			}
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		err   string
+	}{
+		{"unpinned", []string{"core 1.35", "ui 1.37"}, ""},
+		{"pinned to the floor", []string{"keyless 1.35 pinned"}, ""},
+		{"pinned to the newest", []string{"keyless 1.37 pinned"}, ""},
+		{"pinned to the floor and another minor", []string{"keyless 1.35 pinned", "keyless 1.36 pinned"}, ""},
+		{"an upgrade suite pinned to the floor", []string{"upgrade-v090 1.35 pinned"}, ""},
+		{"a minor tool-versions.env has no node for", []string{"keyless 1.99 pinned"},
+			"keyless is pinned to 1.99, which hack/tool-versions.env has no KIND_NODE_1_99 for"},
+		{"a suite's own node image is not a gate minor", []string{"keyless 1.38 pinned"},
+			"keyless is pinned to 1.38, which hack/tool-versions.env has no KIND_NODE_1_38 for"},
+		{"no minor the gate runs", []string{"keyless 1.36 pinned"},
+			"keyless is pinned to 1.36, none of the minors the gate runs (1.35 and 1.37): it would run nowhere"},
+		{"core", []string{"core 1.37 pinned"}, "core cannot be pinned"},
+		{"an upgrade suite off the floor", []string{"upgrade-v090 1.37 pinned"},
+			"upgrade-v090 is pinned off the floor minor 1.35"},
+		{"the upgrade suite off the floor", []string{"upgrade 1.37 pinned"}, "upgrade is pinned off the floor minor 1.35"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := repo(tc.lines...).checkPins()
+			if tc.err == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
+// TestPinProbes are QA-2's three release-gate -list probes on #2309, on this
+// checkout's matrix.txt and tool-versions.env: each edit stops LoadRepo,
+// where the gate (and -list) starts, instead of planning a gate that runs a
+// suite nowhere or misses core on the floor.
+func TestPinProbes(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	matrix, err := os.ReadFile(filepath.Join(repoRoot, "hack", "e2e", "matrix.txt"))
+	require.NoError(t, err)
+	tools, err := os.ReadFile(filepath.Join(repoRoot, "hack", "tool-versions.env"))
+	require.NoError(t, err)
+	const keyless = "receipts-keyless  1.35        -      -     pinned\n"
+	const keylessWhy = "# Knative 1.19, which sigstore scaffolding runs on, supports Kubernetes up to\n# 1.35.\n"
+	require.Contains(t, string(matrix), keylessWhy+keyless, "the probes edit these lines")
+	var withoutCore []string
+	for _, l := range strings.SplitAfter(string(matrix), "\n") {
+		if !strings.HasPrefix(l, "core ") {
+			withoutCore = append(withoutCore, l)
+		}
+	}
+	for _, tc := range []struct{ name, matrix, err string }{
+		{"A: receipts-keyless pinned to 1.99, a minor the gate never runs",
+			strings.Replace(string(matrix), keyless, strings.Replace(keyless, "1.35", "1.99", 1), 1),
+			"receipts-keyless is pinned to 1.99, which hack/tool-versions.env has no KIND_NODE_1_99 for"},
+		{"B: core pinned to 1.37",
+			"# qa2: x\ncore 1.37 - - pinned\n" + strings.Join(withoutCore, ""), "core cannot be pinned"},
+		{"C: the reason #.",
+			strings.Replace(string(matrix), keylessWhy, "#.\n", 1), `which names no cause`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, data := range map[string]string{"hack/e2e/matrix.txt": tc.matrix, "hack/tool-versions.env": string(tools)} {
+				require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(data), 0o644))
+			}
+			_, err := LoadRepo(root)
 			assert.ErrorContains(t, err, tc.err)
 		})
 	}
