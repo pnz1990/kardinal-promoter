@@ -217,6 +217,21 @@ spec:
             {{- with (dig "health" "refresh" "namespaces" list .Values.AsMap) }}
             - --health-refresh-namespaces={{ join "," . }}
             {{- end }}
+            {{- with (dig "health" "eks" "allowedRoleARNs" list .Values.AsMap) }}
+            - --health-eks-role-arns={{ join "," . }}
+            {{- end }}
+            {{- with (dig "health" "eks" "allowedRoleARNsByNamespace" dict .Values.AsMap) }}
+            {{- $byNamespace := . }}
+            {{- $entries := list }}
+            {{- range $ns := keys $byNamespace | sortAlpha }}
+            {{- range $arn := index $byNamespace $ns }}
+            {{- $entries = append $entries (printf "%s=%s" $ns $arn) }}
+            {{- end }}
+            {{- end }}
+            {{- if $entries }}
+            - --health-eks-role-arns-by-namespace={{ join "," $entries }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.scm.gatesCommitStatus }}
             {{- if eq (toString .enabled) "false" }}
             - --gates-commit-status=false

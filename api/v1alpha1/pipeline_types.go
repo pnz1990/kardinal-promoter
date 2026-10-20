@@ -955,6 +955,44 @@ type KubeconfigSecretRef struct {
 	// Key is the key holding the kubeconfig. Defaults to "kubeconfig".
 	// +optional
 	Key string `json:"key,omitempty"`
+
+	// EKS authenticates to an Amazon EKS cluster with the controller's own
+	// AWS identity (IRSA or EKS Pod Identity) instead of a credential in the
+	// kubeconfig. The controller assumes RoleARN, with the session tags
+	// kardinal-namespace and kardinal-pipeline set to this Pipeline's
+	// namespace and name, reads the cluster's endpoint and CA with
+	// eks:DescribeCluster as that role, and sends a 15-minute EKS token for
+	// ClusterName, signed as the role (as aws-iam-authenticator does), to
+	// that endpoint only; no long-lived secret exists. The Secret's
+	// kubeconfig is then optional and may hold no users[].user credentials;
+	// a server it names must be the cluster's endpoint. RoleARN must match
+	// the controller's --health-eks-role-arns or, for this namespace,
+	// --health-eks-role-arns-by-namespace (Helm health.eks), both empty, so
+	// the feature is off, by default (docs/health-adapters.md, Remote
+	// clusters on EKS).
+	// +optional
+	EKS *EKSCredentials `json:"eks,omitempty"`
+}
+
+// EKSCredentials names the EKS cluster and the IAM role a remote health
+// check authenticates with.
+type EKSCredentials struct {
+	// ClusterName is the EKS cluster's name, the x-k8s-aws-id the token is
+	// signed for.
+	// +kubebuilder:validation:Pattern=`^[0-9A-Za-z][A-Za-z0-9_-]{0,99}$`
+	ClusterName string `json:"clusterName"`
+
+	// Region is the cluster's AWS region (its STS endpoint).
+	// +kubebuilder:validation:Pattern=`^[a-z]{2}(-[a-z]+)+-[0-9]+$`
+	Region string `json:"region"`
+
+	// RoleARN is the IAM role the controller assumes. Its trust policy
+	// should require aws:RequestTag/kardinal-namespace (and
+	// kardinal-pipeline) to name the Pipelines allowed to use it; it needs
+	// eks:DescribeCluster on the cluster, and an EKS access entry maps it to
+	// a Kubernetes group bound to read the health objects.
+	// +kubebuilder:validation:Pattern=`^arn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$`
+	RoleARN string `json:"roleARN"`
 }
 
 // HealthTargetRef names the object a health adapter reads.

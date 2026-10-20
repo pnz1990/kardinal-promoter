@@ -454,6 +454,22 @@ health:
     # ["default=kardinal-test-app-*"]; ["*=*"] refreshes any object. Other
     # objects are not refreshed and the step waits for the tool's poll.
     namespaces: []
+  eks:
+    # -- IAM role ARN patterns (path.Match globs, for example
+    # ["arn:aws:iam::111122223333:role/kardinal-health-*"]) a Pipeline's
+    # health.kubeconfigSecretRef.eks.roleARN may name (--health-eks-role-arns).
+    # The controller assumes the role with its own AWS identity (IRSA or EKS
+    # Pod Identity: serviceAccount.annotations), with the session tags
+    # kardinal-namespace and kardinal-pipeline, and signs EKS tokens with it,
+    # so no long-lived token exists. Empty allows none. See
+    # docs/health-adapters.md#remote-clusters-on-eks.
+    allowedRoleARNs: []
+    # -- More role ARN patterns, per namespace: the Pipelines of that namespace
+    # only may name them (--health-eks-role-arns-by-namespace), for example
+    # {team-a: ["arn:aws:iam::111122223333:role/kardinal-health-team-a"]}.
+    # Listing each team's roles here, not in allowedRoleARNs, keeps one team
+    # from naming another's role even before its trust policy is checked.
+    allowedRoleARNsByNamespace: {}
 
 # -- Optional controller permissions, off by default.
 rbac:

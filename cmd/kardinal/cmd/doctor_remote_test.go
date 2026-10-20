@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -139,4 +140,36 @@ func TestCheckRemoteHealthAccess(t *testing.T) {
 			assert.Equal(t, tc.verbs, verbs)
 		})
 	}
+}
+
+// TestCheckRemoteHealthAccess_EKS (#2008): an environment with
+// kubeconfigSecretRef.eks is checked for its kubeconfig only (doctor cannot
+// act as the controller's role): one without credentials, or none at all,
+// is a WARN naming the cluster and role and what the role needs, one with a
+// token (which the controller refuses with eks) a FAIL. No request reaches
+// the cluster.
+func TestCheckRemoteHealthAccess_EKS(t *testing.T) {
+	srv, seen := fakeSSARServer(t)
+	env := v1alpha1.EnvironmentSpec{Name: "prod", Health: v1alpha1.HealthConfig{Type: "resource",
+		KubeconfigSecretRef: &v1alpha1.KubeconfigSecretRef{Name: "hub", EKS: &v1alpha1.EKSCredentials{
+			ClusterName: "prod-eu", Region: "eu-west-1", RoleARN: "arn:aws:iam::111122223333:role/kardinal-health-team-a"}}}}
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "spike", Namespace: "team-a"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{env}}}
+	withToken := doctorKubeconfigSecret(srv, true)
+	noUser := withToken.DeepCopy()
+	noUser.Data["kubeconfig"] = []byte(strings.Replace(string(withToken.Data["kubeconfig"]), "{token: remote-token}", "{}", 1))
+	r := checkRemoteHealthAccess(context.Background(), doctorClient(noUser), p)[0]
+	assert.Equal(t, doctorWarn, r.icon, r.detail)
+	assert.Contains(t, r.detail, "EKS cluster prod-eu (eu-west-1) as arn:aws:iam::111122223333:role/kardinal-health-team-a")
+	assert.Contains(t, r.hint, "kardinal-namespace=team-a")
+	assert.Contains(t, r.hint, "allowedRoleARNsByNamespace.team-a")
+	assert.Contains(t, r.hint, "eks:DescribeCluster")
+	empty := noUser.DeepCopy()
+	empty.Data = nil
+	r = checkRemoteHealthAccess(context.Background(), doctorClient(empty), p)[0]
+	assert.Equal(t, doctorWarn, r.icon, "with eks the kubeconfig is optional: %s", r.detail)
+	r = checkRemoteHealthAccess(context.Background(), doctorClient(withToken), p)[0]
+	assert.Equal(t, doctorFail, r.icon, r.detail)
+	assert.Contains(t, r.detail, "remove users[].user's credentials")
+	assert.Empty(t, *seen, "doctor does not reach the cluster")
 }

@@ -278,6 +278,19 @@ func main() {
 			"besides those in its own namespace or deploying there. Each side is a namespace, a prefix ending "+
 			"in * or *; *=* refreshes any object. A remote cluster's refresh (health.kubeconfigSecretRef) uses "+
 			"the kubeconfig's identity and is not limited.")
+	var healthEKSRoleARNs string
+	flag.StringVar(&healthEKSRoleARNs, "health-eks-role-arns", "",
+		"Comma-separated IAM role ARN patterns (path.Match globs, Helm health.eks.allowedRoleARNs) a "+
+			"Pipeline's health.kubeconfigSecretRef.eks.roleARN may name: the controller assumes the role with "+
+			"its own AWS identity (IRSA or EKS Pod Identity), with session tags naming the Pipeline, and signs "+
+			"EKS tokens with it, for the endpoint eks:DescribeCluster returns as the role. Empty, the default, "+
+			"allows none.")
+	var healthEKSRoleARNsByNamespace string
+	flag.StringVar(&healthEKSRoleARNsByNamespace, "health-eks-role-arns-by-namespace", "",
+		"Comma-separated namespace=pattern entries (Helm health.eks.allowedRoleARNsByNamespace): the IAM role "+
+			"ARN patterns (path.Match globs) the Pipelines of that namespace only may name in "+
+			"health.kubeconfigSecretRef.eks.roleARN, besides --health-eks-role-arns. A namespace may have "+
+			"several entries.")
 	var gatesStatusContext string
 	flag.StringVar(&gatesStatusContext, "gates-status-context", scm.GatesStatusContext,
 		"Commit status context (GitLab name, Bitbucket key, Azure DevOps genre/name) the gate results are "+
@@ -678,6 +691,11 @@ func main() {
 			Msg("health.refresh may also refresh the GitOps objects these rules admit")
 	}
 
+	remoteHealth, err := remoteClusters(healthEKSRoleARNs, healthEKSRoleARNsByNamespace)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --health-eks-role-arns-by-namespace")
+	}
+
 	trustedProxies, err := accesslog.ParseCIDRs(splitCSV(accessLogTrustedProxies))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid --access-log-trusted-proxies")
@@ -1044,7 +1062,7 @@ func main() {
 		RefreshScope:        refreshScope,
 		GatesStatusContext:  gatesStatusContext,
 		HealthDetector:      newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
-		RemoteClusters:      &healthpkg.RemoteClusters{},
+		RemoteClusters:      remoteHealth,
 		Recorder:            eventRecorder,
 		// A git Secret with GitHub App credentials gets its installation
 		// tokens from the controller's GitHub API.
@@ -1648,4 +1666,19 @@ func freezeAuditNamespace(watchNamespace string) string {
 		return watchNamespace
 	}
 	return os.Getenv("POD_NAMESPACE")
+}
+
+// remoteClusters is the remote health clients' cache; with role patterns
+// (for every namespace, or namespace=pattern entries for one) it also signs
+// EKS tokens (health.kubeconfigSecretRef.eks) for the roles they match.
+func remoteClusters(eksRoleARNs, eksRoleARNsByNamespace string) (*healthpkg.RemoteClusters, error) {
+	byNamespace, err := healthpkg.ParseEKSRoleARNsByNamespace(splitCSV(eksRoleARNsByNamespace))
+	if err != nil {
+		return nil, err
+	}
+	r := &healthpkg.RemoteClusters{}
+	if roles := splitCSV(eksRoleARNs); len(roles) > 0 || len(byNamespace) > 0 {
+		r.EKS = &healthpkg.EKSAuth{AllowedRoleARNs: roles, AllowedRoleARNsByNamespace: byNamespace}
+	}
+	return r, nil
 }
