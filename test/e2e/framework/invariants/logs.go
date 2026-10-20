@@ -112,11 +112,19 @@ type Collector struct {
 // Collect starts a Collector writing raw logs under dir. Stop it with Stop.
 func Collect(t *testing.T, e *framework.Env, dir string) *Collector {
 	t.Helper()
+	return CollectSince(t, e, dir, time.Now().Add(-time.Second))
+}
+
+// CollectSince is Collect from since: it reads each container's lines from
+// since on, so a Collector started once a rollout is done still reads the new
+// Pods' lines from their start.
+func CollectSince(t *testing.T, e *framework.Env, dir string, since time.Time) *Collector {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("log dir: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Collector{e: e, dir: dir, start: time.Now().Add(-time.Second), cancel: cancel,
+	c := &Collector{e: e, dir: dir, start: since, cancel: cancel,
 		seen: map[string]bool{}, unexpected: map[string]*LogGroup{}, reconcile: map[string]*LogGroup{}}
 	c.wg.Add(1)
 	go c.watch(ctx)

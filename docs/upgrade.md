@@ -80,6 +80,12 @@ RoleBindings at startup.
 The same steps take a v0.12.1 or v0.12.2 installation: neither changes a CRD, value or admission
 policy.
 
+The upgrade suites run these steps as written (`TestUpgradeV0120_Estate` from v0.12.0 and
+`TestUpgradeV0121_Estate` from v0.12.1, on the oldest and newest supported Kubernetes minors)
+while versions are in flight: bakes, open promotion PRs, a rollback, gates holding versions with
+approvals and Verdicts recorded, a running AgentRun, a freeze and, from v0.12.1, an automatic
+rollback. They keep their objects and finish.
+
 What v0.12.0 stored keeps working. Versions in flight keep their Graphs, PromotionSteps,
 PRStatuses and gate instances: at its first start the new controller removes the health ref nodes
 from those Graphs in place, and it rebuilds a version's gates only when one of its gates changes.

@@ -9,12 +9,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/coverage"
 )
 
 // These tests run the preflight scripts of .github/workflows/release.yml:
@@ -1263,4 +1266,148 @@ func TestReleaseDryRun(t *testing.T) {
 	_ = os.RemoveAll(filepath.Join(dir, "release-notes"))
 	out, _, err = runReleaseStep(t, dir, preflightScript(t, "Release notes from docs/changelog.md"), "VERSION=v0.12.0")
 	require.Error(t, err, out)
+}
+
+// TestReleaseUpgradeSuiteForPreviousRelease: hack/release-gate gives NO-GO
+// ("upgrade from vX | MISSING") when hack/e2e/matrix.txt has no
+// upgrade-v<X> suite for the previous release: the gate's, the newest final
+// tag merged into the commit and not on it, where the tags are fetched, else
+// the newest final release in docs/changelog.md older than Chart.yaml's
+// version. Its suite runs on the oldest and the newest KIND_NODE_1_*
+// minors, hack/e2e/up.sh runs its TestUpgradeV<X>_ test, which exists, and
+// it installs that release (components/kardinal-v<X>.sh, and the V<X>_ pins
+// of hack/e2e/versions.env name it). Every upgrade suite runs once (run.sh
+// and all.sh COUNT=1): its test upgrades its cluster.
+func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
+	root := repoRoot(t)
+	parse := func(v string) [3]int {
+		var out [3]int
+		parts := strings.Split(v, ".")
+		require.Len(t, parts, 3, "version %q", v)
+		for i, p := range parts {
+			n, err := strconv.Atoi(p)
+			require.NoError(t, err, "version %q", v)
+			out[i] = n
+		}
+		return out
+	}
+	less := func(a, b [3]int) bool {
+		for i := range a {
+			if a[i] != b[i] {
+				return a[i] < b[i]
+			}
+		}
+		return false
+	}
+	chart, err := os.ReadFile(filepath.Join(root, "chart", "kardinal-promoter", "Chart.yaml"))
+	require.NoError(t, err)
+	cv := regexp.MustCompile(`(?m)^version:\s*(\d+\.\d+\.\d+)\s*$`).FindSubmatch(chart)
+	require.NotNil(t, cv, "Chart.yaml has a version X.Y.Z")
+	current := parse(string(cv[1]))
+	changelog, err := os.ReadFile(filepath.Join(root, "docs", "changelog.md"))
+	require.NoError(t, err)
+	// Where the tags are fetched, the gate's own previous release: the
+	// newest final vX.Y.Z tag merged into HEAD that does not point at HEAD
+	// (hack/release-gate previousRelease). Between a patch release's tag and
+	// its successor's pins the changelog and the chart still name the tagged
+	// release, which the commits after the tag upgrade from.
+	prev, from := "", "git tags"
+	cmd := exec.Command("git", "tag", "--merged", "HEAD", "--no-contains", "HEAD", "--list", "v*", "--sort=-v:refname")
+	cmd.Dir = root
+	if out, err := cmd.Output(); err == nil {
+		for _, tag := range strings.Fields(string(out)) {
+			if regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(tag) {
+				prev = strings.TrimPrefix(tag, "v")
+				break
+			}
+		}
+	}
+	if prev == "" {
+		from = "docs/changelog.md"
+		for _, m := range regexp.MustCompile(`(?m)^## \[v(\d+\.\d+\.\d+)\]`).FindAllSubmatch(changelog, -1) {
+			v := string(m[1])
+			if less(parse(v), current) && (prev == "" || less(parse(prev), parse(v))) {
+				prev = v
+			}
+		}
+	}
+	require.NotEmpty(t, prev, "no release before this commit in git tags or in docs/changelog.md (chart %s)", cv[1])
+	digits := strings.ReplaceAll(prev, ".", "")
+	suite := "upgrade-v" + digits
+	t.Logf("chart %s, previous release v%s (%s): suite %s", cv[1], prev, from, suite)
+
+	tv := toolVersions(t)
+	newest := 0
+	for k := range tv {
+		if m := kindNodeKey.FindStringSubmatch(k); m != nil {
+			n, err := strconv.Atoi(m[1])
+			require.NoError(t, err)
+			newest = max(newest, n)
+		}
+	}
+	matrix, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "matrix.txt"))
+	require.NoError(t, err)
+	minors := map[string]bool{}
+	for _, l := range strings.Split(string(matrix), "\n") {
+		if f := strings.Fields(l); len(f) >= 3 && f[0] == suite {
+			minors[f[1]] = true
+		}
+	}
+	for _, m := range []int{oldestMinor(t), newest} {
+		assert.True(t, minors[fmt.Sprintf("1.%d", m)], "hack/e2e/matrix.txt runs %s on Kubernetes 1.%d: %v", suite, m, minors)
+	}
+
+	runs, err := coverage.SuiteRuns(root)
+	require.NoError(t, err)
+	run, ok := runs[suite]
+	if assert.True(t, ok, "hack/e2e/up.sh has a suite %s", suite) {
+		test := "TestUpgradeV" + digits + "_"
+		assert.True(t, run.MatchString(test+"Estate"), "up.sh runs %s* for %s: RUN=%s", test, suite, run)
+		files, err := filepath.Glob(filepath.Join(root, "test", "e2e", "live", "*_test.go"))
+		require.NoError(t, err)
+		found := false
+		for _, f := range files {
+			src, err := os.ReadFile(f)
+			require.NoError(t, err)
+			found = found || strings.Contains(string(src), "\nfunc "+test)
+		}
+		assert.True(t, found, "test/e2e/live has a %s* test", test)
+	}
+	assert.FileExists(t, filepath.Join(root, "hack", "e2e", "components", "kardinal-v"+digits+".sh"))
+	env, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "versions.env"))
+	require.NoError(t, err)
+	pins := map[string]string{}
+	for _, l := range strings.Split(string(env), "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(l), "="); ok && strings.HasPrefix(k, "V"+digits+"_") {
+			pins[strings.TrimPrefix(k, "V"+digits+"_")] = v
+		}
+	}
+	assert.Equal(t, prev, pins["CHART_VERSION"], "versions.env V%s_CHART_VERSION", digits)
+	assert.True(t, strings.HasSuffix(pins["CONTROLLER_IMAGE"], ":v"+prev), "versions.env V%s_CONTROLLER_IMAGE is v%s's: %q", digits, prev, pins["CONTROLLER_IMAGE"])
+	assert.Contains(t, pins["CLI_URL"], "/releases/download/v"+prev+"/", "versions.env V%s_CLI_URL is v%s's", digits, prev)
+	assert.Regexp(t, sha256Hex, pins["CLI_SHA256"], "versions.env V%s_CLI_SHA256", digits)
+	if d, ok := pins["CONTROLLER_DIGEST"]; ok {
+		assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, d, "versions.env V%s_CONTROLLER_DIGEST is the released image's index digest", digits)
+	}
+	assert.NotEmpty(t, pins["KRO_VERSION"], "versions.env V%s_KRO_VERSION", digits)
+
+	// Every upgrade suite runs once.
+	for file, re := range map[string]*regexp.Regexp{
+		"hack/e2e/run.sh": regexp.MustCompile(`(?m)^case \$SUITE in ([^)]*)\) \[ "\$COUNT" = 1 \]`),
+		"hack/e2e/all.sh": regexp.MustCompile(`(?m)^\s*case \$suite in ([^)]*)\) COUNT=1 ;; esac`),
+	} {
+		src, err := os.ReadFile(filepath.Join(root, file))
+		require.NoError(t, err)
+		m := re.FindSubmatch(src)
+		require.NotNil(t, m, "%s sets COUNT=1 for the upgrade suites", file)
+		once := map[string]bool{}
+		for _, s := range strings.Split(string(m[1]), "|") {
+			once[strings.TrimSpace(s)] = true
+		}
+		for s := range runs {
+			if s == "upgrade" || strings.HasPrefix(s, "upgrade-") {
+				assert.True(t, once[s], "%s runs the %s suite once (COUNT=1): its test upgrades its cluster", file, s)
+			}
+		}
+	}
 }
