@@ -242,6 +242,35 @@ func TestLocalLive(t *testing.T) {
 			assert.NoDirExists(t, filepath.Join(h.slots, "1"), "its slot is given back")
 		})
 	}
+	t.Run("a copy outside a checkout runs the checkout it is run from, with the loadlock.sh next to it", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		shared := filepath.Join(t.TempDir(), "bin")
+		require.NoError(t, os.MkdirAll(shared, 0o755))
+		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(shared, "local-live.sh"), src, 0o755))
+		// The shared loadlock.sh: records that it ran, then runs CMD.
+		require.NoError(t, os.WriteFile(filepath.Join(shared, "loadlock.sh"), []byte(`#!/usr/bin/env bash
+echo shared >>"$FAKE/loadlock"
+while [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+`), 0o755))
+		cmd := h.cmd(t, nil, "scale")
+		cmd.Args[1] = filepath.Join(shared, "local-live.sh")
+		cmd.Dir = repoRoot(t)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Equal(t, "shared\n", h.read("loadlock"), "the heavy suite ran under the shared loadlock.sh")
+		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "the checkout's matrix: scale's minor")
+
+		cmd = h.cmd(t, nil, "-n", "core")
+		cmd.Args[1] = filepath.Join(shared, "local-live.sh")
+		cmd.Dir = t.TempDir() // not a checkout
+		out, err = cmd.CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), "run it from a kardinal-promoter checkout")
+	})
 	t.Run("an existing cluster is not taken over", func(t *testing.T) {
 		h := newLocalLiveHost(t)
 		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-ll-test-core-35\n"), 0o644))

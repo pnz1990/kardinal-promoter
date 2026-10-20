@@ -78,9 +78,20 @@ HEAVY_SUITES="scale multi-cluster"
 MAX_LOAD=48
 LOAD_RETRY=30
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+LOADLOCK_SH=$REPO_ROOT/hack/loadlock.sh
+# A copy outside a checkout (the host's shared one, next to the shared
+# loadlock.sh) runs the checkout of the directory it is run from: its
+# matrix, pins, up.sh and run.sh, and the loadlock.sh next to it.
+if [ ! -f "$REPO_ROOT/hack/e2e/matrix.txt" ]; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && [ -f "$REPO_ROOT/hack/e2e/matrix.txt" ] ||
+    { echo "local-live: run it from a kardinal-promoter checkout" >&2; exit 2; }
+  LOADLOCK_SH=$REPO_ROOT/hack/loadlock.sh
+  [ ! -f "$HERE/loadlock.sh" ] || LOADLOCK_SH=$HERE/loadlock.sh
+fi
 E2E_DIR=${LOCAL_LIVE_E2E_DIR:-$REPO_ROOT/hack/e2e}
-SELF="$REPO_ROOT/hack/e2e/local-live.sh"
 ARGS=("$@")
 
 die() {
@@ -184,7 +195,7 @@ fi
 # A heavy suite takes the lock first, by running this script again under
 # hack/loadlock.sh.
 if [ -z "$nolock" ] && [ -n "$heavy" ] && [ -z "${_LOCAL_LIVE_LOCKED:-}" ]; then
-  exec bash "$REPO_ROOT/hack/loadlock.sh" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" -r "$RETRY" -- \
+  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" -r "$RETRY" -- \
     env _LOCAL_LIVE_LOCKED=1 bash "$SELF" "${ARGS[@]}"
 fi
 
