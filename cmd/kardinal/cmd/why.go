@@ -105,6 +105,9 @@ func whyWatch(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeli
 			_, _ = fmt.Fprintf(w, "error: %v\n", HumanError(err))
 		}
 		_, _ = fmt.Fprintln(w, watchFooter)
+		if ctx.Err() != nil {
+			return nil // done during the render: no second one (watchLoop)
+		}
 		select {
 		case <-ctx.Done():
 			return nil

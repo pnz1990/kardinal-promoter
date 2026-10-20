@@ -54,6 +54,11 @@ func watchLoop(ctx context.Context, w io.Writer, interval time.Duration, render 
 		if table {
 			_, _ = fmt.Fprintln(w, watchFooter)
 		}
+		// Done during the render: no second one. With both ready the select
+		// below would pick at random (a render slower than interval).
+		if ctx.Err() != nil {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return nil

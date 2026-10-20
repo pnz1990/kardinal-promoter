@@ -360,6 +360,25 @@ func TestExplainWatch_JSON(t *testing.T) {
 	assert.Contains(t, errb.String(), `error: pipeline "nope" not found`)
 }
 
+// TestWatch_CancelledRendersOnce: explain -w and why -w, once cancelled,
+// render once and return, as get pipelines -w does (TestWatch_YAMLDocuments).
+// An interval of 0 has the interval's timer ready next to the cancelled
+// context in every select: a select would pick either.
+func TestWatch_CancelledRendersOnce(t *testing.T) {
+	t.Parallel()
+	c := policyClient(t, outputFixture()...)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 20; i++ {
+		var out bytes.Buffer
+		require.NoError(t, explainWatch(ctx, &out, c, "default", "demo", "", false, 0))
+		require.Equal(t, 1, strings.Count(out.String(), watchFooter), "explain -w, run %d: %s", i, out.String())
+		out.Reset()
+		require.NoError(t, whyWatch(ctx, &out, c, "default", "demo", "", 0))
+		require.Equal(t, 1, strings.Count(out.String(), watchFooter), "why -w, run %d: %s", i, out.String())
+	}
+}
+
 // TestWatch_YAMLDocuments (C4): -o yaml -w separates its documents with
 // "---", so the stream parses as YAML documents.
 //
@@ -375,13 +394,22 @@ func TestWatch_YAMLDocuments(t *testing.T) {
 	assert.True(t, strings.HasPrefix(out.String(), "---\n"), out.String())
 	assert.Contains(t, out.String(), "\npipeline: demo\n")
 
-	out.Reset()
-	n := 0
-	require.NoError(t, watchLoop(ctx, &out, time.Millisecond, func() error {
-		n++
-		return statusPipelineWriter(t.Context(), &out, c, "default", "demo")
-	}))
-	assert.Equal(t, 1, n)
-	assert.True(t, strings.HasPrefix(out.String(), "---\n"), out.String())
-	assert.NotContains(t, out.String(), "watching")
+	assert.Equal(t, 1, strings.Count(out.String(), "---\n"), "a cancelled watch renders once")
+
+	// A cancelled watch never renders again (CI flake on #2326: under load
+	// the 1ms interval's timer was ready next to the cancelled context, and
+	// the select picked it). An interval of 0 makes that every select.
+	for _, interval := range []time.Duration{time.Millisecond, 0} {
+		for i := 0; i < 20; i++ {
+			out.Reset()
+			n := 0
+			require.NoError(t, watchLoop(ctx, &out, interval, func() error {
+				n++
+				return statusPipelineWriter(t.Context(), &out, c, "default", "demo")
+			}))
+			require.Equal(t, 1, n, "interval %s, run %d", interval, i)
+			assert.True(t, strings.HasPrefix(out.String(), "---\n"), out.String())
+			assert.NotContains(t, out.String(), "watching")
+		}
+	}
 }
