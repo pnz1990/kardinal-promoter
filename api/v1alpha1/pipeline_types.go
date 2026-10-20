@@ -93,9 +93,10 @@ type PipelineSpec struct {
 	// field are team gates: they never count as org gates and never grant a skip.
 	// Any other namespace listed must agree to be read: the label
 	// kardinal.io/policy-shareable=true on it, or the controller's
-	// --policy-shareable-namespaces. One that has not is still read for now,
-	// and the Pipeline's PolicyNamespacesShared condition is False naming it;
-	// a later release refuses it.
+	// --policy-shareable-namespaces. One that has not is refused (#2286): the
+	// Pipeline is Ready=False (PolicyNamespaceNotShared) and its new versions
+	// wait, naming it, until it agrees or the entry is removed; a version
+	// already promoting keeps the gates it started with.
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
 
@@ -1316,6 +1317,29 @@ type PipelineStatus struct {
 	// (why, status) and the UI can say why without reading the Bundle.
 	// +optional
 	FailedVersion *PipelineFailedVersion `json:"failedVersion,omitempty"`
+
+	// PolicyNamespaces is what the Pipeline reconciler found reading the
+	// namespaces of spec.policyNamespaces that must agree to share their
+	// PolicyGates (#2286). The Bundle reconciler translates a new version
+	// only from a result for the Pipeline's current generation, and never
+	// reads a namespace it names in notShared.
+	// +optional
+	PolicyNamespaces *PipelinePolicyNamespaces `json:"policyNamespaces,omitempty"`
+}
+
+// PipelinePolicyNamespaces is the Pipeline reconciler's check of
+// spec.policyNamespaces (status.policyNamespaces).
+type PipelinePolicyNamespaces struct {
+	// ObservedGeneration is the Pipeline's generation the check is for.
+	ObservedGeneration int64 `json:"observedGeneration"`
+
+	// NotShared are the namespaces of spec.policyNamespaces that have not
+	// agreed to share their PolicyGates, sorted. A namespace the controller
+	// could not read keeps its last result; one that does not exist is named
+	// like one that is not labelled.
+	// +listType=set
+	// +optional
+	NotShared []string `json:"notShared,omitempty"`
 }
 
 // PipelineFailedVersion is why the newest version of a Pipeline failed.
