@@ -151,6 +151,30 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
 		assert.Empty(t, slots, "the slot: %s", out.String())
 	})
+	t.Run("a signal just before it lets the flock go releases under the flock it holds (#2316 QA)", func(t *testing.T) {
+		// LOADLOCK_TEST_BEFORE_UNLOCK parks it after the take with the fd
+		// still open: in_flock must still be set there, or release waits
+		// FLOCK_WAIT on a second fd for the flock the first holds, and leaves
+		// the slot (any reordering of the clear before the close, #2316 QA).
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		cmd := loadlock(t, lock, "sleep", "30")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+			10*time.Second, 5*time.Millisecond, "parked before the unlock")
+		start := time.Now()
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err := cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.Less(t, time.Since(start), 5*time.Second, "released under the flock it holds, not after a 10s flock wait: %s", out.String())
+		assert.NotContains(t, out.String(), "no flock")
+		assert.NoDirExists(t, lock, "the view")
+		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Empty(t, slots, "the slot: %s", out.String())
+	})
 	t.Run("a signal as it lets the flock go releases under the flock, taken again (#2316 QA)", func(t *testing.T) {
 		// LOADLOCK_TEST_AFTER_UNLOCK parks it after the take, with the flock's
 		// fd closed but in_flock still set. The test then holds the flock:

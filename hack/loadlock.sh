@@ -240,16 +240,20 @@ with_flock() {
   # in between finds in_flock set but the fd closed, and release takes the
   # flock again (clearing in_flock first left a moment where release waited
   # on a second fd for the flock this one still held, #2316 QA).
+  unlock_park BEFORE_UNLOCK "$1"
   exec {flock_fd}>&-
-  # LOADLOCK_TEST_AFTER_UNLOCK (tests only, with LOADLOCK_TEST=1) parks it
-  # there after a take, seconds.
-  if [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "${LOADLOCK_TEST_AFTER_UNLOCK:-}" ] && [ "$1" = take_turn ]; then
-    sleep "$LOADLOCK_TEST_AFTER_UNLOCK"
-  fi
+  unlock_park AFTER_UNLOCK "$1"
   in_flock=''
   return "$rc"
 }
 in_flock='' flock_fd=''
+# unlock_park NAME CMD: LOADLOCK_TEST_<NAME> (tests only, with LOADLOCK_TEST=1)
+# parks with_flock that many seconds after a take: just before the close (the
+# fd open, in_flock set) and just after it (the fd closed, in_flock set).
+unlock_park() {
+  local v=LOADLOCK_TEST_$1
+  if [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "${!v:-}" ] && [ "$2" = take_turn ]; then sleep "${!v}"; fi
+}
 
 # count_holders sets held_n to how many slots are held, or to "exclusive"
 # when LOCK is an older client's (no view marker); held_x is set when a
@@ -339,6 +343,8 @@ release() {
     with_flock release_slot
   fi
 }
+# A second signal while release waits for the flock (Ctrl-C twice) ends the
+# run there: its slot is left to the next waiter's dead-holder reclaim (#2336).
 trap release EXIT
 # A signal stops CMD first, then releases the lock (EXIT).
 stop() {
