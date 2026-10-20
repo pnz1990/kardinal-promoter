@@ -6,6 +6,7 @@ package scale
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,74 +16,85 @@ import (
 )
 
 // TestScale_TenantFairness* time tenant B's Bundles twice in one run: alone,
-// before tenant A's load starts, and under it. Fairness is judged against
-// B's own time alone, on the same controller and host, not by whether B
-// ends before A: on a fast host A's load ends before a fair B can (#2252).
-//
-// What tells a starved B is when its first environment is Verified, not how
-// long it takes. With a queue that holds B until A drains (a test-only
-// patch, on 32 CPUs and on a kind node capped at 4), B's first environment
-// was Verified 1 to 3 s after A's load ended in every run; with the fair
-// queue, well before. How much slower B is under A's load depends on the
-// host as much as on the queue (the table on #2252): that bound
-// (FairnessFactor) only catches a gross slowdown.
+// before tenant A's load starts, and under it, and judge them against B's
+// own time alone and A's own steps, on the same controller and host, not by
+// whether B ends before A: on a fast host A's load ends before a fair B can
+// (#2252). How much slower B is under A's load than alone depends on the
+// host as much as on the queue (a GitHub runner's CPU, saturated by A, slows
+// B's own work 8 to 13 times), so no bound on that tells a fair queue from
+// an unfair one. Two things do (the tables on #2252 and #2257):
+//   - with a queue that holds B until A drains, B's first environment is
+//     Verified only after A's load ended (1 to 3 s after, in every run);
+//   - without the fair queue (controller-runtime's default queue), B's steps
+//     wait their turn behind A's backlog like A's own: on a GitHub runner
+//     B's slowest step took 24 s against A's median step of 19 s, where with
+//     the fair queue it takes less than A's median (8 s against 12 s).
+// On a host where A's load builds no backlog (A's steps run about as fast
+// as B's alone, as on 32 cores), there is no queue to be unfair in, and
+// only starvation is judged.
 
-// FairnessFactor is how many times its slowest Bundle alone a B Bundle may
-// take under A's load. It is sized for the smallest host the suite runs on,
-// a GitHub runner (4 vCPUs), where A's load saturates the CPU and B's own
-// work slows down however fairly the queue orders it. Under
-// TestScale_TenantFairnessManyRepos' load, with the fair queue, B took 24 s
-// there against 3 s alone (e2e-live run 39377163730, 8 times), and the
-// nightly runs of 13-20 October measured B at 23 to 39 s under the same
-// load: up to 13 times that baseline. On a kind node capped at 4 CPUs it was
-// 25 to 31 s against 4 to 5 s alone. 15 leaves room above that. On a fast
-// host A's load is too short to slow B that much whatever the queue does;
-// the starvation check is what catches an unfair queue (JudgeFairness).
-const FairnessFactor = 15
+// BacklogFactor is how many times longer than B's slowest step alone A's
+// median step must take for A's load to count as a backlog: then A's steps
+// wait in the queue, and a fair queue serves B's ahead of them. On 32 cores
+// A's median step took 2 to 3 s against B's 1 to 2 s alone (no backlog); on
+// a GitHub runner 12 to 19 s against 1 to 2 s.
+const BacklogFactor = 3
 
-// FairnessSlack is added to the bound and the starvation window: the
-// objects' timestamps are whole seconds, so a duration between two of them
-// is up to 2 s off.
+// FairnessSlack is added to the starvation window and to A's median step:
+// the objects' timestamps are whole seconds, so a duration between two of
+// them is up to 2 s off.
 const FairnessSlack = 2 * time.Second
 
 // TenantBundle is one of tenant B's Bundles, timed from its objects: its
 // creation, its first environment Verified (zero if none was) and its last
-// (zero unless the Bundle ended Verified).
+// (zero unless the Bundle ended Verified), and its slowest step, from the
+// step's creation to its Verified condition.
 type TenantBundle struct {
 	Name                 string
 	Created, First, Last time.Time
+	SlowestStep          time.Duration
 }
 
 // Latency is the Bundle's time from its creation to its last environment
 // Verified (the latency-slo invariant's Bundle end to end).
 func (b TenantBundle) Latency() time.Duration { return b.Last.Sub(b.Created) }
 
+// TenantLoad is tenant A's load, timed from its objects: when its last step
+// was Verified, and its steps' median time from creation to Verified.
+type TenantLoad struct {
+	End        time.Time
+	StepMedian time.Duration
+}
+
 // Fairness is the verdict on tenant B's Bundles under A's load.
 type Fairness struct {
-	// Alone is the slowest of B's Bundles alone; Bound is what a B Bundle
-	// may take under A's load; Worst is the slowest that did.
-	Alone, Bound, Worst time.Duration
+	// Alone is the slowest of B's Bundles alone, AloneStep the slowest of
+	// their steps; Worst is the slowest B Bundle under A's load, and
+	// SlowestStep the slowest of its steps.
+	Alone, AloneStep, Worst, SlowestStep time.Duration
 	// Judged counts the B Bundles A's load outlasted long enough to tell
-	// whether they waited for all of it.
+	// whether they waited for all of it; Backlog is whether A's load was a
+	// backlog, so B's steps were judged against A's.
 	Judged     int
+	Backlog    bool
 	Violations []string
 }
 
 // JudgeFairness judges tenant B's Bundles under tenant A's load (loaded)
-// against B's Bundles alone (alone), A's load having ended at aEnd:
+// against B's Bundles alone (alone) and A's load (a):
 //   - starvation: a loaded Bundle that A's load outlasted by more than B's
 //     slowest Bundle alone, plus FairnessSlack, has an environment Verified
 //     before A's load ended (the timestamps are whole seconds: the same
 //     second is not before). Its first environment is a third of the work
 //     B did alone in that time; one with none Verified waited for all of
-//     A's load, however short A's load was. A host A's load saturates,
-//     where a fair B's first environment can take longer than that, has
-//     A's load outlast B's Bundles by far more (45 s and more on 4 CPUs);
-//   - each loaded Bundle ends within FairnessFactor times the slowest alone
-//     Bundle, plus FairnessSlack;
+//     A's load, however short A's load was;
+//   - served ahead of A's backlog: when A's median step took more than
+//     BacklogFactor times B's slowest step alone, no step of a loaded
+//     Bundle takes longer than A's median step, plus FairnessSlack;
 //   - contention was measured: every loaded Bundle was created before A's
-//     load ended, and at least one could be judged for starvation.
-func JudgeFairness(alone, loaded []TenantBundle, aEnd time.Time) Fairness {
+//     load ended and ended Verified, and at least one could be judged for
+//     starvation.
+func JudgeFairness(alone, loaded []TenantBundle, a TenantLoad) Fairness {
 	var f Fairness
 	if len(alone) == 0 {
 		f.Violations = append(f.Violations, "no Bundle of tenant B ran alone: no baseline to compare with")
@@ -94,33 +106,35 @@ func JudgeFairness(alone, loaded []TenantBundle, aEnd time.Time) Fairness {
 			return f
 		}
 		f.Alone = max(f.Alone, b.Latency())
+		f.AloneStep = max(f.AloneStep, b.SlowestStep)
 	}
-	f.Bound = FairnessFactor*f.Alone + FairnessSlack
 	window := f.Alone + FairnessSlack
+	f.Backlog = a.StepMedian > BacklogFactor*f.AloneStep
 	late := 0
 	for _, b := range loaded {
-		if !b.Created.Before(aEnd) {
+		if !b.Created.Before(a.End) {
 			late++
 			f.Violations = append(f.Violations, fmt.Sprintf("tenant B's Bundle %s was created %s after tenant A's load ended: not measured under contention",
-				b.Name, b.Created.Sub(aEnd)))
+				b.Name, b.Created.Sub(a.End)))
 			continue
 		}
 		if b.Last.IsZero() {
 			f.Violations = append(f.Violations, fmt.Sprintf("tenant B's Bundle %s did not end Verified under tenant A's load", b.Name))
 		} else {
 			f.Worst = max(f.Worst, b.Latency())
-			if b.Latency() > f.Bound {
-				f.Violations = append(f.Violations, fmt.Sprintf("tenant B's Bundle %s took %s under tenant A's load, over %d times its %s alone plus %s (%s)",
-					b.Name, b.Latency(), FairnessFactor, f.Alone, FairnessSlack, f.Bound))
-			}
 		}
-		if aEnd.Sub(b.Created) <= window {
+		f.SlowestStep = max(f.SlowestStep, b.SlowestStep)
+		if f.Backlog && b.SlowestStep > a.StepMedian+FairnessSlack {
+			f.Violations = append(f.Violations, fmt.Sprintf("tenant B's Bundle %s had a step of %s under tenant A's load, longer than A's median step (%s) plus %s: B's steps waited behind A's backlog",
+				b.Name, b.SlowestStep, a.StepMedian, FairnessSlack))
+		}
+		if a.End.Sub(b.Created) <= window {
 			continue
 		}
 		f.Judged++
-		if b.First.IsZero() || !b.First.Before(aEnd) {
+		if b.First.IsZero() || !b.First.Before(a.End) {
 			f.Violations = append(f.Violations, fmt.Sprintf("tenant B's Bundle %s waited for all of tenant A's load: no environment was Verified until %s after A's load ended, though A's load ran %s after it was created, longer than B's %s alone",
-				b.Name, firstAfter(b, aEnd), aEnd.Sub(b.Created), f.Alone))
+				b.Name, firstAfter(b, a.End), a.End.Sub(b.Created), f.Alone))
 		}
 	}
 	if f.Judged == 0 && late == 0 {
@@ -166,6 +180,7 @@ func (f *Fleet) Timing(ctx context.Context, created []Created) ([]TenantBundle, 
 			if !ok {
 				continue
 			}
+			tb.SlowestStep = max(tb.SlowestStep, at.Sub(steps[i].CreationTimestamp.Time))
 			if tb.First.IsZero() || at.Before(tb.First) {
 				tb.First = at
 			}
@@ -181,21 +196,31 @@ func (f *Fleet) Timing(ctx context.Context, created []Created) ([]TenantBundle, 
 	return out, nil
 }
 
-// LastVerified is the latest Verified condition of the fleet's steps,
-// retired steps included: when its load ended, once every Bundle settled
-// Verified.
-func (f *Fleet) LastVerified(ctx context.Context) (time.Time, error) {
+// Load times the fleet's load from its steps, retired steps included: when
+// its last step was Verified, once every Bundle settled Verified, and the
+// median of its steps' times from creation to Verified.
+func (f *Fleet) Load(ctx context.Context) (TenantLoad, error) {
 	steps, _, err := f.allSteps(ctx)
 	if err != nil {
-		return time.Time{}, err
+		return TenantLoad{}, err
 	}
-	var last time.Time
+	var l TenantLoad
+	var times []time.Duration
 	for i := range steps {
-		if at, ok := lifecycle.VerifiedTime(&steps[i]); ok && at.After(last) {
-			last = at
+		at, ok := lifecycle.VerifiedTime(&steps[i])
+		if !ok {
+			continue
 		}
+		if at.After(l.End) {
+			l.End = at
+		}
+		times = append(times, at.Sub(steps[i].CreationTimestamp.Time))
 	}
-	return last, nil
+	if len(times) > 0 {
+		sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+		l.StepMedian = times[(len(times)+1)/2-1]
+	}
+	return l, nil
 }
 
 // allSteps is the fleet's PromotionSteps and its Bundles. Retirement

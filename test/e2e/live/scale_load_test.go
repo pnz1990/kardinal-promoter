@@ -186,14 +186,19 @@ func TestScale_TwoTenants(t *testing.T) {
 // 2 s apart, alone: its time alone on this controller and host. Then tenant A
 // promotes a canary and a TenantWave-wide wave on one branch (its pushes take
 // turns, #1586), and once a tenth of TenantWave steps exist B promotes a
-// second Bundle on each Pipeline, 2 s apart. Fairness is relative to B's
-// time alone (scale.JudgeFairness, #2252): none of B's Bundles under A's
-// load waits for all of it (no environment Verified until A's load ended),
-// each ends within scale.FairnessFactor times its time alone plus
-// scale.FairnessSlack, and contention was measured. B's step
-// p99 (creation to Verified, the latency-slo invariant) stays within
-// TenantStepP99 and its Bundles' p99 within TenantBundleP99. A's wave time
-// is noted (tenantAWaveSeconds) to compare runs.
+// second Bundle on each Pipeline, 2 s apart. Fairness is judged against B's
+// time alone and A's own steps (scale.JudgeFairness, #2252): none of B's
+// Bundles under A's load waits for all of it (no environment Verified until
+// A's load ended); when A's load is a backlog (A's median step more than
+// scale.BacklogFactor times B's slowest step alone), no step of B's takes
+// longer than A's median step, as a fair queue serves B ahead of A's
+// backlog; and contention was measured. A host where A's load builds no
+// backlog (32 cores) judges only starvation. B's step p99 (creation to
+// Verified, the latency-slo invariant) stays within TenantStepP99 and its
+// Bundles' p99 within TenantBundleP99, the second line of defence: on a
+// GitHub runner with controller-runtime's default queue instead of the fair
+// one, TenantStepP99 failed too (#2257). A's wave time is noted
+// (tenantAWaveSeconds) to compare runs.
 //
 // Covers SCALE-LOAD-FAIR-01.
 func TestScale_TenantFairness(t *testing.T) {
@@ -262,7 +267,7 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	}
 	r.Note("tenantAWaveSeconds", int(time.Since(aStart).Seconds()))
 
-	aEnd, err := r.Fleet.LastVerified(ctx)
+	load, err := r.Fleet.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,14 +279,17 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fair := scale.JudgeFairness(alone, loaded, aEnd)
+	fair := scale.JudgeFairness(alone, loaded, load)
+	r.Note("tenantAStepMedianSeconds", load.StepMedian.Seconds())
+	r.Note("tenantABacklog", fair.Backlog)
 	r.Note("tenantBAloneSeconds", fair.Alone.Seconds())
+	r.Note("tenantBSlowestStepAloneSeconds", fair.AloneStep.Seconds())
 	r.Note("tenantBUnderASeconds", fair.Worst.Seconds())
-	r.Note("tenantBBoundSeconds", fair.Bound.Seconds())
+	r.Note("tenantBSlowestStepUnderASeconds", fair.SlowestStep.Seconds())
 	r.Note("tenantBJudgedForStarvation", fair.Judged)
 	for _, b := range append(alone, loaded...) {
-		t.Logf("tenant B's Bundle %s: created %s before A's load ended; first environment Verified after %s, the last after %s",
-			b.Name, aEnd.Sub(b.Created), since(b.Created, b.First), since(b.Created, b.Last))
+		t.Logf("tenant B's Bundle %s: created %s before A's load ended; first environment Verified after %s, the last after %s; slowest step %s",
+			b.Name, load.End.Sub(b.Created), since(b.Created, b.First), since(b.Created, b.Last), b.SlowestStep)
 	}
 	for _, v := range fair.Violations {
 		t.Error(v)
