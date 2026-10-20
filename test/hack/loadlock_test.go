@@ -1249,6 +1249,37 @@ func TestLoadLock_QueueNeverWedges(t *testing.T) {
 		require.True(t, runs(t, b, 20*time.Second), "b: %s", b.out.String())
 		assert.Equal(t, "a\nb\n", readFile(t, order), "a kept its place")
 	})
+	t.Run("a ticket removed between its check and its heartbeat is written again by the heartbeat: its place kept", func(t *testing.T) {
+		// QA-5: the silent path, every run (LOADLOCK_TEST_BEFORE_BEAT parks
+		// the waiter there while the test removes its ticket).
+		dir := t.TempDir()
+		lock, stop, order, beat := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "stop"), filepath.Join(dir, "order"), filepath.Join(dir, "beat")
+		t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+		holder := loadlock(t, lock, "sh", "-c", `while [ ! -e "$0" ]; do sleep 0.05; done`, stop)
+		require.NoError(t, holder.Start())
+		require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(lock, "owner")); return err == nil && tickets(lock) == 0 }, 10*time.Second, 20*time.Millisecond)
+		waiter := func(name string, env ...string) *waited {
+			cmd := loadlock(t, lock, "sh", "-c", `echo "$1" >>"$0"`, order, name)
+			cmd.Env = append(cmd.Env, env...)
+			return launch(t, cmd)
+		}
+		a := waiter("a", "LOADLOCK_TEST_BEFORE_BEAT="+beat)
+		require.Eventually(t, func() bool { _, err := os.Stat(beat + ".parked"); return err == nil }, 10*time.Second, 20*time.Millisecond, "a parks before its heartbeat")
+		names, err := filepath.Glob(filepath.Join(lock+".queue", "[0-9]-*"))
+		require.NoError(t, err)
+		require.Len(t, names, 1)
+		require.NoError(t, os.Remove(names[0])) // as a stale reaper would
+		require.NoError(t, os.WriteFile(beat+".go", nil, 0o644))
+		require.Eventually(t, func() bool { _, err := os.Stat(names[0]); return err == nil }, 10*time.Second, 20*time.Millisecond, "the heartbeat writes it again, under its name")
+		assert.NotContains(t, a.out.String(), "queued it again", "the silent path, not the said one")
+		b := waiter("b")
+		require.Eventually(t, func() bool { return tickets(lock) == 2 }, 10*time.Second, 10*time.Millisecond)
+		require.NoError(t, os.WriteFile(stop, nil, 0o644))
+		require.NoError(t, holder.Wait())
+		require.True(t, runs(t, a, 20*time.Second), "a: %s", a.out.String())
+		require.True(t, runs(t, b, 20*time.Second), "b: %s", b.out.String())
+		assert.Equal(t, "a\nb\n", readFile(t, order), "a kept its place")
+	})
 	t.Run("a waiting waiter touches its ticket on every poll: never stale", func(t *testing.T) {
 		dir := t.TempDir()
 		lock, stop := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "stop")
