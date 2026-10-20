@@ -461,7 +461,7 @@ func controllerAccess() []apiAccess {
 		{"admissionregistration.k8s.io", "validatingadmissionpolicies", []string{"get"}, inCluster, "kardinal-promoter-agent-index", "agentidentity IndexReconciler chartIndex (a deleted chart index is recreated)"},
 		// Namespace mode limits it to the watched namespace (releaseNS in
 		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
-		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback"},
+		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback; pipeline policy_namespaces.go notSharedPolicyNamespaces"},
 	}
 	for _, k := range kardinalNamespacedKinds {
 		acc = append(acc,
@@ -742,6 +742,16 @@ func TestChartRBACSCMTokenSecret(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestChartPolicyShareableNamespaces: controller.policyShareableNamespaces is
+// --policy-shareable-namespaces (#2286); empty passes no flag.
+func TestChartPolicyShareableNamespaces(t *testing.T) {
+	t.Parallel()
+	assert.NotContains(t, argValues(controllerContainer(t, render(t, "kardinal-promoter"))), "policy-shareable-namespaces")
+	c := controllerContainer(t, render(t, "kardinal-promoter",
+		"--set", "controller.policyShareableNamespaces={shared-gates,team-a-gates}"))
+	assert.Equal(t, "shared-gates,team-a-gates", argValues(c)["policy-shareable-namespaces"])
 }
 
 // TestChartNamespaceModeWiring: in namespace mode the controller's cache

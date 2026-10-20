@@ -254,6 +254,24 @@ The controller reads gates from these places:
 
 Every matching gate from all three is added to the Graph. `spec.policyNamespaces` can only add namespaces; the org policy namespaces are read whatever it says. A gate from the Pipeline's namespace or from `spec.policyNamespaces` is a team gate, unless it is labelled `kardinal.io/scope: org`. Either way, it can never grant a skip (see [Skip Permissions](#skip-permissions)).
 
+### Sharing gates with other namespaces
+
+A gate read through `spec.policyNamespaces` is copied into the Pipeline's namespace, where
+everyone who may read that namespace sees its expression, name and labels. So a namespace other
+than the org policy namespaces must agree to be named there, in one of two ways:
+
+- its Namespace carries the label `kardinal.io/policy-shareable: "true"`, which whoever may edit the
+  Namespace sets (`kubectl label namespace shared-gates kardinal.io/policy-shareable=true`);
+- it is listed in the controller's `--policy-shareable-namespaces` (Helm
+  `controller.policyShareableNamespaces`).
+
+A Pipeline whose `spec.policyNamespaces` names a namespace that has not agreed gets the condition
+`PolicyNamespacesShared=False` (reason `NotShared`), naming each such namespace, and one Warning
+Event `PolicyNamespaceNotShared`. A namespace that does not exist, or that the controller may not
+read, is named too. In this release the gates of that namespace are still read and `Ready` is
+unchanged; a later release refuses them (#2286). The controller checks again every 5 minutes, so
+a label added later clears the condition within that time.
+
 The Graph creates every gate instance in the Pipeline namespace and labels it
 `kardinal.io/gate-template-namespace` with its template's namespace. A gate from an org policy
 namespace reads `metrics.*` from the MetricChecks of that namespace, so the platform team owns

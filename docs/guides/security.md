@@ -260,6 +260,12 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
 - With `ui.auth.tokenReview` on, the UI follows the same RBAC: every object the UI API reads or
   writes for a user is checked with a `SubjectAccessReview` (see
   [UI API Access Control](#ui-api-access-control)).
+- A Pipeline's `spec.policyNamespaces` reads the PolicyGates of other namespaces with the
+  controller's access, not its author's, and copies them into the Pipeline's namespace. A namespace
+  other than the org policy namespaces must agree to it, with the label
+  `kardinal.io/policy-shareable: "true"` or `controller.policyShareableNamespaces`. Until a later
+  release refuses the rest, a Pipeline naming one that has not is `PolicyNamespacesShared=False`
+  ([Sharing gates with other namespaces](../policy-gates.md#sharing-gates-with-other-namespaces)).
 
 #### The shared SCM token and `scm.allowedRepositories`
 

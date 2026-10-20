@@ -2159,6 +2159,11 @@ spec:
                   default "platform-policies") and the pipeline's own namespace are always read,
                   so a Pipeline cannot opt out of org gates. Gates found only through this
                   field are team gates: they never count as org gates and never grant a skip.
+                  Any other namespace listed must agree to be read: the label
+                  kardinal.io/policy-shareable=true on it, or the controller's
+                  --policy-shareable-namespaces. One that has not is still read for now,
+                  and the Pipeline's PolicyNamespacesShared condition is False naming it;
+                  a later release refuses it.
                 items:
                   type: string
                 type: array

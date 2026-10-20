@@ -120,6 +120,7 @@ func main() {
 		eventWarningLimit      kubeevent.Limit
 		webhookBindAddress     string
 		policyNamespaces       string
+		policyShareable        string
 		githubToken            string
 		webhookSecret          string
 		scmProviderType        string
@@ -234,6 +235,8 @@ func main() {
 		"The address the SCM webhook endpoint binds to.")
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
 		"Comma-separated list of namespaces to scan for org-level PolicyGates.")
+	flag.StringVar(&policyShareable, "policy-shareable-namespaces", "",
+		"Comma-separated namespaces whose PolicyGates any Pipeline may read through spec.policyNamespaces, besides those labelled kardinal.io/policy-shareable=true. A Pipeline naming another namespace gets PolicyNamespacesShared=False and a Warning Event; its gates are still read for now (#2286).")
 	flag.StringVar(&githubToken, "github-token", os.Getenv("GITHUB_TOKEN"),
 		"SCM token for API operations (a GitHub, GitLab, Forgejo/Gitea, Bitbucket or Azure DevOps token).")
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
@@ -975,6 +978,7 @@ func main() {
 		ControllerSecret: controllerSecret,
 		CompactAbove:     &graphCompactAbove, Reader: mgr.GetAPIReader(), Workers: *workers["pipeline"],
 		HoldBundleGrace: holdBundleGrace, Recorder: eventRecorder,
+		PolicyNamespaces: splitCSV(policyNamespaces), PolicyShareableNamespaces: splitCSV(policyShareable),
 		FleetApplicationNamespaces:    splitCSV(fleetApplicationNamespaces),
 		FleetClusterProfileNamespaces: splitCSV(fleetClusterProfileNamespaces)}).
 		SetupWithManager(mgr); err != nil {
