@@ -614,7 +614,7 @@ kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
     - A step held by a gate keeps waiting.
     - Once the gate passes, the step opens its PR, and the Bundle finishes after the merge.
 - **Superseded and finished Bundles** are left as they are. They get no new Graph (see step 11 for their children).
-- **Gate instances keep their old expression.** A Bundle's gate instances are copied from the PolicyGate templates when the controller builds the Bundle's Graph, so editing a template after the upgrade doesn't change the instances of Bundles already in flight. To release a Bundle held by such a gate, override it:
+- **Gate instances follow their templates.** After the upgrade, editing a PolicyGate template reaches the Bundles still promoting: kardinal copies the gate again into each of them ([When a new or edited gate takes effect](policy-gates.md#when-a-new-or-edited-gate-takes-effect)). To release a Bundle a gate holds without changing the gate, override it:
 
     ```bash
     kardinal override <pipeline> --env <env> --gate <gate> --reason "<why>" --expires-in 1h
