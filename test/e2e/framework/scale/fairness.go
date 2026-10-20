@@ -29,14 +29,16 @@ import (
 
 // FairnessFactor is how many times its slowest Bundle alone a B Bundle may
 // take under A's load. It is sized for the smallest host the suite runs on,
-// where A's load saturates the CPU and B's own work slows down however
-// fairly the queue orders it: on a kind node capped at 4 CPUs (a GitHub
-// runner's), with the fair queue, B's Bundles took 25 to 30 s under
-// TestScale_TenantFairnessManyRepos' load against 4 to 5 s alone, up to 7.5
-// times. A queue that holds B until A drains made them 57 to 61 s there,
-// over 10 times. On a fast host A's load is too short to slow B that much
-// whatever the queue does; the starvation check is what catches it there.
-const FairnessFactor = 10
+// a GitHub runner (4 vCPUs), where A's load saturates the CPU and B's own
+// work slows down however fairly the queue orders it. Under
+// TestScale_TenantFairnessManyRepos' load, with the fair queue, B took 24 s
+// there against 3 s alone (e2e-live run 39377163730, 8 times), and the
+// nightly runs of 13-20 October measured B at 23 to 39 s under the same
+// load: up to 13 times that baseline. On a kind node capped at 4 CPUs it was
+// 25 to 31 s against 4 to 5 s alone. 15 leaves room above that. On a fast
+// host A's load is too short to slow B that much whatever the queue does;
+// the starvation check is what catches an unfair queue (JudgeFairness).
+const FairnessFactor = 15
 
 // FairnessSlack is added to the bound and the starvation window: the
 // objects' timestamps are whole seconds, so a duration between two of them

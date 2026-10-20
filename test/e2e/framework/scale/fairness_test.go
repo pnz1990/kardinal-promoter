@@ -33,7 +33,7 @@ func tb(name string, c, first, last float64) TenantBundle {
 }
 
 // alone is B alone, before A's load: its slowest Bundle 4 s, as a 32-core
-// host and a 4-CPU kind node both measure (#2252). So the bound is 42 s and
+// host and a 4-CPU kind node both measure (#2252). So the bound is 62 s and
 // the starvation window 6 s.
 var alone = []TenantBundle{tb("b1-1", -30, -29, -27), tb("b2-1", -28, -27, -24), tb("b3-1", -26, -25.5, -23)}
 
@@ -49,7 +49,7 @@ const (
 func TestJudgeFairness_Baseline(t *testing.T) {
 	f := JudgeFairness(alone, nil, at(15))
 	assert.Equal(t, 4*time.Second, f.Alone)
-	assert.Equal(t, 42*time.Second, f.Bound)
+	assert.Equal(t, 62*time.Second, f.Bound)
 }
 
 // TestJudgeFairness judges timelines of the hosts #2252 measured, fair and
@@ -81,10 +81,11 @@ func TestJudgeFairness(t *testing.T) {
 			want:   []string{starved, starved, starved},
 		},
 		{
-			// A 4-CPU node under ManyRepos' load: the fair queue, and B
-			// 7.5 times slower than alone, from CPU contention.
+			// A GitHub runner under ManyRepos' load: the fair queue, and
+			// B 13 times slower than alone, from CPU contention (the
+			// slowest nightly run, 39 s, against a 3 s baseline).
 			name:   "slow host, fair",
-			loaded: []TenantBundle{tb("b1-2", 12, 22, 42), tb("b2-2", 14, 24, 43), tb("b3-2", 16, 27, 46)},
+			loaded: []TenantBundle{tb("b1-2", 12, 22, 42), tb("b2-2", 14, 24, 43), tb("b3-2", 16, 27, 68)},
 			aEnd:   75,
 			judged: 3,
 		},
@@ -99,7 +100,7 @@ func TestJudgeFairness(t *testing.T) {
 			// B's steps get through, but B waits most of A's load between
 			// them: slow, not starved.
 			name:   "slow host, B held part of the time",
-			loaded: []TenantBundle{tb("b1-2", 12, 20, 72), tb("b2-2", 14, 22, 30), tb("b3-2", 16, 24, 34)},
+			loaded: []TenantBundle{tb("b1-2", 12, 20, 80), tb("b2-2", 14, 22, 30), tb("b3-2", 16, 24, 34)},
 			aEnd:   100,
 			judged: 3,
 			want:   []string{slow},
@@ -146,14 +147,14 @@ func TestJudgeFairness(t *testing.T) {
 		},
 		{
 			name:   "exactly at the bound",
-			loaded: []TenantBundle{tb("b1-2", 2, 3, 2+42)},
-			aEnd:   50,
+			loaded: []TenantBundle{tb("b1-2", 2, 3, 2+62)},
+			aEnd:   70,
 			judged: 1,
 		},
 		{
 			name:   "a second over the bound",
-			loaded: []TenantBundle{tb("b1-2", 2, 3, 3+42)},
-			aEnd:   50,
+			loaded: []TenantBundle{tb("b1-2", 2, 3, 3+62)},
+			aEnd:   70,
 			judged: 1,
 			want:   []string{slow},
 		},
