@@ -89,12 +89,21 @@ func HumanError(err error) error {
 }
 
 // humanErrorIn is HumanError for a command that ran with client c in
-// namespace ns (a kardinal mcp tool call): the not-found hint lists ns's
-// pipelines, never those of the flags' namespace, which a tool call does not
-// set (#2230).
-func humanErrorIn(err error, c sigs_client.Client, ns string) error {
-	if name, ok := notFoundPipeline(err); ok && c != nil {
-		return pipelineNotFound(context.Background(), c, ns, name)
+// namespace ns, in ctx (a kardinal mcp tool call): the not-found hint lists
+// ns's pipelines (lifecycle's, the error's namespace) with the call's
+// client, never those of the flags' namespace, which a tool call does not
+// set, and not after the call is cancelled (#2230).
+func humanErrorIn(ctx context.Context, err error, c sigs_client.Client, ns string) error {
+	if err == nil {
+		return nil
+	}
+	if c != nil {
+		if name, ok := notFoundPipeline(err); ok {
+			return pipelineNotFound(ctx, c, ns, name)
+		}
+		if m := lifecycleNotFoundRE.FindStringSubmatch(err.Error()); m != nil && errors.Is(err, lifecycle.ErrNotFound) {
+			return pipelineNotFound(ctx, c, m[1], m[2])
+		}
 	}
 	return HumanError(err)
 }

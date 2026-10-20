@@ -26,6 +26,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/internal/style"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // TestMCP_ConcurrentNamespaces: two agents' calls at once, one per
@@ -124,19 +125,36 @@ func TestMCP_CallsWriteNoGlobal(t *testing.T) {
 	}
 }
 
-// TestHumanErrorIn: a not-found Pipeline's hint lists the namespace the
-// command ran in, not the flags' default.
+// TestHumanErrorIn: a not-found Pipeline's hint (the API server's, and
+// lifecycle's, which names the namespace) lists the namespace the command
+// ran in, with the call's client, not the flags' default; and lists nothing
+// once the call's context is cancelled.
 func TestHumanErrorIn(t *testing.T) {
 	setForTest(t, &globalNamespace, "default")
 	c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "a-one", Namespace: "team-a"}},
-		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "d-one", Namespace: "default"}}).Build()
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "d-one", Namespace: "default"}}).
+		WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, c sigs_client.WithWatch, list sigs_client.ObjectList, opts ...sigs_client.ListOption) error {
+			if err := ctx.Err(); err != nil {
+				return err // as the API server's client does
+			}
+			return c.List(ctx, list, opts...)
+		}}).Build()
 	notFound := apierrors.NewNotFound(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "pipelines"}, "ghost")
-	got := humanErrorIn(notFound, c, "team-a").Error()
+	lifecycleNotFound := fmt.Errorf("pipeline team-a/ghost: %w", lifecycle.ErrNotFound)
+	for _, err := range []error{notFound, lifecycleNotFound} {
+		got := humanErrorIn(t.Context(), err, c, "team-a").Error()
+		assert.Contains(t, got, `pipeline "ghost" not found in namespace "team-a"`, err)
+		assert.Contains(t, got, "a-one", err)
+		assert.NotContains(t, got, "d-one", err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	got := humanErrorIn(cancelled, notFound, c, "team-a").Error()
 	assert.Contains(t, got, `pipeline "ghost" not found in namespace "team-a"`)
-	assert.Contains(t, got, "a-one")
-	assert.NotContains(t, got, "d-one")
-	assert.Equal(t, "boom", humanErrorIn(errors.New("boom"), c, "team-a").Error(), "other errors as HumanError rewrites them")
+	assert.NotContains(t, got, "a-one", "a cancelled call lists nothing")
+	assert.Equal(t, "boom", humanErrorIn(t.Context(), errors.New("boom"), c, "team-a").Error(), "other errors as HumanError rewrites them")
+	assert.NoError(t, humanErrorIn(t.Context(), nil, c, "team-a"))
 }
 
 // TestAssertedFor: the stamp's asserted client is the tool call's (ctx),

@@ -20,6 +20,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario"
 )
 
@@ -27,12 +28,14 @@ import (
 // admission policies) with a Pipeline app in team-a that ran version 1.1.0
 // to prod, a Pipeline app in team-b, and kardinal mcp --allow-write
 // connected as agent fixer (scoped to team-a) through a kubeconfig of its
-// own (World.ClientAs).
-func mcpWorld(t *testing.T) (*scenario.World, *mcp.ClientSession, scenario.Identity) {
+// own (World.ClientAs). Without admission, the World stores every write
+// as the CLI made it (scenario.Options.NoAdmission).
+func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession, scenario.Identity) {
 	t.Helper()
 	c := scenario.Combo{Update: "kustomize", Health: "deployment", Gate: "cel", Topology: "linear", Delivery: "direct",
 		SCM: scenario.SCMGitHub, Outcome: "success", Actor: "human"}
-	w := scenario.NewWorld(t, scenario.Options{SCM: c.SCM, PolicyNamespaces: []string{scenario.PolicyNS}, Actors: true})
+	w := scenario.NewWorld(t, scenario.Options{SCM: c.SCM, PolicyNamespaces: []string{scenario.PolicyNS}, Actors: true,
+		NoAdmission: !admission})
 	p := scenario.BuildPlan(c, "team-a", w.Now(), false)
 	require.NoError(t, p.Setup(w))
 	w.MustApply(scenario.AgentFixture("team-a")...)
@@ -131,9 +134,31 @@ func toolArgs(t *testing.T, cs *mcp.ClientSession) map[string]struct {
 // whatever any call writes is in team-a and is stamped with the agent;
 // nothing cluster-scoped changes; and what the agent reads back carries the
 // injection only labelled untrusted. Covers MCP-HOSTILE-01.
+//
+// The chart's admission policies refuse a write whose stamp is not its
+// requester's, so there a wrong stamp is never stored to be checked. The
+// write tools run again in a World without admission, where every stamp
+// stored is the CLI's own: a version and a Verdict created and a version
+// rejected are each checked there at least once. (Stored text is bounded
+// by the policies, so that is checked with admission only.)
 func TestMCP_HostileInputs(t *testing.T) {
 	t.Parallel()
-	w, cs, agent := mcpWorld(t)
+	for _, admission := range []bool{true, false} {
+		name := "admission"
+		if !admission {
+			name = "no admission"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hostileInputs(t, admission)
+		})
+	}
+}
+
+// hostileInputs is TestMCP_HostileInputs in a World with or without the
+// chart's admission policies; without, only the write tools run.
+func hostileInputs(t *testing.T, admission bool) {
+	w, cs, agent := mcpWorld(t, admission)
 	tools := toolArgs(t, cs)
 	require.Len(t, tools, len(mcpReadTools)+len(mcpWriteTools))
 	baseArgs := func(name string) map[string]any {
@@ -154,10 +179,14 @@ func TestMCP_HostileInputs(t *testing.T) {
 		assert.False(t, res.IsError, "%s with valid arguments: %v", name, body)
 	}
 	calls, refused, fresh, wrote := 0, 0, 0, 0
+	stamped := map[string]int{}
 	snap := w.Snapshot()
 	accepted := map[string]int{}
 	hostile := scenario.HostileInputs()
 	for _, name := range slices.Sorted(maps.Keys(tools)) {
+		if !admission && !slices.Contains(mcpWriteTools, name) {
+			continue
+		}
 		spec := tools[name]
 		for argN, arg := range slices.Sorted(maps.Keys(spec.args)) {
 			for _, h := range hostile {
@@ -212,13 +241,25 @@ func TestMCP_HostileInputs(t *testing.T) {
 				if len(changed) > 0 {
 					wrote++
 				}
-				checkStamped(t, w, what, before, changed, agent.Username)
-				assert.Empty(t, w.LongStrings(changed, 4096), "%s: stored text past 4 KiB", what)
+				for k, n := range checkStamped(t, w, what, before, changed, agent.Username) {
+					stamped[k] += n
+				}
+				if admission {
+					// The chart's policies bound stored text; the CLI does not.
+					assert.Empty(t, w.LongStrings(changed, 4096), "%s: stored text past 4 KiB", what)
+				}
 			}
 		}
 	}
-	t.Logf("%d calls, %d refused, %d wrote; accepted: %v", calls, refused, wrote, accepted)
+	t.Logf("%d calls, %d refused, %d wrote, stamps checked %v; accepted: %v", calls, refused, wrote, stamped, accepted)
 	assert.NotZero(t, wrote, "no call wrote, so no stamp was checked")
+	if !admission {
+		// No version waits at an approval gate here, so approve writes no
+		// Approval in either World.
+		for _, k := range []string{"Bundle", "Bundle rejected", "Verdict"} {
+			assert.NotZero(t, stamped[k], "no %s stamp checked without admission", k)
+		}
+	}
 
 	// What the agent reads back: an injection it (or anyone) wrote is
 	// labelled untrusted wherever it appears.
@@ -239,10 +280,13 @@ func hostileCalled(h scenario.Hostile, argN int) bool {
 }
 
 // checkStamped checks that every Bundle, Approval and Verdict changed
-// created names agent as its actor's principal, and that a Bundle it
-// rejected names agent as who rejected it.
-func checkStamped(t *testing.T, w *scenario.World, what string, before map[string]string, changed []string, agent string) {
+// created names agent as its actor's principal (and a Bundle as its
+// creator), and that a Bundle it rejected names agent as who rejected it.
+// It returns how many of each it checked ("Bundle rejected" for a
+// rejection).
+func checkStamped(t *testing.T, w *scenario.World, what string, before map[string]string, changed []string, agent string) map[string]int {
 	t.Helper()
+	checked := map[string]int{}
 	for _, k := range changed {
 		_, existed := before[k]
 		parts := strings.SplitN(k, "/", 3)
@@ -256,6 +300,7 @@ func checkStamped(t *testing.T, w *scenario.World, what string, before map[strin
 			}
 			if existed {
 				if b.Spec.Rejected != nil {
+					checked["Bundle rejected"]++
 					assert.Equal(t, agent, b.Spec.Rejected.By, "%s: %s rejected in another's name", what, k)
 				}
 				continue
@@ -263,6 +308,7 @@ func checkStamped(t *testing.T, w *scenario.World, what string, before map[strin
 			if b.Spec.Actor != nil && b.Spec.Actor.Kind == v1alpha1.ActorController {
 				continue // the controller's own version
 			}
+			assert.Equal(t, agent, b.Annotations[lifecycle.AnnotationCreatedBy], "%s: %s created in another's name", what, k)
 			a = b.Spec.Actor
 		case "Approval":
 			var o v1alpha1.Approval
@@ -279,8 +325,10 @@ func checkStamped(t *testing.T, w *scenario.World, what string, before map[strin
 		default:
 			continue
 		}
+		checked[parts[0]]++
 		if assert.NotNil(t, a, "%s: %s has no actor stamp", what, k) {
 			assert.Equal(t, agent, a.Principal, "%s: %s names another actor", what, k)
 		}
 	}
+	return checked
 }

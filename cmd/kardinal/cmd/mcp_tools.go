@@ -264,7 +264,7 @@ func (k *mcpServer) direct(ctx context.Context, ns string, offset int,
 	if err != nil {
 		// Rewritten with this call's client and namespace: the hints never
 		// read the flags' namespace.
-		return nil, humanizedError{orig: err, human: humanErrorIn(err, c, cns)}
+		return nil, humanizedError{orig: err, human: humanErrorIn(ctx, err, c, cns)}
 	}
 	if v == nil {
 		if raw := bytes.TrimSpace(out.Bytes()); json.Valid(raw) && len(raw) > 0 {

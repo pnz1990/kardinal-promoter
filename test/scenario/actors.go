@@ -293,6 +293,9 @@ func (w *World) admitPatched(ctx context.Context, c client.WithWatch, sub string
 // stored index is served again after it.
 func (w *World) WithEmptyAgentIndex(fn func()) {
 	w.T.Helper()
+	if w.api == nil {
+		w.T.Fatal("WithEmptyAgentIndex: no admission plugin (Options.Actors, without NoAdmission)")
+	}
 	var idx v1alpha1.AgentIndex
 	if err := w.store.Get(w.Ctx, types.NamespacedName{Name: Release}, &idx); err != nil {
 		w.T.Fatalf("get agent index: %v", err)

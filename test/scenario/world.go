@@ -153,6 +153,11 @@ type Options struct {
 	// kro). The index is the policies' param, as the plugin's informer sees
 	// it at the time of the write.
 	Actors bool
+	// NoAdmission, with Actors, runs the agent registry but no admission
+	// plugin: every write is stored as its client made it, so a test can
+	// check what the client itself stamps where no policy would refuse a
+	// wrong stamp first. WithEmptyAgentIndex needs admission.
+	NoAdmission bool
 	// MaxIndexBytes bounds the agent index (0: actor.MaxIndexBytes).
 	MaxIndexBytes int
 }
@@ -527,7 +532,9 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.mgr = managerConfig{scmKind: kind, compactAbove: opts.CompactAbove, policyNS: opts.PolicyNamespaces,
 		actors: opts.Actors, maxIndexBytes: opts.MaxIndexBytes, dyn: dyn}
 	if opts.Actors {
-		w.startAPIServer()
+		if !opts.NoAdmission {
+			w.startAPIServer()
+		}
 		// The API server's own EndpointSlice: an AgentRun's NetworkPolicy
 		// allows egress to it.
 		if err := c.Create(w.Ctx, &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
