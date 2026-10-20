@@ -26,7 +26,9 @@ import (
 
 // The fixtures in testdata/jira are Jira REST API responses (create issue,
 // get issue, JQL search) in the shape of the Jira Cloud platform REST API
-// reference, written from it, not recorded (spec 23 section 5.4).
+// reference, written from it, not recorded (spec 23 section 5.4); their property
+// names are checked against the vendor schemas and the vendor examples are
+// read as they are (published_fixtures_test.go).
 // {{CORRELATION}} becomes the correlation label, {{BASE}} the server URL.
 
 const jiraToken = "ops@example.com:atl-token-123"
