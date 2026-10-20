@@ -70,15 +70,12 @@ v0.13.0 is not released yet; v0.12.3 is the latest release.
   kardinal opens for the promotion or links by its key: [Change Requests](change-requests.md).
 - **Approval fields.** An approval gate can require what an approve carries, such as a change
   ticket ID or an acknowledgement: [Approval fields](approvals.md#approval-fields).
+- **Keyless commit signatures.** kardinal verifies a config commit's gitsign (Sigstore) signature
+  itself, and names the agent whose workload signed it, which gates read as `commit.*`:
+  [Commit signatures with gitsign](image-verification.md#commit-signatures-with-gitsign).
 
 The changelog's [Unreleased](changelog.md#unreleased) section lists every change since v0.12.0,
 including those to rollbacks, gates and the UI.
-
-**Still planned for v0.13:**
-
-- Keyless (gitsign) commit signatures, mapped to the agent that signed. Commit signatures the
-  SCM verified (`commits.requireSigned`) already ship:
-  [Signed commits](image-verification.md#signed-commits).
 
 ### v0.14: adaptive
 

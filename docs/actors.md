@@ -183,6 +183,9 @@ RBAC: give its ServiceAccount the chart's roles as for anyone else
 
 ### Signing identities
 
+!!! info "New in v0.13.0 (unreleased)"
+    v0.12.x has no `spec.signingIdentities`: a signature never names an agent.
+
 The actor stamp verifies who **created** a version. The commit it promotes, and the provenance of
 its images, were signed by whoever ran the job. `spec.signingIdentities` lists the Sigstore
 (Fulcio) certificate identities that are the agent's own workload, so a verified signature can
