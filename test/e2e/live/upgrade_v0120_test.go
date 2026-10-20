@@ -340,8 +340,8 @@ func kroErrors(t *testing.T, e *framework.Env, since time.Time) (leveled int, er
 //     environment for 30s): the two-approver gate until bob's approval
 //     completes alice's (2 of 2); the false gate until its template is
 //     edited, which now reaches the version v0.12 started (#1360: the
-//     instance takes the template's generation, a GateChanged record per
-//     version);
+//     instance takes the template's generation; v0.12's unstamped copy is
+//     the baseline, so no GateChanged record);
 //     the verify gates until the AgentRun that was running finishes (the
 //     same run, created before the upgrade) and its Verdict counts, and
 //     until a second person's Verdict joins the one recorded before; the
@@ -872,8 +872,9 @@ func u012Upgrade(t *testing.T, from u012From) {
 	}
 	// #1360: an edit of the false gate reaches the versions the release
 	// started. Their instances, copied without the template's revision, take
-	// the edited rule and the template's generation, and a GateChanged
-	// record is written for each.
+	// the edited rule and the template's generation. A copy without that
+	// stamp is the baseline the next change is measured from, not a change,
+	// so this edit writes no GateChanged record (gateChangeEntry).
 	for _, b := range heldB {
 		g, ok, err := e.GateInstance(ctx, s.held.NS, b, "prod", "release-window")
 		require.NoError(t, err)
@@ -886,21 +887,16 @@ func u012Upgrade(t *testing.T, from u012From) {
 		assert.Equal(t, fmt.Sprint(gen), g.Annotations["kardinal.io/gate-template-generation"], "the instance names the edited revision")
 		assert.Equal(t, gates[b], "PolicyGate "+s.held.NS+"/"+g.Name, "the edit updates the instance v%s's Graph made", fromVersion)
 	}
-	framework.Eventually(t, time.Minute, "a GateChanged record for each held version", func(ctx context.Context) (bool, string) {
+	framework.Consistently(t, 15*time.Second, "no GateChanged record for a version the release built", func(ctx context.Context) (bool, string) {
 		var evs v1alpha1.AuditEventList
 		if err := e.Client.List(ctx, &evs, client.InNamespace(s.held.NS), client.MatchingLabels{"kardinal.io/action": "GateChanged"}); err != nil {
 			return false, err.Error()
 		}
-		seen := map[string]bool{}
+		var names []string
 		for _, ev := range evs.Items {
-			seen[ev.Spec.BundleName] = true
+			names = append(names, ev.Spec.BundleName)
 		}
-		for _, b := range heldB {
-			if !seen[b] {
-				return false, fmt.Sprintf("none for %s in %d records", b, len(evs.Items))
-			}
-		}
-		return true, ""
+		return len(evs.Items) == 0, fmt.Sprintf("GateChanged records for %v", names)
 	})
 	// The verify gates: the AgentRun that was running finishes and counts;
 	// dave's Verdict joins carol's.
