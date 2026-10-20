@@ -154,8 +154,6 @@ func TestScale_EvidencePackVersions(t *testing.T) {
 	})
 }
 
-// packRecords are the per-file record counts of an evidence pack's
-// manifest.
 // waitNoTerminatingNamespaces waits until no Namespace is being deleted, and
 // notes how long that took.
 func waitNoTerminatingNamespaces(t *testing.T, r *scale.Run, timeout time.Duration) {
@@ -246,6 +244,8 @@ func lineDiff(a, b string) string {
 	return strings.Join(out, " ")
 }
 
+// packRecords are the per-file record counts of an evidence pack's
+// manifest.
 func packRecords(t *testing.T, pack []byte) map[string]int {
 	t.Helper()
 	dir := t.TempDir()
@@ -274,8 +274,9 @@ func packRecords(t *testing.T, pack []byte) map[string]int {
 // as the controller marks it (status written as the controller, so nothing
 // promotes it); its gate instance on prod; an Approval of it for prod by
 // the test's user; and two receipts, for uat and prod (about 4 KiB, the
-// fixture of TestScale_Receipts), Pending: the export reads them as the
-// controller wrote them, signing is TestScale_Receipts' concern.
+// fixture of TestScale_Receipts), written as the controller writes them:
+// the controller (receipts on, scale.EnableReceipts) signs and stores them,
+// and the test waits until every one is Stored before it exports.
 func createPackVersions(t *testing.T, r *scale.Run, as client.Client, user string, nss []string, from, to int) {
 	t.Helper()
 	ctx := context.Background()

@@ -27,8 +27,10 @@ const rssSample = 5 * time.Millisecond
 // of 470 MiB reads 470 MiB for every CLI it runs. VmHWM is the high-water
 // mark of the process's current address space, the one exec gave it.
 //
-// The child's final growth between the last sample and its exit is not
-// seen: VmHWM only grows, and the sample interval is 5ms. A child gone
+// A peak followed by any sample is seen: VmHWM only grows. Growth after
+// the last sample, in the child's final 5ms, is not: a burst right before
+// exit can read a few MiB low (5 to 10 MiB for a 100 MiB allocation just
+// before os.Exit), which a streaming export does not do. A child gone
 // before the first sample returns an error rather than 0.
 func RunPeakRSS(cmd *exec.Cmd) (int64, error) {
 	if err := cmd.Start(); err != nil {

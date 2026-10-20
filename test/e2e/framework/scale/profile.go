@@ -90,10 +90,11 @@ type Profile struct {
 	PackMaxTime         time.Duration
 	// PackVersions versions in PackNamespaces namespaces, each with an
 	// Approval, a gate instance and two receipts, exported cluster-wide by
-	// TestScale_EvidencePackVersions (#2238) within PackVersionsMaxTime (10x
-	// the measured export: 0.96s for 500, 10.3s for 5,000), with
-	// the memory checks of PackMaxRSSGrowthMiB (against a tenth of the
-	// versions) and PackMaxRSSMiB.
+	// TestScale_EvidencePackVersions (#2238) within PackVersionsMaxTime: 10s
+	// in ci, 10x the 0.96s a ci run measured for 500; 100s in full, 10x a
+	// first full run's 10.3s for 5,000 (6.8s since). With the memory checks
+	// of PackMaxRSSGrowthMiB (against a tenth of the versions) and
+	// PackMaxRSSMiB.
 	PackVersions        int
 	PackNamespaces      int
 	PackVersionsMaxTime time.Duration
