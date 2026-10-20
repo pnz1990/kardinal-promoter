@@ -359,6 +359,15 @@ var u012HealthRefForbidden = regexp.MustCompile(`apply \\"health[A-Z][A-Za-z0-9]
 // gone (#1283).
 var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-manager\tWatch error\t\{"gvr": "(apps/v1, Resource=deployments|argoproj\.io/v1alpha1, Resource=(applications|rollouts)|kustomize\.toolkit\.fluxcd\.io/v1, Resource=kustomizations|flagger\.app/v1beta1, Resource=canaries)", "error": "(failed to list \*v1\.PartialObjectMetadata: )?[a-z.]+ is forbidden: User \\"system:serviceaccount:[^\\"]+\\" cannot (list|watch) resource `)
 
+// u012SchemaRedirect matches kro failing to resolve a kardinal kind's schema
+// while the guide's step 1 applies the new CRDs: the API server rebuilds the
+// kardinal.io/v1alpha1 OpenAPI v3 document once per changed CRD, and kro's
+// request for the document by its hash is redirected to a newer one until
+// client-go gives up. kro requeues the Graph. Seen in one of eight upgrade
+// runs (upgrade-v0120 on 1.37): four lines in the same second, two seconds
+// before the new controller started.
+var u012SchemaRedirect = regexp.MustCompile(`build node \\"[A-Za-z0-9]+\\": resolve schema for kardinal\.io/v1alpha1, Kind=[A-Za-z]+: Get \\"/openapi/v3/apis/kardinal\.io/v1alpha1\?hash=[0-9A-F]+\\": stopped after 10 redirects`)
+
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
 // released (its chart, CLI and kro) and follows "Upgrading from v0.12.0" in
 // docs/upgrade.md, running the guide's own commands, while versions are in
@@ -1092,14 +1101,27 @@ func u012Upgrade(t *testing.T, from u012From) {
 		SeedTag: scale.SeedTag, Start: testStart, AllowEmpty: false, Logs: logs,
 		Skip: map[string]string{"env-content": "the rollbacks restore older versions on purpose; their content is checked above"}})
 	logs.Stop()
-	// The one error the guide expects (#1283): kro cannot read a health ref
-	// node between the chart upgrade and the new controller's removal of
-	// those nodes. Only that read, and only before the nodes were gone.
-	leveled, allowed, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
-		return (at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line))) ||
-			(from.kroExpected != nil && from.kroExpected(line, at))
+	// The errors the guide expects: kro cannot read a health ref node
+	// between the chart upgrade and the new controller's removal of those
+	// nodes (#1283), and cannot resolve a kardinal kind's schema while the
+	// CRDs change. Only those, and only before the nodes were gone; and
+	// the ones a suite's own case expects.
+	var refs, schema, cases int
+	leveled, _, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
+		switch {
+		case at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line)):
+			refs++
+		case at.Before(refsGone) && u012SchemaRedirect.MatchString(line):
+			schema++
+		case from.kroExpected != nil && from.kroExpected(line, at):
+			cases++
+		default:
+			return false
+		}
+		return true
 	})
-	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283)", leveled, allowed)
+	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283), %d resolved a schema while the CRDs changed, %d the suite's own cases expect",
+		leveled, refs, schema, cases)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")
 	assert.Empty(t, kroErrs, "kro logged no other error from the upgrade on")
 	assert.Equal(t, kroBefore, kroPods(t, e), "kro's Pods did not restart")
