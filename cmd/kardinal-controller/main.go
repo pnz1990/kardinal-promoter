@@ -1031,6 +1031,7 @@ func main() {
 			OCI:       receiptOpts.ociSink(receiptNS, transport),
 			SCM:       scmProvider,
 			Providers: providers,
+			Recorder:  eventRecorder,
 		}).SetupWithManager(mgr); err != nil {
 			logger.Fatal().Err(err).Msg("unable to set up PromotionReceiptReconciler")
 		}

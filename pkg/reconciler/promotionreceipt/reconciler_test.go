@@ -42,10 +42,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
@@ -643,6 +645,108 @@ func TestReconcile_SignWriteRetried(t *testing.T) {
 			assert.Equal(t, tc.signs, signs, "signatures in all")
 			assert.Equal(t, v1alpha1.ReceiptStored, rc.Status.Phase)
 			_, err = receipt.Verify([]byte(rc.Status.Bundle), receipt.VerifyOptions{Key: pub})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestReconcile_RefusedWriteIsTerminal (QA-2 on #2323): the API server
+// refuses the status write right after a signature, or after a PR comment
+// (a 403 for a missing RBAC rule on promotionreceipts/status, a 422 for an
+// invalid status). The reconcile returns a terminal error, so the controller
+// does not requeue it: driven as controller-runtime drives it (requeued
+// after an error unless it is terminal), the receipt is signed once over
+// many rounds, not once a backoff. Each refusal is counted
+// (kardinal_receipt_status_writes_refused_total{step}) and announced with a
+// Warning Event on the receipt. Once the receipt changes and the write is
+// allowed, the step is done again and recorded: the documented second
+// signature.
+//
+// Covers RECEIPT-SIGN-10.
+func TestReconcile_RefusedWriteIsTerminal(t *testing.T) {
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "promotionreceipts"}
+	for _, tc := range []struct {
+		name   string
+		step   string // the write refused: signing or pr-comment
+		refuse error
+	}{
+		{name: "a 403 after the signature", step: metricSigning,
+			refuse: apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("cannot patch resource \"promotionreceipts/status\""))},
+		{name: "a 422 after the signature", step: metricSigning,
+			refuse: apierrors.NewInvalid(schema.GroupKind{Group: "kardinal.io", Kind: "PromotionReceipt"}, "checkout-1-5-0-prod", nil)},
+		{name: "a 403 after the PR comment", step: metricPRComment,
+			refuse: apierrors.NewForbidden(gr, "checkout-1-5-0-prod", errors.New("denied by admission"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			secret, pub := keySecret(t)
+			refusing := true
+			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(secret, newReceipt(t, "ghcr.io/acme/checkout", "sha256:"+strings.Repeat("a", 64))).
+				WithStatusSubresource(&v1alpha1.PromotionReceipt{}).
+				WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+					patch client.Patch, opts ...client.SubResourcePatchOption) error {
+					rc := obj.(*v1alpha1.PromotionReceipt)
+					step := ""
+					switch {
+					case rc.Status.Phase == v1alpha1.ReceiptSigned:
+						step = metricSigning
+					case rc.Status.PRComment:
+						step = metricPRComment
+					}
+					if refusing && step == tc.step {
+						return tc.refuse
+					}
+					return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+				}}).Build()
+			signs := 0
+			key := SecretKey(c, "kardinal-system", "receipt-key", "cosign.key")
+			rec := events.NewFakeRecorder(10)
+			s := &commentSCM{}
+			r := &Reconciler{Client: c, APIReader: c, SCM: s, Recorder: rec, NowFn: func() time.Time { return now }, JitterFn: noJitter,
+				SleepFn: func(context.Context, time.Duration) error { return nil },
+				Signer: &receipt.Signer{Mode: v1alpha1.ReceiptSigningKey, Key: func(ctx context.Context) (crypto.Signer, string, error) {
+					signs++
+					return key(ctx)
+				}}}
+			req := ctrlruntime.Request{NamespacedName: types.NamespacedName{Namespace: "payments", Name: "checkout-1-5-0-prod"}}
+			refusedBefore := testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step))
+			// Driven as controller-runtime does: after a nil error the next
+			// round comes from the status write's event; after an error it is
+			// requeued, unless the error is terminal.
+			rounds, terminal := 0, false
+			for ; rounds < 8 && !terminal; rounds++ {
+				_, err := r.Reconcile(context.Background(), req)
+				terminal = err != nil && errors.Is(err, reconcile.TerminalError(nil))
+				if err != nil && !terminal {
+					t.Fatalf("round %d: a non-terminal error: %v", rounds, err)
+				}
+			}
+			require.True(t, terminal, "the refused write ends in a terminal error")
+			assert.Equal(t, 1, signs, "signed once, not once a backoff")
+			assert.Equal(t, refusedBefore+1, testutil.ToFloat64(observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(tc.step)))
+			require.Len(t, rec.Events, 1)
+			ev := <-rec.Events
+			assert.Contains(t, ev, "Warning "+ReasonStatusWriteRefused+" ")
+			assert.Contains(t, ev, "retried only when the receipt changes or the controller resyncs")
+
+			// The receipt changes (or a resync comes) once the write is
+			// allowed: the step is done again, and recorded.
+			refusing = false
+			for range 3 {
+				_, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+			}
+			var got v1alpha1.PromotionReceipt
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, v1alpha1.ReceiptStored, got.Status.Phase)
+			assert.True(t, got.Status.PRComment)
+			if tc.step == metricSigning {
+				assert.Equal(t, 2, signs, "signed again at the change: the documented limit")
+				assert.Len(t, s.comments, 1)
+			} else {
+				assert.Equal(t, 1, signs)
+				assert.Len(t, s.comments, 2, "the provider cannot search: commented again at the change")
+			}
+			_, err := receipt.Verify([]byte(got.Status.Bundle), receipt.VerifyOptions{Key: pub})
 			require.NoError(t, err)
 		})
 	}

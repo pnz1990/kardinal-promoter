@@ -180,6 +180,20 @@ var (
 		[]string{"sink"},
 	)
 
+	// ReceiptStatusWritesRefusedTotal counts the status writes the API
+	// server refused (not a conflict, a server error or a timeout) right
+	// after a receipt's signature or PR comment, by step (signing,
+	// pr-comment). Each leaves the receipt unrecorded until it changes or the
+	// controller resyncs, and then the step is done again: a second
+	// signature (#2313).
+	ReceiptStatusWritesRefusedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_receipt_status_writes_refused_total",
+			Help: "Status writes refused right after a receipt's signature or PR comment, by step (signing, pr-comment): not retried until the receipt changes or a resync.",
+		},
+		[]string{"step"},
+	)
+
 	// HoldBundleMissingTotal counts holds (Pipeline spec.holds) whose
 	// rollback Bundle has not existed for the grace, once per hold. The
 	// hold stays in effect until a human releases it (#1629).
@@ -249,6 +263,7 @@ func init() {
 		VerdictsTotal,
 		AgentRunsTotal,
 		ReceiptsFailedTotal,
+		ReceiptStatusWritesRefusedTotal,
 		ReceiptsTotal,
 		ReceiptBytesTotal,
 		HoldBundleMissingTotal,

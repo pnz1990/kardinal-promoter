@@ -38,16 +38,20 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
+	"k8s.io/client-go/tools/events"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -185,7 +189,14 @@ type Reconciler struct {
 	// SleepFn waits d between tries of a status write (nil: a timer that
 	// ctx ends early); tests record the waits instead.
 	SleepFn func(ctx context.Context, d time.Duration) error
+	// Recorder emits the Warning Event for a status write refused after a
+	// signature or a PR comment. Nil records none.
+	Recorder events.EventRecorder
 }
+
+// ReasonStatusWriteRefused is the Warning Event's reason when the API server
+// refuses the status write that records a signature or a PR comment.
+const ReasonStatusWriteRefused = "StatusWriteRefused"
 
 func (r *Reconciler) now() time.Time {
 	if r.NowFn != nil {
@@ -341,7 +352,7 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 	// signing again: a second signature would be a second certificate and,
 	// with Rekor, a second public log entry.
 	if err := r.patchKeeping(ctx, base, rc, record); err != nil {
-		return ctrlruntime.Result{}, err
+		return ctrlruntime.Result{}, r.refused(ctx, rc, metricSigning, "Sign", err)
 	}
 	observability.ReceiptsTotal.WithLabelValues(signed.SignedBy.Mode).Inc()
 	observability.ReceiptBytesTotal.Add(float64(len(rc.Spec.Statement) + len(signed.Bundle)))
@@ -500,7 +511,31 @@ func (r *Reconciler) comment(ctx context.Context, base, rc *v1alpha1.PromotionRe
 		return true
 	}
 	commented(rc)
-	return ctrlruntime.Result{}, r.patchKeeping(ctx, base, rc, commented)
+	if err := r.patchKeeping(ctx, base, rc, commented); err != nil {
+		return ctrlruntime.Result{}, r.refused(ctx, rc, metricPRComment, "Comment", err)
+	}
+	return ctrlruntime.Result{}, nil
+}
+
+// refused returns err, the failed status write after an external call (a
+// signature, a PR comment) that patchKeeping could not record. A transient
+// one comes back to be retried with backoff. A refusal (a 403 for a missing
+// RBAC rule on promotionreceipts/status, an admission policy, a 422 for an
+// invalid status) would be refused again: retried with backoff it would
+// sign again every few minutes, each time a new certificate and Rekor entry,
+// for as long as it lasts. So it is a terminal error, tried again at the
+// receipt's next change or a resync, and counted and announced (a Warning
+// Event on the receipt).
+func (r *Reconciler) refused(ctx context.Context, rc *v1alpha1.PromotionReceipt, step, action string, err error) error {
+	if transient(err) {
+		return err
+	}
+	observability.ReceiptStatusWritesRefusedTotal.WithLabelValues(step).Inc()
+	zerolog.Ctx(ctx).Error().Err(err).Str("receipt", rc.Name).Str("step", step).
+		Msg("the status write after the receipt's " + step + " was refused: not retried until the receipt changes or a resync")
+	kubeevent.Emit(r.Recorder, rc, corev1.EventTypeWarning, ReasonStatusWriteRefused, action,
+		fmt.Sprintf("the status write after the %s was refused, so it is not recorded and is retried only when the receipt changes or the controller resyncs: %v", step, err))
+	return reconcile.TerminalError(err)
 }
 
 // keepTries and keepWait bound patchKeeping: up to keepTries status writes
