@@ -238,6 +238,9 @@ the Graph admits after an attempt that finished without a pass or a fail.
   and the `kardinal verify` command.
 - **Audit.** Each verdict that appears in, or leaves, a gate writes a `VerdictRecorded` or
   `VerdictRevoked` AuditEvent naming the verdict's actor.
+- **Evidence pack.** `kardinal audit evidence-pack` exports each Verdict with the AgentRun that
+  wrote it (`agentruns.ndjson`), so an auditor follows a run's Verdict to its agent and sponsor
+  from the pack's records ([Trace a Verdict to its agent](../compliance.md#trace-a-verdict-to-its-agent)).
 - **Metrics.** `kardinal_verdicts_total{check,result,verifier_kind}` and
   `kardinal_agentruns_total{template,phase}`. The share of `inconclusive` verdicts of a check is its
   flakiness ([Metrics](../reference/metrics.md)).

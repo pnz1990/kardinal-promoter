@@ -131,10 +131,23 @@ func packWorld(t *testing.T, events int) []sigs_client.Object {
 				Labels: map[string]string{"kardinal.io/bundle": a.bundle, "kardinal.io/environment": a.env, "kardinal.io/gate-template": "gate"}},
 			Spec: v1alpha1.PolicyGateSpec{Expression: "true"},
 		})
-		objs = append(objs, &v1alpha1.Verdict{
+		v := &v1alpha1.Verdict{
 			ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "v-" + a.bundle + "-" + a.env, CreationTimestamp: at("2026-09-02T00:00:00Z")},
 			Spec:       v1alpha1.VerdictSpec{Pipeline: "app", Bundle: a.bundle, Environment: a.env, Check: "smoke", Result: "pass", By: "ci"},
-		})
+		}
+		if a.ns == "pay" && a.env == "prod" {
+			// An in-cluster verifier's Verdict: bound to its AgentRun
+			// (spec.run), with no actor stamp (#2295).
+			run := "run-" + a.bundle + "-prod"
+			v.Spec.By, v.Spec.Run = "system:serviceaccount:pay:kr-"+run, &v1alpha1.VerdictRun{Name: run, Index: 1, Attempt: 1}
+			objs = append(objs, &v1alpha1.AgentRun{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: run, CreationTimestamp: at("2026-09-02T00:00:00Z")},
+				Spec: v1alpha1.AgentRunSpec{PipelineName: "app", BundleName: a.bundle, Environment: "prod", TargetNamespace: "pay",
+					Check: "smoke", Template: "explore-qa", Run: 1, Attempt: 1},
+				Status: v1alpha1.AgentRunStatus{Phase: "Succeeded", Agent: "verifier", Sponsor: "bob@example.com", ServiceAccount: "kr-" + run},
+			})
+		}
+		objs = append(objs, v)
 		objs = append(objs, &v1alpha1.ChangeRequest{
 			ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Name: "cr-" + a.bundle + "-" + a.env, CreationTimestamp: at("2026-09-02T00:00:00Z"),
 				Labels: map[string]string{"kardinal.io/bundle": a.bundle, "kardinal.io/environment": a.env, "kardinal.io/change-request-template": "prod-change"}},
@@ -158,6 +171,10 @@ func packWorld(t *testing.T, events int) []sigs_client.Object {
 		&v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "holidays", CreationTimestamp: at("2026-01-01T00:00:00Z")},
 			Spec: v1alpha1.ChangeWindowSpec{Type: "blackout"}},
 		&v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "fixer", CreationTimestamp: at("2026-01-01T00:00:00Z")}},
+		// AgentRuns no Verdict of the pack names: another run, and one of the
+		// same name in another namespace.
+		&v1alpha1.AgentRun{ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "run-other", CreationTimestamp: at("2026-09-02T00:00:00Z")}},
+		&v1alpha1.AgentRun{ObjectMeta: metav1.ObjectMeta{Namespace: "ops", Name: "run-app-v2-prod", CreationTimestamp: at("2026-09-02T00:00:00Z")}},
 		&admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter-approvals",
 			Labels: map[string]string{chartNameLabel: "kardinal-promoter"}}},
 		&admissionregistrationv1.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter-approvals",
@@ -274,12 +291,12 @@ func TestEvidencePack(t *testing.T) {
 	b, stderr, err := buildPack(t, objs, pg, packPeriodOpts)
 	require.NoError(t, err)
 	assert.Equal(t, auditExportPage, pg.maxPage, "every kind is read in pages of %d", auditExportPage)
-	assert.Regexp(t, `^sha256:[0-9a-f]{64}  .*pack\.tar\.gz \(17 files, \d+ records\)\n$`, stderr)
+	assert.Regexp(t, `^sha256:[0-9a-f]{64}  .*pack\.tar\.gz \(18 files, \d+ records\)\n$`, stderr)
 	sum := sha256.Sum256(b)
 	assert.Contains(t, stderr, hex.EncodeToString(sum[:]), "the printed digest is the pack's")
 
 	files, order := readPack(t, b)
-	assert.Equal(t, []string{"manifest.json", "SHA256SUMS", "admission.yaml", "agentidentities.ndjson", "approvals.ndjson",
+	assert.Equal(t, []string{"manifest.json", "SHA256SUMS", "admission.yaml", "agentidentities.ndjson", "agentruns.ndjson", "approvals.ndjson",
 		"auditevents.ndjson", "auditevents.ocsf.ndjson", "bundles.ndjson", "changerequest-templates.ndjson", "changerequests.ndjson",
 		"changewindows.ndjson", "controls.json",
 		"pipelines.ndjson", "policygate-templates.ndjson", "policygates.ndjson", "receipts.ndjson", "verdicts.ndjson"}, order)
@@ -317,6 +334,20 @@ func TestEvidencePack(t *testing.T) {
 		"the Approvals of the period's versions, not app-v1's")
 	assert.Equal(t, []string{"ops/gate-app-v9-prod", "pay/gate-app-v2-prod", "pay/gate-app-v2-uat"}, names(packLines(files["policygates.ndjson"])))
 	assert.Equal(t, []string{"ops/v-app-v9-prod", "pay/v-app-v2-prod", "pay/v-app-v2-uat"}, names(packLines(files["verdicts.ndjson"])))
+	// The AgentRuns those Verdicts name: not app-v1's (its version is before
+	// the period), not one no Verdict names, not a namesake in another
+	// namespace. Each names the agent and its sponsor (#2295).
+	runs := packLines(files["agentruns.ndjson"])
+	assert.Equal(t, []string{"pay/run-app-v2-prod"}, names(runs))
+	require.Len(t, runs, 1)
+	assert.Equal(t, "AgentRun", runs[0]["kind"])
+	assert.Equal(t, "verifier", runs[0]["status"].(map[string]interface{})["agent"])
+	assert.Equal(t, "bob@example.com", runs[0]["status"].(map[string]interface{})["sponsor"])
+	for _, v := range packLines(files["verdicts.ndjson"]) {
+		if run, ok := v["spec"].(map[string]interface{})["run"].(map[string]interface{}); ok {
+			assert.Equal(t, "run-app-v2-prod", run["name"], "the Verdict's run is the pack's AgentRun")
+		}
+	}
 	assert.Equal(t, []string{"pay/gate"}, names(packLines(files["policygate-templates.ndjson"])), "templates, not instances or generated gates")
 	crs := packLines(files["changerequests.ndjson"])
 	assert.Equal(t, []string{"ops/cr-app-v9-prod", "pay/cr-app-v2-prod", "pay/cr-app-v2-uat"}, names(crs),
@@ -403,6 +434,7 @@ func TestEvidencePack_Filters(t *testing.T) {
 	assert.Equal(t, []string{"pay/app-v2-prod"}, names(packLines(files["approvals.ndjson"])))
 	assert.Equal(t, []string{"pay/gate-app-v2-prod"}, names(packLines(files["policygates.ndjson"])))
 	assert.Equal(t, []string{"pay/cr-app-v2-prod"}, names(packLines(files["changerequests.ndjson"])), "the environment filter applies")
+	assert.Equal(t, []string{"pay/run-app-v2-prod"}, names(packLines(files["agentruns.ndjson"])), "the AgentRun of the filtered Verdict")
 	assert.Equal(t, []string{"pay/app"}, names(packLines(files["pipelines.ndjson"])))
 	var m packManifest
 	require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
@@ -425,8 +457,18 @@ func TestEvidencePack_Coverage(t *testing.T) {
 		assert.Equal(t, []string{"ValidatingAdmissionPolicy", "Verdict"}, m.Coverage.Forbidden)
 		assert.NotContains(t, files, "verdicts.ndjson")
 		assert.NotContains(t, files, "admission.yaml")
-		assert.Contains(t, stderr, "(15 files,")
+		assert.Contains(t, stderr, "(16 files,")
 		assert.Contains(t, stderr, "warning: you may not read some kinds in every namespace (-A)")
+	})
+	t.Run("AgentRuns forbidden", func(t *testing.T) {
+		b, stderr, err := buildPack(t, packWorld(t, 100), &pager{forbidden: map[string]bool{"AgentRun": true}}, packPeriodOpts)
+		require.NoError(t, err)
+		files, _ := readPack(t, b)
+		var m packManifest
+		require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
+		assert.Equal(t, []string{"AgentRun"}, m.Coverage.Forbidden)
+		assert.NotContains(t, files, "agentruns.ndjson", "left out, not written empty")
+		assert.NotContains(t, stderr, "no longer holds", "a run the exporter may not read is not one the cluster lost")
 	})
 	t.Run("an export that fails part way leaves no pack", func(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(packScheme(t)).WithObjects(packWorld(t, 100)...).
@@ -454,14 +496,15 @@ func TestEvidencePack_Coverage(t *testing.T) {
 		require.NoError(t, clientgoscheme.AddToScheme(older))
 		metav1.AddToGroupVersion(older, v1alpha1.GroupVersion)
 		for gvk, typ := range s.AllKnownTypes() {
-			if gvk.Group == v1alpha1.GroupVersion.Group && !strings.HasPrefix(gvk.Kind, "Verdict") && !strings.HasPrefix(gvk.Kind, "AgentIdentity") {
+			if gvk.Group == v1alpha1.GroupVersion.Group && !strings.HasPrefix(gvk.Kind, "Verdict") && !strings.HasPrefix(gvk.Kind, "AgentIdentity") &&
+				!strings.HasPrefix(gvk.Kind, "AgentRun") {
 				older.AddKnownTypeWithName(gvk, reflectNew(typ))
 			}
 		}
 		var objs []sigs_client.Object
 		for _, o := range packWorld(t, 100) {
 			switch o.(type) {
-			case *v1alpha1.Verdict, *v1alpha1.AgentIdentity:
+			case *v1alpha1.Verdict, *v1alpha1.AgentIdentity, *v1alpha1.AgentRun:
 				continue
 			}
 			objs = append(objs, o)
@@ -474,7 +517,7 @@ func TestEvidencePack_Coverage(t *testing.T) {
 		files, _ := readPack(t, out.Bytes())
 		var m packManifest
 		require.NoError(t, json.Unmarshal(files["manifest.json"], &m))
-		assert.Equal(t, []string{"AgentIdentity", "Verdict"}, m.Coverage.Missing)
+		assert.Equal(t, []string{"AgentIdentity", "AgentRun", "Verdict"}, m.Coverage.Missing)
 	})
 	t.Run("retention gap warns", func(t *testing.T) {
 		opts := packPeriodOpts
@@ -495,6 +538,37 @@ func TestEvidencePack_Coverage(t *testing.T) {
 		assert.Contains(t, err.Error(), "before the oldest AuditEvent the cluster holds (2026-06-20T00:00:00Z)")
 		assert.Contains(t, err.Error(), "Export continuously into your SIEM with kardinal audit export")
 	})
+}
+
+// TestEvidencePack_AgentRuns (#2295): an AgentRun is redacted as every
+// record is, and a Verdict whose AgentRun the cluster no longer holds is
+// counted in a warning that says where its agent is named instead.
+//
+// Covers EVIDENCE-PACK-AGENTRUNS-01.
+func TestEvidencePack_AgentRuns(t *testing.T) {
+	t.Parallel()
+	objs := packWorld(t, 100)
+	for _, o := range objs {
+		if r, ok := o.(*v1alpha1.AgentRun); ok && r.Name == "run-app-v2-prod" && r.Namespace == "pay" {
+			r.Status.Message = "evidence at https://user:hunter2@ci.example.com/run?token=abc"
+		}
+	}
+	gone := &v1alpha1.Verdict{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "pay", Name: "v-app-v2-prod-2", CreationTimestamp: metav1.NewTime(time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC))},
+		Spec: v1alpha1.VerdictSpec{Pipeline: "app", Bundle: "app-v2", Environment: "prod", Check: "smoke", Result: "pass",
+			By: "system:serviceaccount:pay:kr-run-gone", Run: &v1alpha1.VerdictRun{Name: "run-gone", Index: 2, Attempt: 1}},
+	}
+	b, stderr, err := buildPack(t, append(objs, gone), &pager{}, packPeriodOpts)
+	require.NoError(t, err)
+	files, _ := readPack(t, b)
+	runs := packLines(files["agentruns.ndjson"])
+	assert.Equal(t, []string{"pay/run-app-v2-prod"}, names(runs))
+	require.Len(t, runs, 1)
+	msg := runs[0]["status"].(map[string]interface{})["message"].(string)
+	assert.NotContains(t, msg, "hunter2")
+	assert.NotContains(t, msg, "abc")
+	assert.Contains(t, stderr, "warning: 1 Verdicts name an AgentRun the cluster no longer holds: their agent is named by "+
+		"the gate instance's spec.verdicts[].actor, the VerdictRecorded AuditEvent and the version's receipt\n")
 }
 
 // TestParsePackTime: a date, an RFC 3339 time, or a duration before now.
