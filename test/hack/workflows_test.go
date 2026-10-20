@@ -644,3 +644,31 @@ func TestE2EMatrixMinors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, string(out), "MINORS: 1.x is not a Kubernetes minor")
 }
+
+// TestRepoPATsOnlyInTheirEnvironment: the repository's personal access
+// tokens are secrets of the e2e-github environment, which only main and v*
+// tags may use, and every job that names one declares that environment, so
+// a workflow run from any other branch cannot read them.
+func TestRepoPATsOnlyInTheirEnvironment(t *testing.T) {
+	pat := regexp.MustCompile(`secrets\.(DEMO_GITHUB_TOKEN|KARDINAL_DEMO_PAT)\b|secrets\[`)
+	uses := 0
+	for _, rel := range workflowFiles(t) {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
+		require.NoError(t, err)
+		var wf struct {
+			Jobs map[string]map[string]any `json:"jobs"`
+		}
+		require.NoError(t, yaml.Unmarshal(data, &wf), rel)
+		for name, j := range wf.Jobs {
+			out, err := yaml.Marshal(j)
+			require.NoError(t, err)
+			if !pat.Match(out) {
+				continue
+			}
+			uses++
+			env := fmt.Sprint(j["environment"])
+			assert.Contains(t, env, "'e2e-github'", "%s job %s names a repository PAT: it must declare environment e2e-github", rel, name)
+		}
+	}
+	assert.Equal(t, 1, uses, "e2e-live.yml's suite job is the one job that reads a PAT")
+}
