@@ -1,0 +1,5 @@
+---
+section: Development
+---
+
+- **The evidence-tenancy live suite** (#2062) — two teams' evidence kept apart, team A on the main release and team B on a second shard, each signing receipts with its own key and pushing referrers only under its own registry prefix. A team's auditor exports only its own namespace: asked for the other one, or for every namespace (`-A`), it gets a pack with those kinds in `coverage.forbidden` and no record. A shard's controller may not write receipts in the other shard's namespaces, and `verify-receipt --file` refuses a receipt presented as another namespace's or checked with the other shard's key. A gate cannot use another namespace's change request template, and a version of another team's image gets no referrer in that team's repository. A team's ServiceNow credential, webhook token and SCM Secrets work only in its own namespace (#2048), and the egress guard refuses loopback and link-local instance URLs. The fake ticketing API now accepts one user per team and records the user of each request.

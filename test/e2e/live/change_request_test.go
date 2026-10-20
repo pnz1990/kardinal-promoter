@@ -51,8 +51,15 @@ func snowTemplate(t *testing.T, e *framework.Env, ns string, mut ...func(*v1alph
 // waitChangeRequest waits until the instance name in ns satisfies ok.
 func waitChangeRequest(t *testing.T, e *framework.Env, ns, name, what string, ok func(*v1alpha1.ChangeRequest) (bool, string)) *v1alpha1.ChangeRequest {
 	t.Helper()
+	return waitChangeRequestFor(t, e, ns, name, what, gateTimeout, ok)
+}
+
+// waitChangeRequestFor is waitChangeRequest with a timeout.
+func waitChangeRequestFor(t *testing.T, e *framework.Env, ns, name, what string, timeout time.Duration,
+	ok func(*v1alpha1.ChangeRequest) (bool, string)) *v1alpha1.ChangeRequest {
+	t.Helper()
 	var cr v1alpha1.ChangeRequest
-	framework.Eventually(t, gateTimeout, what, func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, timeout, what, func(ctx context.Context) (bool, string) {
 		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &cr); err != nil {
 			return false, err.Error()
 		}

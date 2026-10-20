@@ -896,7 +896,8 @@ the Pipeline's git and SCM hosts.
 NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`,
 `datadog.address`, `cloudWatch.endpoint`, `newRelic.address`, `web.url`),
 Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`,
-`spec.helm.repoURL`) and the API calls of ScmProviders and ClusterScmProviders
+`spec.helm.repoURL`), ChangeRequest providers (`spec.servicenow.instanceURL`,
+`spec.jira.baseURL`) and the API calls of ScmProviders and ClusterScmProviders
 (`spec.apiURL`, `https://` only unless `scm.providersAllowInsecureHTTP` is set)
 send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
@@ -914,11 +915,14 @@ is resolved and every address checked before the connection, which then goes to 
 that was checked, and the host key is verified against the Secret's `known_hosts`. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
-`status.failureMessage`, MetricCheck `status.reason` or Subscription `status.message`.
+`status.failureMessage`, MetricCheck `status.reason`, Subscription `status.message` or the
+ChangeRequest's `Refused` condition (reason `EgressRefused`).
 
 Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and public
 addresses are allowed, because in-cluster Services, Prometheus, registries and Git servers
-are the normal targets.
+are the normal targets. This is by design: the guard does not keep a URL a tenant writes off
+the cluster's own Services or Pod addresses. To narrow those, use the allowlist below or a
+NetworkPolicy.
 
 To allow only the destinations you expect, set the controller's egress allowlist (chart value
 `egress.allowlist`, flag `--egress-allowlist`, environment variable `KARDINAL_EGRESS_ALLOWLIST`):
@@ -932,7 +936,7 @@ egress:
     - 10.20.0.0/16                         # addresses in this range
 ```
 
-With an allowlist, a NotificationHook, MetricCheck or Subscription request is allowed when
+With an allowlist, a NotificationHook, MetricCheck, Subscription or ChangeRequest request is allowed when
 its URL's host name matches a host entry, or when every address the controller connects to
 is inside a CIDR entry (an address entry is a `/32` or `/128`). Anything else is refused
 before connecting, with `destination address is not allowed: not in the controller egress

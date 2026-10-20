@@ -39,9 +39,15 @@ const receiptsRepository = "e2e/receipts"
 // (Secret receipt-key, components/kardinal.sh) to a file and returns it.
 func receiptPublicKey(t *testing.T, e *framework.Env) string {
 	t.Helper()
+	return receiptPublicKeyIn(t, e, framework.ControllerNamespace)
+}
+
+// receiptPublicKeyIn is receiptPublicKey for the release in namespace ns
+// (shard b's: components/shard.sh).
+func receiptPublicKeyIn(t *testing.T, e *framework.Env, ns string) string {
+	t.Helper()
 	var s corev1.Secret
-	require.NoError(t, e.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: framework.ControllerNamespace, Name: "receipt-key"}, &s))
+	require.NoError(t, e.Client.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "receipt-key"}, &s))
 	key, err := receipt.ParsePrivateKey(s.Data["cosign.key"])
 	require.NoError(t, err)
 	pub, err := cryptoutils.MarshalPublicKeyToPEM(key.Public())

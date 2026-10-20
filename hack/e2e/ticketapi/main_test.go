@@ -185,3 +185,72 @@ func TestFakeAgreesWithJiraProvider(t *testing.T) {
 		})
 	}
 }
+
+// TestFakeUsers: a user added through the control port is accepted with its
+// own password only, and each request record names the user it carried
+// (accepted or not; a Jira bearer token's user too), never the password. A
+// change it creates is its own (sys_created_by), so the provider of another
+// user does not adopt it.
+func TestFakeUsers(t *testing.T) {
+	s := &server{user: "u", password: "p"}
+	api := httptest.NewTLSServer(http.HandlerFunc(s.api))
+	t.Cleanup(api.Close)
+	ctl := httptest.NewServer(http.HandlerFunc(s.control))
+	t.Cleanup(ctl.Close)
+	put := func(path, body string) int {
+		r, err := http.NewRequest(http.MethodPut, ctl.URL+path, bytes.NewBufferString(body))
+		require.NoError(t, err)
+		resp, err := http.DefaultClient.Do(r)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	require.Equal(t, http.StatusNoContent, put("/_control/users/team-a", `{"password":"team-a-pass"}`))
+	assert.Equal(t, http.StatusBadRequest, put("/_control/users/team-b", `{}`), "a user needs a password")
+	assert.Equal(t, http.StatusBadRequest, put("/_control/users/a:b", `{"password":"x"}`), "no colon in a basic-auth user")
+
+	sn := &changerequest.ServiceNow{Client: api.Client()}
+	secret := "team-a:team-a-pass"
+	req := changerequest.Request{CorrelationID: "kardinal:team-a/app-v1/prod/uid",
+		Secret: func(context.Context, kardinalv1alpha1.SecretKeyRef) (string, error) { return secret, nil },
+		Spec: &kardinalv1alpha1.ChangeRequestSpec{Provider: "servicenow", ServiceNow: &kardinalv1alpha1.ServiceNowChangeRequest{
+			InstanceURL: api.URL, Template: map[string]string{"short_description": "Promote app v1"}}}}
+	ctx := context.Background()
+	created, err := sn.Create(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "team-a", s.tickets[0].CreatedBy)
+
+	secret = "team-a:p" // the -user password is not team-a's
+	_, err = sn.Get(ctx, req, created.Ticket)
+	assert.ErrorIs(t, err, changerequest.ErrCredentials)
+	secret = "u:team-a-pass" // nor is team-a's the -user one's
+	_, err = sn.Get(ctx, req, created.Ticket)
+	assert.ErrorIs(t, err, changerequest.ErrCredentials)
+	secret = "u:p"
+	_, found, err := sn.Find(ctx, req)
+	require.NoError(t, err)
+	assert.False(t, found, "the -user one does not adopt team-a's change")
+
+	// A Jira personal access token: the user whose password it is.
+	jr, err := http.NewRequest(http.MethodGet, api.URL+"/rest/api/2/myself", nil)
+	require.NoError(t, err)
+	jr.Header.Set("Authorization", "Bearer team-a-pass")
+	resp, err := api.Client().Do(jr)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, err = http.Get(ctl.URL + "/_control/requests")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	var recs []record
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&recs))
+	var got []string
+	for _, rec := range recs {
+		got = append(got, rec.User+" "+rec.Auth)
+		raw, err := json.Marshal(rec)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "team-a-pass", "no password is recorded")
+	}
+	assert.Equal(t, []string{"team-a ok", "team-a wrong user or password", "u wrong user or password", "u ok", "team-a ok"}, got)
+}

@@ -119,6 +119,17 @@ latency: the owning shard's PRStatus poll records the merge.
   queue, so sharding kardinal does not raise the Graph throughput ceiling
   ([ledger G13](design/16-graph-capability-ledger.md#g13-the-graph-controller-cannot-be-sharded)).
   Tune kro with `hack/install-kro.sh` (`config.graphConcurrentReconciles`).
+- **Trust**: shards split the load, not trust. Each shard's controller has the
+  cluster-mode ClusterRole, which grants `get` on Secrets in every namespace (each
+  Pipeline's git Secret is read in the Pipeline's own namespace), so it can read the
+  Secrets of namespaces it does not own, another shard's receipt signing key included. The
+  [admission policies](#identity-admission-policies) keep one shard's controller from
+  writing receipts and other records in another shard's namespaces only while no release
+  lists the other's controller in `admission.controllerUsernames`, and handoffs need it
+  listed. To keep teams' credentials and evidence out of each other's controller, run a
+  release per team in namespace mode (`controller.watchNamespace`), whose controller gets a
+  Role in that namespace only
+  ([One install per team namespace](guides/security.md#stronger-isolation-one-install-per-team-namespace)).
 
 ## RBAC
 

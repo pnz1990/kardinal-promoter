@@ -37,6 +37,9 @@
 //	                                            count API requests whose path?query contains match fail so
 //	                                            ("count":0 clears)
 //	GET  /_control/requests                     the API requests, oldest first (no credentials)
+//	PUT  /_control/users/<user>                 {"password"}: accept this basic-auth user too (a tenant's
+//	                                            own credential, so a test sees whose credential a request
+//	                                            carried); the -user one stays accepted
 //
 // Only the standard library, so it builds without downloading modules.
 package main
@@ -98,7 +101,11 @@ type record struct {
 	Path   string    `json:"path"`
 	Query  string    `json:"query"`
 	// Auth is "ok" or why the credential was refused.
-	Auth   string `json:"auth"`
+	Auth string `json:"auth"`
+	// User is the basic-auth user the request named (a bearer token's
+	// user when one has it as password), accepted or not; never the
+	// password.
+	User   string `json:"user,omitempty"`
 	Status int    `json:"status"`
 	Body   string `json:"body,omitempty"`
 }
@@ -133,11 +140,14 @@ type issue struct {
 
 type server struct {
 	user, password string
-	mu             sync.Mutex
-	tickets        []*ticket
-	issues         []*issue
-	records        []record
-	fail           failure
+	// users are the other accepted basic-auth users and their passwords
+	// (PUT /_control/users/<user>).
+	users   map[string]string
+	mu      sync.Mutex
+	tickets []*ticket
+	issues  []*issue
+	records []record
+	fail    failure
 }
 
 func main() {
@@ -199,6 +209,20 @@ func (s *server) control(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case path == "_control/requests":
 		writeJSON(w, http.StatusOK, s.records)
+	case strings.HasPrefix(path, "_control/users/") && r.Method == http.MethodPut:
+		name := strings.TrimPrefix(path, "_control/users/")
+		var in struct {
+			Password string `json:"password"`
+		}
+		if name == "" || strings.Contains(name, ":") || json.Unmarshal(body, &in) != nil || in.Password == "" {
+			http.Error(w, `PUT /_control/users/<user> {"password":"..."}`, http.StatusBadRequest)
+			return
+		}
+		if s.users == nil {
+			s.users = map[string]string{}
+		}
+		s.users[name] = in.Password
+		w.WriteHeader(http.StatusNoContent)
 	case path == "_control/fail" && r.Method == http.MethodPut:
 		var f failure
 		if json.Unmarshal(body, &f) != nil {
@@ -319,17 +343,40 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 	s.records = append(s.records, rec)
 }
 
+// accepts reports whether user and pass are the -user credential or one
+// PUT /_control/users added; the caller holds s.mu.
+func (s *server) accepts(user, pass string) bool {
+	if user == s.user {
+		return pass == s.password
+	}
+	want, ok := s.users[user]
+	return ok && pass == want
+}
+
+// tokenUser is the user whose password is token (a Jira personal access
+// token is the password, sent alone): the -user one unless an added user
+// has it. The caller holds s.mu.
+func (s *server) tokenUser(token string) string {
+	for u, p := range s.users {
+		if p == token {
+			return u
+		}
+	}
+	return s.user
+}
+
 // serve answers one API request and returns its status; the caller holds s.mu.
 func (s *server) serve(w http.ResponseWriter, r *http.Request, body []byte, rec *record) int {
 	user, pass, ok := r.BasicAuth()
 	if bearer, isBearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); isBearer &&
 		strings.HasPrefix(r.URL.Path, "/rest/api/") {
-		user, pass, ok = s.user, bearer, true // a Data Center personal access token
+		user, pass, ok = s.tokenUser(bearer), bearer, true // a Data Center personal access token
 	}
+	rec.User = user
 	switch {
 	case !ok:
 		rec.Auth = "no basic credentials"
-	case user != s.user || pass != s.password:
+	case !s.accepts(user, pass):
 		rec.Auth = "wrong user or password"
 	default:
 		rec.Auth = "ok"
