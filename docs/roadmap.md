@@ -59,7 +59,8 @@ v0.13.0 is not released yet; v0.12.2 is the latest release.
   [Signed promotion receipts](receipts.md).
 - **Attestations.** Verified SLSA provenance (with the build level you grant each builder),
   vulnerability scans with OpenVEX, and any in-toto predicate, read by gates as
-  `attestations.*`: [Attestations](image-verification.md#attestations).
+  `attestations.*`, with a maximum age so a gate can refuse a stale scan:
+  [Attestations](image-verification.md#attestations).
 - **A compliance mapping and an evidence pack.** Which kardinal record evidences which control
   of SOC 2, ISO/IEC 27001, NIST SP 800-53, DORA, the EU AI Act and ISO/IEC 42001, and
   `kardinal audit evidence-pack`, a period's records in one archive for an auditor:
@@ -77,7 +78,6 @@ including those to rollbacks, gates and the UI.
 - Keyless (gitsign) commit signatures, mapped to the agent that signed. Commit signatures the
   SCM verified (`commits.requireSigned`) already ship:
   [Signed commits](image-verification.md#signed-commits).
-- A maximum age for attestations, so a gate can refuse a stale scan.
 
 ### v0.14: adaptive
 

@@ -84,7 +84,11 @@ What v0.12.0 stored keeps working. Versions in flight keep their Graphs, Promoti
 PRStatuses and gate instances: at its first start the new controller removes the health ref nodes
 from those Graphs in place, and it rebuilds a version's gates only when one of its gates changes.
 The new kinds, PromotionReceipt and ChangeRequest, are only installed: receipts stay off until
-you set `receipts.enabled`, and no change request is opened until a gate reads one.
+you set `receipts.enabled`, and no change request is opened until a gate reads one. EKS health
+credentials (`health.kubeconfigSecretRef.eks`, a new Pipeline field) stay off too: no Pipeline
+may name an IAM role until you allow it in `health.eks.allowedRoleARNs` or
+`health.eks.allowedRoleARNsByNamespace`, which are empty by default
+([Remote clusters on EKS](health-adapters.md#remote-clusters-on-eks)).
 
 v0.13.0 targets the same kro as v0.12.0 (`v0.10.0-rc.0`), so kro is not upgraded.
 
