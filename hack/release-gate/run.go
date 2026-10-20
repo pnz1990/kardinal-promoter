@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -341,6 +342,10 @@ func (g *Gate) Run(ctx context.Context, steps []Step) ([]Result, error) {
 		case <-time.After(g.Wait):
 		}
 	}
+	// A step that waited for slots to the end gives its place back.
+	if d, ok := g.Host.(interface{ DropSlotTicket() }); ok {
+		d.DropSlotTicket()
+	}
 	return results, ctx.Err()
 }
 
@@ -464,6 +469,11 @@ type machine struct {
 	slot      string         // the slot directory of the lock it holds
 	lockLoad  func() float64 // nil: /proc/loadavg (tests set it)
 	log       func(format string, args ...any)
+	// The cluster slots' queue ticket while a step waits for slots, and its
+	// record (slotQueue).
+	slotMu     sync.Mutex
+	slotTicket string
+	slotRecord string
 }
 
 func (m *machine) Ready() (bool, string) {
@@ -480,22 +490,71 @@ func (m *machine) Ready() (bool, string) {
 	return true, ""
 }
 
+// slotQueue is the cluster slots' queue, DIR/.queue, shared with
+// hack/e2e/local-live.sh (#2242's ticket protocol): a waiter's ticket
+// <class>-<ns>-<pid>, release gates' (-priority release) before everyone
+// else's, then the oldest; only the first takes slots, so a waiter that
+// polls often never overtakes one that polls seldom. A heavy local-live run
+// draining the host is the head while it drains.
+func slotQueue(dir string) string { return filepath.Join(dir, ".queue") }
+
 // Slots makes n of slotsDir/1..slotMax (mkdir is atomic) and writes the
-// owner into each; with fewer than n free, or slotMax held in all, it takes
-// none.
+// owner into each, when this gate's ticket is first in the slots' queue;
+// with fewer than n free, or slotMax held in all, it takes none and keeps
+// its place.
 func (m *machine) Slots(n int) (func(), bool, string) {
 	if m.slotsDir == "" {
 		return func() {}, true, ""
 	}
+	m.slotMu.Lock()
+	defer m.slotMu.Unlock()
+	proc := m.proc
+	if proc == nil {
+		proc = hostProc{}
+	}
+	q := slotQueue(m.slotsDir)
+	if m.slotTicket == "" {
+		class := m.lockClass
+		if class == "" {
+			class = classNormal
+		}
+		m.slotTicket = newTicketName(class)
+		m.slotRecord = m.owner + " " + selfRecord(proc) + " priority=" + priorityOf(class) + " beat=1"
+	}
+	if _, err := os.Stat(filepath.Join(q, m.slotTicket)); err != nil {
+		// Gone (removed as stale while the gate did not ask): queued again
+		// in its place.
+		if err := writeTicket(q, m.slotTicket, m.slotRecord); err != nil {
+			return nil, false, fmt.Sprintf("queue for a cluster slot: %v", err)
+		}
+	} else {
+		now := time.Now() // the heartbeat
+		_ = os.Chtimes(filepath.Join(q, m.slotTicket), now, now)
+	}
+	logf := m.log
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	reapTickets(proc, q, logf, nil, m.slotTicket)
 	// A heavy local-live suite draining the host (DIR/.drain, written by
 	// hack/e2e/local-live.sh) keeps every other run's cluster off it, the
-	// gate's too, unless the gate wrote it.
+	// gate's too, unless the gate wrote it. A marker that is there but
+	// cannot be read is a drain (#2242 QA: the safe answer).
 	if drain, err := os.ReadFile(filepath.Join(m.slotsDir, ".drain")); err == nil && drainLive(string(drain), "") {
 		return nil, false, "a heavy suite is draining the host: " + strings.TrimSpace(string(drain))
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, false, fmt.Sprintf("a drain marker that cannot be read: %v", err)
+	}
+	if first := firstTicket(q); first != m.slotTicket {
+		return nil, false, fmt.Sprintf("cluster slot ticket %s waits behind %s", m.slotTicket, first)
 	}
 	// Every held slot directory counts, one above slotMax too (a run with a
 	// larger SLOT_MAX took it): the host runs slotMax clusters at most.
-	if held := heldSlots(m.slotsDir); held+n > m.slotMax {
+	held, err := heldSlots(m.slotsDir)
+	if err != nil {
+		return nil, false, fmt.Sprintf("cannot count the cluster slots in %s: %v", m.slotsDir, err)
+	}
+	if held+n > m.slotMax {
 		return nil, false, fmt.Sprintf("%d cluster slots are in use in %s, and the host has %d", held, m.slotsDir, m.slotMax)
 	}
 	var taken []string
@@ -521,19 +580,35 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 		release()
 		return nil, false, fmt.Sprintf("fewer than %d of the host's %d cluster slots in %s are free", n, m.slotMax, m.slotsDir)
 	}
+	_ = os.Remove(filepath.Join(q, m.slotTicket))
+	m.slotTicket = ""
 	return release, true, ""
 }
 
+// DropSlotTicket gives this gate's place in the slots' queue back (the run
+// is over, or interrupted, with a step still waiting).
+func (m *machine) DropSlotTicket() {
+	m.slotMu.Lock()
+	defer m.slotMu.Unlock()
+	if m.slotTicket != "" && m.slotsDir != "" {
+		_ = os.Remove(filepath.Join(slotQueue(m.slotsDir), m.slotTicket))
+	}
+	m.slotTicket = ""
+}
+
 // heldSlots counts dir's numbered slot directories.
-func heldSlots(dir string) int {
-	entries, _ := os.ReadDir(dir)
+func heldSlots(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
 	n := 0
 	for _, e := range entries {
 		if _, err := strconv.Atoi(e.Name()); err == nil && e.IsDir() {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 var (

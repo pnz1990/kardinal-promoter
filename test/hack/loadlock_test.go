@@ -45,6 +45,7 @@ func exitCode(err error) int {
 // if it is still its own (the 07:19 incident: a lock another run held was
 // removed by a command chain whose mkdir had failed).
 func TestLoadLock(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	t.Run("runs the command holding the lock, then removes it", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		out, err := loadlock(t, lock, "bash", "-c", `cat "$0/owner"; exit 3`, lock).CombinedOutput()
@@ -118,6 +119,13 @@ func tickets(lock string) int {
 // starts; it then frees the lock and returns the order they ran in.
 func served(t *testing.T, lock string, waiters ...[]string) []string {
 	t.Helper()
+	return servedWith(t, lock, nil, waiters...)
+}
+
+// servedWith is served, each waiter with env too.
+func servedWith(t *testing.T, lock string, env []string, waiters ...[]string) []string {
+	t.Helper()
+	token := releaseToken(t, lock)
 	require.NoError(t, os.Mkdir(lock, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(lock, "owner"), []byte("other\n"), 0o644))
 	ran := filepath.Join(t.TempDir(), "ran")
@@ -126,7 +134,8 @@ func served(t *testing.T, lock string, waiters ...[]string) []string {
 		args := append(append([]string{filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", lock, "-o", w[0], "-r", "0.05"},
 			w[1:]...), "--", "bash", "-c", `echo "$0" >> "$1"; sleep 0.1`, w[0], ran)
 		cmd := exec.Command("bash", args...)
-		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time
+		cmd.Env = append(append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99", // a busy host: one holder at a time
+			"RELEASE_GATE_PRIORITY_TOKEN="+token), env...)
 		require.NoError(t, cmd.Start())
 		cmds = append(cmds, cmd)
 		require.Eventually(t, func() bool { return tickets(lock) == i+1 }, 10*time.Second, 10*time.Millisecond, "%s queued", w[0])
@@ -142,11 +151,21 @@ func served(t *testing.T, lock string, waiters ...[]string) []string {
 	return strings.Fields(string(out))
 }
 
+// releaseToken writes the coordinator's release token next to lock
+// (DIR/.release-token, mode 600) and returns it.
+func releaseToken(t *testing.T, lock string) string {
+	t.Helper()
+	token := fmt.Sprintf("r%d", time.Now().UnixNano())
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(lock), ".release-token"), []byte(token+"\n"), 0o600))
+	return token
+}
+
 // TestLoadLock_Fair: waiters are served in the order they queued, a release
 // gate's ticket (-p release) before the normal ones queued ahead of it, and
 // a lock or ticket of a process that is gone is removed (the lock was a
 // mutex with pollers: the release gate lost the race to later pollers).
 func TestLoadLock_Fair(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	t.Run("first come, first served", func(t *testing.T) {
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		assert.Equal(t, []string{"w1", "w2", "w3"}, served(t, lock, []string{"w1"}, []string{"w2"}, []string{"w3"}))
@@ -171,6 +190,41 @@ func TestLoadLock_Fair(t *testing.T) {
 		assert.Contains(t, string(out), "removed "+lock+" of a holder that is gone")
 		assert.Contains(t, string(out), "test pid:", "it took the lock")
 		assert.NoFileExists(t, ghost)
+	})
+	t.Run("a release ticket that comes between a waiter's head check and its turn goes first (#2282 QA)", func(t *testing.T) {
+		// The gap widened to 0.3s: the turn checks the head again under the
+		// flock, or the stale head takes the lock.
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		assert.Equal(t, []string{"gate", "w1", "w2"},
+			servedWith(t, lock, []string{"LOADLOCK_TEST_AFTER_HEAD=0.3"}, []string{"w1"}, []string{"w2"}, []string{"gate", "-p", "release"}))
+	})
+	t.Run("-p release needs the coordinator's token (#2282 QA)", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		run := func(env ...string) (string, error) {
+			cmd := loadlock(t, lock, "true")
+			cmd.Args = append(cmd.Args[:2], append([]string{"-p", "release"}, cmd.Args[2:]...)...)
+			cmd.Env = append(cmd.Env, env...)
+			out, err := cmd.CombinedOutput()
+			return string(out), err
+		}
+		out, err := run("RELEASE_GATE_PRIORITY_TOKEN=")
+		assert.Equal(t, 2, exitCode(err), "no token file: %s", out)
+		assert.Contains(t, out, "-p release needs RELEASE_GATE_PRIORITY_TOKEN matching "+filepath.Join(filepath.Dir(lock), ".release-token"))
+		token := releaseToken(t, lock)
+		for _, env := range []string{"RELEASE_GATE_PRIORITY_TOKEN=", "RELEASE_GATE_PRIORITY_TOKEN=a-guess"} {
+			out, err := run(env)
+			assert.Equal(t, 2, exitCode(err), "%s: %s", env, out)
+		}
+		require.NoError(t, os.Chmod(filepath.Join(filepath.Dir(lock), ".release-token"), 0o644))
+		out, err = run("RELEASE_GATE_PRIORITY_TOKEN=" + token)
+		assert.Equal(t, 2, exitCode(err), "a token file others can read: %s", out)
+		require.NoError(t, os.Chmod(filepath.Join(filepath.Dir(lock), ".release-token"), 0o600))
+		cmd := loadlock(t, lock, "sh", "-c", `cat "$0".d/*/owner`, lock)
+		cmd.Args = append(cmd.Args[:2], append([]string{"-p", "release"}, cmd.Args[2:]...)...)
+		cmd.Env = append(cmd.Env, "RELEASE_GATE_PRIORITY_TOKEN="+token)
+		got, err := cmd.CombinedOutput()
+		require.NoError(t, err, "with the token: %s", got)
+		assert.Contains(t, string(got), "priority=release", "the record says its class")
 	})
 	t.Run("an unknown priority is refused", func(t *testing.T) {
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "-l", filepath.Join(t.TempDir(), "LOADLOCK"),
@@ -782,6 +836,7 @@ if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; e
 // counting lock alone, on an idle host too: two -x runs (two scale suites)
 // never overlap, and no other run holds it beside one.
 func TestLoadLock_Exclusive(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	dir := t.TempDir()
 	lock := filepath.Join(dir, "LOADLOCK")
@@ -822,6 +877,7 @@ rmdir "$me"
 // a cat that fails on /proc, as a $(cat ...) whose fork failed does) never
 // makes a live holder look gone and its slot reclaimed.
 func TestLoadLock_ForkFailureIsNoDeath(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	lock := filepath.Join(t.TempDir(), "LOADLOCK")
 	bin := t.TempDir()
 	realCat, err := exec.LookPath("cat")
@@ -863,6 +919,7 @@ exec `+realCat+` "$@"
 // exclusive holder is not joined, a load it cannot read is a busy host's;
 // and it still gets the lock once the holder is done.
 func TestLoadLock_FailingToolsAreNoUnsafeAnswer(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	// All six fail; and cat and grep alone, so the waiter still finds its
 	// turn (find) and reaches the decisions (the script before #2242 QA's
 	// fix reclaimed the long-held slot and joined the exclusive holder).
@@ -944,6 +1001,7 @@ func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
 // (LOADLOCK_TEST_PROC: pid 424242's directory with no stat); one whose
 // directory is gone is not.
 func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	proc := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(proc, "424242"), 0o755))
 	if _, err := os.Stat("/proc/424243"); err == nil {
@@ -989,6 +1047,7 @@ func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
 // command without the flock: while flock fails, a waiter takes no slot and
 // runs nothing; once it works, the waiter gets the lock.
 func TestLoadLock_FlockThatFails(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
 	realFlock, err := exec.LookPath("flock")
 	require.NoError(t, err)
 	bin, dir := t.TempDir(), t.TempDir()
@@ -1018,6 +1077,238 @@ exec `+realFlock+` "$@"
 		_ = cmd.Process.Kill()
 		<-done
 		t.Fatalf("never got the lock once flock worked: %s", out.String())
+	}
+	assert.FileExists(t, ran)
+}
+
+// TestLoadLock_OwnerReadAgainBeforeTheRemoval (#2242 QA): an older client's
+// lock judged dead is removed only while its owner is still the dead one
+// (LOADLOCK_TEST_BEFORE_RM pauses between the judgement and the removal, and
+// the test puts another older client's LOCK there meanwhile).
+func TestLoadLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	dir := t.TempDir()
+	lock, pause := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "pause")
+	require.NoError(t, os.Mkdir(lock, 0o755))
+	owner := filepath.Join(lock, "owner")
+	require.NoError(t, os.WriteFile(owner, []byte(fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
+	cmd := loadlock(t, lock, "true")
+	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_RM="+pause)
+	out := &syncBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	require.Eventually(t, func() bool { _, err := os.Stat(pause + ".judged"); return err == nil }, 10*time.Second, 20*time.Millisecond, "judged dead")
+	// Another older client's LOCK, live (this test process), meanwhile.
+	live := liveRecord(t, "another older") + "\n"
+	require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
+	require.NoError(t, os.WriteFile(pause+".go", nil, 0o644))
+	time.Sleep(time.Second)
+	assert.Equal(t, live, readFile(t, owner), "the new LOCK is left alone: %s", out.String())
+	assert.NotContains(t, out.String(), "removed "+lock)
+}
+
+// TestLoadLock_TicketClockWithoutEpochRealtime (#2242 QA): without
+// EPOCHREALTIME (an older bash) the ticket's time is date's, and a date that
+// fails ends the run: it never writes a 0 that jumps the queue.
+func TestLoadLock_TicketClockWithoutEpochRealtime(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	out, err := func() ([]byte, error) {
+		cmd := loadlock(t, lock, "true")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_NO_EPOCHREALTIME=1")
+		return cmd.CombinedOutput()
+	}()
+	require.NoError(t, err, "date's time: %s", out)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "date"), []byte("#!/bin/sh\necho 'bash: fork: Resource temporarily unavailable' >&2\nexit 1\n"), 0o755))
+	ran := filepath.Join(t.TempDir(), "ran")
+	cmd := loadlock(t, lock, "touch", ran)
+	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_NO_EPOCHREALTIME=1", "PATH="+bin+":"+os.Getenv("PATH"))
+	out, err = cmd.CombinedOutput()
+	assert.Equal(t, 1, exitCode(err), "%s", out)
+	assert.Contains(t, string(out), "cannot read the time for a ticket")
+	assert.NoFileExists(t, ran)
+	tickets, _ := filepath.Glob(filepath.Join(lock+".queue", "[0-9]-*"))
+	assert.Empty(t, tickets, "no ticket, a 0 one least of all")
+}
+
+// TestLoadLock_QueueNeverWedges (#2282 QA): a ticket that cannot be read is
+// judged by its name's pid; a ticket untouched for STALE (a waiter stopped,
+// hung, or a stray one naming a live pid) is removed whatever its pid, and a
+// waiter that resumes queues again in its place; a normal ticket that has
+// waited 2h sorts as a release one.
+func TestLoadLock_QueueNeverWedges(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	ticketAt := func(t *testing.T, lock string, class int, at time.Time, pid int, text string, mode os.FileMode) string {
+		t.Helper()
+		q := lock + ".queue"
+		require.NoError(t, os.MkdirAll(q, 0o755))
+		p := filepath.Join(q, fmt.Sprintf("%d-%019d-%d", class, at.UnixNano(), pid))
+		require.NoError(t, os.WriteFile(p, []byte(text), 0o644))
+		require.NoError(t, os.Chmod(p, mode))
+		return p
+	}
+	// waited is a started run: done gets its Wait's result, once.
+	type waited struct {
+		cmd  *exec.Cmd
+		out  *syncBuf
+		done chan error
+	}
+	launch := func(t *testing.T, cmd *exec.Cmd) *waited {
+		t.Helper()
+		w := &waited{cmd: cmd, out: &syncBuf{}, done: make(chan error, 1)}
+		cmd.Stdout, cmd.Stderr = w.out, w.out
+		require.NoError(t, cmd.Start())
+		go func() { w.done <- cmd.Wait() }()
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return w
+	}
+	runs := func(t *testing.T, w *waited, within time.Duration) bool {
+		t.Helper()
+		select {
+		case err := <-w.done:
+			require.NoError(t, err, "%s", w.out.String())
+			return true
+		case <-time.After(within):
+			return false
+		}
+	}
+	start := func(t *testing.T, lock string, env ...string) *waited {
+		t.Helper()
+		cmd := loadlock(t, lock, "true")
+		cmd.Env = append(cmd.Env, env...)
+		return launch(t, cmd)
+	}
+	t.Run("an unreadable ticket of a waiter that is gone is removed", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		p := ticketAt(t, lock, 1, time.Unix(0, 1), gone.Process.Pid, "x\n", 0o000)
+		w := start(t, lock)
+		require.True(t, runs(t, w, 10*time.Second), "wedged behind it: %s", w.out.String())
+		assert.NoFileExists(t, p)
+		assert.Contains(t, w.out.String(), "of a waiter that is gone")
+	})
+	t.Run("an unreadable ticket of a live pid stays until it is stale", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		// Queued now: a pid that started before its ticket is the ticket's.
+		p := ticketAt(t, lock, 1, time.Now().Add(-time.Second), os.Getpid(), "x\n", 0o000)
+		w := start(t, lock, "LOADLOCK_TEST_STALE=600")
+		require.False(t, runs(t, w, time.Second), "it ran past a live head")
+		old := time.Now().Add(-time.Hour)
+		require.NoError(t, os.Chtimes(p, old, old))
+		require.True(t, runs(t, w, 10*time.Second), "wedged behind a stale ticket: %s", w.out.String())
+		assert.Contains(t, w.out.String(), "untouched for")
+	})
+	t.Run("a stray ticket naming pid 1 is removed once stale", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		// Queued a minute ago: pid 1 started before it, so only its age says it is stale.
+		p := ticketAt(t, lock, 0, time.Now().Add(-time.Minute), 1, "stray\n", 0o644)
+		old := time.Now().Add(-time.Hour)
+		require.NoError(t, os.Chtimes(p, old, old))
+		w := start(t, lock, "LOADLOCK_TEST_STALE=600")
+		require.True(t, runs(t, w, 10*time.Second), "wedged behind pid 1's ticket: %s", w.out.String())
+	})
+	t.Run("a stopped waiter's ticket is removed, and it queues again in its place when it resumes", func(t *testing.T) {
+		dir := t.TempDir()
+		lock, stop, order := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "stop"), filepath.Join(dir, "order")
+		t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+		holder := loadlock(t, lock, "sh", "-c", `while [ ! -e "$0" ]; do sleep 0.05; done`, stop)
+		require.NoError(t, holder.Start())
+		require.Eventually(t, func() bool {
+			_, err := os.Stat(filepath.Join(lock, "owner"))
+			return err == nil && tickets(lock) == 0 // the holder's ticket gone too
+		}, 10*time.Second, 20*time.Millisecond)
+		waiter := func(name string) *waited {
+			cmd := loadlock(t, lock, "sh", "-c", `echo "$1" >>"$0"`, order, name)
+			cmd.Env = append(cmd.Env, "LOADLOCK_TEST_STALE=1")
+			return launch(t, cmd)
+		}
+		a := waiter("a")
+		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond)
+		require.NoError(t, a.cmd.Process.Signal(syscall.SIGSTOP))
+		b := waiter("b")
+		if !assert.Eventually(t, func() bool { return strings.Contains(b.out.String(), "untouched for") }, 15*time.Second, 50*time.Millisecond, "b removes stopped a's ticket") {
+			t.Fatalf("a: %s\nb: %s", a.out.String(), b.out.String())
+		}
+		require.NoError(t, a.cmd.Process.Signal(syscall.SIGCONT))
+		if !assert.Eventually(t, func() bool { return strings.Contains(a.out.String(), "queued it again in its place") }, 15*time.Second, 50*time.Millisecond, "a queues again") {
+			t.Fatalf("a: %s\nb: %s", a.out.String(), b.out.String())
+		}
+		require.NoError(t, os.WriteFile(stop, nil, 0o644))
+		require.NoError(t, holder.Wait())
+		require.True(t, runs(t, a, 20*time.Second), "a: %s", a.out.String())
+		require.True(t, runs(t, b, 20*time.Second), "b: %s", b.out.String())
+		assert.Equal(t, "a\nb\n", readFile(t, order), "a kept its place")
+	})
+	t.Run("a waiting waiter touches its ticket on every poll: never stale", func(t *testing.T) {
+		dir := t.TempDir()
+		lock, stop := filepath.Join(dir, "LOADLOCK"), filepath.Join(dir, "stop")
+		t.Cleanup(func() { _ = os.WriteFile(stop, nil, 0o644) })
+		holder := loadlock(t, lock, "sh", "-c", `while [ ! -e "$0" ]; do sleep 0.05; done`, stop)
+		require.NoError(t, holder.Start())
+		require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(lock, "owner")); return err == nil && tickets(lock) == 0 }, 10*time.Second, 20*time.Millisecond)
+		w1 := start(t, lock, "LOADLOCK_TEST_STALE=1")
+		require.Eventually(t, func() bool { return tickets(lock) == 1 }, 10*time.Second, 10*time.Millisecond)
+		w2 := start(t, lock, "LOADLOCK_TEST_STALE=1")
+		time.Sleep(3 * time.Second) // three times STALE
+		assert.NotContains(t, w1.out.String()+w2.out.String(), "untouched for", "a live waiter's ticket was taken as stale")
+		assert.Equal(t, 2, tickets(lock))
+		require.NoError(t, os.WriteFile(stop, nil, 0o644))
+		require.NoError(t, holder.Wait())
+		require.True(t, runs(t, w1, 20*time.Second))
+		require.True(t, runs(t, w2, 20*time.Second))
+	})
+	t.Run("a normal ticket that has waited 2h sorts before a release one", func(t *testing.T) {
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		live := liveRecord(t, "w") + " beat=1\n"
+		aged := ticketAt(t, lock, 1, time.Now().Add(-3*time.Hour), os.Getpid(), live, 0o644)
+		ticketAt(t, lock, 0, time.Now().Add(-time.Minute), os.Getpid(), live, 0o644)
+		w := start(t, lock)
+		require.Eventually(t, func() bool { return strings.Contains(w.out.String(), "waits behind "+filepath.Base(aged)) }, 10*time.Second, 20*time.Millisecond)
+	})
+}
+
+// TestLoadLock_FlockWaitCap (#2282 QA): a reclaim flock held by another (a
+// waiter stopped or hung while it held it) is waited for FLOCK_WAIT at most,
+// with the cause, and tried again; nothing runs without it; once it is let
+// go, the waiter gets the lock.
+func TestLoadLock_FlockWaitCap(t *testing.T) {
+	t.Parallel() // sleeps and waits mostly: beside the package's others (CI's 120s)
+	lock := filepath.Join(t.TempDir(), "LOADLOCK")
+	require.NoError(t, os.MkdirAll(lock+".queue", 0o755))
+	// flock's sleep inherits the locked fd: the group is ended, not flock alone.
+	held := exec.Command("flock", filepath.Join(lock+".queue", ".reclaim"), "sleep", "60")
+	held.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, held.Start())
+	letGo := func() { _ = syscall.Kill(-held.Process.Pid, syscall.SIGKILL); _ = held.Wait() }
+	t.Cleanup(letGo)
+	time.Sleep(200 * time.Millisecond) // it holds the flock
+	ran := filepath.Join(t.TempDir(), "ran")
+	cmd := loadlock(t, lock, "touch", ran)
+	cmd.Env = append(cmd.Env, "LOADLOCK_TEST_FLOCK_WAIT=1")
+	out := &syncBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	require.NoError(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(), "no flock on "+filepath.Join(lock+".queue", ".reclaim")+" in 1s: a waiter stopped (Ctrl-Z) or hung")
+	}, 10*time.Second, 20*time.Millisecond, "the cap's message, not a silent hang")
+	assert.NoFileExists(t, ran, "nothing runs without the flock")
+	letGo()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "%s", out.String())
+	case <-time.After(20 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("never got the lock once the flock was let go: %s", out.String())
 	}
 	assert.FileExists(t, ran)
 }

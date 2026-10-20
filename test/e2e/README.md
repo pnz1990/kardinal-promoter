@@ -43,6 +43,7 @@ with `bash -n` and `zsh -n`.
 ```bash
 hack/e2e/local-live.sh core 1.37            # one suite as its CI job runs it
 hack/e2e/local-live.sh -pr 2137 -shard 1/3 core
+hack/e2e/local-live.sh -pr 2200 -run '^TestFlux_VerifiesAppliedCommit$' -count 5 flux  # a targeted run
 KEEP=1 hack/e2e/local-live.sh gitea         # keep the cluster for a re-run
 hack/e2e/local-live.sh -reuse kardinal-e2e-ll-engineer-4-gitea-37 gitea  # from any worktree
 ```
@@ -51,11 +52,31 @@ hack/e2e/local-live.sh -reuse kardinal-e2e-ll-engineer-4-gitea-37 gitea  # from 
 `hack/e2e/matrix.txt` the way its `e2e-live.yml` job does: the pinned kind,
 kubectl and helm, the minor's pinned node image (default the suite's first
 minor in `matrix.txt`), `up.sh`, then `run.sh`. The controller is built on the
-host (`KARDINAL_E2E_BUILD=host`) unless you set another build. It holds a
-cluster slot (`$RELEASE_GATE_SLOTS/1..4`, as `hack/release-gate -slots` takes
-them) for the whole run; a slot whose owner is gone (its pid, boot id or start
-time no longer match) is reclaimed, a kept cluster's only once the cluster is
-gone. It creates its cluster only while the host's one-minute load is under 48
+host (`KARDINAL_E2E_BUILD=host`) unless you set another build. `-run REGEX`
+runs only the suite's tests matching `go test -run REGEX`, and `-count N` sets
+`go test -count`: a targeted run (a single test's proof, a flake check) takes
+the same lock and slot as the whole suite, and its summary and comment say
+"targeted", never a proof of the whole suite. It holds a cluster slot
+(`$RELEASE_GATE_SLOTS/1..SLOT_MAX`, as `hack/release-gate -slots` takes them)
+for the whole run. `SLOT_MAX` is `$SLOT_MAX`, else `SLOT_MAX=N` in the host's
+`host.env` next to the slots directory, else 2, and 1 to 4 or the run refuses.
+Slots are first come, first served: waiters queue in
+`$RELEASE_GATE_SLOTS/.queue`, release runs first (`-p release`, as
+`hack/release-gate -priority release`; it also queues a heavy suite's lock
+ticket first), and only the first takes a slot, however often the others poll. `-p release`
+needs `RELEASE_GATE_PRIORITY_TOKEN` matching the coordinator's token file
+(`$RELEASE_GATE_SLOTS/../.release-token`, mode 600), and a normal ticket that
+has waited 2 hours goes first anyway. On a host where every agent runs as one
+user the token says intent, not authority: a ticket's `priority=` makes a
+misuse visible. Waiters touch their tickets on every
+poll: one untouched for 10 minutes (a waiter stopped with Ctrl-Z, hung, or a
+stray file) is removed, and its waiter queues again in its place when it
+resumes. A run waits for the slots' flock 60 seconds at most, and says so (a
+run stopped or hung while it held it), and Docker is asked with a 10-second
+timeout under it. A steady stream of heavy suites keeps light runs mostly
+out by design: each drains the host while it waits and runs. A slot whose owner is gone (its pid, boot
+id or start time no longer match) is reclaimed, a kept cluster's only once the
+cluster is gone. It creates its cluster only while the host's one-minute load is under 48
 and `fs.inotify.max_user_instances` has room for another kind node, and at
 least 60s after the last cluster start on the host: the check and the start are
 one step under a flock, so two runs never pass on one reading (it waits,

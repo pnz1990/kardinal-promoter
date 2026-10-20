@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
+# hack/e2e/local-live.sh [-pr N] [-shard i/n] [-run REGEX] [-count N] [-p release|normal] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]
 #
 # Runs one live e2e suite on this host as its CI job does (e2e-live.yml:
 # hack/e2e/tools.sh's pinned kind, kubectl and helm, a kind cluster on
@@ -10,7 +10,10 @@
 #
 # A shared host: every run takes a cluster slot (DIR/1..SLOT_MAX, taken with
 # mkdir, as hack/release-gate -slots does; DIR from $RELEASE_GATE_SLOTS;
-# the multi-cluster suite takes two). A slot whose owner is gone (its pid,
+# the multi-cluster suite takes two). Slots are first come, first served:
+# waiters queue in DIR/.queue (hack/loadlock.sh's tickets; release gates'
+# first), and only the first takes slots, however often the others poll.
+# A slot whose owner is gone (its pid,
 # boot id or start time no longer match, as hack/loadlock.sh judges) is
 # reclaimed; a KEEP run's slot only when its cluster is gone. Before it
 # creates its cluster a run waits until the host's one-minute load is under
@@ -22,8 +25,10 @@
 # The heavy suites (host heavy in hack/e2e/matrix.txt: scale, multi-cluster)
 # also take the heavy-load lock first (hack/loadlock.sh, LOCK from
 # $LOADLOCK), and drain the host: a waiting heavy run writes DIR/.drain, no
-# new run takes a slot while it is there, and the heavy run starts once at
-# most one other slot is in use and the load is under 16. The marker stays
+# new run takes a slot while it is there (the drainer is the queue's head
+# meanwhile, so it never waits for a waiter that waits for it), and the
+# heavy run starts once at most one other slot is in use and the load is
+# under 16. The marker stays
 # until the heavy run ends, so its numbers are not shared with light runs.
 #
 # All are released, and the cluster (and the multi-cluster suite's spoke)
@@ -49,6 +54,16 @@
 #              in hack/tool-versions.env
 #   -pr N      post the summary on pull request N (gh pr comment; the
 #              repository is $GH_REPO, default pnz1990/kardinal-promoter)
+#   -run R     run only the suite's tests matching go test -run R (run.sh
+#              RUN): a targeted run (a single test's proof, a flake check
+#              with -count). It takes the lock and slot the suite does, and
+#              its summary and comment say "targeted": never a proof of the
+#              whole suite
+#   -count N   go test -count N (1 to 100; default $COUNT, else 1)
+#   -p P       release or normal (default): a release run's cluster slot
+#              ticket, and its heavy-load lock ticket (hack/loadlock.sh -p),
+#              are served before every normal one, as hack/release-gate
+#              -priority release's
 #   -shard i/n run only the ith of n parts of the suite (run.sh SHARD);
 #              default the whole suite
 #   -badge B   the first line of the comment, e.g. "[🔨 ENGINEER-4]"
@@ -103,8 +118,10 @@ export KUBECONFIG=/dev/null
 # line; one without the line (version 2's a89b89b6f had none of it) is
 # never run by a copy that has it. The line must stay byte-identical: the
 # hand-off matches it whole (grep -x), so any change to it refuses every
-# checkout copy until the shared one is refreshed.
-LOCAL_LIVE_VERSION=3
+# checkout copy until the shared one is refreshed. Version 4 queues for
+# cluster slots (DIR/.queue): a shared copy at 4 runs a checkout's at 3
+# never, so every run it starts waits its turn in the queue.
+LOCAL_LIVE_VERSION=4
 LOCAL_LIVE_ISOLATION=kubeconfig,home
 # The load gate: a cluster starts only while the one-minute load is under
 # MAX_LOAD (HEAVY_MAX_LOAD for a heavy suite, which also needs at most
@@ -166,13 +183,16 @@ if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
   test_mode=1
   LOAD_RETRY=${LOCAL_LIVE_TEST_LOAD_RETRY:-$LOAD_RETRY}
 fi
-usage() { die "usage: $0 [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
+usage() { die "usage: $0 [-pr N] [-shard i/n] [-run REGEX] [-count N] [-p release|normal] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
 
-pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse=''
+pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse='' run_re='' count='' priority=normal
 while [ $# -gt 0 ]; do
   case $1 in
     -pr | --pr) [ $# -ge 2 ] || usage; pr=$2; shift 2 ;;
     -shard | --shard) [ $# -ge 2 ] || usage; shard=$2; shift 2 ;;
+    -run | --run) [ $# -ge 2 ] || usage; run_re=$2; shift 2 ;;
+    -p) [ $# -ge 2 ] || usage; priority=$2; shift 2 ;;
+    -count | --count) [ $# -ge 2 ] || usage; count=$2; shift 2 ;;
     -reuse | --reuse) [ $# -ge 2 ] || usage; reuse=$2; shift 2 ;;
     -badge | --badge) [ $# -ge 2 ] || usage; badge=$2; shift 2 ;;
     -o) [ $# -ge 2 ] || usage; OWNER=$2; shift 2 ;;
@@ -187,6 +207,17 @@ done
 SUITE=$1 MINOR=${2:-}
 [ -z "$pr" ] || [[ "$pr" =~ ^[1-9][0-9]*$ ]] || die "-pr $pr: want a pull request number"
 [ -z "$shard" ] || [[ "$shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] || die "-shard $shard: want i/n"
+[ -z "$count" ] || { [[ $count =~ ^[1-9][0-9]?$|^100$ ]] || die "-count $count: want 1 to 100"; }
+# A release run's tickets (class 0) go before the others' (1).
+case $priority in release) slot_class=0 ;; normal) slot_class=1 ;; *) die "-p $priority: want release or normal" ;; esac
+# A release run's tickets need RELEASE_GATE_PRIORITY_TOKEN to match the
+# token file the coordinator keeps next to the slots directory
+# (DIR/../.release-token, this user's, mode 600), as hack/loadlock.sh's and
+# the release gate's -priority release (#2282 QA): no one else jumps the
+# queues by saying so. Checked below, once the slots directory is known.
+# A targeted run says so wherever its result is shown.
+targeted=''
+[ -z "$run_re" ] || targeted=" (targeted: -run $run_re)"
 
 # The suite and its minors come from matrix.txt, the pins from
 # tool-versions.env: the same files CI's matrix and tools come from.
@@ -230,9 +261,19 @@ owner_part=$(printf '%s' "$owner_part" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z
 [ -n "$owner_part" ] || owner_part=unknown
 export KIND_CLUSTER=${KIND_CLUSTER:-kardinal-e2e-ll-$owner_part-$SUITE-${MINOR#1.}}
 case $KIND_CLUSTER in kardinal-e2e-*) ;; *) die "KIND_CLUSTER=$KIND_CLUSTER must start with kardinal-e2e-" ;; esac
-COUNT=${COUNT:-1}
+COUNT=${count:-${COUNT:-1}}
+[[ $COUNT =~ ^[1-9][0-9]?$|^100$ ]] || die "COUNT=$COUNT: want 1 to 100"
 RETRY=${RETRY:-10}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
+if [ "$priority" = release ] && [ -z "$nolock" ]; then
+  release_token=${SLOTS_DIR%/}
+  if [[ $release_token == */* ]]; then release_token=${release_token%/*}/.release-token; else release_token=.release-token; fi
+  want=''
+  { read -r want <"$release_token"; } 2>/dev/null || want=''
+  mode=$(stat -c %a "$release_token" 2>/dev/null) || mode=''
+  [ -n "$want" ] && [ "$mode" = 600 ] && [ -O "$release_token" ] && [ "${RELEASE_GATE_PRIORITY_TOKEN:-}" = "$want" ] ||
+    die "-p release needs RELEASE_GATE_PRIORITY_TOKEN matching $release_token (mode 600): refusing to jump the queue"
+fi
 # The host's cluster slots: $SLOT_MAX, else SLOT_MAX=N in the host's
 # host.env next to the slots directory (DIR/../host.env, where the host's
 # capacity is tuned, not in this script), else 2; 1 to 4 (MAX_SLOTS), or
@@ -280,6 +321,7 @@ cluster  $KIND_CLUSTER${reuse:+ (reused: only the controller is rebuilt)}
 state    $STATE/$KIND_CLUSTER
 build    $KARDINAL_E2E_BUILD
 count    $COUNT
+run      ${run_re:-the whole suite}${run_re:+ (targeted: not a proof of the whole suite)}
 lock     $lock_d
 slots    $slots_d
 comment  $pr_d
@@ -294,7 +336,7 @@ if [ -z "$nolock" ] && [ -n "$heavy" ] && [ -z "${_LOCAL_LIVE_LOCKED:-}" ]; then
   # holders (#2242); a single-holder loadlock.sh is alone anyway.
   alone=()
   ! grep -q 'exclusive=1' "$LOADLOCK_SH" || alone=(-x)
-  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" "${alone[@]}" -r "$RETRY" -- \
+  exec bash "$LOADLOCK_SH" -l "$LOCK" -o "$OWNER local-live $SUITE $MINOR" -p "$priority" "${alone[@]}" -r "$RETRY" -- \
     env _LOCAL_LIVE_LOCKED=1 bash "$SELF" "${ARGS[@]}"
 fi
 
@@ -407,16 +449,37 @@ kept_tag="KEEP $KIND_CLUSTER, kept by $OWNER local-live $SUITE $MINOR at $stamp"
 drain_tag="$OWNER local-live $SUITE $MINOR draining the host for a heavy suite, pid $$ $stamp boot=$this_boot start=$self_start"
 taken=()
 draining=''
+# The cluster slots' queue (#2242's protocol, as hack/loadlock.sh's): a
+# waiter's ticket SLOTS_DIR/.queue/<class>-<ns>-<pid>, release gates'
+# (class 0, hack/release-gate -priority release) before everyone else's
+# (1), then the oldest; only the first takes slots, so a waiter that polls
+# often never overtakes one that polls seldom. A heavy run draining the
+# host is the head while its drain lasts: the waiters ahead of it wait for
+# the drain, and it waits only for the clusters running.
+slot_queue=$SLOTS_DIR/.queue
+slot_ticket='' slot_ticket_text=''
 
 # with_flock NAME CMD... runs CMD under flock on SLOTS_DIR/NAME; never
-# without it: when flock fails (a fork that failed), with_flock fails.
+# without it: when flock fails (a fork that failed), with_flock fails. It
+# waits for the flock FLOCK_WAIT seconds (60) at most (#2282 QA): a run
+# stopped (Ctrl-Z) or hung while it held it would stall every other one
+# silently, the drain deadline too; so it says so and the caller tries
+# again. LOCAL_LIVE_TEST_FLOCK_WAIT sets it, in the test mode.
+FLOCK_WAIT=60
+[ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_FLOCK_WAIT:-} =~ ^[0-9]+$ ]] || FLOCK_WAIT=$LOCAL_LIVE_TEST_FLOCK_WAIT
+# Docker answers within DOCKER_WAIT seconds, or counts as not answering: it
+# is asked under these flocks. LOCAL_LIVE_TEST_DOCKER_WAIT sets it, in the
+# test mode.
+DOCKER_WAIT=10
+[ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_DOCKER_WAIT:-} =~ ^[0-9]+$ ]] || DOCKER_WAIT=$LOCAL_LIVE_TEST_DOCKER_WAIT
 with_flock() {
   local name=$1 fd rc
   shift
   exec {fd}>"$SLOTS_DIR/$name" || return 1
-  if ! flock -x "$fd"; then
+  if ! flock -x -w "$FLOCK_WAIT" "$fd"; then
     exec {fd}>&-
-    why="cannot take the $name flock"
+    why="no $name flock in ${FLOCK_WAIT}s: a run stopped (Ctrl-Z) or hung while it held it? Resume or end it"
+    log "$why"
     return 1
   fi
   "$@"
@@ -444,6 +507,8 @@ release_slots() {
     fi
   done
   taken=()
+  [ -z "$slot_ticket" ] || rm -f "$slot_queue/$slot_ticket"
+  slot_ticket=''
   if [ -n "$draining" ] && read_file "$SLOTS_DIR/.drain" && [ "$file_v" = "$drain_tag" ]; then
     rm -f "$SLOTS_DIR/.drain"
   fi
@@ -457,7 +522,7 @@ release_slots() {
 # shellcheck disable=SC2329 # called through with_flock, or the EXIT trap
 reclaim_slots() {
   local d owner cluster docker_ok=1
-  docker info >/dev/null 2>&1 || docker_ok=''
+  timeout "$DOCKER_WAIT" docker info >/dev/null 2>&1 || docker_ok=''
   for d in "$SLOTS_DIR"/[0-9]*; do
     [ -d "$d" ] || continue
     # An owner that is there but cannot be read is a live run's.
@@ -503,7 +568,7 @@ reclaim_slots() {
 # shellcheck disable=SC2329 # called by reclaim_slots, through with_flock
 cluster_state() {
   local out lower
-  if out=$(docker inspect "$1-control-plane" 2>&1 >/dev/null); then
+  if out=$(timeout "$DOCKER_WAIT" docker inspect "$1-control-plane" 2>&1 >/dev/null); then
     state_v=running
     return
   fi
@@ -526,6 +591,95 @@ in_use() {
   in_use_v=$((n - ${#taken[@]}))
 }
 
+# write_slot_ticket (re)writes this run's ticket in the slots' queue (the
+# queue directory too); a failure ends the run.
+write_slot_ticket() {
+  local _
+  for _ in 1 2 3; do
+    mkdir -p "$slot_queue" && printf '%s\n' "$slot_ticket_text" >"$slot_queue/.$slot_ticket" 2>/dev/null &&
+      mv "$slot_queue/.$slot_ticket" "$slot_queue/$slot_ticket" 2>/dev/null && return 0
+  done
+  die "cannot write the cluster slot ticket $slot_queue/$slot_ticket"
+}
+
+# A ticket untouched for SLOT_STALE seconds is a stopped, hung or stray
+# waiter's: removed, whatever its pid (#2282 QA: a head that does not move
+# wedged everyone); its waiter queues it again in its place when it resumes
+# (waiters touch theirs on every poll). LOCAL_LIVE_TEST_STALE sets it, in
+# the test mode.
+SLOT_STALE=600
+[ -z "$test_mode" ] || [[ ! ${LOCAL_LIVE_TEST_STALE:-} =~ ^[0-9]+$ ]] || SLOT_STALE=$LOCAL_LIVE_TEST_STALE
+
+# reap_slot_tickets removes the tickets of waiters that are gone, and stale
+# ones; never this run's own. A ticket that cannot be read, or whose text
+# has no pid, is judged by the pid in its name.
+reap_slot_tickets() {
+  local t name text mtime now=${EPOCHSECONDS:-}
+  for t in "$slot_queue"/[0-9]-*; do
+    [ -e "$t" ] || continue
+    name=${t##*/}
+    [ "$name" != "$slot_ticket" ] || continue
+    # stat is the one fork here: when it fails, the ticket is not stale.
+    if [[ $now =~ ^[0-9]+$ ]] && mtime=$(stat -c %Y "$t" 2>/dev/null) && [[ $mtime =~ ^[0-9]+$ ]] && ((now - mtime > SLOT_STALE)); then
+      rm -f "$t" && log "removed the cluster slot ticket $name, untouched for $((now - mtime))s (a waiter that is stopped, hung or gone; it queues again when it resumes)"
+      continue
+    fi
+    if read_file "$t"; then text=$file_v; else text='(a ticket that cannot be read)'; fi
+    [[ $text =~ (^|[[:space:]])pid\ [0-9]+ ]] || text="$text pid ${name##*-}"
+    if record_gone "$text"; then
+      rm -f "$t" && log "removed the cluster slot ticket $name of a waiter that is gone"
+    fi
+  done
+}
+
+# first_slot_ticket sets first_v to the ticket that sorts first (bytewise),
+# a normal ticket that has waited AGE_PROMOTE seconds (2h) sorting as a
+# release one (#2282 QA: release tickets never starve the others).
+AGE_PROMOTE=7200
+first_slot_ticket() {
+  local t name key first_key='' rest tns now_ns='' LC_ALL=C
+  [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]] && now_ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
+  first_v=''
+  for t in "$slot_queue"/[0-9]-*; do
+    [ -e "$t" ] || continue
+    name=${t##*/} key=${t##*/}
+    rest=${name#*-} tns=${rest%%-*}
+    if [ "${name%%-*}" = 1 ] && [ -n "$now_ns" ] && [[ $tns =~ ^[0-9]+$ ]] && ((10#$now_ns - 10#$tns > AGE_PROMOTE * 1000000000)); then
+      key=0-$rest
+    fi
+    if [ -z "$first_v" ] || [[ $key < $first_key ]]; then first_v=$name first_key=$key; fi
+  done
+}
+
+# slots_room succeeds when this run's slots could be taken now (judged again
+# under the flock); otherwise it sets why.
+slots_room() {
+  in_use
+  if [ -n "$heavy" ] && ((in_use_v > HEAVY_OTHER_SLOTS)); then
+    why="$in_use_v other cluster slots are in use; a heavy suite starts with at most $HEAVY_OTHER_SLOTS"
+    return 1
+  fi
+  if ((in_use_v + need_slots > SLOT_MAX)); then
+    why="$in_use_v cluster slots are in use in $SLOTS_DIR, and the host has $SLOT_MAX"
+    return 1
+  fi
+}
+
+# slots_reclaim_due succeeds when a slot's owner (or the drain marker's run)
+# looks gone, or a slot is a kept cluster's (judged again under the flock):
+# only then does a waiter that is not the head take the flock, so a waiter
+# stopped while it waits seldom holds it.
+slots_reclaim_due() {
+  local d
+  for d in "$SLOTS_DIR"/[0-9]*; do
+    [ -d "$d" ] || continue
+    read_file "$d/owner" || continue
+    [[ $file_v == KEEP\ * ]] && return 0
+    record_gone "$file_v" && return 0
+  done
+  read_file "$SLOTS_DIR/.drain" && record_gone "$file_v"
+}
+
 # try_slots, under the .reclaim flock and in this shell (it sets taken):
 # reclaims, then takes this run's slots when it may: a light run not while a
 # heavy run drains the host; a heavy run only with at most HEAVY_OTHER_SLOTS
@@ -535,11 +689,23 @@ try_slots() {
   local i d
   why=''
   reclaim_slots
+  if [ ! -e "$slot_queue/$slot_ticket" ]; then
+    write_slot_ticket
+    log "cluster slot ticket $slot_ticket was gone; queued it again in its place"
+  fi
   # A marker that is there but cannot be read is a drain.
-  if [ -z "$heavy" ] && [ -e "$SLOTS_DIR/.drain" ]; then
+  if [ -z "$draining" ] && [ -e "$SLOTS_DIR/.drain" ]; then
     read_file "$SLOTS_DIR/.drain" || file_v='(a marker that cannot be read)'
     why="a heavy suite is draining the host: $file_v"
     return 1
+  fi
+  # First come, first served; the drainer is the head while it drains.
+  if [ -z "$draining" ]; then
+    first_slot_ticket
+    if [ "$first_v" != "$slot_ticket" ]; then
+      why="cluster slot ticket $slot_ticket waits behind ${first_v:-?}"
+      return 1
+    fi
   fi
   in_use
   if [ -n "$heavy" ] && ((in_use_v > HEAVY_OTHER_SLOTS)); then
@@ -559,7 +725,11 @@ try_slots() {
     echo "$KIND_CLUSTER" >"$d/cluster"
     taken+=("$d")
   done
-  [ "${#taken[@]}" -lt "$need_slots" ] || return 0
+  if [ "${#taken[@]}" -ge "$need_slots" ]; then
+    rm -f "$slot_queue/$slot_ticket"
+    slot_ticket=''
+    return 0
+  fi
   for d in "${taken[@]}"; do rm -r "$d"; done
   taken=()
   why="fewer than $need_slots of the $SLOT_MAX cluster slots in $SLOTS_DIR are free"
@@ -577,6 +747,16 @@ take_slots() {
     fi
   done
   [ "${#taken[@]}" -lt "$need_slots" ] || return 0
+  # In the queue: a ticket named by its class, time (ns) and pid.
+  local ns
+  if [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+    ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
+  else
+    ns=$(date +%s%N) && [[ $ns =~ ^[0-9]+$ ]] || die "cannot read the time for a cluster slot ticket"
+  fi
+  printf -v slot_ticket '%s-%019d-%d' "$slot_class" "$((10#$ns))" "$$"
+  slot_ticket_text="$slot_tag priority=$priority beat=1"
+  write_slot_ticket
   if [ -n "$heavy" ]; then
     # Drain: no new run takes a slot from now on, for DRAIN_DEADLINE at most.
     echo "$drain_tag" >"$SLOTS_DIR/.drain"
@@ -584,7 +764,32 @@ take_slots() {
     drain_since=${EPOCHSECONDS:-}
     [ -n "$drain_since" ] || printf -v drain_since '%(%s)T' -1
   fi
-  while ! with_flock .reclaim try_slots; do
+  while :; do
+    # The heartbeat (a builtin write: its time is the ticket's mtime); a
+    # ticket removed as stale is queued again in its place.
+    if [ -e "$slot_queue/$slot_ticket" ]; then
+      printf '%s\n' "$slot_ticket_text" >"$slot_queue/$slot_ticket" 2>/dev/null || true
+    else
+      write_slot_ticket
+      log "cluster slot ticket $slot_ticket was gone; queued it again in its place"
+    fi
+    reap_slot_tickets
+    first_slot_ticket
+    # The flock only when it can matter (a waiter stopped while it waits
+    # seldom holds it): to reclaim, or for the head's take when there is
+    # room; everything is judged again under it.
+    if [ -z "$draining" ] && [ -e "$SLOTS_DIR/.drain" ]; then
+      read_file "$SLOTS_DIR/.drain" || file_v='(a marker that cannot be read)'
+      why="a heavy suite is draining the host: $file_v"
+      ! slots_reclaim_due || with_flock .reclaim reclaim_slots || true
+    elif [ -z "$draining" ] && [ "$first_v" != "$slot_ticket" ]; then
+      why="cluster slot ticket $slot_ticket waits behind ${first_v:-?}"
+      ! slots_reclaim_due || with_flock .reclaim reclaim_slots || true
+    elif ! slots_reclaim_due && ! slots_room; then
+      : # why says it
+    elif with_flock .reclaim try_slots; then
+      break
+    fi
     drain_expired
     [ "$why" = "$said" ] || log "waiting for a cluster slot: $why; checking every ${RETRY}s"
     said=$why
@@ -649,7 +854,7 @@ room() {
     return
   fi
   # docker ps is the one fork: when it fails, the nodes cannot be counted.
-  if ! names=$(docker ps --format '{{.Names}}' 2>/dev/null); then
+  if ! names=$(timeout "$DOCKER_WAIT" docker ps --format '{{.Names}}' 2>/dev/null); then
     why="docker ps failed: the kind nodes running cannot be counted"
     return
   fi
@@ -767,7 +972,7 @@ rm -f "$E2E_OUT/test.json" "$E2E_OUT/summary.json" "$E2E_OUT/summary.md"
 head_sha=$(git -C "$REPO_ROOT" rev-parse HEAD)
 dirty=$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no | head -1)
 start=$(date +%s)
-log "suite $SUITE${shard:+ shard $shard} on Kubernetes $MINOR, cluster $KIND_CLUSTER, build $KARDINAL_E2E_BUILD; log $LOG"
+log "suite $SUITE${shard:+ shard $shard}$targeted on Kubernetes $MINOR, cluster $KIND_CLUSTER, build $KARDINAL_E2E_BUILD; log $LOG"
 
 # The suite runs in a process group of its own (set -m), so a signal stops
 # up.sh's kind and run.sh's go test with it.
@@ -777,6 +982,7 @@ set -m
 (
   [ "$SUITE" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
   unset RUN
+  [ -z "$run_re" ] || export RUN=$run_re
   export KIND_K8S=$MINOR SHARD=$shard COUNT
   [ -z "$reuse" ] || export KARDINAL_E2E_REUSE=1
   # run.sh's report writes its Markdown summary here, as CI's job summary.
@@ -801,8 +1007,12 @@ fi
 body=$RUN_DIR/comment.md
 {
   [ -z "$badge" ] || echo "$badge"
-  echo "## local live: $SUITE${shard:+ shard $shard} on Kubernetes $MINOR: $result"
+  echo "## local live: $SUITE${shard:+ shard $shard}$targeted on Kubernetes $MINOR: $result"
   echo
+  if [ -n "$run_re" ]; then
+    echo "**Targeted run**: only the tests matching \`-run $run_re\`; this is not a proof of the whole $SUITE suite."
+    echo
+  fi
   echo "| | |"
   echo "|---|---|"
   echo "| commit | \`$head_sha\`${dirty:+ plus uncommitted changes (not a proof of this commit)} |"
@@ -813,7 +1023,11 @@ body=$RUN_DIR/comment.md
   echo "| build | KARDINAL_E2E_BUILD=$KARDINAL_E2E_BUILD, COUNT=$COUNT${reuse:+, on reused cluster $KIND_CLUSTER (controller rebuilt)} |"
   echo "| host | $(hostname -s 2>/dev/null || echo ?), load $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo ?) |"
   echo
-  echo "Re-run: \`hack/e2e/local-live.sh${shard:+ -shard $shard} $SUITE $MINOR\`"
+  rerun=hack/e2e/local-live.sh
+  [ -z "$shard" ] || rerun="$rerun -shard $shard"
+  [ -z "$run_re" ] || rerun="$rerun -run $(printf '%q' "$run_re")"
+  [ "$COUNT" = 1 ] || rerun="$rerun -count $COUNT"
+  echo "Re-run: \`$rerun $SUITE $MINOR\`"
   if [ -s "$E2E_OUT/summary.md" ]; then
     echo
     echo "<details><summary>run.sh's report</summary>"
@@ -833,7 +1047,7 @@ body=$RUN_DIR/comment.md
 
 printf '\n'
 cat "$body"
-printf '\nlocal-live: %s %s (log %s, results %s)\n' "$result" "$SUITE" "$LOG" "$RUN_DIR"
+printf '\nlocal-live: %s %s%s (log %s, results %s)\n' "$result" "$SUITE" "$targeted" "$LOG" "$RUN_DIR"
 
 if [ -n "$pr" ]; then
   if gh pr comment "$pr" --repo "${GH_REPO:-pnz1990/kardinal-promoter}" --body-file "$body" >>"$LOG" 2>&1; then

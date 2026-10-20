@@ -39,10 +39,12 @@ esac
 `
 
 // docker knows the fake clusters' nodes: ps lists them, inspect finds them.
-// FAKE_DOCKER_DOWN makes docker info fail, FAKE_DOCKER_ERR every inspect.
+// FAKE_DOCKER_DOWN makes docker info fail, FAKE_DOCKER_ERR every inspect,
+// FAKE_DOCKER_HANG every call hang.
 // Its tools are the system's (command -p): a run's failing tools are not
 // docker's.
 const localLiveDocker = `#!/usr/bin/env bash
+[ -z "${FAKE_DOCKER_HANG:-}" ] || exec sleep 1000 # a daemon that does not answer
 f=$FAKE/clusters; command -p touch "$f"
 case "$1" in
   info) [ -z "${FAKE_DOCKER_DOWN:-}" ] ;;
@@ -83,7 +85,7 @@ fi
 `
 
 const localLiveRun = `#!/usr/bin/env bash
-{ echo "RUN_KUBECONFIG=$KUBECONFIG"; echo "RUN_HOME=$HOME"; [ -e "$HOME/.kube/config" ] && echo "RUN_HOMEKUBE=yes"; } >>"$FAKE/run"
+{ echo "RUN_KUBECONFIG=$KUBECONFIG"; echo "RUN_HOME=$HOME"; [ -e "$HOME/.kube/config" ] && echo "RUN_HOMEKUBE=yes"; echo "RUN_RE=${RUN:-}"; echo "RUN_COUNT=${COUNT:-}"; } >>"$FAKE/run"
 echo '{"suite":"'"$1"'","results":[{"test":"TestA","action":"pass"},{"test":"TestB","action":"pass"}]}' >"$E2E_OUT/summary.json"
 echo "| TestA | pass |" >"$GITHUB_STEP_SUMMARY"
 [ -z "${FAKE_SLEEP:-}" ] || sleep "$FAKE_SLEEP"
@@ -120,6 +122,9 @@ func (h *localLiveHost) cmd(t *testing.T, env []string, args ...string) *exec.Cm
 		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots,
 		// An idle host with room for clusters, unless a test says otherwise.
 		"LOCAL_LIVE_TEST=1", "LOCAL_LIVE_TEST_TOKEN="+h.token,
+		// The host's go never fetches go.mod's toolchain into a fake HOME (its
+		// files are read-only, and the test's cleanup cannot remove them).
+		"GOTOOLCHAIN=local",
 		"LOCAL_LIVE_TEST_LOAD=0", "LOCAL_LIVE_TEST_INOTIFY=8192", "LOCAL_LIVE_TEST_SPACING=0")
 	cmd.Env = append(cmd.Env, env...)
 	return cmd
@@ -136,6 +141,7 @@ func (h *localLiveHost) read(name string) string {
 // it with -pr, and deletes the cluster and releases both however it ends.
 func TestLocalLive(t *testing.T) {
 	t.Run("a passing run: summary, comment, cleanup", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, nil, "-pr", "42", "-badge", "[BADGE]", "core").CombinedOutput()
 		require.NoError(t, err, "%s", out)
@@ -164,6 +170,7 @@ func TestLocalLive(t *testing.T) {
 		assert.Len(t, runs, 1, "the run's log is kept")
 	})
 	t.Run("a failing run exits with the suite's status", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, []string{"FAKE_RC=3"}, "-shard", "2/3", "core", "1.37").CombinedOutput()
 		assert.Equal(t, 3, exitCode(err), "%s", out)
@@ -174,6 +181,7 @@ func TestLocalLive(t *testing.T) {
 		assert.Empty(t, h.read("gh"), "no -pr, no comment")
 	})
 	t.Run("KEEP, then -reuse rebuilds only the controller and cleans up", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, []string{"KEEP=1"}, "gitea").CombinedOutput()
 		require.NoError(t, err, "%s", out)
@@ -198,6 +206,7 @@ func TestLocalLive(t *testing.T) {
 		assert.Equal(t, 2, exitCode(err), "a deleted cluster can't be reused: %s", out)
 	})
 	t.Run("a signal stops the suite, deletes the cluster, releases the lock and slot", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		cmd := h.cmd(t, []string{"FAKE_SLEEP=30"}, "core")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -214,6 +223,7 @@ func TestLocalLive(t *testing.T) {
 		assert.NoDirExists(t, filepath.Join(h.slots, "1"))
 	})
 	t.Run("the owner names the cluster, so two agents' runs do not collide", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		for _, tc := range []struct {
 			env  []string
@@ -230,6 +240,7 @@ func TestLocalLive(t *testing.T) {
 		}
 	})
 	t.Run("a heavy suite takes the heavy-load lock and a slot", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, nil, "scale").CombinedOutput()
 		require.NoError(t, err, "%s", out)
@@ -239,6 +250,7 @@ func TestLocalLive(t *testing.T) {
 		assert.NoDirExists(t, h.lock)
 	})
 	t.Run("a heavy suite refuses to run on a shared host without the lock", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, []string{"LOADLOCK="}, "scale").CombinedOutput()
 		assert.Equal(t, 2, exitCode(err), "%s", out)
@@ -246,6 +258,7 @@ func TestLocalLive(t *testing.T) {
 		assert.Empty(t, h.read("up"))
 	})
 	t.Run("an ordinary suite runs without the lock set", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		out, err := h.cmd(t, []string{"LOADLOCK="}, "gitea").CombinedOutput()
 		require.NoError(t, err, "%s", out)
@@ -256,6 +269,7 @@ func TestLocalLive(t *testing.T) {
 		{"too few inotify instances", "LOCAL_LIVE_TEST_INOTIFY=64", "fs.inotify.max_user_instances is 64"},
 	} {
 		t.Run("waits to create its cluster on "+tc.name, func(t *testing.T) {
+			t.Parallel() // each on a fake host of its own
 			h := newLocalLiveHost(t)
 			cmd := h.cmd(t, []string{tc.env}, "core")
 			out := &liveOut{}
@@ -270,6 +284,7 @@ func TestLocalLive(t *testing.T) {
 		})
 	}
 	t.Run("a copy outside a checkout runs an older checkout's suites itself, with the loadlock.sh next to it", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		shared := filepath.Join(t.TempDir(), "bin")
 		require.NoError(t, os.MkdirAll(shared, 0o755))
@@ -316,6 +331,7 @@ exec "$@"
 		assert.Empty(t, h.read("old"), "the older checkout's own script is not run")
 		assert.Equal(t, "shared\n", h.read("loadlock"), "the heavy suite ran under the shared loadlock.sh")
 		assert.Contains(t, h.read("loadlock-args"), " -x ", "a heavy suite holds a counting lock alone")
+		assert.Contains(t, h.read("loadlock-args"), " -p normal ", "a normal run's lock ticket")
 		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "the checkout's matrix: scale's minor")
 
 		cmd = h.cmd(t, nil, "-n", "core")
@@ -326,6 +342,7 @@ exec "$@"
 		assert.Contains(t, string(out), "run it from a kardinal-promoter checkout")
 	})
 	t.Run("a copy outside a checkout hands off to a checkout's local-live.sh at least as new", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		shared := filepath.Join(t.TempDir(), "bin")
 		require.NoError(t, os.MkdirAll(shared, 0o755))
@@ -342,14 +359,16 @@ exec "$@"
 		assert.Contains(t, h.read("up"), "LOCKED=yes")
 	})
 	t.Run("a copy outside a checkout never hands off to a copy that does not keep the run off the user's kubeconfig", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
 		require.NoError(t, err)
-		require.Contains(t, string(src), "\nLOCAL_LIVE_VERSION=3\n")
+		require.Contains(t, string(src), "\nLOCAL_LIVE_VERSION=4\n")
 		require.Contains(t, string(src), "\nLOCAL_LIVE_ISOLATION=kubeconfig,home\n")
 		for _, tc := range []struct{ name, own string }{
 			// a89b89b6f: version 2, no scratch HOME, no top KUBECONFIG=/dev/null.
 			{"version 2, as a89b89b6f", "LOCAL_LIVE_VERSION=2\n"},
-			{"as new, without the isolation line", "LOCAL_LIVE_VERSION=3\n"},
+			{"as new, without the isolation line", "LOCAL_LIVE_VERSION=4\n"},
+			{"version 3, without the slot queue", "LOCAL_LIVE_VERSION=3\nLOCAL_LIVE_ISOLATION=kubeconfig,home\n"},
 			{"newer, without the isolation line", "LOCAL_LIVE_VERSION=9\n"},
 			{"newer, with another isolation", "LOCAL_LIVE_VERSION=9\nLOCAL_LIVE_ISOLATION=kubeconfig\n"},
 		} {
@@ -380,13 +399,14 @@ exec "$@"
 				require.NoError(t, err, "%s", out)
 				assert.Empty(t, h.read("own"), "the checkout's copy is not run")
 				assert.Contains(t, h.read("run"), "RUN_HOME="+filepath.Join(h.state, "kardinal-e2e-ll-test-gitea-37", "runs"), "the shared copy ran it, with a scratch HOME")
-				if strings.Contains(tc.own, "=9") || strings.Contains(tc.own, "=3") {
+				if strings.Contains(tc.own, "VERSION=9") || strings.Contains(tc.own, "VERSION=4") {
 					assert.Contains(t, string(out), "does not keep the run off the user's kubeconfig")
 				}
 			})
 		}
 	})
 	t.Run("a waiting heavy suite drains the host: no new run starts, and it starts with one other slot in use", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		// Two other runs hold slots (live records: this test's own pid).
 		hold := func(n string) {
@@ -418,6 +438,7 @@ exec "$@"
 		assert.NoFileExists(t, filepath.Join(h.slots, ".drain"), "the marker goes with the heavy run")
 	})
 	t.Run("a heavy suite waits for the load to be under 16", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_LOAD=20"}, "scale")
 		out := &liveOut{}
@@ -430,6 +451,7 @@ exec "$@"
 		assert.NoFileExists(t, filepath.Join(h.slots, ".drain"))
 	})
 	t.Run("two runs at once start their clusters at least the spacing apart", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		var cmds []*exec.Cmd
 		for _, suite := range []string{"gitea", "flux"} {
@@ -456,6 +478,7 @@ exec "$@"
 		assert.GreaterOrEqual(t, gap, 1900*time.Millisecond, "starts 2s apart (up.sh runs a moment after its start is recorded)")
 	})
 	t.Run("a slot whose owner is gone is reclaimed; a kept cluster's only when the cluster is gone", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		gone := exec.Command("true")
 		require.NoError(t, gone.Run())
@@ -479,6 +502,7 @@ exec "$@"
 		assert.DirExists(t, filepath.Join(h.slots, "4"), "a kept cluster that is there keeps its slot")
 	})
 	t.Run("children see the run's kind kubeconfig, never ~/.kube/config", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		home := t.TempDir() // the user's: a kubeconfig of another cluster
 		require.NoError(t, os.MkdirAll(filepath.Join(home, ".kube"), 0o755))
@@ -500,6 +524,7 @@ exec "$@"
 		}
 	})
 	t.Run("a heavy suite gives up draining after the deadline, naming what blocked it", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		for n, owner := range map[string]string{"3": fmt.Sprintf("other run pid %d now", os.Getpid()), "4": "KEEP kept-here, kept by someone"} {
 			require.NoError(t, os.MkdirAll(filepath.Join(h.slots, n), 0o755))
@@ -528,6 +553,7 @@ exec "$@"
 		assert.Empty(t, h.read("up"))
 	})
 	t.Run("a kept cluster's slot is reclaimed only on a definite no such object", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		for _, tc := range []struct {
 			name, env, warn string
 		}{
@@ -547,6 +573,7 @@ exec "$@"
 		}
 	})
 	t.Run("a SIGKILLed KEEP run's slot stays while its cluster runs", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		gone := exec.Command("true")
 		require.NoError(t, gone.Run())
@@ -559,7 +586,279 @@ exec "$@"
 		assert.Contains(t, string(out), "its cluster kardinal-e2e-still-here still runs; the slot stays")
 		assert.DirExists(t, filepath.Join(h.slots, "1"))
 	})
+	t.Run("cluster slots are first come, first served: a waiter polling often never overtakes one polling seldom", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		// 0.1s against 3s (the 1s and 30s of the report, scaled to a test).
+		h := newLocalLiveHost(t)
+		holder := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(holder, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+		slow := h.cmd(t, []string{"SLOT_MAX=1", "RETRY=3"}, "gitea")
+		sout := &liveOut{}
+		slow.Stdout, slow.Stderr = sout, sout
+		require.NoError(t, slow.Start())
+		require.Eventually(t, func() bool { return strings.Contains(sout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		fast := h.cmd(t, []string{"SLOT_MAX=1", "RETRY=0.1"}, "flux")
+		fout := &liveOut{}
+		fast.Stdout, fast.Stderr = fout, fout
+		require.NoError(t, fast.Start())
+		require.Eventually(t, func() bool { return strings.Contains(fout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		require.NoError(t, os.RemoveAll(holder)) // the slot frees: the fast waiter polls first
+		waitLive(t, slow, sout)
+		waitLive(t, fast, fout)
+		runs := strings.Split(h.read("up"), "KUBECONFIG=")
+		require.Len(t, runs, 3, "%s", h.read("up"))
+		assert.Contains(t, runs[1], "-gitea-", "the first waiter ran first, though it polls every 3s")
+		assert.Contains(t, runs[2], "-flux-")
+		assert.Contains(t, fout.String(), "waits behind 1-", "the later waiter queued behind it")
+	})
+	t.Run("-p release: a release run's slot ticket is served before an older normal one", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		holder := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(holder, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+		normal := h.cmd(t, []string{"SLOT_MAX=1"}, "gitea")
+		nout := &liveOut{}
+		normal.Stdout, normal.Stderr = nout, nout
+		require.NoError(t, normal.Start())
+		require.Eventually(t, func() bool { return strings.Contains(nout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		token := "r" + h.token
+		require.NoError(t, os.WriteFile(filepath.Join(h.dir, ".release-token"), []byte(token+"\n"), 0o600))
+		release := h.cmd(t, []string{"SLOT_MAX=1", "RELEASE_GATE_PRIORITY_TOKEN=" + token}, "-p", "release", "flux")
+		rout := &liveOut{}
+		release.Stdout, release.Stderr = rout, rout
+		require.NoError(t, release.Start())
+		require.Eventually(t, func() bool {
+			tickets, _ := filepath.Glob(filepath.Join(h.slots, ".queue", "0-*"))
+			return len(tickets) == 1
+		}, 10*time.Second, 20*time.Millisecond, "the release run's ticket, class 0")
+		require.NoError(t, os.RemoveAll(holder))
+		waitLive(t, release, rout)
+		waitLive(t, normal, nout)
+		runs := strings.Split(h.read("up"), "KUBECONFIG=")
+		require.Len(t, runs, 3, "%s", h.read("up"))
+		assert.Contains(t, runs[1], "-flux-", "the release run first, though it queued second")
+		assert.Contains(t, runs[2], "-gitea-")
+		out, err := h.cmd(t, nil, "-p", "urgent", "gitea").CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "%s", out)
+		assert.Contains(t, string(out), "-p urgent: want release or normal")
+		// #2282 QA: only with the coordinator's token.
+		for _, env := range []string{"RELEASE_GATE_PRIORITY_TOKEN=", "RELEASE_GATE_PRIORITY_TOKEN=a-guess"} {
+			out, err := h.cmd(t, []string{env}, "-p", "release", "gitea").CombinedOutput()
+			assert.Equal(t, 2, exitCode(err), "%s: %s", env, out)
+			assert.Contains(t, string(out), "-p release needs RELEASE_GATE_PRIORITY_TOKEN matching "+filepath.Join(h.dir, ".release-token"))
+		}
+		require.NoError(t, os.Chmod(filepath.Join(h.dir, ".release-token"), 0o644))
+		out, err = h.cmd(t, []string{"RELEASE_GATE_PRIORITY_TOKEN=" + token}, "-p", "release", "gitea").CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "a token file others can read: %s", out)
+	})
+	t.Run("the slot queue never wedges: unreadable, stale and stopped waiters' tickets, and aging (#2282 QA)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		if os.Geteuid() == 0 {
+			t.Skip("root reads a mode-000 file")
+		}
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		put := func(h *localLiveHost, class int, at time.Time, pid int, text string, mode os.FileMode, touched time.Time) string {
+			q := filepath.Join(h.slots, ".queue")
+			require.NoError(t, os.MkdirAll(q, 0o755))
+			p := filepath.Join(q, fmt.Sprintf("%d-%019d-%d", class, at.UnixNano(), pid))
+			require.NoError(t, os.WriteFile(p, []byte(text), 0o644))
+			require.NoError(t, os.Chtimes(p, touched, touched))
+			require.NoError(t, os.Chmod(p, mode))
+			return p
+		}
+		now, old := time.Now(), time.Now().Add(-time.Hour)
+		live := liveRecord(t, "w") + " beat=1\n"
+		// Each blocker alone ahead of a gitea run, which must get through.
+		for _, tc := range []struct {
+			name, says string
+			put        func(h *localLiveHost) string
+		}{
+			{"an unreadable ticket of a waiter that is gone", "of a waiter that is gone", func(h *localLiveHost) string {
+				return put(h, 1, now.Add(-time.Minute), gone.Process.Pid, "x", 0o000, now)
+			}},
+			{"a stray release ticket naming pid 1, untouched", "untouched for", func(h *localLiveHost) string {
+				return put(h, 0, now.Add(-time.Minute), 1, "stray\n", 0o644, old)
+			}},
+			{"a live waiter's ticket, untouched (stopped)", "untouched for", func(h *localLiveHost) string {
+				return put(h, 1, now.Add(-time.Minute), os.Getpid(), live, 0o644, old)
+			}},
+		} {
+			h := newLocalLiveHost(t)
+			p := tc.put(h)
+			// Each case has its own deadline (waitLive's 30s): a wedge fails
+			// it, not the package's timeout.
+			cmd := h.cmd(t, nil, "gitea")
+			out := &liveOut{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			waitLive(t, cmd, out)
+			assert.NoFileExists(t, p, tc.name)
+			assert.Contains(t, out.String(), tc.says, tc.name)
+		}
+		// An unreadable ticket of a live pid, touched now, is a live head.
+		h := newLocalLiveHost(t)
+		p := put(h, 1, now.Add(-time.Second), os.Getpid(), "x", 0o000, now)
+		cmd := h.cmd(t, nil, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "waits behind "+filepath.Base(p)) }, 10*time.Second, 20*time.Millisecond)
+		require.NoError(t, os.Chmod(p, 0o644))
+		require.NoError(t, os.Remove(p))
+		waitLive(t, cmd, out)
+		// Aging: a normal ticket 3h old sorts before a release one.
+		h = newLocalLiveHost(t)
+		aged := put(h, 1, now.Add(-3*time.Hour), os.Getpid(), live, 0o644, now)
+		put(h, 0, now.Add(-time.Minute), os.Getpid(), live, 0o644, now)
+		cmd = h.cmd(t, nil, "gitea")
+		out = &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "waits behind "+filepath.Base(aged)) }, 10*time.Second, 20*time.Millisecond, "the aged normal ticket is the head")
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	t.Run("a waiting run touches its slot ticket on every poll: never stale", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		holder := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(holder, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+		env := []string{"SLOT_MAX=1", "LOCAL_LIVE_TEST_STALE=1"}
+		var cmds []*exec.Cmd
+		var outs []*liveOut
+		for _, suite := range []string{"gitea", "flux"} {
+			c := h.cmd(t, env, suite)
+			o := &liveOut{}
+			c.Stdout, c.Stderr = o, o
+			require.NoError(t, c.Start())
+			cmds, outs = append(cmds, c), append(outs, o)
+			require.Eventually(t, func() bool { return strings.Contains(o.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		}
+		time.Sleep(3 * time.Second) // three times the staleness
+		for _, o := range outs {
+			assert.NotContains(t, o.String(), "untouched for", "a live waiter's ticket was taken as stale")
+		}
+		require.NoError(t, os.RemoveAll(holder))
+		for i := range cmds {
+			waitLive(t, cmds[i], outs[i])
+		}
+	})
+	t.Run("a stopped waiter's slot ticket is removed as stale, and it queues again in its place when it resumes", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		holder := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(holder, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+		env := []string{"SLOT_MAX=1", "LOCAL_LIVE_TEST_STALE=1"}
+		a := h.cmd(t, env, "gitea")
+		aout := &liveOut{}
+		a.Stdout, a.Stderr = aout, aout
+		require.NoError(t, a.Start())
+		require.Eventually(t, func() bool { return strings.Contains(aout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		require.NoError(t, a.Process.Signal(syscall.SIGSTOP))
+		b := h.cmd(t, env, "flux")
+		bout := &liveOut{}
+		b.Stdout, b.Stderr = bout, bout
+		require.NoError(t, b.Start())
+		require.Eventually(t, func() bool { return strings.Contains(bout.String(), "untouched for") }, 15*time.Second, 50*time.Millisecond, "b removes stopped a's ticket")
+		require.NoError(t, a.Process.Signal(syscall.SIGCONT))
+		require.Eventually(t, func() bool { return strings.Contains(aout.String(), "queued it again in its place") }, 15*time.Second, 50*time.Millisecond)
+		require.NoError(t, os.RemoveAll(holder))
+		waitLive(t, a, aout)
+		waitLive(t, b, bout)
+		runs := strings.Split(h.read("up"), "KUBECONFIG=")
+		require.Len(t, runs, 3, "%s", h.read("up"))
+		assert.Contains(t, runs[1], "-gitea-", "a kept its place")
+	})
+	t.Run("a release gate's ticket is served first, and a gone waiter's ticket is removed", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		q := filepath.Join(h.slots, ".queue")
+		require.NoError(t, os.MkdirAll(q, 0o755))
+		release := filepath.Join(q, fmt.Sprintf("0-%019d-%d", time.Now().UnixNano(), os.Getpid()))
+		require.NoError(t, os.WriteFile(release, []byte(liveRecord(t, "release-gate")+"\n"), 0o644))
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		require.NoError(t, os.WriteFile(filepath.Join(q, fmt.Sprintf("1-%019d-%d", 1, gone.Process.Pid)), []byte("gone\n"), 0o644))
+		cmd := h.cmd(t, nil, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "waits behind 0-") }, 10*time.Second, 20*time.Millisecond)
+		assert.Contains(t, out.String(), "removed the cluster slot ticket 1-0000000000000000001-", "the gone waiter's ticket, though it sorts first among class 1")
+		assert.Empty(t, h.read("up"))
+		require.NoError(t, os.Remove(release))
+		waitLive(t, cmd, out)
+		entries, _ := os.ReadDir(q)
+		assert.Empty(t, entries, "the run gave its ticket back")
+	})
+	t.Run("the drainer is the head while it drains: without that, a waiter ahead of it and it wait on each other", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
+		require.NoError(t, err)
+		rule := "  if [ -z \"$draining\" ]; then\n    first_slot_ticket\n"
+		require.Contains(t, string(src), rule)
+		for _, tc := range []struct {
+			name, script string
+			heavyRC      int
+		}{
+			{"with the rule, the heavy run starts and the light one after it", string(src), 0},
+			{"without it, the two wait on each other until the drain's deadline", strings.Replace(string(src), rule, "  if :; then\n    first_slot_ticket\n", 1), 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				script := checkoutWith(t, tc.script)
+				// A live run holds the one slot; a light run queues for it,
+				// then a heavy one drains the host behind it.
+				holder := filepath.Join(h.slots, "1")
+				require.NoError(t, os.MkdirAll(holder, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+				env := []string{"SLOT_MAX=1", "DRAIN_DEADLINE=4"}
+				light := h.cmd(t, env, "gitea")
+				light.Args[1] = script
+				lout := &liveOut{}
+				light.Stdout, light.Stderr = lout, lout
+				require.NoError(t, light.Start())
+				require.Eventually(t, func() bool { return strings.Contains(lout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+				heavy := h.cmd(t, env, "scale")
+				heavy.Args[1] = script
+				hout := &liveOut{}
+				heavy.Stdout, heavy.Stderr = hout, hout
+				require.NoError(t, heavy.Start())
+				require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(h.slots, ".drain")); return err == nil }, 10*time.Second, 20*time.Millisecond)
+				require.NoError(t, os.RemoveAll(holder)) // the running cluster ends
+				hdone := make(chan error, 1)
+				go func() { hdone <- heavy.Wait() }()
+				select {
+				case err := <-hdone:
+					assert.Equal(t, tc.heavyRC, exitCode(err), "%s", hout.String())
+				case <-time.After(30 * time.Second):
+					_ = heavy.Process.Kill()
+					<-hdone
+					t.Fatalf("the heavy run neither started nor gave up: %s", hout.String())
+				}
+				waitLive(t, light, lout)
+				up := h.read("up")
+				if tc.heavyRC == 0 {
+					runs := strings.Split(up, "KUBECONFIG=")
+					require.Len(t, runs, 3, "%s", up)
+					assert.Contains(t, runs[1], "-scale-", "the drainer went first")
+					assert.Contains(t, runs[2], "-gitea-")
+				} else {
+					assert.Contains(t, hout.String(), "gave up draining the host after 4s")
+					assert.Contains(t, hout.String(), "waits behind 1-", "it waited for the light run, which waited for its drain")
+					assert.Contains(t, lout.String(), "a heavy suite is draining the host")
+					assert.NotContains(t, up, "-scale-", "the heavy run never started")
+				}
+			})
+		}
+	})
 	t.Run("slot directories above SLOT_MAX count: no run starts while SLOT_MAX clusters run", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		for _, n := range []string{"3", "4"} { // two runs with a larger SLOT_MAX
 			require.NoError(t, os.MkdirAll(filepath.Join(h.slots, n), 0o755))
@@ -577,6 +876,7 @@ exec "$@"
 		assert.Contains(t, h.read("up"), "SLOT=1\n", "slot 1, beside the other run's 3")
 	})
 	t.Run("a run whose cat, grep, cut, awk, sed and find fail takes no unsafe answer", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		// #2242 QA's rule, for the slots: the tools fail while the run takes
 		// its slots and waits for room (LOCAL_LIVE_TEST_FAIL_PATH), as forks
 		// do on a busy host. Before it, a failed $(cat ...) made a live run's
@@ -692,7 +992,7 @@ exec `+realCat+` "$@"
 			require.NoError(t, os.WriteFile(filepath.Join(noFlock, "flock"),
 				[]byte("#!/bin/sh\necho \"bash: fork: Resource temporarily unavailable\" >&2\nexit 1\n"), 0o755))
 			h := newLocalLiveHost(t)
-			cmd, out := start(t, h, "cannot take the .reclaim flock", "LOCAL_LIVE_TEST_FAIL_PATH="+noFlock)
+			cmd, out := start(t, h, "no .reclaim flock in", "LOCAL_LIVE_TEST_FAIL_PATH="+noFlock)
 			time.Sleep(300 * time.Millisecond)
 			entries, _ := os.ReadDir(h.slots)
 			for _, e := range entries {
@@ -742,6 +1042,7 @@ exec `+realCat+` "$@"
 		})
 	})
 	t.Run("a pid whose stat cannot be opened is alive while its /proc directory is there", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		// LOCAL_LIVE_TEST_PROC: pid 424242's /proc directory, with no stat to
 		// open (a full file table); pid 424243 is not there.
 		if _, err := os.Stat("/proc/424243"); err == nil {
@@ -762,6 +1063,7 @@ exec `+realCat+` "$@"
 		assert.Contains(t, string(out), "reclaimed cluster slot "+filepath.Join(h.slots, "2"), "the pid that is gone does not")
 	})
 	t.Run("SLOT_MAX: $SLOT_MAX, else the host's host.env next to the slots, else 2", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		dry := func(env ...string) string {
 			out, err := h.cmd(t, env, "-n", "gitea").CombinedOutput()
@@ -811,6 +1113,7 @@ exec `+realCat+` "$@"
 		}
 	})
 	t.Run("LOCAL_LIVE_TEST=1 without the harness's token refuses to run", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		for _, tok := range []string{"", "a-guess"} {
 			out, err := h.cmd(t, []string{"LOCAL_LIVE_TEST_TOKEN=" + tok}, "gitea").CombinedOutput()
@@ -822,7 +1125,93 @@ exec `+realCat+` "$@"
 		assert.Equal(t, 2, exitCode(err), "no token file: %s", out)
 		assert.Empty(t, h.read("up"))
 	})
+	t.Run("-run and -count: a targeted run takes the suite's lock and slot, and says it is targeted", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		for _, tc := range []struct {
+			suite  string
+			locked bool
+		}{{"gitea", false}, {"scale", true}} {
+			t.Run(tc.suite, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				out, err := h.cmd(t, nil, "-pr", "7", "-run", "^TestA$", "-count", "3", tc.suite).CombinedOutput()
+				require.NoError(t, err, "%s", out)
+				run, up := h.read("run"), h.read("up")
+				assert.Contains(t, run, "RUN_RE=^TestA$\n", "go test -run")
+				assert.Contains(t, run, "RUN_COUNT=3\n", "go test -count")
+				assert.Contains(t, up, "SLOT=1", "it takes a cluster slot")
+				assert.Equal(t, tc.locked, strings.Contains(up, "LOCKED=yes"), "the heavy-load lock as the suite's class says")
+				body := h.read("body")
+				assert.Contains(t, body, "## local live: "+tc.suite+" (targeted: -run ^TestA$) on Kubernetes", "the comment's title")
+				assert.Contains(t, body, "**Targeted run**", "the comment says it")
+				assert.Contains(t, body, "not a proof of the whole "+tc.suite+" suite")
+				assert.Contains(t, body, "-run \\^TestA\\$ -count 3 "+tc.suite, "the re-run line")
+				assert.Contains(t, string(out), "local-live: PASS "+tc.suite+" (targeted: -run ^TestA$)")
+			})
+		}
+		h := newLocalLiveHost(t)
+		out, err := h.cmd(t, nil, "-pr", "7", "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Contains(t, h.read("run"), "RUN_RE=\n", "the whole suite: no -run")
+		assert.NotContains(t, h.read("body"), "argeted", "a whole-suite run is not marked targeted")
+		dry, err := h.cmd(t, nil, "-n", "-run", "TestA", "gitea").CombinedOutput()
+		require.NoError(t, err, "%s", dry)
+		assert.Contains(t, string(dry), "run      TestA (targeted: not a proof of the whole suite)\n")
+		for _, bad := range []string{"0", "abc", "101", "-1"} {
+			out, err := h.cmd(t, nil, "-count", bad, "gitea").CombinedOutput()
+			assert.Equal(t, 2, exitCode(err), "-count %s: %s", bad, out)
+			assert.Contains(t, string(out), "-count "+bad+": want 1 to 100")
+		}
+	})
+	t.Run("a held .reclaim flock is waited for FLOCK_WAIT at most, with the cause (#2282 QA)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		// flock's sleep inherits the locked fd: the group is ended, not flock alone.
+		held := exec.Command("flock", filepath.Join(h.slots, ".reclaim"), "sleep", "60")
+		held.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		require.NoError(t, held.Start())
+		letGo := func() { _ = syscall.Kill(-held.Process.Pid, syscall.SIGKILL); _ = held.Wait() }
+		t.Cleanup(letGo)
+		time.Sleep(200 * time.Millisecond) // it holds the flock
+		cmd := h.cmd(t, []string{"LOCAL_LIVE_TEST_FLOCK_WAIT=1"}, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		if !assert.Eventually(t, func() bool {
+			return strings.Contains(out.String(), "no .reclaim flock in 1s: a run stopped (Ctrl-Z) or hung while it held it? Resume or end it")
+		}, 10*time.Second, 20*time.Millisecond, "the cap's message, not a silent hang") {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("%s", out.String())
+		}
+		assert.Empty(t, h.read("up"), "no cluster without the flock")
+		letGo()
+		waitLive(t, cmd, out)
+		assert.Contains(t, h.read("up"), "KIND_K8S=1.37", "it runs once the flock is let go")
+	})
+	t.Run("a docker that does not answer is asked DOCKER_WAIT at most: the kept slot stays, no cluster starts (#2282 QA)", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
+		h := newLocalLiveHost(t)
+		d := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "owner"), []byte("KEEP kept-x, kept by someone\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "cluster"), []byte("kardinal-e2e-kept-x\n"), 0o644))
+		cmd := h.cmd(t, []string{"FAKE_DOCKER_HANG=1", "LOCAL_LIVE_TEST_DOCKER_WAIT=1"}, "gitea")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); _ = cmd.Wait() })
+		if !assert.Eventually(t, func() bool {
+			return strings.Contains(out.String(), "docker does not answer; kept cluster slot "+d) &&
+				strings.Contains(out.String(), "docker ps failed: the kind nodes running cannot be counted")
+		}, 15*time.Second, 50*time.Millisecond, "a hung docker is not answering, never a silent block") {
+			t.Fatalf("%s", out.String())
+		}
+		assert.DirExists(t, d, "the kept cluster's slot stays")
+		assert.Empty(t, h.read("up"), "no cluster starts")
+	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		for _, n := range []string{"1", "2", "3", "4"} {
 			require.NoError(t, os.MkdirAll(filepath.Join(h.slots, n), 0o755))
@@ -840,6 +1229,7 @@ exec `+realCat+` "$@"
 		}
 	})
 	t.Run("an existing cluster is not taken over", func(t *testing.T) {
+		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)
 		require.NoError(t, os.WriteFile(filepath.Join(h.fake, "clusters"), []byte("kardinal-e2e-ll-test-core-35\n"), 0o644))
 		out, err := h.cmd(t, nil, "core").CombinedOutput()
@@ -867,4 +1257,56 @@ func (o *liveOut) String() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.b.String()
+}
+
+// liveRecord is a record of this test process, as local-live.sh writes one
+// (pid, boot id, start time): a live run's.
+func liveRecord(t *testing.T, who string) string {
+	t.Helper()
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	require.NoError(t, err)
+	stat, err := os.ReadFile("/proc/self/stat")
+	require.NoError(t, err)
+	f := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
+	require.Greater(t, len(f), 19)
+	return fmt.Sprintf("%s pid %d now boot=%s start=%s", who, os.Getpid(), strings.TrimSpace(string(boot)), f[19])
+}
+
+// waitLive waits up to 30s for a local-live run to end, and requires it to
+// pass.
+func waitLive(t *testing.T, c *exec.Cmd, out *liveOut) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "%s", out.String())
+	case <-time.After(30 * time.Second):
+		_ = c.Process.Kill()
+		<-done
+		t.Fatalf("the run never ended: %s", out.String())
+	}
+}
+
+// checkoutWith is a checkout (a git repository with this one's matrix,
+// pins and loadlock.sh) whose hack/e2e/local-live.sh is script; it returns
+// that script's path.
+func checkoutWith(t *testing.T, script string) string {
+	t.Helper()
+	co := t.TempDir()
+	for _, f := range []string{"hack/e2e/matrix.txt", "hack/tool-versions.env", "hack/loadlock.sh"} {
+		b, err := os.ReadFile(filepath.Join(repoRoot(t), f))
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(co, f)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(co, f), b, 0o755))
+	}
+	path := filepath.Join(co, "hack", "e2e", "local-live.sh")
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "co"}} {
+		git := exec.Command("git", args...)
+		git.Dir = co
+		out, err := git.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	return path
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,21 @@ func TestFairLock_ReleaseJumpsTheQueue(t *testing.T) {
 	got := order(t, dir, lockAs(dir, "holder", classNormal),
 		lockAs(dir, "normal-1", classNormal), lockAs(dir, "normal-2", classNormal), lockAs(dir, "release", classRelease))
 	assert.Equal(t, []string{"release", "normal-1", "normal-2"}, got)
+}
+
+// TestFairLock_HeadCheckedAgainUnderTheFlock (#2282 QA): a release ticket
+// that comes between a waiter's head check and its turn goes first: the
+// turn checks the head again under the flock. The gap is widened to 30ms,
+// which made the stale head take the lock every time without the check.
+func TestFairLock_HeadCheckedAgainUnderTheFlock(t *testing.T) {
+	afterHeadCheck = func() { time.Sleep(30 * time.Millisecond) }
+	defer func() { afterHeadCheck = nil }()
+	for i := 0; i < 3; i++ {
+		dir := filepath.Join(t.TempDir(), "LOADLOCK")
+		got := order(t, dir, lockAs(dir, "holder", classNormal),
+			lockAs(dir, "normal-1", classNormal), lockAs(dir, "normal-2", classNormal), lockAs(dir, "release", classRelease))
+		assert.Equal(t, []string{"release", "normal-1", "normal-2"}, got, "round %d", i)
+	}
 }
 
 // deadPid is the pid of a process that has exited.
@@ -753,4 +769,155 @@ func TestCountingLock_AnyWaiterReclaims(t *testing.T) {
 	require.NoError(t, os.Remove(older))
 	require.NoError(t, <-done)
 	w.Unlock()
+}
+
+// TestFairLock_OwnerReadAgainBeforeTheRemoval (#2242 QA): an older client's
+// lock judged dead is removed only while its owner is still the dead one: a
+// LOCK another older client made meanwhile stays.
+func TestFairLock_OwnerReadAgainBeforeTheRemoval(t *testing.T) {
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	for _, tc := range []struct {
+		name    string
+		swap    bool
+		removed bool
+	}{{"the owner is the same: removed", false, true}, {"another LOCK meanwhile: it stays", true, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "LOADLOCK")
+			require.NoError(t, os.Mkdir(dir, 0o755))
+			owner := filepath.Join(dir, "owner")
+			require.NoError(t, os.WriteFile(owner, []byte(fmt.Sprintf("older pid %d 2026-10-20T00:00:00Z\n", gone.Process.Pid)), 0o644))
+			live := fmt.Sprintf("another older pid %d now %s\n", os.Getpid(), selfRecord(hostProc{}))
+			beforeReclaimRemove = func() {
+				if tc.swap {
+					require.NoError(t, os.WriteFile(owner, []byte(live), 0o644))
+				}
+			}
+			defer func() { beforeReclaimRemove = nil }()
+			(&fairLock{lock: dir, log: func(string, ...any) {}, proc: hostProc{}}).reclaim()
+			if tc.removed {
+				assert.NoDirExists(t, dir)
+			} else {
+				assert.Equal(t, live, readOwner(t, dir), "the new LOCK is left alone")
+			}
+		})
+	}
+}
+
+// TestFairLock_QueueNeverWedges (#2282 QA): a ticket that cannot be read is
+// judged by its name's pid and time; one untouched for staleBeat (a stopped,
+// hung or stray waiter's, live pid or not) is removed, but never the
+// reaper's own; waiters touch theirs on every poll; a normal ticket that
+// has waited agePromote sorts as a release one.
+func TestFairLock_QueueNeverWedges(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	q := t.TempDir()
+	put := func(class string, at time.Time, pid int, text string, mode os.FileMode, touched time.Time) string {
+		p := filepath.Join(q, fmt.Sprintf("%s-%019d-%d", class, at.UnixNano(), pid))
+		require.NoError(t, os.WriteFile(p, []byte(text), 0o644))
+		require.NoError(t, os.Chtimes(p, touched, touched))
+		require.NoError(t, os.Chmod(p, mode))
+		return p
+	}
+	now, old := time.Now(), time.Now().Add(-time.Hour)
+	live := fmt.Sprintf("w pid %d now %s beat=1\n", os.Getpid(), selfRecord(hostProc{}))
+	unreadableGone := put(classNormal, now.Add(-time.Minute), gone.Process.Pid, "x", 0o000, now)
+	unreadableLive := put(classNormal, now.Add(-time.Second), os.Getpid(), "x", 0o000, now)
+	staleLive := put(classNormal, now.Add(-2*time.Minute), os.Getpid(), live, 0o644, old)
+	strayPid1 := put(classRelease, now.Add(-3*time.Minute), 1, "stray\n", 0o644, old)
+	ownStale := put(classNormal, now.Add(-4*time.Minute), os.Getpid(), live, 0o644, old)
+	fresh := put(classNormal, now.Add(-5*time.Minute), os.Getpid(), live, 0o644, now)
+	var logs []string
+	reapTickets(hostProc{}, q, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }, nil, filepath.Base(ownStale))
+	assert.NoFileExists(t, unreadableGone, "an unreadable ticket of a pid that is gone")
+	assert.FileExists(t, unreadableLive, "an unreadable ticket of a live pid, touched now")
+	assert.NoFileExists(t, staleLive, "a live pid's ticket untouched for an hour")
+	assert.NoFileExists(t, strayPid1, "a stray ticket naming pid 1, untouched")
+	assert.FileExists(t, ownStale, "never the reaper's own")
+	assert.FileExists(t, fresh)
+	assert.Contains(t, strings.Join(logs, "\n"), "untouched for")
+
+	// Aging: the fresh normal ticket is 5 min old; one 3h old sorts before
+	// a release ticket of a minute ago.
+	require.NoError(t, os.Chmod(unreadableLive, 0o644))
+	for _, p := range []string{unreadableLive, ownStale, fresh} {
+		require.NoError(t, os.Remove(p))
+	}
+	aged := put(classNormal, now.Add(-3*time.Hour), os.Getpid(), live, 0o644, now)
+	put(classRelease, now.Add(-time.Minute), os.Getpid(), live, 0o644, now)
+	assert.Equal(t, filepath.Base(aged), firstTicket(q), "a normal ticket that waited 2h goes first")
+
+	// A waiter touches its ticket on every poll: with staleBeat short, it
+	// keeps its place behind a live holder while a stopped one's goes.
+	staleBeat = 300 * time.Millisecond
+	defer func() { staleBeat = 10 * time.Minute }()
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	h := lockAs(dir, fmt.Sprintf("h pid %d now", os.Getpid()), classNormal)
+	require.NoError(t, h.Lock(context.Background()))
+	require.NoError(t, os.MkdirAll(queueDir(dir), 0o755))
+	stopped := filepath.Join(queueDir(dir), fmt.Sprintf("1-%019d-%d", now.Add(-time.Minute).UnixNano(), os.Getpid()))
+	require.NoError(t, os.WriteFile(stopped, []byte(live), 0o644))
+	require.NoError(t, os.Chtimes(stopped, old, old))
+	w := lockAs(dir, fmt.Sprintf("w pid %d now", os.Getpid()), classNormal)
+	w.lockRetry = 20 * time.Millisecond
+	done := make(chan error, 1)
+	go func() { done <- w.Lock(context.Background()) }()
+	require.Eventually(t, func() bool { _, err := os.Stat(stopped); return errors.Is(err, os.ErrNotExist) }, 5*time.Second, 20*time.Millisecond, "the stopped waiter's ticket goes")
+	time.Sleep(time.Second) // longer than staleBeat: the waiter's own must stay
+	entries, err := os.ReadDir(queueDir(dir))
+	require.NoError(t, err)
+	var mine []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			mine = append(mine, e.Name())
+			info, err := e.Info()
+			require.NoError(t, err)
+			assert.Less(t, time.Since(info.ModTime()), staleBeat, "touched on every poll")
+		}
+	}
+	assert.Len(t, mine, 1, "the waiter's own ticket stays")
+	h.Unlock()
+	require.NoError(t, <-done)
+	w.Unlock()
+}
+
+// TestWithLockFlock_WaitCap (#2282 QA): a reclaim flock held by another
+// (a waiter stopped or hung while it held it) is waited for flockWait at
+// most, with the cause; the retries share one pending attempt (no goroutine
+// or fd per retry); once it is let go, the next call takes it.
+func TestWithLockFlock_WaitCap(t *testing.T) {
+	q := t.TempDir()
+	other, err := os.OpenFile(filepath.Join(q, ".reclaim"), os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	defer func() { _ = other.Close() }()
+	require.NoError(t, unix.Flock(int(other.Fd()), unix.LOCK_EX))
+	assert.Equal(t, time.Minute, flockWait, "a minute at most, as hack/loadlock.sh's and local-live.sh's")
+	flockWait = 200 * time.Millisecond
+	defer func() { flockWait = time.Minute }()
+	ran := 0
+	var fl flocker // one waiter, retrying
+	start := time.Now()
+	res := make(chan error, 1)
+	go func() { res <- fl.with(q, func() error { ran++; return nil }) }()
+	select {
+	case err = <-res:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no cap: it waits for the flock as long as it is held")
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no flock on "+filepath.Join(q, ".reclaim")+" in 200ms: a waiter stopped (Ctrl-Z) or hung")
+	assert.Less(t, time.Since(start), 2*time.Second, "the cap, not a hang")
+	before := runtime.NumGoroutine()
+	for i := 0; i < 5; i++ {
+		require.Error(t, fl.with(q, func() error { ran++; return nil }))
+	}
+	assert.LessOrEqual(t, runtime.NumGoroutine(), before, "one pending attempt, not one per retry")
+	assert.Zero(t, ran, "nothing ran without the flock")
+	require.NoError(t, unix.Flock(int(other.Fd()), unix.LOCK_UN))
+	require.NoError(t, fl.with(q, func() error { ran++; return nil }))
+	assert.Equal(t, 1, ran)
 }
