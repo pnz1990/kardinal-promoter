@@ -10,6 +10,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- changelog.d: the unreleased entries are the files in docs/changelog.d (CONTRIBUTING.md, Changelog) -->
 
+## [v0.12.2] — 2026-10-20
+
+A patch release of v0.12.1 with one security fix, in two parts: Bundles carrying forged rollback
+markers could take over an automatic rollback or steer which version a rollback restores (#2187),
+and a relinked marker on the controller's own earlier rollback could stand in for a new one
+(#2223). It changes no CRD, value or admission policy. Upgrade the chart in place with
+`--version 0.12.2` (and the CLI with it); from v0.11.0, follow
+[Upgrading from v0.11.0](upgrade.md#upgrading-from-v0110) with `--version 0.12.2`.
+
+### Security
+
+- **A forged automatic rollback is never adopted** (#2187). `onHealthFailure: rollback` and a RollbackPolicy took any Bundle of the pipeline as the automatic rollback when it had the `kardinal.io/rollback` label, `kardinal.io/rollback-from` naming the failing version and its environment as target, at any name. Anyone who may create Bundles can set those fields, so they could pre-empt the rollback: the step said it was rolling back while the environment stayed on the failing version, or rolled forward to a version of their choosing through the normal gates. kardinal now adopts only a Bundle the controller created, with its actor stamp (`kind: controller`, `via: auto-rollback`) and creator, which the chart's admission lets no one else write ([What Happens in Git](rollback.md#what-happens-in-git)). The same markers no longer steer the rollback planner on their own either. A failing version is exempt from an automatic rollback when the controller made it, or when it is labelled a rollback and deploys only artifacts Verified in that environment (a `kardinal rollback`, which stops for a human when it fails); a release labelled a rollback with new artifacts is rolled back like any other. A rollback marks the version it left as rolled back from when the controller wrote it, or when its change landed in that environment (past the gates and the merge) and it deploys its rollbackOf's artifacts; a Bundle that only carries the markers, or waits at a gate, marks nothing. Images compare by digest when both refs name one, by tag otherwise.
+- **A relinked automatic rollback is never adopted** (#2223). `onHealthFailure: rollback` and a RollbackPolicy look for an existing automatic rollback of the failing version first, so one failing version gets one rollback. They found it by its `kardinal.io/rollback-from` annotation and labels, which anyone who may patch Bundles can rewrite, also on the controller's own rollbacks. Relinking the finished rollback of an earlier failure to the version failing now made kardinal take it for that version's rollback: no rollback was created, the environment stayed on the failing version, and the record named the wrong Bundle. kardinal now finds an existing rollback only by its name, one of the names the controller creates it at for the failing version, with the controller's stamp and the pipeline in `spec.pipeline` ([What Happens in Git](rollback.md#what-happens-in-git)).
+
 ## [v0.12.1] — 2026-10-19
 
 A patch release of v0.12.0 with one fix: a version could be recorded Verified in an
@@ -1030,6 +1044,7 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 ---
 
 [Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...HEAD
+[v0.12.2]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.1...v0.12.2
 [v0.12.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...v0.12.1
 [v0.12.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.11.0...v0.12.0
 [v0.11.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.10.0...v0.11.0
