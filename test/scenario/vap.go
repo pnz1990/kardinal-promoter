@@ -5,6 +5,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -101,6 +102,21 @@ const (
 	noParams    = "no params found"
 )
 
+// readyTimeout is how long NewAPIServer waits for the plugin to evaluate
+// its first request, and SetAgentIndex for it to see a param. Compiling
+// every chart policy's CEL takes seconds under -race on a loaded CI runner
+// (#2264): the wait is on what the plugin does, this only bounds a plugin
+// that never gets there.
+const readyTimeout = 60 * time.Second
+
+// probeBundle is a Bundle the probe policy evaluates, carrying seq.
+func probeBundle(seq string) map[string]interface{} {
+	return map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+		"metadata": map[string]interface{}{"namespace": ReleaseNamespace, "name": "probe",
+			"labels": map[string]interface{}{probeLabel: "true"}, "annotations": map[string]interface{}{seqKey: seq}},
+		"spec": map[string]interface{}{"type": "image", "pipeline": "probe"}}
+}
+
 // NewAPIServer starts the plugin with objs (namespaces, policies, bindings)
 // served by its informers. authz nil allows everything.
 func NewAPIServer(objs []k8sruntime.Object, authz authorizer.UnconditionalAuthorizer) (*APIServer, func(), error) {
@@ -147,13 +163,16 @@ func NewAPIServer(objs []k8sruntime.Object, authz authorizer.UnconditionalAuthor
 	}
 	factory.Start(stop)
 	factory.WaitForCacheSync(stop)
-	for deadline := time.Now().Add(10 * time.Second); !p.WaitForReady(); {
-		if time.Now().After(deadline) {
-			close(stop)
-			return nil, nil, fmt.Errorf("admission plugin not ready")
-		}
-	}
 	s := &APIServer{plugin: p, scheme: scheme, kube: kube, dyn: dyn, namespaces: map[string]bool{}, matched: map[string]bool{}}
+	// Ready is when the plugin evaluates a request: its policies compiled
+	// (all of objs's, in one pass), the probe's binding matched and its param
+	// informer synced, so the probe is denied for want of the AgentIndex
+	// param, which is not served yet. Until then a request is refused as
+	// not ready, or after the plugin's own wait (10s) for its informers.
+	if err := s.waitForProbe("0", func(err error) bool { return err != nil && strings.Contains(err.Error(), noParams) }); err != nil {
+		close(stop)
+		return nil, nil, fmt.Errorf("admission plugin not ready: %w", err)
+	}
 	for _, o := range objs {
 		switch x := o.(type) {
 		case *corev1.Namespace:
@@ -278,18 +297,30 @@ func (s *APIServer) SetAgentIndex(idx *v1alpha1.AgentIndex) error {
 			return fmt.Errorf("update agent index param: %w", err)
 		}
 	}
-	probe := map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
-		"metadata": map[string]interface{}{"namespace": ReleaseNamespace, "name": "probe",
-			"labels": map[string]interface{}{probeLabel: "true"}, "annotations": map[string]interface{}{seqKey: seq}},
-		"spec": map[string]interface{}{"type": "image", "pipeline": "probe"}}
+	if err := s.waitForProbe(seq, func(err error) bool {
+		return (idx == nil && err != nil && strings.Contains(err.Error(), noParams)) || (idx != nil && err == nil)
+	}); err != nil {
+		return fmt.Errorf("the admission plugin did not see agent index %s: %w", seq, err)
+	}
+	return nil
+}
+
+// waitForProbe admits the probe Bundle carrying seq until seen says the
+// plugin's answer is the one wanted, for at most readyTimeout; it returns
+// the last answer when that never comes.
+func (s *APIServer) waitForProbe(seq string, seen func(error) bool) error {
+	probe := probeBundle(seq)
 	controller := &user.DefaultInfo{Name: ControllerUser}
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(readyTimeout); ; time.Sleep(time.Millisecond) {
 		err := s.Admit(admission.Create, GVR("bundles"), probe, nil, controller)
-		if (idx == nil && err != nil && strings.Contains(err.Error(), noParams)) || (idx != nil && err == nil) {
+		if seen(err) {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("the admission plugin did not see agent index %s: %v", seq, err)
+			if err == nil {
+				err = errors.New("admitted")
+			}
+			return fmt.Errorf("after %s, the probe: %w", readyTimeout, err)
 		}
 	}
 }
