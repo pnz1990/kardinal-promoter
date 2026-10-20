@@ -229,7 +229,7 @@ case "$SUITE" in
   # serves TestScale_TopologyArgoCD's 151 Applications; its
   # ServiceMonitor feeds the invariants' Prometheus queries. Info logs: the
   # invariants read every controller log line.
-  scale) COMPONENTS=("toxiproxy.sh forgejo.forgejo.svc.cluster.local:3000" "giteafamily.sh forgejo" prometheus.sh argocd.sh)
+  scale) COMPONENTS=("toxiproxy.sh forgejo.forgejo.svc.cluster.local:3000" "giteafamily.sh forgejo" prometheus.sh argocd.sh registry.sh)
     RUN='^TestScale_'
     export KARDINAL_E2E_RACE=${KARDINAL_E2E_RACE:-1}
     export KARDINAL_E2E_ARGOCD_EXCLUDE_KARDINAL=1
