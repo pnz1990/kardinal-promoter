@@ -94,6 +94,28 @@ func TestLoadLock(t *testing.T) {
 		assert.Less(t, time.Since(start), 10*time.Second, "the command is stopped, not waited for")
 		assert.NoDirExists(t, lock)
 	})
+	t.Run("a signal while it takes the lock gives the slot and the view back (#2316 CI)", func(t *testing.T) {
+		// LOADLOCK_TEST_AFTER_TAKE parks it after the view is made, under
+		// the flock, where the signal once left both behind.
+		lock := filepath.Join(t.TempDir(), "LOADLOCK")
+		cmd := loadlock(t, lock, "sleep", "30")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_TAKE=1")
+		out := &syncBuf{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool {
+			owner, err := os.ReadFile(filepath.Join(lock, "owner"))
+			return err == nil && strings.HasPrefix(string(owner), "test pid:")
+		}, 10*time.Second, 20*time.Millisecond)
+		start := time.Now()
+		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+		err := cmd.Wait()
+		assert.Equal(t, 143, exitCode(err), "%s", out.String())
+		assert.Less(t, time.Since(start), 10*time.Second, "released under the flock it holds, not waiting for it: %s", out.String())
+		assert.NoDirExists(t, lock, "the view")
+		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
+		assert.Empty(t, slots, "the slot")
+	})
 	t.Run("no lock, no run", func(t *testing.T) {
 		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", "loadlock.sh"), "--", "true")
 		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=99") // a busy host: one holder at a time

@@ -233,12 +233,15 @@ with_flock() {
     echo "loadlock: no flock on $queue/.reclaim in ${FLOCK_WAIT}s: a waiter stopped (Ctrl-Z) or hung while it held it? Resume or end it" >&2
     return 1
   fi
+  in_flock=1
   "$@"
   rc=$?
+  in_flock=''
   flock -u "$fd"
   exec {fd}>&-
   return "$rc"
 }
+in_flock=''
 
 # count_holders sets held_n to how many slots are held, or to "exclusive"
 # when LOCK is an older client's (no view marker); held_x is set when a
@@ -303,7 +306,10 @@ write_view() {
 held=
 child=
 release_slot() {
-  if read_file "$slot/owner" && [ "$file_v" = "$record" ]; then
+  # Ours: its owner is this run's record, or (a signal between the mkdir and
+  # the owner write) there is none yet.
+  if { read_file "$slot/owner" && [ "$file_v" = "$record" ]; } ||
+    { [ -d "$slot" ] && { [ ! -e "$slot/owner" ] || { read_file "$slot/owner" && [ -z "$file_v" ]; }; }; }; then
     rm -r "$slot"
     write_view || true
   else
@@ -313,7 +319,9 @@ release_slot() {
 release() {
   rm -f "$queue/$ticket"
   [ -n "$held" ] || return 0
-  with_flock release_slot
+  # A signal inside a with_flock (while it takes the lock) still holds
+  # the flock: release under it, never wait for it from a second fd.
+  if [ -n "$in_flock" ]; then release_slot; else with_flock release_slot; fi
 }
 trap release EXIT
 # A signal stops CMD first, then releases the lock (EXIT).
@@ -490,19 +498,26 @@ take_turn() {
   [ -z "$held_x" ] || return 1
   for n in 1 2; do
     mkdir "$slots/$n" 2>/dev/null || continue
+    # Held from the mkdir on: a signal from here gives the slot (and the
+    # view) up, through release (a signal between the view and a later
+    # held=1 left both behind, #2316's CI).
+    slot="$slots/$n"
+    held=1
     if ! echo "$record" >"$slots/$n/owner"; then
       rmdir "$slots/$n"
+      slot='' held=''
       echo "loadlock: cannot write $slots/$n/owner; gave the lock up" >&2
       return 2
     fi
     if ! write_view; then
       rm -r "${slots:?}/$n"
+      slot='' held=''
       echo "loadlock: an older client took $lock meanwhile; gave slot $n back" >&2
       return 1
     fi
-    # Held from here: a signal from now on gives the slot up (release).
-    slot="$slots/$n"
-    held=1
+    # LOADLOCK_TEST_AFTER_TAKE (tests only, with LOADLOCK_TEST=1) widens the
+    # gap between the take and the command, seconds.
+    if [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "${LOADLOCK_TEST_AFTER_TAKE:-}" ]; then sleep "$LOADLOCK_TEST_AFTER_TAKE"; fi
     return 0
   done
   return 1
