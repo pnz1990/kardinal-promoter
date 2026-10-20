@@ -60,6 +60,10 @@ type u012From struct {
 	// suite follows, when not the release's own (v0.12.1 follows v0.12.0's).
 	guide string
 	extra func(t *testing.T, e *framework.Env, from u012From) (after func())
+	// kroExpected, when set, says which other kro error lines from the
+	// upgrade on a suite's own case expects (u012Stuck: the refusals of the
+	// instance the release rendered, until it exists).
+	kroExpected func(text string, at time.Time) bool
 }
 
 // The kinds this release adds: their CRDs arrive with the guide's step 2.
@@ -401,9 +405,11 @@ var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-man
 //   - neither the controller nor kro restarted, and neither logged an
 //     unexpected error from the upgrade on.
 //
-// Covers UPG-V0120-01, UPG-V0120-02, UPG-V0120-03, UPG-V0120-04, UPG-V0120-05.
+// Covers UPG-V0120-01, UPG-V0120-02, UPG-V0120-03, UPG-V0120-04, UPG-V0120-05, UPG-V0120-06.
 func TestUpgradeV0120_Estate(t *testing.T) {
-	u012Upgrade(t, u012From{pins: "V0120", cli: (*framework.Env).KardinalV0120, guideChart: guideChartV0120})
+	stuck := &u012Stuck{}
+	u012Upgrade(t, u012From{pins: "V0120", cli: (*framework.Env).KardinalV0120, guideChart: guideChartV0120,
+		extra: stuck.before, kroExpected: stuck.expected})
 }
 
 // u012Upgrade is TestUpgradeV0120_Estate's estate, upgrade and checks, from
@@ -1090,7 +1096,8 @@ func u012Upgrade(t *testing.T, from u012From) {
 	// node between the chart upgrade and the new controller's removal of
 	// those nodes. Only that read, and only before the nodes were gone.
 	leveled, allowed, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
-		return at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line))
+		return (at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line))) ||
+			(from.kroExpected != nil && from.kroExpected(line, at))
 	})
 	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283)", leveled, allowed)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")

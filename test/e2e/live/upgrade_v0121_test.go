@@ -42,10 +42,11 @@ const u0121AlarmGate = "hold-auto-rollbacks"
 // It adds an automatic rollback in flight across the upgrade
 // (u0121AutoRollback): the code v0.12.2 changes (#2187, #2223).
 //
-// Covers UPG-V0121-01, UPG-V0121-02, UPG-V0121-03, UPG-V0121-04, UPG-V0121-05, UPG-V0121-06.
+// Covers UPG-V0121-01, UPG-V0121-02, UPG-V0121-03, UPG-V0121-04, UPG-V0121-05, UPG-V0121-06, UPG-V0121-07.
 func TestUpgradeV0121_Estate(t *testing.T) {
+	stuck := &u012Stuck{}
 	u012Upgrade(t, u012From{pins: "V0121", cli: (*framework.Env).KardinalV0121, guideChart: guideChartV0121,
-		guide: "0.12.0", extra: u0121AutoRollback})
+		guide: "0.12.0", extra: u012Extras(u0121AutoRollback, stuck.before), kroExpected: stuck.expected})
 }
 
 // u0121Rollbacks are the rollback Bundles of ns (label kardinal.io/rollback)
