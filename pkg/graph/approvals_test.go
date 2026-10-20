@@ -92,6 +92,16 @@ func TestBuilder_ApprovalGate(t *testing.T) {
 	nodes = nodeByID(res.Graph.Spec.Nodes)
 	assert.NotContains(t, nodes, graph.ApprovalsNodeID, "no Approvals ref without an approval gate")
 	assert.NotContains(t, nodes, graph.NodeApprovalGates)
+
+	// A Graph whose only approval gate has no policy keeps it in
+	// ApprovalGates, which then renders no spec.approval (#2271).
+	res, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app"),
+		PolicyGates: []kardinalv1alpha1.PolicyGate{counter, plain}})
+	require.NoError(t, err)
+	nodes = nodeByID(res.Graph.Spec.Nodes)
+	require.Contains(t, nodes, graph.NodeApprovalGates)
+	assert.NotContains(t, nodes, graph.NodeApprovalReadGates)
+	assert.NotContains(t, nodes[graph.NodeApprovalGates].Template["spec"], "approval")
 }
 
 // TestBuilder_ApprovalGateNoApprovals: with no Approval yet the collection

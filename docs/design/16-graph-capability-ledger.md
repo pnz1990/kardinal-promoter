@@ -1253,9 +1253,11 @@ gates in one collection with and without a policy. #2271 (found by the agent-evi
 **Minimal Graph that shows it.** A collection over two items whose data entries differ in one
 key, templating `f: ${data.entries[item.t].?f}` into a CRD field that is not nullable: the
 item whose entry lacks `f` is refused.
-**kardinal workaround.** A collection renders an optional field for all its items or for none:
-the gate collections are split by whether the template has `spec.approval` (`ApprovalGates` and
-`ApprovalReadGates`, `VerifyGates` and `VerifyApprovalGates`, `pkg/graph/gates.go`). The
+**kardinal workaround.** A collection renders an optional field for all its items or for none.
+In a Graph where a gate has `spec.approval`, `ApprovalGates` and `VerifyGates` render it and hold
+only gates with one; the approval and verify gates without one go to `ApprovalReadGates` and
+`VerifyOnlyGates`, which render none (`pkg/graph/gates.go`). A Graph where no gate has one keeps
+every gate where it was, so a working Graph's nodes do not change. The
 package's test renderer renders an optional with no value as null as kro does, and every test
 that renders a Graph checks no PolicyGate has a null `spec.approval` (`assertNoNullApproval`).
 **Smallest change, no upstream work yet.** Nothing upstream is needed: omitting the field is

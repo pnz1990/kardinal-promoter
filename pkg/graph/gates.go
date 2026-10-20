@@ -35,15 +35,17 @@ const (
 	// instances of gates that read the Bundle's Verdicts (verify.go), with
 	// their Approvals when they read those too.
 	NodeVerifyGates = "VerifyGates"
-	// NodeApprovalReadGates and NodeVerifyApprovalGates are the approval
-	// gates without spec.approval (they only read approvals.*) and the verify
-	// gates with one. A collection renders spec.approval for all its items or
-	// for none: kro renders an optional with no value as null (unless its
-	// alpha CELOmitFunction gate is on), and the CRD refuses a null
-	// spec.approval, so a mixed collection's instances without a policy were
-	// never created (#2271).
-	NodeApprovalReadGates   = "ApprovalReadGates"
-	NodeVerifyApprovalGates = "VerifyApprovalGates"
+	// NodeApprovalReadGates and NodeVerifyOnlyGates are, in a Graph where a
+	// gate has spec.approval, the approval gates without one (they only read
+	// approvals.*) and the verify gates without one. ApprovalGates and
+	// VerifyGates then render spec.approval, and these do not: a collection
+	// renders it for all its items or for none. kro renders an optional with
+	// no value as null (unless its alpha CELOmitFunction gate is on), and the
+	// CRD refuses a null spec.approval, so such an instance in a mixed
+	// collection was never created (#2271, ledger G28). A Graph where no gate
+	// has spec.approval keeps every gate where it was.
+	NodeApprovalReadGates = "ApprovalReadGates"
+	NodeVerifyOnlyGates   = "VerifyOnlyGates"
 	// NodePRStatusData holds one entry per environment's PRStatus.
 	NodePRStatusData = "PRStatusData"
 	// NodePRStatuses creates one PRStatus per NodePRStatusData item.
@@ -81,10 +83,10 @@ type gateCollections struct {
 	templates []interface{}
 	index     map[string]int
 	// gates, skipGates, approvalGates, approvalReadGates, verifyGates and
-	// verifyApprovalGates hold the items of each collection node, in chunks
-	// of at most MaxCollectionItems (kro's default forEach limit).
+	// verifyOnlyGates hold the items of each collection node, in chunks of
+	// at most MaxCollectionItems (kro's default forEach limit).
 	gates, skipGates, approvalGates, approvalReadGates [][]interface{}
-	verifyGates, verifyApprovalGates                   [][]interface{}
+	verifyGates, verifyOnlyGates                       [][]interface{}
 	instances                                          []kardinalv1alpha1.PolicyGate
 	// collection is the collection node of each instance name.
 	collection map[string]string
@@ -98,7 +100,8 @@ type gateCollections struct {
 	// bundleUID are the Bundle's.
 	approvals, agentRuns bool
 	namespace, bundleUID string
-	// approvalPolicies is whether a template has spec.approval. kro types
+	// approvalPolicies is whether a gate of the Graph has spec.approval
+	// (set before the first add: it decides where a gate goes). kro types
 	// the templates list from its data, so spec.?approval compiles only when
 	// one of them has the field.
 	approvalPolicies bool
@@ -129,9 +132,6 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		c.templates = append(c.templates, tmpl)
 	}
 	item := map[string]interface{}{"name": k8sName, "environment": envName, "t": t}
-	if gate.Spec.Approval != nil {
-		c.approvalPolicies = true
-	}
 	var collection string
 	switch {
 	case len(skipped) > 0 && needsApprovals(gate):
@@ -147,12 +147,12 @@ func (c *gateCollections) add(gate kardinalv1alpha1.PolicyGate, envName, k8sName
 		// A verify gate that reads approvals too copies them (every item of
 		// the collection says whether it does, so the field is always there).
 		item["readsApprovals"] = needsApprovals(gate)
-		if gate.Spec.Approval != nil {
-			collection = appendChunked(&c.verifyApprovalGates, item, NodeVerifyApprovalGates)
+		if c.approvalPolicies && gate.Spec.Approval == nil {
+			collection = appendChunked(&c.verifyOnlyGates, item, NodeVerifyOnlyGates)
 		} else {
 			collection = appendChunked(&c.verifyGates, item, NodeVerifyGates)
 		}
-	case needsApprovals(gate) && gate.Spec.Approval == nil:
+	case needsApprovals(gate) && c.approvalPolicies && gate.Spec.Approval == nil:
 		collection = appendChunked(&c.approvalReadGates, item, NodeApprovalReadGates)
 	case needsApprovals(gate):
 		collection = appendChunked(&c.approvalGates, item, NodeApprovalGates)
@@ -342,8 +342,8 @@ func (c *gateCollections) collectionIDs() []string {
 	for i := range c.verifyGates {
 		ids = append(ids, chunkID(NodeVerifyGates, i))
 	}
-	for i := range c.verifyApprovalGates {
-		ids = append(ids, chunkID(NodeVerifyApprovalGates, i))
+	for i := range c.verifyOnlyGates {
+		ids = append(ids, chunkID(NodeVerifyOnlyGates, i))
 	}
 	return ids
 }
@@ -369,7 +369,7 @@ func (c *gateCollections) nodes() []GraphNode {
 	for i, items := range c.approvalGates {
 		field := chunkID("approvalGates", i)
 		data[field] = items
-		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalGates, i), field, true))
+		out = append(out, c.approvalCollectionNode(chunkID(NodeApprovalGates, i), field, c.approvalPolicies))
 	}
 	for i, items := range c.approvalReadGates {
 		field := chunkID("approvalReadGates", i)
@@ -379,12 +379,12 @@ func (c *gateCollections) nodes() []GraphNode {
 	for i, items := range c.verifyGates {
 		field := chunkID("verifyGates", i)
 		data[field] = items
-		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyGates, i), field, false))
+		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyGates, i), field, c.approvalPolicies))
 	}
-	for i, items := range c.verifyApprovalGates {
-		field := chunkID("verifyApprovalGates", i)
+	for i, items := range c.verifyOnlyGates {
+		field := chunkID("verifyOnlyGates", i)
 		data[field] = items
-		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyApprovalGates, i), field, true))
+		out = append(out, c.verifyCollectionNode(chunkID(NodeVerifyOnlyGates, i), field, false))
 	}
 	return append([]GraphNode{{ID: NodePolicyGateData, Def: data}}, out...)
 }
