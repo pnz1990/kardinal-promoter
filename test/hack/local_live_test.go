@@ -25,6 +25,9 @@ import (
 // record what they were asked, around a real lock and slots directory.
 type localLiveHost struct {
 	dir, lock, slots, state, fake string
+	// token turns local-live.sh's test overrides on: it matches the file
+	// in the fake e2e directory (a stray LOCAL_LIVE_TEST=1 has neither).
+	token string
 }
 
 const localLiveKind = `#!/usr/bin/env bash
@@ -91,7 +94,7 @@ func newLocalLiveHost(t *testing.T) *localLiveHost {
 	t.Helper()
 	dir := t.TempDir()
 	h := &localLiveHost{dir: dir, lock: filepath.Join(dir, "LOADLOCK"), slots: filepath.Join(dir, "slots"),
-		state: filepath.Join(dir, "e2e-state"), fake: filepath.Join(dir, "fake")}
+		state: filepath.Join(dir, "e2e-state"), fake: filepath.Join(dir, "fake"), token: fmt.Sprintf("t%d-%d", time.Now().UnixNano(), os.Getpid())}
 	for _, d := range []string{h.fake, filepath.Join(dir, "bin"), filepath.Join(dir, "e2e"), h.slots} {
 		require.NoError(t, os.MkdirAll(d, 0o755))
 	}
@@ -101,6 +104,7 @@ func newLocalLiveHost(t *testing.T) *localLiveHost {
 		"bin/zsh": "#!/usr/bin/env bash\n"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755))
 	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "e2e", ".local-live-test-token"), []byte(h.token+"\n"), 0o600))
 	return h
 }
 
@@ -115,7 +119,8 @@ func (h *localLiveHost) cmd(t *testing.T, env []string, args ...string) *exec.Cm
 		"LOADLOCK="+h.lock, "RELEASE_GATE_SLOTS="+h.slots,
 		"LOCK_UNDER_TEST="+h.lock, "SLOTS_UNDER_TEST="+h.slots,
 		// An idle host with room for clusters, unless a test says otherwise.
-		"LOCAL_LIVE_TEST=1", "LOCAL_LIVE_TEST_LOAD=0", "LOCAL_LIVE_TEST_INOTIFY=8192", "LOCAL_LIVE_TEST_SPACING=0")
+		"LOCAL_LIVE_TEST=1", "LOCAL_LIVE_TEST_TOKEN="+h.token,
+		"LOCAL_LIVE_TEST_LOAD=0", "LOCAL_LIVE_TEST_INOTIFY=8192", "LOCAL_LIVE_TEST_SPACING=0")
 	cmd.Env = append(cmd.Env, env...)
 	return cmd
 }
@@ -767,16 +772,55 @@ exec `+realCat+` "$@"
 		hostEnv := filepath.Join(filepath.Dir(h.slots), "host.env")
 		require.NoError(t, os.WriteFile(hostEnv, []byte("# the host's capacity\nSLOT_MAX=3\r\n"), 0o644))
 		assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..3\n", "host.env")
-		assert.Contains(t, dry("SLOT_MAX=5"), "slots    1 of "+h.slots+"/1..5\n", "$SLOT_MAX over host.env")
-		for _, bad := range []string{"SLOT_MAX=0\n", "SLOT_MAX=03\n", "SLOT_MAX=three\n"} {
-			require.NoError(t, os.WriteFile(hostEnv, []byte(bad), 0o644))
-			assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..2\n", "%q", bad)
+		assert.Contains(t, dry("SLOT_MAX=4"), "slots    1 of "+h.slots+"/1..4\n", "$SLOT_MAX over host.env")
+		// Out of 1..4, from either source: refused, never room (#2244 QA).
+		refused := func(env ...string) string {
+			// 15s at most: a run that takes the value waits for room, or starts.
+			cmd := h.cmd(t, env, "gitea")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			out := &liveOut{}
+			cmd.Stdout, cmd.Stderr = out, out
+			require.NoError(t, cmd.Start())
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				assert.Equal(t, 2, exitCode(err), "%s", out.String())
+			case <-time.After(15 * time.Second):
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				<-done
+				t.Errorf("not refused (%v): %s", env, out.String())
+			}
+			assert.Empty(t, h.read("up"), "no cluster")
+			return out.String()
 		}
+		for _, bad := range []string{"5", "999", "99999999999999999999", "abc", "0", "03", "-1", " 3"} {
+			require.NoError(t, os.WriteFile(hostEnv, []byte("SLOT_MAX="+bad+"\n"), 0o644))
+			assert.Contains(t, refused(), "SLOT_MAX="+bad+" ("+hostEnv+"): the host has 1 to 4 cluster slots", "host.env %q", bad)
+		}
+		require.NoError(t, os.WriteFile(hostEnv, []byte("SLOT_MAX=3\n"), 0o644))
+		for _, bad := range []string{"5", "999", "99999999999999999999", "abc"} {
+			assert.Contains(t, refused("SLOT_MAX="+bad), "SLOT_MAX="+bad+" ($SLOT_MAX): the host has 1 to 4 cluster slots", "$SLOT_MAX %q", bad)
+		}
+		require.NoError(t, os.WriteFile(hostEnv, []byte("slot_max=9\n"), 0o644))
+		assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..2\n", "another key is not SLOT_MAX")
 		if os.Geteuid() != 0 {
 			require.NoError(t, os.WriteFile(hostEnv, []byte("SLOT_MAX=3\n"), 0o644))
 			require.NoError(t, os.Chmod(hostEnv, 0o000))
 			assert.Contains(t, dry(), "slots    1 of "+h.slots+"/1..2\n", "a host.env that cannot be read: the fewest")
 		}
+	})
+	t.Run("LOCAL_LIVE_TEST=1 without the harness's token refuses to run", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		for _, tok := range []string{"", "a-guess"} {
+			out, err := h.cmd(t, []string{"LOCAL_LIVE_TEST_TOKEN=" + tok}, "gitea").CombinedOutput()
+			assert.Equal(t, 2, exitCode(err), "%s", out)
+			assert.Contains(t, string(out), "LOCAL_LIVE_TEST=1 is set without the test harness's token")
+		}
+		require.NoError(t, os.Remove(filepath.Join(h.dir, "e2e", ".local-live-test-token")))
+		out, err := h.cmd(t, nil, "gitea").CombinedOutput()
+		assert.Equal(t, 2, exitCode(err), "no token file: %s", out)
+		assert.Empty(t, h.read("up"))
 	})
 	t.Run("a slot owner without a pid is never reclaimed", func(t *testing.T) {
 		h := newLocalLiveHost(t)

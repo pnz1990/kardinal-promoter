@@ -118,9 +118,6 @@ START_SPACING=60
 # DRAIN_DEADLINE: how long a heavy suite may drain the host waiting for its
 # start before it gives up (seconds; DRAIN_DEADLINE in the env overrides it).
 DRAIN_DEADLINE=${DRAIN_DEADLINE:-1800}
-if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
-  LOAD_RETRY=${LOCAL_LIVE_TEST_LOAD_RETRY:-$LOAD_RETRY}
-fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
@@ -153,6 +150,22 @@ die() {
   exit 2
 }
 log() { printf '[local-live %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
+
+# The test overrides (LOCAL_LIVE_TEST_*: the load, inotify, spacing, failing
+# tools, /proc) are test/hack's fake host's only: on with LOCAL_LIVE_TEST=1
+# and LOCAL_LIVE_TEST_TOKEN matching the token file the harness writes in its
+# fake e2e directory (E2E_DIR/.local-live-test-token). LOCAL_LIVE_TEST=1
+# without it refuses to run, so a stray export never bypasses the host's
+# gates (#2244 QA).
+test_mode=''
+if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
+  test_token=''
+  { read -r test_token <"$E2E_DIR/.local-live-test-token"; } 2>/dev/null || test_token=''
+  [ -n "$test_token" ] && [ "${LOCAL_LIVE_TEST_TOKEN:-}" = "$test_token" ] ||
+    die "LOCAL_LIVE_TEST=1 is set without the test harness's token: refusing to run (its overrides would bypass the host's gates; unset it)"
+  test_mode=1
+  LOAD_RETRY=${LOCAL_LIVE_TEST_LOAD_RETRY:-$LOAD_RETRY}
+fi
 usage() { die "usage: $0 [-pr N] [-shard i/n] [-reuse CLUSTER] [-badge B] [-o OWNER] [-n] [-no-lock] SUITE [MINOR]"; }
 
 pr='' shard='' badge=${AGENT_BADGE:-} dry='' nolock='' reuse=''
@@ -222,18 +235,31 @@ RETRY=${RETRY:-10}
 SLOTS_DIR=${RELEASE_GATE_SLOTS:-}
 # The host's cluster slots: $SLOT_MAX, else SLOT_MAX=N in the host's
 # host.env next to the slots directory (DIR/../host.env, where the host's
-# capacity is tuned, not in this script), else 2. hack/release-gate's
-# -slot-max reads the same.
-# A host.env that cannot be read leaves the default (2, the fewest).
-if [ -z "${SLOT_MAX:-}" ] && [ -n "$SLOTS_DIR" ] && [ -e "${SLOTS_DIR%/}/../host.env" ]; then
-  {
-    while IFS= read -r line || [ -n "$line" ]; do
-      line=${line%$'\r'}
-      if [[ $line =~ ^SLOT_MAX=([1-9][0-9]*)$ ]]; then SLOT_MAX=${BASH_REMATCH[1]}; fi
-    done <"${SLOTS_DIR%/}/../host.env"
-  } 2>/dev/null || true
+# capacity is tuned, not in this script), else 2; 1 to 4 (MAX_SLOTS), or
+# the run refuses (#2244 QA: any agent can write host.env, and a value out of
+# range never means room). A host.env that cannot be read leaves 2, the
+# fewest. hack/release-gate's -slot-max reads the same.
+MAX_SLOTS=4
+slot_max_from="\$SLOT_MAX"
+if [ -z "${SLOT_MAX:-}" ]; then
+  SLOT_MAX='' slot_max_from='the default'
+  host_env=${SLOTS_DIR%/}
+  if [[ $host_env == */* ]]; then host_env=${host_env%/*}/host.env; else host_env=host.env; fi
+  if [ -n "$SLOTS_DIR" ] && [ -e "$host_env" ]; then
+    if {
+      while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        [[ $line != SLOT_MAX=* ]] || SLOT_MAX=${line#SLOT_MAX=} slot_max_from=$host_env
+      done <"$host_env"
+    } 2>/dev/null; then :; else
+      SLOT_MAX='' slot_max_from='the default'
+      log "warning: cannot read $host_env; the host has 2 cluster slots"
+    fi
+  fi
 fi
 SLOT_MAX=${SLOT_MAX:-2}
+[[ $SLOT_MAX =~ ^[1-9]$ ]] && [ "$SLOT_MAX" -le "$MAX_SLOTS" ] ||
+  die "SLOT_MAX=$SLOT_MAX ($slot_max_from): the host has 1 to $MAX_SLOTS cluster slots"
 need_slots=1
 [ "$SUITE" != multi-cluster ] || need_slots=2
 
@@ -303,11 +329,11 @@ mkdir -p "$HOME"
 # never make a live run look gone or the host look free. A file that is
 # there but cannot be read is the safe answer: its run is alive, the host is
 # draining, busy or full.
-# LOCAL_LIVE_TEST_PROC (tests only, with LOCAL_LIVE_TEST=1): pids the test
+# LOCAL_LIVE_TEST_PROC (tests only, in the test mode): pids the test
 # makes (directories <pid>, with a stat or without); a pid there is judged
 # from it, every other from /proc, as hack/loadlock.sh's LOADLOCK_TEST_PROC.
 test_proc=''
-[ "${LOCAL_LIVE_TEST:-}" != 1 ] || test_proc=${LOCAL_LIVE_TEST_PROC:-}
+[ -z "$test_mode" ] || test_proc=${LOCAL_LIVE_TEST_PROC:-}
 # pid_dir PID sets pid_dir_v to the directory PID is judged from.
 pid_dir() {
   pid_dir_v=/proc/$1
@@ -516,13 +542,13 @@ try_slots() {
     return 1
   fi
   in_use
-  if [ -n "$heavy" ] && [ "$in_use_v" -gt "$HEAVY_OTHER_SLOTS" ]; then
+  if [ -n "$heavy" ] && ((in_use_v > HEAVY_OTHER_SLOTS)); then
     why="$in_use_v other cluster slots are in use; a heavy suite starts with at most $HEAVY_OTHER_SLOTS"
     return 1
   fi
   # Every slot directory counts, one above SLOT_MAX too (a run with a larger
   # SLOT_MAX took it): the host runs SLOT_MAX clusters at most.
-  if [ $((in_use_v + need_slots)) -gt "$SLOT_MAX" ]; then
+  if ((in_use_v + need_slots > SLOT_MAX)); then
     why="$in_use_v cluster slots are in use in $SLOTS_DIR, and the host has $SLOT_MAX"
     return 1
   fi
@@ -602,7 +628,7 @@ drain_expired() {
 # more, fs.inotify.max_user_instances is under 128 per kind node running and
 # the one to come (kind nodes hang at boot without them), or the last cluster
 # start was less than START_SPACING seconds ago (its load does not show yet).
-# LOCAL_LIVE_TEST=1 lets tests set the load, the limit and the spacing
+# The test mode (test_mode) lets tests set the load, the limit and the spacing
 # (LOCAL_LIVE_TEST_LOAD, LOCAL_LIVE_TEST_INOTIFY, LOCAL_LIVE_TEST_SPACING).
 # shellcheck disable=SC2329 # called by start_turn, through with_flock
 # It sets why; a load, an inotify limit, a node count or a last start it
@@ -612,7 +638,7 @@ room() {
   why=''
   { read -r load _ </proc/loadavg; } 2>/dev/null
   { read -r max </proc/sys/fs/inotify/max_user_instances; } 2>/dev/null
-  if [ "${LOCAL_LIVE_TEST:-}" = 1 ]; then
+  if [ -n "$test_mode" ]; then
     load=${LOCAL_LIVE_TEST_LOAD:-$load}
     max=${LOCAL_LIVE_TEST_INOTIFY:-$max}
     spacing=${LOCAL_LIVE_TEST_SPACING:-$spacing}
@@ -709,11 +735,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# LOCAL_LIVE_TEST_FAIL_PATH (tests, with LOCAL_LIVE_TEST=1) is put in front
+# LOCAL_LIVE_TEST_FAIL_PATH (tests, in the test mode) is put in front
 # of PATH while the run takes its slots and waits for room: a directory of
 # tools that fail, as forks do on a busy host.
 fail_path=''
-[ "${LOCAL_LIVE_TEST:-}" != 1 ] || [ -z "${LOCAL_LIVE_TEST_FAIL_PATH:-}" ] || fail_path=$LOCAL_LIVE_TEST_FAIL_PATH:
+[ -z "$test_mode" ] || [ -z "${LOCAL_LIVE_TEST_FAIL_PATH:-}" ] || fail_path=$LOCAL_LIVE_TEST_FAIL_PATH:
 if [ -z "$nolock" ]; then
   mkdir -p "$SLOTS_DIR"
   PATH=$fail_path$PATH take_slots

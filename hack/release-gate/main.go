@@ -184,6 +184,10 @@ func run() error {
 	if *noSlots {
 		*slots = ""
 	}
+	hostSlots, err := slotMaxOr(*slotMax, *slots)
+	if err != nil {
+		return err
+	}
 	tools, err := os.ReadFile(filepath.Join(root, "hack", "tool-versions.env"))
 	if err != nil {
 		return fmt.Errorf("read tool versions: %w", err)
@@ -205,7 +209,7 @@ func run() error {
 		// What every step's result depends on besides its own scripts.
 		Inputs: fmt.Sprintf("%s\x00count=%d fuzztime=%s image-build=%s live=%s minors=%s",
 			tools, *count, *fuzzTime, *imgBuild, *live, minorsInput(opts)),
-		Host: &machine{maxLoad: *maxLoad, minMemGB: *minMem, slotsDir: *slots, slotMax: slotMaxOr(*slotMax, *slots), lockDir: *lock,
+		Host: &machine{maxLoad: *maxLoad, minMemGB: *minMem, slotsDir: *slots, slotMax: hostSlots, lockDir: *lock,
 			owner: fmt.Sprintf("%s pid %d %s", *owner, os.Getpid(), time.Now().UTC().Format(time.RFC3339)), lockRetry: *lockRetry, lockClass: lockClassOf(*priority), log: logf},
 		Runner: runner,
 	}
@@ -278,38 +282,56 @@ func run() error {
 	return nil
 }
 
-// slotMaxOr is -slot-max when it was given (above 0), else slotMaxDefault.
-func slotMaxOr(flagged int, slotsDir string) int {
+// maxSlots is the most cluster slots a host may have: the two-cluster scale
+// profile's -slot-max 4 (#2107); hack/e2e/local-live.sh's MAX_SLOTS.
+const maxSlots = 4
+
+// slotMaxOr is -slot-max when it was given (above 0), else slotMaxDefault;
+// out of 1..maxSlots it is refused (#2244 QA: never more room than that).
+func slotMaxOr(flagged int, slotsDir string) (int, error) {
+	if flagged < 0 || flagged > maxSlots {
+		return 0, fmt.Errorf("-slot-max %d: the host has 1 to %d cluster slots", flagged, maxSlots)
+	}
 	if flagged > 0 {
-		return flagged
+		return flagged, nil
 	}
 	return slotMaxDefault(slotsDir)
 }
 
 // slotMaxDefault is the host's cluster slots, as hack/e2e/local-live.sh
-// reads them: $SLOT_MAX when it is a positive number, else SLOT_MAX=N in
-// host.env next to the slots directory (DIR/../host.env, where the host's
-// capacity is tuned), else 2.
-func slotMaxDefault(slotsDir string) int {
-	if n, err := strconv.Atoi(os.Getenv("SLOT_MAX")); err == nil && n > 0 {
-		return n
+// reads them: $SLOT_MAX, else SLOT_MAX=N in host.env next to the slots
+// directory (DIR/../host.env, where the host's capacity is tuned), else 2.
+// A value out of 1..maxSlots, from either, is refused; a host.env that
+// cannot be read leaves 2, the fewest.
+func slotMaxDefault(slotsDir string) (int, error) {
+	if v := os.Getenv("SLOT_MAX"); v != "" {
+		return checkSlotMax(v, "$SLOT_MAX")
 	}
 	if slotsDir != "" {
-		if b, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Clean(slotsDir)), "host.env")); err == nil {
-			n := 0
+		path := filepath.Join(filepath.Dir(filepath.Clean(slotsDir)), "host.env")
+		if b, err := os.ReadFile(path); err == nil {
+			v, found := "", false
 			for _, l := range strings.Split(string(b), "\n") {
-				if v, ok := strings.CutPrefix(strings.TrimRight(l, "\r"), "SLOT_MAX="); ok {
-					if m, err := strconv.Atoi(v); err == nil && m > 0 && v[0] != '0' {
-						n = m
-					}
+				if rest, ok := strings.CutPrefix(strings.TrimRight(l, "\r"), "SLOT_MAX="); ok {
+					v, found = rest, true
 				}
 			}
-			if n > 0 {
-				return n
+			if found {
+				return checkSlotMax(v, path)
 			}
 		}
 	}
-	return 2
+	return 2, nil
+}
+
+// checkSlotMax is v as the host's cluster slots, refused out of
+// 1..maxSlots (a plain number: no sign, no leading zero or space).
+func checkSlotMax(v, from string) (int, error) {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > maxSlots || strconv.Itoa(n) != v {
+		return 0, fmt.Errorf("SLOT_MAX=%s (%s): the host has 1 to %d cluster slots", v, from, maxSlots)
+	}
+	return n, nil
 }
 
 // hostRulesProblem refuses heavy steps without the heavy-load lock and
