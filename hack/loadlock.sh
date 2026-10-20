@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hack/loadlock.sh [-l LOCK] [-o OWNER] [-p release|normal] [-r RETRY] -- CMD [ARG...]
+# hack/loadlock.sh [-l LOCK] [-o OWNER] [-p release|normal] [-x] [-r RETRY] -- CMD [ARG...]
 #
 # Runs CMD holding the shared host's heavy-load lock. When CMD ends, however
 # it ends (an error, a signal), its hold is given up only if its owner record
@@ -38,18 +38,20 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: $0 [-l LOCK] [-o OWNER] [-p release|normal] [-r RETRY] -- CMD [ARG...]" >&2
+  echo "usage: $0 [-l LOCK] [-o OWNER] [-p release|normal] [-x] [-r RETRY] -- CMD [ARG...]" >&2
   exit 2
 }
 lock=${LOADLOCK:-}
 owner=${USER:-unknown}
 retry=10
 class=1
+alone=''
 while [ $# -gt 0 ]; do
   case $1 in
     -l) lock=$2; shift 2 ;;
     -o) owner=$2; shift 2 ;;
     -r) retry=$2; shift 2 ;;
+    -x) alone=1; shift ;;
     -p)
       case $2 in release) class=0 ;; normal) class=1 ;; *) usage ;; esac
       shift 2 ;;
@@ -102,6 +104,10 @@ record_dead() {
 # judge it by its boot id and pid only.
 self_start=$(start_of $$) || self_start=unknown
 tag="$owner pid $$ $(date -u +%Y-%m-%dT%H:%M:%SZ) boot=$(boot_id) start=$self_start"
+# -x: hold the lock alone (a heavy live suite): this run takes a slot only when
+# none is held, and while its record (exclusive=1) holds one no one takes the
+# other.
+[ -z "$alone" ] || tag="$tag exclusive=1"
 queue="$lock.queue"
 mkdir -p "$queue"
 ticket=$(printf '%s-%019d-%d' "$class" "$(date +%s%N)" "$$")
@@ -262,6 +268,10 @@ take_turn() {
   write_view || true
   held_n=$(holders_count)
   [ "$held_n" != exclusive ] && [ "$held_n" -lt "$(capacity)" ] || return 1
+  [ -z "$alone" ] || [ "$held_n" -eq 0 ] || return 1
+  for d in "$slots"/*; do
+    [ -f "$d/owner" ] && grep -q 'exclusive=1' "$d/owner" && return 1
+  done
   for n in 1 2; do
     mkdir "$slots/$n" 2>/dev/null || continue
     if ! echo "$record" >"$slots/$n/owner"; then

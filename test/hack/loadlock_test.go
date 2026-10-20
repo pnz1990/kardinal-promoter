@@ -687,3 +687,38 @@ if [ "$(cat "$0/owner" 2>/dev/null)" = "manual pid $$ now" ]; then rm -r "$0"; e
 		}
 	})
 }
+
+// TestLoadLock_Exclusive (#2244 QA, item 5): loadlock.sh -x holds the
+// counting lock alone, on an idle host too: two -x runs (two scale suites)
+// never overlap, and no other run holds it beside one.
+func TestLoadLock_Exclusive(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "LOADLOCK")
+	crit := filepath.Join(t.TempDir(), "crit.sh")
+	require.NoError(t, os.WriteFile(crit, []byte(`kind=$1 d=$2 me=$d/$kind.$$
+mkdir "$me"
+n_x=$(find "$d" -maxdepth 1 -name 'x.*' | wc -l)
+n_all=$(find "$d" -maxdepth 1 \( -name 'x.*' -o -name 'n.*' \) | wc -l)
+if [ "$kind" = x ]; then [ "$n_all" -eq 1 ] || touch "$d/violation"; else [ "$n_x" -eq 0 ] && [ "$n_all" -le 2 ] || touch "$d/violation"; fi
+sleep 0.05
+rmdir "$me"
+`), 0o755))
+	var cmds []*exec.Cmd
+	for i := 0; i < 9; i++ {
+		args := []string{script, "-l", lock, "-o", fmt.Sprintf("w%d", i), "-r", "0.05"}
+		kind := "n"
+		if i%3 == 0 {
+			args, kind = append(args, "-x"), "x"
+		}
+		cmd := exec.Command("bash", append(args, "--", "sh", crit, kind, dir)...)
+		cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
+		require.NoError(t, cmd.Start())
+		cmds = append(cmds, cmd)
+	}
+	for _, c := range cmds {
+		require.NoError(t, c.Wait())
+	}
+	assert.NoFileExists(t, filepath.Join(dir, "violation"), "an exclusive holder shared the lock")
+	assert.NoDirExists(t, lock)
+}

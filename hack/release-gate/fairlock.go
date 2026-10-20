@@ -203,6 +203,10 @@ type fairLock struct {
 	// load, when set, is the host's one-minute load (tests); nil reads
 	// /proc/loadavg.
 	load func() float64
+	// exclusive: hold the lock alone (a heavy live suite). An exclusive
+	// waiter takes a slot only when no slot is held, and while its record
+	// (exclusive=1) holds one, no one else takes the other.
+	exclusive bool
 	// held is the owner record written when the lock was taken, slot the
 	// slot directory it holds.
 	held, slot string
@@ -234,6 +238,9 @@ func (f *fairLock) acquire(ctx context.Context) error {
 	name := fmt.Sprintf("%s-%019d-%d", f.class, ns, os.Getpid())
 	ticket := filepath.Join(q, name)
 	record := f.owner + " " + selfRecord(f.proc)
+	if f.exclusive {
+		record += " exclusive=1"
+	}
 	if err := writeTicket(q, name, record); err != nil {
 		return err
 	}
@@ -370,6 +377,16 @@ func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
 		}
 		if exclusive || len(held) >= capacity(load) {
 			return nil
+		}
+		// A heavy holder holds the lock alone; a heavy waiter waits for it
+		// to be free.
+		if f.exclusive && len(held) > 0 {
+			return nil
+		}
+		for _, h := range held {
+			if strings.Contains(h, "exclusive=1") {
+				return nil
+			}
 		}
 		sd := slotsDir(f.lock)
 		if err := os.MkdirAll(sd, 0o755); err != nil {

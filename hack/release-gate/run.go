@@ -58,6 +58,9 @@ type Host interface {
 	Slots(n int) (release func(), ok bool, why string)
 	// Lock takes the heavy-load lock, waiting for it until ctx ends.
 	Lock(ctx context.Context) error
+	// LockExclusive takes it as its only holder (a heavy live suite: the
+	// counting lock's second holder waits).
+	LockExclusive(ctx context.Context) error
 	Unlock()
 }
 
@@ -354,8 +357,12 @@ func (g *Gate) runStep(ctx context.Context, st Step) Result {
 		return r
 	}
 	if st.Heavy {
-		g.Log("%s: taking the heavy-load lock", st.ID)
-		if err := g.Host.Lock(ctx); err != nil {
+		g.Log("%s: taking the heavy-load lock%s", st.ID, map[bool]string{true: " alone", false: ""}[st.Exclusive])
+		lock := g.Host.Lock
+		if st.Exclusive {
+			lock = g.Host.LockExclusive
+		}
+		if err := lock(ctx); err != nil {
 			r.Status, r.Reason = statusFail, "heavy-load lock: "+err.Error()
 			_ = g.save(r)
 			return r
@@ -524,7 +531,12 @@ func memAvailableGB() (float64, bool) {
 // (fairlock.go): a ticket of lockClass, served release tickets first, then
 // in order. While it waits it wakes on the queue's changes, or every
 // lockRetry.
-func (m *machine) Lock(ctx context.Context) error {
+func (m *machine) Lock(ctx context.Context) error { return m.lock(ctx, false) }
+
+// LockExclusive is Lock as the lock's only holder.
+func (m *machine) LockExclusive(ctx context.Context) error { return m.lock(ctx, true) }
+
+func (m *machine) lock(ctx context.Context, exclusive bool) error {
 	if m.lockDir == "" {
 		return nil
 	}
@@ -536,7 +548,8 @@ func (m *machine) Lock(ctx context.Context) error {
 	if poll <= 0 {
 		poll = 10 * time.Second
 	}
-	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc, load: m.lockLoad}
+	f := &fairLock{lock: m.lockDir, owner: m.owner, class: class, poll: poll, log: m.log, proc: m.proc, load: m.lockLoad,
+		exclusive: exclusive}
 	if err := f.acquire(ctx); err != nil {
 		return err
 	}

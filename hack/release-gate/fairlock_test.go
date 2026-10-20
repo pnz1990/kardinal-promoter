@@ -558,3 +558,76 @@ func readOwner(t *testing.T, dir string) string {
 	require.NoError(t, err)
 	return string(b)
 }
+
+// TestCountingLock_ExclusiveHoldsAlone (#2244 QA, item 5): a heavy suite
+// holds the counting lock alone. On an idle host, while an exclusive holder
+// holds it no one else does; an exclusive waiter waits for the lock to be
+// free; two exclusive runs (two scale suites) never overlap.
+func TestCountingLock_ExclusiveHoldsAlone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	x, n := idleAs(dir, "x", classNormal), idleAs(dir, "n", classNormal)
+	require.NoError(t, x.LockExclusive(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	assert.ErrorIs(t, n.Lock(ctx), context.DeadlineExceeded, "no second holder beside an exclusive one")
+	cancel()
+	x.Unlock()
+	require.NoError(t, n.Lock(context.Background()))
+	ctx, cancel = context.WithTimeout(context.Background(), 300*time.Millisecond)
+	assert.ErrorIs(t, x.LockExclusive(ctx), context.DeadlineExceeded, "an exclusive waiter waits for the lock to be free")
+	cancel()
+	n.Unlock()
+
+	var inside, xInside, violations atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m := idleAs(dir, fmt.Sprintf("w%d pid %d now", i, os.Getpid()), classNormal)
+			exclusive := i%3 == 0
+			lock := m.Lock
+			if exclusive {
+				lock = m.LockExclusive
+			}
+			for r := 0; r < 20; r++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				err := lock(ctx)
+				cancel()
+				if !assert.NoError(t, err) {
+					return
+				}
+				all := inside.Add(1)
+				if exclusive {
+					if xInside.Add(1) > 1 || all > 1 {
+						violations.Add(1)
+					}
+				} else if xInside.Load() > 0 || all > 2 {
+					violations.Add(1)
+				}
+				time.Sleep(time.Millisecond)
+				if exclusive {
+					xInside.Add(-1)
+				}
+				inside.Add(-1)
+				m.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Zero(t, violations.Load(), "an exclusive holder shared the lock")
+}
+
+// TestPlan_ScaleStepsHoldTheLockAlone (#2244 QA, item 5): the scale suite's
+// steps take the counting lock exclusively; other heavy steps share it.
+func TestPlan_ScaleStepsHoldTheLockAlone(t *testing.T) {
+	scale := 0
+	for _, st := range Plan(fakeRepo(), Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, Floor: 35, Newest: 37}) {
+		if strings.HasPrefix(st.ID, "scale-") {
+			scale++
+			assert.True(t, st.Exclusive && st.Heavy, "%s holds the heavy-load lock alone", st.ID)
+		} else {
+			assert.False(t, st.Exclusive, "%s shares it", st.ID)
+		}
+	}
+	assert.Positive(t, scale)
+}

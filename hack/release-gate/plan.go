@@ -46,6 +46,9 @@ type Step struct {
 	Clusters int
 	// Heavy steps hold the host's heavy-load lock while they run.
 	Heavy bool
+	// Exclusive heavy steps hold it alone (the scale suite): with the
+	// counting lock, no second holder runs beside them.
+	Exclusive bool
 	// Tests is the go test -json file the step writes, relative to its
 	// directory, for the totals.
 	Tests string
@@ -428,7 +431,7 @@ func scaleSteps(r *Repo, o Options) []Step {
 	for _, p := range o.ScaleProfiles {
 		st := Step{
 			ID: "scale-" + p, Area: areaScale, Title: "scale suite, " + p + " profile",
-			Clusters: clusterWeight["scale"], Heavy: true, Tests: "e2e/test.json", MinTests: 1,
+			Clusters: clusterWeight["scale"], Heavy: true, Exclusive: true, Tests: "e2e/test.json", MinTests: 1,
 		}
 		if r.nodeImage("scale", o.Newest) == "" {
 			st.Missing = fmt.Sprintf("no node image for Kubernetes 1.%d", o.Newest)

@@ -216,6 +216,8 @@ func (h *fakeHost) Lock(context.Context) error {
 	return nil
 }
 
+func (h *fakeHost) LockExclusive(ctx context.Context) error { return h.Lock(ctx) }
+
 func (h *fakeHost) Unlock() {
 	h.mu.Lock()
 	h.locked = false
