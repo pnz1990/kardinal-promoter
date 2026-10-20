@@ -68,7 +68,7 @@ With a controller older than status.environments, the CLI computes the same
 rows itself, with the controller's code; SINCE is then known only for live
 environments. -o json and -o yaml print the same data with the API's state
 values (Verified, WaitingForMerge) and "source": "controller" or "cli".
-kardinal explain shows the steps and every gate of the current Bundle.
+kardinal why <pipeline> -o wide shows the steps and every gate of the current Bundle.
 
 ```
 kardinal status [<pipeline>] [flags]
@@ -97,7 +97,7 @@ kardinal status [<pipeline>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, explain, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

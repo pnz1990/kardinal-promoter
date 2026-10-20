@@ -81,7 +81,7 @@ Output:
 ```
 Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
 Bundle my-app-rollback-x7k2p created (rollbackOf=my-app-v1-28-0)
-Track with: kardinal explain my-app --env prod
+Track with: kardinal why my-app prod
 ```
 
 ### Roll back to a specific version
@@ -181,7 +181,7 @@ Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg
 Bundle my-app-rollback-3f9a1c created (rollbackOf=my-app-v1-28-0)
 Environment prod held on my-app-rollback-3f9a1c: no other version promotes there until: kardinal unhold my-app prod
 Gates of prod that would block the rollback pass as EXEMPT (audited) while the controller verifies it restores what was Verified there.
-Track with: kardinal explain my-app --env prod
+Track with: kardinal why my-app prod
 ```
 
 `--hold` restores the environment and keeps it there. Without it, the next version CI creates
@@ -215,7 +215,7 @@ an incident is open. While the environment is held:
   `kubectl`.
 
 `--reason` is required with `--hold`. The hold records who held the environment and when.
-`kardinal explain my-app --env prod` and the UI show it. An environment holds at most one rollback:
+`kardinal why my-app prod -o wide` and the UI show it. An environment holds at most one rollback:
 a second `--hold` on the same environment is refused until the first is released.
 `--hold-expires-in` ends the hold by itself. From `expiresAt` on, the hold counts as absent: the
 exemption ends, steps of other versions are no longer held, and the controller removes the entry
@@ -244,7 +244,7 @@ controller reports it:
   ([kardinal metrics](reference/metrics.md#kardinal-metrics)), each at most once per hold
   (Events expire, and a controller that stops between the status write and the Event can
   miss them);
-- `kardinal explain` and the UI's hold badge show the missing version and the release command.
+- `kardinal why -o wide` and the UI's hold badge show the missing version and the release command.
 
 To recover, release the hold, then roll back and hold again if you still want the
 environment held:

@@ -265,7 +265,7 @@ words (`uat-soak (blocking) · +1 passing`). Durations read `42s`, `4m`, `2h 15m
   as running. Image and config Bundles do not replace each other, so a station also shows, under
   `+`, what the environment runs from another Bundle: the config commit of the last config Bundle
   under an image Bundle, or the image tags of the last image Bundle under a config Bundle, as
-  `kardinal explain` does. A lit rail marks the active Bundle's version on its way into an environment:
+  `kardinal why -o wide` does. A lit rail marks the active Bundle's version on its way into an environment:
   amber and moving while it promotes, waits for its PR or is health checked; amber and still
   while a PolicyGate holds it; red where it failed. A [fleet](pipeline-reference.md#fleets)
   is one station with a bar of its targets (Verified, in flight, Failed) and a count such as
