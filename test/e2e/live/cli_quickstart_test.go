@@ -134,6 +134,10 @@ func TestCLI_Quickstart(t *testing.T) {
 	t.Logf("quickstart:\n%s", r.Output())
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.NotContains(t, r.Output(), string(token.Data["token"]))
+	// The commands it prints name the context it checked and the kubeconfig
+	// it read it from (#2233), so they run against this cluster when copied
+	// into any shell: the CLI's KUBECONFIG is the kind-only file.
+	hint := func(tool string) string { return tool + " --context " + e.Context + " --kubeconfig " + cli.Kubeconfig }
 	steps := []string{
 		"Setting up the kardinal demo in " + e.Context + "\n",
 		"  - kro 0.10.0-rc.0: already installed\n",
@@ -147,11 +151,11 @@ func TestCLI_Quickstart(t *testing.T) {
 		"Following version " + fixtures.V2 + " (demo-",
 		") through test, uat and prod (Ctrl-C stops following, the promotion goes on)\n",
 		"Version " + fixtures.V2 + " (demo-",
-		") stopped: prod waits for approval at gate prod-approval (kardinal approve demo prod)\n",
-		"\nNext:\n  Approve prod:    kardinal approve demo prod\n",
-		"  Watch:           kardinal status demo -w\n",
-		"  Open the UI:     kardinal dashboard\n",
-		"  Ship the next:   kardinal ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:",
+		") stopped: prod waits for approval at gate prod-approval (" + hint("kardinal") + " approve demo prod)\n",
+		"\nNext:\n  Approve prod:    " + hint("kardinal") + " approve demo prod\n",
+		"  Watch:           " + hint("kardinal") + " status demo -w\n",
+		"  Open the UI:     " + hint("kardinal") + " dashboard\n",
+		"  Ship the next:   " + hint("kardinal") + " ship demo --image ghcr.io/pnz1990/kardinal-test-app:main@sha256:",
 	}
 	at := 0
 	for _, s := range steps {
@@ -237,7 +241,7 @@ func TestCLI_Quickstart(t *testing.T) {
 		"PolicyGate default/prod-approval: deleted\n",
 		"Argo CD ApplicationSet argocd/kardinal-test-app: deleted (Argo CD deletes its Applications)\n",
 		"Secret default/github-token: deleted\n",
-		"  kubectl delete namespace kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod\n",
+		"  " + hint("kubectl") + " delete namespace kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod\n",
 	} {
 		assert.Contains(t, r.Stdout, line)
 	}
