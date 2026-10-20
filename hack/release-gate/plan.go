@@ -55,6 +55,11 @@ type Step struct {
 	// NotRun, when set, is why the step cannot run here: it is reported,
 	// never run, and the gate is incomplete.
 	NotRun string
+	// Pinned, when set, is why the suite cannot run on this minor:
+	// hack/e2e/matrix.txt pins it to its own minors. The step is reported
+	// with the reason and never run; the verdict does not wait for it, as no
+	// host could run it.
+	Pinned string
 	// Missing, when set, is evidence the release needs that this commit has
 	// no test for: the gate fails.
 	Missing string
@@ -117,14 +122,20 @@ func fuzzHeavy(fuzzTime string) bool {
 
 // Repo is what the plan reads from the checkout.
 type Repo struct {
-	Root         string
-	Matrix       []MatrixLine      // hack/e2e/matrix.txt
+	Root   string
+	Matrix []MatrixLine // hack/e2e/matrix.txt
+	// Pinned are the suites matrix.txt runs only on the minors their lines
+	// list (a fifth column, pinned), each with the comment above its first
+	// line: why.
+	Pinned       map[string]string
 	ToolVersions map[string]string // hack/tool-versions.env
 	FuzzTargets  []FuzzTarget
 	PrevRelease  string // the release before this commit, e.g. v0.11.0
 	Enterprise   bool   // test/scenario/enterprise exists
 	// NotRunItems are what the gate does not run (hack/release-gate/not-run.txt).
 	NotRunItems []NotRunItem
+	// ReleaseTargets are the binaries release.yml ships, for every platform.
+	ReleaseTargets []BuildTarget
 }
 
 // MatrixLine is a line of hack/e2e/matrix.txt.
@@ -140,12 +151,13 @@ var (
 )
 
 // LoadRepo reads the matrix, the tool versions, the fuzz targets, the
-// previous release and the not-run list of the checkout at root: a broken
-// not-run list stops the gate before it runs anything.
+// previous release, the not-run list and the release targets of the
+// checkout at root: a broken not-run list stops the gate before it runs
+// anything.
 func LoadRepo(root string) (*Repo, error) {
 	r := &Repo{Root: root}
 	var err error
-	if r.Matrix, err = readMatrix(filepath.Join(root, "hack", "e2e", "matrix.txt")); err != nil {
+	if r.Matrix, r.Pinned, err = readMatrix(filepath.Join(root, "hack", "e2e", "matrix.txt")); err != nil {
 		return nil, err
 	}
 	if r.ToolVersions, err = readEnv(filepath.Join(root, "hack", "tool-versions.env")); err != nil {
@@ -160,34 +172,67 @@ func LoadRepo(root string) (*Repo, error) {
 	if r.NotRunItems, err = readNotRun(root); err != nil {
 		return nil, err
 	}
+	if r.ReleaseTargets, err = releaseTargets(root); err != nil {
+		return nil, err
+	}
 	if st, err := os.Stat(filepath.Join(root, "test", "scenario", "enterprise")); err == nil && st.IsDir() {
 		r.Enterprise = true
 	}
 	return r, nil
 }
 
-func readMatrix(path string) ([]MatrixLine, error) {
+// readMatrix reads matrix.txt's lines, and its pinned suites: the suites
+// whose lines say pinned (all of them), each with the comment right above
+// its first line, which must say why.
+func readMatrix(path string) ([]MatrixLine, map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("read matrix: %w", err)
+		return nil, nil, fmt.Errorf("read matrix: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	var out []MatrixLine
+	pinned := map[string]bool{}    // suite -> its lines say pinned
+	comment := map[string]string{} // suite -> the comment above its first line
+	var above []string
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
-		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+		if len(fields) == 0 {
+			above = nil
 			continue
 		}
-		if len(fields) != 4 || (fields[3] != "heavy" && fields[3] != "-") {
-			return nil, fmt.Errorf("%s: %q: want suite, Kubernetes minor, shard and host (heavy or -)", path, sc.Text())
+		if strings.HasPrefix(fields[0], "#") {
+			above = append(above, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(sc.Text()), "#")))
+			continue
 		}
-		out = append(out, MatrixLine{fields[0], fields[1], fields[2]})
+		if (len(fields) != 4 && len(fields) != 5) || (fields[3] != "heavy" && fields[3] != "-") || (len(fields) == 5 && fields[4] != "pinned") {
+			return nil, nil, fmt.Errorf("%s: %q: want suite, Kubernetes minor, shard, host (heavy or -) and, for a suite that runs only on the minors it lists, pinned", path, sc.Text())
+		}
+		suite, pin := fields[0], len(fields) == 5
+		if was, seen := pinned[suite]; seen && was != pin {
+			return nil, nil, fmt.Errorf("%s: %q: every line of %s says pinned, or none", path, sc.Text(), suite)
+		}
+		if _, seen := pinned[suite]; !seen {
+			comment[suite] = strings.Join(above, " ")
+		}
+		pinned[suite] = pin
+		above = nil
+		out = append(out, MatrixLine{suite, fields[1], fields[2]})
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("read matrix: %w", err)
+		return nil, nil, fmt.Errorf("read matrix: %w", err)
 	}
-	return out, nil
+	pins := map[string]string{}
+	for suite, pin := range pinned {
+		if !pin {
+			continue
+		}
+		if comment[suite] == "" {
+			return nil, nil, fmt.Errorf("%s: %s is pinned to its minors without a reason: say why in a comment right above its first line", path, suite)
+		}
+		pins[suite] = comment[suite]
+	}
+	return out, pins, nil
 }
 
 func readEnv(path string) (map[string]string, error) {
@@ -288,10 +333,33 @@ func Plan(r *Repo, o Options) []Step {
 	// suites, then scale.
 	steps = append(steps, chartSteps(r, o)...)
 	steps = append(steps, staticSteps(o)...)
+	steps = append(steps, crossCompileStep(r))
 	steps = append(steps, unitSteps(r, o)...)
 	steps = append(steps, e2eSteps(r, o)...)
 	steps = append(steps, scaleSteps(r, o)...)
 	return steps
+}
+
+// pinnedOff is why suite cannot run on minor, or "": matrix.txt pins it to
+// the minors its lines list, and minor is not one of them.
+func (r *Repo) pinnedOff(suite string, minor int) string {
+	reason, ok := r.Pinned[suite]
+	if !ok {
+		return ""
+	}
+	var on []string
+	for _, l := range r.Matrix {
+		if l.Suite != suite {
+			continue
+		}
+		if l.Minor == fmt.Sprintf("1.%d", minor) {
+			return ""
+		}
+		if len(on) == 0 || on[len(on)-1] != l.Minor {
+			on = append(on, l.Minor)
+		}
+	}
+	return fmt.Sprintf("hack/e2e/matrix.txt runs %s on %s only: %s", suite, strings.Join(on, ", "), reason)
 }
 
 // suiteShards lists the live suites of matrix.txt but scale, in order, with
@@ -319,7 +387,8 @@ func suiteShards(r *Repo) ([]string, map[string][]string) {
 
 // ciSteps are the e2e-live.yml jobs the gate dispatches: every suite but
 // scale on the floor and the newest minor (e2e-live.yml's minors input,
-// hack/e2e/all.sh MINORS), with its matrix.txt shards.
+// hack/e2e/all.sh MINORS), with its matrix.txt shards. A pinned suite's
+// other minor is a pinned step: all.sh MINORS runs no job for it.
 func ciSteps(r *Repo, o Options) []Step {
 	suites, shards := suiteShards(r)
 	var steps []Step
@@ -332,8 +401,11 @@ func ciSteps(r *Repo, o Options) []Step {
 				if isUpgrade(suite) {
 					area = areaUpgrade
 				}
-				steps = append(steps, Step{ID: "ci-" + j.ID, Area: area, Title: j.Name() + " (CI)",
-					Tests: "e2e/test.json", MinTests: 1, CIJob: j})
+				st := Step{ID: "ci-" + j.ID, Area: area, Title: j.Name() + " (CI)", Tests: "e2e/test.json", MinTests: 1, CIJob: j}
+				if st.Pinned = r.pinnedOff(suite, m); st.Pinned != "" {
+					st.CIJob, st.Tests, st.MinTests = nil, "", 0
+				}
+				steps = append(steps, st)
 			}
 		}
 	}
@@ -381,6 +453,10 @@ func e2eStep(r *Repo, o Options, suite string, minor int) Step {
 	st := Step{
 		ID: id, Area: area, Title: fmt.Sprintf("%s on Kubernetes 1.%d", suite, minor),
 		Clusters: max(1, clusterWeight[suite]), Tests: "e2e/test.json", MinTests: 1,
+	}
+	if st.Pinned = r.pinnedOff(suite, minor); st.Pinned != "" {
+		st.Clusters, st.Tests, st.MinTests = 0, "", 0
+		return st
 	}
 	if suite == "github" && !o.GitHubToken {
 		st.NotRun = "no KARDINAL_E2E_GITHUB_TOKEN_FILE or DEMO_GITHUB_TOKEN (the gate never uses your gh login)"
@@ -650,5 +726,109 @@ for v in "$ENVTEST_K8S_MIN" "$ENVTEST_K8S_MAX"; do
   KUBEBUILDER_ASSETS=$assets go test -tags envtest ./test/helm/ -run TestInstallOnAPIServer -count=1 -json >> "$STEP_DIR/tests.json"
 done
 `
+	return st
+}
+
+// BuildTarget is a binary a release ships: a package of this module built
+// for a platform, with its build tags.
+type BuildTarget struct{ GOOS, GOARCH, Pkg, Tags string }
+
+var (
+	// A release.yml line that builds a release asset:
+	// GOOS=darwin GOARCH=arm64 go build -ldflags=... -o dist/x ./cmd/kardinal/
+	distBuild = regexp.MustCompile(`(?m)\bGOOS=(\w+)\s+GOARCH=(\w+)\s+go build\b([^\n]*?)\s(\./cmd/[\w-]+)/?[ \t]*$`)
+	// An image's platforms (docker/build-push-action), and a Dockerfile other
+	// than the root one it builds.
+	imagePlatforms = regexp.MustCompile(`(?m)^\s+platforms:\s*(\S+)\s*$`)
+	imageFile      = regexp.MustCompile(`(?m)^\s+file:\s*(\S*Dockerfile)\s*$`)
+	// A Dockerfile's go build of a package, and its -tags.
+	dockerBuild = regexp.MustCompile(`\bgo build\b.*?\s(\./cmd/[\w-]+)/?(?:\s|$)`)
+	buildTags   = regexp.MustCompile(`\s-tags[= ](\S+)`)
+)
+
+// releaseTargets are what .github/workflows/release.yml ships: each
+// GOOS/GOARCH go build of a release asset, and the go build of each image's
+// Dockerfile on each of the images' platforms. Sorted, once each.
+func releaseTargets(root string) ([]BuildTarget, error) {
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		return nil, fmt.Errorf("read release.yml: %w", err)
+	}
+	seen := map[BuildTarget]bool{}
+	add := func(t BuildTarget) { seen[t] = true }
+	for _, m := range distBuild.FindAllStringSubmatch(string(wf), -1) {
+		t := BuildTarget{GOOS: m[1], GOARCH: m[2], Pkg: m[4]}
+		if tm := buildTags.FindStringSubmatch(m[3]); tm != nil {
+			t.Tags = strings.Trim(tm[1], `"'`)
+		}
+		add(t)
+	}
+	var platforms []string
+	for _, m := range imagePlatforms.FindAllStringSubmatch(string(wf), -1) {
+		platforms = append(platforms, strings.Split(m[1], ",")...)
+	}
+	if len(platforms) > 0 {
+		files := []string{"Dockerfile"} // the build context's default
+		for _, m := range imageFile.FindAllStringSubmatch(string(wf), -1) {
+			files = append(files, m[1])
+		}
+		for _, file := range files {
+			data, err := os.ReadFile(filepath.Join(root, file))
+			if err != nil {
+				return nil, fmt.Errorf("read %s, an image release.yml builds: %w", file, err)
+			}
+			// One line per command: RUN lines continue with a backslash.
+			text := strings.ReplaceAll(string(data), "\\\n", " ")
+			for _, l := range strings.Split(text, "\n") {
+				m := dockerBuild.FindStringSubmatch(l)
+				if m == nil {
+					continue
+				}
+				tags := ""
+				if tm := buildTags.FindStringSubmatch(l); tm != nil {
+					tags = strings.Trim(tm[1], `"'`)
+				}
+				for _, p := range platforms {
+					goos, goarch, ok := strings.Cut(strings.TrimSpace(p), "/")
+					if !ok {
+						return nil, fmt.Errorf("release.yml: image platform %q: want os/arch", p)
+					}
+					add(BuildTarget{GOOS: goos, GOARCH: goarch, Pkg: m[1], Tags: tags})
+				}
+			}
+		}
+	}
+	out := make([]BuildTarget, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		return a.Pkg+" "+a.GOOS+"/"+a.GOARCH+" "+a.Tags < b.Pkg+" "+b.GOOS+"/"+b.GOARCH+" "+b.Tags
+	})
+	return out, nil
+}
+
+// crossCompileStep builds every binary release.yml ships, for its platform
+// (QA-2's v0.13 gate audit, #2304): a compile break on darwin, windows or
+// arm64 alone fails here, not at tag time. It builds only; go vet per
+// platform would vet the test files too, and some use unix-only syscalls.
+func crossCompileStep(r *Repo) Step {
+	st := Step{ID: "cross-compile", Area: areaStatic,
+		Title: fmt.Sprintf("go build of the %d binaries release.yml ships, each for its platform", len(r.ReleaseTargets))}
+	if len(r.ReleaseTargets) == 0 {
+		st.Missing = "found no GOOS/GOARCH go build or multi-platform image in .github/workflows/release.yml"
+		return st
+	}
+	var b strings.Builder
+	b.WriteString("export CGO_ENABLED=0\n")
+	for _, t := range r.ReleaseTargets {
+		tags := ""
+		if t.Tags != "" {
+			tags = " -tags " + t.Tags
+		}
+		fmt.Fprintf(&b, "echo '== %s/%s %s%s'\nGOOS=%s GOARCH=%s go build%s -o /dev/null %s\n", t.GOOS, t.GOARCH, t.Pkg, tags, t.GOOS, t.GOARCH, tags, t.Pkg)
+	}
+	st.Script = b.String()
 	return st
 }

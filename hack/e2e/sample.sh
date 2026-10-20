@@ -15,9 +15,10 @@
 #   minor  one suite on a Kubernetes minor matrix.txt does not run it on: a
 #          pair (suite, minor) of the suites that run on one minor only
 #          (every suite but core, the upgrade suites, scale, github, whose
-#          token is for one job, and multi-cluster, whose spoke boots the
-#          kind-config image) and the KIND_NODE_1_* minors of
-#          hack/tool-versions.env they don't run on. The pairs are sorted,
+#          token is for one job, multi-cluster, whose spoke boots the
+#          kind-config image, and a suite matrix.txt pins to its minors) and
+#          the KIND_NODE_1_* minors of hack/tool-versions.env they don't run
+#          on. The pairs are sorted,
 #          and night N (days since 1970-01-01) runs pair N mod their count,
 #          so every pair runs within that many nights.
 #   flake  a slice of the core suite on the newest minor, SHARD i/SLICES
@@ -60,16 +61,18 @@ mapfile -t minors < <(sed -n 's/^KIND_NODE_1_\([0-9]*\)=.*/1.\1/p' "$REPO_ROOT/h
 [ "${#minors[@]}" -gt 0 ] || die "hack/tool-versions.env has no KIND_NODE_1_* image"
 newest=${minors[${#minors[@]} - 1]}
 
-# suite -> the minors matrix.txt runs it on.
-declare -A runs_on=()
-while read -r suite k8s _ || [ -n "$suite" ]; do
+# suite -> the minors matrix.txt runs it on; pinned: the suites it pins.
+declare -A runs_on=() pinned=()
+while read -r suite k8s _ _ pin _ || [ -n "$suite" ]; do
   case "$suite" in '' | '#'*) continue ;; esac
   runs_on[$suite]+=" $k8s "
+  [ "${pin:-}" != pinned ] || pinned[$suite]=1
 done <"$E2E_DIR/matrix.txt"
 
 pairs=()
 for suite in $(printf '%s\n' "${!runs_on[@]}" | sort); do
   case "$suite" in core | scale | github | multi-cluster | upgrade*) continue ;; esac
+  [ -z "${pinned[$suite]:-}" ] || continue
   for m in "${minors[@]}"; do
     [[ "${runs_on[$suite]}" == *" $m "* ]] || pairs+=("$suite $m")
   done

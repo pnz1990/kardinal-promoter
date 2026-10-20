@@ -88,7 +88,8 @@ type Coverage struct {
 	Rows     int
 	ByStatus map[string]int
 	ByResult map[string]int // test/e2e/proof -out, empty without e2e results
-	// Unproven are the rows whose result is failed, missing or not run.
+	// Unproven are the rows whose result is failed, missing or not run, and
+	// the covered rows whose result is todo (unprovenResult).
 	Unproven map[string]string
 	// Allowed are rows that may stay unproven, each with its reason
 	// (hack/release-gate/coverage-allow.txt).
@@ -99,6 +100,14 @@ type Coverage struct {
 
 // unprovenResults are the proof results that do not prove a row.
 var unprovenResults = map[string]bool{"failed": true, "missing": true, "not run": true}
+
+// unprovenResult reports whether a row of this coverage.tsv status is left
+// unproven by its proof result. todo is a row no test claims: unproven for a
+// row coverage.tsv says a test covers (covered, or known-bug), whose test is
+// gone (QA-2's v0.13 gate audit, #2304); for a todo row it is the truth.
+func unprovenResult(result, status string) bool {
+	return unprovenResults[result] || (result == "todo" && (status == "covered" || status == "known-bug"))
+}
 
 // Blocking are the unproven rows not in the allowlist, sorted.
 func (c Coverage) Blocking() []string {
@@ -144,6 +153,7 @@ func readCoverage(root, proofFile string) (Coverage, error) {
 		return c, fmt.Errorf("open coverage.tsv: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+	status := map[string]string{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for first := true; sc.Scan(); first = false {
@@ -153,6 +163,7 @@ func readCoverage(root, proofFile string) (Coverage, error) {
 		}
 		c.Rows++
 		c.ByStatus[cols[3]]++
+		status[cols[0]] = cols[3]
 	}
 	if err := sc.Err(); err != nil {
 		return c, fmt.Errorf("read coverage.tsv: %w", err)
@@ -167,7 +178,7 @@ func readCoverage(root, proofFile string) (Coverage, error) {
 		}
 		for _, r := range rows {
 			c.ByResult[r.Result]++
-			if unprovenResults[r.Result] {
+			if unprovenResult(r.Result, status[r.ID]) {
 				c.Unproven[r.ID] = r.Result
 			}
 		}
@@ -322,10 +333,14 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 			continue
 		}
 		var t Totals
-		passed := 0
+		passed, counted := 0, 0
 		status := statusPass
 		var first, last time.Time
 		for _, i := range idx {
+			if results[i].Status == statusPinned {
+				continue // no host could run it: listed under Steps with why
+			}
+			counted++
 			if tt, ok := ranTotals(out, steps[i], results[i]); ok {
 				t.add(tt)
 			}
@@ -352,7 +367,7 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 		all.add(t)
 		// The area's span, first start to last end: its steps overlap (the
 		// CI jobs run at once), so their sum would overstate it.
-		fmt.Fprintf(&b, "| %s | %s | %d of %d | %d | %d | %d | %d | %s |\n", a, strings.ToUpper(status), passed, len(idx),
+		fmt.Fprintf(&b, "| %s | %s | %d of %d | %d | %d | %d | %d | %s |\n", a, strings.ToUpper(status), passed, counted,
 			t.Run, t.Passed, t.Failed, t.Skipped, duration(last.Sub(first).Seconds()))
 	}
 	fmt.Fprintf(&b, "| **Total** | **%s** | | **%d** | **%d** | **%d** | **%d** | %s wall |\n\n",

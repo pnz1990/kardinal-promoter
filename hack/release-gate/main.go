@@ -144,6 +144,8 @@ func run() error {
 				note = "  MISSING: " + st.Missing
 			case st.NotRun != "":
 				note = "  not run: " + st.NotRun
+			case st.Pinned != "":
+				note = "  pinned: " + st.Pinned
 			case st.CIJob != nil:
 				note = "  CI job: " + st.CIJob.Name()
 			}
@@ -422,6 +424,8 @@ func resultOf(g *Gate, st Step) Result {
 		return Result{ID: st.ID, Status: statusMissing, Reason: st.Missing}
 	case st.NotRun != "":
 		return Result{ID: st.ID, Status: statusNotRun, Reason: st.NotRun}
+	case st.Pinned != "":
+		return Result{ID: st.ID, Status: statusPinned, Reason: st.Pinned}
 	}
 	data, err := os.ReadFile(filepath.Join(g.dir(st), "result.json"))
 	if err == nil {

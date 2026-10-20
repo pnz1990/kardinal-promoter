@@ -116,7 +116,11 @@ SUITES='gitea flux' make e2e-all   # only these suites
 `hack/e2e/matrix.txt` lists the jobs: every suite, the core suite on each of
 the three Kubernetes minors split across three jobs per minor with `SHARD` (by the test durations in `hack/e2e/durations.txt`), and
 the upgrade suites on the oldest supported minor (Chart.yaml kubeVersion) and
-the newest.
+the newest. A suite that cannot run on other minors says `pinned` in a fifth
+column, with the reason in a comment right above its first line:
+receipts-keyless runs on 1.35 only, as the Knative under sigstore scaffolding
+supports Kubernetes up to 1.35. `all.sh MINORS`, the release gate and the
+nightly sample run it on its own minors only.
 `make e2e-all` runs them on this host, each on a kind cluster of its own
 (`kardinal-e2e-all-<job>`), deletes the clusters (`KEEP=1` keeps them), and
 runs `go run ./test/e2e/proof` over all the results. It fails when a job
@@ -376,9 +380,10 @@ in turn: gitea, gitlab, chart, delivery, ui, flux and shard on 1.35 and 1.36,
 14 nights), and a ninth of the core suite on the newest minor with each test
 repeated three times (`SHARD=i/9 COUNT=3`, every core test within 9 nights),
 so a flake shows up within days instead of at the weekly run. The core, scale,
-upgrade, github and multi-cluster suites are not rotated across minors: core
-and the upgrades already run on several, scale and multi-cluster are sized or
-paired for one, and only the github job gets the token. `hack/e2e/sample.sh
+upgrade, github and multi-cluster suites, and a suite `matrix.txt` pins, are
+not rotated across minors: core and the upgrades already run on several,
+scale and multi-cluster are sized or paired for one, only the github job gets
+the token, and a pinned suite cannot run on another minor. `hack/e2e/sample.sh
 2026-10-14` prints that night's jobs, `hack/e2e/sample.sh -cycle` the length
 of both rotations; `SAMPLE=2026-10-14 SAMPLE_ONLY=1 make e2e-all` runs them
 on this host, and `gh workflow run e2e-live.yml -f sample=today` adds them
