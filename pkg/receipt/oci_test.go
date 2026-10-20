@@ -67,13 +67,13 @@ func TestRegistry_PushReferrer(t *testing.T) {
 			require.NoError(t, err)
 
 			r := &Registry{Insecure: true}
-			ref, err := r.PushReferrer(context.Background(), repo, repo, d.String(), signed.Bundle)
+			ref, err := r.PushReferrer(context.Background(), repo, repo, d.String(), "", signed.Bundle)
 			require.NoError(t, err)
-			again, err := r.PushReferrer(context.Background(), repo, repo, d.String(), signed.Bundle)
+			again, err := r.PushReferrer(context.Background(), repo, repo, d.String(), "", signed.Bundle)
 			require.NoError(t, err)
 			assert.Equal(t, ref, again, "content-addressed")
 
-			got, err := r.Referrers(context.Background(), repo, d.String())
+			got, err := bundlesOf(r.Referrers(context.Background(), repo, d.String(), nil))
 			require.NoError(t, err)
 			require.Len(t, got, 1)
 			v, err := Verify(got[0], VerifyOptions{Key: pub, Subject: d.String(), Environment: "prod"})
@@ -92,7 +92,7 @@ func TestRegistry_PushReferrer(t *testing.T) {
 			// A builder's VSA (same artifact and predicate type, no receipt
 			// annotation) is not read as a receipt.
 			pushBuilderVSA(t, repo, d.String())
-			got, err = r.Referrers(context.Background(), repo, d.String())
+			got, err = bundlesOf(r.Referrers(context.Background(), repo, d.String(), nil))
 			require.NoError(t, err)
 			assert.Len(t, got, 1, "the builder's VSA is skipped")
 		})
@@ -141,15 +141,18 @@ func TestRegistry_PushReferrerOtherRepository(t *testing.T) {
 	signed, err := s.Sign(context.Background(), raw)
 	require.NoError(t, err)
 	r := &Registry{Insecure: true}
-	ref, err := r.PushReferrer(context.Background(), repo, image, imageDigest, signed.Bundle)
+	ref, err := r.PushReferrer(context.Background(), repo, image, imageDigest, "", signed.Bundle)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(ref, repo+"@sha256:"))
-	got, err := r.Referrers(context.Background(), repo, imageDigest)
+	got, err := bundlesOf(r.Referrers(context.Background(), repo, imageDigest, nil))
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	_, err = Verify(got[0], VerifyOptions{Key: pub, Subject: imageDigest})
 	require.NoError(t, err)
 
-	_, err = r.PushReferrer(context.Background(), image, image, imageDigest, signed.Bundle)
+	_, err = r.PushReferrer(context.Background(), image, image, imageDigest, "", signed.Bundle)
 	require.Error(t, err, "its own repository unreachable: no push")
 }
+
+// bundlesOf is the bundles of a Referrers result.
+func bundlesOf(f Found, err error) ([][]byte, error) { return f.Bundles, err }

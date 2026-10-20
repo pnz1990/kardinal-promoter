@@ -149,6 +149,24 @@ var (
 		},
 	)
 
+	// ReceiptsTotal counts promotion receipts signed, by signing mode
+	// (keyless, key, kms); ReceiptBytesTotal their size (statement and
+	// signed bundle). A Pipeline's status.environments[].receipts has each
+	// environment's count and size.
+	ReceiptsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_receipts_total",
+			Help: "Promotion receipts signed, by signing mode (keyless, key, kms).",
+		},
+		[]string{"mode"},
+	)
+	ReceiptBytesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kardinal_receipt_bytes_total",
+			Help: "Bytes of the promotion receipts signed (their statements and signed bundles).",
+		},
+	)
+
 	// ReceiptsFailedTotal counts failed promotion receipt attempts by sink:
 	// signing (the signature, and Rekor when it is configured), oci, and
 	// pr-comment, each retried with backoff; and build, once per step whose
@@ -231,6 +249,8 @@ func init() {
 		VerdictsTotal,
 		AgentRunsTotal,
 		ReceiptsFailedTotal,
+		ReceiptsTotal,
+		ReceiptBytesTotal,
 		HoldBundleMissingTotal,
 		NotificationsDroppedTotal,
 		PRCleanupFailuresTotal,

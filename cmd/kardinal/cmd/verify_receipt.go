@@ -23,6 +23,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	sigroot "github.com/sigstore/sigstore-go/pkg/root"
@@ -45,6 +46,7 @@ type verifyReceiptOptions struct {
 	key, identity, issuer, trRoot  string
 	require                        []string
 	insecure, anyCluster           bool
+	timeout                        time.Duration
 }
 
 func newVerifyReceiptCmd() *cobra.Command {
@@ -86,6 +88,7 @@ trusts any identity). The exit code is 0 only when every check passes.`,
 	f.StringSliceVar(&o.require, "require", nil, "Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, SLSA_BUILD_LEVEL_3, ...); !LEVEL must be absent")
 	f.StringVar(&o.repo, "repository", "", "Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's")
 	f.BoolVar(&o.insecure, "insecure-registry", false, "Read --image over plain HTTP")
+	f.DurationVar(&o.timeout, "timeout", time.Minute, "Give up past this (reading the cluster, the registry and its credentials, the trusted root): cannot verify, a failure")
 	return withStructuredOutput(cmd)
 }
 
@@ -96,8 +99,13 @@ type verifyReceiptResult struct {
 	Signer   string `json:"signer"`
 	Logged   bool   `json:"logged"`
 	// LogNotChecked: the receipt has a log entry that was not verified.
-	LogNotChecked bool               `json:"logNotChecked,omitempty"`
-	Statement     *receipt.Statement `json:"statement"`
+	LogNotChecked bool `json:"logNotChecked,omitempty"`
+	// Checks are what was checked, one by one, and what was not.
+	Checks []receipt.Check `json:"checks"`
+	// ReferrersTruncated: --image read only the first MaxReferrerEntries
+	// referrers; another receipt may exist.
+	ReferrersTruncated bool               `json:"referrersTruncated,omitempty"`
+	Statement          *receipt.Statement `json:"statement"`
 }
 
 func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions) error {
@@ -105,6 +113,19 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if o.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, o.timeout)
+		defer cancel()
+	}
+	err := verifyReceipt(ctx, cmd, args, o)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("verify-receipt: cannot verify: no answer within --timeout %s: %w", o.timeout, err)
+	}
+	return err
+}
+
+func verifyReceipt(ctx context.Context, cmd *cobra.Command, args []string, o verifyReceiptOptions) error {
 	sources := 0
 	for _, set := range []bool{len(args) > 0, o.image != "", o.file != ""} {
 		if set {
@@ -142,7 +163,7 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 		vo.Key = raw
 	}
 	if o.trRoot != "" || o.identity != "" {
-		tr, err := trustedRoot(o.trRoot)
+		tr, err := trustedRoot(ctx, o.trRoot)
 		if err != nil {
 			return fmt.Errorf("verify-receipt: %w", err)
 		}
@@ -151,6 +172,7 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 
 	var bundles [][]byte
 	var name string
+	truncated := false
 	switch {
 	case len(args) == 2:
 		vo.Environment, vo.Pipeline = args[1], args[0]
@@ -180,14 +202,32 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 		if o.repo != "" {
 			repo = o.repo
 		}
-		found, err := reg.Referrers(ctx, repo, digest)
+		// Only the receipts of the pinned resource are read; the
+		// annotation is a filter, the receipt read is verified.
+		suffix := fmt.Sprintf("/namespaces/%s/pipelines/%s/environments/%s", vo.Namespace, o.pipeline, o.env)
+		match := func(resource string) bool {
+			if !strings.HasSuffix(resource, suffix) {
+				return false
+			}
+			return vo.ClusterID == "" || strings.HasPrefix(resource, "kardinal://"+vo.ClusterID+"/")
+		}
+		found, err := reg.Referrers(ctx, repo, digest, match)
 		if err != nil {
 			return fmt.Errorf("verify-receipt: %w", err)
 		}
-		if len(found) == 0 {
-			return fmt.Errorf("verify-receipt: %s has no receipt referrers", o.image)
+		truncated = found.Truncated
+		if truncated {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s has more receipt referrers than are read (%d entries): another receipt may exist\n",
+				o.image, found.Entries)
 		}
-		bundles, name = found, o.image
+		if len(found.Bundles) == 0 {
+			if truncated {
+				return fmt.Errorf("verify-receipt: %s: cannot verify: no receipt of %s among the first %d referrers, and more receipt "+
+					"referrers exist: whether one exists is unknown", o.image, suffix[1:], receipt.MaxReferrerEntries)
+			}
+			return fmt.Errorf("verify-receipt: %s: NOT VERIFIED: no receipt referrer of %s", o.image, suffix[1:])
+		}
+		bundles, name = found.Bundles, o.image
 	}
 
 	var errs []error
@@ -198,9 +238,15 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 			continue
 		}
 		if len(args) == 2 {
-			if err := checkBundleUID(ctx, v.Statement); err != nil {
+			check, err := checkBundleUID(ctx, v.Statement)
+			if err != nil {
 				return fmt.Errorf("verify-receipt: %s: %w", name, err)
 			}
+			v.Checks = append(v.Checks, check)
+		}
+		if truncated {
+			v.Checks = append(v.Checks, receipt.Check{Name: "referrers",
+				Detail: fmt.Sprintf("only the first %d of the image's referrers were read: another receipt may exist", receipt.MaxReferrerEntries)})
 		}
 		if v.Statement.Predicate.Kardinal.Receipt != "" {
 			name = v.Statement.Predicate.Kardinal.Receipt
@@ -208,10 +254,17 @@ func runVerifyReceipt(cmd *cobra.Command, args []string, o verifyReceiptOptions)
 		out := cmd.OutOrStdout()
 		if structured() {
 			return writeStructured(out, verifyReceiptResult{Receipt: name, Verified: true, Signer: v.Signer, Logged: v.Logged,
-				LogNotChecked: v.LogNotChecked, Statement: v.Statement})
+				LogNotChecked: v.LogNotChecked, Checks: v.Checks, ReferrersTruncated: truncated, Statement: v.Statement})
 		}
 		printReceipt(out, name, v)
 		return nil
+	}
+	if truncated {
+		// The receipt asked for may be among those not read (receipts
+		// planted to fill the ones read, say): unknown, never a pass, and
+		// not a NOT VERIFIED either.
+		return fmt.Errorf("verify-receipt: %s: cannot verify: none of the %d receipts read verified, and more receipt referrers exist: %w",
+			name, len(bundles), errors.Join(errs...))
 	}
 	return fmt.Errorf("verify-receipt: %s: NOT VERIFIED: %w", name, errors.Join(errs...))
 }
@@ -249,23 +302,24 @@ func clusterReceipt(ctx context.Context, pipeline, env, bundle string) (*v1alpha
 
 // checkBundleUID checks that the Bundle the receipt names, when it still
 // exists, is the one it was made for.
-func checkBundleUID(ctx context.Context, st *receipt.Statement) error {
+func checkBundleUID(ctx context.Context, st *receipt.Statement) (receipt.Check, error) {
 	c, ns, err := buildClient()
 	if err != nil {
-		return err
+		return receipt.Check{}, err
 	}
 	v := st.Predicate.Kardinal.Version
 	var b v1alpha1.Bundle
 	err = c.Get(ctx, types.NamespacedName{Namespace: ns, Name: v.Bundle}, &b)
 	switch {
 	case apierrors.IsNotFound(err):
-		return nil // retired: the receipt outlives it
+		// Retired: the receipt outlives it.
+		return receipt.Check{Name: "bundle", Detail: v.Bundle + " no longer exists (retired): its UID is not compared"}, nil
 	case err != nil:
-		return fmt.Errorf("get bundle %s: %w", v.Bundle, err)
+		return receipt.Check{}, fmt.Errorf("get bundle %s: %w", v.Bundle, err)
 	case string(b.UID) != v.BundleUID:
-		return fmt.Errorf("the receipt is for Bundle %s with UID %s, and the Bundle of that name now has UID %s", v.Bundle, v.BundleUID, b.UID)
+		return receipt.Check{}, fmt.Errorf("the receipt is for Bundle %s with UID %s, and the Bundle of that name now has UID %s", v.Bundle, v.BundleUID, b.UID)
 	}
-	return nil
+	return receipt.Check{Name: "bundle", Checked: true, Detail: v.Bundle + " is the Bundle the receipt was made for (UID " + v.BundleUID + ")"}, nil
 }
 
 func forBundle(b string) string {
@@ -283,7 +337,7 @@ func phaseOr(p string) string {
 }
 
 // trustedRoot reads path, or fetches the public-good root with TUF.
-func trustedRoot(path string) (sigroot.TrustedMaterial, error) {
+func trustedRoot(ctx context.Context, path string) (sigroot.TrustedMaterial, error) {
 	if path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -295,8 +349,11 @@ func trustedRoot(path string) (sigroot.TrustedMaterial, error) {
 		}
 		return tr, nil
 	}
-	opts := sigtuf.DefaultOptions().WithDisableLocalCache()
-	opts.Fetcher = &tuffetch.Fetcher{} // a 404 ends a download; every download is bounded (#2218)
+	// Every download carries ctx (--timeout) as its parent, and a 404 ends
+	// one at once (#2218): a mirror that never answers is cannot verify at
+	// the deadline, not a hang.
+	opts := sigtuf.DefaultOptions().WithDisableLocalCache().WithRepositoryBaseURL(tufMirror).WithContext(ctx).
+		WithFetcher(&tuffetch.Fetcher{Context: ctx})
 	tr, err := sigroot.FetchTrustedRootWithOptions(opts)
 	if err != nil {
 		return nil, fmt.Errorf("fetch the public-good trusted root (or give --trusted-root): %w", err)
@@ -304,12 +361,24 @@ func trustedRoot(path string) (sigroot.TrustedMaterial, error) {
 	return tr, nil
 }
 
+// tufMirror is the TUF repository the public-good trusted root is read
+// from; tests replace it.
+var tufMirror = sigtuf.DefaultMirror
+
 // printReceipt is the human output: what was promoted, by whom, through
 // which gates, and who signed it.
 func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 	p := v.Statement.Predicate
 	r := p.Kardinal
-	_, _ = fmt.Fprintf(w, "VERIFIED receipt %s\n", name)
+	_, _ = fmt.Fprintf(w, "receipt %s: every check below that was made passed\n", name)
+	for _, c := range v.Checks {
+		mark := "✓"
+		if !c.Checked {
+			mark = "–"
+		}
+		_, _ = fmt.Fprintf(w, "  %s %-17s %s\n", mark, c.Name+":", c.Detail)
+	}
+	_, _ = fmt.Fprintln(w, "record:")
 	_, _ = fmt.Fprintf(w, "  environment: %s (pipeline %s)\n", r.Change.Environment, r.Pipeline)
 	ver := r.Version.Bundle
 	if r.Version.Version != "" {
@@ -326,14 +395,7 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 		}
 		_, _ = fmt.Fprintf(w, "  actor:       %s\n", who)
 	}
-	signed := v.Signer
-	if v.LogNotChecked {
-		signed += "; its transparency log entry is not checked (give --trusted-root)"
-	}
-	if v.Logged {
-		signed += ", in the transparency log"
-	}
-	_, _ = fmt.Fprintf(w, "  signed by:   %s\n", signed)
+	_, _ = fmt.Fprintf(w, "  signed by:   %s\n", v.Signer)
 	if pr := r.Change.PR; pr != nil && pr.URL != "" {
 		_, _ = fmt.Fprintf(w, "  change:      %s\n", pr.URL)
 	} else if r.Change.Commit != "" {
@@ -370,7 +432,7 @@ func printReceipt(w io.Writer, name string, v *receipt.Verified) {
 		_, _ = fmt.Fprintf(w, "  approved by: %s\n", strings.Join(approvers, ", "))
 	}
 	if len(verifiers) > 0 {
-		_, _ = fmt.Fprintf(w, "  verified by: %s\n", strings.Join(verifiers, ", "))
+		_, _ = fmt.Fprintf(w, "  verdicts by: %s\n", strings.Join(verifiers, ", "))
 	}
 	_, _ = fmt.Fprintf(w, "  levels:      %s\n", strings.Join(p.VerifiedLevels, ", "))
 	if d := p.Policy.Digest["sha256"]; d != "" {

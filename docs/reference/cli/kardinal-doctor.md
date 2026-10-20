@@ -5,9 +5,9 @@ Run pre-flight checks to verify the cluster is correctly configured
 ### Synopsis
 
 Check that kardinal can work in this cluster: the controller answers, the
-CRDs are installed, kro and its Graph CRD run, and the controller has an SCM
-token. --pipeline also checks one Pipeline. Run it first when something is
-wrong.
+CRDs are installed, kro and its Graph CRD run, the controller has an SCM
+token, and promotion receipts do not outgrow etcd while retention is off.
+--pipeline also checks one Pipeline. Run it first when something is wrong.
 
 PASS  Controller reachable      kardinal-version ConfigMap in the controller namespace
   PASS  CRDs installed            every kardinal.io/v1alpha1 resource served

@@ -61,6 +61,7 @@ kardinal verify-receipt [<pipeline> <env>] [flags]
       --repository string     Read --image's receipts from this repository (receipts.sinks.oci.repository) instead of the image's
       --require strings       Levels that must be verified, comma-separated (GATES_PASSED, APPROVED, HEALTHY, SLSA_BUILD_LEVEL_3, ...); !LEVEL must be absent
       --subject string        The image digest (sha256:...) or commit the receipt must be about (required with --file)
+      --timeout duration      Give up past this (reading the cluster, the registry and its credentials, the trusted root): cannot verify, a failure (default 1m0s)
       --trusted-root string   Sigstore trusted_root.json (default: the public-good root, fetched with TUF)
 ```
 

@@ -18,6 +18,9 @@ package receipt
 import (
 	"bytes"
 	"crypto"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -77,6 +80,17 @@ type Verified struct {
 	// LogNotChecked is true when the bundle has a Rekor entry that was not
 	// verified: a key receipt verified without a trusted root.
 	LogNotChecked bool
+	// Checks are what was checked, one by one, and what was not: a receipt
+	// is never shown as just "verified".
+	Checks []Check
+}
+
+// Check is one check of a receipt: what, whether it was made (it passed:
+// Verify fails on any check that fails), and what it found.
+type Check struct {
+	Name    string `json:"name"`
+	Checked bool   `json:"checked"`
+	Detail  string `json:"detail"`
 }
 
 // Verify checks a receipt bundle against o. Every failure is an error: a
@@ -155,7 +169,80 @@ func Verify(bundleJSON []byte, o VerifyOptions) (*Verified, error) {
 	if err := checkPredicate(st, o); err != nil {
 		return nil, err
 	}
-	return &Verified{Statement: st, Signer: signer, Logged: logChecked, LogNotChecked: logged && !logChecked}, nil
+	out := &Verified{Statement: st, Signer: signer, Logged: logChecked, LogNotChecked: logged && !logChecked}
+	out.Checks = verifyChecks(&b, o, st, payload, logged, logChecked, res)
+	return out, nil
+}
+
+// verifyChecks are the checks Verify made on b, in the order a reader
+// reads them.
+func verifyChecks(b *bundle.Bundle, o VerifyOptions, st *Statement, payload []byte, logged, logChecked bool,
+	res *verify.VerificationResult) []Check {
+	var out []Check
+	if len(o.Key) > 0 {
+		detail := "key"
+		if pub, err := cryptoutils.UnmarshalPEMToPublicKey(o.Key); err == nil {
+			if der, err := x509.MarshalPKIXPublicKey(pub); err == nil {
+				sum := sha256.Sum256(der)
+				detail = "key sha256:" + hex.EncodeToString(sum[:8])
+			}
+		}
+		out = append(out, Check{Name: "signature", Checked: true, Detail: detail})
+	} else {
+		out = append(out, Check{Name: "signature", Checked: true,
+			Detail: fmt.Sprintf("certificate for %s (issuer %s), chained to the trusted root", o.Identity, o.Issuer)})
+	}
+	switch {
+	case logChecked:
+		detail := "inclusion verified against the trusted root"
+		if entries, err := b.TlogEntries(); err == nil && len(entries) > 0 {
+			detail = fmt.Sprintf("inclusion verified (logIndex %d, log %s)", entries[0].LogIndex(), short(entries[0].LogKeyID()))
+		}
+		out = append(out, Check{Name: "transparency log", Checked: true, Detail: detail})
+	case logged:
+		out = append(out, Check{Name: "transparency log", Detail: "entry not checked (give --trusted-root)"})
+	default:
+		out = append(out, Check{Name: "transparency log", Detail: "no entry"})
+	}
+	if res != nil {
+		for _, ts := range res.VerifiedTimestamps {
+			out = append(out, Check{Name: "timestamp", Checked: true,
+				Detail: fmt.Sprintf("%s %s (%s)", ts.Type, ts.Timestamp.UTC().Format(time.RFC3339), ts.URI)})
+		}
+	}
+	if o.Statement != nil {
+		out = append(out, Check{Name: "statement", Checked: true, Detail: "the cluster's spec.statement, " + Digest(payload)})
+	}
+	if o.Subject != "" {
+		out = append(out, Check{Name: "subject digest", Checked: true, Detail: o.Subject})
+	} else {
+		out = append(out, Check{Name: "subject digest", Detail: "not pinned (give --image or --subject)"})
+	}
+	var pinned []string
+	for _, p := range []struct{ name, v string }{{"cluster", o.ClusterID}, {"namespace", o.Namespace}, {"pipeline", o.Pipeline}, {"environment", o.Environment}} {
+		if p.v != "" {
+			pinned = append(pinned, p.name)
+		}
+	}
+	if len(pinned) > 0 {
+		out = append(out, Check{Name: "resource", Checked: true, Detail: st.Predicate.ResourceURI + " (" + strings.Join(pinned, ", ") + " pinned)"})
+	} else {
+		out = append(out, Check{Name: "resource", Detail: st.Predicate.ResourceURI + " (nothing pinned)"})
+	}
+	if len(o.Require) > 0 {
+		out = append(out, Check{Name: "levels", Checked: true, Detail: strings.Join(o.Require, ", ") + " as required"})
+	} else {
+		out = append(out, Check{Name: "levels", Detail: "none required (give --require)"})
+	}
+	return out
+}
+
+// short is the first 12 characters of id.
+func short(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func keyVerifier(pub crypto.PublicKey, trusted root.TrustedMaterial, logged bool) (*verify.Verifier, error) {

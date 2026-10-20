@@ -64,7 +64,7 @@ func TestUIAPI_StepReceipt(t *testing.T) {
 		return out
 	}
 	on := get(true)
-	assert.Equal(t, &uiReceipt{Name: "app-v1-prod", Phase: "Stored", Verified: true}, on["prod"])
+	assert.Equal(t, &uiReceipt{Name: "app-v1-prod", Phase: "Stored", Signed: true}, on["prod"])
 	assert.Nil(t, on["test"], "not Verified: no receipt yet")
 	assert.Nil(t, get(false)["prod"], "receipts off")
 }

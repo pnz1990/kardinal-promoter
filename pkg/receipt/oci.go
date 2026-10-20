@@ -68,9 +68,36 @@ func (r *Registry) options(ctx context.Context) []remote.Option {
 		opts = append(opts, remote.WithTransport(r.Transport))
 	}
 	if r.Keychain != nil {
-		opts = append(opts, remote.WithAuthFromKeychain(r.Keychain))
+		opts = append(opts, remote.WithAuthFromKeychain(boundedKeychain{r.Keychain}))
 	}
 	return opts
+}
+
+// boundedKeychain resolves credentials within the caller's context: the
+// default keychain may run a docker credential helper, and ignores it, so
+// a helper that never answers would outlast verify-receipt --timeout.
+type boundedKeychain struct{ k authn.Keychain }
+
+func (b boundedKeychain) Resolve(res authn.Resource) (authn.Authenticator, error) {
+	return b.ResolveContext(context.Background(), res)
+}
+
+func (b boundedKeychain) ResolveContext(ctx context.Context, res authn.Resource) (authn.Authenticator, error) {
+	type resolved struct {
+		a   authn.Authenticator
+		err error
+	}
+	done := make(chan resolved, 1)
+	go func() {
+		a, err := authn.Resolve(ctx, b.k, res)
+		done <- resolved{a, err}
+	}()
+	select {
+	case r := <-done:
+		return r.a, r.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("credentials for %s: %w", res, ctx.Err())
+	}
 }
 
 func (r *Registry) nameOptions() []name.Option {
@@ -86,12 +113,16 @@ func (r *Registry) nameOptions() []name.Option {
 // push is content-addressed: pushing the same receipt again writes the same
 // manifest.
 //
+// resource, the statement's resourceUri, is annotated on the referrer
+// (ResourceAnnotation), so a reader of one environment's receipt skips the
+// others'.
+//
 // The subject descriptor is read from repository, else from the image's
 // own repository. With another repository and neither readable (the image
 // is in a registry the controller cannot reach), the descriptor names the
 // digest as an OCI image manifest of unknown size: a referrer is found by
 // its subject's digest alone.
-func (r *Registry) PushReferrer(ctx context.Context, repository, image, digest string, bundleJSON []byte) (string, error) {
+func (r *Registry) PushReferrer(ctx context.Context, repository, image, digest, resource string, bundleJSON []byte) (string, error) {
 	opts := r.options(ctx)
 	subject, err := r.subject(repository, image, digest, opts)
 	if err != nil {
@@ -107,7 +138,11 @@ func (r *Registry) PushReferrer(ctx context.Context, repository, image, digest s
 	img = mutate.ConfigMediaType(img, types.MediaType(BundleMediaType))
 	// Annotations before Subject: mutate.Annotations rebuilds the image
 	// from its manifest and would drop a subject set before it.
-	img = mutate.Annotations(img, map[string]string{PredicateTypeAnnotation: PredicateVSA, ReceiptAnnotation: "true"}).(v1.Image)
+	ann := map[string]string{PredicateTypeAnnotation: PredicateVSA, ReceiptAnnotation: "true"}
+	if resource != "" {
+		ann[ResourceAnnotation] = resource
+	}
+	img = mutate.Annotations(img, ann).(v1.Image)
 	img = mutate.Subject(img, desc).(v1.Image)
 	d, err := img.Digest()
 	if err != nil {
@@ -152,41 +187,6 @@ func (r *Registry) subject(repository, image, digest string, opts []remote.Optio
 		return v1.Descriptor{}, fmt.Errorf("subject digest %s: %w", digest, err)
 	}
 	return v1.Descriptor{MediaType: types.OCIManifestSchema1, Digest: h}, nil
-}
-
-// Referrers returns the receipt bundles that refer to repository@digest:
-// referrers of the Sigstore bundle artifact type annotated with the VSA
-// predicate.
-func (r *Registry) Referrers(ctx context.Context, repository, digest string) ([][]byte, error) {
-	subject, err := name.NewDigest(repository+"@"+digest, r.nameOptions()...)
-	if err != nil {
-		return nil, fmt.Errorf("image %s@%s: %w", repository, digest, err)
-	}
-	opts := r.options(ctx)
-	idx, err := remote.Referrers(subject, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("list referrers of %s: %w", subject, err)
-	}
-	m, err := idx.IndexManifest()
-	if err != nil {
-		return nil, fmt.Errorf("list referrers of %s: %w", subject, err)
-	}
-	var out [][]byte
-	for _, d := range m.Manifests {
-		if d.ArtifactType != BundleMediaType || d.Annotations[PredicateTypeAnnotation] != PredicateVSA ||
-			d.Annotations[ReceiptAnnotation] != "true" {
-			continue
-		}
-		if len(out) == maxReferrers {
-			break
-		}
-		b, err := r.firstLayer(subject.Context().Digest(d.Digest.String()), opts)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, nil
 }
 
 func (r *Registry) firstLayer(ref name.Digest, opts []remote.Option) ([]byte, error) {

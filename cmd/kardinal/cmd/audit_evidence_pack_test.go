@@ -860,7 +860,7 @@ func TestEvidencePack_Receipts(t *testing.T) {
 		"--subject", receiptDigest, "--cluster", "c1"}
 	out, _, err := runOutput(t, receiptClient(t), verify...)
 	require.NoError(t, err)
-	assert.Contains(t, out, "VERIFIED receipt checkout-1-5-0-prod")
+	assert.Contains(t, out, "receipt checkout-1-5-0-prod: every check below that was made passed")
 	assert.Equal(t, rc.Spec.Statement, recs[0]["spec"].(map[string]interface{})["statement"], "the statement is exported as signed")
 
 	// A receipt changed in the pack does not verify.

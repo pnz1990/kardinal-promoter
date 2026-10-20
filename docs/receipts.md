@@ -11,8 +11,16 @@ keeps it in the cluster. It can also push it next to the image in your registry 
 Rekor, so anyone can check it without access to the cluster.
 
 ```text
-$ kardinal verify-receipt checkout prod --key receipt.pub
-VERIFIED receipt checkout-1-5-0-prod
+$ kardinal verify-receipt checkout prod --key receipt.pub --require HEALTHY,!OVERRIDDEN
+receipt checkout-1-5-0-prod: every check below that was made passed
+  ✓ signature:        key sha256:6f1e9c2a4b8d0e37
+  – transparency log: no entry
+  ✓ statement:        the cluster's spec.statement, sha256:9d3a...
+  – subject digest:   not pinned (give --image or --subject)
+  ✓ resource:         kardinal://1f0c.../namespaces/payments/pipelines/checkout/environments/prod (namespace, pipeline, environment pinned)
+  ✓ levels:           HEALTHY, !OVERRIDDEN as required
+  ✓ bundle:           checkout-1-5-0 is the Bundle the receipt was made for (UID 1b2c...)
+record:
   environment: prod (pipeline checkout)
   version:     checkout-1-5-0 (1.5.0)
   actor:       agent fixer for alice@example.com; asserted: model claude-opus-5
@@ -82,6 +90,13 @@ read when the step was verified".
 A receipt is at most 256 KiB. Past that, the approvals and Verdicts that did not count are dropped
 first (counted in `approvalsOmitted` and `verdictsOmitted`), then long gate texts are cut and the change requests' approvers dropped (`approversOmitted`), then the gates after the first
 and the metrics. `truncated: true` says so. The levels are those of the full record.
+
+How much receipts take: each PromotionReceipt has its size in `status.bytes`, each Pipeline
+environment its receipts' count and total size in `status.environments[].receipts`
+(`{count, bytes}`), and the controller counts the receipts it signs, `kardinal_receipts_total{mode}`,
+and their bytes, `kardinal_receipt_bytes_total`. Receipts past `receipts.retention.maxAge` are
+deleted; without it every receipt is kept, and `kardinal doctor` warns once they pass 1 GiB (they
+share etcd's quota, 8 GB by default, with every other object).
 
 ### Credentials are redacted
 
@@ -212,7 +227,7 @@ subprocess.
 | Sink | Values | Notes |
 |---|---|---|
 | The PromotionReceipt (always) | — | `status.bundle` holds the signed receipt (a Sigstore bundle). Lives and dies with the cluster. |
-| OCI referrer | `receipts.sinks.oci.enabled`, `receipts.sinks.oci.secretRef.name` | Pushed as a referrer of each image, artifact type `application/vnd.dev.sigstore.bundle.v0.3+json`, annotated `dev.sigstore.bundle.predicateType: https://slsa.dev/verification_summary/v1` and `kardinal.io/receipt: "true"` (a reader of attestations tells a receipt from a builder's own VSA by it; `verify-receipt` reads only those). Needs push rights: a `kubernetes.io/dockerconfigjson` Secret in the release namespace, never a tenant's pull Secret. A config version has no image and is not pushed. |
+| OCI referrer | `receipts.sinks.oci.enabled`, `receipts.sinks.oci.secretRef.name` | Pushed as a referrer of each image, artifact type `application/vnd.dev.sigstore.bundle.v0.3+json`, annotated `dev.sigstore.bundle.predicateType: https://slsa.dev/verification_summary/v1`, `kardinal.io/receipt: "true"` (a reader of attestations tells a receipt from a builder's own VSA by it; `verify-receipt` reads only those) and `kardinal.io/receipt-resource` (its `resourceUri`, so `verify-receipt --image` reads only the environment it is asked about). Needs push rights: a `kubernetes.io/dockerconfigjson` Secret in the release namespace, never a tenant's pull Secret. A config version has no image and is not pushed. |
 | Rekor | `receipts.sinks.rekor.url`, `receipts.sinks.rekor.version` (1 or 2) | Every signature is logged: in Rekor v1 (`rekor.sigstore.dev`), or with version 2 in a Rekor v2 (rekor-tiles) log, such as the public `log20xx` shards or sigstore scaffolding's, where a receipt is a hashedrekord entry. A Rekor v2 entry proves inclusion but not the signing time, so keyless signing with version 2 needs `receipts.signing.tsaURL` too: the chart and the controller refuse it without one (a receipt that could never verify once its short-lived certificate expired is never marked Signed). A key or KMS receipt in Rekor v2 needs no timestamp authority. The public-good Rekor (`rekor.sigstore.dev`) publishes each receipt's names, emails and pipeline names, so it needs `receipts.sinks.rekor.public: true` as well. A private Rekor is the enterprise path. |
 
 The OCI sink pushes with the controller's Secret, but a Bundle's image repositories are chosen
@@ -298,9 +313,9 @@ It checks, and exits non-zero when any check fails:
    `--issuer`. Both are required: no default trusts any identity.
 2. **The log entry or timestamp**, when the receipt has one, against the trusted root. It never
    contacts Rekor: the entry and its inclusion proof are in the receipt. A key receipt verified
-   without `--trusted-root` does not check its log entry, and says so ("its transparency log
-   entry is not checked"; `logged: false, logNotChecked: true` with `-o json`): it is "in the
-   transparency log" only once the entry is verified.
+   without `--trusted-root` does not check its log entry, and says so ("entry not checked";
+   `logged: false, logNotChecked: true` with `-o json`): it is in the transparency log only once
+   the entry is verified (`✓ transparency log: inclusion verified (logIndex N, log ...)`).
 3. **What it is for**: the cluster, namespace, Pipeline and environment of its `resourceUri`,
    exactly, and the subject. From the cluster these are the receipt's own; with `--image` and
    `--file`, `-n`, `--pipeline` and `--env` are required, `--subject` too for a file (the
@@ -313,7 +328,26 @@ It checks, and exits non-zero when any check fails:
    the Bundle it names, when it still exists, has the UID it records. A receipt edited after it
    was signed fails.
 
-`-o json` prints the verified statement.
+Each check is a line of its own, `✓` when it was made and passed, `–` when it was not made (a
+subject not pinned, a log entry not checked, no level required): the output never says just
+"verified". `-o json` prints the same list (`checks`, each with `name`, `checked` and `detail`)
+and the statement.
+
+**With `--image`**, verify-receipt reads the image's referrers, following the registry's pages
+(the Referrers API's `Link: rel="next"`, on the same registry only; or the referrers tag schema),
+up to 1024 of them. Each receipt referrer carries its `resourceUri` as an annotation
+(`kardinal.io/receipt-resource`, not signed: it only narrows the search, and the receipt read is
+verified), so another environment's receipts are skipped before they are read and cannot crowd
+out the one asked for. An image with more referrers than are read gets a warning, and
+`referrersTruncated: true` with `-o json`; if no receipt of the pinned resource is among those
+read, or none of those read verifies (receipts planted by whoever may push to the repository, say,
+up to the 64 that are read), verify-receipt fails with "cannot verify": the real one may be among
+those not read, so whether one exists is unknown, which is never a pass. A registry
+whose list cannot be read whole fails it too ("cannot verify"): more than 64 pages, a page linked
+twice, or a next page on another host or scheme. The whole command gives up after `--timeout`
+(60 s by default), also with "cannot verify": reading the cluster, the registry and its credentials
+(a docker credential helper that does not answer is cut off), and the public-good trusted root's TUF
+fetch.
 
 ## Where receipts show
 
@@ -332,11 +366,12 @@ It checks, and exits non-zero when any check fails:
   `write:repository` and `write:issue` scopes, a Bitbucket token without `account`) is not
   searched: the comment is posted, and a crash between the post and its status write can post
   it twice. Add `read:user` (Forgejo/Gitea) or `account` (Bitbucket) to search.
-- **`kardinal history`** adds a RECEIPT column once a promotion has one: "verified" when it is
-  signed.
+- **`kardinal history`** adds a RECEIPT column once a promotion has one: "signed" once the
+  controller signed it. "Verified" is only what `kardinal verify-receipt` says of a receipt it
+  checked.
 - **`kardinal why`** names the receipt of the version an environment runs, with the command to
   verify it.
-- **The UI**: the stage drawer's History says "Receipt <name>: verified ✓" with the command to
+- **The UI**: the stage drawer's History says "Receipt <name>: signed ✓" with the command to
   verify it once the step's receipt is signed.
 
 Environments with `approval: auto` have no PR: their receipts show in `history`, `why` and the UI.

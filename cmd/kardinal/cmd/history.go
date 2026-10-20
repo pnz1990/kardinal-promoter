@@ -113,9 +113,10 @@ type historyEntry struct {
 
 // historyReceipt is a receipt in kardinal history -o json|yaml.
 type historyReceipt struct {
-	Name     string `json:"name"`
-	Phase    string `json:"phase"`
-	Verified bool   `json:"verified"`
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+	// Signed is true once the controller signed it (Signed or Stored).
+	Signed bool `json:"signed"`
 }
 
 // writeHistoryStructured writes rows as -o json|yaml asks.
@@ -125,7 +126,7 @@ func writeHistoryStructured(w io.Writer, rows []HistoryRow) error {
 		e := historyEntry{Bundle: r.Bundle, Action: r.Action, Environment: r.Env, State: r.State,
 			PRURL: r.PRURL, DurationSeconds: r.Seconds, Running: r.Running, CreatedAt: r.Created.UTC(), Actor: r.Actor}
 		if rc := r.Receipt; rc != nil {
-			e.Receipt = &historyReceipt{Name: rc.Name, Phase: phaseOr(rc.Status.Phase), Verified: receiptSigned(*rc)}
+			e.Receipt = &historyReceipt{Name: rc.Name, Phase: phaseOr(rc.Status.Phase), Signed: receiptSigned(*rc)}
 		}
 		out = append(out, e)
 	}

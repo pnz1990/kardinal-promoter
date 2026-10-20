@@ -462,8 +462,9 @@ type uiReceipt struct {
 	Name string `json:"name"`
 	// Phase is Pending, Signed, Stored or Failed.
 	Phase string `json:"phase"`
-	// Verified is true once it is signed (Signed or Stored).
-	Verified bool `json:"verified"`
+	// Signed is true once the controller signed it (Signed or Stored):
+	// "verified" is what verify-receipt says of a receipt it checked.
+	Signed bool `json:"signed"`
 }
 
 // uiStepStatus is the JSON shape for one entry of PromotionStep status.steps[].
@@ -1516,7 +1517,7 @@ func (s *uiAPIServer) stepReceipt(ctx context.Context, ps *v1alpha1.PromotionSte
 		return nil
 	}
 	return &uiReceipt{Name: rc.Name, Phase: rc.Status.Phase,
-		Verified: rc.Status.Phase == v1alpha1.ReceiptSigned || rc.Status.Phase == v1alpha1.ReceiptStored}
+		Signed: rc.Status.Phase == v1alpha1.ReceiptSigned || rc.Status.Phase == v1alpha1.ReceiptStored}
 }
 
 // buildUIStepStatuses converts status.steps[] to the UI shape.

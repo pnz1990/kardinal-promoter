@@ -11,7 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
+
+	"k8s.io/utils/lru"
 )
 
 // ErrCommentSearchUnsupported is returned by a provider (or a wrapper of
@@ -39,10 +40,31 @@ type comment struct {
 	body, author string
 }
 
+// maxSelfIDs bounds selfIDs: past it, the least recently used identity is
+// dropped (read again at its provider's next search).
+var maxSelfIDs = 1024
+
 // selfIDs caches each provider's own identity (the token's user, or the
 // GitHub App's ID), by provider: it does not change while the provider
-// lives (a rotated token builds a new provider).
-var selfIDs sync.Map
+// lives. A provider that is replaced (a rotated token builds a new one) or
+// dropped (the ScmProvider registry evicts its client) is forgotten
+// (ForgetIdentity), and the cache is bounded besides, so neither token
+// rotation nor many providers grow it.
+var selfIDs = lru.New(maxSelfIDs)
+
+// ForgetIdentity drops the cached identity of p, and of the provider it
+// wraps: p is being replaced or dropped. It is safe for a provider that has
+// none.
+func ForgetIdentity(p SCMProvider) {
+	for p != nil {
+		selfIDs.Remove(p)
+		w, ok := p.(interface{ wrapped() SCMProvider })
+		if !ok {
+			return
+		}
+		p = w.wrapped()
+	}
+}
 
 // self is the identity of p, from lookup the first time. A token that may
 // not read its own user (a Forgejo token without read:user, a Bitbucket
@@ -51,7 +73,7 @@ var selfIDs sync.Map
 // searching, which at worst repeats a comment; a search by marker alone
 // would let anyone who can comment suppress it.
 func self(ctx context.Context, p interface{}, lookup func(context.Context) (string, error)) (string, error) {
-	if v, ok := selfIDs.Load(p); ok {
+	if v, ok := selfIDs.Get(p); ok {
 		return v.(string), nil
 	}
 	id, err := lookup(ctx)
@@ -65,7 +87,7 @@ func self(ctx context.Context, p interface{}, lookup func(context.Context) (stri
 	if id == "" {
 		return "", errors.New("read the SCM identity: empty")
 	}
-	selfIDs.Store(p, id)
+	selfIDs.Add(p, id)
 	return id, nil
 }
 
