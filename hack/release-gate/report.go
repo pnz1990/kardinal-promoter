@@ -290,8 +290,9 @@ func duration(s float64) string {
 }
 
 // Render writes the report: verdict, per-area table, totals, coverage,
-// durations and provenance. Links are relative to the report's directory.
-func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverage, p Provenance, wall time.Duration) error {
+// what the gate does not run, durations and provenance. Links are relative
+// to the report's directory.
+func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverage, notRun []NotRunItem, p Provenance, wall time.Duration) error {
 	var b strings.Builder
 	short := p.SHA
 	if len(short) > 12 {
@@ -303,7 +304,11 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 	if p.Dirty {
 		b.WriteString(", **with uncommitted changes**")
 	}
-	fmt.Fprintf(&b, ". Generated %s by `make release-gate`.\n\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, ". Generated %s by `make release-gate`.", time.Now().UTC().Format(time.RFC3339))
+	if len(notRun) > 0 {
+		fmt.Fprintf(&b, " It does not prove the %d items [not run by this gate](#not-run-by-this-gate).", len(notRun))
+	}
+	b.WriteString("\n\n")
 
 	var all Totals
 	byArea := map[string][]int{}
@@ -449,6 +454,8 @@ func Render(w io.Writer, steps []Step, results []Result, out string, cov Coverag
 		sort.Strings(allowed)
 		b.WriteString("\nNot proven, allowed by hack/release-gate/coverage-allow.txt:\n\n" + strings.Join(allowed, "\n") + "\n")
 	}
+
+	renderNotRun(&b, notRun)
 
 	b.WriteString("\n## Provenance\n\n")
 	fmt.Fprintf(&b, "- Commit: `%s` (%s)\n", p.SHA, p.Describe)

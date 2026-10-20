@@ -123,6 +123,8 @@ type Repo struct {
 	FuzzTargets  []FuzzTarget
 	PrevRelease  string // the release before this commit, e.g. v0.11.0
 	Enterprise   bool   // test/scenario/enterprise exists
+	// NotRunItems are what the gate does not run (hack/release-gate/not-run.txt).
+	NotRunItems []NotRunItem
 }
 
 // MatrixLine is a line of hack/e2e/matrix.txt.
@@ -137,8 +139,9 @@ var (
 	releaseTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 )
 
-// LoadRepo reads the matrix, the tool versions, the fuzz targets and the
-// previous release of the checkout at root.
+// LoadRepo reads the matrix, the tool versions, the fuzz targets, the
+// previous release and the not-run list of the checkout at root: a broken
+// not-run list stops the gate before it runs anything.
 func LoadRepo(root string) (*Repo, error) {
 	r := &Repo{Root: root}
 	var err error
@@ -152,6 +155,9 @@ func LoadRepo(root string) (*Repo, error) {
 		return nil, err
 	}
 	if r.PrevRelease, err = previousRelease(root); err != nil {
+		return nil, err
+	}
+	if r.NotRunItems, err = readNotRun(root); err != nil {
 		return nil, err
 	}
 	if st, err := os.Stat(filepath.Join(root, "test", "scenario", "enterprise")); err == nil && st.IsDir() {
