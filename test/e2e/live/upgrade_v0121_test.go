@@ -25,7 +25,7 @@ import (
 
 // guideChartV0121 is the chart reference of the "Upgrading from v0.12.1"
 // guide: the test replaces it with the checkout's chart.
-const guideChartV0121 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.2"
+const guideChartV0121 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3"
 
 // u0121AlarmGate is the gate that holds the controller's automatic
 // rollbacks at test (their actor stamp), so the one the release starts is still

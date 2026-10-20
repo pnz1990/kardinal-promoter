@@ -11,8 +11,8 @@ type: application
 # and the CRD and admission policy install check (make envtest) run on it. The
 # -0 lets pre-release builds such as v1.35.2-eks-ce1d5eb match.
 kubeVersion: ">=1.35.0-0"
-version: 0.12.2
-appVersion: "v0.12.2"
+version: 0.12.3
+appVersion: "v0.12.3"
 keywords:
   - kubernetes
   - promotion
