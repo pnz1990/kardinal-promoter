@@ -812,10 +812,14 @@ func TestLoadLock_Counting(t *testing.T) {
 			dirs = append(dirs, dir)
 			for i := 0; i < 8; i++ {
 				// Two places in the critical section; a third holder finds both
-				// taken. Held long enough (0.5s) that the next waiter's turn
-				// comes while it holds, on a busy CI runner too.
+				// taken. The first in1 holder of a lock waits (30s at most)
+				// for an in2 holder beside it, so two hold it at once however
+				// slow the next waiter's turn (#2348 QA: beside the package's
+				// other lock tests, 160 waiters starved through a 0.5s hold).
 				cmd := exec.Command("bash", script, "-l", lock, "-o", fmt.Sprintf("w%d", i), "-r", "0.05", "--", "sh", "-c",
-					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi; sleep 0.5; rmdir "$0/$p"`, dir)
+					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi
+if [ $p = in1 ]; then n=0; while [ ! -e "$0/two" ] && [ $n -lt 600 ]; do sleep 0.05; n=$((n + 1)); done; else sleep 0.5; fi
+rmdir "$0/$p"`, dir)
 				cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
 				require.NoError(t, cmd.Start())
 				cmds = append(cmds, cmd)

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -466,12 +465,12 @@ func changelogAnchors(lines []string) map[string]map[string]int {
 	return anchors
 }
 
-// changelogAnchorsMemo holds changelogAnchors of each changelog read, by
-// root and line count: every row's changelog refs share them (#2292).
+// changelogAnchorsMemo holds changelogAnchors of each changelog read, by its
+// text: every row's changelog refs share them (#2292).
 var changelogAnchorsMemo sync.Map
 
-func memoChangelogAnchors(root string, lines []string) map[string]map[string]int {
-	key := root + "\x00" + strconv.Itoa(len(lines))
+func memoChangelogAnchors(lines []string) map[string]map[string]int {
+	key := strings.Join(lines, "\n")
 	if v, ok := changelogAnchorsMemo.Load(key); ok {
 		return v.(map[string]map[string]int)
 	}
@@ -496,7 +495,7 @@ func changelogRefProblem(root string, files map[string][]string, anchor string) 
 		lines = strings.Split(text, "\n")
 		files[changelogPath] = lines
 	}
-	anchors := memoChangelogAnchors(root, lines)
+	anchors := memoChangelogAnchors(lines)
 	text, release := anchor, ""
 	if i := strings.LastIndex(anchor, "@"); i > 0 {
 		if _, known := releasesOf(anchors)[anchor[i+1:]]; known {
