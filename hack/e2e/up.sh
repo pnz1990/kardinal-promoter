@@ -44,6 +44,9 @@
 #           builds the same estate, plus an automatic rollback of a podinfo
 #           release in flight, and follows "Upgrading from v0.12.1"; one run
 #           per cluster too
+#   upgrade-v0122  the same from kardinal-promoter v0.12.2 as released
+#           (kardinal-v0122.sh), following "Upgrading from v0.12.2"; one run
+#           per cluster too
 #   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
 #           blocks of the getting-started and how-to pages in order
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,
@@ -150,6 +153,8 @@ case "$SUITE" in
   # Argo CD deploys the podinfo release whose rollout fails, for the
   # automatic rollback in flight across the upgrade.
   upgrade-v0121) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0121.sh test-agent.sh) RUN='^TestUpgradeV0121_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  upgrade-v0122) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0122.sh test-agent.sh) RUN='^TestUpgradeV0122_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.

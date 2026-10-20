@@ -28,7 +28,7 @@ import (
 const guideChartV0121 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.2"
 
 // u0121AlarmGate is the gate that holds the controller's automatic
-// rollbacks at test (their actor stamp), so the one v0.12.1 starts is still
+// rollbacks at test (their actor stamp), so the one the release starts is still
 // in flight when the upgrade starts.
 const u0121AlarmGate = "hold-auto-rollbacks"
 
@@ -43,12 +43,12 @@ const u0121AlarmGate = "hold-auto-rollbacks"
 // still 0.12.1.
 //
 // It adds an automatic rollback in flight across the upgrade
-// (u0121AutoRollback): the code v0.12.2 changes (#2187, #2223).
+// (u012AutoRollback): the code v0.12.2 changes (#2187, #2223).
 //
 // Covers UPG-V0121-01, UPG-V0121-02, UPG-V0121-03, UPG-V0121-04, UPG-V0121-05, UPG-V0121-06.
 func TestUpgradeV0121_Estate(t *testing.T) {
 	u012Upgrade(t, u012From{pins: "V0121", cli: (*framework.Env).KardinalV0121, guideChart: guideChartV0121,
-		extra: u0121AutoRollback})
+		extra: u012AutoRollback})
 }
 
 // u0121Rollbacks are the rollback Bundles of ns (label kardinal.io/rollback)
@@ -95,10 +95,10 @@ func u0121FailedStep(ctx context.Context, e *framework.Env, ns, bundle string, f
 	return false, fmt.Sprintf("no step %s and no record of it in %s's status.retiredSteps", failed.Name, bundle)
 }
 
-// u0121AutoRollbackOf checks that rb is the controller's automatic rollback
+// u012AutoRollbackOf checks that rb is the controller's automatic rollback
 // of from (onHealthFailure: rollback): its stamp, its marker and the image it
 // restores.
-func u0121AutoRollbackOf(t *testing.T, e *framework.Env, ns, rb, from string) *v1alpha1.Bundle {
+func u012AutoRollbackOf(t *testing.T, e *framework.Env, ns, rb, from string) *v1alpha1.Bundle {
 	t.Helper()
 	b := getBundle(t, e, ns, rb)
 	require.NotNil(t, b.Spec.Actor, "%s has an actor stamp", rb)
@@ -110,12 +110,13 @@ func u0121AutoRollbackOf(t *testing.T, e *framework.Env, ns, rb, from string) *v
 	return b
 }
 
-// u0121AutoRollback is upgrade-v0121's own case: an automatic rollback in
-// flight across the upgrade. Under v0.12.1 (its CLI), a podinfo Pipeline
-// with onHealthFailure: rollback on test (rbAlarmPipeline, the core suite's
-// fixture) has a version Verified, then a version whose rollout fails
-// (ProgressDeadlineExceeded): its step turns RollingBack and v0.12.1
-// creates the rollback Bundle <version>-rollback-alarm, which a gate on the
+// u012AutoRollback is a case of the upgrade-v0121 and upgrade-v0122 suites:
+// an automatic rollback in flight across the upgrade. Under the release (its
+// CLI), a podinfo Pipeline with onHealthFailure: rollback on test
+// (rbAlarmPipeline, the core suite's fixture) has a version Verified, then a
+// version whose rollout fails (ProgressDeadlineExceeded): its step turns
+// RollingBack and the release creates the rollback Bundle
+// <version>-rollback-alarm, which a gate on the
 // controller's auto-rollback stamp holds at test. The failed version is
 // Superseded, and its Graph retires a minute later (its step then is a
 // record in status.retiredSteps). After the upgrade:
@@ -126,7 +127,7 @@ func u0121AutoRollbackOf(t *testing.T, e *framework.Env, ns, rb, from string) *v
 //     is Verified, the same Bundle, and the failed version ends Superseded;
 //   - a version that fails after the upgrade gets exactly one new automatic
 //     rollback, which is Verified: the namespace then has those two.
-func u0121AutoRollback(t *testing.T, e *framework.Env, from u012From) func() {
+func u012AutoRollback(t *testing.T, e *framework.Env, from u012From) func() {
 	t.Helper()
 	ctx := context.Background()
 	a := rbAlarmPipeline(t, e, nil)
@@ -152,7 +153,7 @@ func u0121AutoRollback(t *testing.T, e *framework.Env, from u012From) func() {
 	failed := e.WaitStepState(t, a.ns, pipelineName, b2, "test", "RollingBack", promoteTimeout)
 	rb := b2 + "-rollback-alarm"
 	require.True(t, strings.HasSuffix(failed.Status.Message, " — rollback Bundle "+rb+" created"), failed.Status.Message)
-	held := u0121AutoRollbackOf(t, e, a.ns, rb, b2)
+	held := u012AutoRollbackOf(t, e, a.ns, rb, b2)
 	failedB := getBundle(t, e, a.ns, b2)
 	e.WaitGateReady(t, a.ns, rb, "test", u0121AlarmGate, false, "", gateTimeout)
 	e.NoStep(t, a.ns, pipelineName, rb, "test", 10*time.Second)
@@ -195,7 +196,7 @@ func u0121AutoRollback(t *testing.T, e *framework.Env, from u012From) func() {
 		failed3 := e.WaitStepState(t, a.ns, pipelineName, b3, "test", "RollingBack", promoteTimeout)
 		rb3 := b3 + "-rollback-alarm"
 		assert.True(t, strings.HasSuffix(failed3.Status.Message, " — rollback Bundle "+rb3+" created"), failed3.Status.Message)
-		fresh := u0121AutoRollbackOf(t, e, a.ns, rb3, b3)
+		fresh := u012AutoRollbackOf(t, e, a.ns, rb3, b3)
 		rbVerified(t, a, rb3, "test")
 		assertEnvAt(t, a, "test", fixtures.V2)
 		e.WaitBundlePhase(t, a.ns, b3, "Superseded", time.Minute)
