@@ -559,6 +559,112 @@ exec "$@"
 		assert.Contains(t, string(out), "its cluster kardinal-e2e-still-here still runs; the slot stays")
 		assert.DirExists(t, filepath.Join(h.slots, "1"))
 	})
+	t.Run("cluster slots are first come, first served: a waiter polling often never overtakes one polling seldom", func(t *testing.T) {
+		// 0.1s against 3s (the 1s and 30s of the report, scaled to a test).
+		h := newLocalLiveHost(t)
+		holder := filepath.Join(h.slots, "1")
+		require.NoError(t, os.MkdirAll(holder, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+		slow := h.cmd(t, []string{"SLOT_MAX=1", "RETRY=3"}, "gitea")
+		sout := &liveOut{}
+		slow.Stdout, slow.Stderr = sout, sout
+		require.NoError(t, slow.Start())
+		require.Eventually(t, func() bool { return strings.Contains(sout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		fast := h.cmd(t, []string{"SLOT_MAX=1", "RETRY=0.1"}, "flux")
+		fout := &liveOut{}
+		fast.Stdout, fast.Stderr = fout, fout
+		require.NoError(t, fast.Start())
+		require.Eventually(t, func() bool { return strings.Contains(fout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+		require.NoError(t, os.RemoveAll(holder)) // the slot frees: the fast waiter polls first
+		waitLive(t, slow, sout)
+		waitLive(t, fast, fout)
+		runs := strings.Split(h.read("up"), "KUBECONFIG=")
+		require.Len(t, runs, 3, "%s", h.read("up"))
+		assert.Contains(t, runs[1], "-gitea-", "the first waiter ran first, though it polls every 3s")
+		assert.Contains(t, runs[2], "-flux-")
+		assert.Contains(t, fout.String(), "waits behind 1-", "the later waiter queued behind it")
+	})
+	t.Run("a release gate's ticket is served first, and a gone waiter's ticket is removed", func(t *testing.T) {
+		h := newLocalLiveHost(t)
+		q := filepath.Join(h.slots, ".queue")
+		require.NoError(t, os.MkdirAll(q, 0o755))
+		release := filepath.Join(q, fmt.Sprintf("0-%019d-%d", time.Now().UnixNano(), os.Getpid()))
+		require.NoError(t, os.WriteFile(release, []byte(liveRecord(t, "release-gate")+"\n"), 0o644))
+		gone := exec.Command("true")
+		require.NoError(t, gone.Run())
+		require.NoError(t, os.WriteFile(filepath.Join(q, fmt.Sprintf("1-%019d-%d", 1, gone.Process.Pid)), []byte("gone\n"), 0o644))
+		cmd := h.cmd(t, nil, "gitea")
+		out := &liveOut{}
+		cmd.Stdout, cmd.Stderr = out, out
+		require.NoError(t, cmd.Start())
+		require.Eventually(t, func() bool { return strings.Contains(out.String(), "waits behind 0-") }, 10*time.Second, 20*time.Millisecond)
+		assert.Contains(t, out.String(), "removed the cluster slot ticket 1-0000000000000000001-", "the gone waiter's ticket, though it sorts first among class 1")
+		assert.Empty(t, h.read("up"))
+		require.NoError(t, os.Remove(release))
+		waitLive(t, cmd, out)
+		entries, _ := os.ReadDir(q)
+		assert.Empty(t, entries, "the run gave its ticket back")
+	})
+	t.Run("the drainer is the head while it drains: without that, a waiter ahead of it and it wait on each other", func(t *testing.T) {
+		src, err := os.ReadFile(filepath.Join(repoRoot(t), "hack", "e2e", "local-live.sh"))
+		require.NoError(t, err)
+		rule := "  if [ -z \"$draining\" ]; then\n    first_slot_ticket\n"
+		require.Contains(t, string(src), rule)
+		for _, tc := range []struct {
+			name, script string
+			heavyRC      int
+		}{
+			{"with the rule, the heavy run starts and the light one after it", string(src), 0},
+			{"without it, the two wait on each other until the drain's deadline", strings.Replace(string(src), rule, "  if :; then\n    first_slot_ticket\n", 1), 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newLocalLiveHost(t)
+				script := checkoutWith(t, tc.script)
+				// A live run holds the one slot; a light run queues for it,
+				// then a heavy one drains the host behind it.
+				holder := filepath.Join(h.slots, "1")
+				require.NoError(t, os.MkdirAll(holder, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(holder, "owner"), []byte(liveRecord(t, "other run")+"\n"), 0o644))
+				env := []string{"SLOT_MAX=1", "DRAIN_DEADLINE=4"}
+				light := h.cmd(t, env, "gitea")
+				light.Args[1] = script
+				lout := &liveOut{}
+				light.Stdout, light.Stderr = lout, lout
+				require.NoError(t, light.Start())
+				require.Eventually(t, func() bool { return strings.Contains(lout.String(), "waiting for a cluster slot") }, 10*time.Second, 20*time.Millisecond)
+				heavy := h.cmd(t, env, "scale")
+				heavy.Args[1] = script
+				hout := &liveOut{}
+				heavy.Stdout, heavy.Stderr = hout, hout
+				require.NoError(t, heavy.Start())
+				require.Eventually(t, func() bool { _, err := os.Stat(filepath.Join(h.slots, ".drain")); return err == nil }, 10*time.Second, 20*time.Millisecond)
+				require.NoError(t, os.RemoveAll(holder)) // the running cluster ends
+				hdone := make(chan error, 1)
+				go func() { hdone <- heavy.Wait() }()
+				select {
+				case err := <-hdone:
+					assert.Equal(t, tc.heavyRC, exitCode(err), "%s", hout.String())
+				case <-time.After(30 * time.Second):
+					_ = heavy.Process.Kill()
+					<-hdone
+					t.Fatalf("the heavy run neither started nor gave up: %s", hout.String())
+				}
+				waitLive(t, light, lout)
+				up := h.read("up")
+				if tc.heavyRC == 0 {
+					runs := strings.Split(up, "KUBECONFIG=")
+					require.Len(t, runs, 3, "%s", up)
+					assert.Contains(t, runs[1], "-scale-", "the drainer went first")
+					assert.Contains(t, runs[2], "-gitea-")
+				} else {
+					assert.Contains(t, hout.String(), "gave up draining the host after 4s")
+					assert.Contains(t, hout.String(), "waits behind 1-", "it waited for the light run, which waited for its drain")
+					assert.Contains(t, lout.String(), "a heavy suite is draining the host")
+					assert.NotContains(t, up, "-scale-", "the heavy run never started")
+				}
+			})
+		}
+	})
 	t.Run("slot directories above SLOT_MAX count: no run starts while SLOT_MAX clusters run", func(t *testing.T) {
 		h := newLocalLiveHost(t)
 		for _, n := range []string{"3", "4"} { // two runs with a larger SLOT_MAX
@@ -867,4 +973,56 @@ func (o *liveOut) String() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.b.String()
+}
+
+// liveRecord is a record of this test process, as local-live.sh writes one
+// (pid, boot id, start time): a live run's.
+func liveRecord(t *testing.T, who string) string {
+	t.Helper()
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	require.NoError(t, err)
+	stat, err := os.ReadFile("/proc/self/stat")
+	require.NoError(t, err)
+	f := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+1:])
+	require.Greater(t, len(f), 19)
+	return fmt.Sprintf("%s pid %d now boot=%s start=%s", who, os.Getpid(), strings.TrimSpace(string(boot)), f[19])
+}
+
+// waitLive waits up to 30s for a local-live run to end, and requires it to
+// pass.
+func waitLive(t *testing.T, c *exec.Cmd, out *liveOut) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "%s", out.String())
+	case <-time.After(30 * time.Second):
+		_ = c.Process.Kill()
+		<-done
+		t.Fatalf("the run never ended: %s", out.String())
+	}
+}
+
+// checkoutWith is a checkout (a git repository with this one's matrix,
+// pins and loadlock.sh) whose hack/e2e/local-live.sh is script; it returns
+// that script's path.
+func checkoutWith(t *testing.T, script string) string {
+	t.Helper()
+	co := t.TempDir()
+	for _, f := range []string{"hack/e2e/matrix.txt", "hack/tool-versions.env", "hack/loadlock.sh"} {
+		b, err := os.ReadFile(filepath.Join(repoRoot(t), f))
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(co, f)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(co, f), b, 0o755))
+	}
+	path := filepath.Join(co, "hack", "e2e", "local-live.sh")
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "co"}} {
+		git := exec.Command("git", args...)
+		git.Dir = co
+		out, err := git.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	return path
 }

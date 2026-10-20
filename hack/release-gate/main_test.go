@@ -656,8 +656,9 @@ func TestMachineSlots(t *testing.T) {
 	_, ok, why := b.Slots(2)
 	assert.False(t, ok, "one slot left")
 	assert.Contains(t, why, "2 cluster slots are in use in "+dir+", and the host has 3")
-	entries, _ := os.ReadDir(dir)
-	assert.Len(t, entries, 2, "a failed take leaves no slot behind")
+	held, err := heldSlots(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 2, held, "a failed take leaves no slot behind")
 	relB, ok, _ := b.Slots(1)
 	require.True(t, ok)
 	owner, err := os.ReadFile(filepath.Join(dir, "3", "owner"))
@@ -668,15 +669,69 @@ func TestMachineSlots(t *testing.T) {
 	relB2, ok, _ := b.Slots(1)
 	require.True(t, ok)
 	relA()
-	entries, _ = os.ReadDir(dir)
-	assert.Len(t, entries, 2, "a gives back its own slot, not the two b holds")
+	held, err = heldSlots(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 2, held, "a gives back its own slot, not the two b holds")
 	relB2()
 	relB()
-	entries, _ = os.ReadDir(dir)
-	assert.Empty(t, entries)
+	held, err = heldSlots(dir)
+	require.NoError(t, err)
+	assert.Zero(t, held)
+	tickets, _ := os.ReadDir(slotQueue(dir))
+	assert.Empty(t, tickets, "a take gives its queue ticket back")
 	none, ok, _ := (&machine{}).Slots(5)
 	assert.True(t, ok, "no slots directory: no limit")
 	none()
+}
+
+// TestMachineSlots_Queue: the gate takes cluster slots first come, first
+// served with hack/e2e/local-live.sh (DIR/.queue): it waits behind an older
+// live waiter's ticket, a release gate's ticket goes first, a gone waiter's
+// ticket is removed, and a take or the run's end gives the ticket back.
+func TestMachineSlots_Queue(t *testing.T) {
+	dir := t.TempDir()
+	q := slotQueue(dir)
+	require.NoError(t, os.MkdirAll(q, 0o755))
+	live := fmt.Sprintf("ENGINEER-1 local-live gitea 1.37 pid %d now %s", os.Getpid(), selfRecord(hostProc{}))
+	older := filepath.Join(q, fmt.Sprintf("1-%019d-%d", 1, os.Getpid()))
+	require.NoError(t, os.WriteFile(older, []byte(live+"\n"), 0o644))
+
+	m := &machine{slotsDir: dir, slotMax: 2, owner: fmt.Sprintf("gate pid %d now", os.Getpid())}
+	_, ok, why := m.Slots(1)
+	assert.False(t, ok, "an older waiter is first")
+	assert.Contains(t, why, "waits behind 1-0000000000000000001-")
+	ticket := m.slotTicket
+	require.FileExists(t, filepath.Join(q, ticket), "the gate keeps its place")
+	_, ok, _ = m.Slots(1)
+	assert.False(t, ok)
+	assert.Equal(t, ticket, m.slotTicket, "the same ticket, however often it asks")
+
+	rel := &machine{slotsDir: dir, slotMax: 2, owner: fmt.Sprintf("release gate pid %d now", os.Getpid()), lockClass: classRelease}
+	release, ok, why := rel.Slots(1)
+	require.True(t, ok, "a release gate's ticket goes first: %s", why)
+	release()
+
+	require.NoError(t, os.Remove(older))
+	release, ok, why = m.Slots(1)
+	require.True(t, ok, why)
+	release()
+	assert.NoFileExists(t, filepath.Join(q, ticket), "a take gives the ticket back")
+
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	require.NoError(t, os.WriteFile(filepath.Join(q, fmt.Sprintf("1-%019d-%d", 2, gone.Process.Pid)), []byte("gone\n"), 0o644))
+	release, ok, why = m.Slots(1)
+	require.True(t, ok, "a gone waiter's ticket is removed: %s", why)
+	release()
+
+	require.NoError(t, os.WriteFile(older, []byte(live+"\n"), 0o644))
+	_, ok, _ = m.Slots(1)
+	require.False(t, ok)
+	ticket = m.slotTicket
+	m.DropSlotTicket()
+	assert.NoFileExists(t, filepath.Join(q, ticket), "the run's end gives the ticket back")
+	entries, _ := os.ReadDir(q)
+	assert.Len(t, entries, 1, "only the older waiter's")
 }
 
 // TestMachineSlots_AboveSlotMaxCount (#2244): a slot directory above

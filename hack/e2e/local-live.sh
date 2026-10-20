@@ -10,7 +10,10 @@
 #
 # A shared host: every run takes a cluster slot (DIR/1..SLOT_MAX, taken with
 # mkdir, as hack/release-gate -slots does; DIR from $RELEASE_GATE_SLOTS;
-# the multi-cluster suite takes two). A slot whose owner is gone (its pid,
+# the multi-cluster suite takes two). Slots are first come, first served:
+# waiters queue in DIR/.queue (hack/loadlock.sh's tickets; release gates'
+# first), and only the first takes slots, however often the others poll.
+# A slot whose owner is gone (its pid,
 # boot id or start time no longer match, as hack/loadlock.sh judges) is
 # reclaimed; a KEEP run's slot only when its cluster is gone. Before it
 # creates its cluster a run waits until the host's one-minute load is under
@@ -22,8 +25,10 @@
 # The heavy suites (host heavy in hack/e2e/matrix.txt: scale, multi-cluster)
 # also take the heavy-load lock first (hack/loadlock.sh, LOCK from
 # $LOADLOCK), and drain the host: a waiting heavy run writes DIR/.drain, no
-# new run takes a slot while it is there, and the heavy run starts once at
-# most one other slot is in use and the load is under 16. The marker stays
+# new run takes a slot while it is there (the drainer is the queue's head
+# meanwhile, so it never waits for a waiter that waits for it), and the
+# heavy run starts once at most one other slot is in use and the load is
+# under 16. The marker stays
 # until the heavy run ends, so its numbers are not shared with light runs.
 #
 # All are released, and the cluster (and the multi-cluster suite's spoke)
@@ -407,6 +412,15 @@ kept_tag="KEEP $KIND_CLUSTER, kept by $OWNER local-live $SUITE $MINOR at $stamp"
 drain_tag="$OWNER local-live $SUITE $MINOR draining the host for a heavy suite, pid $$ $stamp boot=$this_boot start=$self_start"
 taken=()
 draining=''
+# The cluster slots' queue (#2242's protocol, as hack/loadlock.sh's): a
+# waiter's ticket SLOTS_DIR/.queue/<class>-<ns>-<pid>, release gates'
+# (class 0, hack/release-gate -priority release) before everyone else's
+# (1), then the oldest; only the first takes slots, so a waiter that polls
+# often never overtakes one that polls seldom. A heavy run draining the
+# host is the head while its drain lasts: the waiters ahead of it wait for
+# the drain, and it waits only for the clusters running.
+slot_queue=$SLOTS_DIR/.queue
+slot_ticket=''
 
 # with_flock NAME CMD... runs CMD under flock on SLOTS_DIR/NAME; never
 # without it: when flock fails (a fork that failed), with_flock fails.
@@ -444,6 +458,8 @@ release_slots() {
     fi
   done
   taken=()
+  [ -z "$slot_ticket" ] || rm -f "$slot_queue/$slot_ticket"
+  slot_ticket=''
   if [ -n "$draining" ] && read_file "$SLOTS_DIR/.drain" && [ "$file_v" = "$drain_tag" ]; then
     rm -f "$SLOTS_DIR/.drain"
   fi
@@ -526,6 +542,46 @@ in_use() {
   in_use_v=$((n - ${#taken[@]}))
 }
 
+# write_slot_ticket (re)writes this run's ticket in the slots' queue (the
+# queue directory too); a failure ends the run.
+write_slot_ticket() {
+  local _
+  for _ in 1 2 3; do
+    mkdir -p "$slot_queue" && printf '%s\n' "$slot_tag" >"$slot_queue/.$slot_ticket" 2>/dev/null &&
+      mv "$slot_queue/.$slot_ticket" "$slot_queue/$slot_ticket" 2>/dev/null && return 0
+  done
+  die "cannot write the cluster slot ticket $slot_queue/$slot_ticket"
+}
+
+# reap_slot_tickets removes the tickets of waiters that are gone (a ticket's
+# text without a pid is judged by the pid in its name).
+# shellcheck disable=SC2329 # called by try_slots, through with_flock
+reap_slot_tickets() {
+  local t name text
+  for t in "$slot_queue"/[0-9]-*; do
+    [ -e "$t" ] || continue
+    name=${t##*/}
+    read_file "$t" || continue
+    text=$file_v
+    [[ $text =~ (^|[[:space:]])pid\ [0-9]+ ]] || text="$text pid ${name##*-}"
+    if record_gone "$text"; then
+      rm -f "$t" && log "removed the cluster slot ticket $name of a waiter that is gone"
+    fi
+  done
+}
+
+# first_slot_ticket sets first_v to the ticket that sorts first (bytewise).
+# shellcheck disable=SC2329 # called by try_slots, through with_flock
+first_slot_ticket() {
+  local t name LC_ALL=C
+  first_v=''
+  for t in "$slot_queue"/[0-9]-*; do
+    [ -e "$t" ] || continue
+    name=${t##*/}
+    if [ -z "$first_v" ] || [[ $name < $first_v ]]; then first_v=$name; fi
+  done
+}
+
 # try_slots, under the .reclaim flock and in this shell (it sets taken):
 # reclaims, then takes this run's slots when it may: a light run not while a
 # heavy run drains the host; a heavy run only with at most HEAVY_OTHER_SLOTS
@@ -535,11 +591,24 @@ try_slots() {
   local i d
   why=''
   reclaim_slots
+  reap_slot_tickets
+  if [ ! -e "$slot_queue/$slot_ticket" ]; then
+    write_slot_ticket
+    log "cluster slot ticket $slot_ticket was gone; queued it again in its place"
+  fi
   # A marker that is there but cannot be read is a drain.
-  if [ -z "$heavy" ] && [ -e "$SLOTS_DIR/.drain" ]; then
+  if [ -z "$draining" ] && [ -e "$SLOTS_DIR/.drain" ]; then
     read_file "$SLOTS_DIR/.drain" || file_v='(a marker that cannot be read)'
     why="a heavy suite is draining the host: $file_v"
     return 1
+  fi
+  # First come, first served; the drainer is the head while it drains.
+  if [ -z "$draining" ]; then
+    first_slot_ticket
+    if [ "$first_v" != "$slot_ticket" ]; then
+      why="cluster slot ticket $slot_ticket waits behind ${first_v:-?}"
+      return 1
+    fi
   fi
   in_use
   if [ -n "$heavy" ] && ((in_use_v > HEAVY_OTHER_SLOTS)); then
@@ -559,7 +628,11 @@ try_slots() {
     echo "$KIND_CLUSTER" >"$d/cluster"
     taken+=("$d")
   done
-  [ "${#taken[@]}" -lt "$need_slots" ] || return 0
+  if [ "${#taken[@]}" -ge "$need_slots" ]; then
+    rm -f "$slot_queue/$slot_ticket"
+    slot_ticket=''
+    return 0
+  fi
   for d in "${taken[@]}"; do rm -r "$d"; done
   taken=()
   why="fewer than $need_slots of the $SLOT_MAX cluster slots in $SLOTS_DIR are free"
@@ -577,6 +650,15 @@ take_slots() {
     fi
   done
   [ "${#taken[@]}" -lt "$need_slots" ] || return 0
+  # In the queue: a ticket named by its class, time (ns) and pid.
+  local ns
+  if [[ ${EPOCHREALTIME:-} =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+    ns=${BASH_REMATCH[1]}${BASH_REMATCH[2]}000
+  else
+    ns=$(date +%s%N) && [[ $ns =~ ^[0-9]+$ ]] || die "cannot read the time for a cluster slot ticket"
+  fi
+  printf -v slot_ticket '1-%019d-%d' "$((10#$ns))" "$$"
+  write_slot_ticket
   if [ -n "$heavy" ]; then
     # Drain: no new run takes a slot from now on, for DRAIN_DEADLINE at most.
     echo "$drain_tag" >"$SLOTS_DIR/.drain"

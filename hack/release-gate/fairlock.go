@@ -246,17 +246,7 @@ func (f *fairLock) acquire(ctx context.Context) error {
 	if err := os.MkdirAll(q, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", q, err)
 	}
-	ns := time.Now().UnixNano()
-	for {
-		last := seq.Load()
-		if ns <= last {
-			ns = last + 1
-		}
-		if seq.CompareAndSwap(last, ns) {
-			break
-		}
-	}
-	name := fmt.Sprintf("%s-%019d-%d", f.class, ns, os.Getpid())
+	name := newTicketName(f.class)
 	ticket := filepath.Join(q, name)
 	record := f.owner + " " + selfRecord(f.proc)
 	if f.exclusive {
@@ -316,6 +306,22 @@ func (f *fairLock) acquire(ctx context.Context) error {
 		case <-time.After(f.poll):
 		}
 	}
+}
+
+// newTicketName is a waiter's ticket, <class>-<19-digit ns>-<pid>, unique in
+// this process however fast it queues (seq).
+func newTicketName(class string) string {
+	ns := time.Now().UnixNano()
+	for {
+		last := seq.Load()
+		if ns <= last {
+			ns = last + 1
+		}
+		if seq.CompareAndSwap(last, ns) {
+			break
+		}
+	}
+	return fmt.Sprintf("%s-%019d-%d", class, ns, os.Getpid())
 }
 
 // writeTicket writes ticket name in q (a temporary name, then a rename),
