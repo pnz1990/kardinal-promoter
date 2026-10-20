@@ -70,7 +70,7 @@ func TestSSO_OIDCProxy(t *testing.T) {
 	// ── Step 3: kardinal accepts the ID token ───────────────────────────
 	rel := e.ExistingRelease(t, framework.ControllerDeployment, framework.ControllerNamespace)
 	up := e.Shell(t, framework.Fill(t, framework.PageBlock(t, ssoPage, "acceptAPIServerAudience"),
-		"oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.2", `"$KARDINAL_E2E_CHART"`,
+		"oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3", `"$KARDINAL_E2E_CHART"`,
 		"kardinal.example.com", host))
 	require.Zero(t, up.Code, up.Output)
 	rel.WaitRolledOut(t, 3*time.Minute)
