@@ -525,3 +525,36 @@ func TestCountingLock_StressTwoAtMost(t *testing.T) {
 	assert.Equal(t, int32(maxHolders), most.Load(), "two did hold it at once")
 	assert.Zero(t, wedged.Load(), "waiters that never got the lock")
 }
+
+// TestCountingLock_OlderClientsAreLeftAlone (#2242 QA): the view lists its
+// holders without the "pid N" an older client judges a lock by, and a LOCK
+// an older client made after the slots were looked at is never taken over:
+// writeView refuses it, and the slot is given back.
+func TestCountingLock_OlderClientsAreLeftAlone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "LOADLOCK")
+	w := idleAs(dir, fmt.Sprintf("w pid %d 2026-10-20T00:00:00Z", os.Getpid()), classNormal)
+	require.NoError(t, w.Lock(context.Background()))
+	view := strings.Join(viewLines(t, dir), "\n")
+	assert.NotRegexp(t, `\bpid \d+\b`, view, "no pid N in the view")
+	assert.Contains(t, view, fmt.Sprintf("pid:%d", os.Getpid()))
+	w.Unlock()
+	require.NoDirExists(t, dir)
+
+	// An older client's LOCK appears after holders() saw none: a slot is
+	// taken, and writeView finds LOCK without the marker.
+	slot := filepath.Join(slotsDir(dir), "1")
+	require.NoError(t, os.MkdirAll(slot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(slot, "owner"), []byte("new pid 1 now\n"), 0o644))
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "owner"), []byte("older pid 2 now\n"), 0o644))
+	assert.ErrorIs(t, writeView(dir), errOlderHolder)
+	assert.NoFileExists(t, filepath.Join(dir, viewMarker), "the older client's LOCK is not made a view")
+	assert.Equal(t, "older pid 2 now\n", readOwner(t, dir), "nor its owner overwritten")
+}
+
+func readOwner(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "owner"))
+	require.NoError(t, err)
+	return string(b)
+}

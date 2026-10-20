@@ -151,17 +151,26 @@ holders_count() {
 
 # write_view makes LOCK the view of the slots: with the marker and LOCK/owner
 # listing every holder while any is held, gone when none is. Under the flock.
+# It fails (3) when LOCK is an older client's: one made since holders_count
+# looked is never taken over (a plain mkdir, #2242 QA). The holder lines have
+# "pid N" written "pid:N": older clients judge LOCK/owner by its first
+# "pid N", and would remove the view while another slot's holder runs.
 write_view() {
   local d lines=
-  [ "$(holders_count)" != exclusive ] || return 0
+  [ "$(holders_count)" != exclusive ] || return 3
   for d in "$slots"/*; do
-    [ -f "$d/owner" ] && lines="$lines$(cat "$d/owner")"$'\n'
+    [ -f "$d/owner" ] && lines="$lines$(sed -E 's/(^|[[:space:]])pid ([0-9]+)/\1pid:\2/g' "$d/owner")"$'\n'
   done
   if [ -z "$lines" ]; then
     [ ! -e "$lock" ] || rm -r "$lock"
     return 0
   fi
-  mkdir -p "$lock" && : >"$lock/.counting" && printf '%s' "$lines" >"$lock/.owner.tmp" && mv "$lock/.owner.tmp" "$lock/owner"
+  if mkdir "$lock" 2>/dev/null; then
+    : >"$lock/.counting"
+  elif [ ! -e "$lock/.counting" ]; then
+    return 3
+  fi
+  printf '%s' "$lines" >"$lock/.owner.tmp" && mv "$lock/.owner.tmp" "$lock/owner"
 }
 
 held=
@@ -169,7 +178,7 @@ child=
 release_slot() {
   if [ "$(cat "$slot/owner" 2>/dev/null)" = "$record" ]; then
     rm -r "$slot"
-    write_view
+    write_view || true
   else
     echo "loadlock: $slot is not ours any more; left as it is" >&2
   fi
@@ -209,14 +218,15 @@ reap_tickets() {
 }
 
 # The lock counts: up to 2 hold it at once while the host's one-minute load
-# is under 32, one at or above it (LOADLOCK_LOAD overrides the load, for
-# tests). Each holder has a slot LOCK.d/<n> with its owner record; LOCK
+# is under 32, one at or above it (LOADLOCK_TEST_LOAD overrides the load,
+# for tests only: it is honoured only with LOADLOCK_TEST=1). Each holder has a slot LOCK.d/<n> with its owner record; LOCK
 # exists while anyone holds it (an older client's mkdir LOCK still waits),
 # LOCK/owner listing every holder and LOCK/.counting marking it as this
 # view. hack/release-gate/fairlock.go counts the same way.
 capacity() {
   local load
-  load=${LOADLOCK_LOAD:-$(cut -d' ' -f1 /proc/loadavg)}
+  load=$(cut -d' ' -f1 /proc/loadavg)
+  [ "${LOADLOCK_TEST:-}" != 1 ] || load=${LOADLOCK_TEST_LOAD:-$load}
   if awk -v l="$load" 'BEGIN { exit !(l < 32) }'; then echo 2; else echo 1; fi
 }
 
@@ -249,7 +259,7 @@ take_turn() {
       rm -r "$d" && echo "loadlock: removed lock slot $d$why" >&2
     fi
   done
-  write_view
+  write_view || true
   held_n=$(holders_count)
   [ "$held_n" != exclusive ] && [ "$held_n" -lt "$(capacity)" ] || return 1
   for n in 1 2; do
@@ -259,10 +269,14 @@ take_turn() {
       echo "loadlock: cannot write $slots/$n/owner; gave the lock up" >&2
       return 2
     fi
+    if ! write_view; then
+      rm -r "${slots:?}/$n"
+      echo "loadlock: an older client took $lock meanwhile; gave slot $n back" >&2
+      return 1
+    fi
     # Held from here: a signal from now on gives the slot up (release).
     slot="$slots/$n"
     held=1
-    write_view
     return 0
   done
   return 1

@@ -388,9 +388,19 @@ func (f *fairLock) tryHead(q, name, record string) (took bool, err error) {
 				_ = os.Remove(slot) // never hold a slot without an owner record; only an empty one, as the shell's rmdir
 				return fmt.Errorf("write owner: %w", err)
 			}
+			if err := writeView(f.lock); err != nil {
+				_ = os.Remove(filepath.Join(slot, "owner"))
+				_ = os.Remove(slot)
+				f.held = ""
+				if errors.Is(err, errOlderHolder) {
+					f.log("an older client took %s meanwhile; gave slot %s back", f.lock, slot)
+					return nil
+				}
+				return err
+			}
 			f.slot = slot
 			took = true
-			return writeView(f.lock)
+			return nil
 		}
 		return nil
 	})
@@ -420,7 +430,7 @@ func holders(lock string) (records []string, exclusive bool) {
 func writeView(lock string) error {
 	held, exclusive := holders(lock)
 	if exclusive {
-		return nil
+		return errOlderHolder
 	}
 	if len(held) == 0 {
 		if err := os.RemoveAll(lock); err != nil {
@@ -428,17 +438,41 @@ func writeView(lock string) error {
 		}
 		return nil
 	}
-	if err := os.Mkdir(lock, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+	// A plain mkdir: a LOCK that is there without the marker is an older
+	// client's, made since holders looked (#2242 QA): never take it over.
+	switch err := os.Mkdir(lock, 0o755); {
+	case err == nil:
+		if err := os.WriteFile(filepath.Join(lock, viewMarker), nil, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", viewMarker, err)
+		}
+	case errors.Is(err, os.ErrExist):
+		if _, err := os.Stat(filepath.Join(lock, viewMarker)); err != nil {
+			return errOlderHolder
+		}
+	default:
 		return fmt.Errorf("mkdir %s: %w", lock, err)
 	}
-	if err := os.WriteFile(filepath.Join(lock, viewMarker), nil, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", viewMarker, err)
+	lines := make([]string, len(held))
+	for i, h := range held {
+		lines[i] = viewLine(h)
 	}
 	tmp := filepath.Join(lock, ".owner.tmp")
-	if err := os.WriteFile(tmp, []byte(strings.Join(held, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write view: %w", err)
 	}
 	return os.Rename(tmp, filepath.Join(lock, "owner"))
+}
+
+// errOlderHolder: LOCK is an older client's exclusive lock.
+var errOlderHolder = errors.New("the lock is held by an older client")
+
+// viewLine is a holder's record as LOCK/owner lists it: "pid N" written
+// "pid:N". Older clients judge LOCK/owner by its first "pid N", and would
+// remove the view while another slot's holder runs when that one is dead
+// (#2242 QA); a view without one is never theirs to take over. New clients
+// judge the slots.
+func viewLine(record string) string {
+	return recordPid.ReplaceAllString(record, "pid:$1")
 }
 
 // release gives up slot, only when its owner is still held, and updates
@@ -454,7 +488,10 @@ func release(lock, slot, held string) (bool, error) {
 		if err := os.RemoveAll(slot); err != nil {
 			return fmt.Errorf("remove %s: %w", slot, err)
 		}
-		return writeView(lock)
+		if err := writeView(lock); err != nil && !errors.Is(err, errOlderHolder) {
+			return err
+		}
+		return nil
 	})
 	return ours, err
 }
@@ -495,7 +532,7 @@ func (f *fairLock) reclaim() {
 			}
 		}
 	}
-	if err := writeView(f.lock); err != nil {
+	if err := writeView(f.lock); err != nil && !errors.Is(err, errOlderHolder) {
 		f.log("refresh heavy-load lock %s: %v", f.lock, err)
 	}
 }
