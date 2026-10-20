@@ -194,6 +194,30 @@ func (e *Env) SetArgoAutoSync(t *testing.T, name string, on bool) {
 	}
 }
 
+// RefreshArgoApp asks Argo CD to compare the Application again: "normal"
+// (with its cached resolution of the target branch) or "hard" (resolving
+// the branch anew), with the argocd.argoproj.io/refresh annotation.
+func (e *Env) RefreshArgoApp(t *testing.T, name, kind string) {
+	t.Helper()
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"argocd.argoproj.io/refresh":%q}}}`, kind)
+	if _, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Patch(context.Background(), name,
+		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("refresh Argo CD Application %s: %v", name, err)
+	}
+}
+
+// WaitArgoField waits until the Application's field (a status path such as
+// status, sync, revision) satisfies ok, and returns its value.
+func (e *Env) WaitArgoField(t *testing.T, name, what string, timeout time.Duration, ok func(string) bool, fields ...string) string {
+	t.Helper()
+	var v string
+	Eventually(t, timeout, "Argo CD Application "+name+": "+what, func(context.Context) (bool, string) {
+		v = e.ArgoField(t, name, fields...)
+		return ok(v), strings.Join(fields, ".") + "=" + v
+	})
+	return v
+}
+
 // WaitStepMessageAll waits until the Bundle's PromotionStep for env is in state
 // with a message containing every one of substrs, and returns it. It fails
 // early when the step reaches a terminal state other than state.

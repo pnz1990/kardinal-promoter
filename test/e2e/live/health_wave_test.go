@@ -131,25 +131,37 @@ func TestHealth_ArgoCDWaveOnSharedBranch(t *testing.T) {
 // test's commit, so only the Application running the Bundle image passes
 // the step, and the message says so.
 //
+// Argo CD resolves the branch on its own schedule and caches the answer
+// (#2246): on a loaded host its poll resolved test's commit before the
+// force-push, and it synced that once auto-sync was back on. So the test
+// waits on what Argo CD compares, not on timing: no sync runs before
+// test's commit is pushed; Argo CD is made to resolve test's commit before
+// the force-push (as its poll would); after it, a hard refresh, and auto-sync
+// only once Argo CD compares the rewrite.
+//
 // Covers HEALTH-ARGO-IMAGES-01.
 func TestHealth_ArgoImagesFallback(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ctx := context.Background()
 	a := newArgoApp(t, e, "test")
+	app := a.argoApp("test")
 	b, ok := e.Git.(gitserver.Brancher)
 	if !ok {
 		t.Fatalf("%s git server cannot create branches", e.Git.Kind())
 	}
 	require.NoError(t, b.CreateBranch(ctx, a.repo, "rewrite", a.repo.Branch))
-	// health.refresh: false: a refresh at the push would have Argo CD
-	// resolve the branch to test's own commit before the force-push, and
-	// sync that once auto-sync is back on.
+	// health.refresh: false: kardinal's own refresh at the push would sync
+	// test's commit once auto-sync is back on.
 	p := a.pipeline(nil)
 	noRefresh := false
 	p.Spec.Environments[0].Health.Refresh = &noRefresh
 	a.apply(t, p)
-	e.SetArgoAutoSync(t, a.argoApp("test"), false)
+	e.SetArgoAutoSync(t, app, false)
+	// No sync started before auto-sync went off may still run, and pick up
+	// test's commit.
+	e.WaitArgoField(t, app, "no sync operation running", time.Minute,
+		func(phase string) bool { return phase != "Running" && phase != "Terminating" }, "status", "operationState", "phase")
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
 	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", promoteTimeout, "test's commit",
@@ -157,16 +169,29 @@ func TestHealth_ArgoImagesFallback(t *testing.T) {
 			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != "", framework.DescribeStep(ps)
 		})
 	own := ps.Status.Outputs["commitSHA"]
+	// What Argo CD's poll does on a slow host: resolve the branch to test's
+	// commit, and cache it, before the force-push.
+	e.RefreshArgoApp(t, app, "normal")
+	e.WaitArgoField(t, app, "compares test's commit", 2*time.Minute,
+		func(rev string) bool { return rev == own }, "status", "sync", "revision")
+	require.NotEqual(t, own, e.ArgoField(t, app, "status", "operationState", "syncResult", "revision"),
+		"Argo CD synced test's commit while auto-sync was off")
+
 	path := fixtures.Path("test") + "/kustomization.yaml"
 	sibling, err := gitserver.CommitFiles(ctx, e.Git, a.repo, "rewrite", "", "the same change, rewritten",
 		map[string][]byte{path: []byte(e.ReadFile(t, a.repo, own, path)), "notes/rewritten.txt": []byte("x\n")})
 	require.NoError(t, err)
 	scale.ForcePush(t, e, a.repo, sibling)
+	// Argo CD compares the branch's new head, not its cached resolution, and
+	// only then syncs.
+	e.RefreshArgoApp(t, app, "hard")
+	e.WaitArgoField(t, app, "compares the rewrite", 2*time.Minute,
+		func(rev string) bool { return rev == sibling }, "status", "sync", "revision")
 
-	e.SetArgoAutoSync(t, a.argoApp("test"), true)
+	e.SetArgoAutoSync(t, app, true)
 	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
 	assert.Equal(t, fmt.Sprintf("%s (synced revision %s is not %s, but the Application runs the Bundle images)",
 		argoVerified, short(sibling), short(own)), ps.Status.Message)
-	assert.Equal(t, sibling, e.ArgoField(t, a.argoApp("test"), "status", "sync", "revision"))
+	assert.Equal(t, sibling, e.ArgoField(t, app, "status", "sync", "revision"))
 	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
 }
