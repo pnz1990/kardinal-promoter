@@ -426,7 +426,20 @@ func capacity(load float64) int {
 // it held it would wedge every other one, so they say so and try again.
 func withLockFlock(q string, fn func() error) error {
 	var fl flocker // one call: no attempt to keep
-	return fl.with(q, fn)
+	err := fl.with(q, fn)
+	// An attempt that timed out is given up: granted later, it lets the
+	// flock go at once, not after flockHandoff (each one held it 5s for
+	// no one, #2361 QA).
+	fl.abandon()
+	return err
+}
+
+// abandon gives fl's pending attempt up, if it has one.
+func (fl *flocker) abandon() {
+	if fl.pending != nil {
+		close(fl.pending.abandoned)
+		fl.pending = nil
+	}
 }
 
 // flocker takes the reclaim flock for one waiter, one call at a time. An
@@ -435,12 +448,14 @@ func withLockFlock(q string, fn func() error) error {
 type flocker struct{ pending *flockAttempt }
 
 // flockAttempt is a pending flock on a reclaim file: got hands it to the
-// waiter; dead is closed when it was given back unclaimed (flockHandoff).
+// waiter; dead is closed when it was given back unclaimed (flockHandoff, or
+// at once once abandoned is closed: its waiter will not ask again).
 type flockAttempt struct {
-	path string
-	got  chan error
-	dead chan struct{}
-	f    *os.File
+	path      string
+	got       chan error
+	dead      chan struct{}
+	abandoned chan struct{}
+	f         *os.File
 }
 
 func (fl *flocker) with(q string, fn func() error) error {
@@ -482,19 +497,22 @@ func startFlock(path string) (*flockAttempt, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open reclaim lock: %w", err)
 	}
-	at := &flockAttempt{path: path, got: make(chan error), dead: make(chan struct{}), f: f}
+	at := &flockAttempt{path: path, got: make(chan error), dead: make(chan struct{}), abandoned: make(chan struct{}), f: f}
 	go func() {
 		err := unix.Flock(int(f.Fd()), unix.LOCK_EX)
 		select {
 		case at.got <- err: // its waiter takes it (and unlocks it)
+			return
+		case <-at.abandoned:
 		case <-time.After(flockHandoff):
-			// Its waiter did not ask again: given back, never held for nothing.
-			if err == nil {
-				_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
-			}
-			_ = f.Close()
-			close(at.dead)
 		}
+		// Its waiter did not ask again, or never will: given back, never
+		// held for nothing.
+		if err == nil {
+			_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		}
+		_ = f.Close()
+		close(at.dead)
 	}()
 	return at, nil
 }

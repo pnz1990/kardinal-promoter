@@ -479,6 +479,9 @@ type machine struct {
 	slotMu     sync.Mutex
 	slotTicket string
 	slotRecord string
+	// slotFlock takes SLOTS_DIR/.reclaim for the takes: the flock
+	// hack/e2e/local-live.sh's takes and reclaims hold (#2352 QA).
+	slotFlock flocker
 }
 
 func (m *machine) Ready() (bool, string) {
@@ -506,7 +509,10 @@ func slotQueue(dir string) string { return filepath.Join(dir, ".queue") }
 // Slots makes n of slotsDir/1..slotMax (mkdir is atomic) and writes the
 // owner into each, when this gate's ticket is first in the slots' queue;
 // with fewer than n free, or slotMax held in all, it takes none and keeps
-// its place.
+// its place. The takes, and their release, hold slotsDir/.reclaim, as
+// local-live.sh's do: no slot is made outside that flock, which a
+// local-live run stopped mid-mkdir counts on (it gives up a slot with no
+// owner yet as its own, #2352 QA), and no two clients take at once.
 func (m *machine) Slots(n int) (func(), bool, string) {
 	if m.slotsDir == "" {
 		return func() {}, true, ""
@@ -550,20 +556,53 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, false, fmt.Sprintf("a drain marker that cannot be read: %v", err)
 	}
+	// The head and the room first without the flock (a waiter that cannot
+	// take never holds it), then again under it, with the takes.
+	if why, ok := m.slotTurn(q, n); !ok {
+		return nil, false, why
+	}
+	var (
+		release func()
+		ok      bool
+		why     string
+	)
+	if err := m.slotFlock.with(m.slotsDir, func() error {
+		release, ok, why = m.takeSlots(q, n, logf)
+		return nil
+	}); err != nil {
+		return nil, false, err.Error()
+	}
+	return release, ok, why
+}
+
+// slotTurn reports whether this gate's ticket is first in q and n slots are
+// free, or why not.
+func (m *machine) slotTurn(q string, n int) (string, bool) {
 	if first := firstTicket(q); first != m.slotTicket {
-		return nil, false, fmt.Sprintf("cluster slot ticket %s waits behind %s", m.slotTicket, first)
+		return fmt.Sprintf("cluster slot ticket %s waits behind %s", m.slotTicket, first), false
 	}
 	// Every held slot directory counts, one above slotMax too (a run with a
 	// larger SLOT_MAX took it): the host runs slotMax clusters at most.
 	held, err := heldSlots(m.slotsDir)
 	if err != nil {
-		return nil, false, fmt.Sprintf("cannot count the cluster slots in %s: %v", m.slotsDir, err)
+		return fmt.Sprintf("cannot count the cluster slots in %s: %v", m.slotsDir, err), false
 	}
 	if held+n > m.slotMax {
-		return nil, false, fmt.Sprintf("%d cluster slots are in use in %s, and the host has %d", held, m.slotsDir, m.slotMax)
+		return fmt.Sprintf("%d cluster slots are in use in %s, and the host has %d", held, m.slotsDir, m.slotMax), false
+	}
+	return "", true
+}
+
+// takeSlots is Slots' take, under the slots' .reclaim flock: the turn again,
+// then each mkdir and its owner write. Its release takes the flock again;
+// one it cannot have in flockWait (a run stopped while it held it) still
+// gives this gate's slots back, as the owner check keeps every other's.
+func (m *machine) takeSlots(q string, n int, logf func(string, ...any)) (func(), bool, string) {
+	if why, ok := m.slotTurn(q, n); !ok {
+		return nil, false, why
 	}
 	var taken []string
-	release := func() {
+	drop := func() {
 		for _, d := range taken {
 			if holder, err := os.ReadFile(filepath.Join(d, "owner")); err == nil && strings.TrimSpace(string(holder)) == m.owner {
 				_ = os.RemoveAll(d)
@@ -577,16 +616,22 @@ func (m *machine) Slots(n int) (func(), bool, string) {
 		}
 		taken = append(taken, d)
 		if err := os.WriteFile(filepath.Join(d, "owner"), []byte(m.owner+"\n"), 0o644); err != nil {
-			release()
+			drop()
 			return nil, false, fmt.Sprintf("write cluster slot %s: %v", d, err)
 		}
 	}
 	if len(taken) < n {
-		release()
+		drop()
 		return nil, false, fmt.Sprintf("fewer than %d of the host's %d cluster slots in %s are free", n, m.slotMax, m.slotsDir)
 	}
 	_ = os.Remove(filepath.Join(q, m.slotTicket))
 	m.slotTicket = ""
+	release := func() {
+		if err := withLockFlock(m.slotsDir, func() error { drop(); return nil }); err != nil {
+			logf("%v; giving the gate's cluster slots back without it", err)
+			drop()
+		}
+	}
 	return release, true, ""
 }
 
