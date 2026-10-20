@@ -27,6 +27,7 @@ import (
 
 // TestDiff_ShowsImageDifferences verifies that diffFn outputs image tag differences.
 func TestDiff_ShowsImageDifferences(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	bA := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-v1", Namespace: "default"},
@@ -84,6 +85,7 @@ func TestDiff_ShowsImageDifferences(t *testing.T) {
 
 // TestDiff_NoBundleReturnsError verifies that diffFn returns an error for missing bundles.
 func TestDiff_NoBundleReturnsError(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
@@ -96,6 +98,7 @@ func TestDiff_NoBundleReturnsError(t *testing.T) {
 // TestFormatDiffTable_SameImagesShowsNoChanges verifies diff output when both bundles
 // have the same image (no change to highlight, but table should still render).
 func TestFormatDiffTable_SameImages(t *testing.T) {
+	t.Parallel()
 	bA := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-a"},
 		Spec: v1alpha1.BundleSpec{
@@ -123,6 +126,7 @@ func TestFormatDiffTable_SameImages(t *testing.T) {
 
 // TestFormatDiffTable_ImageAbsentInB verifies that an image absent in bundle-b shows "(absent)".
 func TestFormatDiffTable_ImageAbsentInB(t *testing.T) {
+	t.Parallel()
 	bA := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-a"},
 		Spec: v1alpha1.BundleSpec{
@@ -147,6 +151,7 @@ func TestFormatDiffTable_ImageAbsentInB(t *testing.T) {
 
 // TestTruncDigest verifies digest truncation.
 func TestTruncDigest(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		input    string
 		expected string
@@ -165,6 +170,7 @@ func TestTruncDigest(t *testing.T) {
 // repository are paired in order, provenance has its own header, and rows
 // that differ are marked.
 func TestFormatDiffTable_EdgeCases(t *testing.T) {
+	t.Parallel()
 	a := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "a"},
 		Spec: v1alpha1.BundleSpec{
@@ -205,6 +211,7 @@ func TestFormatDiffTable_EdgeCases(t *testing.T) {
 }
 
 func TestFormatDiffTable_NoProvenance(t *testing.T) {
+	t.Parallel()
 	a := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "a"},
 		Spec: v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "nginx", Tag: "1.25"}}}}
 	var buf bytes.Buffer

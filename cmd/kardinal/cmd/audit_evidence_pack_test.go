@@ -471,6 +471,7 @@ func TestEvidencePack_Coverage(t *testing.T) {
 
 // TestParsePackTime: a date, an RFC 3339 time, or a duration before now.
 func TestParsePackTime(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 17, 12, 30, 45, 0, time.UTC)
 	for in, want := range map[string]time.Time{
 		"2026-07-01":                time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
@@ -494,6 +495,7 @@ func reflectNew(typ reflect.Type) runtime.Object {
 // TestEvidencePackRecord: a record has its kind and no managedFields, and
 // the object read is not changed.
 func TestEvidencePackRecord(t *testing.T) {
+	t.Parallel()
 	b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "v1", ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl"}}}}
 	r := (&evidence{}).record(b, "Bundle")
 	assert.Nil(t, r.GetManagedFields())
@@ -675,6 +677,7 @@ func TestEvidencePack_IncludeCommands(t *testing.T) {
 // TestRedactor_TypedEnv: a typed container's literal env value is replaced
 // and its name kept; a valueFrom is kept.
 func TestRedactor_TypedEnv(t *testing.T) {
+	t.Parallel()
 	r := &redactor{}
 	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Env: []corev1.EnvVar{
 		{Name: "A", Value: "secret"}, {Name: "B", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{Key: "k"}}},
@@ -690,6 +693,7 @@ func TestRedactor_TypedEnv(t *testing.T) {
 // --flag=value and --flag value forms, with or without export, and inside
 // one shell string; other flags, names and values stay (--path, --author).
 func TestRedactor_Args(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in, want []string
 		n        int
@@ -897,6 +901,7 @@ func TestEvidencePack_Receipts(t *testing.T) {
 //
 // Covers EVIDENCE-PACK-COSIGN-01.
 func TestEvidencePack_Cosign(t *testing.T) {
+	t.Parallel()
 	cosign, err := exec.LookPath("cosign")
 	if err != nil {
 		if os.Getenv("KARDINAL_REQUIRE_COSIGN") == "1" {
@@ -937,6 +942,7 @@ func TestEvidencePack_Cosign(t *testing.T) {
 // and checks each value, fails closed on a statement or bundle that does not
 // decode, and requires the bundle to sign the statement.
 func TestReceiptUnsafe(t *testing.T) {
+	t.Parallel()
 	stmt := `{"a":"https://ci.example.com/r?x=1&token=T","b":"fine"}`
 	bundleWith := func(payload string, extra map[string]interface{}) string {
 		m := map[string]interface{}{"dsseEnvelope": map[string]interface{}{"payload": []byte(payload)}}

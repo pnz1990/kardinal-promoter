@@ -103,6 +103,7 @@ func runExplain(t *testing.T, c sigs_client.Client, pipeline, env string, color 
 // the active Bundle, including org gates whose template lives in
 // platform-policies, with the controller's evaluation.
 func TestExplain_ShowsAppliedGateInstances(t *testing.T) {
+	t.Parallel()
 	created := policyTestNow.Add(-time.Hour)
 	template := policyGate("no-weekend-deploys", "platform-policies", "prod", "!schedule.isWeekend",
 		"kardinal.io/scope", "org")
@@ -348,6 +349,7 @@ func TestExplain_Rows(t *testing.T) {
 // environment the Bundle has not reached, or of a step that already started,
 // is Waiting, and a Superseded Bundle's gate is Superseded.
 func TestExplain_GateStates(t *testing.T) {
+	t.Parallel()
 	created := policyTestNow.Add(-time.Hour)
 	// upstreamVerified has b1 Verified in test and uat, with its prod step
 	// in prodState waiting on gate ("" for no prod step).
@@ -423,6 +425,7 @@ func TestExplain_GateStates(t *testing.T) {
 // steps, not the gate instances of an older Superseded Bundle that never
 // reached prod.
 func TestExplain_SupersededBundleIsNotCurrent(t *testing.T) {
+	t.Parallel()
 	old := policyTestNow.Add(-18 * time.Hour)
 	recent := policyTestNow.Add(-17 * time.Minute)
 	objs := []sigs_client.Object{
@@ -463,6 +466,7 @@ func TestExplain_SupersededBundleIsNotCurrent(t *testing.T) {
 // instance. explain shows that instance, not the Step of the older Bundle
 // already in the environment, and lists the gate that blocks first.
 func TestExplain_WaitingBundleSkipGate(t *testing.T) {
+	t.Parallel()
 	old := policyTestNow.Add(-5 * time.Minute)
 	recent := policyTestNow.Add(-time.Minute)
 	skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
@@ -504,6 +508,7 @@ func TestExplain_WaitingBundleSkipGate(t *testing.T) {
 
 // C09a-cli-14: an unknown env or pipeline is an error; a valid idle env is not.
 func TestExplain_Errors(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"))
 
 	_, err := runExplain(t, c, "demo", "prdo", false)
@@ -572,6 +577,7 @@ func (b *watchBuffer) Write(p []byte) (int, error) {
 // C09a-cli-15: --watch keeps polling after an error and does not write
 // clear-screen escapes when the output is not a terminal.
 func TestExplainWatch_ContinuesAfterErrorAndNoClearOnPipe(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t) // no pipeline: every render is an error
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -605,6 +611,7 @@ func (w *firstFrameWriter) Write(p []byte) (int, error) {
 // Ctrl-C (SIGINT) ends explain --watch with no error, so the CLI exits 0 like
 // the other --watch commands instead of being killed by the signal.
 func TestExplainWatch_InterruptEndsTheWatch(t *testing.T) {
+	t.Parallel()
 	// Another listener turns off the default action (exit), so without the
 	// handler the test fails on the timeout instead of killing the binary.
 	keep := make(chan os.Signal, 1)
@@ -637,6 +644,7 @@ func TestExplainWatch_InterruptEndsTheWatch(t *testing.T) {
 // environment, who made it and why, and how to release it; a filter on
 // another environment does not show it.
 func TestExplain_ShowsHold(t *testing.T) {
+	t.Parallel()
 	created := policyTestNow.Add(-time.Hour)
 	p := policyPipeline("demo", "test", "prod")
 	p.Spec.Holds = []v1alpha1.EnvironmentHold{{Environment: "prod", Bundle: "demo-rollback-abc123", Reason: "INC-42", CreatedBy: "alice"}}
@@ -672,6 +680,7 @@ func TestExplain_ShowsHold(t *testing.T) {
 //
 // Covers RB-HOLD-04.
 func TestExplain_ShowsHoldBundleMissing(t *testing.T) {
+	t.Parallel()
 	created := policyTestNow.Add(-time.Hour)
 	since := metav1.NewTime(created)
 	p := policyPipeline("demo", "test", "prod")

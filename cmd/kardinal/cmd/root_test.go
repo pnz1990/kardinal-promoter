@@ -140,6 +140,7 @@ func TestOutputFlag_StructuredCommands(t *testing.T) {
 // C09b-cli-22: refresh only annotates the Pipeline, and dashboard only opens a
 // URL; the help says so.
 func TestRefreshAndDashboard(t *testing.T) {
+	t.Parallel()
 	c := policyClient(t, policyPipeline("demo", "test"))
 	var buf bytes.Buffer
 	require.NoError(t, refreshFn(&buf, c, "default", "demo"))

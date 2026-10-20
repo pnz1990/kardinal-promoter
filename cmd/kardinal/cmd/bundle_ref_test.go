@@ -54,6 +54,7 @@ func refBundle(name, pipeline, phase string, minutes int, tags ...string) *v1alp
 //
 // Covers CLI-VERSIONREF-01.
 func TestResolveBundleRef_Golden(t *testing.T) {
+	t.Parallel()
 	chart := refBundle("demo-chart", "demo", "Verified", 15)
 	chart.Spec.Type, chart.Spec.Chart = "chart", &v1alpha1.ChartRef{Name: "mychart", Version: "7.7.7"}
 	cfg := refBundle("demo-cfg", "demo", "Verified", 12)

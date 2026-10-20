@@ -97,6 +97,7 @@ func TestPackageVariablesAreRestored(t *testing.T) {
 // change. Found as TestPackageVariablesAreRestored finds changes (helpers
 // one call deep, Execute, setForTest).
 func TestParallelTestsChangeNoPackageVariable(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 	srcs := map[string]string{}
@@ -115,6 +116,7 @@ func TestParallelTestsChangeNoPackageVariable(t *testing.T) {
 // through setForTest, keepStyle or a helper); a serial one, or a parallel
 // one that only reads, is not.
 func TestParallelChanges(t *testing.T) {
+	t.Parallel()
 	const pkg = "package cmd\n\nvar x string\nvar errOut, sty, skewCheck any\n"
 	cases := []struct {
 		name, test string
@@ -127,6 +129,9 @@ func TestParallelChanges(t *testing.T) {
 func TestA(t *testing.T) { t.Parallel(); stub(t) }`, []string{"TestA changes x"}},
 		{"keepStyle", `func keepStyle(t *testing.T) { a, b, c := errOut, sty, skewCheck; t.Cleanup(func() { errOut, sty, skewCheck = a, b, c }) }
 func TestA(t *testing.T) { t.Parallel(); keepStyle(t) }`, []string{"TestA changes errOut", "TestA changes skewCheck", "TestA changes sty"}},
+		{"a flag bound to it (#2194)", `func newCmd() { flags.StringVar(&x, "x", "", "") }
+func TestA(t *testing.T) { t.Parallel(); newCmd() }`, []string{"TestA changes x"}},
+		{"its address handed out", `func TestA(t *testing.T) { t.Parallel(); _ = json.Unmarshal(nil, &x) }`, []string{"TestA changes x"}},
 		{"serial", `func TestA(t *testing.T) { setForTest(t, &x, "a") }`, nil},
 		{"reads only", `func TestA(t *testing.T) { t.Parallel(); _ = x }`, nil},
 	}
@@ -145,6 +150,7 @@ func TestA(t *testing.T) { t.Parallel(); keepStyle(t) }`, []string{"TestA change
 // TestRestoreLeaks: the check on small packages, a leak and a safe form of
 // each kind.
 func TestRestoreLeaks(t *testing.T) {
+	t.Parallel()
 	const pkg = "package cmd\n\nvar x, y string\nvar out *int\n"
 	cases := []struct {
 		name, test string
@@ -397,6 +403,9 @@ func parallelChanges(srcs map[string]string) ([]string, error) {
 		for v := range sum.writes {
 			vars[v] = true
 		}
+		for v := range sum.binds {
+			vars[v] = true
+		}
 		for _, put := range []map[string]bool{sum.restored, sum.deferred} {
 			for v := range put {
 				if v != "" {
@@ -441,6 +450,13 @@ type restoreSummary struct {
 	restored map[string]bool      // put back by a cleanup it registers (at the end of the test)
 	deferred map[string]bool      // put back by its own defers (when it returns)
 	returns  map[string]bool      // put back by a function it returns
+	// binds are the package variables it hands out by address
+	// (fs.StringVar(&globalOutput, ...)): whoever holds the pointer writes
+	// them later, a flag binding with its default at once. Building the
+	// root command binds every persistent flag. TestPackageVariablesAreRestored
+	// does not count them (the next build resets them to their defaults); a
+	// parallel test may not (two builds at once race, #2194).
+	binds map[string]bool
 }
 
 // pkgVar is the package variable id names, or "" (a local, a field, a
@@ -564,7 +580,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 		return s
 	}
 	s := &restoreSummary{writes: map[string]token.Pos{}, restored: map[string]bool{}, deferred: map[string]bool{},
-		returns: map[string]bool{}}
+		returns: map[string]bool{}, binds: map[string]bool{}}
 	a.done[fn] = s                              // a recursive call sees what is known so far
 	saved := map[types.Object]string{}          // prev := v
 	locals := map[types.Object]*ast.FuncLit{}   // restore := func() { ... }
@@ -604,6 +620,7 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			}
 		}
 		merge(s.restored, hs.restored)
+		merge(s.binds, hs.binds)
 	}
 	// named is function d registered as a cleanup or deferred by name: what
 	// it assigns as a restore (initializer or zero value) is put back into
@@ -753,8 +770,17 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 				if u, ok := n.Args[1].(*ast.UnaryExpr); ok {
 					s.restored[a.rootVar(u.X)] = true
 				}
-			} else if h := a.callee(n.Fun, aliases); h != nil {
-				call(h, n.Pos())
+			} else {
+				if h := a.callee(n.Fun, aliases); h != nil {
+					call(h, n.Pos())
+				}
+				for _, arg := range n.Args {
+					if u, ok := arg.(*ast.UnaryExpr); ok && u.Op == token.AND {
+						if v := a.rootVar(u.X); v != "" {
+							s.binds[v] = true
+						}
+					}
+				}
 			}
 			// A function passed by name (t.Run("s", sub)) is taken to be
 			// called.

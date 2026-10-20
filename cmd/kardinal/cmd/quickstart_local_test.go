@@ -232,6 +232,7 @@ func TestQuickstartLocal_Demo(t *testing.T) {
 //
 // Covers QUICKSTART-LOCAL-03.
 func TestQuickstartLocal_ServerNotExposed(t *testing.T) {
+	t.Parallel()
 	objs, err := localGitObjects()
 	require.NoError(t, err)
 	kinds := map[string]*unstructured.Unstructured{}
@@ -267,6 +268,7 @@ func TestQuickstartLocal_ServerNotExposed(t *testing.T) {
 // pnz1990/kardinal-demo: environments/<env> with a kustomization over the
 // kardinal-test-app Deployment at sha-9349a3f.
 func TestQuickstartLocal_DemoFiles(t *testing.T) {
+	t.Parallel()
 	files, err := localDemoFiles()
 	require.NoError(t, err)
 	require.Len(t, files, 6)
@@ -288,6 +290,7 @@ func TestQuickstartLocal_DemoFiles(t *testing.T) {
 }
 
 func TestQuickstartLocal_Versions(t *testing.T) {
+	t.Parallel()
 	env, err := os.ReadFile("../../../hack/e2e/versions.env")
 	require.NoError(t, err)
 	m := regexp.MustCompile(`(?m)^FORGEJO_IMAGE="?([^"\s]+)"?`).FindSubmatch(env)
@@ -409,6 +412,7 @@ func TestQuickstartLocal_Refuses(t *testing.T) {
 //
 // Covers QUICKSTART-LOCAL-03.
 func TestQuickstartLocal_Flags(t *testing.T) {
+	t.Parallel()
 	cmd := newQuickstartCmd()
 	require.NoError(t, cmd.ParseFlags([]string{"--local", "--repo", "https://github.com/me/kardinal-demo"}))
 	err := cmd.ValidateFlagGroups()

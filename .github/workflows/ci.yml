@@ -267,21 +267,18 @@ jobs:
           # test/helm renders the chart for every profile and builds the
           # controller with each ldflags mistake; it runs at ~115s of the
           # 120s budget on a runner, so it gets its own 300s (#2156) until
-          # its slow tests are split. cmd/kardinal/cmd (the CLI's tests: MCP,
-          # policy simulate, previews, the evidence pack) took 84s next to the
-          # shard's other packages after #2215 halved it, and still 82s with
-          # its MCP tests in parallel (#2230): it keeps 300s too (#2194) until
           # its slow tests are split. test/hack (TestLocalLive and the
           # heavy-load lock tests) passed 120s on a runner after #2242-#2244:
           # it keeps 300s too (#2292) until those tests run in parallel.
-          # Every other package keeps 120s.
-          cli=github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd
+          # Every other package keeps 120s; cmd/kardinal/cmd left this list
+          # once its tests that change no package variable ran in parallel
+          # (#2194).
           hack=github.com/kardinal-promoter/kardinal-promoter/test/hack
           others=()
           slow=()
           for p in "${packages[@]}"; do
             case "$p" in
-              "$helm" | "$cli" | "$hack") slow+=("$p") ;;
+              "$helm" | "$hack") slow+=("$p") ;;
               *) others+=("$p") ;;
             esac
           done

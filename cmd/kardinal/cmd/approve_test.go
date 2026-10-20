@@ -111,6 +111,7 @@ func TestApprove_Refusals(t *testing.T) {
 }
 
 func TestApprovalName(t *testing.T) {
+	t.Parallel()
 	a := lifecycle.ApprovalName("app-v1", "prod", "alice")
 	assert.Equal(t, a, lifecycle.ApprovalName("app-v1", "prod", "alice"), "stable")
 	assert.NotEqual(t, a, lifecycle.ApprovalName("app-v1", "prod", "bob"), "one per user")
@@ -344,6 +345,7 @@ func TestApprove_Fields(t *testing.T) {
 // TestWhy_ApprovalFields: kardinal why lists the fields an approval still
 // needs and gives the approve command with their --field flags.
 func TestWhy_ApprovalFields(t *testing.T) {
+	t.Parallel()
 	fields := []v1alpha1.ApprovalField{
 		{Name: "ticketID", Required: true, Description: "ServiceNow change number"},
 		{Name: "riskAcknowledged", Type: "bool", Required: true, MustBe: "true"},

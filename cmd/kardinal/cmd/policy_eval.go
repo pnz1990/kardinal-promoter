@@ -32,7 +32,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
+	clienttesting "k8s.io/client-go/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -275,6 +277,10 @@ type simulationClient struct {
 
 func newSimulationClient(scheme *runtime.Scheme, cluster sigs_client.Reader, objs ...sigs_client.Object) *simulationClient {
 	overlay := fake.NewClientBuilder().WithScheme(scheme).
+		// A plain object tracker: the reconciler never server-side applies,
+		// and the default tracker's managed-fields bookkeeping on every status
+		// write was a third of each simulated gate's time (#2194).
+		WithObjectTracker(clienttesting.NewObjectTracker(scheme, serializer.NewCodecFactory(scheme).UniversalDecoder())).
 		WithObjects(objs...).
 		WithStatusSubresource(&v1alpha1.PolicyGate{}).
 		// The reconciler lists one Pipeline's Bundles by spec.pipeline (#1654).

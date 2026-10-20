@@ -100,6 +100,7 @@ func TestMCP_AgentOutOfScope(t *testing.T) {
 // TestMCPClientLabel: the client's name and version are what it says, so
 // the label keeps printable ASCII only and fits the stamp's 128 bytes.
 func TestMCPClientLabel(t *testing.T) {
+	t.Parallel()
 	session := func(name, version string) *mcp.CallToolRequest {
 		st, ct := mcp.NewInMemoryTransports()
 		ss, err := mcp.NewServer(&mcp.Implementation{Name: "s", Version: "1"}, nil).Connect(t.Context(), st, nil)

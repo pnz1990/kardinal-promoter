@@ -34,6 +34,7 @@ func tableCells(line string) []string {
 //
 // Covers DISPLAY-STATES-01.
 func TestEnvCellLabel(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "Waiting for PR merge", envCellLabel("WaitingForMerge"))
 	assert.Equal(t, "Live", envCellLabel("Verified"))
 	assert.Equal(t, "Not reached", envCellLabel("Waiting"))
@@ -61,6 +62,7 @@ func assertNoRawStates(t *testing.T, out string) {
 //
 // Covers DISPLAY-STATES-01.
 func TestHeldEnvironments(t *testing.T) {
+	t.Parallel()
 	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
 	assert.Equal(t, "Held by rollback", envCellLabel(heldCell("Waiting", true, nil, "")))
 	assert.Equal(t, "Held by gate a, b", envCellLabel(heldCell("Pending", false, []string{"a", "b"}, "")))

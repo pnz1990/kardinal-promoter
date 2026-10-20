@@ -50,6 +50,7 @@ func init() {
 //
 // Covers CLI-INIT-02.
 func TestInitFn_Minimal(t *testing.T) {
+	t.Parallel()
 	want, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "minimal", "pipeline.yaml"))
 	require.NoError(t, err)
 	var buf bytes.Buffer
@@ -263,6 +264,7 @@ func TestInitCmd_NoInjection(t *testing.T) {
 // TestInitFn_NoNamespaceDefault (C6 QA): the namespace default is left out,
 // so the wizard's default answer writes the minimal Pipeline.
 func TestInitFn_NoNamespaceDefault(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, initFn(&buf, &InitConfig{AppName: "my-app", Namespace: "default", GitURL: "https://github.com/myorg/gitops",
 		Environments: []string{"test", "uat", "prod"}}))
@@ -344,6 +346,7 @@ func TestInitCmd_DetectSecretApply(t *testing.T) {
 // TestInitScaffold_CreatesKustomizationFiles verifies that scaffoldGitOpsFn creates
 // the expected kustomization.yaml files for each environment (O1, O7).
 func TestInitScaffold_CreatesKustomizationFiles(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	gitopsDir := filepath.Join(tmpDir, "gitops")
 	envs := []string{"test", "uat", "prod"}
@@ -370,6 +373,7 @@ func TestInitScaffold_CreatesKustomizationFiles(t *testing.T) {
 // TestInitScaffold_IdempotentOnSecondRun verifies that existing files are not
 // overwritten on re-run (O1 idempotency, O7).
 func TestInitScaffold_IdempotentOnSecondRun(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	gitopsDir := filepath.Join(tmpDir, "gitops")
 	envs := []string{"test", "prod"}
@@ -399,6 +403,7 @@ func TestInitScaffold_IdempotentOnSecondRun(t *testing.T) {
 
 // TestInitScaffold_DemoMode verifies that --demo uses the kardinal-test-app placeholder (O4, O7).
 func TestInitScaffold_DemoMode(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	gitopsDir := filepath.Join(tmpDir, "demo-gitops")
 	envs := []string{"test", "uat", "prod"}
@@ -418,6 +423,7 @@ func TestInitScaffold_DemoMode(t *testing.T) {
 // TestInitScaffold_AbsoluteAndRelativePaths verifies that both absolute and relative
 // gitops-dir paths work (O5).
 func TestInitScaffold_AbsoluteAndRelativePaths(t *testing.T) {
+	t.Parallel()
 	t.Run("absolute path", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		var out bytes.Buffer
@@ -442,6 +448,7 @@ func TestInitScaffold_AbsoluteAndRelativePaths(t *testing.T) {
 
 // TestBuildKustomization_ContainsRequiredFields verifies the kustomization template output.
 func TestBuildKustomization_ContainsRequiredFields(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		imageRef string
@@ -485,6 +492,7 @@ func TestBuildKustomization_ContainsRequiredFields(t *testing.T) {
 // C09b-cli-15: a registry port stays in the image name, and a digest is
 // written as Kustomize's digest field, not as newTag.
 func TestBuildKustomization_ImageBlock(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		imageRef string
 		want     string
@@ -508,6 +516,7 @@ func TestBuildKustomization_ImageBlock(t *testing.T) {
 // re-prompting on a bad answer and failing at end of input; it asks only
 // for what no flag gives.
 func TestRunInitWizard_Validation(t *testing.T) {
+	t.Parallel()
 	none := func(string) bool { return false }
 	t.Run("defaults only: the URL is required", func(t *testing.T) {
 		err := runInitWizard(strings.NewReader("\n\n\n\n"), &bytes.Buffer{}, &InitConfig{}, none)
@@ -674,6 +683,7 @@ func TestInitCmd_NamespaceAndSSH(t *testing.T) {
 // environment says it found nothing; with none found anywhere, nothing is
 // said.
 func TestDetectHealth_SkipsADeletedApplication(t *testing.T) {
+	t.Parallel()
 	apps := []sigs_client.Object{}
 	for _, env := range []string{"test", "uat"} {
 		app := &unstructured.Unstructured{}

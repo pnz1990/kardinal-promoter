@@ -52,6 +52,7 @@ func TestQuickstartHints_Verbs(t *testing.T) {
 }
 
 func TestQuickstartHints_Text(t *testing.T) {
+	t.Parallel()
 	h := &hinter{kctx: "kind-kardinal", verbs: kardinalVerbs}
 	for in, want := range map[string]string{
 		"Approve prod:    kardinal approve demo prod":    "Approve prod:    kardinal --context kind-kardinal approve demo prod",

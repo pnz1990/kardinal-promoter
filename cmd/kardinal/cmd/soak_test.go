@@ -18,6 +18,7 @@ import (
 //
 // Covers CLI-WHY-01.
 func TestSoakOf(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
 	ago := func(d time.Duration) *metav1.Time { m := metav1.NewTime(now.Add(-d)); return &m }
 	fanIn := policyPipeline("demo", "test", "eu", "us", "prod")

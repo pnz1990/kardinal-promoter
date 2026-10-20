@@ -238,6 +238,7 @@ func TestQuickstart_Preconditions(t *testing.T) {
 // environment installs: hack/install-kro.sh's kro and chart values, and
 // hack/e2e/versions.env's Argo CD.
 func TestQuickstart_Versions(t *testing.T) {
+	t.Parallel()
 	kro, err := os.ReadFile("../../../hack/install-kro.sh")
 	require.NoError(t, err)
 	def := func(name string) string {

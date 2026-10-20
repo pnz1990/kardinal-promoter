@@ -40,6 +40,7 @@ func buildDeleteBundleScheme(t *testing.T) *runtime.Scheme {
 
 // TestDeleteBundle_Success verifies that a bundle is deleted and output is correct.
 func TestDeleteBundle_Success(t *testing.T) {
+	t.Parallel()
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-pipeline-abc123",
@@ -70,6 +71,7 @@ func TestDeleteBundle_Success(t *testing.T) {
 
 // TestDeleteBundle_NotFound verifies error when bundle does not exist.
 func TestDeleteBundle_NotFound(t *testing.T) {
+	t.Parallel()
 	c := fake.NewClientBuilder().
 		WithScheme(buildDeleteBundleScheme(t)).
 		Build()

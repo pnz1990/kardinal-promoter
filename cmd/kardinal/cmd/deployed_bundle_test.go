@@ -17,6 +17,7 @@ import (
 )
 
 func TestBundleVersion(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		spec v1alpha1.BundleSpec
@@ -73,6 +74,7 @@ func deployedFixture() []sigs_client.Object {
 // explain names the Bundle of every row and, for an environment where the
 // current Bundle's change has not landed, the Bundle deployed there now.
 func TestExplain_BundleColumnAndDeployed(t *testing.T) {
+	t.Parallel()
 	out, err := runExplain(t, policyClient(t, deployedFixture()...), "demo", "", false)
 	require.NoError(t, err)
 	table, deployed, ok := strings.Cut(out, "\n\n")
@@ -110,6 +112,7 @@ func TestExplain_BundleColumnAndDeployed(t *testing.T) {
 // status lists what runs in every environment, including ones the newest
 // Bundle has not reached, and the Bundle on its way in.
 func TestStatusPipelineWriter_RunningAndIncoming(t *testing.T) {
+	t.Parallel()
 	out := runStatusPipeline(t, deployedFixture()...)
 	assert.Equal(t, []map[string]string{
 		{"ENVIRONMENT": "test", "RUNNING": "2.0 (b2)", "INCOMING": "-", "STATE": "Live", "SINCE": "-", "PR": "-"},
@@ -155,6 +158,7 @@ func mixedDeployedFixture() []sigs_client.Object {
 // environment, explain names both: the newest one that landed, and where the
 // rest of what runs there came from (#1353). status names the newest one.
 func TestDeployed_ImageAndConfigBundles(t *testing.T) {
+	t.Parallel()
 	out := runStatusPipeline(t, mixedDeployedFixture()...)
 	rows := statusRows(t, out)
 	require.Len(t, rows, 3, out)
@@ -169,6 +173,7 @@ func TestDeployed_ImageAndConfigBundles(t *testing.T) {
 // A config Bundle that landed last names the image Bundle whose images still
 // run, by its tags only.
 func TestDeployedLabel_ConfigOverImages(t *testing.T) {
+	t.Parallel()
 	mixed := &v1alpha1.Bundle{Spec: v1alpha1.BundleSpec{Type: "mixed",
 		Images:    []v1alpha1.ImageRef{{Repository: "r/app", Tag: "1.5"}},
 		ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0000000aaaa"}}}

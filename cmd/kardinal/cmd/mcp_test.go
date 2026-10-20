@@ -447,6 +447,7 @@ func assertOnlyLabelled(t *testing.T, what string, v any, text string) {
 // TestLabelUntrusted: the fields that carry text kardinal did not write are
 // labelled wherever they are; the others, and empty values, are not.
 func TestLabelUntrusted(t *testing.T) {
+	t.Parallel()
 	in := map[string]any{
 		"pipeline": "app",
 		"message":  "from the SCM",

@@ -150,6 +150,7 @@ func TestCompletion_NoCluster(t *testing.T) {
 // alternatives such as <name|version> the first one names it, so renaming an
 // argument to accept a version keeps its completion.
 func TestArgKindOf(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		cmd, token string
 		want       argKind

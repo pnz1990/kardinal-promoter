@@ -24,6 +24,7 @@ import (
 //
 // Covers RECEIPT-SIZE-01.
 func TestDoctor_ReceiptGrowth(t *testing.T) {
+	t.Parallel()
 	pipeline := func(bytes int64) *v1alpha1.Pipeline {
 		return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"},
 			Status: v1alpha1.PipelineStatus{Environments: []v1alpha1.PipelineEnvironmentStatus{
@@ -71,6 +72,7 @@ func TestDoctor_ReceiptGrowth(t *testing.T) {
 // "Receipt storage" line, so doctor's output is unchanged for it; one with
 // receipts, or whose controller signs them, does.
 func TestDoctor_ReceiptGrowthHiddenWithoutReceipts(t *testing.T) {
+	t.Parallel()
 	controller := func(args ...string) *appsv1.Deployment {
 		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter", Namespace: "kardinal-system"},
 			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{

@@ -241,10 +241,13 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 	t.Parallel()
 	custom := policyPipeline("demo", "test", "prod")
 	custom.Spec.PolicyNamespaces = []string{"custom-policies"}
+	// Gates that pass: the test is about which namespaces' gates attach, and
+	// a blocking one would also run the week-long next-window search, about
+	// 170 evaluations each (#2194).
 	gates := []sigs_client.Object{
-		policyGate("platform-gate", "platform-policies", "prod", "false"),
-		policyGate("custom-gate", "custom-policies", "prod", "false"),
-		policyGate("flag-gate", "flag-policies", "prod", "false"),
+		policyGate("platform-gate", "platform-policies", "prod", "true"),
+		policyGate("custom-gate", "custom-policies", "prod", "true"),
+		policyGate("flag-gate", "flag-policies", "prod", "true"),
 	}
 	tests := []struct {
 		name     string
@@ -547,6 +550,7 @@ func TestPolicySimulate_NeverWritesToCluster(t *testing.T) {
 // The CLI reads the reconciler's status.reason; these are the prefixes it
 // depends on (policy_eval.go).
 func TestGateEvaluator_ReasonPrefixes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	msg, invalid, err := celSyntaxCheck(ctx, "schedule.hour >>> 9")
@@ -724,6 +728,7 @@ func TestPolicyTest_WeekendGateAtFixedTimes(t *testing.T) {
 }
 
 func TestParsePolicyGateYAML(t *testing.T) {
+	t.Parallel()
 	quickstart, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "quickstart", "policy-gates.yaml"))
 	require.NoError(t, err)
 	tests := []struct {
@@ -759,6 +764,7 @@ func TestParsePolicyGateYAML(t *testing.T) {
 // ─── policy list (C09b-cli-12) ──────────────────────────────────────────────
 
 func TestPolicyList(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "quickstart", "policy-gates.yaml"))
 	require.NoError(t, err)
 	quickstart, err := parsePolicyGateYAML(data)
@@ -832,6 +838,7 @@ func TestPolicyList(t *testing.T) {
 // TestPolicyList_Fleet (#1565 QA): kardinal policy list --pipeline shows the
 // gates that apply to a fleet environment and to one of its targets only.
 func TestPolicyList_Fleet(t *testing.T) {
+	t.Parallel()
 	p := policyPipeline("web", "test", "prod")
 	p.Spec.Environments[1].Fleet = &v1alpha1.FleetSpec{Targets: []v1alpha1.FleetTarget{{Name: "eu"}, {Name: "us"}}}
 	c := policyClient(t, p,
@@ -852,6 +859,7 @@ func TestPolicyList_Fleet(t *testing.T) {
 // share instances. An instance without the namespace label (from an older
 // controller) is matched by scope: org in every namespace, team in its own.
 func TestPolicyList_LastEvaluated(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	// instance is labelled as an older controller labelled it, without
 	// kardinal.io/gate-template-namespace.
@@ -936,6 +944,7 @@ func TestPolicyList_LastEvaluated(t *testing.T) {
 // namespaces are org. An instance the builder labels with its template's
 // namespace matches its template whatever scope it carries.
 func TestPolicyList_ScopeFromNamespace(t *testing.T) {
+	t.Parallel()
 	inst := policyGate("plain-platform-policies-test--demo-b", "default", "test", "true",
 		"kardinal.io/gate-template", "plain", "kardinal.io/gate-template-namespace", "platform-policies",
 		"kardinal.io/scope", "org", "kardinal.io/pipeline", "demo", "kardinal.io/bundle", "demo-b")
@@ -974,6 +983,7 @@ func TestPolicyList_ScopeFromNamespace(t *testing.T) {
 // ─── validate CEL (C09b-cli-16) ─────────────────────────────────────────────
 
 func TestValidateCELExpression(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		expr    string
 		wantErr bool

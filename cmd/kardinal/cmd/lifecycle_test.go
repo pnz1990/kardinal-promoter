@@ -91,6 +91,7 @@ func newBundles(t *testing.T, c client.Client, fixture ...string) []v1alpha1.Bun
 // TestCreateBundle_DigestStoredInDigestField covers C09a-cli-02: an image
 // pinned by digest produces ImageRef.Digest, never a sha256 tag.
 func TestCreateBundle_DigestStoredInDigestField(t *testing.T) {
+	t.Parallel()
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	tests := []struct {
 		name      string
@@ -136,6 +137,7 @@ func TestCreateBundle_DigestStoredInDigestField(t *testing.T) {
 // C09b-cli-03: the CLI rolls back to the Bundle verified before the deployed
 // one, copies its images, validates --to, and creates nothing on refusal.
 func TestRollbackCmd_RestoresPreviousVerifiedBundle(t *testing.T) {
+	t.Parallel()
 	history := []client.Object{
 		lcPipeline(),
 		lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),
@@ -195,6 +197,7 @@ func TestRollbackCmd_RestoresPreviousVerifiedBundle(t *testing.T) {
 // copies the artifacts of the Bundle verified upstream and never creates an
 // image-less Bundle.
 func TestPromoteCmd_CopiesBundleVerifiedUpstream(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		objs    []client.Object
@@ -238,6 +241,7 @@ func TestPromoteCmd_CopiesBundleVerifiedUpstream(t *testing.T) {
 // and holds the environment on it with the reason, says how to release it,
 // and refuses a hold without a reason; release-hold removes the hold.
 func TestRollbackCmd_Hold(t *testing.T) {
+	t.Parallel()
 	history := []client.Object{
 		lcPipeline(),
 		lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 10),

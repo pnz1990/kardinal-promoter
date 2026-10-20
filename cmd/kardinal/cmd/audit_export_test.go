@@ -63,6 +63,7 @@ func lines(t *testing.T, out *bytes.Buffer) []map[string]interface{} {
 // TestAuditExport_JSON: one line per AuditEvent in the window and the
 // namespace (all with ""), filtered by pipeline, with the actor.
 func TestAuditExport_JSON(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	c := exportFixture(t, now)
 	for _, tc := range []struct {
@@ -101,6 +102,7 @@ func TestAuditExport_JSON(t *testing.T) {
 // mapping (principal in actor.user, agent in actor.app_name), and the
 // kardinal fields OCSF has no place for under unmapped.kardinal.
 func TestAuditExport_OCSF(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	c := exportFixture(t, now)
 	var out bytes.Buffer

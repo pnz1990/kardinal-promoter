@@ -82,11 +82,13 @@ func blockingGates(out string) string {
 }
 
 func TestStatusPipelineWriter_NoSteps(t *testing.T) {
+	t.Parallel()
 	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"))
 	assert.Equal(t, "Pipeline: demo   Namespace: default\n\nNo versions yet. Ship one: kardinal create bundle demo --image <ref>\n", out)
 }
 
 func TestStatusPipelineWriter_NotFound(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	err := statusPipelineWriter(t.Context(), &buf, policyClient(t), "default", "missing-pipeline")
 	require.Error(t, err)
@@ -96,6 +98,7 @@ func TestStatusPipelineWriter_NotFound(t *testing.T) {
 // A step waiting for its PR: the environment's newest version is incoming,
 // in words, with its PR; the summary sentence leads.
 func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
+	t.Parallel()
 	step := explainStep("demo", "bundle-abc", "prod", "WaitingForMerge", "waiting for PR merge",
 		time.Now().Add(-5*time.Minute))
 	step.Status.PRURL = "https://github.com/org/repo/pull/42"
@@ -116,6 +119,7 @@ func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
 // that environment. Gate instances carry the bundle label; the step is created
 // only once every gate passes (pkg/graph/builder.go requiredGates).
 func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
+	t.Parallel()
 	recent := time.Now().Add(-time.Hour)
 	gate := explainGateInstance("demo", "bundle-abc", "prod", "no-weekend-deploys", "!schedule.isWeekend",
 		false, true, "!schedule.isWeekend = false")
@@ -143,6 +147,7 @@ func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
 // is cut to. A gate whose message does not explain the block (an evaluation
 // error) shows its reason as before.
 func TestStatusPipelineWriter_BlockingGateMessage(t *testing.T) {
+	t.Parallel()
 	recent := time.Now().Add(-time.Hour)
 	const msg = "Production deployments are blocked on weekends"
 	weekend := explainGateInstance("demo", "bundle-abc", "prod", "no-weekend-deploys", "!schedule.isWeekend",
@@ -170,6 +175,7 @@ func TestStatusPipelineWriter_BlockingGateMessage(t *testing.T) {
 // environment, every upstream environment Verified for that Bundle. A soak
 // gate on prod does not block a Bundle still health checking in test.
 func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
+	t.Parallel()
 	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
 	soak := func() *v1alpha1.PolicyGate {
 		return explainGateInstance("demo", "b2", "prod", "require-uat-soak", "upstream.uat.soakMinutes >= 30",
@@ -279,6 +285,7 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 // C09b-cli-18: gates of another Bundle, templates and passing gates are not
 // reported as blocking.
 func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
+	t.Parallel()
 	old := time.Now().Add(-3 * time.Hour)
 	recent := time.Now().Add(-time.Hour)
 	template := policyGate("no-weekend-deploys", "default", "prod", "!schedule.isWeekend")
@@ -400,6 +407,7 @@ func TestStatusPipelineWriter_OlderController(t *testing.T) {
 // Superseded Bundle's gate instances never hide the newest Bundle, and a
 // Bundle held at a skip-permission gate shows that gate as blocking.
 func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
+	t.Parallel()
 	old := time.Now().Add(-18 * time.Hour)
 	recent := time.Now().Add(-17 * time.Minute)
 
@@ -471,6 +479,7 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 
 // Every step state reads as words in STATE.
 func TestStatusPipelineWriter_StepStates(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"Verified", "Failed", "AbortedByAlarm", "RollingBack", "HealthChecking", "Promoting"} {
 		t.Run(state, func(t *testing.T) {
 			out := runStatusPipeline(t,
@@ -488,6 +497,7 @@ func TestStatusPipelineWriter_StepStates(t *testing.T) {
 // counts Available and Promoting Bundles as active, and names Degraded
 // Pipelines.
 func TestStatusSummary(t *testing.T) {
+	t.Parallel()
 	pipe := func(ns, name, phase string) *v1alpha1.Pipeline {
 		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
 		p.Status.Phase = phase
@@ -533,6 +543,7 @@ Warning: 1 pipeline(s) Degraded: run 'kardinal get pipelines' for details
 }
 
 func TestStatusSummary_ListError(t *testing.T) {
+	t.Parallel()
 	c := fake.NewClientBuilder().WithScheme(rootScheme).WithInterceptorFuncs(interceptor.Funcs{
 		List: func(_ context.Context, _ sigs_client.WithWatch, list sigs_client.ObjectList, _ ...sigs_client.ListOption) error {
 			if _, ok := list.(*v1alpha1.BundleList); ok {
@@ -555,6 +566,7 @@ func TestStatusSummary_ListError(t *testing.T) {
 //
 // Covers PIPE-GITCRED-02.
 func TestStatusPipelineWriter_PipelineNotices(t *testing.T) {
+	t.Parallel()
 	p := policyPipeline("demo", "test", "prod")
 	p.Status.Conditions = []metav1.Condition{
 		{Type: "Ready", Status: metav1.ConditionFalse, Reason: "GitCredentialMissing",

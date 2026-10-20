@@ -35,6 +35,7 @@ func lcFleetPipeline(n int) *v1alpha1.Pipeline {
 //
 // Covers FLEET-14.
 func TestFleetPauseCmd(t *testing.T) {
+	t.Parallel()
 	c := lcClient(t, lcFleetPipeline(3))
 	var buf bytes.Buffer
 	require.NoError(t, fleetPauseFn(t.Context(), &buf, c, "default", "app", "prod", true, ""))
@@ -65,6 +66,7 @@ func TestFleetPauseCmd(t *testing.T) {
 //
 // Covers FLEET-15.
 func TestRollbackCmd_Fleet(t *testing.T) {
+	t.Parallel()
 	p := lcFleetPipeline(10)
 	p.Spec.PausedFleets = []string{"prod"}
 	objs := []client.Object{p, lcBundle("app-v1", "app", "1", 0), lcBundle("app-v2", "app", "2", 100)}

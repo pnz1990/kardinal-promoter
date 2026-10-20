@@ -25,6 +25,7 @@ import (
 // server, so `kardinal history` reads one Pipeline's Bundles (the index
 // stands in for the server here).
 func TestCLI_BundleSelectorOnTheServer(t *testing.T) {
+	t.Parallel()
 	objs := []sigs_client.Object{
 		&v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "app-v1-dev", Namespace: "default", Labels: map[string]string{"kardinal.io/pipeline": "app"}},
 			Spec:   v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "app-v1", Environment: "dev", StepType: "open-pr"},

@@ -29,6 +29,7 @@ import (
 
 // TestPromote_PipelineNotFound returns an error when the pipeline does not exist.
 func TestPromote_PipelineNotFound(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
@@ -40,6 +41,7 @@ func TestPromote_PipelineNotFound(t *testing.T) {
 
 // TestPromote_EnvironmentNotInPipeline returns an error when the env is not in the pipeline.
 func TestPromote_EnvironmentNotInPipeline(t *testing.T) {
+	t.Parallel()
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
