@@ -548,7 +548,7 @@ func TestAzureDevOpsContract_OpenPRReusesExisting(t *testing.T) {
 			api := newFakeAPI(t, map[string]apiReply{"POST " + adoPRsPath: tt.create, "GET " + adoPRsPath: tt.list,
 				// The lookup reads the repository's ID first.
 				"GET " + strings.TrimSuffix(adoPRsPath, "/pullrequests"): {http.StatusOK, mustJSON(t, adoRepository(""))}})
-			prURL, n, err := newAzureDevOps(t, api.URL, "").OpenPR(context.Background(), "contoso/Web/web-app", "t", "b", adoBranch, "main")
+			prURL, n, err := existing(newAzureDevOps(t, api.URL, "").OpenPR(context.Background(), "contoso/Web/web-app", "t", "b", adoBranch, "main"))
 			calls := api.Calls()
 			require.Len(t, calls, tt.wantCalls)
 			if tt.wantErr != "" {

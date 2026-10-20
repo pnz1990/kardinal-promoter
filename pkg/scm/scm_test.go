@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,7 +49,7 @@ func TestGitHubProvider_OpenPR(t *testing.T) {
 	defer server.Close()
 
 	p := scm.NewGitHubProvider("test-token", server.URL, "")
-	url, num, err := p.OpenPR(context.Background(), "owner/repo", "Test PR", "body", "feature", "main")
+	url, num, err := existing(p.OpenPR(context.Background(), "owner/repo", "Test PR", "body", "feature", "main"))
 	require.NoError(t, err)
 	assert.Equal(t, 42, num)
 	assert.Equal(t, "https://github.com/owner/repo/pull/42", url)
@@ -478,7 +479,7 @@ func TestGitLabProvider_OpenPR(t *testing.T) {
 	defer server.Close()
 
 	p := scm.NewGitLabProvider("glpat-test-token", server.URL, "")
-	url, num, err := p.OpenPR(context.Background(), "owner/repo", "Test MR", "body", "feature", "main")
+	url, num, err := existing(p.OpenPR(context.Background(), "owner/repo", "Test MR", "body", "feature", "main"))
 	require.NoError(t, err)
 	assert.Equal(t, 77, num)
 	assert.Equal(t, "https://gitlab.com/owner/repo/-/merge_requests/77", url)
@@ -512,7 +513,7 @@ func TestGitLabProvider_OpenPR_AlreadyExists(t *testing.T) {
 	defer server.Close()
 
 	p := scm.NewGitLabProvider("glpat-test-token", server.URL, "")
-	url, num, err := p.OpenPR(context.Background(), "owner/repo", "Test MR", "body", "feature", "main")
+	url, num, err := existing(p.OpenPR(context.Background(), "owner/repo", "Test MR", "body", "feature", "main"))
 	require.NoError(t, err)
 	assert.Equal(t, 88, num)
 	assert.Equal(t, "https://gitlab.com/owner/repo/-/merge_requests/88", url)
@@ -759,7 +760,7 @@ func TestForgejoProvider_OpenPR(t *testing.T) {
 	defer server.Close()
 
 	p := scm.NewForgejoProvider("test-token", server.URL, "")
-	url, num, err := p.OpenPR(context.Background(), "owner/repo", "Test PR", "body", "feature", "main")
+	url, num, err := existing(p.OpenPR(context.Background(), "owner/repo", "Test PR", "body", "feature", "main"))
 	require.NoError(t, err)
 	assert.Equal(t, 55, num)
 	assert.Equal(t, "https://forgejo.example.com/owner/repo/pulls/55", url)
@@ -772,7 +773,8 @@ func TestForgejoProvider_OpenPR_AlreadyExists(t *testing.T) {
 		if calls == 1 {
 			// First call: POST to create → 409 conflict
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"message":"pull request already exists"}`))
+			// Gitea's and Forgejo's ErrPullRequestAlreadyExists, as their API writes it.
+			_, _ = w.Write([]byte(`{"message":"pull request already exists for these targets [id: 55, issue_id: 60, head_repo_id: 1, base_repo_id: 1, head_branch: feature, base_branch: main]","url":"https://forgejo.example.com/api/swagger"}`))
 			return
 		}
 		// Second call: GET to list open PRs
@@ -790,7 +792,7 @@ func TestForgejoProvider_OpenPR_AlreadyExists(t *testing.T) {
 	defer server.Close()
 
 	p := scm.NewForgejoProvider("test-token", server.URL, "")
-	url, num, err := p.OpenPR(context.Background(), "owner/repo", "Test PR", "body", "feature", "main")
+	url, num, err := existing(p.OpenPR(context.Background(), "owner/repo", "Test PR", "body", "feature", "main"))
 	require.NoError(t, err)
 	assert.Equal(t, 55, num)
 	assert.Equal(t, "https://forgejo.example.com/owner/repo/pulls/55", url)
@@ -1569,4 +1571,15 @@ func TestFormatElapsed(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// existing is OpenPR's result with a refused duplicate read as the open PR
+// it names: since #2079 OpenPR returns *scm.ExistingPRError and leaves
+// adopting it to its caller (open-pr checks its head).
+func existing(url string, num int, err error) (string, int, error) {
+	var e *scm.ExistingPRError
+	if errors.As(err, &e) {
+		return e.PR.URL, e.PR.Number, nil
+	}
+	return url, num, err
 }

@@ -58,9 +58,14 @@ before kardinal opens a PR from it. Otherwise nothing is adopted or opened, and 
 rebuilt over the other commit: the step fails, with a `PRBranchForeignCommit` Warning Event that
 says how to go on ([PR evidence](pr-evidence.md)). A PR opened by hand on kardinal's branch in the repository itself,
 after kardinal's push, carries kardinal's commit and is adopted with its own title and body:
-only someone who can push the branch anyway can do that. A PR that another run opens between
-the lookup and the create is still adopted, from the repository's own branch only, when the SCM
-refuses the duplicate.
+only someone who can push the branch anyway can do that. A PR opened between the lookup and the
+create, which the SCM then refuses to duplicate, is adopted on the same rule: from the
+repository's own branch only, with a head that is or contains kardinal's commit. kardinal reads a
+refusal as a duplicate only on the provider's own answer: GitHub 422 "A pull request already
+exists for", GitLab 409 "Another open merge request already exists for this source branch",
+Forgejo and Gitea 409 "pull request already exists for these targets", Azure DevOps 409
+`TF401179`, Bitbucket Data Center 409 `DuplicatePullRequestException`. Any other refusal, a 409
+for another cause included, fails the step with the SCM's own message.
 
 SCM webhooks are delivered to `POST /webhook/scm` on the webhook port (`8083`). Without
 `--webhook-secret` the endpoint rejects every event with `401`, and merges are detected by

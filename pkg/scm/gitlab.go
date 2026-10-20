@@ -93,23 +93,20 @@ func (g *GitLabProvider) OpenPR(ctx context.Context, repo, title, body, head, ba
 		// GitLab returns 409 Conflict when an open MR from the source branch
 		// into the target branch already exists.
 		if isGitLabExistingMRErr(err) {
-			return g.adoptRefused(ctx, repo, head, base, err)
+			return g.refusedExisting(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open MR %s: %w", repo, err)
 	}
 	return result.WebURL, result.IID, nil
 }
 
-// isGitLabExistingMRErr returns true when GitLab rejected the MR creation with 409
-// because an open MR already exists for the source branch.
+// isGitLabExistingMRErr reports whether GitLab refused the MR creation as a
+// duplicate: a 409 whose body says "Another open merge request already
+// exists for this source branch". Any other 409 keeps its own reason
+// (#2079).
 func isGitLabExistingMRErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "409") ||
-		strings.Contains(msg, "already exists") ||
-		strings.Contains(msg, "open merge request")
+	apiErr, ok := statusIs(err, http.StatusConflict)
+	return ok && strings.Contains(apiErr.Body, "Another open merge request already exists for this source branch")
 }
 
 // ClosePR closes the merge request by setting state_event to "close".

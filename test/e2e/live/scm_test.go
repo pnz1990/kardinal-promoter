@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -876,4 +877,46 @@ func TestSCM_KardinalClosedPRGetsOneComment(t *testing.T) {
 	})
 	assert.Len(t, e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR"), 1, "PR #%d keeps its one close comment", pr.Number)
 	assertEnvAt(t, a, "prod", fixtures.V1)
+}
+
+// TestSCM_RefusedDuplicateNamesTheOpenPR (#2079): against the suite's real
+// git server, kardinal's provider asked to open a second PR for a branch
+// that has one reads the server's own refusal as a duplicate and names that
+// PR (*scm.ExistingPRError), adopting nothing itself: the duplicate status
+// and message kardinal matches are the ones this server sends.
+//
+// Covers SCM-DUP-PR-03.
+func TestSCM_RefusedDuplicateNamesTheOpenPR(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	token, api := os.Getenv(gitserver.EnvToken), os.Getenv(gitserver.EnvAPI)
+	var provider scm.SCMProvider
+	switch kind := os.Getenv(gitserver.EnvKind); kind {
+	case "forgejo", "gitea":
+		provider = scm.NewForgejoProvider(token, api, "")
+	case "gitlab":
+		provider = scm.NewGitLabProvider(token, api, "")
+	case "github":
+		provider = scm.NewGitHubProvider(token, api, "")
+	default:
+		t.Skipf("no kardinal provider for git server %q", kind)
+	}
+	a := newArgoApp(t, e, "prod")
+	ctx := context.Background()
+	branch := a.repo.Branch + "-dup"
+	if strings.HasPrefix(a.repo.Branch, gitserver.BranchPrefix) {
+		branch = gitserver.BranchPrefix + "dup-" + strings.TrimPrefix(a.repo.Branch, gitserver.BranchPrefix)
+	}
+	_, err := gitserver.CommitFiles(ctx, e.Git, a.repo, a.repo.Branch, branch, "e2e: a change to open a PR for",
+		map[string][]byte{"dup.txt": []byte("one\n")})
+	require.NoError(t, err)
+	pr, err := e.Brancher(t).OpenPR(ctx, a.repo, branch, a.repo.Branch, "e2e: the open PR")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = e.Git.ClosePR(context.Background(), a.repo, pr.Number) })
+
+	_, _, err = provider.OpenPR(ctx, a.repo.Owner+"/"+a.repo.Name, "e2e: a second PR", "body", branch, a.repo.Branch)
+	var existing *scm.ExistingPRError
+	require.ErrorAs(t, err, &existing, "the server's refusal is read as a duplicate: %v", err)
+	assert.Equal(t, pr.Number, existing.PR.Number, "it names the open PR")
+	t.Logf("refused with: %v", existing.Cause)
 }

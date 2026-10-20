@@ -109,21 +109,20 @@ func (g *GitHubProvider) OpenPR(ctx context.Context, repo, title, body, head, ba
 		// GitHub returns 422 when an open PR from head into base already
 		// exists. In that case, find that PR and return it.
 		if isExistingPRErr(err) {
-			return g.adoptRefused(ctx, repo, head, base, err)
+			return g.refusedExisting(ctx, repo, head, base, err)
 		}
 		return "", 0, fmt.Errorf("open PR %s: %w", repo, err)
 	}
 	return result.HTMLURL, result.Number, nil
 }
 
-// isExistingPRErr returns true when the GitHub API rejected the PR creation with 422
-// because a pull request already exists for the head branch.
+// isExistingPRErr reports whether the GitHub API refused the PR creation as
+// a duplicate: a 422 whose body says "A pull request already exists for".
+// Any other 422 (a missing branch, no commits between the branches) keeps
+// its own reason (#2079).
 func isExistingPRErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "422") && (strings.Contains(msg, "already exists") || strings.Contains(msg, "A pull request"))
+	apiErr, ok := statusIs(err, http.StatusUnprocessableEntity)
+	return ok && strings.Contains(apiErr.Body, "A pull request already exists for")
 }
 
 // ClosePR closes the pull request without merging.
