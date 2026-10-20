@@ -698,16 +698,16 @@ func TestCLI_Validate(t *testing.T) {
 		{name: "schema type", doc: pipeline("type", "", envs) + "    dependsOn: test\n",
 			want:       `  - spec.environments[1].dependsOn: Invalid value: "string": spec.environments[1].dependsOn in body must be of type array`,
 			apiRejects: true, apiSays: `spec.environments[1].dependsOn: Invalid value: "string": spec.environments[1].dependsOn in body must be of type array`},
-		{name: "another kind, required", doc: "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: sub\n  namespace: " + ns +
+		{name: "another kind required", doc: "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: sub\n  namespace: " + ns +
 			"\nspec:\n  image: {registry: ghcr.io/o/app}\n",
 			want: "  - spec.pipeline: Required value\n  - spec.type: Required value\n", apiRejects: true, apiSays: "spec.pipeline: Required value"},
 		// What the API server does first on create: a required field with
 		// a default is defaulted, a status is dropped (QA on #2183).
 		{name: "defaulted required field", doc: "apiVersion: kardinal.io/v1alpha1\nkind: MetricCheck\nmetadata:\n  name: m\n  namespace: " + ns +
-			"\nspec:\n  query: up\n  threshold: {operator: gt, value: 1}\n", valid: true, want: "is valid\n"},
+			"\nspec:\n  query: up\n  prometheusURL: http://prometheus.monitoring:9090\n  threshold: {operator: gt, value: 1}\n", valid: true, want: "is valid\n"},
 		{name: "exported status", doc: gate("exported", "  expression: \"true\"\n") + "status:\n  reason: exported\n",
 			valid: true, want: "is valid\n"},
-		{name: "another kind, valid", doc: "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: sub\n  namespace: " + ns +
+		{name: "another kind valid", doc: "apiVersion: kardinal.io/v1alpha1\nkind: Subscription\nmetadata:\n  name: sub\n  namespace: " + ns +
 			"\nspec:\n  pipeline: web\n  type: image\n  image: {registry: ghcr.io/o/app}\n", valid: true, want: "is valid\n"},
 	}
 	// The API server accepts these; the controller refuses them. reason and
