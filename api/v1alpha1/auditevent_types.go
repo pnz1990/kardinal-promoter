@@ -159,7 +159,31 @@ type AuditGateChange struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=128
 	Manager string `json:"manager,omitempty"`
+	// EnvironmentsAdded are environments of the version the template's gate
+	// copies now apply to and did not before (a kardinal.io/applies-to edit
+	// moves a gate without changing its rule): the first
+	// MaxAuditGateEnvironments in name order.
+	// +optional
+	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:items:MaxLength=63
+	EnvironmentsAdded []string `json:"environmentsAdded,omitempty"`
+	// EnvironmentsRemoved are environments of the version the template's
+	// gate copies applied to and no longer do: the first
+	// MaxAuditGateEnvironments in name order.
+	// +optional
+	// +kubebuilder:validation:MaxItems=5
+	// +kubebuilder:validation:items:MaxLength=63
+	EnvironmentsRemoved []string `json:"environmentsRemoved,omitempty"`
+	// EnvironmentsOmitted counts the added and removed environments past the
+	// first MaxAuditGateEnvironments of each.
+	// +optional
+	EnvironmentsOmitted int32 `json:"environmentsOmitted,omitempty"`
 }
+
+// MaxAuditGateEnvironments bounds AuditGateChange.EnvironmentsAdded and
+// EnvironmentsRemoved, so a gate that applies to hundreds of environments
+// keeps a GateChanged record (and the Bundle's audit outbox) small.
+const MaxAuditGateEnvironments = 5
 
 // AuditRequest names the API request an APIWrite AuditEvent records.
 type AuditRequest struct {

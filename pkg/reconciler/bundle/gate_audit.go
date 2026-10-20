@@ -39,8 +39,14 @@ const AuditActionGateChanged = "GateChanged"
 // MaxAuditGateChanges in template order and counts the rest, so a bulk
 // change cannot push other records out of the Bundle's bounded outbox. The
 // entry is named after the Bundle and every change, so it is written once.
+//
+// beforeEnvs and afterEnvs are graph.TemplateEnvironments of the Graph before
+// and after (afterEnvs nil when it could not be read): a stamped copy whose
+// environments changed with no other change (a kardinal.io/applies-to edit)
+// is recorded as moved, and an edit that also moves a gate says where (#2338).
 func gateChangeEntry(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline,
-	before map[string]graph.TemplateStamp, gates []kardinalv1alpha1.PolicyGate, now time.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	before map[string]graph.TemplateStamp, beforeEnvs, afterEnvs map[string][]string,
+	gates []kardinalv1alpha1.PolicyGate, now time.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	type change struct {
 		key  string
 		gate kardinalv1alpha1.AuditGateChange
@@ -53,13 +59,19 @@ func gateChangeEntry(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipe
 		seen[key] = true
 		digest := graph.TemplateDigest(g)
 		old, had := before[key]
-		if had && (old.Digest == "" || old.Digest == digest && old.Generation == g.Generation) {
+		var moved environmentMove
+		if had && afterEnvs != nil {
+			moved = environmentDiff(beforeEnvs[key], afterEnvs[key])
+		}
+		if had && (old.Digest == "" || old.Digest == digest && old.Generation == g.Generation && moved.none()) {
 			continue
 		}
-		changes = append(changes, change{key: key, env: gateEnvironment(g), gate: kardinalv1alpha1.AuditGateChange{
+		gc := kardinalv1alpha1.AuditGateChange{
 			Template: g.Name, Namespace: g.Namespace, OldDigest: old.Digest, NewDigest: digest,
 			OldGeneration: old.Generation, NewGeneration: g.Generation, Manager: lastManager(g.ManagedFields),
-		}})
+		}
+		moved.set(&gc)
+		changes = append(changes, change{key: key, env: gateEnvironment(g), gate: gc})
 	}
 	for key, old := range before {
 		if seen[key] || old.Digest == "" {
@@ -96,6 +108,9 @@ func gateChangeRecord(bundle, pipeline, env string, changes []kardinalv1alpha1.A
 	listed := make([]kardinalv1alpha1.AuditGateChange, 0, min(len(changes), kardinalv1alpha1.MaxAuditGateChanges))
 	for i, gc := range changes {
 		_, _ = fmt.Fprintf(h, "%s/%s|%s|%d|%s|%d\n", gc.Namespace, gc.Template, gc.OldDigest, gc.OldGeneration, gc.NewDigest, gc.NewGeneration)
+		if !moveOf(gc).none() {
+			_, _ = fmt.Fprintf(h, "+%s|-%s|%d\n", strings.Join(gc.EnvironmentsAdded, ","), strings.Join(gc.EnvironmentsRemoved, ","), gc.EnvironmentsOmitted)
+		}
 		if i < kardinalv1alpha1.MaxAuditGateChanges {
 			listed = append(listed, gc)
 		}
@@ -150,12 +165,13 @@ func coalesceGateChanges(older, newer kardinalv1alpha1.PendingAuditEvent) (kardi
 			if gc.Manager == "" {
 				gc.Manager = was.Manager
 			}
+			moveOf(was).then(moveOf(gc)).set(&gc)
 		}
 		byKey[key] = gc
 	}
 	changes := make([]kardinalv1alpha1.AuditGateChange, 0, len(byKey))
 	for _, gc := range byKey {
-		if gc.OldDigest == gc.NewDigest && gc.OldGeneration == gc.NewGeneration {
+		if gc.OldDigest == gc.NewDigest && gc.OldGeneration == gc.NewGeneration && moveOf(gc).none() {
 			continue
 		}
 		changes = append(changes, gc)
@@ -252,10 +268,15 @@ func gateChangeClause(gc kardinalv1alpha1.AuditGateChange) string {
 		what = fmt.Sprintf("was deleted (generation %d)", gc.OldGeneration)
 	case gc.OldDigest == "":
 		what = fmt.Sprintf("now applies (generation %d)", gc.NewGeneration)
+	case gc.OldDigest == gc.NewDigest && gc.OldGeneration == gc.NewGeneration:
+		what = fmt.Sprintf("moved (generation %d)", gc.NewGeneration)
 	case gc.OldDigest == gc.NewDigest:
 		what = fmt.Sprintf("was edited back to the same rule (generation %d to %d)", gc.OldGeneration, gc.NewGeneration)
 	default:
 		what = fmt.Sprintf("changed (generation %d to %d)", gc.OldGeneration, gc.NewGeneration)
+	}
+	if m := moveOf(gc); !m.none() {
+		what += ": " + m.String()
 	}
 	if gc.Manager != "" {
 		what += ", declared field manager " + gc.Manager
@@ -274,7 +295,8 @@ func gateChangeClause(gc kardinalv1alpha1.AuditGateChange) string {
 // graph.TemplateStamps, gates the templates it was built with. A change of
 // stamp alone (a copy made before #1360 gets one) is not a rule change.
 func upgradeGateChangeEntry(b *kardinalv1alpha1.Bundle, before, after map[string]string,
-	stamps, newStamps map[string]graph.TemplateStamp, gates []kardinalv1alpha1.PolicyGate, now time.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	stamps, newStamps map[string]graph.TemplateStamp, beforeEnvs, afterEnvs map[string][]string,
+	gates []kardinalv1alpha1.PolicyGate, now time.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	byKey := map[string]kardinalv1alpha1.PolicyGate{}
 	for _, g := range gates {
 		byKey[g.Namespace+"/"+g.Name] = g
@@ -297,7 +319,11 @@ func upgradeGateChangeEntry(b *kardinalv1alpha1.Bundle, before, after map[string
 	for _, key := range sorted {
 		old, had := before[key]
 		cur, has := after[key]
-		if had && has && old == cur {
+		var moved environmentMove
+		if had && has {
+			moved = environmentDiff(beforeEnvs[key], afterEnvs[key])
+		}
+		if had && has && old == cur && moved.none() {
 			continue
 		}
 		ns, name, _ := strings.Cut(key, "/")
@@ -310,9 +336,15 @@ func upgradeGateChangeEntry(b *kardinalv1alpha1.Bundle, before, after map[string
 			if g, ok := byKey[key]; ok {
 				gc.Manager, e = lastManager(g.ManagedFields), gateEnvironment(g)
 			}
-			if had {
+			moved.set(&gc)
+			switch {
+			case had && old == cur:
+				clauses = append(clauses, fmt.Sprintf("%s moves (generation %d): %s", key, gc.NewGeneration, moved))
+			case had && !moved.none():
+				clauses = append(clauses, fmt.Sprintf("%s takes its current rule (generation %d): %s", key, gc.NewGeneration, moved))
+			case had:
 				clauses = append(clauses, fmt.Sprintf("%s takes its current rule (generation %d)", key, gc.NewGeneration))
-			} else {
+			default:
 				clauses = append(clauses, fmt.Sprintf("%s now applies (generation %d)", key, gc.NewGeneration))
 			}
 		default:
@@ -341,4 +373,111 @@ func upgradeGateChangeEntry(b *kardinalv1alpha1.Bundle, before, after map[string
 		"was rendered again (render version %s) and its gates took the current rules: %s",
 		len(changes), noun, b.Name, graph.RenderLabel, strings.Join(clauses, "; "))
 	return entry, true
+}
+
+// environmentMove is how a template's gate copies moved between the
+// environments of a version: the environments they are in now and were not,
+// and those they were in and are not (#2338). Lists hold every name; set
+// writes the first kardinalv1alpha1.MaxAuditGateEnvironments of each to a
+// record and counts the rest.
+type environmentMove struct {
+	added, removed []string
+	omitted        int32
+}
+
+// environmentDiff is the move from the environments before to after (each
+// sorted, graph.TemplateEnvironments).
+func environmentDiff(before, after []string) environmentMove {
+	in := map[string]bool{}
+	for _, e := range before {
+		in[e] = true
+	}
+	var m environmentMove
+	for _, e := range after {
+		if !in[e] {
+			m.added = append(m.added, e)
+		}
+		delete(in, e)
+	}
+	for _, e := range before {
+		if in[e] {
+			m.removed = append(m.removed, e)
+		}
+	}
+	return m
+}
+
+// moveOf is the move a record carries.
+func moveOf(gc kardinalv1alpha1.AuditGateChange) environmentMove {
+	return environmentMove{added: gc.EnvironmentsAdded, removed: gc.EnvironmentsRemoved, omitted: gc.EnvironmentsOmitted}
+}
+
+func (m environmentMove) none() bool {
+	return len(m.added) == 0 && len(m.removed) == 0 && m.omitted == 0
+}
+
+// then is m followed by next: an environment added and then removed (or the
+// reverse) is no move. Counts of omitted names add up, an upper bound.
+func (m environmentMove) then(next environmentMove) environmentMove {
+	added, removed := map[string]bool{}, map[string]bool{}
+	for _, e := range m.added {
+		added[e] = true
+	}
+	for _, e := range m.removed {
+		removed[e] = true
+	}
+	for _, e := range next.added {
+		if removed[e] {
+			delete(removed, e)
+		} else {
+			added[e] = true
+		}
+	}
+	for _, e := range next.removed {
+		if added[e] {
+			delete(added, e)
+		} else {
+			removed[e] = true
+		}
+	}
+	out := environmentMove{omitted: m.omitted + next.omitted}
+	for e := range added {
+		out.added = append(out.added, e)
+	}
+	for e := range removed {
+		out.removed = append(out.removed, e)
+	}
+	sort.Strings(out.added)
+	sort.Strings(out.removed)
+	return out
+}
+
+// set writes m to gc, the first MaxAuditGateEnvironments names of each list.
+func (m environmentMove) set(gc *kardinalv1alpha1.AuditGateChange) {
+	n := kardinalv1alpha1.MaxAuditGateEnvironments
+	gc.EnvironmentsAdded, gc.EnvironmentsRemoved, gc.EnvironmentsOmitted = nil, nil, m.omitted
+	if len(m.added) > 0 {
+		gc.EnvironmentsAdded = append([]string(nil), m.added[:min(len(m.added), n)]...)
+		gc.EnvironmentsOmitted += int32(len(m.added) - len(gc.EnvironmentsAdded))
+	}
+	if len(m.removed) > 0 {
+		gc.EnvironmentsRemoved = append([]string(nil), m.removed[:min(len(m.removed), n)]...)
+		gc.EnvironmentsOmitted += int32(len(m.removed) - len(gc.EnvironmentsRemoved))
+	}
+}
+
+// String says the move: "now also in test; no longer in uat", and how many
+// more.
+func (m environmentMove) String() string {
+	var parts []string
+	if len(m.added) > 0 {
+		parts = append(parts, "now also in "+strings.Join(m.added, ", "))
+	}
+	if len(m.removed) > 0 {
+		parts = append(parts, "no longer in "+strings.Join(m.removed, ", "))
+	}
+	if m.omitted > 0 {
+		parts = append(parts, fmt.Sprintf("and %d more environments", m.omitted))
+	}
+	return strings.Join(parts, "; ")
 }

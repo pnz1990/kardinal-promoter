@@ -1467,6 +1467,33 @@ spec:
                               An empty digest is a template that did not apply before (created) or no
                               longer does (deleted).
                             properties:
+                              environmentsAdded:
+                                description: |-
+                                  EnvironmentsAdded are environments of the version the template's gate
+                                  copies now apply to and did not before (a kardinal.io/applies-to edit
+                                  moves a gate without changing its rule): the first
+                                  MaxAuditGateEnvironments in name order.
+                                items:
+                                  maxLength: 63
+                                  type: string
+                                maxItems: 5
+                                type: array
+                              environmentsOmitted:
+                                description: |-
+                                  EnvironmentsOmitted counts the added and removed environments past the
+                                  first MaxAuditGateEnvironments of each.
+                                format: int32
+                                type: integer
+                              environmentsRemoved:
+                                description: |-
+                                  EnvironmentsRemoved are environments of the version the template's
+                                  gate copies applied to and no longer do: the first
+                                  MaxAuditGateEnvironments in name order.
+                                items:
+                                  maxLength: 63
+                                  type: string
+                                maxItems: 5
+                                type: array
                               manager:
                                 description: |-
                                   Manager is the field manager of the template's newest managedFields
