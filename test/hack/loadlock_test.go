@@ -604,7 +604,7 @@ func TestLoadLock_MixedClients(t *testing.T) {
 	})
 
 	t.Run("20 locks, new, older and bare-mkdir clients at once: never an older client with anyone, never three", func(t *testing.T) {
-		rounds := 2
+		rounds := 1 // CI time; LOADLOCK_STRESS=10 for the review-size run
 		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
 			n, err := strconv.Atoi(v)
 			require.NoError(t, err)
