@@ -285,6 +285,16 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 			}
 		})
 	}
+	// One blocking gate from a namespace other than the Pipeline's: the
+	// next-window search evaluates it in its own namespace too (QA-3 on #2194).
+	t.Run("a blocking gate from spec.policyNamespaces gets its next window", func(t *testing.T) {
+		t.Parallel()
+		c := policyClient(t, custom.DeepCopy(), policyGate("custom-gate", "custom-policies", "prod", "schedule.hour >= 14"))
+		out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
+		require.NoError(t, err)
+		assert.Contains(t, out, "RESULT: BLOCKED\nBlocked by: custom-gate\n")
+		assert.Contains(t, out, "Next window: Tuesday 14:00 UTC\n")
+	})
 }
 
 // The github-demo example gates must be the ones simulate reports for prod.
