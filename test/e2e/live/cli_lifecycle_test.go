@@ -190,7 +190,9 @@ func TestCLI_Rollback(t *testing.T) {
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rb.Spec.Images)
 	assert.Equal(t, &v1alpha1.BundleIntent{TargetEnvironment: "prod", TargetOnly: true}, rb.Spec.Intent)
 	require.NotNil(t, rb.Spec.Provenance)
-	assert.Equal(t, v1alpha1.BundleProvenance{CommitSHA: "0a1b2c3", Author: "e2e-bot", CIRunURL: "https://ci.example/run/7", RollbackOf: bA},
+	// It records the Bundle it rolls back from, as the annotation does, in
+	// spec.provenance.rollbackFrom, which cannot change (#2225).
+	assert.Equal(t, v1alpha1.BundleProvenance{CommitSHA: "0a1b2c3", Author: "e2e-bot", CIRunURL: "https://ci.example/run/7", RollbackOf: bA, RollbackFrom: bB},
 		*rb.Spec.Provenance, "the rollback Bundle carries the target's provenance")
 
 	// A's image is pinned by tag only, so the rollback carries no
@@ -234,7 +236,7 @@ func TestCLI_Rollback(t *testing.T) {
 	assert.Equal(t, bR, rb2.Annotations["kardinal.io/rollback-from"])
 	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V3}}, rb2.Spec.Images)
 	require.NotNil(t, rb2.Spec.Provenance)
-	assert.Equal(t, v1alpha1.BundleProvenance{RollbackOf: bB}, *rb2.Spec.Provenance, "B has no provenance to copy")
+	assert.Equal(t, v1alpha1.BundleProvenance{RollbackOf: bB, RollbackFrom: bR}, *rb2.Spec.Provenance, "B has no provenance to copy")
 	e.WaitStepState(t, a.ns, pipelineName, bR2, "prod", "Verified", 2*promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
 }
