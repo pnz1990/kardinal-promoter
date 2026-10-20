@@ -52,6 +52,15 @@ var ErrBranchNotMoved = errors.New("the remote branch did not move")
 // clone.
 var ErrRebaseBaseMissing = errors.New("the commit HEAD was made on is not in the clone")
 
+// notMovedWait bounds how long RebaseOnRemote fetches the branch again
+// when it is still at the commit HEAD was made on (#2351). A push refused
+// because another writer's update held the branch's lock ("cannot lock
+// ref", "failed to lock": a lost race, ErrNonFastForward) can be followed by
+// a fetch that still sees the old head, the other update not yet applied;
+// a few fetches later the branch has moved. A branch that has not moved by
+// then is stuck (ErrBranchNotMoved). A test shortens it.
+var notMovedWait = 2 * time.Second
+
 // rebaseBaseDepth is how many commits of the branch RebaseOnRemote fetches
 // when the commit HEAD was made on is not in the clone: the base is an
 // earlier head of the branch, so it is found unless more writers than this
@@ -145,19 +154,39 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 		return nil, fmt.Errorf("rebase: read the commit HEAD was made on: %w", err)
 	}
 
-	if err := fetch(1); err != nil {
+	remoteHead := func() (*object.Commit, error) {
+		if err := fetch(1); err != nil {
+			return nil, err
+		}
+		trackRef, err := repo.Reference(tracking, true)
+		if err != nil {
+			return nil, fmt.Errorf("rebase: read %s: %w", tracking, err)
+		}
+		upstream, err := repo.CommitObject(trackRef.Hash())
+		if err != nil {
+			return nil, fmt.Errorf("rebase: read the remote head: %w", err)
+		}
+		return upstream, nil
+	}
+	upstream, err := remoteHead()
+	if err != nil {
 		return nil, err
 	}
-	trackRef, err := repo.Reference(tracking, true)
-	if err != nil {
-		return nil, fmt.Errorf("rebase: read %s: %w", tracking, err)
-	}
-	upstream, err := repo.CommitObject(trackRef.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("rebase: read the remote head: %w", err)
+	// Still at the base: the update that refused the push may be in flight
+	// (notMovedWait). Fetch again, backing off, before calling it stuck.
+	deadline := time.Now().Add(notMovedWait)
+	for wait := 20 * time.Millisecond; upstream.Hash == base.Hash && time.Now().Before(deadline); wait = min(2*wait, 400*time.Millisecond) {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("rebase onto %s: %w", branch, ctx.Err())
+		case <-time.After(min(wait, time.Until(deadline))):
+		}
+		if upstream, err = remoteHead(); err != nil {
+			return nil, err
+		}
 	}
 	if upstream.Hash == base.Hash {
-		return nil, fmt.Errorf("rebase onto %s at %s: %w", branch, upstream.Hash, ErrBranchNotMoved)
+		return nil, fmt.Errorf("rebase onto %s at %s (not moved in %s): %w", branch, upstream.Hash, notMovedWait, ErrBranchNotMoved)
 	}
 
 	baseTree, err := base.Tree()

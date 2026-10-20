@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -425,12 +426,14 @@ func (c *GoGitClient) push(ctx context.Context, dir, remote, branch string, auth
 	}
 	proxyOpts, release := sshScope(ctx, am)
 	defer release()
+	var side remoteErrors
 	pushOpts := &gogit.PushOptions{
 		RemoteName:   remote,
 		RefSpecs:     []config.RefSpec{config.RefSpec(refSpec)},
 		Force:        force,
 		Auth:         am,
 		ProxyOptions: proxyOpts,
+		Progress:     &side,
 	}
 	if lease != "" {
 		// Checked against this push's own advertisement, which the server
@@ -446,7 +449,10 @@ func (c *GoGitClient) push(ctx context.Context, dir, remote, branch string, auth
 			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrLeaseBroken)
 		}
 		if errors.Is(err, gogit.ErrNonFastForwardUpdate) || isConcurrentUpdate(err.Error()) {
-			return fmt.Errorf("git push %s %s: %w", remote, branch, ErrNonFastForward)
+			// The server's words stay in the error: a refusal that is not
+			// contention after all (a stale lock file) is named by them
+			// when the branch does not move (#2351).
+			return fmt.Errorf("git push %s %s: %s%s: %w", remote, branch, gitErrorText(err), side.said(), ErrNonFastForward)
 		}
 		// Another writer moved the branch between the check above and the
 		// push: go-git then walks from a remote head it does not have.
@@ -460,12 +466,69 @@ func (c *GoGitClient) push(ctx context.Context, dir, remote, branch string, auth
 	return nil
 }
 
+// remoteErrors keeps the "error:" lines a push's server sends on the
+// sideband (go-git's Progress), at most maxErrorBody characters of them:
+// git's receive-pack reports a ref update it could not make as "failed to
+// update ref" and says why only there ("cannot lock ref 'R': Unable to
+// create 'R.lock': File exists", a stale lock file or an update in flight,
+// #2351).
+type remoteErrors struct {
+	mu    sync.Mutex
+	buf   strings.Builder
+	lines []string
+}
+
+func (r *remoteErrors) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf.Write(p)
+	for {
+		s := r.buf.String()
+		i := strings.IndexAny(s, "\r\n")
+		if i < 0 {
+			if r.buf.Len() > 4*maxErrorBody {
+				r.buf.Reset() // a line too long to be an error line
+			}
+			return len(p), nil
+		}
+		if line := strings.TrimSpace(s[:i]); strings.HasPrefix(strings.ToLower(line), "error:") {
+			r.lines = append(r.lines, line)
+		}
+		r.buf.Reset()
+		r.buf.WriteString(s[i+1:])
+	}
+}
+
+// said is the server's error lines as " (error: ...; error: ...)", one line
+// without credentials, cut at maxErrorBody characters; "" when it sent none.
+func (r *remoteErrors) said() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.lines) == 0 {
+		return ""
+	}
+	text := oneLine(strings.Join(r.lines, "; "))
+	if runes := []rune(text); len(runes) > maxErrorBody {
+		text = strings.TrimSpace(string(runes[:maxErrorBody])) + "…"
+	}
+	return " (" + text + ")"
+}
+
 // concurrentUpdateReasons are the ref update failures a server reports when
 // another writer moved the branch while this push was in flight: the push
 // lost a race and can be retried on the new head, like a non-fast-forward.
+// git's receive-pack, which GitHub, GitLab (Gitaly), Forgejo and Bitbucket
+// apply a push with, gives the ref transaction's error: "cannot lock ref
+// 'R': is at X but expected Y" (GitHub's refusal of a lost race, #2351),
+// "cannot lock ref 'R': Unable to create 'R.lock': File exists" (another
+// update holds the lock: RebaseOnRemote waits for it, notMovedWait),
+// "cannot update ref 'R': is at X but expected Y", "... reference already
+// exists" and "... reference is missing but expected X"; older servers
+// "failed to update ref" or "failed to lock".
 var concurrentUpdateReasons = []string{
 	"non-fast-forward", "fetch first", "failed to update ref", "failed to lock",
-	"cannot lock ref", "stale info", "reference already exists", "incorrect old value",
+	"cannot lock ref", "but expected", "stale info", "reference already exists",
+	"incorrect old value",
 }
 
 // isConcurrentUpdate reports whether a push error is a lost race on the ref.

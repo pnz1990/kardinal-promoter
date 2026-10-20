@@ -145,3 +145,11 @@ func (c *labelCap) forget(v string) {
 	defer c.mu.Unlock()
 	delete(c.seen, v)
 }
+
+// SetNotMovedWaitForTest sets how long RebaseOnRemote fetches again while
+// the remote branch has not moved, until the test ends.
+func SetNotMovedWaitForTest(t interface{ Cleanup(func()) }, d time.Duration) {
+	old := notMovedWait
+	notMovedWait = d
+	t.Cleanup(func() { notMovedWait = old })
+}
