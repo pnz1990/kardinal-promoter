@@ -75,6 +75,12 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 			wantMsg: "kept moving"},
 		{name: "fetch fails", approval: "auto", pushErrs: []error{nonFF}, rebaseErrs: []error{errors.New("git fetch: boom")},
 			wantStatus: parentsteps.StepFailed, wantErr: true, wantPushes: 1, wantRebases: 1},
+		{name: "not moved: the server's refusal is named (#2351)", approval: "auto",
+			pushErrs: []error{fmt.Errorf("git push origin main: command error on refs/heads/main: cannot lock ref 'refs/heads/main': "+
+				"Unable to create '/srv/git/app.git/refs/heads/main.lock': File exists.: %w", scm.ErrNonFastForward)},
+			rebaseErrs: []error{fmt.Errorf("rebase onto main at abc (not moved in 2s): %w", scm.ErrBranchNotMoved)},
+			wantStatus: parentsteps.StepFailed, wantErr: true, wantPushes: 1, wantRebases: 1,
+			wantMsg: "main.lock': File exists"},
 		{name: "pr-review never rebases", approval: "pr-review",
 			wantStatus: parentsteps.StepSuccess, wantPushes: 1},
 	}
