@@ -766,7 +766,12 @@ exec "$@"
 		require.NoError(t, b.Start())
 		require.Eventually(t, func() bool { return strings.Contains(bout.String(), "untouched for") }, 15*time.Second, 50*time.Millisecond, "b removes stopped a's ticket")
 		require.NoError(t, a.Process.Signal(syscall.SIGCONT))
-		require.Eventually(t, func() bool { return strings.Contains(aout.String(), "queued it again in its place") }, 15*time.Second, 50*time.Millisecond)
+		// a queues again under its name: said, or (stopped between its check
+		// and its heartbeat) by that write.
+		require.Eventually(t, func() bool {
+			tickets, _ := filepath.Glob(filepath.Join(h.slots, ".queue", "[0-9]-*"))
+			return len(tickets) == 2
+		}, 15*time.Second, 50*time.Millisecond, "a queues again: %s", aout.String())
 		require.NoError(t, os.RemoveAll(holder))
 		waitLive(t, a, aout)
 		waitLive(t, b, bout)

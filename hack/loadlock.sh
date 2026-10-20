@@ -411,6 +411,20 @@ dead_dir() {
 # (and an older client's exclusive lock) of holders that are gone, then takes
 # a free slot when fewer than the capacity hold the lock. It succeeds when
 # this run holds a slot.
+# before_beat is a test's pause between the ticket's check and its heartbeat
+# (LOADLOCK_TEST_BEFORE_BEAT=FILE, tests only, with LOADLOCK_TEST=1): the
+# first time, it writes FILE.parked and waits, 10s at most, for FILE.go, so
+# a test can remove the ticket there, as a stale reaper would.
+before_beat() {
+  local f=${LOADLOCK_TEST_BEFORE_BEAT:-} i
+  [ "${LOADLOCK_TEST:-}" = 1 ] && [ -n "$f" ] && [ ! -e "$f.parked" ] || return 0
+  : >"$f.parked"
+  for ((i = 0; i < 100; i++)); do
+    [ ! -e "$f.go" ] || return 0
+    sleep 0.1
+  done
+}
+
 # before_rm is a test's pause between judging an older client's lock dead
 # and reading its owner again (LOADLOCK_TEST_BEFORE_RM=FILE, tests only,
 # with LOADLOCK_TEST=1): it writes FILE.judged and waits, 10s at most, for
@@ -550,7 +564,10 @@ while :; do
     write_ticket
     echo "loadlock: ticket $ticket was gone; queued it again in its place" >&2
   else
-    # The heartbeat (a builtin write: its time is the ticket's mtime).
+    before_beat
+    # The heartbeat (a builtin write: its time is the ticket's mtime). A
+    # ticket removed since the check above is written again by it, under its
+    # name: the waiter keeps its place.
     printf '%s\n' "$tag" >"$queue/$ticket" 2>/dev/null || true
   fi
   reap_tickets
