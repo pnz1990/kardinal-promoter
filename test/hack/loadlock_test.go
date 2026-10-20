@@ -1238,7 +1238,9 @@ func TestLoadLock_QueueNeverWedges(t *testing.T) {
 			t.Fatalf("a: %s\nb: %s", a.out.String(), b.out.String())
 		}
 		require.NoError(t, a.cmd.Process.Signal(syscall.SIGCONT))
-		if !assert.Eventually(t, func() bool { return strings.Contains(a.out.String(), "queued it again in its place") }, 15*time.Second, 50*time.Millisecond, "a queues again") {
+		// a queues again under its name: said, or (stopped between its check
+		// and its heartbeat) by that write.
+		if !assert.Eventually(t, func() bool { return tickets(lock) == 2 }, 15*time.Second, 50*time.Millisecond, "a queues again") {
 			t.Fatalf("a: %s\nb: %s", a.out.String(), b.out.String())
 		}
 		require.NoError(t, os.WriteFile(stop, nil, 0o644))
