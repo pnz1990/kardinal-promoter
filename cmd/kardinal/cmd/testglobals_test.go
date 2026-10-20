@@ -78,11 +78,17 @@ func keepStyle(t testing.TB) {
 // (bx.put("a") changes bx). A function literal that the package's own code
 // (not a test file) stores in a value or a field (cobra.Command{RunE: ...})
 // is not run where it is built; in a test file one is taken to be called
-// (a table's setup func, interceptor.Funcs). TestMain is exempt: it sets up
-// the whole run. Not seen: writes through a pointer parameter or a method
-// of another package (other than Execute), a function-typed package
-// variable's value after a test swaps it, and a function value called
-// through a struct field or a parameter.
+// (a table's setup func, interceptor.Funcs), and so is a package function
+// or method value a test file refers to at all (r := runner{f: w{}.set}).
+// The functions a package variable's initializer stores (var handlers =
+// map[string]func(){...}), not those it calls while the package
+// initializes, are taken to be called by whatever reads the variable. &v
+// of a package variable, anywhere, hands it out (#2367). TestMain is
+// exempt: it sets up the whole run. Not seen: writes through a pointer
+// parameter or a method of another package (other than Execute), a
+// function-typed package variable's value after a test swaps it, and a
+// function value the package's own code stores in a struct field or holds
+// in a parameter.
 func TestPackageVariablesAreRestored(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -204,6 +210,40 @@ func TestA(t *testing.T) { t.Parallel(); f := bx.put; f("a") }`, []string{"TestA
 		{"a method value passed", `type h struct{}
 func (h) sub(t *testing.T) { x = "a" }
 func TestA(t *testing.T) { t.Parallel(); t.Run("s", h{}.sub) }`, []string{"TestA changes x"}, ""},
+		{"a method value in the package's own code", `func TestA(t *testing.T) { t.Parallel(); do() }`, []string{"TestA changes bx"},
+			"package cmd\n\n" + box + "var bx box\nfunc do() { f := bx.put; f(\"a\") }\n"},
+		{"a method value passed in the package's own code", `func TestA(t *testing.T) { t.Parallel(); do() }`, []string{"TestA changes x"},
+			"package cmd\n\ntype h struct{}\nfunc (h) set() { x = \"a\" }\nfunc each(f func()) { f() }\nfunc do() { each(h{}.set) }\n"},
+		// QA-3 on #2367: a function reached through data, and an address
+		// held in a local.
+		{"a method value stored in a struct field", `type runner struct{ f func() }
+type w struct{}
+func (w) set() { x = "a" }
+func TestA(t *testing.T) { t.Parallel(); r := runner{f: w{}.set}; r.f() }`, []string{"TestA changes x"}, ""},
+		{"a package function stored in a slice", `func stub() { x = "a" }
+func TestA(t *testing.T) { t.Parallel(); fs := []func(){stub}; fs[0]() }`, []string{"TestA changes x"}, ""},
+		{"a package struct holding a method value", `type runner struct{ f func() }
+type w struct{}
+func (w) set() { x = "a" }
+var rn = runner{f: w{}.set}
+func TestA(t *testing.T) { t.Parallel(); rn.f() }`, []string{"TestA changes x"}, ""},
+		{"a package map of funcs", `var handlers = map[string]func(){"a": func() { x = "a" }}
+func TestA(t *testing.T) { t.Parallel(); handlers["a"]() }`, []string{"TestA changes x"}, ""},
+		{"a package map of functions, read by a helper", `func stub() { x = "a" }
+func run(name string) { handlers[name]() }
+func TestA(t *testing.T) { t.Parallel(); run("a") }`, []string{"TestA changes x"},
+			"package cmd\n\nvar handlers = map[string]func(){\"a\": stub}\n"},
+		{"a function variable an initializer builds", `func stub() { x = "a" }
+func wrap(f func()) func() { return f }
+var h = wrap(stub)
+func TestA(t *testing.T) { t.Parallel(); h() }`, []string{"TestA changes x"}, ""},
+		{"a package variable's address in a local", box + `var bx box
+func TestA(t *testing.T) { t.Parallel(); p := &bx; p.put("a") }`, []string{"TestA changes bx"}, ""},
+		{"a function an initializer calls while the package initializes", `func mk() int { x = "a"; return 1 }
+var n = mk()
+func TestA(t *testing.T) { t.Parallel(); _ = n }`, nil, ""},
+		{"a function the package stores in a value is not run", `func TestA(t *testing.T) { t.Parallel(); _ = mk() }`, nil,
+			"package cmd\n\ntype c struct{ f func() }\nfunc runX() { x = \"a\" }\nfunc mk() c { return c{f: runX} }\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,7 +394,8 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 		Types: map[ast.Expr]types.TypeAndValue{}},
 		scopes: map[*types.Scope]bool{}, pkgs: map[*types.Package]bool{}, decls: map[types.Object]*ast.FuncDecl{},
 		byName: map[string]*ast.FuncDecl{}, testing: map[types.Object]bool{}, inits: map[string]string{},
-		initType: map[types.Object]types.Type{}, done: map[*ast.FuncDecl]*restoreSummary{}, inTest: map[*ast.FuncDecl]bool{}}
+		initType: map[types.Object]types.Type{}, done: map[*ast.FuncDecl]*restoreSummary{}, inTest: map[*ast.FuncDecl]bool{},
+		initFuncs: map[types.Object][]target{}}
 	var tests []*ast.FuncDecl
 	names := make([]string, 0, len(srcs))
 	for f := range srcs {
@@ -382,6 +423,7 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 		a.pkgs[pkg] = true
 	}
 	var funcVars [][2]*ast.Ident // var set = stub
+	var stored []storedInit      // var handlers = map[string]func(){...}
 	for _, file := range files {
 		for _, d := range file.Decls {
 			switch d := d.(type) {
@@ -420,6 +462,8 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 									a.inTest[fd] = testFile[file]
 								case *ast.Ident:
 									funcVars = append(funcVars, [2]*ast.Ident{n, v})
+								default:
+									stored = append(stored, storedInit{obj, vs.Values[i], testFile[file]})
 								}
 							}
 							a.inits[n.Name] = init
@@ -456,7 +500,66 @@ func newRestoreCheck(srcs map[string]string) (*restoreCheck, []*ast.FuncDecl, er
 			a.byName[v.Name()] = d // a function-typed package variable, for cmd.Set()
 		}
 	}
+	for _, st := range stored {
+		if ts := a.storedFuncs(st.value, st.inTest); len(ts) > 0 {
+			a.initFuncs[st.obj] = ts
+		}
+	}
 	return a, tests, nil
+}
+
+// storedInit is a package variable's initializer that is not a function.
+type storedInit struct {
+	obj    types.Object
+	value  ast.Expr
+	inTest bool
+}
+
+// storedFuncs are the functions a package variable's initializer stores
+// (a map, slice or struct of funcs, or a function or method value passed
+// along): every function literal and every package function or method
+// value in it that is not called right there, while the package
+// initializes.
+func (a *restoreCheck) storedFuncs(value ast.Expr, inTest bool) []target {
+	var out []target
+	called := map[ast.Node]bool{}
+	ast.Inspect(value, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			called[n.Fun] = true
+		case *ast.FuncLit:
+			if !called[n] {
+				fd := &ast.FuncDecl{Name: ast.NewIdent("func"), Type: n.Type, Body: n.Body}
+				a.inTest[fd] = inTest
+				out = append(out, target{decl: fd})
+			}
+			return false
+		case *ast.Ident, *ast.SelectorExpr:
+			if !called[n] && a.funcRef(n.(ast.Expr)) {
+				out = append(out, a.callees(n.(ast.Expr), nil)...)
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// funcRef reports whether e names a function or method of the package (not
+// a variable that holds one): a function, a method value or expression, or
+// cmd.X from package cmd_test.
+func (a *restoreCheck) funcRef(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		_, ok := a.object(x).(*types.Func)
+		return ok && a.decls[a.object(x)] != nil
+	case *ast.SelectorExpr:
+		if _, ok := a.info.Uses[x.Sel].(*types.Func); ok {
+			return true
+		}
+		id, ok := x.X.(*ast.Ident)
+		return ok && id.Name == "cmd" && (a.object(id) == nil || isPkgName(a.object(id))) && a.byName[x.Sel.Name] != nil
+	}
+	return false
 }
 
 // restoreLeaks are the changes to package variables that the Test, Benchmark
@@ -575,7 +678,11 @@ type restoreCheck struct {
 	// empty stand-in imports leave unresolved.
 	initType map[types.Object]types.Type
 	inTest   map[*ast.FuncDecl]bool // the functions of the test files
-	done     map[*ast.FuncDecl]*restoreSummary
+	// initFuncs are the functions a package variable's initializer stores
+	// (handlers = map[string]func(){...}): a function that reads the
+	// variable is taken to call them.
+	initFuncs map[types.Object][]target
+	done      map[*ast.FuncDecl]*restoreSummary
 }
 
 // target is a function a call can run and, for a method, the variable it
@@ -917,9 +1024,60 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			}
 		}
 	}
+	// notRef are the names and selectors that are not a value read: an
+	// assignment's target, an address's operand (handed out), a selector's
+	// name, a key. (A call's function is one: h() reads h.)
+	notRef := map[ast.Node]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			notRef[n.Sel] = true
+		case *ast.UnaryExpr:
+			if n.Op == token.AND {
+				notRef[n.X] = true
+			}
+		case *ast.AssignStmt:
+			for _, l := range n.Lhs {
+				notRef[l] = true
+			}
+		case *ast.KeyValueExpr:
+			notRef[n.Key] = true
+		}
+		return true
+	})
+	// ref is e used as a value. A package variable's stored functions
+	// (initFuncs) are taken to be called by whatever reads it; in a test
+	// file, so is a package function or method value referenced at all
+	// (stored in a struct field, a map, a slice).
+	ref := func(e ast.Expr) {
+		if notRef[e] {
+			return
+		}
+		if id, ok := e.(*ast.Ident); ok {
+			for _, t := range a.initFuncs[a.object(id)] {
+				call(t, e.Pos())
+			}
+		}
+		if a.inTest[fn] && a.funcRef(e) {
+			for _, t := range a.callees(e, aliases) {
+				call(t, e.Pos())
+			}
+		}
+	}
 	var visit func(n ast.Node) bool
 	visit = func(n ast.Node) bool {
 		switch n := n.(type) {
+		case *ast.Ident:
+			ref(n)
+		case *ast.SelectorExpr:
+			ref(n)
+		case *ast.UnaryExpr:
+			// &v anywhere hands v out: whoever holds the pointer writes it.
+			if n.Op == token.AND {
+				if v := a.rootVar(n.X); v != "" {
+					s.binds[v] = true
+				}
+			}
 		case *ast.CompositeLit:
 			// The package's own code stores functions that something else
 			// runs later (cobra.Command{RunE: func...}; Execute stands for
@@ -1036,13 +1194,6 @@ func (a *restoreCheck) summary(fn *ast.FuncDecl) *restoreSummary {
 			} else {
 				for _, t := range a.callees(n.Fun, aliases) {
 					call(t, n.Pos())
-				}
-				for _, arg := range n.Args {
-					if u, ok := arg.(*ast.UnaryExpr); ok && u.Op == token.AND {
-						if v := a.rootVar(u.X); v != "" {
-							s.binds[v] = true
-						}
-					}
 				}
 			}
 			// A function passed by name (t.Run("s", sub)), or a method
