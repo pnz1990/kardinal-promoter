@@ -170,6 +170,11 @@ func TestGraph_GateSquatterRefused(t *testing.T) {
 	e.NoStep(t, a.ns, pipelineName, bundleName, "prod", 5*time.Second)
 
 	require.NoError(t, e.Client.Delete(ctx, squat))
+	// kro dropped its watch on the squatter's name when the apply was refused
+	// (a hard error aborts the reconcile's watches), so the delete never wakes
+	// the Graph; it would apply again only at its error-backoff retry. Wake it
+	// (#2159, #2201).
+	e.NudgeGraph(t, a.ns, bundleName)
 	gate := e.WaitGateReady(t, a.ns, bundleName, "prod", "hold", false, "= false", gateTimeout)
 	assert.Equal(t, instance, gate.Name)
 	assert.Empty(t, gate.Spec.Overrides, "the squatter's override did not survive")
