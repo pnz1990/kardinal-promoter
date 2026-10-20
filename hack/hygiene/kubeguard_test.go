@@ -77,13 +77,45 @@ func TestKubeFindings(t *testing.T) {
 		// i. a method of the manager is not the ambient config.
 		"pkg/i/i.go":      "package i\nfunc I(mgr interface{ GetConfig() any }) { _ = mgr.GetConfig() }\n",
 		"pkg/i/i_test.go": "package i\nimport \"testing\"\nfunc TestI(t *testing.T) {}\n",
+		// QA-3 on #2216, at c4052b7bb:
+		// 1. a guarded test that clears KUBECONFIG, or HOME, falls back to
+		// ~/.kube/config; a path that does not exist is the safe form, and
+		// test/kubetest's own tests may.
+		"test/env/e_test.go": "package env\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { kubetest.Main(m) }\n" +
+			"func TestE(t *testing.T) {\nt.Setenv(\"KUBECONFIG\", \"\")\n_ = os.Unsetenv(\"KUBECONFIG\")\n_ = os.Unsetenv(\"HOME\")\nt.Setenv(\"HOME\", \"\")\n" +
+			"t.Setenv(\"KUBECONFIG\", \"/dev/null\")\nt.Setenv(\"OTHER\", \"\")\n}\n",
+		"test/kubetest/k_test.go": "package kubetest_test\nimport (\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { kubetest.Main(m) }\nfunc TestK(t *testing.T) { t.Setenv(\"KUBECONFIG\", \"\") }\n",
+		"test/kubetest/k.go": "package kubetest\nimport \"k8s.io/client-go/tools/clientcmd\"\nfunc Isolate() { clientcmd.RecommendedHomeFile = \"/nonexistent\" }\nfunc Main(m any) {}\n",
+		// 2. a pkg/ test that starts processes (kubectl, helm, kind, the
+		// CLI), or reaches code that does.
+		"pkg/x/x_test.go": "package x\nimport (\n\"os/exec\"\n\"testing\"\n)\nfunc TestX(t *testing.T) { _ = exec.Command(\"kubectl\", \"get\", \"ns\").Run() }\n",
+		"pkg/z/z.go":      "package z\nimport \"os/exec\"\nfunc Z() { _ = exec.Command(\"helm\").Run() }\n",
+		"pkg/y/y_test.go": "package y\nimport \"testing\"\nfunc TestY(t *testing.T) {}\n",
+		// 3. a function literal called in a package var runs at init.
+		"pkg/g/g.go": "package g\nimport (\n\"k8s.io/client-go/rest\"\n\"sigs.k8s.io/controller-runtime/pkg/client/config\"\n)\n" +
+			"var Cfg = func() *rest.Config { c, _ := config.GetConfig(); return c }()\n",
+		// 4. test files all //go:build !e2e are in the unit builds; e2e &&
+		// linux is e2e-only.
+		"pkg/n/n_test.go": "//go:build !e2e\n\npackage n\nimport (\n\"testing\"\n\"k8s.io/client-go/rest\"\n)\nfunc TestN(t *testing.T) { _, _ = rest.InClusterConfig() }\n",
+		"pkg/o/o_test.go": "//go:build e2e && linux\n\npackage o\nimport (\n\"testing\"\n\"k8s.io/client-go/rest\"\n)\nfunc TestO(t *testing.T) { _, _ = rest.InClusterConfig() }\n",
+		// 5. a guard after the tests guards nothing; kubetest.Run counts.
+		"test/late/l_test.go": "package late\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { code := m.Run(); kubetest.Isolate(); os.Exit(code) }\n",
+		"test/run/r_test.go": "package run\nimport (\n\"os\"\n\"testing\"\n\"github.com/kardinal-promoter/kardinal-promoter/test/kubetest\"\n)\n" +
+			"func TestMain(m *testing.M) { os.Exit(kubetest.Run(m)) }\n",
+		// 6. $HOME's kubeconfig in untagged test/e2e code (unit binaries
+		// import it) is refused; in an e2e-only file it is not.
+		"test/e2e/framework/h.go":      "package framework\nimport \"k8s.io/client-go/tools/clientcmd\"\nvar _ = func() string { return clientcmd.RecommendedHomeFile }\n",
+		"test/e2e/framework/h_test.go": guardMain,
 	}
 	var files []*goFile
 	for rel, s := range src {
 		files = append(files, parsed(t, fset, rel, s))
 	}
 	const mod = "github.com/kardinal-promoter/kardinal-promoter"
-	deps := map[string]map[string]bool{mod + "/pkg/user": {mod + "/pkg/a": true, "fmt": true}}
+	deps := map[string]map[string]bool{mod + "/pkg/user": {mod + "/pkg/a": true, "fmt": true}, mod + "/pkg/y": {mod + "/pkg/z": true, "os/exec": true}}
 	got := kubeFindings(files, fset, mod, deps)
 	keys := make([]string, len(got))
 	for i, g := range got {
@@ -93,15 +125,41 @@ func TestKubeFindings(t *testing.T) {
 		"kubeguard " + mod + "/pkg/b",
 		"kubeguard " + mod + "/pkg/d",
 		"kubeguard " + mod + "/pkg/e",
+		"kubeguard " + mod + "/pkg/n",
 		"kubeguard " + mod + "/pkg/user",
+		"kubeguard " + mod + "/pkg/x",
+		"kubeguard " + mod + "/pkg/y",
+		"kubeguard " + mod + "/test/late",
 		"kubeguard " + mod + "/test/plain",
+		"kubeguard-env test/env/e_test.go:10",
+		"kubeguard-env test/env/e_test.go:11",
+		"kubeguard-env test/env/e_test.go:12",
+		"kubeguard-env test/env/e_test.go:9",
 		"kubeguard-home pkg/c/c.go:3",
+		"kubeguard-home test/e2e/framework/h.go:3",
 		"kubeguard-init pkg/f/f.go:3",
 		"kubeguard-init pkg/f/f.go:5",
+		"kubeguard-init pkg/g/g.go:6",
 	}, keys, strings.Join(got, "\n"))
 	for _, g := range got {
-		if strings.HasPrefix(g, "kubeguard "+mod+"/pkg/user:") {
+		switch {
+		case strings.HasPrefix(g, "kubeguard "+mod+"/pkg/user:"):
 			assert.Contains(t, g, "its tests reach "+mod+"/pkg/a", "the aliased loader is found")
+		case strings.HasPrefix(g, "kubeguard "+mod+"/pkg/y:"):
+			assert.Contains(t, g, "its tests reach "+mod+"/pkg/z, which starts processes (os/exec)")
+		case strings.HasPrefix(g, "kubeguard "+mod+"/pkg/x:"):
+			assert.Contains(t, g, "its code starts processes (os/exec)")
 		}
+	}
+}
+
+// TestE2EOnly (QA-3 on #2216): a file is e2e-only when its build constraint
+// holds for no set of the other tags without e2e; !e2e is in every unit build.
+func TestE2EOnly(t *testing.T) {
+	for tags, want := range map[string]bool{
+		"": false, "e2e": true, "!e2e": false, "e2e && linux": true, "linux && e2e": true, "e2e || envtest": false,
+		"envtest": false, "!race && e2e": true, "!race": false, "(e2e && race) || (e2e && !race)": true,
+	} {
+		assert.Equal(t, want, (&goFile{tags: tags}).e2eOnly(), "//go:build %s", tags)
 	}
 }

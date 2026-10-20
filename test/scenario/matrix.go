@@ -151,5 +151,5 @@ func MainWithRenderJobs(m *testing.M) {
 	if err := os.Setenv(steps.RenderJobEnv, "1"); err != nil {
 		panic(err)
 	}
-	os.Exit(m.Run())
+	os.Exit(kubetest.Run(m))
 }

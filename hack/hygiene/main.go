@@ -404,7 +404,7 @@ func main() {
 		os.Exit(1)
 	}
 	found := fileFindings(*root, r)
-	kinds := map[string]bool{"file": true, "kubeguard": true}
+	kinds := map[string]bool{"file": true, "kubeguard": true, "kubeguard-home": true, "kubeguard-init": true, "kubeguard-env": true}
 	kg, err := kubeGuard(*root)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

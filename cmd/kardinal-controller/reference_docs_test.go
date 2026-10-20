@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv(printHelpEnv) == "1" {
 		printControllerHelp()
 	}
-	os.Exit(m.Run())
+	os.Exit(kubetest.Run(m))
 }
 
 // printControllerHelp runs main with -help, as `kardinal-controller -help`
