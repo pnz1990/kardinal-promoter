@@ -125,10 +125,13 @@ something for you:
   run. If your process relied on a rollback also rolling the upstream environments back, roll
   each of them back on its own. Rollbacks created before the upgrade still go through the
   upstream environments ([Multi-Environment Rollback](rollback.md#multi-environment-rollback)).
-- **Gate changes reach the versions in flight.** A version that was promoting when you upgraded
-  keeps the gates it has until one of its gates is created, edited or deleted; then it gets the
-  changed gates at once, and a `GateChanged` AuditEvent records it. If you relied on a version in
-  flight keeping an old gate, use `kardinal pause` or `kardinal hold` instead
+- **Gate changes reach the versions in flight.** At the upgrade, the controller renders the Graph
+  of every version still promoting again, once, so its gates become copies of the current
+  templates. A gate created, edited or deleted under v0.12 after the version started (v0.12 left
+  those versions on the gates they started with) applies to it from then on, and a `GateChanged`
+  AuditEvent that says it happened on upgrade records it. Later changes reach the versions in
+  flight at once, and are recorded the same way. If you relied on a version in flight keeping an
+  old gate, use `kardinal pause` or `kardinal hold` instead
   ([When a new or edited gate takes effect](policy-gates.md#when-a-new-or-edited-gate-takes-effect)).
 - **`provenance.ciRunURL` refuses credential parameters.** Once the CRDs are applied, the Bundle
   CRD refuses a CI run URL with user info, a credential query or fragment parameter (a name such

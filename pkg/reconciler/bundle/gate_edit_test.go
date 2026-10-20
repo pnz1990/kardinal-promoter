@@ -520,3 +520,95 @@ func TestRenderVersion_StuckVersionRetranslatesOnce(t *testing.T) {
 	assert.Equal(t, updates, g.writes("app-v1", "update"), "a Verified Bundle is not re-translated")
 	assert.NotContains(t, nodeIDs(read()), graph.NodeVerifyOnlyGates)
 }
+
+// gateChangedSpecs are the GateChanged records of Bundle b, written
+// (AuditEvents) or still in its outbox.
+func gateChangedSpecs(t *testing.T, c client.Client, b string) []kardinalv1alpha1.AuditEventSpec {
+	t.Helper()
+	var out []kardinalv1alpha1.AuditEventSpec
+	for _, e := range lcGet(t, c, b).Status.PendingAuditEvents {
+		if e.Spec.Action == bundle.AuditActionGateChanged {
+			out = append(out, e.Spec)
+		}
+	}
+	var evs kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(context.Background(), &evs))
+	for _, ev := range evs.Items {
+		if ev.Spec.Action == bundle.AuditActionGateChanged && ev.Spec.BundleName == b {
+			out = append(out, ev.Spec)
+		}
+	}
+	return out
+}
+
+// #2271: the re-render of a Graph an earlier controller rendered records
+// the rule changes it applies. v0.12 kept the rule each template had when
+// the version started; a template edited since (window) takes its current
+// rule at the upgrade, and one deleted since (gone) no longer applies: one
+// GateChanged record names both, with no stamp before (v0.12 copies had
+// none) and the template's after. A template whose rule did not change
+// (cab), though its copy gains a stamp, is not in it. A second reconcile
+// records nothing more.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_UpgradeRecordsRuleChange(t *testing.T) {
+	ctx := context.Background()
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	window := gateTemplate("window", "prod", false)
+	g := newGateEditRig(t, gateEditPipeline(), cab, window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+	gvr := g.dyn.Resource(graph.GraphGVR).Namespace("default")
+	name := graph.GraphNameFrom("app", "app-v1")
+
+	// What v0.12 left: no label, no stamps, window's rule from before an
+	// edit, and a template deleted since.
+	u, err := gvr.Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	nodes, _, _ := unstructured.NestedSlice(u.Object, "spec", "nodes")
+	for _, n := range nodes {
+		node := n.(map[string]interface{})
+		if node["id"] != graph.NodePolicyGateData {
+			continue
+		}
+		def := node["def"].(map[string]interface{})
+		templates := def["templates"].([]interface{})
+		for _, raw := range templates {
+			tmpl := raw.(map[string]interface{})
+			delete(tmpl, "digest")
+			delete(tmpl, "generation")
+			delete(tmpl, "uid")
+			if tmpl["template"] == "window" {
+				tmpl["spec"].(map[string]interface{})["expression"] = "false"
+			}
+		}
+		def["templates"] = append(templates, map[string]interface{}{"template": "gone", "templateNamespace": "default",
+			"spec": map[string]interface{}{"expression": "true", "generated": true}})
+	}
+	require.NoError(t, unstructured.SetNestedSlice(u.Object, nodes, "spec", "nodes"))
+	labels := u.GetLabels()
+	delete(labels, graph.LabelRenderVersion)
+	u.SetLabels(labels)
+	_, err = gvr.Update(ctx, u, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1, "one record for the re-render")
+	var current kardinalv1alpha1.PolicyGate
+	require.NoError(t, g.c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "window"}, &current))
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "gone", Namespace: "default"},
+		{Template: "window", Namespace: "default", NewDigest: graph.TemplateDigest(current), NewGeneration: current.Generation},
+	}, got[0].Gates)
+	assert.Equal(t, "*", got[0].Environment, "window applies to prod, a deleted template to no environment: the record names several")
+	assert.Contains(t, got[0].Message, "on upgrade")
+	assert.Contains(t, got[0].Message, "default/window takes its current rule")
+	assert.Contains(t, got[0].Message, "default/gone no longer applies")
+	assert.NotContains(t, got[0].Message, "cab")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}

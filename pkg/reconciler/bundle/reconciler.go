@@ -477,6 +477,8 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		// version in flight gets the current rendering once, so one stuck
 		// under a rendering bug recovers on upgrade (#2271).
 		gatesHash := r.gatesHashFor(ctx, log, pipeline)
+		gates, gatesRead := r.currentGates(ctx, log, pipeline)
+		before, stamps := graph.TemplateRules(g), graph.TemplateStamps(g)
 		if _, tErr := r.translate(ctx, log, pipeline, b); tErr != nil {
 			if skipTranslate(tErr) {
 				return nil
@@ -484,6 +486,17 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return fmt.Errorf("re-render graph %s: %w", name, tErr)
 		}
 		b.Status.PolicyGatesHash = gatesHash
+		// A template edited, created or deleted since the version started
+		// reaches it only now: the change is recorded, as one under a
+		// version in flight is (#2144).
+		if gatesRead {
+			if rendered, _, err := r.readGraph(ctx, b.Namespace, name); err != nil || rendered == nil {
+				log.Warn().Err(err).Str("graph", name).Msg("cannot read the re-rendered Graph: a rule change on upgrade is not recorded as an AuditEvent")
+			} else if e, ok := upgradeGateChangeEntry(b, before, graph.TemplateRules(rendered), stamps,
+				graph.TemplateStamps(rendered), gates, r.now()); ok {
+				b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
+			}
+		}
 		log.Info().Str("graph", name).Str("renderVersion", g.Labels[graph.LabelRenderVersion]).
 			Int("currentRenderVersion", graph.RenderVersion).Msg("graph rendered by an earlier controller — re-translated in place")
 		return nil

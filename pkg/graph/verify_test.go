@@ -369,3 +369,38 @@ func TestBuilder_RunVerdicts(t *testing.T) {
 		"agent": "qa", "sponsor": "bob"}, v["actor"])
 	assert.EqualValues(t, 1, v["run"].(map[string]interface{})["index"], "the index is the AgentRun's, not the Verdict's 9")
 }
+
+// #2271: TemplateRules names the rule a Graph's gate instances copy from
+// each template: its spec and the verify policies of its instances. An edit
+// of either changes it; a new generation or uid of the same rule (the
+// stamp) does not.
+func TestTemplateRules(t *testing.T) {
+	p := makeLinearPipeline("app", "uat", "prod")
+	rules := func(gates ...kardinalv1alpha1.PolicyGate) map[string]string {
+		t.Helper()
+		res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: makeBundle("app-v1", "app"), PolicyGates: gates})
+		require.NoError(t, err)
+		return graph.TemplateRules(res.Graph)
+	}
+	verify := verifyGateFor("prod", kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1})
+	plain := makePolicyGate("window", "platform-policies", "prod", "true")
+	base := rules(verify, plain)
+	require.Len(t, base, 2)
+	key := verify.Namespace + "/" + verify.Name
+	require.Contains(t, base[key], `"required":1`, "the verify policy is part of the rule: %s", base[key])
+
+	restamped := verify.DeepCopy()
+	restamped.Generation, restamped.UID = 7, "other"
+	assert.Equal(t, base, rules(*restamped, plain), "a new stamp of the same rule")
+
+	stricter := verify.DeepCopy()
+	stricter.Spec.Verify.Required = 2
+	got := rules(*stricter, plain)
+	assert.NotEqual(t, base[key], got[key], "an edit of the verify policy")
+	assert.Equal(t, base[plain.Namespace+"/"+plain.Name], got[plain.Namespace+"/"+plain.Name], "the other template's rule")
+
+	edited := plain.DeepCopy()
+	edited.Spec.Expression = "false"
+	got = rules(verify, *edited)
+	assert.NotEqual(t, base[plain.Namespace+"/"+plain.Name], got[plain.Namespace+"/"+plain.Name], "an edit of the expression")
+}

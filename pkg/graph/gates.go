@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -639,6 +640,67 @@ const maxCopiedApprovals = 101
 type TemplateStamp struct {
 	Digest     string
 	Generation int64
+}
+
+// TemplateRules returns, by "namespace/name" of each template, the rule g's
+// gate instances copy from it, read from its NodePolicyGateData node: the
+// JSON of the template entry's spec (expression, message, recheck interval,
+// approval policy) and of the verify policies of its instances. It reads
+// what every controller since v0.12.0 writes there, so the rule a Graph of
+// an earlier controller copied can be compared with the one it copies
+// after a re-render (#2271): a template edited after the version started
+// changes it, a template stamp alone does not.
+func TemplateRules(g *Graph) map[string]string {
+	out := map[string]string{}
+	if g == nil {
+		return out
+	}
+	for _, n := range g.Spec.Nodes {
+		if n.ID != NodePolicyGateData {
+			continue
+		}
+		templates, _ := n.Def["templates"].([]interface{})
+		keys := make([]string, len(templates))
+		specs := make([]string, len(templates))
+		verify := make([]map[string]bool, len(templates))
+		for i, raw := range templates {
+			t, _ := raw.(map[string]interface{})
+			name, _ := t["template"].(string)
+			ns, _ := t["templateNamespace"].(string)
+			keys[i] = ns + "/" + name
+			spec, _ := json.Marshal(t["spec"])
+			specs[i] = string(spec)
+			verify[i] = map[string]bool{}
+		}
+		for field, raw := range n.Def {
+			items, ok := raw.([]interface{})
+			if !ok || field == "templates" {
+				continue
+			}
+			for _, it := range items {
+				item, _ := it.(map[string]interface{})
+				v, has := item["verify"]
+				if !has {
+					continue
+				}
+				idx, err := strconv.Atoi(fmt.Sprint(item["t"]))
+				if err != nil || idx < 0 || idx >= len(templates) {
+					continue
+				}
+				data, _ := json.Marshal(v)
+				verify[idx][string(data)] = true
+			}
+		}
+		for i, key := range keys {
+			var vs []string
+			for v := range verify[i] {
+				vs = append(vs, v)
+			}
+			sort.Strings(vs)
+			out[key] = specs[i] + " verify " + strings.Join(vs, ",")
+		}
+	}
+	return out
 }
 
 // TemplateStamps returns, by "namespace/name" of each template, the stamp

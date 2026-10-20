@@ -904,33 +904,54 @@ func u012Upgrade(t *testing.T, from u012From) {
 		require.Equal(t, 0, r.Code, r.Output())
 		e.WaitGateReady(t, s.approve.NS, b, "prod", "two-approvers", true, "(2 of 2)", gateTimeout)
 	}
-	// #1360: an edit of the false gate reaches the versions the release
-	// started. Their instances, copied without the template's revision, take
-	// the edited rule and the template's generation. A copy without that
-	// stamp is the baseline the next change is measured from, not a change,
-	// so this edit writes no GateChanged record (gateChangeEntry).
+	// #1360, #2271: an edit of the false gate reaches the versions the
+	// release started. The upgrade rendered their Graphs again once, which
+	// stamped the instances the release made, with no stamp, with the
+	// template's revision: the baseline the edit is measured from. The rule
+	// did not change at the upgrade, so it recorded no GateChanged; the edit
+	// writes one per held version, from that revision to the edited one.
+	var tmpl v1alpha1.PolicyGate
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: s.held.NS, Name: "release-window"}, &tmpl))
 	for _, b := range heldB {
 		g, ok, err := e.GateInstance(ctx, s.held.NS, b, "prod", "release-window")
 		require.NoError(t, err)
 		require.True(t, ok)
-		assert.NotContains(t, g.Annotations, "kardinal.io/gate-template-generation", "v%s copied the gate without the template's revision", fromVersion)
+		assert.Equal(t, fmt.Sprint(tmpl.Generation), g.Annotations["kardinal.io/gate-template-generation"],
+			"the upgrade stamped the instance v%s made with the template's revision", fromVersion)
 	}
+	heldChanges := func(ctx context.Context) (map[string][]v1alpha1.AuditEventSpec, error) {
+		var evs v1alpha1.AuditEventList
+		if err := e.Client.List(ctx, &evs, client.InNamespace(s.held.NS), client.MatchingLabels{"kardinal.io/action": "GateChanged"}); err != nil {
+			return nil, err
+		}
+		out := map[string][]v1alpha1.AuditEventSpec{}
+		for _, ev := range evs.Items {
+			out[ev.Spec.BundleName] = append(out[ev.Spec.BundleName], ev.Spec)
+		}
+		return out, nil
+	}
+	changed, err := heldChanges(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, changed, "the upgrade changed no rule, and recorded no GateChanged")
 	gen := editGate(t, e, s.held.NS, "release-window", "true")
 	for _, b := range heldB {
 		g := e.WaitGateReady(t, s.held.NS, b, "prod", "release-window", true, "= true", gateTimeout)
 		assert.Equal(t, fmt.Sprint(gen), g.Annotations["kardinal.io/gate-template-generation"], "the instance names the edited revision")
 		assert.Equal(t, gates[b], "PolicyGate "+s.held.NS+"/"+g.Name, "the edit updates the instance v%s's Graph made", fromVersion)
 	}
-	framework.Consistently(t, 15*time.Second, "no GateChanged record for a version the release built", func(ctx context.Context) (bool, string) {
-		var evs v1alpha1.AuditEventList
-		if err := e.Client.List(ctx, &evs, client.InNamespace(s.held.NS), client.MatchingLabels{"kardinal.io/action": "GateChanged"}); err != nil {
+	framework.Eventually(t, gateTimeout, "one GateChanged record per held version, from the upgrade's stamp to the edit", func(ctx context.Context) (bool, string) {
+		got, err := heldChanges(ctx)
+		if err != nil {
 			return false, err.Error()
 		}
-		var names []string
-		for _, ev := range evs.Items {
-			names = append(names, ev.Spec.BundleName)
+		for _, b := range heldB {
+			recs := got[b]
+			if len(recs) != 1 || len(recs[0].Gates) != 1 || recs[0].Gates[0].Template != "release-window" ||
+				recs[0].Gates[0].OldGeneration != tmpl.Generation || recs[0].Gates[0].NewGeneration != gen {
+				return false, fmt.Sprintf("%s: %+v", b, recs)
+			}
 		}
-		return len(evs.Items) == 0, fmt.Sprintf("GateChanged records for %v", names)
+		return len(got) == len(heldB), fmt.Sprintf("GateChanged records %+v", got)
 	})
 	// The verify gates: the AgentRun that was running finishes and counts;
 	// dave's Verdict joins carol's.
