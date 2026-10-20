@@ -22,9 +22,11 @@ import (
 )
 
 // EnvProfile names the profile: ci (the default, sized for a 4-CPU CI
-// runner and the e2e-live job's hour), full (the sizes of a large
-// production company: 120-stage chains, 150 environments, 200 Pipelines,
-// 1,000 Bundles) or soak (full, with a 30-minute sustained load).
+// runner and the e2e-live job's hour), nightly (ci with a deeper backlog in
+// TestScale_TenantFairnessManyRepos, for the scheduled e2e-live run), full
+// (the sizes of a large production company: 120-stage chains, 150
+// environments, 200 Pipelines, 1,000 Bundles) or soak (full, with a 30-minute
+// sustained load).
 const EnvProfile = "KARDINAL_E2E_SCALE_PROFILE"
 
 // Profile holds every size the scale tests use. Each field can also be set
@@ -125,6 +127,18 @@ type Profile struct {
 	// promoted at once: as many of A's steps due at a time, the backlog
 	// the fair queue must serve B ahead of (#2252).
 	TenantRepos int
+	// TenantBacklogRatio is the most B's slowest step under A's load may
+	// take in TestScale_TenantFairnessManyRepos, as a fraction of A's
+	// median step, when A's load is a backlog (JudgeFairness). 0 leaves it
+	// unjudged: at the ci profile's 30 repositories A's backlog is too
+	// shallow to tell the fair queue from controller-runtime's default one
+	// on a GitHub runner (#2257), so PRs judge starvation and the absolute
+	// SLOs, and the nightly profile this.
+	TenantBacklogRatio float64
+	// TenantReposStepP99 bounds the p99 of B's step latency in
+	// TestScale_TenantFairnessManyRepos when set, instead of TenantStepP99:
+	// a deeper backlog slows B's own steps too.
+	TenantReposStepP99 time.Duration
 	// TenantBBundles three-environment Pipelines are what tenant B
 	// promotes in TestScale_TenantFairness*: a Bundle on each, 2 s apart,
 	// alone, then another while A's load runs (JudgeFairness, #2252);
@@ -146,8 +160,9 @@ type Profile struct {
 // profiles are the named profiles. ci is sized for a GitHub-hosted runner
 // (4 vCPUs, 16 GB) running the -race controller, four tests at a time, and
 // keeps each test to a few minutes; full is the production-size run (24 GB kind node, about an
-// hour for the whole suite on 32 cores); soak is full with a 30-minute
-// sustained load at 5 Bundles a second.
+// hour for the whole suite on 32 cores); nightly is ci with a deeper
+// backlog in TestScale_TenantFairnessManyRepos (init); soak is full with a
+// 30-minute sustained load at 5 Bundles a second.
 var profiles = map[string]Profile{
 	"ci": {
 		ChainStages: 30, LongChainStages: 120,
@@ -193,6 +208,16 @@ var profiles = map[string]Profile{
 }
 
 func init() {
+	// nightly is ci with TestScale_TenantFairnessManyRepos' backlog deep
+	// enough to judge B's steps against A's (#2257): twice ci's
+	// repositories. On a GitHub runner, with the fair queue B's slowest
+	// step took 0.62 of A's median step there, and 1.2 to 1.38 without it.
+	// It adds about 90 to 130 s to the scale suite, so PRs keep ci and the
+	// scheduled e2e-live run takes nightly.
+	nightly := profiles["ci"]
+	nightly.TenantRepos, nightly.TenantBacklogRatio, nightly.TenantReposStepP99 = 60, 0.9, 35*time.Second
+	profiles["nightly"] = nightly
+
 	soak := profiles["full"]
 	soak.SustainedRate, soak.SustainedFor, soak.SustainedPipelines = 5, 30*time.Minute, 100
 	soak.Settle = 60 * time.Minute
@@ -208,7 +233,7 @@ func Load() (Profile, error) {
 	}
 	p, ok := profiles[name]
 	if !ok {
-		return Profile{}, fmt.Errorf("%s=%q: want ci, full or soak", EnvProfile, name)
+		return Profile{}, fmt.Errorf("%s=%q: want ci, nightly, full or soak", EnvProfile, name)
 	}
 	p.Name = name
 	for _, o := range overrides(&p) {
@@ -242,8 +267,8 @@ func overrides(p *Profile) []override {
 	}
 	durations := map[string]*time.Duration{
 		"SUSTAINED_FOR": &p.SustainedFor, "CHAOS_FOR": &p.ChaosFor, "SETTLE": &p.Settle, "SERIAL_STEP": &p.SerialStep,
-		"TENANT_START_WITHIN": &p.TenantStartWithin,
-		"SLO_STEP_P50":        &p.SLO.StepP50, "SLO_STEP_P99": &p.SLO.StepP99, "SLO_BUNDLE_P99": &p.SLO.BundleP99,
+		"TENANT_START_WITHIN": &p.TenantStartWithin, "TENANT_REPOS_STEP_P99": &p.TenantReposStepP99,
+		"SLO_STEP_P50": &p.SLO.StepP50, "SLO_STEP_P99": &p.SLO.StepP99, "SLO_BUNDLE_P99": &p.SLO.BundleP99,
 	}
 	var out []override
 	for name, ptr := range ints {
@@ -265,6 +290,14 @@ func overrides(p *Profile) []override {
 			return err
 		}})
 	}
+	out = append(out, override{"TENANT_BACKLOG_RATIO", func(s string) error {
+		f, err := strconv.ParseFloat(s, 64)
+		if err == nil && f < 0 {
+			err = fmt.Errorf("must not be negative")
+		}
+		p.TenantBacklogRatio = f
+		return err
+	}})
 	out = append(out, override{"SUSTAINED_RATE", func(s string) error {
 		f, err := strconv.ParseFloat(s, 64)
 		if err == nil && f <= 0 {

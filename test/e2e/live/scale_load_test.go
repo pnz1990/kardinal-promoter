@@ -7,6 +7,8 @@ package live
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,7 +208,8 @@ func TestScale_TenantFairness(t *testing.T) {
 	a := r.Fleet.Pipeline(t, "fair-a", scale.Waves(1, r.P.TenantWave))
 	tenantFairness(t, r, func() {
 		r.Fleet.MustCreateBundle(t, a.Name, scale.Tag(a.Name, 1))
-	})
+	}, scale.BacklogCheck{Why: "A's wave pushes one branch, so its steps wait for the branch's turn at low priority (#1586), " +
+		"not in the queue level B's steps are served from: there is no backlog for the fair queue to serve B ahead of"}, r.P.TenantStepP99)
 }
 
 // TestScale_TenantFairnessManyRepos is TestScale_TenantFairness with tenant
@@ -220,15 +223,21 @@ func TestScale_TenantFairnessManyRepos(t *testing.T) {
 	r := scale.Begin(t)
 	names := r.Fleet.Pipelines(t, "fairm", r.P.TenantRepos, scale.Chain(5))
 	r.Note("tenantRepos", r.P.TenantRepos)
+	stepP99 := r.P.TenantStepP99
+	if r.P.TenantReposStepP99 > 0 {
+		stepP99 = r.P.TenantReposStepP99
+	}
 	tenantFairness(t, r, func() {
 		r.Fleet.Burst(t, names, len(names), 50)
-	})
+	}, scale.BacklogCheck{Ratio: r.P.TenantBacklogRatio, Why: fmt.Sprintf("profile %s sets no TenantBacklogRatio: at %d repositories A's backlog is "+
+		"too shallow to tell the fair queue from controller-runtime's default one (#2257); TenantStepP99 judges this profile, "+
+		"and the nightly profile judges the backlog", r.P.Name, r.P.TenantRepos)}, stepP99)
 }
 
 // tenantFairness times tenant B's Bundles alone, then starts tenant A's
 // load with startA, waits until a tenth of TenantWave steps exist, times
 // B's Bundles again under it, and judges them (scale.JudgeFairness).
-func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
+func tenantFairness(t *testing.T, r *scale.Run, startA func(), bc scale.BacklogCheck, stepP99 time.Duration) {
 	t.Helper()
 	ctx := context.Background()
 	tenantB := scale.NewFleet(t, r.E, r.Rand)
@@ -280,7 +289,11 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fair := scale.JudgeFairness(alone, loaded, load)
+	fair := scale.JudgeFairness(alone, loaded, load, bc)
+	for _, c := range fair.Checks {
+		t.Log("fairness check " + c)
+	}
+	r.Note("fairnessChecks", strings.Join(fair.Checks, "; "))
 	r.Note("tenantAStepMedianSeconds", load.StepMedian.Seconds())
 	r.Note("tenantABacklog", fair.Backlog)
 	r.Note("tenantBAloneSeconds", fair.Alone.Seconds())
@@ -298,7 +311,7 @@ func tenantFairness(t *testing.T, r *scale.Run, startA func()) {
 	r.Finish(scale.AllVerified)
 	// B's latency, with B's own targets.
 	t.Run("tenant-b", func(t *testing.T) {
-		slo := invariants.SLO{StepP99: r.P.TenantStepP99, BundleP99: r.P.TenantBundleP99}
+		slo := invariants.SLO{StepP99: stepP99, BundleP99: r.P.TenantBundleP99}
 		invariants.Check(t, r.E, invariants.Options{Namespace: tenantB.NS, Outcome: invariants.OutcomeAllVerified, Targets: tenantB.Targets(),
 			Image: scale.ImageRepo, SeedTag: scale.SeedTag, Start: r.Start, SLO: &slo,
 			Extra: map[string]interface{}{"tenant": "b"}})

@@ -49,6 +49,34 @@ func TestLoad(t *testing.T) {
 			assert.Equal(t, 1000, p.BurstBundles)
 		},
 	}, {
+		name: "ci leaves B's steps against A's backlog unjudged",
+		check: func(t *testing.T, p Profile) {
+			assert.Equal(t, 30, p.TenantRepos)
+			assert.Zero(t, p.TenantBacklogRatio)
+			assert.Zero(t, p.TenantReposStepP99, "TenantStepP99 applies")
+		},
+	}, {
+		name: "nightly is ci with a deeper ManyRepos backlog",
+		env:  map[string]string{EnvProfile: "nightly"},
+		check: func(t *testing.T, p Profile) {
+			assert.Equal(t, "nightly", p.Name)
+			assert.Equal(t, 60, p.TenantRepos)
+			assert.Equal(t, 0.9, p.TenantBacklogRatio)
+			assert.Equal(t, 35*time.Second, p.TenantReposStepP99)
+			ci := profiles["ci"]
+			ci.Name, ci.TenantRepos, ci.TenantBacklogRatio, ci.TenantReposStepP99 = p.Name, p.TenantRepos, p.TenantBacklogRatio, p.TenantReposStepP99
+			assert.Equal(t, ci, p, "every other size is ci's")
+		},
+	}, {
+		name: "the backlog ratio and ManyRepos' step p99 are overridable",
+		env:  map[string]string{"KARDINAL_E2E_SCALE_TENANT_BACKLOG_RATIO": "0.8", "KARDINAL_E2E_SCALE_TENANT_REPOS_STEP_P99": "40s", "KARDINAL_E2E_SCALE_TENANT_REPOS": "45"},
+		check: func(t *testing.T, p Profile) {
+			assert.Equal(t, 0.8, p.TenantBacklogRatio)
+			assert.Equal(t, 40*time.Second, p.TenantReposStepP99)
+			assert.Equal(t, 45, p.TenantRepos)
+			assert.Equal(t, 30, p.TenantWave, "TenantRepos sizes ManyRepos alone")
+		},
+	}, {
 		name: "soak is full with a 30-minute load",
 		env:  map[string]string{EnvProfile: "soak"},
 		check: func(t *testing.T, p Profile) {
@@ -72,7 +100,7 @@ func TestLoad(t *testing.T) {
 	}, {
 		name:    "unknown profile",
 		env:     map[string]string{EnvProfile: "huge"},
-		wantErr: `want ci, full or soak`,
+		wantErr: `want ci, nightly, full or soak`,
 	}, {
 		name:    "a count below one",
 		env:     map[string]string{"KARDINAL_E2E_SCALE_FAN_IN": "0"},
@@ -81,6 +109,10 @@ func TestLoad(t *testing.T) {
 		name:    "a bad duration",
 		env:     map[string]string{"KARDINAL_E2E_SCALE_SETTLE": "soon"},
 		wantErr: "KARDINAL_E2E_SCALE_SETTLE",
+	}, {
+		name:    "a negative backlog ratio",
+		env:     map[string]string{"KARDINAL_E2E_SCALE_TENANT_BACKLOG_RATIO": "-1"},
+		wantErr: "must not be negative",
 	}, {
 		name:    "a rate of zero",
 		env:     map[string]string{"KARDINAL_E2E_SCALE_SUSTAINED_RATE": "0"},
