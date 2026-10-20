@@ -74,9 +74,13 @@ targets the same kro as v0.12.2, so kro is not upgraded. The upgrade suite runs 
 written (`TestUpgradeV0122_Estate`, on the oldest and newest supported Kubernetes minors) while
 versions are in flight, with the same checks as the upgrades from v0.12.0 and v0.12.1: versions
 in flight, the gates that hold them, approvals, Verdicts, a running AgentRun, freezes, a rollback
-and an automatic rollback all carry over and finish.
+and an automatic rollback all carry over and finish. A version that v0.12.2 never created a verify
+gate for (#2271) goes on after the upgrade with no step by hand: the new controller renders its
+Graph again, once, kro creates the gate, and the version promotes when the gate passes.
 
-**1. Read the upgrade notes.** The [changelog](changelog.md)'s v0.12.3 section lists what it fixes.
+**1. Read the upgrade notes.** The [changelog](changelog.md)'s v0.12.3 section lists its fix: a
+verify gate, or an approval gate that only reads `approvals.*`, works next to a gate with an
+approval policy. On upgrade the controller renders each promoting version's Graph again, once.
 
 **2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
 v0.12.2 chart installed, so `--force-conflicts` is required:
