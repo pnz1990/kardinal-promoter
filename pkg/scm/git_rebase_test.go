@@ -128,7 +128,8 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 // it has fetched again for the wait (#2351). After a rebase, the commit's
 // new parent is the reference.
 func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
-	scm.SetNotMovedWaitForTest(t, 100*time.Millisecond)
+	const wait = 200 * time.Millisecond
+	scm.SetNotMovedWaitForTest(t, wait)
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n"})
@@ -141,8 +142,11 @@ func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
 
 	start := time.Now()
 	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
+	took := time.Since(start)
 	require.ErrorIs(t, err, scm.ErrBranchNotMoved)
-	assert.GreaterOrEqual(t, time.Since(start), 100*time.Millisecond, "fetched again for the wait first")
+	assert.GreaterOrEqual(t, took, wait, "fetched again for the wait first")
+	// The wait, then at most a fetch or two: not ten waits.
+	assert.Less(t, took, wait+1500*time.Millisecond, "the wait is bounded by notMovedWait")
 	after, err := c.HeadCommit(ctx, work)
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "the commit is left as it was")
@@ -237,6 +241,8 @@ func TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock(t *testing.T) {
 	_, before := remoteFiles(t, remote, "main")
 	err := c.Push(ctx, mine, "origin", "main", scm.GitAuth{}, false)
 	require.ErrorIs(t, err, scm.ErrNonFastForward, "a push refused while the lock is held is a lost race")
+	// The status says "failed to update ref"; the sideband says why.
+	assert.Contains(t, err.Error(), "main.lock': File exists", "the server's refusal is kept: %v", err)
 	_, after := remoteFiles(t, remote, "main")
 	require.Equal(t, before, after, "refused by the server's lock: the branch has not moved")
 

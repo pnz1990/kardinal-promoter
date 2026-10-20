@@ -135,7 +135,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
 		var restart string
 		var baseMissing bool
-		rebases, restart, baseMissing, err = rebaseAndPush(ctx, state, branch)
+		rebases, restart, baseMissing, err = rebaseAndPush(ctx, state, branch, err)
 		if baseMissing {
 			return baseMissingRestart(state, branch, restart)
 		}
@@ -395,12 +395,13 @@ func baseMissingRestart(state *parentsteps.StepState, branch, reason string) (pa
 const maxRebaseAttempts = 6
 
 // rebaseAndPush rebases the promotion commit onto the moved base branch and
-// pushes, until the push lands or maxRebaseAttempts are used. It returns how
-// many rebases it made, or a StepRestart message when the commit must be
-// redone from a fresh clone (the branch changed the same files, the client
-// cannot rebase, the attempts ran out, or, with baseMissing, the clone lacks
-// the commit to rebase from), or the push error.
-func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch string) (n int, restart string, baseMissing bool, err error) {
+// pushes, until the push lands or maxRebaseAttempts are used. refused is the
+// push refusal that sent it here. It returns how many rebases it made, or a
+// StepRestart message when the commit must be redone from a fresh clone (the
+// branch changed the same files, the client cannot rebase, the attempts ran
+// out, or, with baseMissing, the clone lacks the commit to rebase from), or
+// the push error.
+func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch string, refused error) (n int, restart string, baseMissing bool, err error) {
 	rb, ok := state.GitClient.(scm.Rebaser)
 	if !ok {
 		return 0, fmt.Sprintf("base branch %s moved while promoting; retrying from a fresh clone", branch), false, nil
@@ -408,17 +409,22 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 	// No wait between attempts: each one fetches and pushes over the
 	// network, and the reconcile must not sleep. When the attempts run out
 	// the sequence restarts from a fresh clone, and past the engine's
-	// restarts the reconciler requeues the step with backoff and jitter.
+	// restarts the reconciler requeues the step with backoff and jitter. The
+	// one wait is RebaseOnRemote's own: a branch that has not moved is
+	// fetched again for up to about 2s (scm notMovedWait, #2351), for an
+	// update in flight, so a reconcile on a stuck branch holds its worker
+	// that long before the plain error below.
 	for ; n < maxRebaseAttempts; n++ {
 		if err := ctx.Err(); err != nil {
 			return n, "", false, fmt.Errorf("push %s: %w", branch, err)
 		}
 		if _, err := rb.RebaseOnRemote(ctx, state.WorkDir, "origin", branch, state.Git.Auth()); err != nil {
 			if errors.Is(err, scm.ErrBranchNotMoved) {
-				// Not contention: the push is refused for another reason.
+				// Not contention: the push is refused for another reason,
+				// which the server's refusal names (a stale lock file).
 				// A plain error, retried a bounded number of times.
-				return n, "", false, fmt.Errorf("push %s was refused as non-fast-forward, but the remote branch did not move "+
-					"(a lock file, a read-only repository or a full disk on the git server?): %w", branch, err)
+				return n, "", false, fmt.Errorf("push %s was refused (%v), but the remote branch did not move "+
+					"(a stale lock file, a read-only repository or a full disk on the git server?): %w", branch, refused, err)
 			}
 			if errors.Is(err, scm.ErrRebaseConflict) {
 				return n, fmt.Sprintf("base branch %s moved and changed the files this promotion writes (%v); "+
@@ -445,6 +451,7 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 		if !errors.Is(err, scm.ErrNonFastForward) {
 			return n + 1, "", false, err
 		}
+		refused = err
 	}
 	return maxRebaseAttempts, fmt.Sprintf("base branch %s kept moving (%d rebases); retrying from a fresh clone",
 		branch, maxRebaseAttempts), false, nil
