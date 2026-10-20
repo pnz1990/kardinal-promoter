@@ -219,6 +219,13 @@ jobs:
       SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # A pull request to a release branch gets the history and the tags
+          # (the depth is a string: a bare 0 is falsy in an expression):
+          # test/hack's render-label guard reads the branch's newest release
+          # tag, and fails in CI without it (#2360).
+          fetch-depth: ${{ startsWith(github.base_ref, 'release/') && '0' || '1' }}
+          fetch-tags: ${{ startsWith(github.base_ref, 'release/') }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
