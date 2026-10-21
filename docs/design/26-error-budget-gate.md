@@ -901,11 +901,13 @@ How it matches, so it costs kro nothing and misses nothing:
   is never held by the index. **What this cannot do:** an agent registered by a User or Group
   subject cannot be told from a person while the index is not Ready, so in that window it can
   change a gate template or a hand-written check (a ServiceAccount agent cannot: every
-  ServiceAccount is refused). The actor policies have the same residual for unstamped records
-  (#2462, `docs/actors.md`, "What this can't do"). The actor policies apply the same rule to
-  promotion actions (#2451, #2462), and stamp a person they admit while the index is not Ready
-  `unverified`, never `human`; this policy reads the AgentIndex, not actor stamps, so `unverified`
-  changes nothing here. The rule applies to every rule of `<release>-risk-owners`, spec 25's
+  ServiceAccount is refused). The actor policies apply the same rule to promotion actions (#2451,
+  #2462): while the index is not Ready they refuse ServiceAccounts and never refuse a person a
+  stop-the-line write (a freeze, a pause, an exemption, an override, a version); those writes are
+  stamped `unverified`, a raw Approval or Verdict from a requester that is not a ServiceAccount
+  must carry that stamp, and `unverified` never counts toward a gate. So there, a User or Group
+  agent passing as a person in that window counts for nothing. This policy reads the AgentIndex,
+  not actor stamps, so `unverified` changes nothing here, and the residual above stands. The rule applies to every rule of `<release>-risk-owners`, spec 25's
   included (spec 25 §11 is amended to match).
 
 A person and the controller are never judged, a bot (a ServiceAccount the index does not name) only
@@ -1136,7 +1138,7 @@ is) from using it.
 | EB7 | Burn-rate windows | fixed workbook table; tool-specific sets; computed from budget percent | **Named sets per tool, factors from `budgetPercent` or given** (5.3): the windows a tool records are the only ones that can be read |
 | EB8 | Query shape | one query per value; one combined query; PromQL alert expression | **One combined query of raw values** (5.1): one Limiter slot; status shows the deciding rates |
 | EB9 | Who may change a gate's inputs | RBAC only; refuse agents; only the org | **Refuse agents, on by default behind `admission.agentGateInputs`** (11, 15.1): an agent's write to a hand-written MetricCheck or a gate template is the way around any gate; people keep RBAC; org gates keep the org namespace (coordinator's decision on QA-2's review) |
-| EB17 | The agent rules while the AgentIndex is not Ready | refuse every write they check, as the actor policies; refuse ServiceAccounts only; admit everything | **ServiceAccounts only** (11): the index's readiness never refuses a person, so policy can always be fixed; a ServiceAccount agent cannot pass as a person and waits for the index, while a User or Group agent can pass as one until the index is Ready (as in `docs/actors.md`, #2462); the same rule as the actor policies' (#2451) (coordinator's decision) |
+| EB17 | The agent rules while the AgentIndex is not Ready | refuse every write they check, as the actor policies; refuse ServiceAccounts only; admit everything | **ServiceAccounts only** (11): the index's readiness never refuses a person, so policy can always be fixed, and a ServiceAccount waits for the index. A User or Group agent can change gate inputs until the index is Ready (11). The same readiness rule as the actor policies' (#2451, #2462), where a person's writes in that window are stamped `unverified` and never count toward a gate (coordinator's decision) |
 | EB10 | A NaN budget | 1.0 (allow); unknown (fail closed) | **Unknown** (7.1): Sloth's optimized period rule is NaN for a whole period after one idle 5 minutes, and Pyrra reports 1 only with requests |
 | EB11 | Pyrra's period | read `pyrra_window` first; required in spec | **Required** (5.2), checked against `pyrra_window`: the series names depend on it, and a first read would be a second request |
 | EB12 | Sloth's window set | `google-30d` always; from the SLO's period | **From `slo:time_period:days`** (5.2), in the same query: Sloth chooses its set the same way, and both sets read the same windows |
