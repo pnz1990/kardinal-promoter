@@ -1261,7 +1261,7 @@ every gate where it was, so a working Graph's nodes do not change. The
 package's test renderer renders an optional with no value as null as kro does, and every test
 that renders a Graph checks no PolicyGate has a null `spec.approval` (`assertNoNullApproval`).
 A version already stuck when the fix ships recovers on upgrade: the fix bumps
-`graph.RenderVersion` (2; 3 on main since #2346), which every Graph carries as its `kardinal.io/render-version` label, and
+`graph.RenderVersion` (2; 3 on main since #2355), which every Graph carries as its `kardinal.io/render-version` label, and
 the Bundle reconciler re-translates a Promoting Bundle's Graph whose label differs once.
 **Smallest change, no upstream work yet.** Nothing upstream is needed: omitting the field is
 what `CELOmitFunction` is for. Requiring that alpha gate of every kardinal install is not worth
@@ -1400,7 +1400,7 @@ Cadence):
    never uses**: main's `RenderVersion` at the branch's release, plus the patch release (for
    example `3-v0.12.4`). It never takes main's next integer. v0.12.3 labelled its Graphs `2`,
    which main used for a different rendering, so the upgrade from it to main re-rendered nothing
-   until main moved to 3 (#2346).
+   until main moved to 3 (#2355; found in #2346).
    `pkg/graph`'s `TestRenderCorpus` holds the bump to it: it pins the hash of each corpus Graph's
    spec (`pkg/graph/testdata/render-corpus.json`) to the `RenderVersion`, and fails, naming the
    corpus Graphs, when one renders differently at the same version; `KARDINAL_UPDATE_RENDER_CORPUS=1`

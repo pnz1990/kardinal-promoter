@@ -47,7 +47,9 @@ After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, p
 !!! info "Changed in v0.13.0 (unreleased)"
     In v0.12.0 and earlier, a version in flight keeps the gates it started with: a new or edited
     gate applies only to versions created after it, and gate copies carry no
-    `kardinal.io/gate-template-*` annotations and write no `GateChanged` record. The
+    `kardinal.io/gate-template-*` annotations and write no `GateChanged` record. An upgrade from
+    v0.12.x gives each version still promoting the current gates once
+    ([Upgrading from v0.12.0](upgrade.md#upgrading-from-v0120)). The
     [changelog](changelog.md) lists every change since v0.12.0.
 
 A version gets its gates when it starts promoting: kardinal copies every gate that applies to its

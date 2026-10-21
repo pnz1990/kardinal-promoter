@@ -93,7 +93,9 @@ the version promotes when the gate passes.
 
 What v0.12.0 stored keeps working. Versions in flight keep their Graphs, PromotionSteps,
 PRStatuses and gate instances: at its first start the new controller removes the health ref nodes
-from those Graphs in place, and it rebuilds a version's gates only when one of its gates changes.
+from those Graphs in place, and renders the Graph of each version still promoting again, once and
+in place, which gives the version the current gates (step 1, "Gate changes reach the versions in
+flight").
 The new kinds, PromotionReceipt and ChangeRequest, are only installed: receipts stay off until
 you set `receipts.enabled`, and no change request is opened until a gate reads one. EKS health
 credentials (`health.kubeconfigSecretRef.eks`, a new Pipeline field) stay off too: no Pipeline
@@ -132,11 +134,13 @@ something for you:
   upstream environments ([Multi-Environment Rollback](rollback.md#multi-environment-rollback)).
 - **Gate changes reach the versions in flight.** At the upgrade, the controller renders the Graph
   of every version still promoting again, once, so its gates become copies of the current
-  templates. A gate created, edited, deleted or moved to other environments under v0.12 after
-  the version started (v0.12 left those versions on the gates they started with) applies to it
-  from then on, and a `GateChanged` AuditEvent that says it happened on upgrade records it. Later changes reach the versions in
-  flight at once, and are recorded the same way. If you relied on a version in flight keeping an
-  old gate, use `kardinal pause` or `kardinal hold` instead
+  templates. A gate created, edited, deleted or moved to other environments under v0.12 after the
+  version started (v0.12 left those versions on the gates they started with) applies to it from
+  then on, and a `GateChanged` AuditEvent that says it happened on upgrade records it. On a kro
+  install with its alpha `CELOmitFunction` feature gate, the gates of a Graph that holds gates both
+  with and without an approval policy are deleted and created again once then. Later changes reach
+  the versions in flight at once, and are recorded the same way. If you relied on a version in
+  flight keeping an old gate, use `kardinal pause` or `kardinal hold` instead
   ([When a new or edited gate takes effect](policy-gates.md#when-a-new-or-edited-gate-takes-effect)).
 - **`provenance.ciRunURL` refuses credential parameters.** Once the CRDs are applied, the Bundle
   CRD refuses a CI run URL with user info, a credential query or fragment parameter (a name such
