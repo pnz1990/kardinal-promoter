@@ -83,10 +83,10 @@ func storageBytes(t *testing.T, e *framework.Env) float64 {
 // TestScale_Receipts (#2062, evidence-scale): with key-signed receipts on,
 // the profile's Receipts receipts (1,000 in ci, 10,000 in full; one in
 // ReceiptLargeEvery near the 256 KiB cap, the others about 4 KiB) arrive at
-// once, written as the controller writes them. The controller signs and
-// stores every one within ReceiptDrain, its leader's resident
-// memory growing by at most ReceiptRSSMiB (the cache keeps a Stored
-// receipt without its statement and bundle). After every controller Pod is
+// once, written as the controller writes them, twice. The controller signs
+// and stores every one within ReceiptDrain, each batch adding at most
+// ReceiptBytesPerReceipt a receipt to its leader's Go heap (the cache keeps
+// a Stored receipt without its statement and bundle). After every controller Pod is
 // deleted, a new receipt is Stored within ReceiptResync. Retention then
 // deletes up to 2,000 old receipts in one run while a new receipt is still
 // signed within a minute. The etcd database growth is reported.
@@ -176,14 +176,21 @@ func TestScale_Receipts(t *testing.T) {
 	rssN, heapN := leaderRSS(t, e), leaderHeap(t, e)
 	r.Note("receiptsRSSMiB", int(rssN))
 	r.Note("receiptsHeapMiB", int(heapN))
-	assert.LessOrEqual(t, heapN, r.P.ReceiptRSSFactor*baseHeap,
-		"leader heap with %d receipts Stored is at most ReceiptRSSFactor (%.1f) x its baseline %.0f MiB", n, r.P.ReceiptRSSFactor, baseHeap)
-	// The slope: n more receipts may add at most ReceiptBytesPerReceipt
-	// each to the heap. The cache keeps a Stored receipt without its
-	// statement and bundle (about 6 KiB and 8.5 KiB on average here: the
-	// bundle's DSSE envelope carries the statement in base64): runs
-	// measured 1.2 to 2.9 KiB a receipt, so caching either would be over
-	// the budget.
+	// The slopes: each batch of n receipts may add at most
+	// ReceiptBytesPerReceipt each to the leader's heap, the first from the
+	// baseline and the second from the first, every reading taken just
+	// after a collection (leaderHeap). The cache keeps a Stored receipt
+	// without its statement and bundle (about 6 KiB and 8.5 KiB on average
+	// here: the bundle's DSSE envelope carries the statement in base64):
+	// runs measured 1.2 to 2.9 KiB a receipt for the second batch, and 3.4
+	// KiB for the first at 10,000 (the full profile, 18.6 to 51 MiB), so
+	// caching either would be over the budget. A ratio to the baseline
+	// would not hold at full size: 10,000 receipts within the budget may
+	// add twice the baseline itself.
+	slope1 := (heapN - baseHeap) * (1 << 20) / float64(n)
+	r.Note("receiptsBytesPerReceiptFirstBatch", int(slope1))
+	assert.LessOrEqual(t, slope1, float64(r.P.ReceiptBytesPerReceipt),
+		"leader heap per receipt between none and %d Stored receipts (ReceiptBytesPerReceipt), from its baseline %.1f MiB to %.1f MiB", n, baseHeap, heapN)
 	batch(n, n, 2*n)
 	rss2N, heap2N, db := leaderRSS(t, e), leaderHeap(t, e), storageBytes(t, e)
 	slope := (heap2N - heapN) * (1 << 20) / float64(n)

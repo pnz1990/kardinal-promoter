@@ -106,20 +106,20 @@ type Profile struct {
 	// Receipts PromotionReceipts TestScale_Receipts creates at once, twice
 	// (one in ReceiptLargeEvery near the 256 KiB statement cap, the others
 	// about 4 KiB), for the controller to sign and store within
-	// ReceiptDrain each time. With Receipts Stored its leader's Go heap in
-	// use (not RSS: the suite's -race build keeps shadow memory) is at most
-	// ReceiptRSSFactor x its baseline, and the second batch adds at most
-	// ReceiptBytesPerReceipt per receipt to it, read just after a
-	// collection (a Stored receipt is cached without its statement and
-	// bundle, about 6 KiB and 8.5 KiB on average here, the bundle's DSSE
-	// envelope carrying the statement in base64; runs measured 1.2 to 2.9
-	// KiB a receipt, so 4 KiB is above that and below caching either).
+	// ReceiptDrain each time. Each batch adds at most ReceiptBytesPerReceipt
+	// per receipt to its leader's Go heap in use (not RSS: the suite's -race
+	// build keeps shadow memory), the first from the baseline and the second
+	// from the first, each read just after a collection (a Stored receipt is
+	// cached without its statement and bundle, about 6 KiB and 8.5 KiB on
+	// average here, the bundle's DSSE envelope carrying the statement in
+	// base64; runs measured 1.2 to 2.9 KiB a receipt for the second batch
+	// and 3.4 KiB for the first in full, so 4 KiB is above that and below
+	// caching either).
 	// After every controller Pod is deleted while a batch is
 	// being signed, every receipt is Stored within ReceiptResync (#2062).
 	Receipts               int
 	ReceiptLargeEvery      int
 	ReceiptDrain           time.Duration
-	ReceiptRSSFactor       float64
 	ReceiptBytesPerReceipt int
 	ReceiptResync          time.Duration
 	// ReceiptSteps Verified steps (three-environment Pipelines, one
@@ -215,7 +215,7 @@ var profiles = map[string]Profile{
 		// 10k. The export takes 1.2 s live.
 		PackEvents: 10_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 15 * time.Second,
 		PackVersions: 500, PackNamespaces: 10, PackVersionsMaxTime: 10 * time.Second, ReceiptDrainVersions: 5 * time.Minute,
-		Receipts: 1_000, ReceiptLargeEvery: 100, ReceiptDrain: 5 * time.Minute, ReceiptRSSFactor: 1.5, ReceiptBytesPerReceipt: 4096, ReceiptResync: 2 * time.Minute,
+		Receipts: 1_000, ReceiptLargeEvery: 100, ReceiptDrain: 5 * time.Minute, ReceiptBytesPerReceipt: 4096, ReceiptResync: 2 * time.Minute,
 		ReceiptSteps: 150, ReceiptStepsP95: 2 * time.Second,
 		AttestBundles: 30, AttestReferrers: 10, AttestWithin: time.Minute, AttestReconcileP95: 10 * time.Second, AttestReadsPerImage: 40,
 		TenantWave: 30, TenantRepos: 30, TenantStartWithin: 20 * time.Second, TenantBBundles: 3, TenantStepP99: 20 * time.Second, TenantBundleP99: 90 * time.Second,
@@ -240,7 +240,7 @@ var profiles = map[string]Profile{
 		// 12.5 s live at 100k.
 		PackEvents: 100_000, PackMaxRSSMiB: 192, PackMaxRSSGrowthMiB: 4, PackMaxTime: 2 * time.Minute,
 		PackVersions: 5_000, PackNamespaces: 50, PackVersionsMaxTime: 100 * time.Second, ReceiptDrainVersions: 20 * time.Minute,
-		Receipts: 10_000, ReceiptLargeEvery: 100, ReceiptDrain: 20 * time.Minute, ReceiptRSSFactor: 1.5, ReceiptBytesPerReceipt: 4096, ReceiptResync: 2 * time.Minute,
+		Receipts: 10_000, ReceiptLargeEvery: 100, ReceiptDrain: 20 * time.Minute, ReceiptBytesPerReceipt: 4096, ReceiptResync: 2 * time.Minute,
 		ReceiptSteps: 500, ReceiptStepsP95: time.Second,
 		AttestBundles: 500, AttestReferrers: 30, AttestWithin: 5 * time.Minute, AttestReconcileP95: 5 * time.Second, AttestReadsPerImage: 80,
 		TenantWave: 149, TenantRepos: 149, TenantStartWithin: 20 * time.Second, TenantBBundles: 5, TenantStepP99: 10 * time.Second, TenantBundleP99: 35 * time.Second,
