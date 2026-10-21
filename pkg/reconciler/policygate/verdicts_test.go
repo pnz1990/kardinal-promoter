@@ -271,3 +271,59 @@ func TestPolicyGateReconciler_VerdictDroppedByOneAllowlist(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicyGateReconciler_VerdictLeavesWithItsOwnWording (QA-5 on #2429):
+// only a person's counted verdict leaving a gate of agents only reads as the
+// #2411 change. An agent's counted verdict leaving it (its AgentRun made
+// again, the agent unlisted) and a listed user's leaving a gate of agents
+// and users (a revoke) keep the ordinary "(counted)" record.
+func TestPolicyGateReconciler_VerdictLeavesWithItsOwnWording(t *testing.T) {
+	ts := metav1.NewTime(verifyNow.Add(-time.Minute))
+	agent := agentVerdict("qa-run", "qa", "bob", "pass", 1, 1, -time.Minute)
+	lead := kardinalv1alpha1.GateVerdict{Name: "lead-pass", CreatedAt: &ts, Bundle: "nginx-demo-v1", BundleUID: "uid",
+		Environment: "uat", Check: "explore", Result: "pass", By: "lead@example.com",
+		Actor: &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "lead@example.com"}}
+	for name, tc := range map[string]struct {
+		policy  kardinalv1alpha1.GateVerifyPolicy
+		verdict kardinalv1alpha1.GateVerdict
+		record  kardinalv1alpha1.GateVerdictStatus
+	}{
+		"an agent's verdict on a gate of agents only": {
+			kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 1, AllowedAgents: []string{"qa"}}, agent,
+			kardinalv1alpha1.GateVerdictStatus{Name: "qa-run", Verifier: "agent qa for bob", Result: "pass", Counted: true, Run: 1, Attempt: 1, CreatedAt: agent.CreatedAt}},
+		"a listed user's verdict on a gate of agents and users": {
+			kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 1, AllowedAgents: []string{"qa"},
+				AllowedUsers: []string{"lead@example.com"}}, lead,
+			kardinalv1alpha1.GateVerdictStatus{Name: "lead-pass", Verifier: "lead@example.com", Result: "pass", Counted: true, CreatedAt: &ts}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
+			gate.Labels["kardinal.io/pipeline"] = "nginx-demo"
+			p := tc.policy
+			gate.Spec.Verify = &p
+			gate.Status.Verdicts = []kardinalv1alpha1.GateVerdictStatus{tc.record}
+			bundle := makeBundle("nginx-demo-v1", "default")
+			bundle.UID = "uid"
+			bundle.Status.Phase = "Promoting"
+			bundle.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			r.NowFn = func() time.Time { return verifyNow }
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "verify", Namespace: "default"}}
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			var list kardinalv1alpha1.AuditEventList
+			require.NoError(t, c.List(context.Background(), &list, client.InNamespace("default")))
+			var got []string
+			for _, e := range list.Items {
+				if e.Spec.Action == "VerdictRevoked" {
+					got = append(got, e.Spec.Message)
+				}
+			}
+			require.Len(t, got, 1)
+			assert.Contains(t, got[0], "revoked on gate verify (counted)")
+			assert.NotContains(t, got[0], "#2411")
+		})
+	}
+}

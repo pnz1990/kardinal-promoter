@@ -639,10 +639,20 @@ func TestRenderVersion_UpgradeRecordsVerifyRuleChange(t *testing.T) {
 	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
 	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
 
-	// A Graph at the current render version: nothing to say.
+	// A Graph at the current render version: nothing to say. Nor for one
+	// rendered from render version 4 on, which the re-render still renders
+	// again (a release branch's label, a later controller's): its gates
+	// already count agents only (QA-5 on #2429).
 	g.renderOlder(t, "app-v1", graph.RenderLabel, func(map[string]interface{}) {})
 	lcReconcile(t, g.r, "app-v1")
 	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+	for _, label := range []string{"4-v0.13.1", "5"} {
+		updates := g.writes("app-v1", "update")
+		g.renderOlder(t, "app-v1", label, func(map[string]interface{}) {})
+		lcReconcile(t, g.r, "app-v1")
+		require.Greater(t, g.writes("app-v1", "update"), updates+1, "label %s: rendered again", label)
+		require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"), "label %s: no rule change to record", label)
+	}
 
 	// A Graph rendered before #2411 (render version 3).
 	g.renderOlder(t, "app-v1", "3", func(map[string]interface{}) {})
