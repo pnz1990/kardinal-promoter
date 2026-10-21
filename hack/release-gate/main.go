@@ -212,7 +212,7 @@ func run() error {
 		}
 		runner = routeRunner{local: runner, ci: &ciRunner{
 			gh: ghCLI, repo: *ghRepo, ref: *ref, sha: sha, out: *out, count: *count,
-			suites: ciSuitesOf(selected), minors: minorsInput(opts), poll: time.Minute, jobWait: 30 * time.Minute, log: logf,
+			suites: ciSuitesOf(selected), minors: minorsInput(opts), poll: time.Minute, jobWait: 30 * time.Minute, adoptWait: 2 * time.Minute, log: logf,
 		}}
 	}
 	g := &Gate{

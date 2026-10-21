@@ -239,8 +239,13 @@ With `-live ci`, the live suites run as one dispatch of `e2e-live.yml` on
 the pushed branch, every suite on both minors (its `minors` input). Each
 job's result, log and artifact become a step, and the run's image IDs go
 into the report. Running the gate again on the same commit waits for that
-run, and re-runs only its failed jobs. The scale profiles stay on the host:
-a runner is too small for them.
+run, and re-runs only its failed jobs. The dispatch carries the gate's key
+(its commit and inputs, the `gate` input): the run is named after it and
+has a concurrency group of its own, so no other dispatch on the branch
+cancels or holds it up, and a gate that lost track of its run (a dispatch
+whose answer was lost, a results directory gone) adopts the one still going
+instead of dispatching again. GitHub's rate limits are waited out. The scale
+profiles stay on the host: a runner is too small for them.
 
 ### Patch releases from a maintenance branch
 
