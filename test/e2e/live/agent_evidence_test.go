@@ -517,6 +517,7 @@ func TestAgentEvidence_RecreatedRun(t *testing.T) {
 	// record of its own that names this version's UID. It ends on the state.
 	var bv v1alpha1.Bundle
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &bv))
+	var trail []string
 	framework.Eventually(t, gateTimeout, "the verify gate's trail of V's Verdict ends recorded", func(ctx context.Context) (bool, string) {
 		var events v1alpha1.AuditEventList
 		if err := e.Client.List(ctx, &events, client.InNamespace(a.ns),
@@ -525,7 +526,7 @@ func TestAgentEvidence_RecreatedRun(t *testing.T) {
 		}
 		items := events.Items
 		sort.Slice(items, func(i, j int) bool { return lifecycle.CompareAuditEvents(&items[i], &items[j]) < 0 })
-		var trail []string
+		trail = nil
 		ok := true
 		for _, ev := range items {
 			if (ev.Spec.Action == "VerdictRecorded" || ev.Spec.Action == "VerdictRevoked") &&
@@ -538,6 +539,7 @@ func TestAgentEvidence_RecreatedRun(t *testing.T) {
 		return ok && len(trail) >= 3 && trail[0] == recorded && slices.Contains(trail, revoked) && trail[len(trail)-1] == recorded,
 			fmt.Sprintf("trail %v", trail)
 	})
+	t.Logf("the verify gate's trail of verdict %s: %v", first.Name, trail)
 
 	// prod promotes on it.
 	r := c.Exec(framework.CLIOptions{Kubeconfig: userKubeconfig(t, e, a.ns, "carol@example.com")}, c.Args(a.ns, "approve", bundle, "--env", "prod")...)
