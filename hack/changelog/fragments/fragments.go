@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // Dir holds the fragments, Changelog the changelog, relative to the root.
@@ -159,13 +161,20 @@ var (
 	unreleased  = regexp.MustCompile(`(?m)^## \[Unreleased\]\n`)
 	nextRelease = regexp.MustCompile(`(?m)^## \[`)
 	linkRef     = regexp.MustCompile(`(?m)^\[Unreleased\]: (https://github\.com/[^/]+/[^/]+)/compare/(v[^.]+\.[^.]+\.[^.]+)\.\.\.HEAD$`)
-	version     = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
+	// released is a released version's section heading.
+	released = regexp.MustCompile(`(?m)^## \[(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\]`)
+	version  = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
 )
 
 // Release writes fs into changelog as version, released on date: a
 // "## [version] — date" section under [Unreleased] (which keeps only the
-// marker), and the compare links. It refuses a changelog with entries
-// written under [Unreleased] itself, which the fragments replaced.
+// marker), and the compare links. The new version compares from the newest
+// released section, the first heading under [Unreleased], not from the
+// [Unreleased] link: a branch whose patch sections were written by hand
+// (release/v0.12 before v0.12.4) can leave that link at an older version.
+// It refuses a changelog with entries written under [Unreleased] itself,
+// which the fragments replaced, and a version that is not newer than the
+// newest section.
 func Release(changelog string, fs []Fragment, ver, date string) (string, error) {
 	if !version.MatchString(ver) {
 		return "", fmt.Errorf("version %q: want vX.Y.Z", ver)
@@ -188,10 +197,20 @@ func Release(changelog string, fs []Fragment, ver, date string) (string, error) 
 	if body := strings.TrimSpace(strings.Replace(rest[:end], Marker, "", 1)); body != "" {
 		return "", fmt.Errorf("%s has entries under [Unreleased] itself; move them into %s first", Changelog, Dir)
 	}
+	newest := ""
+	if h := released.FindStringSubmatch(rest); h != nil {
+		newest = h[1]
+		if semver.Compare(newest, ver) >= 0 {
+			return "", fmt.Errorf("%s's newest section is %s, not older than %s", Changelog, newest, ver)
+		}
+	}
 	section := fmt.Sprintf("## [%s] — %s\n\n%s", ver, date, Render(fs))
 	out := changelog[:loc[1]] + "\n" + Marker + "\n\n" + section + "\n" + rest[end:]
 	if m := linkRef.FindStringSubmatchIndex(out); m != nil {
 		repo, prev := out[m[2]:m[3]], out[m[4]:m[5]]
+		if newest != "" {
+			prev = newest
+		}
 		links := fmt.Sprintf("[Unreleased]: %s/compare/%s...HEAD\n[%s]: %s/compare/%s...%s", repo, ver, ver, repo, prev, ver)
 		out = out[:m[0]] + links + out[m[1]:]
 	}

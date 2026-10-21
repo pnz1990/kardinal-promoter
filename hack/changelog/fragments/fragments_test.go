@@ -156,6 +156,61 @@ func TestRelease(t *testing.T) {
 	}
 	_, err = Release(changelog, nil, "v0.12.0", "2026-11-01")
 	assert.ErrorContains(t, err, "nothing to release")
+	_, err = Release(changelog, fs, "v0.10.1", "2026-11-01")
+	assert.ErrorContains(t, err, "newest section is v0.11.0, not older than v0.10.1")
+}
+
+// TestReleaseComparesFromTheNewestSection: on a branch shaped like
+// release/v0.12 before v0.12.4 (patch sections written by hand, the
+// [Unreleased] link left at v0.12.1, no links for v0.12.2 and v0.12.3) the
+// new version compares from the newest section, v0.12.3 (QA-3 on #2406).
+func TestReleaseComparesFromTheNewestSection(t *testing.T) {
+	branch := `# Changelog
+
+## [Unreleased]
+
+` + Marker + `
+
+## [v0.12.3] — 2026-10-20
+
+### Fixed
+
+- **C** — c
+
+## [v0.12.2] — 2026-10-19
+
+### Security
+
+- **B** — b
+
+## [v0.12.1] — 2026-10-17
+
+### Fixed
+
+- **A** — a
+
+[Unreleased]: https://github.com/o/r/compare/v0.12.1...HEAD
+[v0.12.1]: https://github.com/o/r/compare/v0.12.0...v0.12.1
+`
+	fs := []Fragment{{File: "1-d.md", Section: "Security", Body: "- **D** — d"}}
+	out, err := Release(branch, fs, "v0.12.4", "2026-10-21")
+	require.NoError(t, err)
+	assert.Contains(t, out, "\n[Unreleased]: https://github.com/o/r/compare/v0.12.4...HEAD\n"+
+		"[v0.12.4]: https://github.com/o/r/compare/v0.12.3...v0.12.4\n"+
+		"[v0.12.1]: https://github.com/o/r/compare/v0.12.0...v0.12.1\n")
+	assert.NotContains(t, out, "compare/v0.12.1...v0.12.4", "not from the [Unreleased] link's v0.12.1")
+	assert.Contains(t, out, "## [v0.12.4] — 2026-10-21\n\n### Security\n\n- **D** — d\n\n## [v0.12.3]")
+
+	// A release on main after a minor compares from it, whatever patch
+	// sections of the previous minor follow.
+	main := strings.Replace(branch, "## [v0.12.3]", "## [v0.13.0] — 2026-10-21\n\n### Added\n\n- **M** — m\n\n## [v0.12.3]", 1)
+	out, err = Release(main, fs, "v0.13.1", "2026-10-22")
+	require.NoError(t, err)
+	assert.Contains(t, out, "[v0.13.1]: https://github.com/o/r/compare/v0.13.0...v0.13.1\n")
+	// The patch line's next release is refused on main: its newest section is
+	// the next minor.
+	_, err = Release(main, fs, "v0.12.5", "2026-10-22")
+	assert.ErrorContains(t, err, "newest section is v0.13.0, not older than v0.12.5")
 }
 
 func TestAssembled(t *testing.T) {
