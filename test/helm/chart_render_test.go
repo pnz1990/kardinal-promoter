@@ -459,6 +459,10 @@ func controllerAccess() []apiAccess {
 		{"kardinal.io", "agentindexes/status", []string{"get", "update", "patch"}, inCluster, "", "agentidentity IndexReconciler"},
 		{"kardinal.io", "agentindexes", []string{"patch"}, inCluster, "kardinal-promoter", "agentidentity IndexReconciler dropManagedFields (#1936)"},
 		{"admissionregistration.k8s.io", "validatingadmissionpolicies", []string{"get"}, inCluster, "kardinal-promoter-agent-index", "agentidentity IndexReconciler chartIndex (a deleted chart index is recreated)"},
+		{"admissionregistration.k8s.io", "validatingadmissionpolicies", []string{"get"}, inCluster, "kardinal-promoter-actor", "agentidentity IndexReconciler compactAllowed (the index format the actor policies read, #2071)"},
+		{"admissionregistration.k8s.io", "validatingadmissionpolicies", []string{"get"}, inCluster, "kardinal-promoter-actor-records", "agentidentity IndexReconciler compactAllowed"},
+		{"admissionregistration.k8s.io", "validatingadmissionpolicies", []string{"get"}, inCluster, "kardinal-promoter-actor-overrides", "agentidentity IndexReconciler compactAllowed"},
+		{"apps", "deployments", []string{"get"}, inRelease, "kardinal-promoter", "agentidentity IndexReconciler rolledOut (the compact format waits for the controller's rollout, #2071)"},
 		// Namespace mode limits it to the watched namespace (releaseNS in
 		// TestChartRBACGrantsControllerAccess); TestChartRBACNamespaceGet checks both modes.
 		{"", "namespaces", []string{"get"}, inCluster, releaseNS, "graphcleanup reconciler.go namespaceTerminating; bundle reconciler.go namespaceDeleting; promotionstep finalizer.go stepComeback; pipeline policy_namespaces.go notSharedPolicyNamespaces"},
@@ -740,6 +744,39 @@ func TestChartRBACSCMTokenSecret(t *testing.T) {
 			for _, verb := range []string{"list", "watch", "update", "delete"} {
 				assert.False(t, v.allowed(releaseNS, "kardinal-promoter", releaseNS, "", "secrets", verb, tt.wantName), verb)
 			}
+		})
+	}
+}
+
+// TestChartControllerDeployment covers #2071: --controller-deployment names
+// the chart's own Deployment (a release whose fullname is not the release
+// name included), and the controller may get it by that name in its own
+// namespace, in both RBAC modes, and not change it.
+// Covers ACTOR-INDEX-02.
+func TestChartControllerDeployment(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, release string
+		args          []string
+	}{
+		{"cluster mode", "kardinal-promoter", nil},
+		{"namespace mode", "kardinal-promoter", []string{"--set", "controller.watchNamespace=" + releaseNS}},
+		{"fullnameOverride", "kp", []string{"--set", "fullnameOverride=kp-controller"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docs := render(t, tt.release, tt.args...)
+			deps := docsOfKind(docs, "Deployment")
+			require.Len(t, deps, 1)
+			var dep appsv1.Deployment
+			decodeStrict(t, deps[0], &dep)
+			c := controllerContainer(t, docs)
+			assert.Equal(t, dep.Name, argValues(c)["controller-deployment"])
+			require.Contains(t, envByName(c), "POD_NAMESPACE", "the flag names a Deployment in POD_NAMESPACE")
+			v := newRBACView(t, docs)
+			sa := dep.Spec.Template.Spec.ServiceAccountName
+			assert.True(t, v.allowed(releaseNS, sa, releaseNS, "apps", "deployments", "get", dep.Name))
+			assert.False(t, v.allowed(releaseNS, sa, releaseNS, "apps", "deployments", "update", dep.Name))
 		})
 	}
 }

@@ -6,7 +6,6 @@ package agentcases
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -20,28 +19,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario"
 	"github.com/kardinal-promoter/kardinal-promoter/test/scenario/enterprise"
 )
 
 // The scale of agents. fullScale is the release gate's
-// (KARDINAL_SCENARIO_SCALE=full): 5,000 AgentIdentities, 50 tenants with 4
-// Pipelines each (200 Pipelines) and 98 agents (100 asked; the 50th team
-// has none) shipping 2 bursts. It takes CI's runner 10 of the 15 minutes
-// its scenario-enterprise job gives go test (3 bursts took 14.5), so that
-// job (KARDINAL_SCENARIO_ENTERPRISE=full) runs mediumScale: 2,000
+// (KARDINAL_SCENARIO_SCALE=full): 7,500 AgentIdentities, above the supported
+// 7,000 (docs/operate.md#scale-and-limits) and 82% of the index's bound in
+// its compact format (#2071; the object format cannot hold them), 50
+// tenants with 4 Pipelines each (200 Pipelines) and 98 agents (100 asked;
+// the 50th team has none) shipping 2 bursts. At 5,000 in the object format
+// it took CI's runner 10 of the 15 minutes its scenario-enterprise job
+// gives go test (3 bursts took 14.5), so that job
+// (KARDINAL_SCENARIO_ENTERPRISE=full) runs mediumScale: 2,000
 // AgentIdentities in 20 tenants. quickScale keeps go test ./... under its
 // budget: one burst, half the scenario under -race (#2194); the second
 // burst, which also wakes the Pipelines' earlier versions, runs in medium
 // and full.
 var (
-	fullScale   = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 5000, Agents: 100, Bursts: 2}
+	fullScale   = agentSize{Teams: 50, PipelinesPerTeam: 4, Identities: 7500, Agents: 100, Bursts: 2}
 	mediumScale = agentSize{Teams: 20, PipelinesPerTeam: 4, Identities: 2000, Agents: 40, Bursts: 2}
 	quickScale  = agentSize{Teams: 3, PipelinesPerTeam: 2, Identities: 150, Agents: 6, Bursts: 1}
 )
@@ -89,17 +91,18 @@ func RunScale(t *testing.T) {
 	require.True(t, w.RunUntil(20, func() bool { return w.Round() == 0 }), "the registry settles")
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
-	require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), "the index is Ready: %v", idx.Status.Conditions)
-	// Sizes as the bound counts them (indexBytes), not the object's YAML,
-	// which is about 10% larger.
-	t.Logf("%s: %d AgentIdentities, %d Pipelines in %d tenants: the index holds %d users and %d groups (%d KiB of %d), built in %s",
-		mode, sz.Identities, sz.Teams*sz.PipelinesPerTeam, sz.Teams, len(idx.Status.Users), len(idx.Status.Groups),
-		indexBytes(idx.Status)>>10, sz.bound()>>10, time.Since(start).Round(time.Millisecond))
+	_, built := actor.Readable(&idx.Status)
+	require.True(t, built, "the index is built: %v", idx.Status.Conditions)
+	// Sizes as the bound counts them (status.bytes), not the object's YAML.
+	users, groups := scenario.IndexEntryCount(&idx)
+	t.Logf("%s: %d AgentIdentities, %d Pipelines in %d tenants: the index holds %d users and %d groups (compact %v, %d KiB of %d), built in %s",
+		mode, sz.Identities, sz.Teams*sz.PipelinesPerTeam, sz.Teams, users, groups, actor.IsCompact(&idx.Status),
+		idx.Status.Bytes>>10, sz.bound()>>10, time.Since(start).Round(time.Millisecond))
 
-	// The index's size as the controller bounds it (actor.Evaluate: each
-	// entry's JSON, its key and 4 bytes), and the identities that would
-	// fill it at this registry's mix.
-	used := indexBytes(idx.Status)
+	// The index's size as the controller bounds it (status.bytes: each
+	// entry and its key in JSON, in the format written), and the
+	// identities that would fill it at this registry's mix.
+	used := int(idx.Status.Bytes)
 	perID := float64(used) / float64(sz.Identities)
 	t.Logf("%s: the index is %d bytes of %d (%.0f%%), %.0f bytes per AgentIdentity: full at about %d AgentIdentities",
 		mode, used, sz.bound(), 100*float64(used)/float64(sz.bound()), perID, int(float64(sz.bound())/perID))
@@ -157,9 +160,10 @@ func RunScale(t *testing.T) {
 	// both, so the budgets hold the ratio of a kind's median to the
 	// calibration's (#2035, #2039): the budget in ms is the one at the
 	// calibration's speed recorded in PerfBaseline. The p99 is logged, not
-	// bounded: at 5,000 identities each Bundle or Approval converts about a
-	// MiB of index, and its tail moves with the host's memory pressure
-	// (46ms idle, 57-65ms with the host loaded, the calibration unmoved). The calibration is
+	// bounded: at 7,500 identities each Bundle or Approval converts about
+	// 800 KiB of index, and its tail moves with the host's memory pressure
+	// (at 5,000 in the object format, 46ms idle, 57-65ms with the host
+	// loaded, the calibration unmoved). The calibration is
 	// an agent's Bundle without the index, for every kind.
 	timed, empty := timeAdmissions(t, w, reg)
 	// The host's speed: an agent's Bundle admitted without the index.
@@ -279,19 +283,6 @@ func timeAdmissions(t *testing.T, w *scenario.World, reg registry) (full, empty 
 
 // admissionPasses is how many times timeAdmissions times each write.
 const admissionPasses = 3
-
-// indexBytes is the size of idx as actor.Evaluate counts it against the
-// bound.
-func indexBytes(idx v1alpha1.AgentIndexStatus) int {
-	n := 0
-	for _, m := range []map[string]v1alpha1.AgentIndexEntry{idx.Users, idx.Groups} {
-		for k, e := range m {
-			raw, _ := json.Marshal(e)
-			n += len(raw) + len(k) + 4
-		}
-	}
-	return n
-}
 
 func sumReconciles(w *scenario.World) int {
 	n := 0

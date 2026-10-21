@@ -1194,7 +1194,9 @@ func TestPolicySimulate_AsAgent(t *testing.T) {
 		Status: v1alpha1.AgentIdentityStatus{Ready: true, ObservedGeneration: 1}}
 	idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Users: map[string]v1alpha1.AgentIndexEntry{
-			"system:serviceaccount:ci:fixer": {Agent: "fixer", Sponsor: "alice", Autonomy: v1alpha1.AutonomyAuto}}}}
+			"system:serviceaccount:ci:fixer": {Agent: "fixer", Sponsor: "alice", Autonomy: v1alpha1.AutonomyAuto}},
+			// Built: an index that is not is read as registering no one.
+			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}}
 	who := policyGate("agents-of-alice", "default", "test", `actor.kind != "agent" || (agent.registered && actor.sponsor == "alice")`)
 	c := policyClient(t, p, id, idx, who)
 

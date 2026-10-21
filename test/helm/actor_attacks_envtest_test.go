@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 )
 
@@ -98,6 +99,15 @@ func TestActorAttacksOnAPIServer(t *testing.T) {
 	_, err = r.Reconcile(ctx, reconcile.Request{})
 	require.NoError(t, err)
 	key := client.ObjectKey{Name: "kardinal-promoter"}
+	// The chart's policies read the compact format, so the controller
+	// writes it (#2071): the attacks below run against it.
+	built := func(idx *v1alpha1.AgentIndex) *v1alpha1.AgentIndexStatus {
+		t.Helper()
+		require.True(t, actor.IsCompact(&idx.Status), "the index is in the compact format: %v", idx.Status.Conditions)
+		st, ok := actor.Readable(&idx.Status)
+		require.True(t, ok, "the index is built: %v", idx.Status.Conditions)
+		return st
+	}
 
 	// A. The index: delete, deletecollection, status writes by release-admin and a SA.
 	res := func(name string, err error, wantErr bool) {
@@ -123,8 +133,7 @@ func TestActorAttacksOnAPIServer(t *testing.T) {
 		// A collection delete carries no name (QA's HIGH finding on #1959).
 		res("deletecollection", who.DeleteAllOf(ctx, &v1alpha1.AgentIndex{}), true)
 		require.NoError(t, admin.Get(ctx, key, &idx), "the index survives a collection delete")
-		require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"))
-		require.Contains(t, idx.Status.Users, "system:serviceaccount:ci:parked", "status untouched")
+		require.Contains(t, built(&idx).Users, "system:serviceaccount:ci:parked", "status untouched")
 	}
 	res("cluster-admin (masters) delete", admin.Delete(ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}), true)
 	res("cluster-admin (masters) deletecollection", admin.DeleteAllOf(ctx, &v1alpha1.AgentIndex{}), true)
@@ -142,7 +151,7 @@ func TestActorAttacksOnAPIServer(t *testing.T) {
 	require.NoError(t, err, "the controller recreates the deleted chart index")
 	var healed v1alpha1.AgentIndex
 	require.NoError(t, admin.Get(ctx, key, &healed))
-	require.True(t, meta.IsStatusConditionTrue(healed.Status.Conditions, "Ready"))
+	built(&healed)
 	require.Equal(t, "Helm", healed.Labels["app.kubernetes.io/managed-by"], "the chart's labels, so Helm adopts it")
 	require.Equal(t, "keep", healed.Annotations["helm.sh/resource-policy"])
 	time.Sleep(2 * time.Second)
@@ -249,10 +258,11 @@ func TestActorAttacksOnAPIServer(t *testing.T) {
 	cg.Labels = nil
 	b("create forged, no label", as(fx).Create(ctx, cg), true)
 
-	// C. Ready=False: controller writes not-Ready.
+	// C. Not built: the controller writes the compact index full
+	// (CompactReady False).
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, admin.Get(ctx, key, &idx))
-	meta.SetStatusCondition(&idx.Status.Conditions, metav1.Condition{Type: "Ready", Status: "False", Reason: "IndexFull"})
+	meta.SetStatusCondition(&idx.Status.Conditions, metav1.Condition{Type: actor.ConditionCompactReady, Status: "False", Reason: "IndexFull"})
 	require.NoError(t, ctrl.Status().Update(ctx, &idx))
 	time.Sleep(2 * time.Second)
 	b("not ready: correct override", merge(as(fx), "g", map[string]interface{}{L: "true"}, ov(fx, ag(fx, "fixer", "alice"))), true)

@@ -45,8 +45,8 @@ type Registry struct {
 	// MaxIndexBytes.
 	Full bool
 	// Bytes is the size of the entries as the bound counts them (each
-	// entry's JSON, its key and 4 bytes), blocked ones included, also when
-	// Full; MaxBytes is the bound.
+	// entry and its key as stored in JSON, a colon and a comma), blocked
+	// ones included, also when Full; MaxBytes is the bound.
 	Bytes, MaxBytes int
 }
 
@@ -58,6 +58,18 @@ type Registry struct {
 // blocked, so an admin's mistake denies the agent rather than turning it into
 // a person.
 func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
+	return evaluate(ids, maxBytes, false)
+}
+
+// EvaluateCompact is Evaluate in the compact format: the entries are in
+// Index.CompactUsers and CompactGroups, counted by their encoded size
+// against maxBytes, and the legacy maps hold only LegacyReaderGuard. An
+// entry a separator would corrupt is written blocked, so it denies its agent.
+func EvaluateCompact(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
+	return evaluate(ids, maxBytes, true)
+}
+
+func evaluate(ids []v1alpha1.AgentIdentity, maxBytes int, compact bool) Registry {
 	sorted := make([]v1alpha1.AgentIdentity, len(ids))
 	copy(sorted, ids)
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -74,6 +86,9 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 			Users:              map[string]v1alpha1.AgentIndexEntry{},
 			Groups:             map[string]v1alpha1.AgentIndexEntry{},
 		},
+	}
+	if compact {
+		reg.Index.CompactUsers, reg.Index.CompactGroups = map[string]string{}, map[string]string{}
 	}
 	// Subjects of every AgentIdentity, ready or not: a sponsor cannot be one.
 	userSubjects := map[string]string{}
@@ -129,13 +144,35 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 				continue // an older AgentIdentity's subject keeps its entry
 			}
 			owner[k] = id.Name
-			size += entrySize(SubjectKey(s), entry)
+			key := SubjectKey(s)
 			if s.Kind == "Group" {
-				reg.Index.Groups[s.Name] = entry
+				key = s.Name
+			}
+			if compact {
+				enc, ok := EncodeEntry(entry)
+				if !ok {
+					enc, _ = EncodeEntry(v1alpha1.AgentIndexEntry{Agent: id.Name,
+						Blocked: "its sponsor or scope holds a character the agent index cannot encode"})
+				}
+				size += compactSize(key, enc)
+				if s.Kind == "Group" {
+					reg.Index.CompactGroups[key] = enc
+				} else {
+					reg.Index.CompactUsers[key] = enc
+				}
+				continue
+			}
+			size += entrySize(key, entry)
+			if s.Kind == "Group" {
+				reg.Index.Groups[key] = entry
 			} else {
-				reg.Index.Users[SubjectKey(s)] = entry
+				reg.Index.Users[key] = entry
 			}
 		}
+	}
+	if compact {
+		// Older readers of the legacy maps fail closed (compact.go).
+		reg.Index.Groups[LegacyReaderGroup] = LegacyReaderGuard
 	}
 	// Every entry counts, blocked ones too. An index past the bound is
 	// written empty and not Ready, and admission then refuses every write it
@@ -144,6 +181,10 @@ func Evaluate(ids []v1alpha1.AgentIdentity, maxBytes int) Registry {
 	if size > maxBytes {
 		reg.Full = true
 		reg.Index.Users, reg.Index.Groups = map[string]v1alpha1.AgentIndexEntry{}, map[string]v1alpha1.AgentIndexEntry{}
+		if compact {
+			reg.Index.CompactUsers, reg.Index.CompactGroups = map[string]string{}, map[string]string{}
+			reg.Index.Groups[LegacyReaderGroup] = LegacyReaderGuard
+		}
 		for name := range reg.Verdicts {
 			reg.Verdicts[name] = Verdict{Reason: ReasonIndexFull, Message: fmt.Sprintf(
 				"the agent index is full (%d bytes of %d): remove AgentIdentities or subjects; until then kardinal refuses "+
@@ -160,9 +201,23 @@ func ownerKey(s v1alpha1.AgentSubject) string {
 	return "user:" + SubjectKey(s)
 }
 
+// entrySize is an entry as the API server stores it: its key and its value
+// in JSON (escapes included), a colon and a comma.
 func entrySize(key string, e v1alpha1.AgentIndexEntry) int {
 	raw, _ := json.Marshal(e)
-	return len(raw) + len(key) + 4
+	return len(raw) + jsonLen(key) + 2
+}
+
+// compactSize is entrySize for a compact entry.
+func compactSize(key, enc string) int {
+	return jsonLen(enc) + jsonLen(key) + 2
+}
+
+// jsonLen is the length of s as a JSON string, its quotes and escapes
+// included.
+func jsonLen(s string) int {
+	raw, _ := json.Marshal(s)
+	return len(raw)
 }
 
 func orAll(v []string) []string {

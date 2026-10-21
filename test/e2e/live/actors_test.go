@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -138,7 +139,12 @@ func waitIndexed(t *testing.T, e *framework.Env, user string, ok func(v1alpha1.A
 		if err := e.Client.Get(ctx, types.NamespacedName{Name: agentIndexName}, &idx); err != nil {
 			return false, err.Error()
 		}
-		en, found := idx.Status.Users[user]
+		// In either of its formats (pkg/actor Readable, #2071).
+		st, built := actor.Readable(&idx.Status)
+		if !built {
+			return false, fmt.Sprint(idx.Status.Conditions)
+		}
+		en, found := st.Users[user]
 		return found && ok(en), fmt.Sprintf("%+v", en)
 	})
 }

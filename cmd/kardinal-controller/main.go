@@ -189,6 +189,11 @@ func main() {
 		"Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the "+
 			"Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). "+
 			"Empty: no agent registry, every caller is a person or a bot (docs/actors.md).")
+	var controllerDeployment string
+	flag.StringVar(&controllerDeployment, "controller-deployment", "",
+		"Name of this controller's Deployment, in POD_NAMESPACE (Helm sets it). The --agent-index switches to "+
+			"its compact format only once the Deployment's rollout has finished, so no replica of an older release "+
+			"is left reading it (#2071). Empty: no wait.")
 	var apiAuditEvents bool
 	flag.BoolVar(&apiAuditEvents, "api-audit-events", true,
 		"Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the "+
@@ -784,7 +789,8 @@ func main() {
 	if agentIndexName != "" {
 		actors.source = &actor.Source{Reader: mgr.GetClient(), Name: agentIndexName}
 		if err := (&agentidentityrecon.IndexReconciler{Client: mgr.GetClient(), Name: agentIndexName,
-			ChartCreated: agentIndexFromChart, Guard: agentIndexName + "-agent-index", Reader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+			ChartCreated: agentIndexFromChart, Guard: agentIndexName + "-agent-index", Reader: mgr.GetAPIReader(),
+			Deployment: controllerDeploymentKey(controllerDeployment)}).SetupWithManager(mgr); err != nil {
 			logger.Fatal().Err(err).Msg("unable to set up AgentIndexReconciler")
 		}
 	} else {
@@ -1660,6 +1666,15 @@ func isSameOrigin(origin, host string) bool {
 		return false
 	}
 	return strings.EqualFold(u.Host, host)
+}
+
+// controllerDeploymentKey is the controller's Deployment named name, in its
+// own namespace; empty without a name.
+func controllerDeploymentKey(name string) types.NamespacedName {
+	if name == "" {
+		return types.NamespacedName{}
+	}
+	return types.NamespacedName{Namespace: os.Getenv("POD_NAMESPACE"), Name: name}
 }
 
 // freezeAuditNamespace is where the ChangeWindow reconciler writes the

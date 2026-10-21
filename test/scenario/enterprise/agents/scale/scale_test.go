@@ -14,7 +14,7 @@ import (
 
 func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
 
-// TestEnterprise_AgentScale is 5,000 AgentIdentities, 200 Pipelines in 50
+// TestEnterprise_AgentScale is 7,500 AgentIdentities, 200 Pipelines in 50
 // tenants and bursts of agent-shipped versions in full (the release gate;
 // 2,000 in CI's scenario-enterprise job): every burst converges
 // within its budget of rounds and reconciles, and admission p99 stays within

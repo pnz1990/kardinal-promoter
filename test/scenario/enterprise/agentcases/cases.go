@@ -18,7 +18,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,7 +40,7 @@ import (
 type agentSize struct{ Teams, PipelinesPerTeam, Identities, Agents, Bursts, Probes, IndexBytes int }
 
 // fullAgents is CI's scenario-enterprise job (KARDINAL_SCENARIO_ENTERPRISE=
-// full): 2,000 AgentIdentities, half the index's 4,000-subject bound, and 50
+// full): 2,000 AgentIdentities, under a quarter of the index's bound, and 50
 // agents across 20 teams. quickAgents keeps go test ./... fast, with a
 // 32 KiB bound to overflow.
 var (
@@ -218,9 +217,11 @@ func Run(t *testing.T, phase Phase) {
 	require.True(t, w.RunUntil(20, func() bool { return w.Round() == 0 }), "the registry settles")
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
-	require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), "the index is Ready: %v", idx.Status.Conditions)
-	t.Logf("registry: %d AgentIdentities, %d users and %d groups in the index (%d KiB of %d, as the bound counts it), built and checked in %s with %d AgentIdentity reconciles",
-		sz.Identities, len(idx.Status.Users), len(idx.Status.Groups), indexBytes(idx.Status)>>10, sz.bound()>>10,
+	_, built := actor.Readable(&idx.Status)
+	require.True(t, built, "the index is built: %v", idx.Status.Conditions)
+	users, groups := scenario.IndexEntryCount(&idx)
+	t.Logf("registry: %d AgentIdentities, %d users and %d groups in the index (compact %v, %d KiB of %d, as the bound counts it), built and checked in %s with %d AgentIdentity reconciles",
+		sz.Identities, users, groups, actor.IsCompact(&idx.Status), idx.Status.Bytes>>10, sz.bound()>>10,
 		time.Since(start).Round(time.Millisecond), w.Reconciles()["AgentIdentity"]-before)
 	assert.Equal(t, sz.Identities, idx.Status.ObservedIdentities)
 
@@ -574,7 +575,10 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 		require.NoError(t, api.EnsureNamespace(enterprise.Team(i)))
 	}
 	require.NoError(t, api.EnsureNamespace("ci"))
-	prs, err := probes(reg, &idx.Status, sz, sz.Probes)
+	// What pkg/actor decides with, in either format.
+	entries, built := actor.Readable(&idx.Status)
+	require.True(t, built)
+	prs, err := probes(reg, entries, sz, sz.Probes)
 	require.NoError(t, err)
 	send := func(pr probe) (time.Duration, error) {
 		op := admission.Create
@@ -592,7 +596,7 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 	for i, pr := range prs {
 		d, err := send(pr)
 		full = append(full, d)
-		want := actorVerdict(pr, &idx.Status)
+		want := actorVerdict(pr, entries)
 		kind := "controller"
 		if pr.u.GetName() != scenario.ControllerUser {
 			r, _ := actor.Derive(actor.User{Username: pr.u.GetName(), Groups: pr.u.GetGroups()}, &idx.Status)
@@ -623,10 +627,7 @@ func probeAgainstGo(t *testing.T, reg registry, idx *v1alpha1.AgentIndex, sz age
 		t.Logf("  %-48s %d", k, verdicts[k])
 	}
 
-	half := idx.DeepCopy()
-	half.Status.Users, half.Status.Groups = subset(idx.Status.Users, 2), subset(idx.Status.Groups, 2)
-	empty := idx.DeepCopy()
-	empty.Status.Users, empty.Status.Groups = nil, nil
+	half, empty := scenario.SubsetIndex(idx, 2), scenario.SubsetIndex(idx, 0)
 	fullBytes, halfBytes, emptyBytes := jsonSize(t, idx.Status), jsonSize(t, half.Status), jsonSize(t, empty.Status)
 	sort.Slice(full, func(i, j int) bool { return full[i] < full[j] })
 	t.Logf("admission over the index (%d KiB): p50 %s, p99 %s, max %s", fullBytes>>10, median(full),
@@ -757,22 +758,6 @@ func quadraticShareRatio(share float64, emptyBytes, halfBytes, fullBytes int) fl
 // check shapeBound holds to its interim bound.
 func isFullSize(sz agentSize) bool { return sz.Identities >= fullAgents.Identities }
 
-// subset keeps every k-th entry of m, by key order.
-func subset(m map[string]v1alpha1.AgentIndexEntry, k int) map[string]v1alpha1.AgentIndexEntry {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := map[string]v1alpha1.AgentIndexEntry{}
-	for i, key := range keys {
-		if i%k == 0 {
-			out[key] = m[key]
-		}
-	}
-	return out
-}
-
 func median(d []time.Duration) time.Duration {
 	c := append([]time.Duration(nil), d...)
 	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
@@ -861,8 +846,11 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	t.Helper()
 	var idx v1alpha1.AgentIndex
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
-	per := 16 * 260
-	extra := (sz.bound()-indexBytes(idx.Status))/per + 2
+	// An AgentIdentity of 16 subjects takes 16 entries of the index's
+	// average size, in its current format.
+	users, groups := scenario.IndexEntryCount(&idx)
+	per := 16 * int(idx.Status.Bytes) / max(1, users+groups)
+	extra := (sz.bound()-int(idx.Status.Bytes))/per + 2
 	admin := scenario.AsUser(w.Ctx, scenario.AdminUser, scenario.AdminGroups...)
 	var names []string
 	for i := 0; i < extra; i++ {
@@ -877,10 +865,11 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	start := time.Now()
 	require.True(t, w.RunUntil(10, func() bool { return !w.IndexReady() }), "the index stays Ready past its bound")
 	require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: scenario.Release}, &idx))
-	c := meta.FindStatusCondition(idx.Status.Conditions, "Ready")
+	c := scenario.IndexCondition(&idx)
 	require.NotNil(t, c)
 	assert.Equal(t, actor.ReasonIndexFull, c.Reason)
-	assert.Empty(t, idx.Status.Users)
+	full, _ := scenario.IndexEntryCount(&idx)
+	assert.Zero(t, full, "a full index is written empty")
 	t.Logf("overflow: %d AgentIdentities of 16 subjects took the index past %d KiB; not Ready after %s",
 		extra, sz.bound()>>10, time.Since(start).Round(time.Millisecond))
 

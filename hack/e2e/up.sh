@@ -48,6 +48,13 @@
 #   upgrade-v0123  the same from kardinal-promoter v0.12.3 as released
 #           (kardinal-v0123.sh), the latest v0.12 patch, which users upgrade
 #           from; one run per cluster too
+#   upgrade-agents  Forgejo + kro and kardinal-promoter as an earlier
+#           commit builds it, two replicas (kardinal-prev.sh: v0.13.0, or
+#           the commit this checkout leaves main at): the
+#           TestUpgradeAgentIndex_ test upgrades it to this checkout, rolls
+#           back, upgrades again and rolls back the Deployment alone while agents
+#           and people write, across the agent index's change of format
+#           (#2071); one run per cluster
 #   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
 #           blocks of the getting-started and how-to pages in order
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,
@@ -185,6 +192,11 @@ case "$SUITE" in
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   upgrade-v0123) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0123.sh test-agent.sh) RUN='^TestUpgradeV0123_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  # kardinal-prev.sh installs an earlier commit's release with this
+  # checkout's kro (the same kro: hack/install-kro.sh); kardinal.sh only
+  # builds and loads this checkout's image and CLI for the test's upgrade.
+  upgrade-agents) COMPONENTS=("giteafamily.sh forgejo" kardinal-prev.sh) RUN='^TestUpgradeAgentIndex_'
+    export KARDINAL_E2E_INSTALL=build ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.
   multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh podinfo.sh spoke.sh)

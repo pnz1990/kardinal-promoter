@@ -52,10 +52,10 @@ admit a stamp only when it says exactly what the requester is:
 - an agent's `agent` and `sponsor` are the ones registered;
 - only kardinal's controller sets `via`.
 
-Until the controller has built the index (`kubectl get agentindex` shows its Ready
-condition), the policies refuse every version, Approval and override they check, and every
-stamped pause, hold release or rejection, people's included, with "kardinal's agent index is
-not ready yet", and the UI API and the Bundle API
+Until the controller has built the index (its `CompactReady` condition is True, see
+[The index format](#the-index-format)), the policies refuse every version, Approval and
+override they check, and every stamped pause, hold release or rejection, people's included,
+with "kardinal's agent index is not ready yet", and the UI API and the Bundle API
 answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade;
 the controller reports ready only once the index is. Writes the policies do not check go on
 meanwhile: kro's gate instances, and the versions kardinal creates itself (automatic rollbacks,
@@ -96,11 +96,6 @@ v0.12. An agent that is suspended, or out of its scope, is refused. `kardinal` s
 for you: `create bundle`, `ship`, `promote`, `rollback`, `approve` and `override` read your
 identity and the agent index, and refuse an agent out of its scope before writing anything.
 The UI and the Bundle API stamp for the caller they authenticated, with the same rules.
-`kardinal` and the controller also read the index in the compact format that v0.14 writes
-(#2071), so this release's CLI keeps stamping agents correctly against a cluster upgraded to
-v0.14. This release's policies never read that format: against a compact index (after a
-rollback from v0.14, until this release's controller has rebuilt the index) they refuse every
-write they check with "kardinal's agent index is in the compact format of a newer release".
 
 A refusal says what to write:
 
@@ -120,6 +115,37 @@ kardinal ship checkout --image ghcr.io/acme/checkout:1.5.0
 ```
 
 `KARDINAL_ACTOR_CLIENT` names the tool. Unset variables record nothing.
+
+### The index format
+
+The controller writes each entry of the index as one string, in `status.compactUsers` and
+`status.compactGroups` (v0.14). Releases before it wrote an object per entry, in `status.users`
+and `status.groups`. The API server copies the whole index for each write the actor policies
+check, and strings are cheaper to copy: admission is about three times faster, and the index
+holds about 9,100 AgentIdentities instead of 5,000
+([Scale and limits](operate.md#scale-and-limits)).
+
+- **Conditions.** `CompactReady` is True once the index is built, and False with `IndexFull`
+  when it is past its bound. `Ready` is False with the reason `CompactFormat`. The actor
+  policies of v0.13 and earlier read only the object format, and this tells them the index is
+  not ready, so they refuse rather than misread it; so do controllers and CLIs older than
+  v0.13.0 (from v0.13.0 on, they read the compact format). To wait for the index, wait for
+  `CompactReady`:
+  `kubectl wait agentindex kardinal-promoter --for=condition=CompactReady`.
+- **When.** The controller switches to the compact format once the chart's three actor
+  policies read it (they carry the label `kardinal.io/agent-index-format: compact`) and every
+  replica of its Deployment runs the same release. Until then, during a `helm upgrade` from
+  v0.13, it writes the object format, which the new policies read too. Once the index is
+  compact, later upgrades keep it compact.
+- **Rollback.** After `helm rollback` to v0.13, until a v0.13 controller has rebuilt the
+  index in the object format (at its start, within seconds), the v0.13 policies refuse the
+  writes they check, with "kardinal's agent index is in the compact format of a newer
+  release". Retry them. v0.13 can build the index only below about 5,000 AgentIdentities.
+- **The CLI.** `kardinal` reads both formats from v0.13.0 on, so a v0.13 CLI keeps stamping
+  agents against v0.14. A CLI older than v0.13.0 cannot read the compact format: it stamps an
+  agent as a person or a bot, and the policy refuses the write ("actor must be {kind: agent,
+  ..."). Upgrade such a CLI before the controller. Older CLIs still stamp people and bots
+  correctly: they are not in the index.
 
 ## Register an agent
 
@@ -161,9 +187,9 @@ The AgentIdentity is ready unless it is invalid:
   keeps it: a principal is never two agents.
 - **InvalidSponsor**: its sponsor is itself an agent.
 - **InvalidSigningIdentity**: a `signingIdentities[].subjectRegExp` does not compile.
-- **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 5,000
-  AgentIdentities of one subject each, blocked ones included; kardinal supports up to 4,000, see
-  [Scale and limits](operate.md#scale-and-limits)). The whole index is then not Ready, and kardinal refuses every write
+- **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 9,100
+  AgentIdentities of one subject each, blocked ones included; kardinal supports up to 7,000, see
+  [Scale and limits](operate.md#scale-and-limits)). The whole index is then not built, and kardinal refuses every write
   the actor policy checks until AgentIdentities or subjects are removed, with "kardinal's
   agent index is full (IndexFull: ...): remove AgentIdentities or subjects until it fits".
 

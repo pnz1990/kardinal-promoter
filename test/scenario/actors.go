@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
@@ -99,13 +101,24 @@ func (w *World) startAPIServer() {
 	}
 	w.T.Cleanup(stop)
 	w.api = api
+	// The controller reads the actor policies to choose the index format
+	// (pkg/reconciler/agentidentity compactAllowed), as it would the chart's.
+	s := k8sruntime.NewScheme()
+	if err := admissionregistrationv1.AddToScheme(s); err != nil {
+		w.T.Fatal(err)
+	}
+	policies := fake.NewClientBuilder().WithScheme(s)
+	for _, n := range names {
+		policies = policies.WithObjects(c.VAPs[n].DeepCopy())
+	}
+	w.policies = policies.Build()
 }
 
 // startRegistry starts the agent registry's reconciler and builds the
 // index, as the controller does at start.
 func (w *World) startRegistry(maxBytes int) {
 	w.T.Helper()
-	w.index = &airec.IndexReconciler{Client: w.Client, Name: Release, MaxIndexBytes: maxBytes}
+	w.index = &airec.IndexReconciler{Client: w.Client, Name: Release, MaxIndexBytes: maxBytes, Reader: w.policies}
 	if _, err := w.index.Reconcile(w.Ctx, ctrl.Request{}); err != nil {
 		w.T.Fatalf("build the agent index: %v", err)
 	}
@@ -288,7 +301,8 @@ func (w *World) admitPatched(ctx context.Context, c client.WithWatch, sub string
 }
 
 // WithEmptyAgentIndex runs fn with the admission plugin serving the stored
-// AgentIndex with no entries (Ready, as the controller wrote it): a
+// AgentIndex with no entries in its current format (built, as the
+// controller wrote it): a
 // calibration of what a write's admission costs without the index. The
 // stored index is served again after it.
 func (w *World) WithEmptyAgentIndex(fn func()) {
@@ -300,8 +314,7 @@ func (w *World) WithEmptyAgentIndex(fn func()) {
 	if err := w.store.Get(w.Ctx, types.NamespacedName{Name: Release}, &idx); err != nil {
 		w.T.Fatalf("get agent index: %v", err)
 	}
-	idx.Status.Users, idx.Status.Groups = map[string]v1alpha1.AgentIndexEntry{}, map[string]v1alpha1.AgentIndexEntry{}
-	if err := w.api.SetAgentIndex(&idx); err != nil {
+	if err := w.api.SetAgentIndex(SubsetIndex(&idx, 0)); err != nil {
 		w.T.Fatal(err)
 	}
 	defer w.indexDirty.Store(true)

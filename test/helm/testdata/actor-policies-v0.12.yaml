@@ -1,0 +1,299 @@
+# The actor policies of kardinal v0.12.0 to v0.13 (identical in every
+# release since the actor stamp, #1857), rendered from v0.12.3 with release
+# name kardinal-promoter in namespace kardinal-system.
+# TestOlderActorPoliciesFailClosed evaluates them against an AgentIndex in the compact format (#2071): an older release's
+# policies left in place (a helm rollback, a controller upgraded before the
+# chart) must refuse the writes they check, never admit them.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kardinal-promoter-actor
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: kardinal.io/v1alpha1
+    kind: AgentIndex
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - kardinal.io
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      resources:
+      - bundles
+      - approvals
+      - verdicts
+    - apiGroups:
+      - kardinal.io
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - changewindows
+  variables:
+  - name: controller
+    expression: request.userInfo.username in ["system:serviceaccount:kardinal-system:kardinal-promoter"]
+  - name: groups
+    expression: 'has(request.userInfo.groups) ? request.userInfo.groups : []'
+  - name: matches
+    expression: "(has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users\n  ?\
+      \ [params.status.users[request.userInfo.username]] : []) +\n(has(params.status) && has(params.status.groups)\n  ? variables.groups.filter(g,\
+      \ g in params.status.groups).map(g, params.status.groups[g]) : [])"
+  - name: agent
+    expression: size(variables.matches) > 0
+  - name: entry
+    expression: 'variables.agent ? variables.matches[0] : {''agent'': '''', ''sponsor'': ''''}'
+  - name: kind
+    expression: 'variables.agent ? ''agent'' : request.userInfo.username.startsWith(''system:serviceaccount:'') ? ''bot''
+      : ''human'''
+  - name: gate
+    expression: request.resource.resource == 'policygates'
+  - name: freeze
+    expression: request.resource.resource == 'changewindows'
+  - name: oldExemptions
+    expression: "variables.freeze && oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.exemptions)\n\
+      \  ? oldObject.spec.freeze.exemptions : []"
+  - name: exemptionStamps
+    expression: "variables.freeze && has(object.spec.freeze) && has(object.spec.freeze.exemptions)\n  ? object.spec.freeze.exemptions.filter(e,\
+      \ !(e in variables.oldExemptions))\n      .map(e, has(e.actor) ? e.actor : null)\n  : []"
+  - name: freezeStamps
+    expression: "!variables.freeze || !has(object.spec.freeze) ? [] : (oldObject == null ? [has(object.spec.freeze.actor)\
+      \ ? object.spec.freeze.actor : null] : []) + (has(object.spec.freeze.lifted) &&\n  !(oldObject != null && has(oldObject.spec.freeze)\
+      \ && has(oldObject.spec.freeze.lifted))\n  ? [has(object.spec.freeze.lifted.actor) ? object.spec.freeze.lifted.actor\
+      \ : null] : [])"
+  - name: stamps
+    expression: "variables.freeze ? variables.exemptionStamps + variables.freezeStamps : variables.gate\n  ? (has(object.spec.overrides)\n\
+      \      ? object.spec.overrides.filter(o,\n          !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))\n\
+      \        .map(o, has(o.actor) ? o.actor : null)\n      : [])\n  : [has(object.spec.actor) ? object.spec.actor : null]"
+  - name: labels
+    expression: 'has(object.metadata.labels) ? object.metadata.labels : {}'
+  - name: pipeline
+    expression: 'request.resource.resource in [''bundles'', ''verdicts''] ? object.spec.pipeline : variables.gate && ''kardinal.io/pipeline''
+      in variables.labels ? variables.labels[''kardinal.io/pipeline''] : '''''
+  - name: environment
+    expression: 'request.resource.resource in [''approvals'', ''verdicts''] ? object.spec.environment : variables.gate &&
+      ''kardinal.io/environment'' in variables.labels ? variables.labels[''kardinal.io/environment''] : '''''
+  - name: check
+    expression: '!variables.controller && size(variables.stamps) > 0'
+  - name: indexReady
+    expression: has(params.status) && has(params.status.conditions) && params.status.conditions.exists(c, c.type == 'Ready'
+      && c.status == 'True')
+  validations:
+  - expression: '!variables.check || variables.indexReady'
+    message: kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)
+    reason: Forbidden
+  - expression: '!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)'
+    messageExpression: '''you ('' + request.userInfo.username + '') match more than one AgentIdentity ('' + variables.matches.map(m,
+      m.agent).join('', '') + ''); ask a cluster admin to fix the agent registry'''
+    reason: Forbidden
+  - expression: '!variables.check || variables.matches.all(m, !has(m.blocked))'
+    messageExpression: '''agent '' + variables.entry.agent + '' may not act: '' + variables.matches.filter(m, has(m.blocked)).map(m,
+      m.blocked).join(''; '')'
+    reason: Forbidden
+  - expression: '!variables.check || !variables.agent || size(variables.exemptionStamps) == 0'
+    messageExpression: '''you are agent '' + variables.entry.agent + '': an agent may not let a pipeline through a freeze
+      '' + ''(break-glass is for people); ask '' + variables.entry.sponsor + '' or another person to run kardinal override
+      --freeze'''
+    reason: Forbidden
+  - expression: '!variables.check || !variables.agent || variables.stamps.all(s, s != null)'
+    messageExpression: '''you are agent '' + variables.entry.agent + '' (sponsor '' + variables.entry.sponsor + ''): set actor
+      {kind: agent, principal: '' + request.userInfo.username + '', agent: '' + variables.entry.agent + '', sponsor: '' +
+      variables.entry.sponsor + ''}; kardinal sets it for you'''
+    reason: Forbidden
+  - expression: "!variables.check || variables.stamps.all(s, s == null || (\n  s.principal == request.userInfo.username &&\
+      \ s.kind == variables.kind && !has(s.via) &&\n  (variables.agent\n    ? has(s.agent) && s.agent == variables.entry.agent\
+      \ && has(s.sponsor) && s.sponsor == variables.entry.sponsor\n    : !has(s.agent) && !has(s.sponsor))))"
+    messageExpression: '''actor must be {kind: '' + variables.kind + '', principal: '' + request.userInfo.username + (variables.agent
+      ? '', agent: '' + variables.entry.agent + '', sponsor: '' + variables.entry.sponsor : '''') + ''}, with no via: it names
+      who you are, as the API server authenticated you; kardinal sets it for you'''
+    reason: Forbidden
+  - expression: "!variables.check || !variables.agent || variables.freeze || (\n  (has(variables.entry.namespaces) ? variables.entry.namespaces\
+      \ : []).exists(p, p == '*' || p == request.namespace ||\n    (p.endsWith('*') && request.namespace.startsWith(p.substring(0,\
+      \ size(p) - 1)))) &&\n  (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline\
+      \ ||\n    (p.endsWith('*') && variables.pipeline.startsWith(p.substring(0, size(p) - 1))))) &&\n  (variables.environment\
+      \ == '' || variables.entry.environments.exists(p, p == '*' || p == variables.environment ||\n    (p.endsWith('*') &&\
+      \ variables.environment.startsWith(p.substring(0, size(p) - 1))))))"
+    messageExpression: '''agent '' + variables.entry.agent + '' may not act here (namespace '' + request.namespace + (variables.pipeline
+      != '''' ? '', pipeline '' + variables.pipeline : '''') + (variables.environment != '''' ? '', environment '' + variables.environment
+      : '''') + ''): see its AgentIdentity spec.scope'''
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kardinal-promoter-actor-records
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: kardinal.io/v1alpha1
+    kind: AgentIndex
+  matchConstraints:
+    objectSelector:
+      matchExpressions:
+      - key: kardinal.io/actor-check
+        operator: Exists
+    resourceRules:
+    - apiGroups:
+      - kardinal.io
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - pipelines
+    - apiGroups:
+      - kardinal.io
+      apiVersions:
+      - '*'
+      operations:
+      - UPDATE
+      resources:
+      - bundles
+  variables:
+  - name: controller
+    expression: request.userInfo.username in ["system:serviceaccount:kardinal-system:kardinal-promoter"]
+  - name: groups
+    expression: 'has(request.userInfo.groups) ? request.userInfo.groups : []'
+  - name: matches
+    expression: "(has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users\n  ?\
+      \ [params.status.users[request.userInfo.username]] : []) +\n(has(params.status) && has(params.status.groups)\n  ? variables.groups.filter(g,\
+      \ g in params.status.groups).map(g, params.status.groups[g]) : [])"
+  - name: agent
+    expression: size(variables.matches) > 0
+  - name: entry
+    expression: 'variables.agent ? variables.matches[0] : {''agent'': '''', ''sponsor'': ''''}'
+  - name: kind
+    expression: 'variables.agent ? ''agent'' : request.userInfo.username.startsWith(''system:serviceaccount:'') ? ''bot''
+      : ''human'''
+  - name: stamps
+    expression: "request.resource.resource == 'pipelines'\n  ? (has(object.spec.holds)\n      ? object.spec.holds.filter(h,\n\
+      \          !(oldObject != null && has(oldObject.spec.holds) && h in oldObject.spec.holds))\n        .map(h, has(h.actor)\
+      \ ? h.actor : null)\n      : []) +\n    (has(object.spec.lastChange) &&\n      !(oldObject != null && has(oldObject.spec.lastChange)\
+      \ && oldObject.spec.lastChange == object.spec.lastChange)\n      ? [has(object.spec.lastChange.actor) ? object.spec.lastChange.actor\
+      \ : null] : [])\n  : (has(object.spec.rejected) && !has(oldObject.spec.rejected)\n      ? [has(object.spec.rejected.actor)\
+      \ ? object.spec.rejected.actor : null] : [])"
+  validations:
+  - expression: "variables.controller || variables.stamps.all(s, s == null || (\n  s.principal == request.userInfo.username\
+      \ && s.kind == variables.kind && !has(s.via) &&\n  (variables.agent\n    ? has(s.agent) && s.agent == variables.entry.agent\
+      \ && has(s.sponsor) && s.sponsor == variables.entry.sponsor\n    : !has(s.agent) && !has(s.sponsor))))"
+    messageExpression: '''actor must be {kind: '' + variables.kind + '', principal: '' + request.userInfo.username + (variables.agent
+      ? '', agent: '' + variables.entry.agent + '', sponsor: '' + variables.entry.sponsor : '''') + ''}, with no via: it names
+      who you are, as the API server authenticated you; kardinal sets it for you'''
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kardinal-promoter-actor-overrides
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: kardinal.io/v1alpha1
+    kind: AgentIndex
+  matchConstraints:
+    objectSelector:
+      matchExpressions:
+      - key: kardinal.io/override-check
+        operator: Exists
+    resourceRules:
+    - apiGroups:
+      - kardinal.io
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - policygates
+  variables:
+  - name: controller
+    expression: request.userInfo.username in ["system:serviceaccount:kardinal-system:kardinal-promoter"]
+  - name: groups
+    expression: 'has(request.userInfo.groups) ? request.userInfo.groups : []'
+  - name: matches
+    expression: "(has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users\n  ?\
+      \ [params.status.users[request.userInfo.username]] : []) +\n(has(params.status) && has(params.status.groups)\n  ? variables.groups.filter(g,\
+      \ g in params.status.groups).map(g, params.status.groups[g]) : [])"
+  - name: agent
+    expression: size(variables.matches) > 0
+  - name: entry
+    expression: 'variables.agent ? variables.matches[0] : {''agent'': '''', ''sponsor'': ''''}'
+  - name: kind
+    expression: 'variables.agent ? ''agent'' : request.userInfo.username.startsWith(''system:serviceaccount:'') ? ''bot''
+      : ''human'''
+  - name: gate
+    expression: request.resource.resource == 'policygates'
+  - name: freeze
+    expression: request.resource.resource == 'changewindows'
+  - name: oldExemptions
+    expression: "variables.freeze && oldObject != null && has(oldObject.spec.freeze) && has(oldObject.spec.freeze.exemptions)\n\
+      \  ? oldObject.spec.freeze.exemptions : []"
+  - name: exemptionStamps
+    expression: "variables.freeze && has(object.spec.freeze) && has(object.spec.freeze.exemptions)\n  ? object.spec.freeze.exemptions.filter(e,\
+      \ !(e in variables.oldExemptions))\n      .map(e, has(e.actor) ? e.actor : null)\n  : []"
+  - name: freezeStamps
+    expression: "!variables.freeze || !has(object.spec.freeze) ? [] : (oldObject == null ? [has(object.spec.freeze.actor)\
+      \ ? object.spec.freeze.actor : null] : []) + (has(object.spec.freeze.lifted) &&\n  !(oldObject != null && has(oldObject.spec.freeze)\
+      \ && has(oldObject.spec.freeze.lifted))\n  ? [has(object.spec.freeze.lifted.actor) ? object.spec.freeze.lifted.actor\
+      \ : null] : [])"
+  - name: stamps
+    expression: "variables.freeze ? variables.exemptionStamps + variables.freezeStamps : variables.gate\n  ? (has(object.spec.overrides)\n\
+      \      ? object.spec.overrides.filter(o,\n          !(oldObject != null && has(oldObject.spec.overrides) && o in oldObject.spec.overrides))\n\
+      \        .map(o, has(o.actor) ? o.actor : null)\n      : [])\n  : [has(object.spec.actor) ? object.spec.actor : null]"
+  - name: labels
+    expression: 'has(object.metadata.labels) ? object.metadata.labels : {}'
+  - name: pipeline
+    expression: 'request.resource.resource in [''bundles'', ''verdicts''] ? object.spec.pipeline : variables.gate && ''kardinal.io/pipeline''
+      in variables.labels ? variables.labels[''kardinal.io/pipeline''] : '''''
+  - name: environment
+    expression: 'request.resource.resource in [''approvals'', ''verdicts''] ? object.spec.environment : variables.gate &&
+      ''kardinal.io/environment'' in variables.labels ? variables.labels[''kardinal.io/environment''] : '''''
+  - name: check
+    expression: '!variables.controller && size(variables.stamps) > 0'
+  - name: indexReady
+    expression: has(params.status) && has(params.status.conditions) && params.status.conditions.exists(c, c.type == 'Ready'
+      && c.status == 'True')
+  validations:
+  - expression: '!variables.check || variables.indexReady'
+    message: kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)
+    reason: Forbidden
+  - expression: '!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)'
+    messageExpression: '''you ('' + request.userInfo.username + '') match more than one AgentIdentity ('' + variables.matches.map(m,
+      m.agent).join('', '') + ''); ask a cluster admin to fix the agent registry'''
+    reason: Forbidden
+  - expression: '!variables.check || variables.matches.all(m, !has(m.blocked))'
+    messageExpression: '''agent '' + variables.entry.agent + '' may not act: '' + variables.matches.filter(m, has(m.blocked)).map(m,
+      m.blocked).join(''; '')'
+    reason: Forbidden
+  - expression: '!variables.check || !variables.agent || size(variables.exemptionStamps) == 0'
+    messageExpression: '''you are agent '' + variables.entry.agent + '': an agent may not let a pipeline through a freeze
+      '' + ''(break-glass is for people); ask '' + variables.entry.sponsor + '' or another person to run kardinal override
+      --freeze'''
+    reason: Forbidden
+  - expression: '!variables.check || !variables.agent || variables.stamps.all(s, s != null)'
+    messageExpression: '''you are agent '' + variables.entry.agent + '' (sponsor '' + variables.entry.sponsor + ''): set actor
+      {kind: agent, principal: '' + request.userInfo.username + '', agent: '' + variables.entry.agent + '', sponsor: '' +
+      variables.entry.sponsor + ''}; kardinal sets it for you'''
+    reason: Forbidden
+  - expression: "!variables.check || variables.stamps.all(s, s == null || (\n  s.principal == request.userInfo.username &&\
+      \ s.kind == variables.kind && !has(s.via) &&\n  (variables.agent\n    ? has(s.agent) && s.agent == variables.entry.agent\
+      \ && has(s.sponsor) && s.sponsor == variables.entry.sponsor\n    : !has(s.agent) && !has(s.sponsor))))"
+    messageExpression: '''actor must be {kind: '' + variables.kind + '', principal: '' + request.userInfo.username + (variables.agent
+      ? '', agent: '' + variables.entry.agent + '', sponsor: '' + variables.entry.sponsor : '''') + ''}, with no via: it names
+      who you are, as the API server authenticated you; kardinal sets it for you'''
+    reason: Forbidden
+  - expression: "!variables.check || !variables.agent || variables.freeze || (\n  (has(variables.entry.namespaces) ? variables.entry.namespaces\
+      \ : []).exists(p, p == '*' || p == request.namespace ||\n    (p.endsWith('*') && request.namespace.startsWith(p.substring(0,\
+      \ size(p) - 1)))) &&\n  (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline\
+      \ ||\n    (p.endsWith('*') && variables.pipeline.startsWith(p.substring(0, size(p) - 1))))) &&\n  (variables.environment\
+      \ == '' || variables.entry.environments.exists(p, p == '*' || p == variables.environment ||\n    (p.endsWith('*') &&\
+      \ variables.environment.startsWith(p.substring(0, size(p) - 1))))))"
+    messageExpression: '''agent '' + variables.entry.agent + '' may not act here (namespace '' + request.namespace + (variables.pipeline
+      != '''' ? '', pipeline '' + variables.pipeline : '''') + (variables.environment != '''' ? '', environment '' + variables.environment
+      : '''') + ''): see its AgentIdentity spec.scope'''
+    reason: Forbidden
