@@ -1430,7 +1430,7 @@ FLEET-WAVE rows as `TestGraph_FleetWave*` in `test/e2e/live/fleet_test.go`. Ther
 | FLEET-WAVE-01 | live | core | todo | graph | `wavePreset: aws` with bake minutes shortened by explicit `waves` (1 minute) on 6 targets: waves 1, 1, 3, 1 in order |
 | FLEET-WAVE-02 | live | core | todo | graph | A failing wave-2 target stops wave 3 with `maxUnavailable: 1` |
 
-(The `source` column, a `docs/...#anchor`, is the user page of §18 row 13.)
+(The `source` column, a `docs/...#anchor`, is the user page of §18 row 14.)
 
 **Upgrade.** A new `upgrade-v0130` suite (a `kardinal-v0130.sh` component, as `kardinal-v0123.sh`),
 once v0.13.0 is tagged: it enables `spec.risk` on an existing Pipeline with a Bundle in flight and
@@ -1444,7 +1444,7 @@ shipping and verifying) sets `spec.risk` with an org-pinned profile and a `risk.
 gate, and the soak adds invariants:
 
 - every gate that reads `risk` passed only after its Bundle's ChangeRisk was terminal;
-- no RiskProfile or `Pipeline.spec.risk` write by an agent was admitted;
+- no RiskProfile or `Pipeline.spec.risk` write, and no DeploymentLog delete, by an agent was admitted;
 - no agent version was scored without verified provenance;
 - every agent's `trackRecord` agrees with `pkg/delivery.Summarize` over its DeploymentLog entries at
   the time of the check;
@@ -1470,7 +1470,7 @@ are no longer dependencies.
 | 10 | Track-record reconciler: `AgentIdentity.spec/status.trackRecord`, the DeploymentLog field index and watch, the IndexReconciler predicate, `agent.*` additions and their gate watch | m | 9 |
 | 11 | Fleet `waves` and `wavePreset`: schema, builder (waves, bake, edges), compact grouping, `status.environments[].fleetWave`, CLI | l | none |
 | 12 | `verify.requiredWhen` for the verify gate (8.2) | s | none |
-| 13 | `<release>-risk-owners` admission policy and its helm tests (§11, §14.1) | s | 3 |
+| 13 | `<release>-risk-owners` admission policy and its helm tests (§11, §14.1) | s | 3; its DeploymentLog DELETE rule needs 9 |
 | 14 | Docs: user page "Change risk and adaptive pacing", cel-context reference, recipes of §7.5 and §8, the gaming table of §14.1 | m | 7, 10, 11, 13 |
 | 15 | Live e2e rows of §17, and the soak invariants in #2403 | m | each feature; #2403 |
 | 16 | Follow-ups: `agents: earned` shorthand; `kardinal risk report` (tier against later failure); a pre-production failure rate once DeploymentLog records it (CR19) | m | 10, 6 |
