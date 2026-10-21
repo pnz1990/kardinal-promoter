@@ -21,9 +21,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/clientcmd"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
@@ -918,7 +920,10 @@ Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
 // accepted, and fails with the controller's reason for one it refused or with
 // a hint for a missing one. --controller-namespace looks for the controller
 // elsewhere. Any failed check exits 1, and no kubeconfig fails before the
-// checks.
+// checks. The "Policy namespaces shared" check is left out of every
+// comparison (framework.WithoutDoctorCheck): it reads every namespace's
+// Pipelines, so it reports other tests' (#2390);
+// TestCLI_DoctorPolicyNamespaces tests it.
 // Covers CLI-DOCTOR-01.
 func TestCLI_Doctor(t *testing.T) {
 	t.Parallel()
@@ -955,16 +960,16 @@ func TestCLI_Doctor(t *testing.T) {
 		row("PASS", "kro Graph CRD installed", "kro.run/v1alpha1 graphs registered") +
 		row("PASS", tokenLabel, "secret "+framework.GitSecretName+" (key token) present in kardinal-system")
 
-	r := cli.Run("", "doctor")
+	r := framework.WithoutDoctorCheck(t, cli.Run("", "doctor"), policyNamespacesCheck)
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Equal(t, header+checks+"\n5 check(s) passed\n", r.Stdout)
 
-	r = cli.Run(ns, "doctor", "--pipeline", pipelineName)
+	r = framework.WithoutDoctorCheck(t, cli.Run(ns, "doctor", "--pipeline", pipelineName), policyNamespacesCheck)
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Equal(t, header+checks+row("PASS", `Pipeline "podinfo"`, "status: Unknown (spec valid, no version shipped yet)")+
 		"\n6 check(s) passed\n", r.Stdout)
 
-	r = cli.Run(ns, "doctor", "--pipeline", refused.Name)
+	r = framework.WithoutDoctorCheck(t, cli.Run(ns, "doctor", "--pipeline", refused.Name), policyNamespacesCheck)
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, row("FAIL", `Pipeline "refused"`, fmt.Sprintf(`Ready=False (ValidationFailed): `+
 		`git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q`,
@@ -972,7 +977,7 @@ func TestCLI_Doctor(t *testing.T) {
 		"Fix the Pipeline spec; 'kardinal validate -f <your-pipeline.yaml>' reports the same problems.\n")
 	assert.True(t, strings.HasSuffix(r.Stdout, "\n5 check(s) passed, 1 failed\n"), r.Stdout)
 
-	r = cli.Run(ns, "doctor", "--pipeline", "missing")
+	r = framework.WithoutDoctorCheck(t, cli.Run(ns, "doctor", "--pipeline", "missing"), policyNamespacesCheck)
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, row("FAIL", `Pipeline "missing"`, fmt.Sprintf(`Pipeline "missing" not found in namespace %q`, ns))+
 		strings.Repeat(" ", 40)+"Apply: kubectl apply -f <your-pipeline.yaml>\n")
@@ -980,7 +985,7 @@ func TestCLI_Doctor(t *testing.T) {
 	assert.Equal(t, "1 pre-flight check(s) failed\n", r.Stderr)
 
 	// No controller in the test namespace.
-	r = cli.Run("", "doctor", "--controller-namespace", ns)
+	r = framework.WithoutDoctorCheck(t, cli.Run("", "doctor", "--controller-namespace", ns), policyNamespacesCheck)
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, row("FAIL", "Controller reachable", "kardinal-version ConfigMap not found in "+ns))
 	assert.Contains(t, r.Stdout, "Installed elsewhere? Use --controller-namespace. Install: helm upgrade --install "+
@@ -992,6 +997,112 @@ func TestCLI_Doctor(t *testing.T) {
 	assert.Equal(t, 1, r.Code)
 	assert.True(t, strings.HasPrefix(r.Stdout, "\nFAIL Could not build kubeconfig: "), r.Stdout)
 	assert.Contains(t, r.Stdout, "\nHint: ensure kubectl is configured and pointing at the correct cluster.\n")
+}
+
+// policyNamespacesCheck is the label of kardinal doctor's check of
+// spec.policyNamespaces consent (#2286), which reads every namespace's
+// Pipelines.
+const policyNamespacesCheck = "Policy namespaces shared"
+
+// TestCLI_DoctorPolicyNamespaces checks kardinal doctor's "Policy
+// namespaces shared" check (#2286) on a Pipeline of its own whose
+// spec.policyNamespaces names a namespace that has not agreed to share its
+// PolicyGates. Cluster-wide, the check names that Pipeline with the
+// namespace, beside any other test's, and stops once the namespace is
+// labelled kardinal.io/policy-shareable=true. Run as a user who may list
+// Pipelines in the test namespace only, the row is exactly that Pipeline's:
+// a WARN that a later release refuses it (namespace ns), then, once the
+// namespace agreed, a WARN that only ns was checked.
+// Covers CLI-DOCTOR-03.
+func TestCLI_DoctorPolicyNamespaces(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	cli := e.CLI(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+	other := e.Namespace(t) // another team's: not labelled
+	barePipeline(t, e, ns, pipelineName, func(p *v1alpha1.Pipeline) { p.Spec.PolicyNamespaces = []string{other} })
+	waitShared := func(want metav1.ConditionStatus) {
+		t.Helper()
+		framework.Eventually(t, 2*time.Minute, "PolicyNamespacesShared="+string(want), func(ctx context.Context) (bool, string) {
+			var p v1alpha1.Pipeline
+			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipelineName}, &p); err != nil {
+				return false, err.Error()
+			}
+			c := meta.FindStatusCondition(p.Status.Conditions, "PolicyNamespacesShared")
+			return c != nil && c.Status == want && c.ObservedGeneration == p.Generation, fmt.Sprint(p.Status.Conditions)
+		})
+	}
+	waitShared(metav1.ConditionFalse)
+	entry := ns + "/" + pipelineName + " (" + other + ")"
+	policyRow := func(r framework.CLIResult) (string, string) {
+		t.Helper()
+		result, detail, ok := framework.DoctorCheck(r.Stdout, policyNamespacesCheck)
+		require.True(t, ok, r.Stdout)
+		return result, detail
+	}
+
+	// A user who may list Pipelines in ns only.
+	user := "doctor-" + ns + "@example.com"
+	_, err := e.Kube.RbacV1().Roles(ns).Create(ctx, &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "pipeline-reader", Namespace: ns},
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{v1alpha1.GroupVersion.Group}, Resources: []string{"pipelines"},
+			Verbs: []string{"get", "list"}}}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = e.Kube.RbacV1().RoleBindings(ns).Create(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "pipeline-reader", Namespace: ns},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "pipeline-reader"},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: user}}}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	waitBoundNamed(t, e, ns, "pipeline-reader")
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	e.WriteKubeconfig(t, kubeconfig, map[string]string{e.Context: ns}, e.Context)
+	cfg, err := clientcmd.LoadFromFile(kubeconfig)
+	require.NoError(t, err)
+	for _, ai := range cfg.AuthInfos {
+		ai.Impersonate = user
+	}
+	require.NoError(t, clientcmd.WriteToFile(*cfg, kubeconfig))
+	asUser := func() framework.CLIResult {
+		t.Helper()
+		return cli.Exec(framework.CLIOptions{Kubeconfig: kubeconfig}, cli.Args(ns, "doctor")...)
+	}
+
+	icon, detail := policyRow(cli.Run("", "doctor"))
+	assert.Contains(t, []string{"WARN", "FAIL"}, icon, "a WARN, or a FAIL from a controller that refuses it")
+	assert.Contains(t, detail, entry)
+	assert.True(t, strings.HasSuffix(detail, " (all namespaces)"), detail)
+
+	r := asUser()
+	icon, detail = policyRow(r)
+	assert.Equal(t, "WARN", icon, "the controller's version is not readable as this user: unknown, so a warning")
+	assert.Equal(t, "v0.14.0 refuses them: "+entry+" (namespace "+ns+")", detail)
+	assert.Contains(t, r.Stdout, "\n"+strings.Repeat(" ", 40)+"Label each namespace kardinal.io/policy-shareable=true")
+
+	// other agrees; the controller sees it on any Pipeline update.
+	var n corev1.Namespace
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Name: other}, &n))
+	if n.Labels == nil {
+		n.Labels = map[string]string{}
+	}
+	n.Labels["kardinal.io/policy-shareable"] = "true"
+	require.NoError(t, e.Client.Update(ctx, &n))
+	var p v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipelineName}, &p))
+	if p.Annotations == nil {
+		p.Annotations = map[string]string{}
+	}
+	p.Annotations["e2e.kardinal.io/recheck"] = "now"
+	require.NoError(t, e.Client.Update(ctx, &p))
+	waitShared(metav1.ConditionTrue)
+
+	_, detail = policyRow(cli.Run("", "doctor"))
+	assert.NotContains(t, detail, ns+"/"+pipelineName, "no longer named once its namespace agreed")
+	r = asUser()
+	icon, detail = policyRow(r)
+	assert.Equal(t, "WARN", icon, "only ns was checked")
+	assert.Equal(t, "checked namespace "+ns+" only: every spec.policyNamespaces entry agreed (1 Pipelines, namespace "+ns+
+		", as the controller last checked)", detail)
+	assert.Contains(t, r.Stdout, "\n"+strings.Repeat(" ", 40)+
+		"Run kardinal doctor as a user who may list Pipelines in every namespace to check them all\n")
 }
 
 // fakeOpener is an xdg-open that records the URL it is asked to open.
