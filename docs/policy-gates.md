@@ -218,7 +218,7 @@ spec:
 
 ### Team-level gates
 
-Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
+Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](overrides.md): it patches the gate instances in the Pipeline namespace, so anyone who may override gates there (`update` on `policygates/override` in the UI, `update` or `patch` on PolicyGates from a kubeconfig) can force-pass an org gate for a limited time, with the reason recorded. Grant those only to the people allowed to break glass: [Who can override an org gate](guides/security.md#who-can-override-an-org-gate) lists the chart roles that grant them.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1

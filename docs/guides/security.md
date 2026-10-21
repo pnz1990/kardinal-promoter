@@ -234,7 +234,13 @@ Applications.
 
 PolicyGates are namespace-scoped:
 
-- **Org-level gates** (`namespace: platform-policies`): mandatory for all pipelines targeting the matching environment. Teams cannot override them. An org gate reads `metrics.*` from the MetricChecks of its own org policy namespace, so a team MetricCheck of the same name cannot decide it.
+- **Org-level gates** (`namespace: platform-policies`): mandatory for all pipelines targeting the
+  matching environment. A team cannot remove or weaken them with gates or MetricChecks of its own:
+  an org gate reads `metrics.*` from the MetricChecks of its own org policy namespace, so a team
+  MetricCheck of the same name cannot decide it, and the `<release>-gate-overrides` admission
+  policy lets only kro and the controller change a gate instance other than its `spec.overrides`.
+  An org gate can still be overridden, like any gate
+  ([Who can override an org gate](#who-can-override-an-org-gate)).
 - **Team-level gates** (team namespace): additive — injected alongside org gates. Teams add restrictions, not bypasses.
 
 ```yaml
@@ -246,6 +252,33 @@ metadata:
 
 The controller reads org gates from the namespaces in `--policy-namespaces` (default
 `platform-policies`; Helm value `controller.policyNamespaces`). No namespace label is needed.
+
+#### Who can override an org gate
+
+An org gate's instances live in the Pipeline's namespace, so whoever may override gates there can
+force-pass it, for at most `controller.gateOverrideMaxMinutes` (24 hours by default), recorded with
+a verified `createdBy` and a `GateOverridden` AuditEvent
+([Override a gate in an emergency](../overrides.md)). With the chart's roles bound in that
+namespace, that is:
+
+- `<fullname>-approver` and `<fullname>-admin`, which grant `update` on the virtual subresource
+  `policygates/override`: the override in the UI, with `ui.auth.tokenReview`. Without it the UI
+  checks no user's RBAC, so whoever holds the shared UI token (`ui.auth.tokenSecretRef`), or may
+  port-forward to the controller, can override any gate the controller watches
+  ([UI API Access Control](#ui-api-access-control)).
+- Anyone with `update` or `patch` on `policygates` there, which `kardinal override` from a
+  kubeconfig needs: `<fullname>-admin`, `<fullname>-approver` with `rbac.userRoles.directWrites`,
+  and any role of your own that grants it.
+- With `rbac.userRoles.aggregateToDefaultRoles`, everyone bound to the built-in `edit` ClusterRole
+  there (it then aggregates the approver) or `admin` (it then aggregates
+  `<fullname>-admin-extra`, which grants every verb on PolicyGates).
+
+An agent's override never opens a gate. RBAC cannot tell an org gate's instance from a team gate's
+in the same namespace: whoever may override one may override both. To keep teams from overriding
+org gates, bind the approver and admin roles in a team's namespace only to the people allowed to
+break glass (a platform on-call group, for example), give the team `<fullname>-promoter` and
+`<fullname>-viewer` instead, leave `aggregateToDefaultRoles` and `directWrites` off, and grant no
+`update` or `patch` on `policygates` in roles of your own.
 
 ### Multi-tenant isolation
 
