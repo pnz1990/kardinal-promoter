@@ -399,7 +399,14 @@ repeats. The version ends the reason, as for every gate (`graph.WithVersion`).
 
 Each Verdict that appears in, or leaves, a gate's `spec.verdicts` writes an AuditEvent
 (`VerdictRecorded`, `VerdictRevoked`) through the gate's audit outbox, as approvals do
-(`recordApprovals`), with `actor` set to the Verdict's stamp (17-actors §7).
+(`recordApprovals`), with `actor` set to the Verdict's stamp (17-actors §7) and `bundleUID` the
+Bundle's. Each time a Verdict enters is an appearance of its own (#2380):
+`status.verdictAppearances` counts them, and keeps the count after the Verdict leaves, and the
+record's name hashes the action, the Verdict's name, the Bundle's UID and the appearance. So a
+Verdict that leaves and comes back is recorded again (the trail ends on the state), a retried
+write of one transition is one record, and a Bundle deleted and created again under its name,
+whose gates and Verdicts have the same names, gets records of its own. Approval and override
+records hash the Bundle's UID too.
 
 ### 6.6 CEL: `verdicts.*`
 
@@ -709,19 +716,19 @@ Each attempt runs at most once:
   the run in the Bundle's receipts. There must be at least one. Names repeat (a Bundle deleted
   and created again under its name has runs, Verdicts, gates and so records of the same names,
   and the earlier Bundle's records stay), so a receipt counts only when its statement names this
-  Bundle's UID, and an AuditEvent, which names no UID, only when it is dated after the second
-  this Bundle was created in (this Bundle's own record comes only after its run has run, so it
-  never falls in that second). Both times are whole seconds from two clocks, the record's
-  `spec.timestamp` from the controller's and `creationTimestamp` from the API server's: until
-  gate AuditEvents name the Bundle's UID (#2380), an earlier Bundle's record dated within the
-  controller clock's lead over the API server's, before this Bundle was created, can still
-  count. Then the run names that agent, that sponsor and `kr-<run>`, and the
+  Bundle's UID, and an AuditEvent only when its `spec.bundleUID` is this Bundle's (#2380; the
+  controller writes it, and an AuditEvent's spec never changes). An AuditEvent written before
+  v0.14 names no UID: it counts only when it is dated after the second this Bundle was created in
+  (this Bundle's own record comes only after its run has run, so it never falls in that second).
+  Both times are whole seconds from two clocks, `spec.timestamp` from the controller's and
+  `creationTimestamp` from the API server's, so an earlier Bundle's such record dated within the
+  controller clock's lead over the API server's, before this Bundle was created, can still count.
+  Then the run names that agent, that sponsor and `kr-<run>`, and the
   Verdict counts and traces as before (6.2): the run-bound
   Verdict counts only through an AgentRun that names an allowed agent, and the evidence pack
   traces it through that AgentRun. Otherwise, because the template's agent or the sponsor
   changed since the run or no record is left (the first run was deleted before a gate recorded
-  its Verdict, retention removed the records, or the Bundle was created again under an earlier
-  one's name, whose AuditEvent holds the name its own would take, #2380), the run names none
+  its Verdict, or retention removed the records), the run names none
   and says "agent changed since the run, or unknown". The Verdict stops counting, failing
   closed: a Verdict one agent's run wrote is never counted as another's.
 - Why these sources: a run-bound Verdict has no actor stamp of its own (the run's Pod writes it,

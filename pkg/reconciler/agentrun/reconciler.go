@@ -406,6 +406,16 @@ func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run
 	return ctrl.Result{}, r.patch(ctx, base, run)
 }
 
+// ownRecord reports whether AuditEvent ev is of run's Bundle, not an earlier
+// one of its name: it names the Bundle's UID, or, written before v0.14 with
+// no UID, it is dated after the second the Bundle was created in.
+func ownRecord(ev v1alpha1.AuditEvent, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) bool {
+	if ev.Spec.BundleUID != "" {
+		return ev.Spec.BundleUID == run.Spec.BundleUID
+	}
+	return ev.Spec.Timestamp.After(bundle.CreationTimestamp.Time)
+}
+
 // recordedActors are what the records kardinal wrote of run's Verdict say
 // its writer was, read from the API server: the actor of each
 // VerdictRecorded AuditEvent of the run's Bundle whose principal is the
@@ -417,14 +427,14 @@ func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run
 //
 // Names repeat: a Bundle deleted and created again under its name has runs,
 // Verdicts and gates of the same names, and the records of the earlier one
-// stay. So a receipt counts only when it names this Bundle's UID, and an
-// AuditEvent (which names no UID) only when it is dated after the second
-// this Bundle was created in: both times are whole seconds, the record's
-// from the controller's clock and the creation's from the API server's, and
-// this Bundle's own record comes only after its run has run. An earlier
-// Bundle's record dated within the controller clock's lead over the API
-// server's can still pass, until gate AuditEvents name the Bundle's UID
-// (#2380).
+// stay. So a record counts only when it names this Bundle's UID: a receipt's
+// statement, an AuditEvent's spec.bundleUID (#2380), both written by the
+// controller and never changed. An AuditEvent written before v0.14 names no
+// UID; it counts only when dated after the second this Bundle was created
+// in (both whole seconds, the record's from the controller's clock and the
+// creation's from the API server's; this Bundle's own record comes only
+// after its run has run), so an earlier Bundle's record of that age dated
+// within the controller clock's lead over the API server's can still pass.
 func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) ([]v1alpha1.Actor, []string, error) {
 	principal := graph.RunServiceAccountUser(run.Namespace, run.Name)
 	var events v1alpha1.AuditEventList
@@ -435,7 +445,7 @@ func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun,
 	var actors []v1alpha1.Actor
 	for _, ev := range events.Items {
 		if a := ev.Spec.Actor; a != nil && a.Principal == principal && ev.Spec.BundleName == run.Spec.BundleName &&
-			ev.Spec.Action == auditActionVerdictRecorded && ev.Spec.Timestamp.After(bundle.CreationTimestamp.Time) {
+			ev.Spec.Action == auditActionVerdictRecorded && ownRecord(ev, run, bundle) {
 			actors = append(actors, *a)
 		}
 	}

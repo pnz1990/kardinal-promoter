@@ -175,9 +175,9 @@ instance's `spec.verdicts[].actor` and the VerdictRecorded AuditEvent. An AgentR
 longer holds is left out, and the command warns how many Verdicts name one. An AgentRun kardinal
 created again after its Verdict was recorded names the agent only when every VerdictRecorded
 AuditEvent and receipt of that Verdict (of this version, not an earlier one of the same name: a
-receipt naming the version's UID, an AuditEvent dated after it was created) names the same agent
-and sponsor, and there is at least one; otherwise its `status.agent` is empty, `status.message`
-says why, and the Verdict does not count.
+receipt or an AuditEvent naming the version's UID, or an AuditEvent written before v0.14 dated
+after the version was created) names the same agent and sponsor, and there is at least one;
+otherwise its `status.agent` is empty, `status.message` says why, and the Verdict does not count.
 
 `manifest.json`'s `coverage` says what the pack cannot hold:
 

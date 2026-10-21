@@ -334,8 +334,8 @@ func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
 	event := func(n, agent, sponsor, who string) client.Object {
 		return &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "payments", Labels: map[string]string{
 			"kardinal.io/bundle": "app-v1", "kardinal.io/action": "VerdictRecorded"}},
-			Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(runNow), BundleName: "app-v1", PipelineName: "app",
-				Environment: "prod", Action: "VerdictRecorded", Outcome: "Success",
+			Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(runNow), BundleName: "app-v1", BundleUID: "uid-1",
+				PipelineName: "app", Environment: "prod", Action: "VerdictRecorded", Outcome: "Success",
 				Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: who, Agent: agent, Sponsor: sponsor}}}
 	}
 	recorded := func(agent, sponsor string) client.Object {
@@ -374,21 +374,38 @@ func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
 		// QA-5 on #2377: a Bundle deleted and created again under its name
 		// (created an hour before runNow) does not take an earlier one's
 		// records, whose names are the same.
-		{name: "an earlier Bundle's AuditEvent, of the same names", change: func(f *fixture) {
+		{name: "an earlier Bundle's AuditEvent, of the same names, from before v0.14", change: func(f *fixture) {
 			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.BundleUID = ""
 			ev.Spec.Timestamp = metav1.NewTime(runNow.Add(-7 * 24 * time.Hour))
 			f.extra = append(f.extra, ev)
 		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
-		// The record's time and the Bundle's are whole seconds from two
-		// clocks: one in the second the Bundle was created in may be the
-		// earlier Bundle's, and is not counted; one a second later is.
-		{name: "an AuditEvent in the second the Bundle was created in", change: func(f *fixture) {
+		// An AuditEvent that names a Bundle UID (#2380) counts only when it
+		// is this Bundle's, whenever it is dated.
+		{name: "an AuditEvent naming this Bundle's UID, in the second it was created in", change: func(f *fixture) {
 			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
 			ev.Spec.Timestamp = metav1.NewTime(f.bundle.CreationTimestamp.Add(900 * time.Millisecond))
 			f.extra = append(f.extra, ev)
-		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
-		{name: "an AuditEvent a second after the Bundle was created", change: func(f *fixture) {
+		}, agent: "qa", sponsor: "bob"},
+		{name: "an earlier Bundle's AuditEvent, dated after this Bundle was created (clock skew)", change: func(f *fixture) {
 			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.BundleUID = "uid-0"
+			ev.Spec.Timestamp = metav1.NewTime(f.bundle.CreationTimestamp.Add(time.Hour))
+			f.extra = append(f.extra, ev)
+		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		// A record written before v0.14 names no UID: its time and the
+		// Bundle's are whole seconds from two clocks, so one in the second
+		// the Bundle was created in may be the earlier Bundle's, and is not
+		// counted; one a second later is.
+		{name: "an AuditEvent from before v0.14, in the second the Bundle was created in", change: func(f *fixture) {
+			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.BundleUID = ""
+			ev.Spec.Timestamp = metav1.NewTime(f.bundle.CreationTimestamp.Add(900 * time.Millisecond))
+			f.extra = append(f.extra, ev)
+		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		{name: "an AuditEvent from before v0.14, a second after the Bundle was created", change: func(f *fixture) {
+			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.BundleUID = ""
 			ev.Spec.Timestamp = metav1.NewTime(f.bundle.CreationTimestamp.Add(time.Second))
 			f.extra = append(f.extra, ev)
 		}, agent: "qa", sponsor: "bob"},
@@ -472,7 +489,7 @@ func TestAgentRun_RecreatedReceiptsUnreadable(t *testing.T) {
 	f.recorded = "pass"
 	f.extra = append(f.extra, &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: "recorded", Namespace: "payments",
 		Labels: map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/action": "VerdictRecorded"}},
-		Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(runNow), BundleName: "app-v1", Action: "VerdictRecorded",
+		Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(runNow), BundleName: "app-v1", BundleUID: "uid-1", Action: "VerdictRecorded",
 			Outcome: "Success", Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorAgent,
 				Principal: "system:serviceaccount:payments:kr-app-app-v1-uat-explore-r1-a1", Agent: "qa", Sponsor: "bob"}}})
 	f.receiptsErr = apierrors.NewInternalError(fmt.Errorf("etcd unavailable"))

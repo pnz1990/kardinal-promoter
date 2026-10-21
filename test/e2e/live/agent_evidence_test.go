@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	iv "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
@@ -410,7 +412,9 @@ func TestAgentEvidence_Journey(t *testing.T) {
 // the verify gate passes on it again, as V's, and stays passed. When V's
 // StepTemplate names another agent (W) instead, the run created again names
 // none, and the Verdict stops counting: V's run's Verdict is never counted
-// as W's. With V back, it counts again; prod promotes with it counted in
+// as W's. With V back, it counts again, and the verify gate's trail of the
+// Verdict ends recorded: VerdictRecorded, VerdictRevoked, VerdictRecorded,
+// each naming the version's UID (#2380). prod promotes with it counted in
 // its receipt, and the evidence pack traces the Verdict to V through the
 // run created again.
 //
@@ -507,6 +511,33 @@ func TestAgentEvidence_RecreatedRun(t *testing.T) {
 	assert.Equal(t, verifier, again.Status.Agent)
 	assert.Equal(t, sponsor, again.Status.Sponsor)
 	framework.Eventually(t, gateTimeout, "the verify gate passes on V's Verdict again", counted)
+
+	// The verify gate's trail of V's Verdict (#2380): recorded, revoked when
+	// it stopped counting, recorded again when it counted again, each a
+	// record of its own that names this version's UID. It ends on the state.
+	var bv v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &bv))
+	framework.Eventually(t, gateTimeout, "the verify gate's trail of V's Verdict ends recorded", func(ctx context.Context) (bool, string) {
+		var events v1alpha1.AuditEventList
+		if err := e.Client.List(ctx, &events, client.InNamespace(a.ns),
+			client.MatchingLabels{"kardinal.io/bundle": bundle, "kardinal.io/gate": journeyVerify}); err != nil {
+			return false, err.Error()
+		}
+		items := events.Items
+		sort.Slice(items, func(i, j int) bool { return lifecycle.CompareAuditEvents(&items[i], &items[j]) < 0 })
+		var trail []string
+		ok := true
+		for _, ev := range items {
+			if (ev.Spec.Action == "VerdictRecorded" || ev.Spec.Action == "VerdictRevoked") &&
+				strings.HasPrefix(ev.Spec.Message, "verdict "+first.Name+" ") {
+				trail = append(trail, ev.Spec.Action+" "+ev.Spec.BundleUID)
+				ok = ok && ev.Spec.BundleUID == string(bv.UID) && (len(trail) == 1 || trail[len(trail)-2] != trail[len(trail)-1])
+			}
+		}
+		recorded, revoked := "VerdictRecorded "+string(bv.UID), "VerdictRevoked "+string(bv.UID)
+		return ok && len(trail) >= 3 && trail[0] == recorded && slices.Contains(trail, revoked) && trail[len(trail)-1] == recorded,
+			fmt.Sprintf("trail %v", trail)
+	})
 
 	// prod promotes on it.
 	r := c.Exec(framework.CLIOptions{Kubeconfig: userKubeconfig(t, e, a.ns, "carol@example.com")}, c.Args(a.ns, "approve", bundle, "--env", "prod")...)

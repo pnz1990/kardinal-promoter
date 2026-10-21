@@ -237,7 +237,10 @@ the Graph admits after an attempt that finished without a pass or a fail.
 - **UI.** The stage drawer shows a verify gate's quorum and each verdict, with its evidence link
   and the `kardinal verify` command.
 - **Audit.** Each verdict that appears in, or leaves, a gate writes a `VerdictRecorded` or
-  `VerdictRevoked` AuditEvent naming the verdict's actor.
+  `VerdictRevoked` AuditEvent naming the verdict's actor and the version's UID (`spec.bundleUID`).
+  A verdict that leaves and comes back (its AgentRun deleted and created again, a policy edit)
+  is recorded again, so the trail ends on what the gate counts now; a version deleted and
+  created again under its name has records of its own.
 - **Evidence pack.** `kardinal audit evidence-pack` exports each Verdict with the AgentRun that
   wrote it (`agentruns.ndjson`), so an auditor follows a run's Verdict to its agent and sponsor
   from the pack's records ([Trace a Verdict to its agent](../compliance.md#trace-a-verdict-to-its-agent)).
