@@ -216,6 +216,49 @@ func (r *Registry) Copy(t *testing.T, src, repo, dst string) string {
 	if r.from != nil {
 		return r.copyFrom(t, src, repo, dst)
 	}
+	return r.copyEdited(t, src, repo, dst, nil)
+}
+
+// CopyAnnotated is Copy with annotations added to the manifest (merged into
+// its own, if it has any), so the image has the seed's config and layers but
+// a digest of its own: one per distinct set of annotations. A test that
+// counts what the registry holds for its image (receipt referrers) annotates
+// it with its namespace, so a rerun (-count=2) gets a new image instead of
+// the first run's. Public registry only.
+func (r *Registry) CopyAnnotated(t *testing.T, src, repo, dst string, annotations map[string]string) string {
+	t.Helper()
+	if r.from != nil {
+		t.Fatalf("CopyAnnotated %s:%s: not for the private registry", repo, dst)
+	}
+	return r.copyEdited(t, src, repo, dst, func(body []byte) []byte {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.UseNumber() // sizes stay integers
+		var m map[string]interface{}
+		if err := dec.Decode(&m); err != nil {
+			t.Fatalf("decode seed manifest %s:%s: %v", r.seed, src, err)
+		}
+		merged := map[string]interface{}{}
+		if old, ok := m["annotations"].(map[string]interface{}); ok {
+			for k, v := range old {
+				merged[k] = v
+			}
+		}
+		for k, v := range annotations {
+			merged[k] = v
+		}
+		m["annotations"] = merged
+		out, err := json.Marshal(m)
+		if err != nil {
+			t.Fatalf("encode manifest %s:%s: %v", repo, dst, err)
+		}
+		return out
+	})
+}
+
+// copyEdited is Copy in the public registry, with the manifest passed
+// through edit when it is set.
+func (r *Registry) copyEdited(t *testing.T, src, repo, dst string, edit func([]byte) []byte) string {
+	t.Helper()
 	ctx := context.Background()
 	get, err := doHTTP(ctx, http.MethodGet, r.api+"/v2/"+r.seed+"/manifests/"+src, map[string]string{"Accept": manifestTypes}, nil)
 	if err != nil || get.Status != http.StatusOK {
@@ -243,8 +286,12 @@ func (r *Registry) Copy(t *testing.T, src, repo, dst string) string {
 			t.Fatalf("mount blob %s into %s: %v HTTP %d %s", d, repo, err, res.Status, clip(res.Body))
 		}
 	}
+	body := []byte(get.Body)
+	if edit != nil {
+		body = edit(body)
+	}
 	put, err := doHTTP(ctx, http.MethodPut, r.api+"/v2/"+repo+"/manifests/"+dst,
-		map[string]string{"Content-Type": get.Header.Get("Content-Type")}, []byte(get.Body))
+		map[string]string{"Content-Type": get.Header.Get("Content-Type")}, body)
 	if err != nil || put.Status != http.StatusCreated {
 		t.Fatalf("push %s:%s: %v HTTP %d %s", repo, dst, err, put.Status, clip(put.Body))
 	}

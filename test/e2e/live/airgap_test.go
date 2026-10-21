@@ -7,6 +7,9 @@ package live
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	"github.com/sigstore/sigstore-go/pkg/testing/ca"
+	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -25,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	iv "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/imageverification/signtest"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
@@ -228,7 +233,7 @@ func TestAirgap_Evidence(t *testing.T) {
 		"--subject", fixtures.V2Digest, "--cluster", cluster, "--key", pub}
 	out, err := offline(t, airgapCLI(t), pinned...)
 	require.NoError(t, err, out)
-	assert.Contains(t, out, "VERIFIED receipt")
+	airgapVerified(t, out, rc.Name, pub, cluster, a.ns)
 	// The namespace really is offline: the CLI cannot reach the cluster.
 	kubeconfig := filepath.Join(dir, "kubeconfig")
 	e.WriteKubeconfig(t, kubeconfig, map[string]string{e.Context: a.ns}, e.Context)
@@ -267,7 +272,7 @@ func TestAirgap_Evidence(t *testing.T) {
 	pinned[2] = fromPack
 	out, err = offline(t, airgapCLI(t), pinned...)
 	require.NoError(t, err, out)
-	assert.Contains(t, out, "VERIFIED receipt")
+	airgapVerified(t, out, rc.Name, pub, cluster, a.ns)
 
 	// Still no way out, and the CNI held throughout: the same kindnet
 	// restarts as at the start, and the controller never called the public
@@ -310,4 +315,30 @@ func TestAirgap_Evidence(t *testing.T) {
 	assert.Contains(t, st.Status.Message, "image verification", "the step failed on the verification")
 	e.WaitBundlePhase(t, b.ns, blocked, "Failed", time.Minute)
 	assert.Contains(t, fmt.Sprint(e.DeploymentImage(t, b.ns, fixtures.Workload("test"))), fixtures.V1, "test still runs V1")
+}
+
+// airgapVerified checks kardinal verify-receipt's output for the prod receipt
+// name of ns's Pipeline, verified from a file with key pub and every pin:
+// the per-check lines of #2174, as TestVerifyReceipt_File has them (the
+// header, and the signature, subject digest and resource checks, each
+// passed), and never the old bare "VERIFIED receipt".
+func airgapVerified(t *testing.T, out, name, pub, cluster, ns string) {
+	t.Helper()
+	pem, err := os.ReadFile(pub)
+	require.NoError(t, err)
+	key, err := cryptoutils.UnmarshalPEMToPublicKey(pem)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(key)
+	require.NoError(t, err)
+	sum := sha256.Sum256(der)
+	lines := strings.Split(out, "\n")
+	for _, want := range []string{
+		"receipt " + name + ": every check below that was made passed",
+		"  ✓ signature:        key sha256:" + hex.EncodeToString(sum[:8]),
+		"  ✓ subject digest:   " + fixtures.V2Digest,
+		"  ✓ resource:         " + receipt.ResourceURI(cluster, ns, pipelineName, "prod") + " (cluster, namespace, pipeline, environment pinned)",
+	} {
+		assert.Contains(t, lines, want, "verify-receipt prints the line %q:\n%s", want, out)
+	}
+	assert.NotContains(t, out, "VERIFIED receipt", "never a bare verified")
 }
