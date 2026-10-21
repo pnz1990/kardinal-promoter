@@ -23,8 +23,8 @@ the page says so.
   release that removes it.
 - **What the version name promises.** Kubernetes' API conventions let an alpha version change
   incompatibly in any release. kardinal already holds itself to the stricter
-  [deprecation policy](#deprecation-policy) below, which a test enforces. The version name does
-  not promise it, though: that promise is part of [1.0](#10-criteria).
+  [deprecation policy](#deprecation-policy) below, and a test enforces its removal rule. The
+  version name does not promise it, though: that promise is part of [1.0](#10-criteria).
 
 ## Stability levels
 
@@ -98,8 +98,9 @@ PromotionReceipt, PromotionStep and RenderRun.
     - Bundle `status.environments[].gateResults`, `mergedBy` and `prMergedAt`;
     - PromotionStep `spec.inputs`.
 - **The one removal so far that followed a deprecation.** v0.11.0 removed 34 fields, and
-  v0.10.0 had marked each of them deprecated. Most had been deprecated since v0.9.0; NotificationHook
-  `spec.webhook.authorizationHeader` was deprecated in v0.10.0. The changelog's v0.10.0
+  v0.10.0 had marked each of them deprecated. Most had been deprecated since v0.9.0. Two were
+  deprecated only in v0.10.0: NotificationHook `spec.webhook.authorizationHeader`, and
+  `health.cluster` on a fleet's targets. The changelog's v0.10.0
   **Deprecated** entry named v0.11 as the release that removes them, and its v0.11.0
   **Removed** entry lists them.
 - **A deprecation that was reversed.** PolicyGate `spec.when` was marked deprecated in v0.9.0
@@ -117,7 +118,7 @@ PromotionReceipt, PromotionStep and RenderRun.
    - **A warning wherever kardinal still reads the field.** In v0.10.0:
      - `kardinal validate` warned about `spec.git.provider` and `spec.when`;
      - the NotificationHook reconciler set `PlaintextCredential=True` for `authorizationHeader`;
-     - the CLI flag `kardinal rollback --emergency` used cobra's `MarkDeprecated`;
+     - the CLI flag `--emergency` of `kardinal rollback` used cobra's `MarkDeprecated`;
      - the deprecated chart values said so in `values.yaml` and `values.schema.json`.
 2. **How long it keeps working.** A deprecated field keeps its schema through every patch
    release of the minor that deprecates it, and keeps behaving as it did: honoured, ignored or
@@ -181,9 +182,9 @@ Each upgrade suite works the same way:
   commands;
 - it upgrades straight to the build under test.
 
-The release gate (`hack/release-gate`) runs every suite in `hack/e2e/matrix.txt` before a
-release is tagged. It runs each on 1.35 and 1.37, the oldest and the newest Kubernetes minors
-kardinal supports.
+The release gate (`hack/release-gate`), run for each release before it is tagged, runs every
+suite in `hack/e2e/matrix.txt`. It runs the upgrade suites on 1.35 and 1.37, the oldest and the
+newest Kubernetes minors kardinal supports.
 
 | From | Suite | Test |
 |---|---|---|
@@ -228,8 +229,8 @@ and an upgrade suite that starts with stored `v1alpha1` objects. Both are part o
 
 - Every Graph carries the render label of the controller that rendered it
   (`kardinal.io/render-version`, `graph.RenderLabel`).
-- Every controller re-renders, once, the Graph of each promoting version whose label differs
-  from its own. The check is for equality, not "older than", so a downgraded controller also
+- A controller from v0.12.3 on (#2271) re-renders, once, the Graph of each promoting version
+  whose label differs from its own. Earlier controllers do not. The check is for equality, not "older than", so a downgraded controller also
   re-renders a newer controller's Graphs with its own rendering (`pkg/graph/gates.go`).
 - Unit tests check this, including for a label written by another release:
   `TestRenderVersion_OnlyPromotingRetranslates`, `TestRenderVersion_StuckVersionRetranslatesOnce`

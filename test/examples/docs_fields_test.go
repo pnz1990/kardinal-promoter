@@ -136,6 +136,16 @@ var foreignFieldPaths = map[string]string{
 	"spec.template.spec.containers.image": "Kubernetes Deployment",
 	"spec.environments.steps":             "removed in v0.11.0 (docs/argocd-native-promotion.md says it is refused)",
 	"spec.webhook.authorizationHeader":    "removed in v0.11.0 (docs/upgrade.md)",
+	// Removed kardinal fields docs/api-stability.md names in the record of
+	// past removals, and a field of the CRDs themselves.
+	"spec.conversion":                 "Kubernetes CustomResourceDefinition",
+	"spec.git.provider":               "Pipeline, removed in v0.11.0 (docs/api-stability.md)",
+	"spec.region":                     "PromotionStep, removed in v0.11.0 (docs/api-stability.md)",
+	"spec.upstreamVerified":           "PromotionStep, removed in v0.7.0 (docs/api-stability.md)",
+	"spec.upstreamEnvironment":        "PolicyGate, removed in v0.8.0 (docs/api-stability.md)",
+	"spec.bundleImage":                "AuditEvent, removed in v0.9.0 (docs/api-stability.md)",
+	"spec.inputs":                     "PromotionStep, removed in v0.9.0 (docs/api-stability.md)",
+	"status.environments.gateResults": "Bundle, removed in v0.9.0 (docs/api-stability.md)",
 }
 
 // foreign returns the foreignFieldPaths entry path is, or is under ("" if
