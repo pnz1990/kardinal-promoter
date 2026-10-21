@@ -25,6 +25,11 @@ type BuildInput struct {
 	// PolicyGates contains all gates from all policy namespaces + pipeline namespace.
 	PolicyGates []kardinalv1alpha1.PolicyGate
 
+	// FrozenDigests are the digests, by namespace/name, of the templates
+	// among PolicyGates that FrozenTemplates rebuilt from the Bundle's own
+	// Graph (#2286): their instances keep the digest they had.
+	FrozenDigests map[string]string
+
 	// Shape, when set (GraphShapeNodes or GraphShapeCompact), is the shape of
 	// the Bundle's existing Graph, which a re-translation keeps: switching
 	// the shape of a Graph in flight would make kro prune the PromotionSteps
@@ -176,6 +181,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	// through the Translate error (phase Failed, reason TranslationError).
 	// The permission expressions are evaluated on the Graph: see
 	// skipPermissionGates.
+	input.PolicyGates = withFrozenDigests(input.PolicyGates, input.FrozenDigests)
 	if err := ValidateSkipPermissions(input.Bundle, input.PolicyGates, input.PolicyNamespaces); err != nil {
 		return nil, err
 	}

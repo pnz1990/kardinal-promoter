@@ -250,11 +250,17 @@ func gateTemplateData(gate kardinalv1alpha1.PolicyGate, orgNS map[string]bool) m
 	if p := approvalPolicyData(gate); p != nil {
 		spec["approval"] = p
 	}
+	digest := TemplateDigest(gate)
+	if d := gate.Annotations[annotationFrozenDigest]; d != "" {
+		// Rebuilt from the Bundle's own Graph (FrozenTemplates): the digest
+		// its instances had (only Build sets the annotation).
+		digest = d
+	}
 	return map[string]interface{}{
 		"spec":              spec,
 		"generation":        strconv.FormatInt(gate.Generation, 10),
 		"uid":               string(gate.UID),
-		"digest":            TemplateDigest(gate),
+		"digest":            digest,
 		"template":          gate.Name,
 		"templateNamespace": gate.Namespace,
 		"gateName":          gateName,

@@ -4,6 +4,7 @@
 package translator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -39,16 +40,19 @@ func IsPolicyNamespacesError(err error) bool {
 	return errors.As(err, &e)
 }
 
-// policyNamespacesAgreed refuses translating a new version (a Bundle with no
+// PolicyNamespacesAgreed refuses translating a new version (a Bundle with no
 // Graph yet) of pipeline while a namespace of spec.policyNamespaces that
 // must agree has not, as the Pipeline reconciler's status.policyNamespaces
 // says for the Pipeline's generation: the translator never reads the
 // Namespaces itself, and never reads one it was not told it may. The
 // Pipeline's own namespace and the org policy namespaces need nothing.
-func policyNamespacesAgreed(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) error {
+// While the generation is not checked yet (Unchecked), no version is
+// translated, not even one in flight: which namespaces' gates it may read,
+// and which it keeps from its Graph, is not known yet.
+func PolicyNamespacesAgreed(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) error {
 	var needs []string
 	for _, ns := range pipeline.Spec.PolicyNamespaces {
-		if ns != "" && ns != pipeline.Namespace && !graph.IsPolicyNamespace(ns, orgNS) && !slices.Contains(needs, ns) {
+		if mustAgree(pipeline, ns, orgNS) && !slices.Contains(needs, ns) {
 			needs = append(needs, ns)
 		}
 	}
@@ -74,13 +78,67 @@ func policyNamespacesAgreed(pipeline *kardinalv1alpha1.Pipeline, orgNS []string)
 
 // RefusedPolicyNamespaces is the namespaces of pipeline's
 // spec.policyNamespaces the controller refuses for a new version, as
-// policyNamespacesAgreed decides from status.policyNamespaces (nil while
+// PolicyNamespacesAgreed decides from status.policyNamespaces (nil while
 // the generation is not checked yet): what kardinal policy simulate leaves
 // out and reports.
 func RefusedPolicyNamespaces(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) []string {
 	var e *PolicyNamespacesError
-	if errors.As(policyNamespacesAgreed(pipeline, orgNS), &e) && !e.Unchecked {
+	if errors.As(PolicyNamespacesAgreed(pipeline, orgNS), &e) && !e.Unchecked {
 		return e.NotShared
 	}
 	return nil
+}
+
+// unreadPolicyNamespaces is the namespaces of pipeline's
+// spec.policyNamespaces whose gates are not read: those refused, and, while
+// the generation is not checked yet, every one that must agree.
+func unreadPolicyNamespaces(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) []string {
+	var e *PolicyNamespacesError
+	if !errors.As(PolicyNamespacesAgreed(pipeline, orgNS), &e) {
+		return nil
+	}
+	if !e.Unchecked {
+		return e.NotShared
+	}
+	var needs []string
+	for _, ns := range pipeline.Spec.PolicyNamespaces {
+		if mustAgree(pipeline, ns, orgNS) && !slices.Contains(needs, ns) {
+			needs = append(needs, ns)
+		}
+	}
+	return needs
+}
+
+// mustAgree reports whether ns, named in pipeline's spec.policyNamespaces,
+// must agree to share its gates: it is neither the Pipeline's own namespace
+// nor an org policy namespace.
+func mustAgree(pipeline *kardinalv1alpha1.Pipeline, ns string, orgNS []string) bool {
+	return ns != "" && ns != pipeline.Namespace && !graph.IsPolicyNamespace(ns, orgNS)
+}
+
+// frozenGates are, for bundle when it is a version in flight (it has a
+// Graph) of a Pipeline whose spec.policyNamespaces names a namespace refused,
+// the templates of those namespaces rebuilt from bundle's own Graph, and their
+// digests (graph.FrozenTemplates): the version keeps the gates it started
+// with. A Graph that cannot be read refuses the translation: rebuilt without
+// those gates, the version would skip them.
+func (t *Translator) frozenGates(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline,
+	bundle *kardinalv1alpha1.Bundle) ([]kardinalv1alpha1.PolicyGate, map[string]string, error) {
+	refused := RefusedPolicyNamespaces(pipeline, t.policyNS)
+	if bundle.Status.GraphRef == "" || len(refused) == 0 {
+		return nil, nil, nil
+	}
+	if t.graphClient == nil {
+		return nil, nil, fmt.Errorf("keep the gates of %s for version %s: no Graph client", strings.Join(refused, ", "), bundle.Name)
+	}
+	g, err := t.graphClient.Get(ctx, bundle.Namespace, bundle.Status.GraphRef)
+	if err != nil {
+		return nil, nil, fmt.Errorf("keep the gates of %s it started with for version %s: read its Graph: %w",
+			strings.Join(refused, ", "), bundle.Name, err)
+	}
+	frozen, digests, err := graph.FrozenTemplates(g, refused)
+	if err != nil {
+		return nil, nil, fmt.Errorf("keep the gates of %s for version %s: %w", strings.Join(refused, ", "), bundle.Name, err)
+	}
+	return frozen, digests, nil
 }

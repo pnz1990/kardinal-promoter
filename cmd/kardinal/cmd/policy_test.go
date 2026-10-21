@@ -33,12 +33,14 @@ import (
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -242,6 +244,9 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 	t.Parallel()
 	custom := policyPipeline("demo", "test", "prod")
 	custom.Spec.PolicyNamespaces = []string{"custom-policies"}
+	// custom-policies agreed to share its gates, as the controller checked
+	// for this generation (#2286).
+	custom.Status.PolicyNamespaces = &v1alpha1.PipelinePolicyNamespaces{ObservedGeneration: custom.Generation}
 	// Gates that pass: the test is about which namespaces' gates attach, and
 	// a blocking one would also run the week-long next-window search, about
 	// 170 evaluations each (#2194).
@@ -1222,7 +1227,8 @@ func TestPolicySimulate_AsAgent(t *testing.T) {
 // (status.policyNamespaces, for its generation) is blocked as in the
 // controller, which translates none: BLOCKED by spec.policyNamespaces, with
 // the refused namespace's gates left out; a version already promoting (it
-// has a Graph) kept them and is not blocked for it.
+// has a Graph) is not blocked for it, and meets that namespace's gates as
+// its Graph has them, not as they are now (an error when its Graph is gone).
 // Covers GATE-POLNS-05.
 func TestPolicySimulate_RefusedPolicyNamespace(t *testing.T) {
 	t.Parallel()
@@ -1237,7 +1243,20 @@ func TestPolicySimulate_RefusedPolicyNamespace(t *testing.T) {
 		Labels: map[string]string{"kardinal.io/pipeline": "demo"}},
 		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "demo", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/acme/demo", Tag: "1.0"}}},
 		Status: v1alpha1.BundleStatus{Phase: "Promoting", GraphRef: "demo-demo-v1"}}
-	c := policyClient(t, pipe(), promoting,
+	// demo-v1 started with refused-gate's rule "false"; it is "true" now.
+	started := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": graph.GraphGVK.GroupVersion().String(), "kind": graph.GraphGVK.Kind,
+		"metadata": map[string]interface{}{"name": "demo-demo-v1", "namespace": "default"},
+		"spec": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{
+			"id": graph.NodePolicyGateData, "def": map[string]interface{}{"templates": []interface{}{map[string]interface{}{
+				"spec":       map[string]interface{}{"expression": "false", "message": "", "recheckInterval": "", "generated": true},
+				"generation": "1", "uid": "uid-refused", "digest": "sha256:started", "template": "refused-gate",
+				"templateNamespace": "team-b", "gateName": "refused-gate", "scope": "team", "appliesTo": "prod",
+			}}}}}},
+	}}
+	gone := promoting.DeepCopy()
+	gone.Name, gone.Status.GraphRef = "demo-v2", "demo-demo-v2"
+	c := policyClient(t, pipe(), promoting, gone, started,
 		policyGate("team-gate", "default", "prod", "true"),
 		policyGate("refused-gate", "team-b", "prod", "true"))
 
@@ -1251,6 +1270,12 @@ func TestPolicySimulate_RefusedPolicyNamespace(t *testing.T) {
 
 	out, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", Version: "demo-v1"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "RESULT: PASS", "a version promoting kept its gates")
+	assert.NotContains(t, out, "spec.policyNamespaces", "a version promoting is not blocked for it")
+	assert.Contains(t, out, "RESULT: BLOCKED", "a version promoting kept the gate as it started")
 	assert.Contains(t, out, "refused-gate:")
+	assert.Contains(t, out, "Blocked by: refused-gate")
+
+	_, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", Version: "demo-v2"})
+	require.Error(t, err, "its Graph is gone: what it kept is not known")
+	assert.Contains(t, err.Error(), "keeps the gates of team-b it started with")
 }

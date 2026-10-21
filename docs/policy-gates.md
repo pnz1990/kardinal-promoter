@@ -322,9 +322,23 @@ A Pipeline whose `spec.policyNamespaces` names a namespace that has not agreed i
   namespace agrees or the entry is removed, the version is translated within a minute, without
   being shipped again.
 - A version **already promoting** when the namespace is refused keeps the gates it started with.
-  Nothing it had is dropped, so no gate is skipped.
+  Nothing it had is dropped, so no gate is skipped. The controller doesn't read that namespace
+  again: when the version's Graph is rebuilt (a change to the Pipeline or to another gate, or an
+  upgrade), that namespace's gates are copied from the Graph as they were. An edit or deletion in
+  that namespace doesn't reach the version, while edits to gates in the namespaces that agreed
+  still do. Each rebuild emits a Warning Event `PolicyNamespaceNotShared` on the Bundle saying so,
+  and no `GateChanged` audit event is recorded for the kept gates.
+- If that version's Graph is deleted while the namespace is refused, the controller doesn't build
+  it again, since the kept gates were only in the Graph. The Bundle's reconcile fails, naming the
+  namespace, until the namespace agrees (the Graph is then built with its current gates) or a new
+  version supersedes it.
+- Until the controller has checked a new generation of the Pipeline (just after a change to its
+  spec, or just after an upgrade), no version is translated, and a version in flight isn't rebuilt.
+  Its Graph stays as it is, with `GraphSynced=False` and reason `PolicyNamespacesUnchecked`. The
+  check usually takes seconds.
 - `kardinal policy simulate` of a new version reports `Blocked by: spec.policyNamespaces`, without
-  that namespace's gates.
+  that namespace's gates. With `--version` naming a version in flight, it uses the gates that
+  version kept, read from its Graph.
 
 A namespace that does not exist is named like one that is not labelled; the controller log tells
 them apart.
@@ -334,7 +348,8 @@ shows within that time. When a read fails (an API error other than not found), t
 the result of its last read: the condition's reason becomes `PolicyNamespaceUnreadable`, its list
 stays as it was, and the read is retried within a minute. An API blip never refuses a namespace that
 agreed. After a change to the Pipeline's spec there is no last result to keep: until a read succeeds,
-`status.policyNamespaces` stays for the earlier generation and new versions wait.
+`status.policyNamespaces` stays for the earlier generation, new versions wait, and versions in
+flight aren't rebuilt.
 
 To list the Pipelines that name a namespace that has not agreed (every one v0.14 refuses), run
 `kardinal doctor`. Its "Policy namespaces shared" check names each such Pipeline and the

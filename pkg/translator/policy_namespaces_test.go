@@ -45,7 +45,7 @@ func TestPolicyNamespacesAgreed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := &kardinalv1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a", Generation: 3},
 				Spec: kardinalv1alpha1.PipelineSpec{PolicyNamespaces: tc.spec}, Status: kardinalv1alpha1.PipelineStatus{PolicyNamespaces: tc.status}}
-			err := policyNamespacesAgreed(p, []string{"platform-policies"})
+			err := PolicyNamespacesAgreed(p, []string{"platform-policies"})
 			if tc.refused == nil && !tc.unchecked {
 				assert.NoError(t, err)
 				return
