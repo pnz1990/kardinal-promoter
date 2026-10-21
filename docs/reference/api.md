@@ -48,6 +48,24 @@ AgentIdentity registers an AI agent: the principals that are the agent, the pers
 |---|---|---|---|
 | `spec` | object | yes | AgentIdentitySpec registers an agent (docs/actors.md). |
 | `spec.autonomy` | string |  | Autonomy is the agent's ceiling: auto, approve (a person approves its promotions) or deny. A Pipeline environment can only tighten it. One of: `auto`, `approve`, `deny`. Default: `approve`. |
+| `spec.budgetExemptions` | []object |  | BudgetExemptions are break-glass exceptions to the budgets, added with kardinal override --budget by someone the cluster lets exempt the agent, never of the agent's own party. |
+| `spec.budgetExemptions[].bundle` | string |  | Bundle, when set, limits the exemption to that version. |
+| `spec.budgetExemptions[].createdBy` | string | yes | CreatedBy is who made the exception, as admission verified it. |
+| `spec.budgetExemptions[].environment` | string | yes | Environment is the environment, or the fleet environment, let through. |
+| `spec.budgetExemptions[].expiresAt` | string (date-time) | yes | ExpiresAt ends the exemption. The controller also ends it 24 hours after it first sees it. |
+| `spec.budgetExemptions[].name` | string | yes | Name identifies the exemption (a DNS label), unique in the list. |
+| `spec.budgetExemptions[].namespace` | string | yes | Namespace and Pipeline are the Pipeline let through. |
+| `spec.budgetExemptions[].pipeline` | string | yes |  |
+| `spec.budgetExemptions[].reason` | string | yes | Reason says why (recorded in the BudgetExempted audit record). |
+| `spec.budgets` | []object |  | Budgets limit how much the agent promotes before a person looks: versions a day, promotions at once, fleet targets an hour, failures left in place, and a share of a fleet. Every rule that matches a step applies; a step beyond a limit waits, it does not fail. Enforced only where the release turns budgets on (actors.budgets.enabled); see docs/design/24-agent-budgets.md. The four counted limits of all rules sum to at most 1,500, which bounds the ledger in status.usage. |
+| `spec.budgets[].environments` | []string | yes | Environments the rule applies to: exact names, or a prefix ending in "*". A fleet target matches through its own name or its fleet's. |
+| `spec.budgets[].fleetShare` | string |  | FleetShare (L5) is the share of one fleet's targets one version of the agent may have under way or failed at once, "1%" to "100%", rounded up and at least one target. It applies to fleet targets only. |
+| `spec.budgets[].fleetTargetsPerHour` | integer (int32) |  | FleetTargetsPerHour (L3) is how many fleet targets the agent may start promoting in any hour. Plain environments do not count. |
+| `spec.budgets[].maxConcurrent` | integer (int32) |  | MaxConcurrent (L2) is how many of the agent's promotions into these environments may be under way at once. |
+| `spec.budgets[].maxUnavailable` | integer (int32) |  | MaxUnavailable (L4) is how many of the agent's promotions may have failed while their environment still runs the failed version. |
+| `spec.budgets[].name` | string | yes | Name identifies the rule (a DNS label), unique in the list. |
+| `spec.budgets[].namespaces` | []string |  | Namespaces the rule applies to, in the same form. Default: every namespace. Default: `["*"]`. |
+| `spec.budgets[].versionsPerDay` | integer (int32) |  | VersionsPerDay (L1) is how many versions the agent may start into these environments in any 24 hours. A version counts once per environment; a fleet's targets are one environment. |
 | `spec.description` | string |  | Description says what the agent does. |
 | `spec.scope` | object | yes | Scope is where the agent may act. |
 | `spec.scope.environments` | []string |  | Environments the agent may approve or override in. Default: all. Default: `["*"]`. |
@@ -76,6 +94,7 @@ AgentIdentity registers an AI agent: the principals that are the agent, the pers
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the status describes. |
 | `status.ready` | boolean |  | Ready is true when the registration is valid and takes effect. |
 | `status.reason` | string |  | Reason says why the AgentIdentity is not ready. |
+| `status.usage` | map[string]object |  | Usage is the agent's budget ledgers, one per installation, keyed by the ledger name (--agent-budget-ledger, by default the release name). Each is written by its installation's budget reconciler only. An agent without budgets has none. |
 
 ## AgentIndex
 
@@ -1671,6 +1690,12 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.bakeFirstStartedAt` | string (date-time) |  | BakeFirstStartedAt is when the first bake window of this step began: the first healthy check with env.bake configured. It is never reset. With bake.policy reset-on-alarm, the step must complete one full window by BakeFirstStartedAt + bake.minutes + health.timeout, so a release that keeps flapping ends. |
 | `status.bakeResets` | integer |  | BakeResets is the number of times the bake timer was reset due to a health alarm during the current bake window. |
 | `status.bakeStartedAt` | string (date-time) |  | BakeStartedAt is when the contiguous-healthy soak window began. Set on the first successful health check when env.bake is configured. Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm). |
+| `status.budget` | object |  | Budget is the step's place against its agent's budgets (AgentIdentity spec.budgets): Waiting while the ledger has no room, then Granted. Absent for a step no budget applies to. |
+| `status.budget.agent` | string | yes | Agent is the AgentIdentity whose budgets hold the step. |
+| `status.budget.exemption` | string |  | Exemption is the exemption the grant used, if any. |
+| `status.budget.rules` | []string |  | Rules are the budget rules that match the step. |
+| `status.budget.since` | string (date-time) |  | Since is when the step started waiting: its place in the queue. |
+| `status.budget.state` | string | yes | State is Waiting (held for room) or Granted. One of: `Waiting`, `Granted`. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |

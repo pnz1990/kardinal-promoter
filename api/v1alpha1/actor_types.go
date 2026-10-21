@@ -201,6 +201,29 @@ type AgentIdentitySpec struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +optional
 	SigningIdentities []AgentSigningIdentity `json:"signingIdentities,omitempty"`
+
+	// Budgets limit how much the agent promotes before a person looks:
+	// versions a day, promotions at once, fleet targets an hour, failures
+	// left in place, and a share of a fleet. Every rule that matches a step
+	// applies; a step beyond a limit waits, it does not fail. Enforced only
+	// where the release turns budgets on (actors.budgets.enabled); see
+	// docs/design/24-agent-budgets.md. The four counted limits of all rules
+	// sum to at most 1,500, which bounds the ledger in status.usage.
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:XValidation:rule="self.map(r, (has(r.versionsPerDay) ? r.versionsPerDay : 0) + (has(r.maxConcurrent) ? r.maxConcurrent : 0) + (has(r.fleetTargetsPerHour) ? r.fleetTargetsPerHour : 0) + (has(r.maxUnavailable) ? r.maxUnavailable : 0)).sum() <= 1500",message="the budgets' versionsPerDay, maxConcurrent, fleetTargetsPerHour and maxUnavailable sum to at most 1500 over all rules"
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Budgets []AgentBudgetRule `json:"budgets,omitempty"`
+
+	// BudgetExemptions are break-glass exceptions to the budgets, added
+	// with kardinal override --budget by someone the cluster lets exempt
+	// the agent, never of the agent's own party.
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	BudgetExemptions []AgentBudgetExemption `json:"budgetExemptions,omitempty"`
 }
 
 // AgentSigningIdentity is a Fulcio certificate identity: the OIDC issuer,
@@ -244,6 +267,14 @@ type AgentIdentityStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Usage is the agent's budget ledgers, one per installation, keyed by
+	// the ledger name (--agent-budget-ledger, by default the release name).
+	// Each is written by its installation's budget reconciler only. An
+	// agent without budgets has none.
+	// +kubebuilder:validation:MaxProperties=16
+	// +optional
+	Usage map[string]AgentUsage `json:"usage,omitempty"`
 }
 
 // +kubebuilder:object:root=true
