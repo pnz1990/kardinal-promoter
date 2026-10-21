@@ -355,6 +355,12 @@ force-pushes the base branch, so no writer's commit is lost:
   the branch to find it. Each fresh clone it still needs is counted in
   `status.outputs.baseMissingRestarts`. After 5 of them the step fails, because the branch was
   probably force-pushed or rewritten.
+  What the contention cost is kept on the step for its whole life, across fresh clones and
+  reconciles: `status.outputs.pushRefusals` (pushes refused because the branch moved),
+  `status.outputs.rebasesTotal` (rebases made) and `status.outputs.pushRestarts` (fresh clones
+  asked for); `status.outputs.rebases` counts only the rebases of the push that landed. The
+  controller's `kardinal_git_operations_total{operation="rebase"}` and
+  `kardinal_git_operation_duration_seconds{operation="rebase"}` count and time every rebase.
 - **pr-review environments**: each promotion pushes its own branch
   `kardinal/<namespace hash>/<bundle>/<environment>` (the hash is the first 8 hex digits of
   the SHA-256 of the namespace, so versions of the same name in two namespaces get separate

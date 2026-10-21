@@ -126,6 +126,10 @@ func TestCompact_Shape300(t *testing.T) {
 	const waves, perWave = 30, 10
 	a, p := wavePipeline(t, e, waves, perWave, func(string) string { return "true" })
 	ns, envs := a.ns, a.envs
+	// The controller's git counters before and after: what the waves spent
+	// on clones, pushes and rebases (#2366). The compact suite runs this
+	// test alone, on one controller replica.
+	before, beforeErr := e.ControllerMetrics(ctx)
 	a.apply(t, p)
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
 
@@ -145,6 +149,11 @@ func TestCompact_Shape300(t *testing.T) {
 		assert.Equal(t, "Verified", s.Status.State, s.Name)
 	}
 	logWaveTimes(t, steps.Items, perWave)
+	if after, err := e.ControllerMetrics(ctx); beforeErr == nil && err == nil {
+		logGitSpend(t, before, after)
+	} else {
+		t.Logf("git spend not measured: controller metrics: before %v, after %v", beforeErr, err)
+	}
 	var gates v1alpha1.PolicyGateList
 	require.NoError(t, e.Client.List(ctx, &gates, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
 	assert.Len(t, gates.Items, len(envs), "one gate instance per environment")
@@ -166,12 +175,21 @@ func TestCompact_Shape300(t *testing.T) {
 // its first step was created (the Graph reached the wave), how long its steps
 // took from creation to Verified (status.stateTransitionTime), and the gap
 // from the previous wave's last Verified to this wave's first step: where a
-// slow run's time goes (#2349).
+// slow run's time goes (#2349). It also sums what the wave's git-push steps
+// spent on one another (#2366): pushes refused because the branch moved,
+// rebases, and fresh clones (status.outputs pushRefusals, rebasesTotal,
+// pushRestarts), with the wave's longest git-clone and git-push runs (the
+// last run of each, status.steps).
 func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
 	t.Helper()
 	type wave struct {
-		created, verified time.Time
-		longest           time.Duration
+		created, verified        time.Time
+		longest, clone, push     time.Duration
+		refusals, rebases, fresh int
+	}
+	count := func(s v1alpha1.PromotionStep, key string) int {
+		n, _ := strconv.Atoi(s.Status.Outputs[key])
+		return n
 	}
 	waves := map[int]*wave{}
 	for _, s := range steps {
@@ -191,7 +209,22 @@ func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
 			wv.verified = verified
 		}
 		wv.longest = max(wv.longest, verified.Sub(created))
+		// pkg/steps/steps' OutputPushRefusals, OutputRebasesTotal and
+		// OutputPushRestarts.
+		wv.refusals += count(s, "pushRefusals")
+		wv.rebases += count(s, "rebasesTotal")
+		wv.fresh += count(s, "pushRestarts")
+		for _, st := range s.Status.Steps {
+			d := time.Duration(st.DurationMs) * time.Millisecond
+			switch st.Name {
+			case "git-clone":
+				wv.clone = max(wv.clone, d)
+			case "git-push":
+				wv.push = max(wv.push, d)
+			}
+		}
 	}
+	var refusals, rebases, fresh int
 	var start, prev time.Time
 	var lines []string
 	for w := 1; waves[w] != nil; w++ {
@@ -203,12 +236,45 @@ func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
 		if !prev.IsZero() {
 			gap = wv.created.Sub(prev)
 		}
-		lines = append(lines, fmt.Sprintf("wave %02d: reached at +%s, %d steps verified in %s (longest step %s), gap after the previous wave %s",
+		lines = append(lines, fmt.Sprintf("wave %02d: reached at +%s, %d steps verified in %s (longest step %s), gap after the previous wave %s; "+
+			"%d pushes refused, %d rebases, %d fresh clones; longest git-clone %s, git-push %s",
 			w, wv.created.Sub(start).Round(time.Second), perWave, wv.verified.Sub(wv.created).Round(time.Second),
-			wv.longest.Round(time.Second), gap.Round(time.Second)))
+			wv.longest.Round(time.Second), gap.Round(time.Second), wv.refusals, wv.rebases, wv.fresh,
+			wv.clone.Round(100*time.Millisecond), wv.push.Round(100*time.Millisecond)))
+		refusals, rebases, fresh = refusals+wv.refusals, rebases+wv.rebases, fresh+wv.fresh
 		prev = wv.verified
 	}
-	t.Logf("wave times (#2349):\n%s", strings.Join(lines, "\n"))
+	t.Logf("wave times (#2349, #2366):\n%s\nall waves: %d pushes refused, %d rebases, %d fresh clones",
+		strings.Join(lines, "\n"), refusals, rebases, fresh)
+}
+
+// logGitSpend logs the controller's git clones, pushes and rebases between
+// two reads of its metrics (kardinal_git_operations_total and
+// kardinal_git_operation_duration_seconds): how many of each, by result, and
+// the seconds spent in each, so a run's git time splits into fresh-clone
+// restarts against rebases and pushes (#2366).
+func logGitSpend(t *testing.T, before, after framework.Metrics) {
+	t.Helper()
+	delta := func(name string, labels map[string]string) float64 {
+		return after.Sum(name, labels) - before.Sum(name, labels)
+	}
+	var lines []string
+	for _, op := range []string{"clone", "push", "rebase"} {
+		n := delta("kardinal_git_operation_duration_seconds_count", map[string]string{"operation": op})
+		secs := delta("kardinal_git_operation_duration_seconds_sum", map[string]string{"operation": op})
+		mean := 0.0
+		if n > 0 {
+			mean = secs / n
+		}
+		var results []string
+		for _, r := range after.LabelValues("kardinal_git_operations_total", "result") {
+			if d := delta("kardinal_git_operations_total", map[string]string{"operation": op, "result": r}); d > 0 {
+				results = append(results, fmt.Sprintf("%s %.0f", r, d))
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%-6s %5.0f in %7.1fs (mean %.2fs): %s", op, n, secs, mean, strings.Join(results, ", ")))
+	}
+	t.Logf("git spend (#2366, controller metrics):\n%s", strings.Join(lines, "\n"))
 }
 
 // wavePipeline sets up a Pipeline of waves × perWave environments

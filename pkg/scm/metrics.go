@@ -80,17 +80,19 @@ var (
 		Help: "SCM circuit breaker state: 0 closed, 1 half-open, 2 open (owner \"_quota\": the rate-limit circuit).",
 	}, []string{"provider", "owner"})
 
-	// GitOperationsTotal counts git clones and pushes by result (ok, error,
-	// non_fast_forward).
+	// GitOperationsTotal counts git clones, pushes and rebases by result (ok,
+	// error, non_fast_forward for a push; conflict, base_missing, not_moved
+	// for a rebase).
 	GitOperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kardinal_git_operations_total",
-		Help: "Git clones and pushes by operation and result.",
+		Help: "Git clones, pushes and rebases by operation and result.",
 	}, []string{"operation", "result"})
 
-	// GitOperationDurationSeconds is the duration of git clones and pushes.
+	// GitOperationDurationSeconds is the duration of git clones, pushes and
+	// rebases (a rebase fetches the moved branch and replays the commit).
 	GitOperationDurationSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kardinal_git_operation_duration_seconds",
-		Help:    "Git clone and push duration by operation.",
+		Help:    "Git clone, push and rebase duration by operation.",
 		Buckets: []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120},
 	}, []string{"operation"})
 
@@ -338,12 +340,18 @@ func gitResult(err error) string {
 		return "ok"
 	case errors.Is(err, ErrNonFastForward):
 		return "non_fast_forward"
+	case errors.Is(err, ErrRebaseConflict):
+		return "conflict"
+	case errors.Is(err, ErrRebaseBaseMissing):
+		return "base_missing"
+	case errors.Is(err, ErrBranchNotMoved):
+		return "not_moved"
 	default:
 		return "error"
 	}
 }
 
-// observeGit records one git clone or push that started at start.
+// observeGit records one git clone, push or rebase that started at start.
 func observeGit(operation string, start time.Time, err error) {
 	GitOperationDurationSeconds.WithLabelValues(operation).Observe(time.Since(start).Seconds())
 	GitOperationsTotal.WithLabelValues(operation, gitResult(err)).Inc()
