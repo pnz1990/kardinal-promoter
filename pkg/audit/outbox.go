@@ -62,7 +62,7 @@ var (
 	// the API server rejected the record as invalid.
 	Dropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kardinal_audit_events_dropped_total",
-		Help: "Audit records never written: the outbox was full (reason overflow) or the record was invalid (reason invalid); for kind APIWrite, over the per-second budget (rate), the queue was full (queue) or the create failed (error).",
+		Help: "Audit records never written: the outbox was full (reason overflow), the record was invalid (reason invalid) or the API server refused an upgrade's record before it was stored (refused); for kind APIWrite, over the per-second budget (rate), the queue was full (queue) or the create failed (error).",
 	}, []string{"kind", "reason"})
 
 	// Coalesced counts the outbox entries merged into another of the same
@@ -263,6 +263,13 @@ func Flush(ctx context.Context, c client.Client, kind, namespace string,
 		}
 	}
 	return remaining, errors.Join(errs...)
+}
+
+// Event is the AuditEvent that outbox entry p is written as in namespace,
+// for a caller that asks the API server whether it would accept it (a
+// dry-run create) before it relies on the outbox to write it.
+func Event(namespace string, p v1alpha1.PendingAuditEvent) *v1alpha1.AuditEvent {
+	return build(namespace, &p)
 }
 
 // build is the AuditEvent of outbox entry p.

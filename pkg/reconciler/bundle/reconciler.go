@@ -786,6 +786,16 @@ func upgradeRecords(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipel
 // unrecorded are the entries neither stored in b's outbox nor written as
 // AuditEvents yet. The outbox is read as the API server holds it, not as b
 // holds it in memory, which may have entries this reconcile has not stored.
+// An entry stored in the outbox counts as recorded: the outbox writes it,
+// retrying, however long the AuditEvent write fails.
+//
+// An entry the API server would never accept (a dry-run create refused as
+// Invalid, BadRequest or Forbidden, or one audit.Validate refuses) is not
+// waited for: it is dropped, with an AuditRecordRefused Warning Event and
+// kardinal_audit_events_dropped_total{reason="refused"}, so a re-render,
+// which can recover a version stuck under a rendering bug (#2271), never
+// waits on a record that cannot be written. Any other error is returned: the
+// Graph stays as it is and the reconcile backs off.
 func (r *Reconciler) unrecorded(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	entries []kardinalv1alpha1.PendingAuditEvent) ([]kardinalv1alpha1.PendingAuditEvent, error) {
 	if len(entries) == 0 {
@@ -811,13 +821,36 @@ func (r *Reconciler) unrecorded(ctx context.Context, b *kardinalv1alpha1.Bundle,
 		var ev kardinalv1alpha1.AuditEvent
 		switch err := reader.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: e.Name}, &ev); {
 		case err == nil:
-		case apierrors.IsNotFound(err):
-			out = append(out, e)
-		default:
+			continue
+		case !apierrors.IsNotFound(err):
 			return nil, fmt.Errorf("get auditevent %s: %w", e.Name, err)
+		}
+		if err := audit.Validate(e); err != nil {
+			r.refusedRecord(ctx, b, e, err)
+			continue
+		}
+		switch err := r.Create(ctx, audit.Event(b.Namespace, e), client.DryRunAll); {
+		case err == nil:
+			out = append(out, e)
+		case apierrors.IsAlreadyExists(err):
+			// Written meanwhile.
+		case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) || apierrors.IsForbidden(err):
+			r.refusedRecord(ctx, b, e, err)
+		default:
+			return nil, fmt.Errorf("dry-run create auditevent %s: %w", e.Name, err)
 		}
 	}
 	return out, nil
+}
+
+// refusedRecord drops upgrade record e of b, which the API server would
+// never accept, saying so (unrecorded).
+func (r *Reconciler) refusedRecord(ctx context.Context, b *kardinalv1alpha1.Bundle, e kardinalv1alpha1.PendingAuditEvent, err error) {
+	zerolog.Ctx(ctx).Error().Err(err).Str("auditEvent", e.Name).Str("bundle", b.Name).
+		Msg("the API server refuses an upgrade's audit record; dropped, and the Graph is rendered again without it")
+	audit.Dropped.WithLabelValues(auditKind, "refused").Inc()
+	r.event(b, corev1.EventTypeWarning, "AuditRecordRefused",
+		fmt.Sprintf("the %s record %s of the upgrade's re-render was refused and is not written: %v", e.Spec.Action, e.Name, err))
 }
 
 // errGatesNotApplied is the error of a re-translate for changed PolicyGate
@@ -2143,19 +2176,20 @@ func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status meta
 // eventActions maps each Bundle Event reason to the events.k8s.io/v1 action,
 // which says what the controller did. The API requires an action.
 var eventActions = map[string]string{
-	"Available":        "Accept",
-	"Superseded":       "Supersede",
-	"Rejected":         "Reject",
-	"PipelineNotFound": "ResolvePipeline",
-	"TranslationError": "CreateGraph",
-	"Promoting":        "Promote",
-	"Failed":           "Promote",
-	"Retrying":         "Retry",
-	"GraphDeleted":     "SyncGraph",
-	"GraphSyncFailed":  "SyncGraph",
-	"Verified":         "Verify",
-	"Recovered":        "Promote",
-	"GraphRetired":     "RetireGraph",
+	"Available":          "Accept",
+	"Superseded":         "Supersede",
+	"Rejected":           "Reject",
+	"PipelineNotFound":   "ResolvePipeline",
+	"TranslationError":   "CreateGraph",
+	"Promoting":          "Promote",
+	"Failed":             "Promote",
+	"Retrying":           "Retry",
+	"GraphDeleted":       "SyncGraph",
+	"GraphSyncFailed":    "SyncGraph",
+	"Verified":           "Verify",
+	"Recovered":          "Promote",
+	"GraphRetired":       "RetireGraph",
+	"AuditRecordRefused": "RecordAudit",
 }
 
 // event emits an Event when a Recorder is configured.
