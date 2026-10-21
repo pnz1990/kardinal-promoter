@@ -29,10 +29,12 @@
 > for requesters the AgentIndex names as agents (they may no longer write gate templates or
 > hand-written MetricChecks) and, while the index is not Ready, for ServiceAccounts; it never
 > refuses a person. **That includes GitOps controllers:** Argo CD's or Flux's ServiceAccount applying
-> PolicyGates or MetricChecks is refused while the index is `IndexFull` and in a `CompactFormat`
-> window (an upgrade or rollback in progress). The remedy is to trim AgentIdentities, or set
-> `allow`, which keeps v0.13's behaviour. It is still narrower than today's `IndexFull`, which
-> refuses everyone the actor policies check (§11, §16, §16.1).
+> PolicyGates or MetricChecks is refused before the index's first build (a sync that applies the
+> chart and its gate templates together retries), while the index is `IndexFull`, and in a
+> `CompactFormat` window (an upgrade or rollback in progress). The remedy is to trim
+> AgentIdentities, or set `allow`, which keeps v0.13's behaviour. It is still narrower than
+> v0.13's `IndexFull`, which refuses everyone the actor policies check. One exception to "never
+> refuses a person": with no AgentIndex at all, everyone is refused (§11, §16, §16.1).
 
 ---
 
@@ -901,14 +903,22 @@ How it matches, so it costs kro nothing and misses nothing:
   is never held by the index. **What this cannot do:** an agent registered by a User or Group
   subject cannot be told from a person while the index is not Ready, so in that window it can
   change a gate template or a hand-written check (a ServiceAccount agent cannot: every
-  ServiceAccount is refused). The actor policies apply the same rule to promotion actions (#2451,
-  #2462): while the index is not Ready they refuse ServiceAccounts and never refuse a person a
-  stop-the-line write (a freeze, a pause, an exemption, an override, a version); those writes are
-  stamped `unverified`, a raw Approval or Verdict from a requester that is not a ServiceAccount
-  must carry that stamp, and `unverified` never counts toward a gate. So there, a User or Group
-  agent passing as a person in that window counts for nothing. This policy reads the AgentIndex,
-  not actor stamps, so `unverified` changes nothing here, and the residual above stands. The rule applies to every rule of `<release>-risk-owners`, spec 25's
-  included (spec 25 §11 is amended to match).
+  ServiceAccount is refused). The actor policies, in the same window, follow "stopping is always
+  allowed, going needs verification" (#2451, #2462): they refuse ServiceAccounts, never refuse a
+  person a stop-the-line write (a freeze, a pause, an exemption, an override, a version), stamp a
+  person's write `unverified`, never `human` (a raw Approval or Verdict from a requester that is
+  not a ServiceAccount must carry that stamp), and count `unverified` as an agent for restrictions
+  and as nobody for grants, so a User or Group agent passing as a person gains nothing there. This
+  policy reads the AgentIndex, not stamps, so `unverified` changes nothing here, and the residual
+  above stands. The rule applies to every rule of `<release>-risk-owners`, spec 25's included
+  (spec 25 §11 is amended to match).
+- **With no AgentIndex at all, everyone is refused.** `<release>-risk-owners` binds its AgentIndex
+  param with `parameterNotFoundAction: Deny`, as `<release>-actor` does
+  (`actor-admission.yaml:207`): the API server refuses every write the policy matches before any
+  expression runs, people's included. The index is missing only if it is deleted, which
+  `<release>-agent-index` refuses to everyone but the controller, so only with that policy's
+  binding removed; the controller then recreates it. This is the one exception to "a person is
+  never refused", and it fails closed.
 
 A person and the controller are never judged, a bot (a ServiceAccount the index does not name) only
 while the index is not Ready, and an agent the AgentIndex does not
@@ -1138,7 +1148,7 @@ is) from using it.
 | EB7 | Burn-rate windows | fixed workbook table; tool-specific sets; computed from budget percent | **Named sets per tool, factors from `budgetPercent` or given** (5.3): the windows a tool records are the only ones that can be read |
 | EB8 | Query shape | one query per value; one combined query; PromQL alert expression | **One combined query of raw values** (5.1): one Limiter slot; status shows the deciding rates |
 | EB9 | Who may change a gate's inputs | RBAC only; refuse agents; only the org | **Refuse agents, on by default behind `admission.agentGateInputs`** (11, 15.1): an agent's write to a hand-written MetricCheck or a gate template is the way around any gate; people keep RBAC; org gates keep the org namespace (coordinator's decision on QA-2's review) |
-| EB17 | The agent rules while the AgentIndex is not Ready | refuse every write they check, as the actor policies; refuse ServiceAccounts only; admit everything | **ServiceAccounts only** (11): the index's readiness never refuses a person, so policy can always be fixed, and a ServiceAccount waits for the index. A User or Group agent can change gate inputs until the index is Ready (11). The same readiness rule as the actor policies' (#2451, #2462), where a person's writes in that window are stamped `unverified` and never count toward a gate (coordinator's decision) |
+| EB17 | The agent rules while the AgentIndex is not Ready | refuse every write they check, as the actor policies; refuse ServiceAccounts only; admit everything | **ServiceAccounts only** (11): the index's readiness never refuses a person, so policy can always be fixed, and a ServiceAccount waits for the index; a User or Group agent can change gate inputs until the index is Ready (11). The actor policies apply the same readiness rule (#2451, #2462) in the form "stopping is always allowed, going needs verification": `unverified` counts as an agent for restrictions and as nobody for grants. This policy reads no stamp. With no AgentIndex at all (`parameterNotFoundAction: Deny`), everyone is refused (coordinator's decision) |
 | EB10 | A NaN budget | 1.0 (allow); unknown (fail closed) | **Unknown** (7.1): Sloth's optimized period rule is NaN for a whole period after one idle 5 minutes, and Pyrra reports 1 only with requests |
 | EB11 | Pyrra's period | read `pyrra_window` first; required in spec | **Required** (5.2), checked against `pyrra_window`: the series names depend on it, and a first read would be a second request |
 | EB12 | Sloth's window set | `google-30d` always; from the SLO's period | **From `slo:time_period:days`** (5.2), in the same query: Sloth chooses its set the same way, and both sets read the same windows |
