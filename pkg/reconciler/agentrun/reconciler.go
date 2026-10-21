@@ -225,7 +225,7 @@ func (r *Reconciler) genuine(ctx context.Context, run *v1alpha1.AgentRun) (*v1al
 // start decides whether the run runs at all, and records its start.
 func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) (ctrl.Result, error) {
 	if run.Spec.Recorded != "" {
-		return r.recorded(ctx, log, base, run)
+		return r.recorded(ctx, log, base, run, bundle)
 	}
 	if halted(bundle) {
 		r.finish(run, v1alpha1.AgentRunSkipped, "not run: Bundle "+bundle.Name+" is "+haltReason(bundle))
@@ -365,7 +365,7 @@ func (r *Reconciler) agentOf(ctx context.Context, tmpl *v1alpha1.StepTemplate, r
 // agent or the sponsor changed since the run, or no record is left) it
 // names none and says why, and the Verdict does not count: a Verdict one
 // agent's run wrote is never counted as another's.
-func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run *v1alpha1.AgentRun) (ctrl.Result, error) {
+func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) (ctrl.Result, error) {
 	msg := "verdict already recorded (" + run.Spec.Recorded + "); not run again"
 	tmpl, refused, err := r.template(ctx, run)
 	var agent *v1alpha1.AgentIdentity
@@ -378,7 +378,7 @@ func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run
 	if agent != nil {
 		want := v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: graph.RunServiceAccountUser(run.Namespace, run.Name),
 			Agent: agent.Name, Sponsor: agent.Spec.Sponsor.User}
-		actors, verifiers, err := r.recordedActors(ctx, run)
+		actors, verifiers, err := r.recordedActors(ctx, run, bundle)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -414,7 +414,13 @@ func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run
 // of the verdict named after the run in each receipt of the Bundle (signed,
 // written when an environment was promoted). Only the controller writes
 // either, and neither changes after it is written.
-func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun) ([]v1alpha1.Actor, []string, error) {
+//
+// Names repeat: a Bundle deleted and created again under its name has runs,
+// Verdicts and gates of the same names, and the records of the earlier one
+// stay. So a receipt counts only when it names this Bundle's UID, and an
+// AuditEvent (which names no UID) only when it is dated at or after this
+// Bundle was created.
+func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) ([]v1alpha1.Actor, []string, error) {
 	principal := graph.RunServiceAccountUser(run.Namespace, run.Name)
 	var events v1alpha1.AuditEventList
 	if err := r.reader().List(ctx, &events, client.InNamespace(run.Namespace), client.MatchingLabels{
@@ -424,7 +430,7 @@ func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun)
 	var actors []v1alpha1.Actor
 	for _, ev := range events.Items {
 		if a := ev.Spec.Actor; a != nil && a.Principal == principal && ev.Spec.BundleName == run.Spec.BundleName &&
-			ev.Spec.Action == auditActionVerdictRecorded {
+			ev.Spec.Action == auditActionVerdictRecorded && !ev.Spec.Timestamp.Before(&bundle.CreationTimestamp) {
 			actors = append(actors, *a)
 		}
 	}
@@ -439,8 +445,8 @@ func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun)
 	var verifiers []string
 	for _, rc := range receipts.Items {
 		st, err := receipt.Parse([]byte(rc.Spec.Statement))
-		if err != nil {
-			continue // a statement it cannot read names no one
+		if err != nil || st.Predicate.Kardinal.Version.BundleUID != run.Spec.BundleUID {
+			continue // a statement it cannot read, or an earlier Bundle's, names no one
 		}
 		for _, g := range st.Predicate.Kardinal.Gates {
 			for _, v := range g.Verdicts {

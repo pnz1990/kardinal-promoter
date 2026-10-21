@@ -52,13 +52,14 @@ type fixture struct {
 	extra    []client.Object
 	notKro   bool
 	recorded string
-	// noReceipts: the controller may not list receipts (receipts.enabled
-	// is false: no RBAC for them).
-	noReceipts bool
+	// receiptsErr is what listing receipts returns (Forbidden: receipts.enabled
+	// is false, so no RBAC for them).
+	receiptsErr error
 }
 
 func newFixture() *fixture {
-	bundle := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "payments", UID: "uid-1"},
+	bundle := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "payments", UID: "uid-1",
+		CreationTimestamp: metav1.NewTime(runNow.Add(-time.Hour))},
 		Spec:   v1alpha1.BundleSpec{Pipeline: "app", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/x/app", Tag: "v1"}}},
 		Status: v1alpha1.BundleStatus{Phase: "Promoting"}}
 	return &fixture{
@@ -104,8 +105,8 @@ func (f *fixture) build(t *testing.T) (*agentrun.Reconciler, client.Client, ctrl
 			}
 			return cl.Create(ctx, obj, opts...)
 		}, List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if _, receipts := list.(*v1alpha1.PromotionReceiptList); receipts && f.noReceipts {
-				return apierrors.NewForbidden(v1alpha1.GroupVersion.WithResource("promotionreceipts").GroupResource(), "", fmt.Errorf("no RBAC"))
+			if _, receipts := list.(*v1alpha1.PromotionReceiptList); receipts && f.receiptsErr != nil {
+				return f.receiptsErr
 			}
 			return cl.List(ctx, list, opts...)
 		}}).Build()
@@ -340,14 +341,16 @@ func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
 	recorded := func(agent, sponsor string) client.Object {
 		return event("prod-explore-qa-verdict-1", agent, sponsor, principal)
 	}
-	signed := func(verifier string) client.Object {
+	receiptOf := func(bundleUID, verifier string) client.Object {
 		st, err := json.Marshal(receipt.Statement{Type: receipt.StatementType, PredicateType: receipt.PredicateVSA,
-			Predicate: receipt.Predicate{Kardinal: receipt.Record{Gates: []receipt.Gate{{Template: "payments/explore-qa",
-				Verdicts: []receipt.Verdict{{Name: name, Verifier: verifier, Result: "pass", Counted: true}}}}}}})
+			Predicate: receipt.Predicate{Kardinal: receipt.Record{Version: receipt.Version{Bundle: "app-v1", BundleUID: bundleUID},
+				Gates: []receipt.Gate{{Template: "payments/explore-qa",
+					Verdicts: []receipt.Verdict{{Name: name, Verifier: verifier, Result: "pass", Counted: true}}}}}}})
 		require.NoError(t, err)
-		return &v1alpha1.PromotionReceipt{ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod", Namespace: "payments",
+		return &v1alpha1.PromotionReceipt{ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod-" + bundleUID, Namespace: "payments",
 			Labels: map[string]string{"kardinal.io/bundle": "app-v1"}}, Spec: v1alpha1.PromotionReceiptSpec{Statement: string(st)}}
 	}
+	signed := func(verifier string) client.Object { return receiptOf("uid-1", verifier) }
 	other := func(f *fixture) { // the template now names agent qa2, registered and ready, of the same sponsor
 		f.tmpl.Spec.Agent = "qa2"
 		qa2 := f.agent.DeepCopy()
@@ -365,7 +368,21 @@ func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
 		{name: "its receipt names its agent", records: []client.Object{signed("agent qa for bob")}, agent: "qa", sponsor: "bob"},
 		{name: "both name its agent", records: []client.Object{recorded("qa", "bob"), signed("agent qa for bob")}, agent: "qa", sponsor: "bob"},
 		{name: "its AuditEvent, with receipts off", records: []client.Object{recorded("qa", "bob")},
-			change: func(f *fixture) { f.noReceipts = true }, agent: "qa", sponsor: "bob"},
+			change: func(f *fixture) {
+				f.receiptsErr = apierrors.NewForbidden(v1alpha1.GroupVersion.WithResource("promotionreceipts").GroupResource(), "", fmt.Errorf("no RBAC"))
+			}, agent: "qa", sponsor: "bob"},
+		// QA-5 on #2377: a Bundle deleted and created again under its name
+		// (created an hour before runNow) does not take an earlier one's
+		// records, whose names are the same.
+		{name: "an earlier Bundle's AuditEvent, of the same names", change: func(f *fixture) {
+			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.Timestamp = metav1.NewTime(runNow.Add(-7 * 24 * time.Hour))
+			f.extra = append(f.extra, ev)
+		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		{name: "an earlier Bundle's receipt, of the same names", records: []client.Object{receiptOf("uid-0", "agent qa for bob")},
+			why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		{name: "this Bundle's receipt, next to an earlier one's that names another agent",
+			records: []client.Object{receiptOf("uid-0", "agent qa2 for carol"), signed("agent qa for bob")}, agent: "qa", sponsor: "bob"},
 		{name: "the template's agent changed since the run", records: []client.Object{recorded("qa", "bob")}, change: other,
 			why: changed + ": no record of its Verdict names agent qa2 for bob (1 VerdictRecorded AuditEvents, 0 receipts name the run)"},
 		{name: "the agent's sponsor changed since the run", records: []client.Object{recorded("qa", "bob")},
@@ -430,6 +447,34 @@ func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
 			assert.Equal(t, got.ResourceVersion, again.ResourceVersion, "idempotent")
 		})
 	}
+}
+
+// TestAgentRun_RecreatedReceiptsUnreadable (QA-5 on #2377): a receipt list
+// that fails for another reason than receipts being off (no RBAC, no CRD)
+// is an error, not "no receipts": a receipt that names another agent may be
+// among them. The run is not finished and names no agent until the list
+// reads; then it is judged on every record.
+func TestAgentRun_RecreatedReceiptsUnreadable(t *testing.T) {
+	f := newFixture()
+	f.recorded = "pass"
+	f.extra = append(f.extra, &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: "recorded", Namespace: "payments",
+		Labels: map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/action": "VerdictRecorded"}},
+		Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(runNow), BundleName: "app-v1", Action: "VerdictRecorded",
+			Outcome: "Success", Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorAgent,
+				Principal: "system:serviceaccount:payments:kr-app-app-v1-uat-explore-r1-a1", Agent: "qa", Sponsor: "bob"}}})
+	f.receiptsErr = apierrors.NewInternalError(fmt.Errorf("etcd unavailable"))
+	r, c, req := f.build(t)
+	_, err := r.Reconcile(context.Background(), req)
+	require.Error(t, err, "an unreadable receipt list is not an empty one")
+	var got v1alpha1.AgentRun
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Empty(t, got.Status.Phase, "not finished")
+	assert.Empty(t, got.Status.Agent, "and names no agent yet")
+
+	f.receiptsErr = nil
+	got = reconcileUntil(t, r, c, req, 1)
+	assert.Equal(t, v1alpha1.AgentRunSucceeded, got.Status.Phase)
+	assert.Equal(t, "qa", got.Status.Agent, "judged on every record once they read")
 }
 
 // TestAgentRun_Deadline: a Job past its deadline is deleted and the run

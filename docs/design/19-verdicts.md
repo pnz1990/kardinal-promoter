@@ -706,14 +706,19 @@ Each attempt runs at most once:
   the run, 8.4), and every record kardinal wrote of the run's Verdict that names its writer. Those
   are the VerdictRecorded AuditEvent (written when the Verdict entered a gate's verdicts, with
   the actor the first run named, `spec.actor.principal` `kr-<run>`) and the verdict named after
-  the run in the Bundle's receipts. There must be at least one. Then the run names that agent,
-  that sponsor and `kr-<run>`, and the Verdict counts and traces as before (6.2): the run-bound
+  the run in the Bundle's receipts. There must be at least one. Names repeat (a Bundle deleted
+  and created again under its name has runs, Verdicts, gates and so records of the same names,
+  and the earlier Bundle's records stay), so a receipt counts only when its statement names this
+  Bundle's UID, and an AuditEvent, which names no UID, only when it is dated at or after this
+  Bundle was created. Then the run names that agent, that sponsor and `kr-<run>`, and the
+  Verdict counts and traces as before (6.2): the run-bound
   Verdict counts only through an AgentRun that names an allowed agent, and the evidence pack
   traces it through that AgentRun. Otherwise, because the template's agent or the sponsor
   changed since the run or no record is left (the first run was deleted before a gate recorded
-  its Verdict, or retention removed the records), the run names none and says "agent changed
-  since the run, or unknown". The Verdict stops counting, failing closed: a Verdict one agent's
-  run wrote is never counted as another's.
+  its Verdict, retention removed the records, or the Bundle was created again under an earlier
+  one's name, whose AuditEvent holds the name its own would take, #2380), the run names none
+  and says "agent changed since the run, or unknown". The Verdict stops counting, failing
+  closed: a Verdict one agent's run wrote is never counted as another's.
 - Why these sources: a run-bound Verdict has no actor stamp of its own (the run's Pod writes it,
   and `spec.run` names only the run), so once the first AgentRun is gone the AgentIdentity is
   the only source of an agent, and only kardinal's records say which agent the run was. Only

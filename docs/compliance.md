@@ -173,9 +173,10 @@ The version's receipt names the same agent and sponsor in its signed statement (
 verify-receipt` prints `verdicts by: agent <agent> for <sponsor>`), and so do the gate
 instance's `spec.verdicts[].actor` and the VerdictRecorded AuditEvent. An AgentRun the cluster no
 longer holds is left out, and the command warns how many Verdicts name one. An AgentRun kardinal
-created again after its Verdict was recorded names the agent only when the Verdict's AuditEvent or
-receipt names the same agent and sponsor; otherwise its `status.agent` is empty, `status.message`
-says why, and the Verdict does not count.
+created again after its Verdict was recorded names the agent only when every VerdictRecorded
+AuditEvent and receipt of that Verdict (of this version, not an earlier one of the same name) names
+the same agent and sponsor, and there is at least one; otherwise its `status.agent` is empty,
+`status.message` says why, and the Verdict does not count.
 
 `manifest.json`'s `coverage` says what the pack cannot hold:
 
