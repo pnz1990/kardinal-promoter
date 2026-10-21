@@ -174,8 +174,11 @@ func (w *verifyWorld) copyVerdicts() {
 	g.Spec.Verdicts = nil
 	for _, v := range list {
 		agent := v.Spec.Actor != nil && v.Spec.Actor.Kind == v1alpha1.ActorAgent
+		// One allowlist (#2411): a person only when listed, or when the
+		// gate lists nobody at all.
+		nobody := len(p.AllowedAgents) == 0 && len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0
 		allowed := (agent && contains(p.AllowedAgents, v.Spec.Actor.Agent)) ||
-			(!agent && (len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0 || contains(p.AllowedUsers, v.Spec.By)))
+			(!agent && (nobody || contains(p.AllowedUsers, v.Spec.By)))
 		// The Bundle UID is not filtered here: the tally refuses another
 		// version's Verdict on its own (the Graph filters it too).
 		if v.Spec.Pipeline != "checkout" || v.Spec.Environment != p.Environment ||

@@ -1448,9 +1448,9 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.verdicts[].run.name` | string | yes | Name is the AgentRun's name. |
 | `spec.verdicts[].summary` | string |  | Summary is the verifier's summary. |
 | `spec.verify` | object |  | Verify makes the gate wait for verdicts (docs/design/19-verdicts.md): it is ready only when its expression is true and at least verify.required verifiers found the Bundle to pass verify.check in verify.environment, and no more than verify.maxFailures found it to fail. Copied from the template to every gate instance. For a gate that only waits for verdicts, use the expression "true". |
-| `spec.verify.allowedAgents` | []string |  | AllowedAgents are the agents (AgentIdentity names) whose verdicts count. An agent's verdict counts only when the agent is listed. |
-| `spec.verify.allowedGroups` | []string |  | AllowedGroups are groups: a verdict counts when one of its groups is listed. |
-| `spec.verify.allowedUsers` | []string |  | AllowedUsers are the usernames of people and bots whose verdicts count. With neither allowedUsers nor allowedGroups, every verdict by someone who is not an agent counts. |
+| `spec.verify.allowedAgents` | []string |  | AllowedAgents are the agents (AgentIdentity names) whose verdicts count. An agent's verdict counts only when the agent is listed. allowedAgents, allowedUsers and allowedGroups are one allowlist: a gate that lists only agents counts no person's verdict. |
+| `spec.verify.allowedGroups` | []string |  | AllowedGroups are groups: a verdict by someone who is not an agent counts when one of its groups is listed. |
+| `spec.verify.allowedUsers` | []string |  | AllowedUsers are the usernames of people and bots whose verdicts count. Only when allowedAgents, allowedUsers and allowedGroups are all empty does every verdict by someone who is not an agent count. |
 | `spec.verify.check` | string | yes | Check is the verification the gate waits for (Verdict spec.check). |
 | `spec.verify.environment` | string |  | Environment is the environment verified, where the version already runs: an upstream of the environment the gate applies to. Empty: that environment's only direct upstream. |
 | `spec.verify.excludeAuthor` | boolean |  | ExcludeAuthor does not count a verdict from the version's author, the author's agent or that agent's sponsor (one party). An agent's verdict on work of its own party never counts, whatever this says. Default: `true`. |

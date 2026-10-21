@@ -15,6 +15,7 @@ PASS  Controller reachable      kardinal-version ConfigMap in the controller nam
   PASS  kro Graph CRD installed   kro.run/v1alpha1 graphs registered
   PASS  GitHub token              GITHUB_TOKEN set on the controller Deployment
   PASS  Policy namespaces shared  every spec.policyNamespaces entry agreed
+  PASS  Verify gates of agents only  no verify gate lists only agents
 
 Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
 garnet ✕), or INFO (i) when it cannot tell yet: run doctor again. The
@@ -60,6 +61,14 @@ reads the condition as the controller last wrote it (the controller reads
 the named Namespaces again every 5 minutes), in every namespace or, when you
 may not list Pipelines cluster-wide, in the current one: a clean result
 there is a WARN, since the other namespaces were not checked.
+
+The verify gates check lists the verify gates that list only agents
+(verify.allowedAgents, no allowedUsers or allowedGroups). From v0.13.0 the
+three lists are one allowlist, so those gates count no person's verdict: it
+names them and passes. Against an older controller, which still counts
+every person's verdict on them, it is a WARN before the upgrade, naming the
+gates on which a person's verdict counted for a version still kept: list
+those people in allowedUsers or allowedGroups to keep counting them.
 
 Use 'kardinal doctor' as the first troubleshooting step.
 

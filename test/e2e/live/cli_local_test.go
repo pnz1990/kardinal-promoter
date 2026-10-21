@@ -920,10 +920,11 @@ Some gates would BLOCK with current context (see FAIL results above) (1 gate(s))
 // accepted, and fails with the controller's reason for one it refused or with
 // a hint for a missing one. --controller-namespace looks for the controller
 // elsewhere. Any failed check exits 1, and no kubeconfig fails before the
-// checks. The "Policy namespaces shared" check is left out of every
-// comparison (framework.WithoutDoctorCheck): it reads every namespace's
-// Pipelines, so it reports other tests' (#2390);
-// TestCLI_DoctorPolicyNamespaces tests it.
+// checks. The "Policy namespaces shared" and "Verify gates of agents only"
+// checks are left out of every comparison (framework.WithoutDoctorCheck):
+// they read every namespace's Pipelines and PolicyGates, so they report
+// other tests' (#2390); TestCLI_DoctorPolicyNamespaces tests the first, and
+// TestDoctor_VerifyGates the second.
 // Covers CLI-DOCTOR-01.
 func TestCLI_Doctor(t *testing.T) {
 	t.Parallel()
@@ -960,16 +961,16 @@ func TestCLI_Doctor(t *testing.T) {
 		row("PASS", "kro Graph CRD installed", "kro.run/v1alpha1 graphs registered") +
 		row("PASS", tokenLabel, "secret "+framework.GitSecretName+" (key token) present in kardinal-system")
 
-	r := framework.WithoutDoctorCheck(t, cli.Run("", "doctor"), policyNamespacesCheck)
+	r := withoutClusterChecks(t, cli.Run("", "doctor"))
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Equal(t, header+checks+"\n5 check(s) passed\n", r.Stdout)
 
-	r = framework.WithoutDoctorCheck(t, cli.Run(ns, "doctor", "--pipeline", pipelineName), policyNamespacesCheck)
+	r = withoutClusterChecks(t, cli.Run(ns, "doctor", "--pipeline", pipelineName))
 	require.Equal(t, 0, r.Code, r.Output())
 	assert.Equal(t, header+checks+row("PASS", `Pipeline "podinfo"`, "status: Unknown (spec valid, no version shipped yet)")+
 		"\n6 check(s) passed\n", r.Stdout)
 
-	r = framework.WithoutDoctorCheck(t, cli.Run(ns, "doctor", "--pipeline", refused.Name), policyNamespacesCheck)
+	r = withoutClusterChecks(t, cli.Run(ns, "doctor", "--pipeline", refused.Name))
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, row("FAIL", `Pipeline "refused"`, fmt.Sprintf(`Ready=False (ValidationFailed): `+
 		`git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q`,
@@ -977,7 +978,7 @@ func TestCLI_Doctor(t *testing.T) {
 		"Fix the Pipeline spec; 'kardinal validate -f <your-pipeline.yaml>' reports the same problems.\n")
 	assert.True(t, strings.HasSuffix(r.Stdout, "\n5 check(s) passed, 1 failed\n"), r.Stdout)
 
-	r = framework.WithoutDoctorCheck(t, cli.Run(ns, "doctor", "--pipeline", "missing"), policyNamespacesCheck)
+	r = withoutClusterChecks(t, cli.Run(ns, "doctor", "--pipeline", "missing"))
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, row("FAIL", `Pipeline "missing"`, fmt.Sprintf(`Pipeline "missing" not found in namespace %q`, ns))+
 		strings.Repeat(" ", 40)+"Apply: kubectl apply -f <your-pipeline.yaml>\n")
@@ -985,7 +986,7 @@ func TestCLI_Doctor(t *testing.T) {
 	assert.Equal(t, "1 pre-flight check(s) failed\n", r.Stderr)
 
 	// No controller in the test namespace.
-	r = framework.WithoutDoctorCheck(t, cli.Run("", "doctor", "--controller-namespace", ns), policyNamespacesCheck)
+	r = withoutClusterChecks(t, cli.Run("", "doctor", "--controller-namespace", ns))
 	assert.Equal(t, 1, r.Code)
 	assert.Contains(t, r.Stdout, row("FAIL", "Controller reachable", "kardinal-version ConfigMap not found in "+ns))
 	assert.Contains(t, r.Stdout, "Installed elsewhere? Use --controller-namespace. Install: helm upgrade --install "+
@@ -1003,6 +1004,18 @@ func TestCLI_Doctor(t *testing.T) {
 // spec.policyNamespaces consent (#2286), which reads every namespace's
 // Pipelines.
 const policyNamespacesCheck = "Policy namespaces shared"
+
+// verifyGatesCheck is the label of kardinal doctor's check of the verify
+// gates that list only agents (#2411), which reads every namespace's
+// PolicyGates.
+const verifyGatesCheck = "Verify gates of agents only"
+
+// withoutClusterChecks is doctor's run r without the checks that read
+// every namespace, which report other tests' objects.
+func withoutClusterChecks(t *testing.T, r framework.CLIResult) framework.CLIResult {
+	t.Helper()
+	return framework.WithoutDoctorCheck(t, framework.WithoutDoctorCheck(t, r, policyNamespacesCheck), verifyGatesCheck)
+}
 
 // TestCLI_DoctorPolicyNamespaces checks kardinal doctor's "Policy
 // namespaces shared" check (#2286) on a Pipeline of its own whose

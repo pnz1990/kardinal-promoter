@@ -349,7 +349,8 @@ func mcpTools() []mcpTool {
 			"Record a verdict (pass, fail or inconclusive) for a check on the version that runs in an "+
 				"environment, as the identity kardinal mcp runs as. The version is required: nothing is "+
 				"recorded when another version runs there. A verify gate decides whether the verdict counts: "+
-				"an agent's only where the gate lists it in verify.allowedAgents, never on its own party's work.",
+				"an agent's only where the gate lists it in verify.allowedAgents, anyone else's only where the gate "+
+				"lists them or lists nobody, never on its own party's work.",
 			true, false, mcpVerify),
 		newMCPTool("freeze", "Freeze agents, or stop the line",
 			"Hold promotions until the freeze is lifted: holds agents (the versions agents created) or everyone "+

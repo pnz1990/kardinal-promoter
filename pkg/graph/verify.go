@@ -215,9 +215,10 @@ func verifyPolicyFromData(d map[string]interface{}) *kardinalv1alpha1.GateVerify
 // at most maxCopiedVerdicts of them. Filtering before the cap means Verdicts
 // that cannot count cannot crowd out the ones that do.
 //
-// A Verdict without spec.run counts when its writer is allowed (an agent
-// only when it is in allowedAgents; anyone else when listed, or when both
-// people lists are empty). A run-bound Verdict counts only with runs (the
+// A Verdict without spec.run counts when its writer is allowed: the three
+// lists are one allowlist (lifecycle.VerdictWriterAllowed, #2411), so an
+// agent only when it is in allowedAgents, anyone else when it is in
+// allowedUsers or allowedGroups, or when no list names anyone. A run-bound Verdict counts only with runs (the
 // Graph has AgentRuns): it must be written by the run's own ServiceAccount
 // (kr-<run>, which admission lets write only that Verdict, from the run's
 // Pod), and name an AgentRun this Graph applied for this Bundle, environment
@@ -229,7 +230,7 @@ func verdictsOfItem(pipeline, namespace, bundleUID string, runs bool) string {
 	base := fmt.Sprintf(`v.spec.bundleUID == bundle.metadata.uid && v.spec.pipeline == %[1]s && `+
 		`v.spec.environment == %[2]s.environment && v.spec.check == %[2]s.check`, strconv.Quote(pipeline), p)
 	eligible := fmt.Sprintf(`(v.spec.?actor.?kind.orValue("") == "agent" ? v.spec.actor.agent in %[1]s.allowedAgents : `+
-		`((size(%[1]s.allowedUsers) == 0 && size(%[1]s.allowedGroups) == 0) || v.spec.by in %[1]s.allowedUsers || `+
+		`((size(%[1]s.allowedAgents) == 0 && size(%[1]s.allowedUsers) == 0 && size(%[1]s.allowedGroups) == 0) || v.spec.by in %[1]s.allowedUsers || `+
 		`v.spec.?groups.orValue([]).exists(g, g in %[1]s.allowedGroups)))`, p)
 	common := `"name": v.metadata.name, "createdAt": string(v.metadata.creationTimestamp), ` +
 		`"bundle": v.spec.bundle, "bundleUID": v.spec.bundleUID, "environment": v.spec.environment, "check": v.spec.check, ` +

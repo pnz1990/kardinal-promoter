@@ -122,9 +122,12 @@ func verifierLabel(a kardinalv1alpha1.Actor) string {
 }
 
 // VerdictWriterAllowed reports whether the policy lets a verdict by v count
-// at all (allowedAgents, allowedUsers, allowedGroups), and why not. An
-// agent counts only when listed; anyone else when listed, or when both
-// people lists are empty.
+// at all, and why not. allowedAgents, allowedUsers and allowedGroups are one
+// allowlist (#2411): an agent counts only when it is in allowedAgents, and
+// anyone else only when it is in allowedUsers or one of its groups is in
+// allowedGroups. A gate that lists nobody at all counts every verdict by
+// someone who is not an agent; one that lists only agents counts agents
+// only.
 func VerdictWriterAllowed(p *kardinalv1alpha1.GateVerifyPolicy, v kardinalv1alpha1.Actor, groups []string) (bool, string) {
 	if v.Kind == kardinalv1alpha1.ActorAgent {
 		if slices.Contains(p.AllowedAgents, v.Agent) {
@@ -132,13 +135,17 @@ func VerdictWriterAllowed(p *kardinalv1alpha1.GateVerifyPolicy, v kardinalv1alph
 		}
 		return false, fmt.Sprintf("agent %s is not in verify.allowedAgents", v.Agent)
 	}
-	if len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0 {
+	if len(p.AllowedAgents) == 0 && len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0 {
 		return true, ""
 	}
 	if slices.Contains(p.AllowedUsers, v.Principal) || slices.ContainsFunc(groups, func(g string) bool {
 		return slices.Contains(p.AllowedGroups, g)
 	}) {
 		return true, ""
+	}
+	if len(p.AllowedUsers) == 0 && len(p.AllowedGroups) == 0 {
+		return false, fmt.Sprintf("%s is not an allowed verifier: the gate counts only the agents in verify.allowedAgents (%s); "+
+			"list people in verify.allowedUsers or allowedGroups to count them", v.Principal, strings.Join(p.AllowedAgents, ", "))
 	}
 	return false, fmt.Sprintf("%s is not in verify.allowedUsers or allowedGroups", v.Principal)
 }
