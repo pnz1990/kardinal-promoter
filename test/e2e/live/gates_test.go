@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -769,6 +770,86 @@ func TestGate_PolicyNamespaceRefused(t *testing.T) {
 	copied, err = e.GateInstances(ctx, a.ns, bundle, "prod", "other-team-pass")
 	require.NoError(t, err)
 	assert.NotEmpty(t, copied, "once it agreed, its gate is applied")
+}
+
+// TestGate_PolicyNamespaceInFlightKeepsGates checks a version in flight when
+// a namespace its Pipeline's spec.policyNamespaces names stops agreeing to
+// share its PolicyGates (#2286 v0.14), on a cluster: the version, waiting for
+// its prod PR, is re-rendered (that namespace's gates drop out of the
+// Pipeline's set) and keeps that namespace's gate as its Graph had it, with
+// a PolicyNamespaceNotShared Warning Event saying so. An edit to that gate
+// does not reach the version, while an edit to the Pipeline's own gate does,
+// and the version promotes to prod.
+//
+// Covers GATE-POLNS-08.
+func TestGate_PolicyNamespaceInFlightKeepsGates(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	other := e.Namespace(t)
+	e.SharePolicyGates(t, other)
+	e.CreateGate(t, framework.Gate(other, "other-keep", "prod", "true", recheck))
+	e.CreateGate(t, framework.Gate(a.ns, "own-edit", "prod", "true", recheck))
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	p.Spec.PolicyNamespaces = []string{other}
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
+	expression := func(template string) (string, bool) {
+		inst, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", template)
+		if err != nil || !ok {
+			return "", false
+		}
+		return inst.Spec.Expression, true
+	}
+	got, ok := expression("other-keep")
+	require.True(t, ok, "the version has the shared gate")
+	require.Equal(t, "true", got)
+
+	// other stops agreeing; the controller sees it on any Pipeline update.
+	var n corev1.Namespace
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Name: other}, &n))
+	delete(n.Labels, "kardinal.io/policy-shareable")
+	require.NoError(t, e.Client.Update(ctx, &n))
+	var cur v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &cur))
+	if cur.Annotations == nil {
+		cur.Annotations = map[string]string{}
+	}
+	cur.Annotations["e2e.kardinal.io/recheck"] = "now"
+	require.NoError(t, e.Client.Update(ctx, &cur))
+	e.WaitPipeline(t, a.ns, pipelineName, gateTimeout, "refused for "+other, func(p *v1alpha1.Pipeline) bool {
+		st := p.Status.PolicyNamespaces
+		return st != nil && st.ObservedGeneration == p.Generation && slices.Equal(st.NotShared, []string{other})
+	})
+	e.WaitEvents(t, a.ns, "Bundle", bundle, gateTimeout, "the version says it keeps "+other+"'s gates", func(ev eventsv1.Event) bool {
+		return ev.Type == corev1.EventTypeWarning && ev.Reason == "PolicyNamespaceNotShared" &&
+			strings.Contains(ev.Note, "keeps the gates of "+other+" it started with")
+	})
+
+	// An edit in other does not reach the version; one to its own gate does.
+	edit := func(ns, name, expr string) {
+		var g v1alpha1.PolicyGate
+		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &g))
+		g.Spec.Expression = expr
+		require.NoError(t, e.Client.Update(ctx, &g))
+	}
+	edit(other, "other-keep", "false")
+	edit(a.ns, "own-edit", "true && true")
+	framework.Eventually(t, gateTimeout, "the own gate's edit reaches the version", func(context.Context) (bool, string) {
+		got, _ := expression("own-edit")
+		return got == "true && true", "own-edit is " + got
+	})
+	got, ok = expression("other-keep")
+	require.True(t, ok, "the version keeps "+other+"'s gate")
+	assert.Equal(t, "true", got, "as it started, not as "+other+" has it now")
+
+	pr := a.openPR(t, bundle, "prod")
+	a.merge(t, pr)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
 }
 
 // TestGate_PREvidenceNamesTemplates checks the promotion PR's evidence for a
