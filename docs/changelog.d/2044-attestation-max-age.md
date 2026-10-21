@@ -1,5 +1,0 @@
----
-section: Added
----
-
-- **Attestation age: `attestations[].maxAge`** ([Attestation age](image-verification.md#attestation-age), #2044) — a Verified ImageVerification no longer holds a scan forever. With `maxAge: 24h`, each result records `verifiedAt` and `staleAt` (from the time the signed statement gives, a scan's `scannedAt` or a SLSA provenance's `finishedOn`, or a keyless signature's certificate-bound signing time; never later than when kardinal first saw it, `datedAt`. A key-signed attestation without a time of its own is stale at once unless `datedBy: logTime` accepts its log time; a time more than 5 minutes ahead of the controller's clock cannot be used either), turns `stale` when that time passes, and the image's referrers are read again (a quarter of `maxAge`, between 5 minutes and an hour) until a newer attestation replaces it. The phase stays Verified; a gate decides with `attestations.<name>.stale`, for example `!attestations.vulns.stale && attestations.vulns.effective.critical == 0`. A required attestation that is already stale is waited for like a missing one (`AttestationStale`).
