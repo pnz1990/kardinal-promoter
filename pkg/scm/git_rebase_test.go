@@ -214,6 +214,25 @@ func TestGoGitClient_RebaseOnRemote_UpdateInFlight(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "the wait ends with the context")
 }
 
+// TestGoGitClient_RebaseOnRemote_CanceledFetch: a context that ends during
+// a fetch, not only during the wait between fetches, is the rebase's error
+// (errors.Is context.Canceled): go-git reports it as text. Here it ended
+// before the first fetch. TestGoGitClient_RebaseOnRemote_UpdateInFlight's
+// cancel landed in a fetch on CI's race build once (release/v0.12, #2387).
+func TestGoGitClient_RebaseOnRemote_CanceledFetch(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n"})
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
+	writeFiles(t, work, map[string]string{"environments/a/kustomization.yaml": "a: 2\n"})
+	require.NoError(t, c.CommitAll(ctx, work, "promote a", "kardinal", "k@example.com"))
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := c.RebaseOnRemote(canceled, work, "origin", "main", scm.GitAuth{})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 // TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock (#2351): the race
 // TestGoGitClient_ConcurrentWritersLoseNothing lost once, made certain. The
 // remote's refs/heads/main.lock stands for another writer's update in
