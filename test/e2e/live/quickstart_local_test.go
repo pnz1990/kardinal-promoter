@@ -190,9 +190,10 @@ func TestQuickstartLocal_FromNothing(t *testing.T) {
 
 // quickstartLocalDiagScript reads, without changing anything, what a failed
 // quickstart --local left: the steps' messages, kardinal why, the Argo CD
-// Applications' sync and health, the pods and events of the demo's
-// namespaces, and the logs of Argo CD and the controller. Each command runs
-// even when one before it fails.
+// Applications' sync and health, every pod not ready (described) and every
+// Warning event, the pods and events of the demo's namespaces, and the logs
+// of Argo CD and the controller. Each command runs even when one before it
+// fails.
 const quickstartLocalDiagScript = `set +e
 kubectl version
 kubectl get promotionsteps -A -o custom-columns=NAME:.metadata.name,STATE:.status.state,MESSAGE:.status.message
@@ -200,6 +201,9 @@ kardinal why demo
 kubectl get applications.argoproj.io -A -o wide
 kubectl -n argocd get applications.argoproj.io -o yaml | grep -A40 '^  status:' | head -200
 kubectl get pods -A -o wide
+kubectl get pods -A --no-headers | awk '{split($3, r, "/"); if (r[1] != r[2] && $4 != "Completed") print $1, $2}' |
+  while read -r ns pod; do kubectl -n "$ns" describe pod "$pod" | tail -40; done
+kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp | tail -80
 for ns in kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod; do
   kubectl -n "$ns" describe pods | tail -60
   kubectl -n "$ns" get events --sort-by=.lastTimestamp | tail -40
