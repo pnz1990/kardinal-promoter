@@ -54,6 +54,7 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
+	agentbudgetrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentbudget"
 	agentidentityrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 	agentrunrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/auditretention"
@@ -189,6 +190,20 @@ func main() {
 		"Name of the AgentIndex this controller builds from the AgentIdentities and stamps the UI API's and the "+
 			"Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). "+
 			"Empty: no agent registry, every caller is a person or a bot (docs/actors.md).")
+	var agentBudgets bool
+	var agentBudgetLedger, agentBudgetExemptionPolicies string
+	flag.BoolVar(&agentBudgets, "agent-budgets", false,
+		"Count and grant agents' promotions against their AgentIdentity spec.budgets "+
+			"(docs/design/24-agent-budgets.md). Off: budgets are kept, not enforced.")
+	flag.StringVar(&agentBudgetLedger, "agent-budget-ledger", "",
+		"The ledger (AgentIdentity status.usage key) this installation counts budgets in. Default: --agent-index, "+
+			"this release. Every shard of one installation sets the default shard's; only the controller whose "+
+			"--agent-index is the ledger, and that owns cluster-scoped kinds, writes it.")
+	flag.StringVar(&agentBudgetExemptionPolicies, "agent-budget-exemption-policies", "",
+		"Comma-separated names of the ValidatingAdmissionPolicies (each with a binding of the same name) that check a "+
+			"budget exemption's createdBy and actor stamp (the chart's <release>-agent-budgets and <release>-actor-budgets). "+
+			"A stamped exemption counts only while all of them exist; --agent-budgets refuses to start without them. "+
+			"Set by the chart.")
 	var apiAuditEvents bool
 	flag.BoolVar(&apiAuditEvents, "api-audit-events", true,
 		"Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the "+
@@ -790,6 +805,41 @@ func main() {
 	} else {
 		logger.Warn().Msg("--agent-index is not set: no agent registry; every caller is recorded as a person or a bot")
 	}
+	// Agent budgets (docs/design/24-agent-budgets.md section 15.2): one
+	// writer per installation's ledger; every shard's steps wait for its
+	// grants.
+	var stepBudgets *psreconciler.BudgetConfig
+	if agentBudgets {
+		ledger, writes, err := agentbudgetrecon.Ledger(agentBudgetLedger, agentIndexName, gate.OwnsClusterScoped())
+		if err == nil {
+			stepBudgets = &psreconciler.BudgetConfig{Ledger: ledger}
+		}
+		switch {
+		case err != nil:
+			logger.Fatal().Err(err).Msg("agent budgets")
+		case len(splitCSV(agentBudgetExemptionPolicies)) == 0:
+			// Without the policy anyone with update on AgentIdentities could
+			// stamp an exemption as a person's (QA-3 on #2456).
+			logger.Fatal().Msg("--agent-budgets needs --agent-budget-exemption-policies, the admission policies that check a " +
+				"budget exemption's stamp (the chart's actors.budgets.enabled sets both)")
+		case !writes:
+			logger.Info().Str("ledger", ledger).Msg("agent budgets: another controller writes ledger " + ledger + "; this one reads it")
+		default:
+			budgets := &agentbudgetrecon.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Ledger: ledger,
+				ExemptionPolicy: exemptionPolicies(mgr.GetAPIReader(), splitCSV(agentBudgetExemptionPolicies))}
+			// An Event on an AgentIdentity, a cluster-scoped kind, is written
+			// in the default namespace, where namespace mode grants no Event
+			// writes; there the ledger's conditions and the log report.
+			if watchNamespace == "" {
+				budgets.Recorder = kubeevent.Limited(mgr.GetEventRecorder("kardinal-agent-budgets"), "kardinal-agent-budgets",
+					eventLimit, eventWarningLimit)
+			}
+			if err := budgets.SetupWithManager(mgr); err != nil {
+				logger.Fatal().Err(err).Msg("unable to set up the agent budget reconciler")
+			}
+			logger.Info().Str("ledger", ledger).Msg("agent budgets: this controller writes ledger " + ledger)
+		}
+	}
 	if apiAuditWriter != nil {
 		apiAuditWriter.client = mgr.GetClient()
 		if err := mgr.Add(apiAuditWriter); err != nil {
@@ -911,7 +961,7 @@ func main() {
 		// patch of the previous reconcile (#1310).
 		APIReader: mgr.GetAPIReader(),
 		Translator: newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger).
-			WithControllerSecret(controllerSecret),
+			WithControllerSecret(controllerSecret).WithAgentBudgets(agentBudgets),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),
@@ -999,6 +1049,9 @@ func main() {
 	pgReconciler.IdentityPolicy = &policygaterecon.IdentityPolicyCheck{Reader: mgr.GetAPIReader(), Name: overrideIdentityPolicy}
 	// agent.* in gate expressions reads this release's AgentIndex (18-actor-policy 2.2).
 	pgReconciler.AgentIndexName = agentIndexName
+	if stepBudgets != nil {
+		pgReconciler.BudgetLedger = stepBudgets.Ledger // budget.* (docs/design/24-agent-budgets.md section 10)
+	}
 	if overrideIdentityPolicy == "" {
 		logger.Warn().Msg("--override-identity-policy is not set: gate overrides are recorded with an unverified createdBy")
 	}
@@ -1074,6 +1127,7 @@ func main() {
 		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
 		SCMWaitTimeout:  scmWaitTimeout,
 		Receipts:        receipts,
+		Budgets:         stepBudgets,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
@@ -1686,4 +1740,15 @@ func remoteClusters(eksRoleARNs, eksRoleARNsByNamespace string) (*healthpkg.Remo
 		r.EKS = &healthpkg.EKSAuth{AllowedRoleARNs: roles, AllowedRoleARNsByNamespace: byNamespace}
 	}
 	return r, nil
+}
+
+// exemptionPolicies is the stamp check of budget exemptions: every named
+// admission policy and its binding exist (policygate.IdentityPolicyCheck,
+// read uncached with a TTL).
+func exemptionPolicies(reader sigs_client.Reader, names []string) agentbudgetrecon.AllPolicies {
+	out := make(agentbudgetrecon.AllPolicies, 0, len(names))
+	for _, n := range names {
+		out = append(out, &policygaterecon.IdentityPolicyCheck{Reader: reader, Name: n})
+	}
+	return out
 }

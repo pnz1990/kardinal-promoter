@@ -72,6 +72,16 @@ var gateContextStrings = []string{
 	"commit.issuer",
 	"commit.authority",
 	"commit.agent",
+	// The agent's budget (docs/design/24-agent-budgets.md section 10): the
+	// AgentIdentity name from the verified stamp, rule names (DNS labels)
+	// and fleetShare percentages (a schema pattern) an admin set, and the
+	// time the controller wrote the ledger.
+	"budget.agent",
+	"budget.env.rule",
+	"budget.env.fleetShare",
+	"budget.rules.*.rule",
+	"budget.rules.*.fleetShare",
+	"budget.evaluatedAt",
 }
 
 // TestGateContext_NeverReadsPRIssueOrCommitProse (#1845, the untrusted-input

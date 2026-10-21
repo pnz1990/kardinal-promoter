@@ -195,6 +195,14 @@ func TestChartRendersOnlyIdentityAdmissionPolicies(t *testing.T) {
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-gitops-writes",
 			"ValidatingAdmissionPolicy/kardinal-promoter-receipts",
 			"ValidatingAdmissionPolicyBinding/kardinal-promoter-receipts",
+			// Agent budgets (agent-budgets-admission.yaml): the who-checks and
+			// the stamp check always, the warning while budgets are off.
+			"ValidatingAdmissionPolicy/kardinal-promoter-agent-budgets",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-agent-budgets",
+			"ValidatingAdmissionPolicy/kardinal-promoter-actor-budgets",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-actor-budgets",
+			"ValidatingAdmissionPolicy/kardinal-promoter-agent-budgets-off",
+			"ValidatingAdmissionPolicyBinding/kardinal-promoter-agent-budgets-off",
 		), got, "args %v", args)
 	}
 }

@@ -187,6 +187,11 @@ spec:
             - --override-identity-policy={{ include "kardinal-promoter.fullname" . }}-gate-overrides
             - --agent-index={{ include "kardinal-promoter.fullname" . }}
             - --agent-index-from-chart=true
+            {{- if .Values.actors.budgets.enabled }}
+            - --agent-budgets=true
+            - --agent-budget-ledger={{ .Values.actors.budgets.ledger | default (include "kardinal-promoter.fullname" .) }}
+            - --agent-budget-exemption-policies={{ include "kardinal-promoter.fullname" . }}-agent-budgets,{{ include "kardinal-promoter.fullname" . }}-actor-budgets
+            {{- end }}
             {{- with .Values.controller.gateOverrideMaxMinutes }}
             - --gate-override-max-minutes={{ . }}
             {{- end }}

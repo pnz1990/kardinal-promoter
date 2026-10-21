@@ -42,6 +42,39 @@ type Translator struct {
 	// whose git.secretRef names it gets no Graph (WithControllerSecret), so
 	// no RenderRun mounts it in a render Job.
 	controllerSecret *scm.ControllerTokenSecret
+	// agentBudgets folds an agent's budget rules into its fleet pacing
+	// (WithAgentBudgets, --agent-budgets).
+	agentBudgets bool
+}
+
+// WithAgentBudgets folds the budget rules of the agent that made a version
+// into its fleet targets' pacing (docs/design/24-agent-budgets.md section
+// 8), so a fleet creates no more steps than the agent's budget lets run.
+// The AgentIdentity is read at translation: an edit reaches a Graph in
+// flight only when it is rebuilt, and the grant (the step hold) applies a
+// tighter budget at once.
+func (t *Translator) WithAgentBudgets(on bool) *Translator {
+	t.agentBudgets = on
+	return t
+}
+
+// agentBudgetRules returns the budget rules of the agent that made bundle, nil
+// for a person's version or with budgets off. An agent with no
+// AgentIdentity folds nothing: the step hold and the agents gates hold its
+// version.
+func (t *Translator) agentBudgetRules(ctx context.Context, bundle *kardinalv1alpha1.Bundle) ([]kardinalv1alpha1.AgentBudgetRule, error) {
+	a := bundle.Spec.Actor
+	if !t.agentBudgets || a == nil || a.Kind != kardinalv1alpha1.ActorAgent || a.Agent == "" {
+		return nil, nil
+	}
+	var id kardinalv1alpha1.AgentIdentity
+	if err := t.k8s.Get(ctx, client.ObjectKey{Name: a.Agent}, &id); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read AgentIdentity %s for its budgets: %w", a.Agent, err)
+	}
+	return id.Spec.Budgets, nil
 }
 
 // WithControllerSecret sets the controller's own SCM token Secret, which no
@@ -158,7 +191,12 @@ func (t *Translator) Translate(ctx context.Context,
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: %w", err)
 	}
+	budgets, err := t.agentBudgetRules(ctx, bundle)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
 	result, err := t.builder.Build(graph.BuildInput{
+		AgentBudgets:     budgets,
 		Pipeline:         pipeline,
 		Bundle:           bundle,
 		PolicyGates:      gates,

@@ -583,6 +583,9 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	// controller.
 	ev.r.PolicyNamespaces = opts.PolicyNamespaces
 	ev.r.AgentIndexName = indexName
+	// budget.* reads the agent's current ledger (docs/design/24-agent-budgets.md
+	// section 10): the one named for this release's index, else its only one.
+	ev.r.BudgetLedger = simulatedLedger(ctx, c, bundle, indexName)
 	// Metric results are the cluster's current ones at every simulated time:
 	// a result is stale only if it is stale now.
 	ev.metricsAt = opts.Now.UTC()
@@ -625,6 +628,28 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	}
 	sort.SliceStable(rep.Gates, func(i, j int) bool { return rep.Gates[i].Name < rep.Gates[j].Name })
 	return rep, nil
+}
+
+// simulatedLedger is the agent budget ledger a simulated version's budget.*
+// reads: the AgentIdentity's status.usage entry for this release's index
+// (the controller's default ledger), else its only entry, else index (no
+// counts yet).
+func simulatedLedger(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle, index string) string {
+	a := b.Spec.Actor
+	if a == nil || a.Kind != v1alpha1.ActorAgent || a.Agent == "" {
+		return index
+	}
+	var id v1alpha1.AgentIdentity
+	if err := c.Get(ctx, types.NamespacedName{Name: a.Agent}, &id); err != nil {
+		return index
+	}
+	if _, ok := id.Status.Usage[index]; ok || len(id.Status.Usage) != 1 {
+		return index
+	}
+	for name := range id.Status.Usage {
+		return name
+	}
+	return index
 }
 
 // gateDisplayName is the user-facing name of a gate instance: its template's

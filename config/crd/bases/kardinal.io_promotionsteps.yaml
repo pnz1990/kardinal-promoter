@@ -412,6 +412,43 @@ spec:
                   Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm).
                 format: date-time
                 type: string
+              budget:
+                description: |-
+                  Budget is the step's place against its agent's budgets
+                  (AgentIdentity spec.budgets): Waiting while the ledger has no room,
+                  then Granted. Absent for a step no budget applies to.
+                properties:
+                  agent:
+                    description: Agent is the AgentIdentity whose budgets hold the
+                      step.
+                    maxLength: 253
+                    type: string
+                  exemption:
+                    description: Exemption is the exemption the grant used, if any.
+                    maxLength: 63
+                    type: string
+                  rules:
+                    description: Rules are the budget rules that match the step.
+                    items:
+                      maxLength: 63
+                      type: string
+                    maxItems: 16
+                    type: array
+                  since:
+                    description: 'Since is when the step started waiting: its place
+                      in the queue.'
+                    format: date-time
+                    type: string
+                  state:
+                    description: State is Waiting (held for room) or Granted.
+                    enum:
+                    - Waiting
+                    - Granted
+                    type: string
+                required:
+                - agent
+                - state
+                type: object
               conditions:
                 description: Conditions holds status conditions.
                 items:
@@ -1315,6 +1352,9 @@ spec:
                             FreezeExempted is written once per exemption when a PromotionStep goes
                             on through an active freeze under it (kardinal override --freeze),
                             naming who made the exemption and why.
+                            BudgetExempted is written once when an agent's PromotionStep goes on
+                            under a budget exemption (AgentIdentity spec.budgetExemptions), naming
+                            who made it, why and until when.
                             GateChanged is written by the BundleReconciler when a PolicyGate
                             template that applies to a Promoting version was created, edited or
                             deleted and the version's Graph got the change; gates lists the
@@ -1357,6 +1397,7 @@ spec:
                           - ChangeRequestApproved
                           - ChangeRequestRejected
                           - GateChanged
+                          - BudgetExempted
                           type: string
                         actor:
                           description: |-

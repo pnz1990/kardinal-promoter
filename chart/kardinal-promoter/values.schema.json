@@ -636,6 +636,15 @@
           "properties": {
             "public": {"type": "boolean", "description": "Bind the agent directory reader ClusterRole to system:authenticated."}
           }
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean", "description": "Enforce agent budgets (--agent-budgets)."},
+            "ledger": {"type": "string", "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)?$",
+              "description": "The ledger this installation counts in (--agent-budget-ledger); empty: the release's full name."}
+          }
         }
       }
     },

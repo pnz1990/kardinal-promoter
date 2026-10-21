@@ -272,6 +272,19 @@ actors:
     # <fullname>-agent-directory-reader ClusterRole to the agents and people
     # who use kardinal.
     public: true
+  budgets:
+    # -- Enforce agent budgets (AgentIdentity spec.budgets,
+    # docs/agent-budgets.md): the controller counts each agent's promotions
+    # in its ledger and holds a step beyond a limit in Pending
+    # (--agent-budgets). Off: budgets and exemptions are kept, not
+    # enforced, and a write that sets them gets a warning. Every shard of
+    # one installation sets it alike.
+    enabled: false
+    # -- The ledger this installation counts in (--agent-budget-ledger,
+    # the AgentIdentity status.usage key). Empty: this release's full name.
+    # Every shard of one sharded installation sets the default shard's
+    # release here, so one writer grants for all of them.
+    ledger: ""
 admission:
   # -- Usernames, besides this release's controller ServiceAccount, that run
   # a kardinal controller: they may name any Bundle's kardinal.io/created-by,

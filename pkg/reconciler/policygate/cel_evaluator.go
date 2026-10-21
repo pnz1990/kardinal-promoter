@@ -108,6 +108,7 @@ func newEvaluator() (*evaluator, error) {
 	env, err := goccel.NewEnv(
 		goccel.Variable("actor", goccel.DynType),
 		goccel.Variable("agent", goccel.DynType),
+		goccel.Variable("budget", goccel.DynType),
 		goccel.Variable("bundle", goccel.DynType),
 		goccel.Variable("attestations", goccel.DynType),
 		goccel.Variable("commit", goccel.DynType),

@@ -23,6 +23,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `verdicts` | map | The Verdicts a verify gate counted (`kardinal verify`, AgentRuns). See [`verdicts.*`](#verdicts) |
 | `actor` | map | Who created the version: its verified actor stamp. See [`actor.*`](#actor) |
 | `agent` | map | The version's agent as the registry says now. See [`agent.*`](#agent) |
+| `budget` | map | (new in v0.14.0, unreleased) The version's agent's budget for this environment and its counts. See [`budget.*`](#budget) |
 | `attestations` | map | The version's verified attestations: SLSA provenance, vulnerability scans after VEX, any in-toto predicate. See [`attestations.*`](#attestations) |
 | `commit` | map | The config commit's verified signature, and the agent whose workload signed it. See [`commit.*`](#commit) |
 
@@ -444,6 +445,39 @@ actor.kind != "agent" || (agent.registered && !agent.suspended)
 
 # Agents with autonomy auto ship here; others wait (pair with approval.requiredWhen)
 actor.kind != "agent" || agent.autonomy == "auto"
+```
+
+## `budget.*`
+
+(New in v0.14.0, unreleased; [agent budgets](../design/24-agent-budgets.md).) The budget of the
+agent that made the version, for the gate's environment: the first rule of its AgentIdentity
+`spec.budgets` that applies (in spec order), and the rule's counts from this installation's
+ledger (`status.usage`), the counts the controller grants by. It is read only when the
+expression or `approval.requiredWhen` mentions `budget`, from the cache, and the gate is
+re-evaluated when the ledger's counts change. Every key except under `budget.rules` is present
+for every version, so an expression evaluates (to false) for a person's version instead of
+failing; with budgets off (`--agent-budgets` unset) `budget.applies` is false and every count is
+zero.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `budget.applies` | bool | `true` | The version is an agent's and a rule of its budgets applies to this environment |
+| `budget.agent` | string | `"fixer"` | `actor.agent`; `""` for a person's version |
+| `budget.current` | bool | `true` | The ledger is evaluated for the AgentIdentity's current spec |
+| `budget.env.rule` | string | `"prod"` | The applying rule; `""` |
+| `budget.env.versions`, `.concurrent`, `.fleetTargets`, `.unavailable` | map | `{set: true, limit: 5, used: 2, remaining: 3}` | `set` false and zeros when the rule does not set the limit; `used` counts before this version |
+| `budget.env.fleetShare` | string | `"25%"` | The rule's `fleetShare`; `""` |
+| `budget.env.waiting` | int | `0` | Requests the rule holds |
+| `budget.env.exhausted` | bool | `false` | A set limit of the rule has no room left |
+| `budget.rules.<name>` | map | | The same shape, for every rule of the agent |
+| `budget.evaluatedAt` | string | `"2026-10-15T10:02:11Z"` | When the ledger was written, for messages only |
+
+```cel
+# More scrutiny as the agent uses its day (in approval.requiredWhen): a person approves once half the budget is spent
+budget.applies && budget.env.versions.set && budget.env.versions.used * 2 >= budget.env.versions.limit
+
+# Show an exhausted budget as a gate. It does not enforce the limit: the controller's grant does
+!budget.env.exhausted
 ```
 
 ## `attestations.*`

@@ -7,6 +7,8 @@ Actor admission policies (docs/actors.md, docs/design/17-actors.md section 5).
 <release>-actor checks the kardinal.io/actor stamp (spec.actor) on new
 Bundles, Approvals and Verdicts, on new gate override entries and on new
 freeze exemptions (an agent's is refused: break-glass is for people) against the AgentIndex
+(<release>-actor-budgets, in agent-budgets-admission.yaml, checks new budget
+exemptions with the same rules)
 the controller builds from the AgentIdentities: the stamp must say what the
 requester is (human, agent, bot), and an agent must stamp, stay in its scope
 and not be suspended. It is a transliteration of pkg/actor Derive and Scope.
@@ -85,6 +87,21 @@ variables:
         ? object.spec.freeze.exemptions.filter(e, !(e in variables.oldExemptions))
             .map(e, has(e.actor) ? e.actor : null)
         : []
+  # A budget exemption's maker (docs/design/24-agent-budgets.md section 12):
+  # the new spec.budgetExemptions entries of an AgentIdentity are stamped
+  # like freeze exemptions, and an agent's is refused.
+  - name: budget
+    expression: "request.resource.resource == 'agentidentities'"
+  - name: oldBudgetNames
+    expression: >-
+      variables.budget && oldObject != null && has(oldObject.spec.budgetExemptions)
+        ? oldObject.spec.budgetExemptions.map(e, e.name) : []
+  - name: budgetStamps
+    expression: >-
+      variables.budget && has(object.spec.budgetExemptions)
+        ? object.spec.budgetExemptions.filter(e, !(e.name in variables.oldBudgetNames))
+            .map(e, has(e.actor) ? e.actor : null)
+        : []
   # Who froze (a new freeze) and who lifts it (a new spec.freeze.lifted).
   - name: freezeStamps
     expression: >-
@@ -96,6 +113,7 @@ variables:
   - name: stamps
     expression: >-
       variables.freeze ? variables.exemptionStamps + variables.freezeStamps
+      : variables.budget ? variables.budgetStamps
       : variables.gate
         ? (has(object.spec.overrides)
             ? object.spec.overrides.filter(o,
@@ -142,6 +160,11 @@ validations:
       'you are agent ' + variables.entry.agent + ': an agent may not let a pipeline through a freeze ' +
       '(break-glass is for people); ask ' + variables.entry.sponsor + ' or another person to run kardinal override --freeze'
     reason: Forbidden
+  - expression: "!variables.check || !variables.agent || size(variables.budgetStamps) == 0"
+    messageExpression: >-
+      'you are agent ' + variables.entry.agent + ': an agent may not let an agent through its budget ' +
+      '(break-glass is for people); ask ' + variables.entry.sponsor + ' or another person to run kardinal override --budget'
+    reason: Forbidden
   # An agent must stamp what it writes.
   - expression: "!variables.check || !variables.agent || variables.stamps.all(s, s != null)"
     messageExpression: >-
@@ -165,7 +188,7 @@ validations:
   # Pipeline, the Approval's environment, the gate's Pipeline and environment.
   # An entry scoped nowhere has no namespaces (the index omits an empty list).
   - expression: >-
-      !variables.check || !variables.agent || variables.freeze || (
+      !variables.check || !variables.agent || variables.freeze || variables.budget || (
         (has(variables.entry.namespaces) ? variables.entry.namespaces : []).exists(p, p == '*' || p == request.namespace ||
           (p.endsWith('*') && request.namespace.startsWith(p.substring(0, size(p) - 1)))) &&
         (variables.pipeline == '' || variables.entry.pipelines.exists(p, p == '*' || p == variables.pipeline ||
