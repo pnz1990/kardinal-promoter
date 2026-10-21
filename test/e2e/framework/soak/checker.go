@@ -121,6 +121,13 @@ func (c *Checker) pass(ctx context.Context, since time.Time) bool {
 	return false
 }
 
+// Fail records a violation found outside a pass, by an episode or a load
+// generator checking what it just did: it ends the soak and dumps the estate
+// as a pass's violation does. Only the first violation counts.
+func (c *Checker) Fail(invariant string, err error) {
+	c.violated(Violation{Invariant: invariant, At: c.clock(), Err: err})
+}
+
 // violated records the first violation, ends the soak and dumps the estate.
 func (c *Checker) violated(v Violation) {
 	c.mu.Lock()

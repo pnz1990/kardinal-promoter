@@ -99,3 +99,30 @@ func TestChecker_FinalFinds(t *testing.T) {
 	assert.Equal(t, "memory-flat", v.Invariant)
 	assert.EqualValues(t, 1, dumps.Load())
 }
+
+// TestChecker_Fail (#2403): a violation an episode finds itself (Fail) ends
+// the soak and dumps the estate as a pass's does; only the first counts,
+// and Final returns it without another pass.
+func TestChecker_Fail(t *testing.T) {
+	var dumps atomic.Int64
+	c := &Checker{Interval: time.Hour, Dump: func(context.Context, Violation) { dumps.Add(1) }}
+	var passes atomic.Int64
+	c.Add("holds", func(context.Context, time.Time) error {
+		passes.Add(1)
+		return nil
+	})
+	ctx := c.Start(context.Background())
+	c.Fail("episode-ha", errors.New("no new leader within 2m0s"))
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fail did not cancel the soak's context")
+	}
+	c.Fail("episode-consent", errors.New("a later violation"))
+	v := c.Final(context.Background())
+	require.NotNil(t, v)
+	assert.Equal(t, "episode-ha", v.Invariant)
+	assert.Contains(t, v.Error(), "no new leader within 2m0s")
+	assert.EqualValues(t, 1, dumps.Load(), "dumped once")
+	assert.Zero(t, passes.Load(), "Final runs no pass after a violation")
+}
