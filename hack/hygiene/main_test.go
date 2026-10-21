@@ -210,7 +210,9 @@ func TestGoImages(t *testing.T) {
 		"go.mod": goMod,
 		"Dockerfile": "FROM node:26-alpine AS ui\nFROM --platform=$BUILDPLATFORM golang:1.26.10-alpine" + digest + " AS builder\n" +
 			"FROM alpine:3.24\n",
-		"render.Dockerfile":         "from docker.io/library/golang:1.26.10" + digest + "\n",
+		"render.Dockerfile": "from docker.io/library/golang:1.26.10" + digest + "\n",
+		"hub.Dockerfile": "FROM index.docker.io/library/golang:1.26.10" + digest + "\n" +
+			"FROM registry-1.docker.io/library/golang:1.26.10" + digest + "\n  from library/golang:1.26.10" + digest + "\n",
 		"hack/e2e/x.Dockerfile":     "FROM alpine:3.24\n",
 		"docs/notes.md":             "FROM golang:1.27-alpine\n", // not a Dockerfile
 		"hack/e2e/Dockerfile.notes": "FROM golang:1.27-alpine\n", // nor this
@@ -224,6 +226,10 @@ func TestGoImages(t *testing.T) {
 			"FROM golang AS bare\n" +
 			"FROM golang:${GO} AS arg\n",
 		"sub/render.Dockerfile": "FROM golang:1.26.10-bookworm\n",
+		// Docker Hub's other hosts and library/ (QA-5 on #2396).
+		"hub.Dockerfile": "FROM index.docker.io/library/golang:1.27-alpine\n" +
+			"FROM --platform=$BUILDPLATFORM REGISTRY-1.DOCKER.IO/library/golang:1.27-alpine\n" +
+			"  from library/golang:1.27-alpine\n",
 	}))
 	assert.Equal(t, []string{
 		"file Dockerfile: line 2 builds FROM golang:1.27-alpine, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
@@ -231,6 +237,9 @@ func TestGoImages(t *testing.T) {
 		"file Dockerfile: line 4 builds FROM golang:1.26.9-alpine" + digest + ", not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
 		"file Dockerfile: line 5 builds FROM golang, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10@sha256:<its digest>, and move go.mod's toolchain line and the image together",
 		"file Dockerfile: line 6 builds FROM golang:${GO}, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file hub.Dockerfile: line 1 builds FROM index.docker.io/library/golang:1.27-alpine, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file hub.Dockerfile: line 2 builds FROM REGISTRY-1.DOCKER.IO/library/golang:1.27-alpine, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file hub.Dockerfile: line 3 builds FROM library/golang:1.27-alpine, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
 		"file sub/render.Dockerfile: line 1 builds FROM golang:1.26.10-bookworm, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-bookworm@sha256:<its digest>, and move go.mod's toolchain line and the image together",
 	}, got)
 
