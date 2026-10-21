@@ -184,9 +184,14 @@ func TestUpgradeV0100_FromV0100(t *testing.T) {
 	upgradeCmd := strings.TrimRight(framework.Fill(t, framework.GuideBlockFrom(t, "0.10.0", "helm upgrade"), guideChartV0100, `"$KARDINAL_E2E_CHART"`), "\n") + ` \
   --set image.repository="${KARDINAL_E2E_IMAGE%:*}" --set image.tag="${KARDINAL_E2E_IMAGE##*:}" --set image.pullPolicy=Never
 `
+	// The version the old leader recorded: the new one records its own once it
+	// leads, a few seconds after its Pod is Ready (#2383).
+	leaderBefore := rel.LeaderVersion(t)
 	up := e.Shell(t, upgradeCmd)
 	require.Zero(t, up.Code, up.Output)
 	rel.WaitRolledOut(t, 3*time.Minute)
+	// The guide waits until kardinal version shows the new controller.
+	rel.WaitLeaderVersionChanged(t, leaderBefore, 2*time.Minute)
 
 	// The git Secret is still unlabeled: this release does not use it.
 	for _, name := range []string{"promote", "done"} {

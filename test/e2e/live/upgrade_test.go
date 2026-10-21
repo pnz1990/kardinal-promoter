@@ -682,6 +682,9 @@ spec:
 	assert.NoError(t, err, "v0.8.1's graph-controller survives the failed upgrade")
 
 	rel := e.ExistingRelease(t, upgradeRelease, framework.ControllerNamespace)
+	// The version the old leader recorded: the new one records its own once it
+	// leads, a few seconds after its Pod is Ready (#2383).
+	leaderBefore := rel.LeaderVersion(t)
 	up := e.Shell(t, upgradeCmd)
 	require.Zero(t, up.Code, up.Output)
 	assert.Equal(t, "2", u.helmRevision(t))
@@ -743,6 +746,8 @@ spec:
 	assert.Nil(t, u.kroSystem(t).DeletionTimestamp, "kro-system is kept")
 	u.deploymentReady(t, "kro-system", "kro", time.Minute)
 	rel.WaitRolledOut(t, 3*time.Minute)
+	// The guide waits until kardinal version shows the new controller.
+	rel.WaitLeaderVersionChanged(t, leaderBefore, 2*time.Minute)
 	pods := rel.Pods(t)
 	require.Len(t, pods, 1)
 	started := pods[0].Status.StartTime

@@ -4,11 +4,16 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -101,7 +106,7 @@ func TestDoctor_PolicyNamespaces(t *testing.T) {
 					return c.List(ctx, list, opts...)
 				}})
 			}
-			r := checkPolicyNamespaces(context.Background(), b.Build(), "team-b", tc.controller)
+			r := checkPolicyNamespaces(context.Background(), b.Build(), "team-b", tc.controller, "")
 			assert.Equal(t, "Policy namespaces shared", r.label)
 			assert.Equal(t, tc.icon, r.icon, r.detail)
 			assert.Contains(t, r.detail, tc.detail)
@@ -112,4 +117,98 @@ func TestDoctor_PolicyNamespaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDoctor_PolicyNamespacesUpgradeInProgress (#2383): right after an
+// upgrade the new controller Pod is Ready before it holds the Lease, and
+// only the leader records its version, so doctor can read an old leader's
+// version. While the controller Deployment rolls out a later release or a
+// build that is not a release, that is an upgrade in progress (INFO, run
+// doctor again), not a controller that does not check; with the Deployment
+// on the leader's release or an earlier one, or not known, the WARN stays.
+// A leader from v0.13 is checked as before whatever the Deployment runs.
+//
+// Covers GATE-POLNS-04.
+func TestDoctor_PolicyNamespacesUpgradeInProgress(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		leader, deployed string
+		icon, detail     string
+	}{
+		"a later release rolls out": {"v0.12.0", "v0.13.0", doctorInfo,
+			"upgrade in progress: the leader still runs v0.12.0, the Deployment runs v0.13.0"},
+		"a tag without v":           {"v0.12.0", "0.13.0", doctorInfo, "the Deployment runs 0.13.0"},
+		"a later release candidate": {"v0.12.3", "v0.13.0-rc.1", doctorInfo, "the Deployment runs v0.13.0-rc.1"},
+		"a build that is not a release": {"v0.12.0", "e2e-kind", doctorInfo,
+			"upgrade in progress: the leader still runs v0.12.0, the Deployment runs e2e-kind"},
+		"the leader's own release":     {"v0.12.0", "v0.12.0", doctorWarn, "controller v0.12.0 does not check spec.policyNamespaces consent"},
+		"the same release, no v":       {"v0.12.0", "0.12.0", doctorWarn, "does not check"},
+		"an earlier release":           {"v0.12.3", "v0.12.1", doctorWarn, "controller v0.12.3 does not check"},
+		"the Deployment not known":     {"v0.12.0", "", doctorWarn, "controller v0.12.0 does not check"},
+		"a v0.13 leader is checked":    {"v0.13.0", "v0.14.0", doctorPass, "every spec.policyNamespaces entry agreed"},
+		"an unknown leader is checked": {"unknown", "v0.13.0", doctorPass, "every spec.policyNamespaces entry agreed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := fake.NewClientBuilder().WithScheme(rootScheme).Build()
+			r := checkPolicyNamespaces(context.Background(), c, "team-b", tc.leader, tc.deployed)
+			assert.Equal(t, tc.icon, r.icon, r.detail)
+			assert.Contains(t, r.detail, tc.detail)
+			assert.Equal(t, tc.icon == doctorInfo, r.noted)
+			assert.Equal(t, tc.icon == doctorWarn, r.warned)
+			assert.False(t, r.failed)
+			if tc.icon == doctorInfo {
+				assert.Equal(t, "The new controller takes over a few seconds after its Pod is Ready. Run kardinal doctor again "+
+					"once kardinal version no longer shows Controller: "+tc.leader, r.hint)
+			}
+		})
+	}
+}
+
+// TestDoctor_DeployedVersion: what the controller Deployment runs is its
+// controller container's image tag, or, for an image by digest, its
+// app.kubernetes.io/version label; nothing when there is no Deployment.
+func TestDoctor_DeployedVersion(t *testing.T) {
+	t.Parallel()
+	dep := func(labels map[string]string, containers ...corev1.Container) *appsv1.Deployment {
+		l := map[string]string{"app.kubernetes.io/name": "kardinal-promoter"}
+		for k, v := range labels {
+			l[k] = v
+		}
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter", Namespace: "kardinal-system", Labels: l},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: containers}}}}
+	}
+	for name, tc := range map[string]struct {
+		objs []sigs_client.Object
+		want string
+	}{
+		"a tag":           {[]sigs_client.Object{dep(nil, corev1.Container{Name: "controller", Image: "ghcr.io/pnz1990/kardinal-promoter/controller:v0.13.0"})}, "v0.13.0"},
+		"a registry port": {[]sigs_client.Object{dep(nil, corev1.Container{Name: "controller", Image: "registry:5000/kp/controller:e2e-kind"})}, "e2e-kind"},
+		"the controller container": {[]sigs_client.Object{dep(nil, corev1.Container{Name: "sidecar", Image: "proxy:v9"},
+			corev1.Container{Name: "controller", Image: "kp/controller:v0.13.1"})}, "v0.13.1"},
+		"by digest, the chart's appVersion": {[]sigs_client.Object{dep(map[string]string{"app.kubernetes.io/version": "v0.13.0"},
+			corev1.Container{Name: "controller", Image: "kp/controller@sha256:abc"})}, "v0.13.0"},
+		"by digest without the label": {[]sigs_client.Object{dep(nil, corev1.Container{Name: "controller", Image: "kp/controller@sha256:abc"})}, ""},
+		"no tag":                      {[]sigs_client.Object{dep(nil, corev1.Container{Name: "controller", Image: "registry:5000/kp/controller"})}, ""},
+		"no Deployment":               {nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(tc.objs...).Build()
+			assert.Equal(t, tc.want, deployedVersion(context.Background(), c, "kardinal-system"))
+		})
+	}
+}
+
+// TestDoctor_SummaryCountsToRunAgain: a check that cannot tell yet is
+// counted apart, neither passed nor a warning, and does not fail doctor.
+func TestDoctor_SummaryCountsToRunAgain(t *testing.T) {
+	var out bytes.Buffer
+	err := printDoctorResults(&out, []doctorResult{
+		{icon: doctorPass, label: "Controller reachable", detail: "kardinal-promoter v0.12.0 in kardinal-system"},
+		{icon: doctorInfo, label: "Policy namespaces shared", detail: "upgrade in progress", hint: "Run kardinal doctor again", noted: true},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "INFO  Policy namespaces shared          upgrade in progress\n"+strings.Repeat(" ", 40)+"Run kardinal doctor again\n")
+	assert.True(t, strings.HasSuffix(out.String(), "\n1 check(s) passed, 1 to run again\n"), out.String())
 }

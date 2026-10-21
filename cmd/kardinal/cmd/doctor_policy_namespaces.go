@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"golang.org/x/mod/semver"
+	appsv1 "k8s.io/api/apps/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -50,10 +51,24 @@ const policyNamespacesHint = "Label each namespace kardinal.io/policy-shareable=
 // user may not list them cluster-wide; then a clean result is a WARN too
 // (only ns was checked). The result is the condition as the controller last
 // wrote it: it reads the named Namespaces again every 5 minutes.
-func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, controller string) doctorResult {
+//
+// controller is the version the leader recorded (kardinal-version), deployed
+// the one the controller Deployment runs (deployedVersion). Right after an
+// upgrade the new Pod is Ready before it holds the Lease, and only the
+// leader records its version (#2383): an old leader's version while the
+// Deployment rolls out another (rolloutTo) is an upgrade in progress (INFO,
+// run doctor again), not a controller that does not check.
+func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, controller, deployed string) doctorResult {
 	r := doctorResult{label: "Policy namespaces shared"}
 	ver := releaseVersion(controller)
 	if ver != "" && !atLeast(ver, policyNamespacesWarnVersion) {
+		if to := rolloutTo(ver, deployed); to != "" {
+			r.icon, r.noted = doctorInfo, true
+			r.detail = fmt.Sprintf("upgrade in progress: the leader still runs %s, the Deployment runs %s", controller, to)
+			r.hint = fmt.Sprintf("The new controller takes over a few seconds after its Pod is Ready. Run kardinal doctor "+
+				"again once kardinal version no longer shows Controller: %s", controller)
+			return r
+		}
 		r.icon, r.warned = doctorWarn, true
 		r.detail = fmt.Sprintf("controller %s does not check spec.policyNamespaces consent", controller)
 		r.hint = fmt.Sprintf("Upgrade to %s first and run kardinal doctor again before %s, which refuses a namespace "+
@@ -105,4 +120,54 @@ func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, c
 	}
 	r.hint = policyNamespacesHint
 	return r
+}
+
+// rolloutTo is what the controller Deployment rolls out (deployed) when it
+// is not leader's version, a release, so the leader is about to be replaced:
+// a later release, or a build that is not a release (a dev or test build).
+// It is "" when the Deployment runs leader's release or an earlier one (the
+// leader is what runs), or when what it runs is unknown.
+func rolloutTo(leader, deployed string) string {
+	if deployed == "" {
+		return ""
+	}
+	if d := releaseVersion(deployed); d != "" {
+		if semver.Compare(d, leader) > 0 {
+			return deployed
+		}
+		return ""
+	}
+	return deployed
+}
+
+// deployedVersion is the version the kardinal-promoter Deployment in
+// controllerNS runs: its controller container's image tag, or, for an
+// image by digest, the Deployment's app.kubernetes.io/version label (the
+// chart's appVersion). It is "" when there is no such Deployment, it cannot
+// be read, or it names neither.
+func deployedVersion(ctx context.Context, client sigs_client.Reader, controllerNS string) string {
+	var deps appsv1.DeploymentList
+	if err := client.List(ctx, &deps, sigs_client.InNamespace(controllerNS),
+		sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"}); err != nil || len(deps.Items) == 0 {
+		return ""
+	}
+	dep := deps.Items[0]
+	containers := dep.Spec.Template.Spec.Containers
+	if len(containers) == 0 {
+		return ""
+	}
+	image := containers[0].Image
+	for _, c := range containers {
+		if c.Name == "controller" {
+			image = c.Image
+		}
+	}
+	if strings.Contains(image, "@") {
+		return dep.Labels["app.kubernetes.io/version"]
+	}
+	name := image[strings.LastIndex(image, "/")+1:]
+	if i := strings.LastIndex(name, ":"); i >= 0 {
+		return name[i+1:]
+	}
+	return ""
 }

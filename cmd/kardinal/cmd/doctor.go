@@ -73,6 +73,9 @@ type doctorResult struct {
 	hint   string // shown only on warn/fail
 	failed bool
 	warned bool
+	// noted: the check cannot tell yet (doctorInfo), neither a pass nor a
+	// warning: run doctor again later.
+	noted bool
 }
 
 func newDoctorCmd() *cobra.Command {
@@ -126,7 +129,8 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 	if r, shown := checkReceiptGrowth(ctx, client, ns, controllerNS); shown {
 		results = append(results, r)
 	}
-	results = append(results, checkPolicyNamespaces(ctx, client, ns, controllerVersion(ctx, client, controllerNS)))
+	results = append(results, checkPolicyNamespaces(ctx, client, ns, controllerVersion(ctx, client, controllerNS),
+		deployedVersion(ctx, client, controllerNS)))
 	if pipeline != "" {
 		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))
 		var p v1alpha1.Pipeline
@@ -143,7 +147,7 @@ func printDoctorResults(w io.Writer, results []doctorResult) error {
 	_, _ = fmt.Fprintln(w, "kardinal-promoter pre-flight check")
 	_, _ = fmt.Fprintln(w, strings.Repeat("=", 50))
 
-	passed, warned, failed := 0, 0, 0
+	passed, warned, failed, noted := 0, 0, 0, 0
 	for _, r := range results {
 		icon := doctorIcon(r.icon)
 		_, _ = fmt.Fprintf(w, "%s  %-*s  %s\n", icon, doctorColWidth, r.label, r.detail)
@@ -156,6 +160,8 @@ func printDoctorResults(w io.Writer, results []doctorResult) error {
 			failed++
 		case r.warned:
 			warned++
+		case r.noted:
+			noted++
 		default:
 			passed++
 		}
@@ -168,6 +174,9 @@ func printDoctorResults(w io.Writer, results []doctorResult) error {
 	}
 	if failed > 0 {
 		summary += fmt.Sprintf(", %d failed", failed)
+	}
+	if noted > 0 {
+		summary += fmt.Sprintf(", %d to run again", noted)
 	}
 	_, _ = fmt.Fprintln(w, summary)
 
@@ -182,16 +191,20 @@ const (
 	doctorPass = "pass"
 	doctorWarn = "warn"
 	doctorFail = "fail"
+	// doctorInfo: the check cannot tell yet (an upgrade in progress).
+	doctorInfo = "info"
 )
 
-// doctorIcon is the mark of a check result: a coloured ✓, ! or ✕ on a
-// terminal, PASS, WARN or FAIL in plain output.
+// doctorIcon is the mark of a check result: a coloured ✓, !, i or ✕ on a
+// terminal, PASS, WARN, INFO or FAIL in plain output.
 func doctorIcon(result string) string {
 	switch result {
 	case doctorPass:
 		return sty.Paint(display.ToneVerified, sty.Sym("✓", "PASS"))
 	case doctorWarn:
 		return sty.Paint(display.ToneBlocked, sty.Sym("!", "WARN"))
+	case doctorInfo:
+		return sty.Paint(display.TonePromoting, sty.Sym("i", "INFO"))
 	}
 	return sty.Paint(display.ToneDegraded, sty.Sym("✕", "FAIL"))
 }
@@ -539,7 +552,8 @@ const doctorReference = `  PASS  Controller reachable      kardinal-version Conf
   PASS  Policy namespaces shared  every spec.policyNamespaces entry agreed
 
 Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
-garnet ✕).
+garnet ✕), or INFO (i) when it cannot tell yet: run doctor again. The
+summary counts the INFO checks as "to run again"; they do not fail doctor.
 
 The token check is named after the controller's --scm-provider (GitHub token,
 GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps
@@ -562,7 +576,12 @@ against a v0.13 controller, which still reads their gates, and a FAIL against
 v0.14 and later, which refuse them (their new versions wait); a release
 candidate or a build after a release tag counts as that release. Run it
 before upgrading to v0.14. Against a controller older than v0.13, which does
-not check, it is a WARN saying so: upgrade to v0.13 and run it again. It
+not check, it is a WARN saying so: upgrade to v0.13 and run it again. Right
+after such an upgrade the new controller's Pod is Ready a few seconds before
+it takes over, and only the controller in charge records its version: while
+the controller Deployment runs a later release than that version, or a build
+that is not a release, the check is an INFO (upgrade in progress) instead.
+Run it again once kardinal version shows the new controller. It
 reads the condition as the controller last wrote it (the controller reads
 the named Namespaces again every 5 minutes), in every namespace or, when you
 may not list Pipelines cluster-wide, in the current one: a clean result
