@@ -28,7 +28,11 @@
 > because the hole it closes exists for every gate, budgets or not. It changes v0.13's behaviour
 > for requesters the AgentIndex names as agents (they may no longer write gate templates or
 > hand-written MetricChecks) and, while the index is not Ready, for ServiceAccounts; it never
-> refuses a person. `allow` keeps v0.13's behaviour (§16.1).
+> refuses a person. **That includes GitOps controllers:** Argo CD's or Flux's ServiceAccount applying
+> PolicyGates or MetricChecks is refused while the index is `IndexFull` and in a `CompactFormat`
+> window (an upgrade or rollback in progress). The remedy is to trim AgentIdentities, or set
+> `allow`, which keeps v0.13's behaviour. It is still narrower than today's `IndexFull`, which
+> refuses everyone the actor policies check (§11, §16, §16.1).
 
 ---
 
@@ -1069,6 +1073,14 @@ is) from using it.
 
 ## 16. Upgrade from v0.13
 
+- **`admission.agentGateInputs` is on (`refuse`) after the upgrade** (§11). A registered agent can no
+  longer create, change or delete a PolicyGate template or a hand-written MetricCheck. While the
+  AgentIndex is not Ready, no ServiceAccount can, GitOps controllers included: Argo CD's or Flux's
+  ServiceAccount applying those objects is refused on `IndexFull`, and in the `CompactFormat` window
+  of an upgrade or a rollback across the compact index (#2372), until the index is Ready again. The
+  remedy is to trim AgentIdentities below the bound, or to set `admission.agentGateInputs: allow`.
+  The release notes say so. People are never refused by the index's state; the actor policies'
+  same rule for promotion actions is #2451.
 - New optional fields on MetricCheck (`spec.errorBudget`, `status.errorBudget`) and a relaxed
   `query` rule. Existing checks and gates behave as before. The CRD change makes the
   implementation PR a "risky" one (no auto-merge), and so do the go.mod change
