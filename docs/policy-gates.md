@@ -256,9 +256,10 @@ Every matching gate from all three is added to the Graph. `spec.policyNamespaces
 
 ### Sharing gates with other namespaces
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0; refused from v0.14.0 (unreleased)"
     v0.12.x and earlier read every namespace `spec.policyNamespaces` names, without its consent
-    and without a condition or Event.
+    and without a condition or Event. v0.13 warned about a namespace that had not agreed and
+    still read it; v0.14 refuses it.
 
 A gate read through `spec.policyNamespaces` is copied into the Pipeline's namespace, where
 everyone who may read that namespace sees its expression, name and labels. So a namespace other
@@ -310,21 +311,34 @@ spec:
   validationActions: ["Deny"]
 ```
 
-A Pipeline whose `spec.policyNamespaces` names a namespace that has not agreed gets the condition
-`PolicyNamespacesShared=False` with reason `NotShared`, naming each such namespace, and one Warning
-Event `PolicyNamespaceNotShared` each time that list changes. A namespace that does not exist is
-named like one that is not labelled; the controller log tells them apart. In this release the gates
-of those namespaces are still read and `Ready` is unchanged; a later release refuses them (#2286).
+A Pipeline whose `spec.policyNamespaces` names a namespace that has not agreed is refused (#2286):
+
+- It gets the condition `PolicyNamespacesShared=False` with reason `NotShared`, naming each such
+  namespace, and one Warning Event `PolicyNamespaceNotShared` each time that list changes.
+  `status.policyNamespaces.notShared` names them too.
+- It is `Ready=False` with reason `PolicyNamespaceNotShared`.
+- Its **new versions wait**: each stays `Available` with `Ready=False` (reason
+  `PolicyNamespaceNotShared`) and one Warning Event naming the namespace. None fails. Once the
+  namespace agrees or the entry is removed, the version is translated within a minute, without
+  being shipped again.
+- A version **already promoting** when the namespace is refused keeps the gates it started with.
+  Nothing it had is dropped, so no gate is skipped.
+- `kardinal policy simulate` of a new version reports `Blocked by: spec.policyNamespaces`, without
+  that namespace's gates.
+
+A namespace that does not exist is named like one that is not labelled; the controller log tells
+them apart.
 
 The controller reads the named Namespaces again every 5 minutes, so a label added or removed later
 shows within that time. When a read fails (an API error other than not found), the namespace keeps
 the result of its last read: the condition's reason becomes `PolicyNamespaceUnreadable`, its list
-stays as it was, and the read is retried within a minute. An API blip neither raises nor clears the
-warning.
+stays as it was, and the read is retried within a minute. An API blip never refuses a namespace that
+agreed. After a change to the Pipeline's spec there is no last result to keep: until a read succeeds,
+`status.policyNamespaces` stays for the earlier generation and new versions wait.
 
-To list the Pipelines that name a namespace that has not agreed (every one a later release refuses),
-run `kardinal doctor`. Its "Policy namespaces shared" check names each such Pipeline and the
-namespaces, and reports a WARN against this release and a FAIL against v0.14, which refuses them.
+To list the Pipelines that name a namespace that has not agreed (every one v0.14 refuses), run
+`kardinal doctor`. Its "Policy namespaces shared" check names each such Pipeline and the
+namespaces, and reports a WARN against v0.13 and a FAIL against v0.14 and later, which refuse them.
 Against a controller older than v0.13, which doesn't check, it warns that it can't tell. Without
 the CLI:
 

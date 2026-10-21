@@ -1216,3 +1216,41 @@ func TestPolicySimulate_AsAgent(t *testing.T) {
 	_, err = runSimulate(t, c, simulateOptions{Env: "prod", Time: "Tuesday 10am", AsAgent: "nobody"})
 	assert.Error(t, err)
 }
+
+// TestPolicySimulate_RefusedPolicyNamespace (#2286): a new version of a
+// Pipeline whose spec.policyNamespaces names a namespace that has not agreed
+// (status.policyNamespaces, for its generation) is blocked as in the
+// controller, which translates none: BLOCKED by spec.policyNamespaces, with
+// the refused namespace's gates left out; a version already promoting (it
+// has a Graph) kept them and is not blocked for it.
+// Covers GATE-POLNS-05.
+func TestPolicySimulate_RefusedPolicyNamespace(t *testing.T) {
+	t.Parallel()
+	pipe := func() *v1alpha1.Pipeline {
+		p := policyPipeline("demo", "test", "prod")
+		p.Generation = 2
+		p.Spec.PolicyNamespaces = []string{"team-b"}
+		p.Status.PolicyNamespaces = &v1alpha1.PipelinePolicyNamespaces{ObservedGeneration: 2, NotShared: []string{"team-b"}}
+		return p
+	}
+	promoting := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "demo-v1", Namespace: "default",
+		Labels: map[string]string{"kardinal.io/pipeline": "demo"}},
+		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "demo", Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/acme/demo", Tag: "1.0"}}},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting", GraphRef: "demo-demo-v1"}}
+	c := policyClient(t, pipe(), promoting,
+		policyGate("team-gate", "default", "prod", "true"),
+		policyGate("refused-gate", "team-b", "prod", "true"))
+
+	out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "RESULT: BLOCKED")
+	assert.Contains(t, out, "Blocked by: spec.policyNamespaces")
+	assert.Contains(t, out, "spec.policyNamespaces names team-b, which has not agreed")
+	assert.Contains(t, out, "team-gate:")
+	assert.NotContains(t, out, "refused-gate", "the refused namespace's gates are not read")
+
+	out, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", Version: "demo-v1"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "RESULT: PASS", "a version promoting kept its gates")
+	assert.Contains(t, out, "refused-gate:")
+}

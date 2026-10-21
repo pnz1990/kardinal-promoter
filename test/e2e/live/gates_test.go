@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -616,7 +617,9 @@ func TestGate_OrgGatesMandatory(t *testing.T) {
 	a := newArgoApp(t, e, "test", env)
 	e.CreateGate(t, framework.Gate(a.ns, org.Name, env, "true", recheck))
 	p := a.pipeline(nil)
-	p.Spec.PolicyNamespaces = []string{e.Namespace(t)}
+	shared := e.Namespace(t)
+	e.SharePolicyGates(t, shared) // spec.policyNamespaces needs its consent (#2286)
+	p.Spec.PolicyNamespaces = []string{shared}
 	a.apply(t, p)
 
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
@@ -691,6 +694,7 @@ func TestGate_PolicyNamespacesAddGates(t *testing.T) {
 	e := framework.New(t)
 	a := newArgoApp(t, e, "prod")
 	listed, unlisted := e.Namespace(t), e.Namespace(t)
+	e.SharePolicyGates(t, listed) // spec.policyNamespaces needs its consent (#2286)
 	e.CreateGate(t, framework.Gate(listed, "shared-open", "prod", openExpr, recheck))
 	e.CreateGate(t, framework.Gate(unlisted, "unlisted-never", "prod", "false", recheck))
 	p := a.pipeline(nil)
@@ -712,6 +716,61 @@ func TestGate_PolicyNamespacesAddGates(t *testing.T) {
 	assert.Empty(t, never, "a namespace the Pipeline does not list adds no gate")
 }
 
+// TestGate_PolicyNamespaceRefused checks the v0.14 refusal (#2286): a
+// Pipeline whose spec.policyNamespaces names another team's namespace that
+// has not agreed to share its PolicyGates is Ready=False
+// (PolicyNamespaceNotShared) with status.policyNamespaces naming it; its new
+// version stays Available with Ready=False PolicyNamespaceNotShared, and no
+// gate of that namespace is copied into the Pipeline's. Once the namespace
+// is labelled kardinal.io/policy-shareable=true, the same version is
+// translated, with its gate, and promotes to prod.
+//
+// Covers GATE-POLNS-06.
+func TestGate_PolicyNamespaceRefused(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	other := e.Namespace(t) // another team's: not labelled
+	e.CreateGate(t, framework.Gate(other, "other-team-pass", "prod", "true", recheck))
+	p := a.pipeline(nil)
+	p.Spec.PolicyNamespaces = []string{other}
+	a.apply(t, p)
+
+	e.WaitPipeline(t, a.ns, pipelineName, gateTimeout, "refused for "+other, func(p *v1alpha1.Pipeline) bool {
+		ready := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+		st := p.Status.PolicyNamespaces
+		return ready != nil && ready.Status == metav1.ConditionFalse && ready.Reason == "PolicyNamespaceNotShared" &&
+			st != nil && st.ObservedGeneration == p.Generation && slices.Equal(st.NotShared, []string{other})
+	})
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitBundle(t, a.ns, bundle, gateTimeout, "waits for "+other, func(b *v1alpha1.Bundle) (bool, string) {
+		ready := meta.FindStatusCondition(b.Status.Conditions, "Ready")
+		return b.Status.Phase == "Available" && ready != nil && ready.Reason == "PolicyNamespaceNotShared" &&
+			strings.Contains(ready.Message, other), fmt.Sprintf("phase %s conditions %v", b.Status.Phase, b.Status.Conditions)
+	})
+	copied, err := e.GateInstances(ctx, a.ns, bundle, "prod", "other-team-pass")
+	require.NoError(t, err)
+	assert.Empty(t, copied, "no gate of a namespace that has not agreed is copied")
+	assertEnvAt(t, a, "prod", fixtures.V1)
+
+	e.SharePolicyGates(t, other)
+	// The controller sees the label within its 5-minute recheck (Namespaces
+	// are not watched); any update reconciles the Pipeline at once.
+	var cur v1alpha1.Pipeline
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: pipelineName}, &cur))
+	if cur.Annotations == nil {
+		cur.Annotations = map[string]string{}
+	}
+	cur.Annotations["e2e.kardinal.io/recheck"] = "now"
+	require.NoError(t, e.Client.Update(ctx, &cur))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+	copied, err = e.GateInstances(ctx, a.ns, bundle, "prod", "other-team-pass")
+	require.NoError(t, err)
+	assert.NotEmpty(t, copied, "once it agreed, its gate is applied")
+}
+
 // TestGate_PREvidenceNamesTemplates checks the promotion PR's evidence for a
 // Bundle created with kardinal create bundle and no --author (#1581): a gate
 // from a spec.policyNamespaces namespace is listed with that namespace, not
@@ -727,6 +786,7 @@ func TestGate_PREvidenceNamesTemplates(t *testing.T) {
 	ctx := context.Background()
 	a := newArgoApp(t, e, "prod")
 	listed := e.Namespace(t)
+	e.SharePolicyGates(t, listed) // spec.policyNamespaces needs its consent (#2286)
 	e.CreateGate(t, framework.Gate(listed, "shared-pass", "prod", "true", recheck))
 	e.CreateGate(t, framework.Gate(a.ns, "team-pass", "prod", "true", recheck))
 	p := a.pipeline(map[string]string{"prod": "pr-review"})

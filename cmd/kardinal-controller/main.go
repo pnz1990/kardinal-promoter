@@ -236,7 +236,7 @@ func main() {
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
 		"Comma-separated list of namespaces to scan for org-level PolicyGates.")
 	flag.StringVar(&policyShareable, "policy-shareable-namespaces", "",
-		"Comma-separated namespaces whose PolicyGates any Pipeline may read through spec.policyNamespaces, besides those labelled kardinal.io/policy-shareable=true. A Pipeline naming another namespace gets PolicyNamespacesShared=False and a Warning Event; its gates are still read for now (#2286).")
+		"Comma-separated namespaces whose PolicyGates any Pipeline may read through spec.policyNamespaces, besides those labelled kardinal.io/policy-shareable=true. A Pipeline naming another namespace is refused: PolicyNamespacesShared=False, Ready=False (PolicyNamespaceNotShared) and a Warning Event, and its new versions wait until the namespace agrees (#2286).")
 	flag.StringVar(&githubToken, "github-token", os.Getenv("GITHUB_TOKEN"),
 		"SCM token for API operations (a GitHub, GitLab, Forgejo/Gitea, Bitbucket or Azure DevOps token).")
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),

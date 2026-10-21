@@ -128,8 +128,9 @@ controller:
   # -- Namespaces whose PolicyGates any Pipeline may read through
   # spec.policyNamespaces (--policy-shareable-namespaces), besides those
   # labelled kardinal.io/policy-shareable=true. A Pipeline that names another
-  # namespace gets PolicyNamespacesShared=False and a Warning Event; its gates
-  # are still read for now, and a later release refuses them (#2286).
+  # namespace is refused: PolicyNamespacesShared=False, Ready=False
+  # (PolicyNamespaceNotShared) and a Warning Event, and its new versions wait
+  # until the namespace agrees (#2286).
   policyShareableNamespaces: []
   # -- Longest a PolicyGate's status goes unwritten while its result does not
   # change (--gate-status-heartbeat, a Go duration). Empty keeps the controller

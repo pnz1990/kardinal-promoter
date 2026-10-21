@@ -244,7 +244,7 @@ See [Image Signature Verification](../image-verification.md).
 
 Extra namespaces to read PolicyGates from. It only adds: the org policy namespaces (the controller's `--policy-namespaces`, default `platform-policies`) and the Pipeline's namespace are always read. A gate found only through it is a team gate unless it is labelled `kardinal.io/scope: org`, and it never grants a skip. See [Policy Gates](../policy-gates.md).
 
-Any other namespace listed must agree to be read (new in v0.13.0, unreleased): the label `kardinal.io/policy-shareable: "true"` on it, or the controller's `--policy-shareable-namespaces`. One that has not is still read for now, and the `PolicyNamespacesShared` condition names it; a later release refuses it ([Sharing gates with other namespaces](../policy-gates.md#sharing-gates-with-other-namespaces)).
+Any other namespace listed must agree to be read: the label `kardinal.io/policy-shareable: "true"` on it, or the controller's `--policy-shareable-namespaces`. One that has not is refused (new in v0.14.0, unreleased; v0.13 warned only). The Pipeline is `Ready=False` with reason `PolicyNamespaceNotShared`, and the `PolicyNamespacesShared` condition and `status.policyNamespaces.notShared` name the namespace. Its new versions wait until the namespace agrees or the entry is removed, and a version already promoting keeps the gates it started with ([Sharing gates with other namespaces](../policy-gates.md#sharing-gates-with-other-namespaces)).
 
 Default: none.
 
