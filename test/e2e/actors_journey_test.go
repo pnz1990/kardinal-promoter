@@ -75,8 +75,11 @@ func TestJourney8AgentActor(t *testing.T) {
 	_, err = src.Resolve(ctx, agent, actor.Where{Namespace: ns, Environment: "prod"})
 	assert.True(t, errors.Is(err, actor.ErrOutOfScope), "approve in prod: %v", err)
 
+	// A UID, as the API server gives every object (the fake client gives
+	// none): the gate names it on its records, and writes none without it.
 	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "checkout-v2", Namespace: ns, Labels: map[string]string{"kardinal.io/pipeline": "checkout"},
+		ObjectMeta: metav1.ObjectMeta{Name: "checkout-v2", Namespace: ns, UID: "uid-checkout-v2",
+			Labels:      map[string]string{"kardinal.io/pipeline": "checkout"},
 			Annotations: map[string]string{lifecycle.AnnotationCreatedBy: fixerSA}},
 		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "checkout", Actor: stamp},
 	}
