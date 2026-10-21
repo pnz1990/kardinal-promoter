@@ -1,6 +1,6 @@
 # Upgrade
 
-**Upgrading from v0.12.0, v0.12.1, v0.12.2 or v0.12.3** to v0.13.0: follow
+**Upgrading from v0.12.0, v0.12.1, v0.12.2, v0.12.3 or v0.12.4** to v0.13.0: follow
 [Upgrading from v0.12.0](#upgrading-from-v0120).
 **From v0.11.0:** follow [Upgrading from v0.11.0](#upgrading-from-v0110), and read step 1 of
 [Upgrading from v0.12.0](#upgrading-from-v0120) too: the v0.13.0 changes it lists apply to you as well.
@@ -70,12 +70,12 @@ RoleBindings at startup.
 
 ## Upgrading from v0.12.0
 
-The same steps take a v0.12.1, v0.12.2 or v0.12.3 installation: none of them changes a CRD, value
-or admission policy.
+The same steps take a v0.12.1, v0.12.2, v0.12.3 or v0.12.4 installation: none of them changes a
+CRD, value or admission policy.
 
 The upgrade suites run these steps as written (`TestUpgradeV0120_Estate` from v0.12.0,
-`TestUpgradeV0121_Estate` from v0.12.1 and `TestUpgradeV0123_Estate` from v0.12.3, on the oldest
-and newest supported Kubernetes minors)
+`TestUpgradeV0121_Estate` from v0.12.1, `TestUpgradeV0123_Estate` from v0.12.3 and
+`TestUpgradeV0124_Estate` from v0.12.4, on the oldest and newest supported Kubernetes minors)
 while versions are in flight: bakes, open promotion PRs, a rollback, gates holding versions with
 approvals and Verdicts recorded, a running AgentRun, a freeze and, from v0.12.1, an automatic
 rollback. They keep their objects and finish. From v0.12.0 and v0.12.1 they also upgrade with a
@@ -130,7 +130,7 @@ what can change for you, and its v0.13.0 section every change since v0.12.0:
   then on, and a `GateChanged` AuditEvent that says it happened on upgrade records it. From
   v0.12.0, v0.12.1 or v0.12.2 on a kro install with its alpha `CELOmitFunction` feature gate, the
   gates of a Graph that holds gates both with and without an approval policy are deleted and
-  created again once then; from v0.12.3, which already splits those gates into their own
+  created again once then; from v0.12.3 or v0.12.4, which already split those gates into their own
   collections, the re-render updates them in place. Later changes reach the versions in flight at
   once, and are recorded the same way. If you relied on a version in flight keeping an old gate,
   use `kardinal pause` or `kardinal hold` instead
