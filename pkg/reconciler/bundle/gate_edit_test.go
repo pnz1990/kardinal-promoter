@@ -5,13 +5,16 @@ package bundle_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,7 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -40,10 +45,17 @@ type gateEditRig struct {
 
 func newGateEditRig(t *testing.T, objs ...client.Object) *gateEditRig {
 	t.Helper()
+	return newGateEditRigWith(t, interceptor.Funcs{}, objs...)
+}
+
+// newGateEditRigWith is newGateEditRig whose client calls funcs first.
+func newGateEditRigWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *gateEditRig {
+	t.Helper()
 	c := indexedBuilder(newScheme()).
 		WithIndex(&kardinalv1alpha1.PolicyGate{}, bundle.GateTemplateIndex, bundle.GateTemplateKey).
 		WithObjects(objs...).
 		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+		WithInterceptorFuncs(funcs).
 		Build()
 	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
@@ -669,6 +681,81 @@ func TestRenderVersion_UpgradeRecordsVerifyRuleChange(t *testing.T) {
 
 	lcReconcile(t, g.r, "app-v1")
 	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
+
+// #2443: an upgrade's re-render stores its audit records before it writes
+// the Graph with the current render label. While the Bundle's status write
+// that would store them conflicts, the Graph stays as the earlier controller
+// rendered it; once they are stored the next reconcile renders it again, and
+// each record (a template rule changed under the version, #2271, and a
+// verify gate of agents only, #2411) is written exactly once. Before #2443 a
+// conflict after the relabel lost them for good: the next reconcile found a
+// current Graph.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_RecordsBeforeRelabel(t *testing.T) {
+	ctx := context.Background()
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4
+	agents := gateTemplate("qa-only", "prod", false)
+	agents.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1, AllowedAgents: []string{"qa-explorer"}}
+	conflicts := 0
+	funcs := interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+		patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		if _, ok := obj.(*kardinalv1alpha1.Bundle); ok && sub == "status" && conflicts > 0 {
+			conflicts--
+			return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "bundles"}, obj.GetName(),
+				errors.New("the object has been modified"))
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}}
+	g := newGateEditRigWith(t, funcs, gateEditPipeline(), window, agents, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	// What a controller before render version 4 left, with window's rule
+	// from before an edit.
+	g.renderOlder(t, "app-v1", "3", func(tmpl map[string]interface{}) {
+		if tmpl["template"] == "window" {
+			tmpl["digest"], tmpl["generation"] = "sha256:old", "3"
+			tmpl["spec"].(map[string]interface{})["expression"] = "false"
+		}
+	})
+	label := func() string {
+		got, err := g.gc.Get(ctx, "default", graph.GraphNameFrom("app", "app-v1"))
+		require.NoError(t, err)
+		return got.Labels[graph.LabelRenderVersion]
+	}
+
+	// The status write that would store the records conflicts: nothing is
+	// recorded, and the Graph is not rendered again either.
+	conflicts = 1
+	res, err := g.r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"}})
+	require.NoError(t, err, "a Conflict is requeued")
+	require.Zero(t, conflicts, "the status write conflicted")
+	assert.Equal(t, time.Second, res.RequeueAfter)
+	assert.Equal(t, "3", label(), "not rendered again before its records are stored")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+
+	// Stored first, the Graph still the earlier controller's.
+	res = lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, "3", label())
+	assert.Equal(t, time.Second, res.RequeueAfter, "rendered again at once")
+	stored := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, stored, 2)
+
+	// Then rendered again; each record written once.
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label())
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 2, "each record once, stored and written")
+	var messages []string
+	for _, e := range got {
+		messages = append(messages, e.Message)
+	}
+	assert.Contains(t, strings.Join(messages, "\n"), "default/window takes its current rule (generation 4)")
+	assert.Contains(t, strings.Join(messages, "\n"), "the controller's verify rule changed (v0.13)")
+	assert.Empty(t, lcGet(t, g.c, "app-v1").Status.PendingAuditEvents, "every record written")
 }
 
 // renderOlder rewrites Bundle b's Graph to what an earlier controller left:

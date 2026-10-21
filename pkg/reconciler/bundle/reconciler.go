@@ -44,6 +44,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -478,6 +479,30 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		gatesHash := r.gatesHashFor(ctx, log, pipeline)
 		gates, gatesRead := r.currentGates(ctx, log, pipeline)
 		before := snapshotGates(g)
+		// The rule changes the re-render applies are recorded before the
+		// Graph is written with the current label: written after, a status
+		// write that conflicts, or a controller that stops, would lose them
+		// for good, as the next reconcile finds a current Graph (#2443).
+		recorded := false
+		if rd, ok := r.Translator.(graphRenderer); ok && gatesRead {
+			if rendered, rErr := rd.Render(ctx, pipeline, b); rErr == nil {
+				entries := upgradeRecords(b, pipeline, g, before, snapshotGates(rendered), gates, r.now())
+				missing, err := r.unrecorded(ctx, b, entries)
+				if err != nil {
+					return fmt.Errorf("re-render graph %s: read its audit records: %w", name, err)
+				}
+				if len(missing) > 0 {
+					for _, e := range missing {
+						b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
+					}
+					log.Info().Str("graph", name).Int("records", len(missing)).
+						Msg("graph rendered by an earlier controller — its audit records are stored first, then it is rendered again")
+					return errRecordsFirst
+				}
+				recorded = true
+			}
+			// A Render error: Translate below fails the same way, and says so.
+		}
 		if _, tErr := r.translate(ctx, log, pipeline, b); tErr != nil {
 			if skipTranslate(tErr) {
 				return nil
@@ -485,23 +510,12 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return fmt.Errorf("re-render graph %s: %w", name, tErr)
 		}
 		b.Status.PolicyGatesHash = gatesHash
-		// A template edited, created or deleted since the version started
-		// reaches it only now: the change is recorded, as one under a
-		// version in flight is (#2144).
-		if gatesRead {
+		// A translator that cannot render without applying: the records
+		// are made from the Graph as written.
+		if gatesRead && !recorded {
 			if rendered := r.auditGraph(ctx, log, b); rendered != nil {
-				after := snapshotGates(rendered)
-				if e, ok := upgradeGateChangeEntry(b, before.rules, after.rules, before.stamps, after.stamps,
-					before.envs, after.envs, gates, r.now()); ok {
+				for _, e := range upgradeRecords(b, pipeline, g, before, snapshotGates(rendered), gates, r.now()) {
 					b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
-				}
-				// A Graph rendered before the verify rule became one
-				// allowlist: its gates of agents only stop counting
-				// people's verdicts now, which the record says (#2411).
-				if renderedBefore(g.Labels[graph.LabelRenderVersion], verifyOneAllowlistRender) {
-					for _, e := range verifyRuleChangeEntries(b, pipeline, gates, r.now()) {
-						b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
-					}
 				}
 			}
 		}
@@ -737,6 +751,73 @@ func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kard
 		return nil
 	}
 	return g
+}
+
+// graphRenderer is a BundleTranslator that also builds a Bundle's Graph
+// without applying it (translator.Translator.Render).
+type graphRenderer interface {
+	Render(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (*graph.Graph, error)
+}
+
+// errRecordsFirst is syncGraph's answer when an upgrade's re-render waits
+// for its audit records: they are in the Bundle's outbox, which the status
+// write of this reconcile stores, and the next reconcile renders the Graph
+// again (#2443). It is no failure: handleSyncEvidence requeues at once.
+var errRecordsFirst = errors.New("the re-render's audit records are stored first")
+
+// upgradeRecords are the audit records of re-rendering a Promoting Bundle's
+// Graph g (before) for the current render version (after): the template
+// rules it changes (#2271), and, for a Graph rendered before the verify rule
+// became one allowlist, its verify gates of agents only (#2411). Each is
+// named after what it records, so making them again makes the same records.
+func upgradeRecords(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline, g *graph.Graph,
+	before, after gateSnapshot, gates []kardinalv1alpha1.PolicyGate, now time.Time) []kardinalv1alpha1.PendingAuditEvent {
+	var out []kardinalv1alpha1.PendingAuditEvent
+	if e, ok := upgradeGateChangeEntry(b, before.rules, after.rules, before.stamps, after.stamps,
+		before.envs, after.envs, gates, now); ok {
+		out = append(out, e)
+	}
+	if renderedBefore(g.Labels[graph.LabelRenderVersion], verifyOneAllowlistRender) {
+		out = append(out, verifyRuleChangeEntries(b, pipeline, gates, now)...)
+	}
+	return out
+}
+
+// unrecorded are the entries neither stored in b's outbox nor written as
+// AuditEvents yet. The outbox is read as the API server holds it, not as b
+// holds it in memory, which may have entries this reconcile has not stored.
+func (r *Reconciler) unrecorded(ctx context.Context, b *kardinalv1alpha1.Bundle,
+	entries []kardinalv1alpha1.PendingAuditEvent) ([]kardinalv1alpha1.PendingAuditEvent, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var stored kardinalv1alpha1.Bundle
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(b), &stored); err != nil {
+		return nil, fmt.Errorf("get bundle %s: %w", b.Name, err)
+	}
+	pending := map[string]bool{}
+	for _, p := range stored.Status.PendingAuditEvents {
+		pending[p.Name] = true
+	}
+	var out []kardinalv1alpha1.PendingAuditEvent
+	for _, e := range entries {
+		if pending[e.Name] {
+			continue
+		}
+		var ev kardinalv1alpha1.AuditEvent
+		switch err := reader.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: e.Name}, &ev); {
+		case err == nil:
+		case apierrors.IsNotFound(err):
+			out = append(out, e)
+		default:
+			return nil, fmt.Errorf("get auditevent %s: %w", e.Name, err)
+		}
+	}
+	return out, nil
 }
 
 // errGatesNotApplied is the error of a re-translate for changed PolicyGate
@@ -1754,6 +1835,12 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	var after []func()
+	// An upgrade's re-render waiting for its audit records: this status
+	// write stores them, and the requeue below renders the Graph (#2443).
+	recordsFirst := errors.Is(syncErr, errRecordsFirst)
+	if recordsFirst {
+		syncErr = nil
+	}
 	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
 	graphDeleted := errors.Is(syncErr, errGraphDeletedAfterFailure)
 	switch {
@@ -1929,6 +2016,9 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	if syncErr != nil && !invalidBuild && !graphDeleted {
 		log.Error().Err(syncErr).Msg("graph sync failed — requeuing")
 		result = ctrl.Result{RequeueAfter: requeueSlow}
+	}
+	if recordsFirst {
+		result = ctrl.Result{RequeueAfter: time.Second}
 	}
 	if equality.Semantic.DeepEqual(before.Status, b.Status) {
 		log.Debug().Msg("bundle status already up to date")

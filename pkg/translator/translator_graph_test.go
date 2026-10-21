@@ -5,6 +5,7 @@ package translator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -122,6 +123,54 @@ func TestTranslate_EndToEnd(t *testing.T) {
 			assert.Equal(t, graph.DefaultApplierClusterRole, bindings.Items[0].RoleRef.Name)
 		})
 	}
+}
+
+// TestRender_AppliesNothing (#2443): Render builds the Graph Translate
+// applies, from the same inputs, and writes nothing: no Graph, no
+// RoleBinding. Its errors are Translate's.
+func TestRender_AppliesNothing(t *testing.T) {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	gate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "qa", Namespace: "team-a", Labels: map[string]string{"kardinal.io/applies-to": "prod"}},
+		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "true",
+			Verify: &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1, AllowedAgents: []string{"qa"}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(translateScheme(t)).WithObjects(gate).Build()
+	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
+	gc := graph.NewGraphClient(dyn, zerolog.Nop())
+	tr := New(gc, graph.NewBuilder(), c, []string{"platform-policies"}, zerolog.Nop()).
+		WithIdentity(&graph.IdentityProvisioner{Writer: c, Reader: c})
+	p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "uat", Health: resourceHealth("team-a")},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: resourceHealth("team-a")})
+
+	rendered, err := tr.Render(ctx, p, teamBundle(nil))
+	require.NoError(t, err)
+	for _, a := range dyn.Actions() {
+		assert.Contains(t, []string{"get", "list"}, a.GetVerb(), "Render writes no Graph: %v", a)
+	}
+	var bindings rbacv1.RoleBindingList
+	require.NoError(t, c.List(ctx, &bindings))
+	assert.Empty(t, bindings.Items, "Render binds nothing")
+
+	name, err := tr.Translate(ctx, p, teamBundle(nil))
+	require.NoError(t, err)
+	applied, err := gc.Get(ctx, "team-a", name)
+	require.NoError(t, err)
+	assert.Equal(t, rendered.Name, applied.Name)
+	assert.Equal(t, rendered.Labels, applied.Labels)
+	want, err := json.Marshal(rendered.Spec)
+	require.NoError(t, err)
+	got, err := json.Marshal(applied.Spec)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(want), string(got), "Translate applies what Render built")
+
+	bad := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+	_, rErr := tr.Render(ctx, bad, teamBundle(nil))
+	_, tErr := tr.Translate(ctx, bad, teamBundle(nil))
+	require.Error(t, rErr)
+	assert.ErrorIs(t, rErr, graph.ErrInvalid)
+	assert.Equal(t, tErr.Error(), rErr.Error(), "the same error")
 }
 
 // TestTranslate_PermanentErrors verifies that Translate errors caused by the
