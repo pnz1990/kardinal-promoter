@@ -26,6 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
@@ -72,19 +74,68 @@ func objectErr(obj interface{}, format string, args ...interface{}) error {
 	return &soakObjectErr{msg: fmt.Sprintf(format, args...), obj: obj}
 }
 
+// violation is a violation with no one object to show.
+func violation(format string, args ...interface{}) error {
+	return &soakObjectErr{msg: fmt.Sprintf(format, args...)}
+}
+
+// isViolation reports whether err is an invariant that did not hold, not
+// an error reading the cluster.
+func isViolation(err error) bool {
+	var v *soakObjectErr
+	return errors.As(err, &v)
+}
+
+// soakCheckRetries are the waits before a check that could not read the
+// cluster runs again: an API server busy with an upgrade's rollout answers
+// a list with an error now and then, which is no broken invariant.
+var soakCheckRetries = []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second}
+
+// soakRetrying runs check again, after each of soakCheckRetries, while it fails
+// with an error reading the cluster; a violation ends it at once, and so
+// does the soak's end. A read that still fails is a violation of its own:
+// an invariant the soak cannot read is not judged.
+func soakRetrying(check func(ctx context.Context, since time.Time) error) func(ctx context.Context, since time.Time) error {
+	return func(ctx context.Context, since time.Time) error {
+		err := check(ctx, since)
+		for _, d := range soakCheckRetries {
+			if err == nil || isViolation(err) || ctx.Err() != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(d):
+			}
+			err = check(ctx, since)
+		}
+		if err != nil && !isViolation(err) {
+			return violation("could not read the cluster to check, %d times: %v", len(soakCheckRetries)+1, err)
+		}
+		return err
+	}
+}
+
 // addChecks registers the invariants with the checker.
 func (s *soakDay) addChecks() {
 	c := s.check
-	c.Add("tenant-isolation", s.checkIsolation)
-	c.Add("receipts", s.checkReceipts)
-	c.Add("verdicts", s.checkVerdicts)
-	c.Add("audit-trail", s.checkAudit)
-	c.Add("reconcile-errors", s.checkReconcileErrors)
-	c.Add("controller-health", s.checkController)
-	c.Add("progress", s.checkProgress)
-	c.Add("load", s.checkLoad)
-	c.Add("memory", s.checkMemory)
-	c.Add("in-flight-finished", s.checkExpectations)
+	for _, ch := range []struct {
+		name string
+		run  func(ctx context.Context, since time.Time) error
+	}{
+		{"tenant-isolation", s.checkIsolation},
+		{"receipts", s.checkReceipts},
+		{"verdicts", s.checkVerdicts},
+		{"audit-trail", s.checkAudit},
+		{"reconcile-errors", s.checkReconcileErrors},
+		{"controller-health", s.checkController},
+		{"progress", s.checkProgress},
+		{"load", s.checkLoad},
+		{"memory", s.checkMemory},
+		{"in-flight-finished", s.checkExpectations},
+	} {
+		c.Add(ch.name, soakRetrying(ch.run))
+	}
 }
 
 // bounds is the window of Verified steps a pass judges: since and now, both
@@ -155,12 +206,13 @@ func (s *soakDay) checkIsolation(ctx context.Context, _ time.Time) error {
 	consentAt := s.consentAt
 	s.mu.Unlock()
 	var gates v1alpha1.PolicyGateList
-	if err := s.e.Client.List(ctx, &gates, client.InNamespace(s.b.ns)); err != nil {
+	if err := s.e.Client.List(ctx, &gates, client.InNamespace(s.b.ns),
+		client.MatchingLabels{graph.LabelGateTemplateNamespace: s.private}); err != nil {
 		return err
 	}
 	for i := range gates.Items {
 		g := &gates.Items[i]
-		if strings.Contains(g.Name, "-"+s.private+"-prod--") && (consentAt.IsZero() || g.CreationTimestamp.Time.Before(consentAt)) {
+		if consentAt.IsZero() || g.CreationTimestamp.Time.Before(consentAt) {
 			return objectErr(g, "gate %s/%s was copied from %s, which had not consented", g.Namespace, g.Name, s.private)
 		}
 	}
@@ -245,32 +297,46 @@ func (s *soakDay) checkReceipts(ctx context.Context, since time.Time) error {
 				return objectErr(rc, "receipt %s's referrers changed once Stored: %s, then %s", key, was.refs, now.refs)
 			}
 		}
-		var bundles v1alpha1.BundleList
-		if err := s.e.Client.List(ctx, &bundles, client.InNamespace(tn.ns)); err != nil {
+		byStep := map[string]*v1alpha1.PromotionReceipt{} // bundle/env -> a Stored receipt
+		for i := range rcs.Items {
+			rc := &rcs.Items[i]
+			k := rc.Labels["kardinal.io/bundle"] + "/" + rc.Labels["kardinal.io/environment"]
+			if prev := byStep[k]; prev == nil || prev.Status.Phase != v1alpha1.ReceiptStored {
+				byStep[k] = rc
+			}
+		}
+		steps, retired, bundles, err := s.stepsOf(ctx, tn.ns)
+		if err != nil {
 			return err
 		}
 		live := map[string]bool{}
-		for _, b := range bundles.Items {
+		for _, b := range bundles {
 			live[b.Name] = true
 		}
-		var steps v1alpha1.PromotionStepList
-		if err := s.e.Client.List(ctx, &steps, client.InNamespace(tn.ns)); err != nil {
-			return err
-		}
-		for i := range steps.Items {
-			ps := &steps.Items[i]
+		for i := range steps {
+			ps := &steps[i]
 			at := stepVerifiedAt(ps)
 			if at.IsZero() || at.Before(lo) || !at.Before(hi) {
 				continue
 			}
-			if ps.Status.Receipt == "" {
-				return objectErr(ps, "step %s/%s Verified at %s names no receipt", ps.Namespace, ps.Name, at.UTC().Format(time.RFC3339))
-			}
-			rc := byName[ps.Status.Receipt]
+			s.judge("receipts", retired[ps.Name])
+			var rc *v1alpha1.PromotionReceipt
 			switch {
-			case rc == nil:
-				return objectErr(ps, "step %s/%s names receipt %s, which does not exist", ps.Namespace, ps.Name, ps.Status.Receipt)
-			case rc.Status.Phase != v1alpha1.ReceiptStored:
+			case retired[ps.Name]:
+				// A retired step keeps no receipt name: its Bundle's and
+				// environment's.
+				if rc = byStep[ps.Spec.BundleName+"/"+ps.Spec.Environment]; rc == nil {
+					return objectErr(ps, "retired step %s/%s Verified at %s has no receipt of %s in %s", ps.Namespace, ps.Name,
+						at.UTC().Format(time.RFC3339), ps.Spec.BundleName, ps.Spec.Environment)
+				}
+			case ps.Status.Receipt == "":
+				return objectErr(ps, "step %s/%s Verified at %s names no receipt", ps.Namespace, ps.Name, at.UTC().Format(time.RFC3339))
+			default:
+				if rc = byName[ps.Status.Receipt]; rc == nil {
+					return objectErr(ps, "step %s/%s names receipt %s, which does not exist", ps.Namespace, ps.Name, ps.Status.Receipt)
+				}
+			}
+			if rc.Status.Phase != v1alpha1.ReceiptStored {
 				return objectErr(rc, "receipt %s/%s of step %s is %s %s after the step was Verified", rc.Namespace, rc.Name, ps.Name,
 					rc.Status.Phase, time.Since(at).Round(time.Second))
 			}
@@ -283,7 +349,7 @@ func (s *soakDay) checkReceipts(ctx context.Context, since time.Time) error {
 			if ps.Spec.PipelineName == tn.evidence && !s.isProbe(ps.Spec.BundleName) && oci == "" {
 				return objectErr(rc, "receipt %s/%s of team %s's own registry image has no referrer: %v", rc.Namespace, rc.Name, tn.name, rc.Status.Conditions)
 			}
-			if !live[ps.Spec.BundleName] || s.rng.Intn(20) != 0 {
+			if retired[ps.Name] || !live[ps.Spec.BundleName] || s.rng.Intn(20) != 0 {
 				continue
 			}
 			tn, ps, rc, oci := tn, ps, rc, oci
@@ -301,6 +367,50 @@ func (s *soakDay) checkReceipts(ctx context.Context, since time.Time) error {
 		}
 	}
 	return nil
+}
+
+// stepsOf are ns's PromotionSteps: the live ones and the retired ones,
+// rebuilt from their Bundles' status.retiredSteps as the invariants do
+// (lifecycle.StepFromRetired: a superseded version's Graph and steps are
+// deleted a minute after, graph.retire.superseded), with retired naming the
+// rebuilt ones, and ns's Bundles.
+func (s *soakDay) stepsOf(ctx context.Context, ns string) ([]v1alpha1.PromotionStep, map[string]bool, []v1alpha1.Bundle, error) {
+	var bl v1alpha1.BundleList
+	if err := s.e.Client.List(ctx, &bl, client.InNamespace(ns)); err != nil {
+		return nil, nil, nil, err
+	}
+	var sl v1alpha1.PromotionStepList
+	if err := s.e.Client.List(ctx, &sl, client.InNamespace(ns)); err != nil {
+		return nil, nil, nil, err
+	}
+	steps := sl.Items
+	seen := map[string]bool{}
+	for i := range steps {
+		seen[steps[i].Name] = true
+	}
+	retired := map[string]bool{}
+	for i := range bl.Items {
+		b := &bl.Items[i]
+		for _, r := range b.Status.RetiredSteps {
+			if !seen[r.Name] {
+				seen[r.Name], retired[r.Name] = true, true
+				steps = append(steps, lifecycle.StepFromRetired(b, r))
+			}
+		}
+	}
+	return steps, retired, bl.Items, nil
+}
+
+// judge counts a step an invariant judged, live or retired, for the report:
+// the coverage of the per-promotion checks shows there.
+func (s *soakDay) judge(invariant string, retired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := invariant + ".live"
+	if retired {
+		k = invariant + ".retired"
+	}
+	s.judged[k]++
 }
 
 // verifyReceipt verifies rc with kardinal verify-receipt from the cluster
@@ -384,16 +494,17 @@ func (s *soakDay) checkAudit(ctx context.Context, since time.Time) error {
 				succeeded[ev.Spec.BundleName+"/"+ev.Spec.Environment] = ev
 			}
 		}
-		var steps v1alpha1.PromotionStepList
-		if err := s.e.Client.List(ctx, &steps, client.InNamespace(tn.ns)); err != nil {
+		steps, retired, _, err := s.stepsOf(ctx, tn.ns)
+		if err != nil {
 			return err
 		}
-		for i := range steps.Items {
-			ps := &steps.Items[i]
+		for i := range steps {
+			ps := &steps[i]
 			at := stepVerifiedAt(ps)
 			if at.IsZero() || at.Before(lo) || !at.Before(hi) {
 				continue
 			}
+			s.judge("audit-trail", retired[ps.Name])
 			ev := succeeded[ps.Spec.BundleName+"/"+ps.Spec.Environment]
 			switch {
 			case ev == nil:
@@ -410,28 +521,51 @@ func (s *soakDay) checkAudit(ctx context.Context, since time.Time) error {
 // soakErrorWindow is the reconcile-error window a pass judges.
 const soakErrorWindow = 10 * time.Minute
 
-// checkReconcileErrors: under 1% of the reconciles of the last ten minutes
-// failed (Prometheus), unless the window holds an upgrade or a leader kill,
-// whose errors the end of the day reports over the whole run instead.
+// The reconcile-error limits: soakErrorLimit for every ten minutes, and
+// soakEpisodeErrorLimit for ten minutes that hold an upgrade or a leader
+// kill (their rollout and handoff end reconciles mid-call). The ten minutes
+// after an episode are held to soakErrorLimit again: the controller must
+// recover, not just survive.
+const (
+	soakErrorLimit        = 0.01
+	soakEpisodeErrorLimit = 0.05
+	// soakPromDownPasses is how many passes in a row may find Prometheus
+	// unreachable before that is a violation: the invariant cannot be
+	// judged blind.
+	soakPromDownPasses = 3
+)
+
+// checkReconcileErrors: the reconciles of the last ten minutes failed under
+// soakErrorLimit, or soakEpisodeErrorLimit when the ten minutes hold an
+// upgrade or a leader kill (Prometheus). A pass Prometheus cannot answer,
+// or with too few reconciles to judge, is counted as unjudged; Prometheus
+// unreachable for soakPromDownPasses passes in a row is a violation, and so
+// is, on the last pass, a day with more unjudged passes than judged ones.
 func (s *soakDay) checkReconcileErrors(ctx context.Context, _ time.Time) error {
-	if s.final {
-		return nil // invariants.Check's metrics-reconcile-errors, over the day
-	}
 	end := time.Now()
 	from := end.Add(-soakErrorWindow)
 	if from.Before(s.start) {
 		from = s.start
 	}
+	limit, during := soakErrorLimit, ""
 	s.mu.Lock()
 	for _, w := range s.windows {
 		if (w.Name == "upgrade" || w.Name == "leader-killed") && w.From.Before(end) && w.To.After(from) {
-			s.mu.Unlock()
-			return nil
+			limit, during = soakEpisodeErrorLimit, " (with the "+w.Name+")"
 		}
 	}
 	s.mu.Unlock()
+	unjudged := func(why string) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.errorUnjudged++
+		if s.final && s.errorUnjudged > s.errorJudged && s.errorJudged+s.errorUnjudged >= 3 {
+			return violation("the reconcile-error ratio was judged on %d passes and not on %d (last: %s)", s.errorJudged, s.errorUnjudged, why)
+		}
+		return nil
+	}
 	sel := `namespace="` + framework.ControllerNamespace + `",job="` + framework.ControllerName + `"`
-	w := fmt.Sprintf("%ds", int(end.Sub(from).Seconds()))
+	w := fmt.Sprintf("%ds", int(math.Max(60, end.Sub(from).Seconds())))
 	sum := func(q string) (map[string]float64, error) {
 		samples, err := s.e.PromQuery(ctx, q)
 		if err != nil {
@@ -446,13 +580,23 @@ func (s *soakDay) checkReconcileErrors(ctx context.Context, _ time.Time) error {
 		return out, nil
 	}
 	all, err := sum(`sum by (controller) (increase(controller_runtime_reconcile_total{` + sel + `}[` + w + `]))`)
-	if err != nil {
-		return nil // Prometheus unreachable: the day's check at the end still runs
+	var bad map[string]float64
+	if err == nil {
+		bad, err = sum(`sum by (controller) (increase(controller_runtime_reconcile_errors_total{` + sel + `}[` + w + `]))`)
 	}
-	bad, err := sum(`sum by (controller) (increase(controller_runtime_reconcile_errors_total{` + sel + `}[` + w + `]))`)
 	if err != nil {
-		return nil
+		s.mu.Lock()
+		s.promDown++
+		down := s.promDown
+		s.mu.Unlock()
+		if down >= soakPromDownPasses {
+			return violation("Prometheus did not answer the reconcile-error query on %d passes in a row: %v", down, err)
+		}
+		return unjudged("Prometheus: " + err.Error())
 	}
+	s.mu.Lock()
+	s.promDown = 0
+	s.mu.Unlock()
 	var tot, errs float64
 	var worst []string
 	for k, v := range all {
@@ -463,17 +607,18 @@ func (s *soakDay) checkReconcileErrors(ctx context.Context, _ time.Time) error {
 		}
 	}
 	if tot < 200 {
-		return nil
+		return unjudged(fmt.Sprintf("%.0f reconciles", tot))
 	}
 	ratio := errs / tot
 	s.mu.Lock()
+	s.errorJudged++
 	series, _ := s.notes["reconcileErrorRatios"].([]string)
-	s.notes["reconcileErrorRatios"] = append(series, fmt.Sprintf("T+%s %.2f%% of %.0f", end.Sub(s.start).Round(time.Minute), 100*ratio, tot))
+	s.notes["reconcileErrorRatios"] = append(series, fmt.Sprintf("T+%s %.2f%% of %.0f%s", end.Sub(s.start).Round(time.Minute), 100*ratio, tot, during))
 	s.mu.Unlock()
-	if ratio > 0.01 {
+	if ratio > limit {
 		sort.Strings(worst)
-		return fmt.Errorf("%.2f%% of %.0f reconciles failed from T+%s to T+%s (limit 1%%): %s", 100*ratio, tot,
-			from.Sub(s.start).Round(time.Second), end.Sub(s.start).Round(time.Second), strings.Join(worst, ", "))
+		return violation("%.2f%% of %.0f reconciles failed from T+%s to T+%s%s (limit %.0f%%): %s", 100*ratio, tot,
+			from.Sub(s.start).Round(time.Second), end.Sub(s.start).Round(time.Second), during, 100*limit, strings.Join(worst, ", "))
 	}
 	return nil
 }
@@ -517,7 +662,7 @@ func (s *soakDay) checkProgress(ctx context.Context, since time.Time) error {
 		n += c
 	}
 	if n == 0 {
-		return fmt.Errorf("no promotion finished since %s while the load ran", since.UTC().Format(time.RFC3339))
+		return violation("no promotion finished since %s while the load ran", since.UTC().Format(time.RFC3339))
 	}
 	return nil
 }
@@ -527,7 +672,7 @@ func (s *soakDay) checkLoad(context.Context, time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.loadErrors) > 0 {
-		return fmt.Errorf("%d Bundle creates failed twice; first: %s", len(s.loadErrors), s.loadErrors[0])
+		return violation("%d Bundle creates failed twice; first: %s", len(s.loadErrors), s.loadErrors[0])
 	}
 	return nil
 }
@@ -540,29 +685,39 @@ func (s *soakDay) checkMemory(context.Context, time.Time) error {
 	}
 	for _, p := range s.leaderSeries() {
 		if p.baseline > 0 && p.last > 2*p.baseline {
-			return fmt.Errorf("controller leader %s's heap %.1f MiB is over twice its baseline %.1f MiB", p.pod, p.last, p.baseline)
+			return violation("controller leader %s's heap %.1f MiB is over twice its baseline %.1f MiB", p.pod, p.last, p.baseline)
 		}
 	}
 	return nil
 }
 
-// checkExpectations runs the checks episodes left whose deadline passed.
+// checkExpectations runs the checks episodes left whose deadline passed,
+// and drops each once it held: one that could not read the cluster is kept
+// for the retry.
 func (s *soakDay) checkExpectations(ctx context.Context, _ time.Time) error {
 	s.mu.Lock()
-	var due, later []soakExpectation
+	var due []soakExpectation
 	for _, x := range s.expect {
 		if s.final || time.Now().After(x.deadline) {
 			due = append(due, x)
-		} else {
-			later = append(later, x)
 		}
 	}
-	s.expect = later
 	s.mu.Unlock()
 	for _, x := range due {
 		if err := x.check(ctx); err != nil {
-			return fmt.Errorf("%s: %w", x.name, err)
+			if isViolation(err) {
+				return fmt.Errorf("%s: %w", x.name, err)
+			}
+			return err
 		}
+		s.mu.Lock()
+		for i := range s.expect {
+			if s.expect[i].name == x.name {
+				s.expect = append(s.expect[:i], s.expect[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
 	}
 	return nil
 }
@@ -664,11 +819,11 @@ func (s *soakDay) memoryFlat() error {
 		judged = append(judged, p.pod)
 		switch {
 		case p.last > 1.2*p.baseline+8:
-			return fmt.Errorf("controller leader %s's heap grew from %.1f to %.1f MiB over %s (limit 1.2x + 8 MiB)", p.pod, p.baseline, p.last, span.Round(time.Minute))
+			return violation("controller leader %s's heap grew from %.1f to %.1f MiB over %s (limit 1.2x + 8 MiB)", p.pod, p.baseline, p.last, span.Round(time.Minute))
 		case slope >= 1:
-			return fmt.Errorf("controller leader %s's heap grows %.2f MiB every ten minutes over %s (limit 1)", p.pod, slope, span.Round(time.Minute))
+			return violation("controller leader %s's heap grows %.2f MiB every ten minutes over %s (limit 1)", p.pod, slope, span.Round(time.Minute))
 		case p.rssLast > 1.2*p.rssBaseline+64:
-			return fmt.Errorf("controller leader %s's RSS grew from %.0f to %.0f MiB over %s (limit 1.2x + 64 MiB)", p.pod, p.rssBaseline, p.rssLast, span.Round(time.Minute))
+			return violation("controller leader %s's RSS grew from %.0f to %.0f MiB over %s (limit 1.2x + 64 MiB)", p.pod, p.rssBaseline, p.rssLast, span.Round(time.Minute))
 		}
 	}
 	s.note("memoryJudged", judged)
@@ -734,8 +889,9 @@ func (s *soakDay) dump(ctx context.Context, v soak.Violation) {
 // soak-report.json in the run's directory.
 func (s *soakDay) writeReport() {
 	s.mu.Lock()
-	rep := map[string]interface{}{"notes": s.notes, "windows": s.windows, "memory": s.heaps,
-		"start": s.start.UTC().Format(time.RFC3339), "duration": s.d.String(), "rejected": s.rejected}
+	rep := map[string]interface{}{"notes": s.notes, "windows": s.windows, "memory": s.heaps, "judged": s.judged,
+		"reconcileErrorPasses": map[string]int{"judged": s.errorJudged, "unjudged": s.errorUnjudged},
+		"start":                s.start.UTC().Format(time.RFC3339), "duration": s.d.String(), "rejected": s.rejected}
 	b, err := json.MarshalIndent(rep, "", "  ")
 	s.mu.Unlock()
 	if err != nil {

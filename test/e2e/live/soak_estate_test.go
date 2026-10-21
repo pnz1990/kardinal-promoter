@@ -172,8 +172,9 @@ func (s *soakDay) teamA() {
 	a := s.a
 	ctx := context.Background()
 	a.verifier = registerAgent(t, e, a.ns, "qa", soakVerifierSponsor, map[string]string{"PROBE_DELAY": "2s"})
-	// allowedUsers names a QA lead nobody acts as: without it every
-	// person's verdict would count (verify.allowedUsers).
+	// allowedUsers names a QA lead nobody acts as: before #2411's one
+	// allowlist (#2429) a gate of agents only counted every person's
+	// verdict too. With it the entry is harmless; drop it once #2429 is in.
 	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 2, AllowedAgents: []string{a.verifier},
 		AllowedUsers: []string{soakQALead}, Run: &v1alpha1.GateVerifyRun{Template: a.verifier, Count: 2, Namespace: a.ns}}))
 	cred := e.AddFakeTicketUser(t, a.ns, randomHex(t, 12))

@@ -121,6 +121,13 @@ type soakDay struct {
 	heaps []heapSample
 	// loadErrors are Bundle creates that failed twice.
 	loadErrors []string
+	// errorPasses counts the reconcile-error passes judged and unjudged
+	// (Prometheus unreachable, or too few reconciles); promDown counts the
+	// passes in a row Prometheus could not answer.
+	errorJudged, errorUnjudged, promDown int
+	// judged counts, per invariant, the steps a receipts or audit pass
+	// judged (live and retired), for the report.
+	judged map[string]int
 	// tickets is each fake ticket's decision; rejected counts rejections.
 	tickets  map[string]string
 	rejected int
@@ -211,7 +218,7 @@ func newSoakDay(t *testing.T) *soakDay {
 		t: t, e: e, d: soakDurationOf(t, envSoakDuration, soakDefault), seed: seed, rng: scale.NewRNG(seed, t.Name()),
 		reg:    framework.NewRegistry(t),
 		signed: map[string]signedReceipt{}, tickets: map[string]string{}, approved: map[string]bool{},
-		paused: map[string]bool{}, probes: map[string]bool{}, notes: map[string]interface{}{"seed": seed},
+		paused: map[string]bool{}, probes: map[string]bool{}, notes: map[string]interface{}{"seed": seed}, judged: map[string]int{},
 	}
 	s.notes["duration"] = s.d.String()
 	s.rel = e.ExistingRelease(t, "kardinal-promoter", framework.ControllerNamespace)
@@ -306,6 +313,23 @@ func (s *soakDay) window(name string, from, to time.Time) {
 	defer s.mu.Unlock()
 	s.windows = append(s.windows, soakWindow{Name: name, From: from, To: to,
 		FromS: from.UTC().Format(time.RFC3339), ToS: to.UTC().Format(time.RFC3339)})
+}
+
+// openWindow opens episode window name now, until closeWindow ends it: a
+// pass during the episode already judges it as one.
+func (s *soakDay) openWindow(name string) (from time.Time, closeWindow func()) {
+	from = time.Now()
+	s.mu.Lock()
+	i := len(s.windows)
+	s.windows = append(s.windows, soakWindow{Name: name, From: from, To: from.Add(24 * time.Hour), FromS: from.UTC().Format(time.RFC3339)})
+	s.mu.Unlock()
+	return from, func() {
+		// The rollout's settling: two minutes after the episode.
+		to := time.Now().Add(2 * time.Minute)
+		s.mu.Lock()
+		s.windows[i].To, s.windows[i].ToS = to, to.UTC().Format(time.RFC3339)
+		s.mu.Unlock()
+	}
 }
 
 // later leaves check for the first pass after deadline.

@@ -355,10 +355,18 @@ Verified step's receipt Stored within four minutes, never signed again, a
 sample verified with `kardinal verify-receipt` from the cluster and the
 registry), verdicts (only the allowed agent's run-bound Verdicts count), the
 audit trail (every Verified step has its `PromotionSucceeded` record naming
-its actor), the reconcile-error ratio (under 1% over ten minutes, the
-upgrade and leader-kill windows reported apart), no panic, race or restart,
-progress, the load's own creates, the leader's heap (under twice its
-baseline), and what an episode left in flight finished within ten minutes.
+its actor), the reconcile-error ratio (under 1% over every ten minutes, 5%
+over ten minutes that hold the upgrade or the leader kill, and 1% again
+right after them; Prometheus unreachable three passes in a row, or more
+passes unjudged than judged, fails), no panic, race or restart, progress,
+the load's own creates, the leader's heap (under twice its baseline), and
+that what an episode left in flight resumed: each step it held, by UID,
+Verified or Superseded within ten minutes, never Failed (the podinfo
+release, which the rollback episode fails on purpose, aside). The receipts
+and audit checks read the steps of superseded versions too, which are
+retired a minute after (`status.retiredSteps`), and the report counts the
+steps each judged. A check that cannot read the cluster runs again three
+times before that is a violation of its own.
 The first violation ends the soak: the checker dumps the estate (each
 namespace's objects, every controller Pod's `/metrics`, the violation with
 the object that broke it in `soak-violation.json`; the controller logs are

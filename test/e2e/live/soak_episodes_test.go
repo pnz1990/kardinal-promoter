@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
@@ -172,7 +174,7 @@ func (s *soakDay) noPromotionStarted(ctx context.Context, ns string, from, to ti
 // agent, once suspended, may not write a Verdict at all.
 func (s *soakDay) forgedVerdicts(ctx context.Context) error {
 	a := s.a
-	var bundle string
+	var bundle, out string
 	var tried []string
 	err := soakWait(ctx, 5*time.Minute, "mallory's pass recorded on a version waiting at prod's verify gate", func(ctx context.Context) (bool, string, error) {
 		g, pipeline, version, err := s.waitingVerifyGate(ctx)
@@ -180,35 +182,48 @@ func (s *soakDay) forgedVerdicts(ctx context.Context) error {
 			return false, "no version of team a waits for verdicts", err
 		}
 		b := g.Labels["kardinal.io/bundle"]
-		if _, err := s.cliRun(ctx, s.malloryKubeconfig, a.ns, "verify", pipeline, "uat", "--check", "explore", "--pass",
-			"--summary", "forged: looks fine to me", "--version", version); err != nil {
+		o, err := s.cliRun(ctx, s.malloryKubeconfig, a.ns, "verify", pipeline, "uat", "--check", "explore", "--pass",
+			"--summary", "forged: looks fine to me", "--version", version)
+		if err != nil {
 			tried = append(tried, b+": "+err.Error())
 			return false, strings.Join(tried, "; "), nil
 		}
-		bundle = b
+		bundle, out = b, o
 		return true, "", nil
 	})
 	if err != nil {
 		return err
 	}
-	err = soakWait(ctx, 2*time.Minute, "mallory's verdict on "+bundle+" recorded and not counted", func(ctx context.Context) (bool, string, error) {
+	// Admitted and kept, and kardinal verify says the gate does not count
+	// it; the gate copies and counts no verdict of hers.
+	if !strings.Contains(out, "not counted by gate explore-qa: ") {
+		return fmt.Errorf("kardinal verify does not say mallory's verdict on %s is not counted:\n%s", bundle, out)
+	}
+	var vs v1alpha1.VerdictList
+	if err := s.e.Client.List(ctx, &vs, client.InNamespace(a.ns), client.MatchingLabels{"kardinal.io/bundle": bundle}); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(vs.Items, func(v v1alpha1.Verdict) bool { return v.Spec.By == soakMallory }) {
+		return fmt.Errorf("mallory's Verdict on %s is not kept", bundle)
+	}
+	err = soakWait(ctx, time.Minute, "mallory's verdict on "+bundle+" never counted", func(ctx context.Context) (bool, string, error) {
 		gs, err := s.e.GateInstances(ctx, a.ns, bundle, "prod", "explore-qa")
 		if err != nil || len(gs) != 1 {
 			return false, fmt.Sprintf("%d instances", len(gs)), err
 		}
 		for _, v := range gs[0].Status.Verdicts {
-			if strings.Contains(v.Verifier, soakMallory) {
-				if v.Counted {
-					return false, "", objectErr(&gs[0], "gate %s counts mallory's verdict %s: %+v", gs[0].Name, v.Name, v)
-				}
-				return true, "", nil
+			if strings.Contains(v.Verifier, soakMallory) && v.Counted {
+				return false, "", objectErr(&gs[0], "gate %s counts mallory's verdict %s: %+v", gs[0].Name, v.Name, v)
 			}
 		}
-		return false, fmt.Sprintf("verdicts %+v", gs[0].Status.Verdicts), nil
+		// Judged at least once since her verdict.
+		return gs[0].Status.LastEvaluatedAt != nil && gs[0].Status.LastEvaluatedAt.After(time.Now().Add(-30*time.Second)),
+			framework.DescribeGate(&gs[0]), nil
 	})
 	if err != nil {
 		return err
 	}
+	s.note("forgedVerdictStanding", strings.TrimSpace(out))
 
 	// The rogue agent: registered, then suspended; its Verdict is refused.
 	var id v1alpha1.AgentIdentity
@@ -338,10 +353,19 @@ func (s *soakDay) frozenBy(ctx context.Context, ns, freeze string) (int, error) 
 	return n, nil
 }
 
-// soakFlight is what was in flight at an episode: steps not finished,
-// change requests pending and receipts not Stored.
+// soakFlight is what was in flight at an episode: steps not finished (by
+// UID), change requests pending and receipts not Stored.
 type soakFlight struct {
-	steps, crs, receipts []types.NamespacedName
+	steps         []soakFlightStep
+	crs, receipts []types.NamespacedName
+}
+
+// soakFlightStep is a step in flight, with its UID: a step of that name made
+// again later is another promotion.
+type soakFlightStep struct {
+	key              types.NamespacedName
+	uid              types.UID
+	bundle, pipeline string
 }
 
 func (f soakFlight) String() string {
@@ -358,7 +382,8 @@ func (s *soakDay) inFlight(ctx context.Context) (soakFlight, error) {
 		}
 		for _, ps := range steps.Items {
 			if !finishedState(ps.Status.State) {
-				f.steps = append(f.steps, types.NamespacedName{Namespace: ps.Namespace, Name: ps.Name})
+				f.steps = append(f.steps, soakFlightStep{key: types.NamespacedName{Namespace: ps.Namespace, Name: ps.Name}, uid: ps.UID,
+					bundle: ps.Spec.BundleName, pipeline: ps.Spec.PipelineName})
 			}
 		}
 		var crs v1alpha1.ChangeRequestList
@@ -385,36 +410,75 @@ func (s *soakDay) inFlight(ctx context.Context) (soakFlight, error) {
 	return f, nil
 }
 
-// finishedState is a step state no promotion leaves (Fleet.WaitSettled's).
+// finishedState is a step state no promotion leaves (Fleet.WaitSettled's,
+// and Superseded: a step whose Bundle a newer one replaced).
 func finishedState(state string) bool {
 	switch state {
-	case "Verified", "Failed", "AbortedByAlarm", "RollingBack":
+	case "Verified", "Failed", "AbortedByAlarm", "RollingBack", "Superseded":
 		return true
 	}
 	return false
 }
 
-// finished is the check that what f held in flight has finished: each step
-// finished or gone (its Graph retired, its Bundle pruned) or its Bundle
-// over, each change request decided or its Bundle over, each receipt Stored.
+// finished is the check that what f held in flight resumed and finished
+// well, not just stopped: each step (by UID) ended Verified, or Superseded
+// by a newer version, never Failed or rolling back, whether the step is
+// still there or retired into its Bundle's status.retiredSteps; each change
+// request was decided, or its Bundle was Superseded or Verified; each
+// receipt is Stored. The podinfo release's steps are left out (the
+// automatic-rollback episode fails one on purpose), and so are probes. A
+// step whose Bundle was pruned (historyLimit) cannot be judged and is
+// counted in the report.
 func (s *soakDay) finished(what string, f soakFlight) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
-		over := func(ns, bundle string) bool {
+		bundle := func(ns, name string) (*v1alpha1.Bundle, error) {
 			var b v1alpha1.Bundle
-			err := s.e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundle}, &b)
-			return apierrors.IsNotFound(err) || (err == nil && scale.TerminalPhase(b.Status.Phase))
-		}
-		for _, k := range f.steps {
-			var ps v1alpha1.PromotionStep
-			if err := s.e.Client.Get(ctx, k, &ps); apierrors.IsNotFound(err) {
-				continue
+			if err := s.e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &b); apierrors.IsNotFound(err) {
+				return nil, nil
 			} else if err != nil {
+				return nil, err
+			}
+			return &b, nil
+		}
+		pruned := 0
+		for _, st := range f.steps {
+			if st.pipeline == pipelineName || s.isProbe(st.bundle) {
+				continue
+			}
+			b, err := bundle(st.key.Namespace, st.bundle)
+			if err != nil {
 				return err
 			}
-			if !finishedState(ps.Status.State) && !over(ps.Namespace, ps.Spec.BundleName) {
-				return objectErr(&ps, "step %s, in flight at %s, is still %s: %s", k, what, ps.Status.State, ps.Status.Message)
+			if b == nil {
+				pruned++
+				continue
+			}
+			state, msg := "", ""
+			var ps v1alpha1.PromotionStep
+			switch err := s.e.Client.Get(ctx, st.key, &ps); {
+			case err == nil && ps.UID == st.uid:
+				state, msg = ps.Status.State, ps.Status.Message
+			case err != nil && !apierrors.IsNotFound(err):
+				return err
+			default: // retired into the Bundle (or made again: not the step in flight)
+				for _, r := range b.Status.RetiredSteps {
+					if r.Name == st.key.Name {
+						state, msg = r.State, r.Message
+					}
+				}
+			}
+			switch {
+			case state == "Verified" || state == "Superseded":
+			case state == "" && (b.Status.Phase == "Verified" || b.Status.Phase == "Superseded"):
+				// The step is gone, retired with no record, and its Bundle
+				// did not fail.
+			case finishedState(state):
+				return objectErr(b, "step %s of %s, in flight at %s, ended %s (%s), Bundle %s", st.key, st.bundle, what, state, msg, b.Status.Phase)
+			default:
+				return objectErr(b, "step %s of %s, in flight at %s, is still %q (%s), Bundle %s", st.key, st.bundle, what, state, msg, b.Status.Phase)
 			}
 		}
+		s.note("inFlightPruned."+what, pruned)
 		for _, k := range f.crs {
 			var cr v1alpha1.ChangeRequest
 			if err := s.e.Client.Get(ctx, k, &cr); apierrors.IsNotFound(err) {
@@ -422,8 +486,15 @@ func (s *soakDay) finished(what string, f soakFlight) func(ctx context.Context) 
 			} else if err != nil {
 				return err
 			}
-			if cr.Status.State == "pending" && !over(cr.Namespace, cr.Labels["kardinal.io/bundle"]) {
-				return objectErr(&cr, "change request %s, pending at %s, is still %q", k, what, cr.Status.State)
+			if cr.Status.State != "pending" {
+				continue
+			}
+			b, err := bundle(cr.Namespace, cr.Labels["kardinal.io/bundle"])
+			if err != nil {
+				return err
+			}
+			if b != nil && b.Status.Phase != "Superseded" && b.Status.Phase != "Verified" {
+				return objectErr(&cr, "change request %s, pending at %s, is still pending; its Bundle is %s", k, what, b.Status.Phase)
 			}
 		}
 		for _, k := range f.receipts {
@@ -452,10 +523,8 @@ func (s *soakDay) upgrade(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	from := time.Now()
-	// The window opens now, so a pass during the rollout already reports
-	// its reconcile errors apart; the upgrade takes minutes, not fifteen.
-	s.window("upgrade", from, from.Add(15*time.Minute))
+	from, closeWindow := s.openWindow("upgrade")
+	defer closeWindow()
 	sets := []string{"--set receipts.sinks.oci.perNamespace=required", "--set receipts.sinks.oci.namespaceAnnotation=false"}
 	for _, tn := range s.tenants() {
 		sets = append(sets, fmt.Sprintf("--set 'receipts.sinks.oci.namespaceRepositories.%s={%s}'", tn.ns, s.reg.Repository(tn.prefix)))
@@ -622,8 +691,8 @@ func (s *soakDay) leaderKilled(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	from := time.Now()
-	s.window("leader-killed", from, from.Add(5*time.Minute))
+	from, closeWindow := s.openWindow("leader-killed")
+	defer closeWindow()
 	if err := scale.KillLeader(ctx, s.e); err != nil {
 		return err
 	}
@@ -674,14 +743,16 @@ func (s *soakDay) consent(ctx context.Context) error {
 	if err := soakWait(ctx, 2*time.Minute, p+" PolicyNamespacesShared False NotShared", cond(true)); err != nil {
 		return err
 	}
+	// The instance of template from namespace ns for bundle, by its labels
+	// (its name is hashed when it is long).
 	gateOf := func(bundle, ns, template string) func(ctx context.Context) (bool, string, error) {
 		return func(ctx context.Context) (bool, string, error) {
-			var g v1alpha1.PolicyGate
-			err := s.e.Client.Get(ctx, types.NamespacedName{Namespace: b.ns, Name: framework.GateInstanceName(ns, template, "prod", bundle)}, &g)
-			if apierrors.IsNotFound(err) {
-				return false, "no instance yet", nil
+			var list v1alpha1.PolicyGateList
+			if err := s.e.Client.List(ctx, &list, client.InNamespace(b.ns), client.MatchingLabels{"kardinal.io/bundle": bundle,
+				"kardinal.io/gate-template": template, graph.LabelGateTemplateNamespace: ns}); err != nil {
+				return false, "", err
 			}
-			return err == nil, "", err
+			return len(list.Items) > 0, fmt.Sprintf("%d instances", len(list.Items)), nil
 		}
 	}
 	v1, err := b.fleet.CreateBundle(ctx, p, s.tag(p))
