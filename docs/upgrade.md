@@ -86,7 +86,10 @@ The upgrade suites run these steps as written (`TestUpgradeV0120_Estate` from v0
 and newest supported Kubernetes minors)
 while versions are in flight: bakes, open promotion PRs, a rollback, gates holding versions with
 approvals and Verdicts recorded, a running AgentRun, a freeze and, from v0.12.1, an automatic
-rollback. They keep their objects and finish.
+rollback. They keep their objects and finish. From v0.12.0 and v0.12.1 they also upgrade with a
+version that the release never created a verify gate for (#2271): it goes on after the upgrade
+with no step by hand. The new controller renders its Graph again, once, kro creates the gate, and
+the version promotes when the gate passes.
 
 What v0.12.0 stored keeps working. Versions in flight keep their Graphs, PromotionSteps,
 PRStatuses and gate instances: at its first start the new controller removes the health ref nodes

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -60,6 +61,10 @@ type u012From struct {
 	// suite follows, when not the release's own (v0.12.1 follows v0.12.0's).
 	guide string
 	extra func(t *testing.T, e *framework.Env, from u012From) (after func())
+	// kroExpected, when set, says which other kro error lines from the
+	// upgrade on a suite's own case expects (u012Stuck: the refusals of the
+	// instance the release rendered, until it exists).
+	kroExpected func(text string, at time.Time) bool
 }
 
 // The kinds this release adds: their CRDs arrive with the guide's step 2.
@@ -355,6 +360,39 @@ var u012HealthRefForbidden = regexp.MustCompile(`apply \\"health[A-Z][A-Za-z0-9]
 // gone (#1283).
 var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-manager\tWatch error\t\{"gvr": "(apps/v1, Resource=deployments|argoproj\.io/v1alpha1, Resource=(applications|rollouts)|kustomize\.toolkit\.fluxcd\.io/v1, Resource=kustomizations|flagger\.app/v1beta1, Resource=canaries)", "error": "(failed to list \*v1\.PartialObjectMetadata: )?[a-z.]+ is forbidden: User \\"system:serviceaccount:[^\\"]+\\" cannot (list|watch) resource `)
 
+// u012KroError is the error field of kro's log line text (the kubelet's
+// timestamp cut off: time, level, message and its JSON fields,
+// tab-separated), and whether the line has one.
+func u012KroError(text string) (string, bool) {
+	f := strings.SplitN(text, "\t", 4)
+	if len(f) != 4 {
+		return "", false
+	}
+	var fields map[string]interface{}
+	if json.Unmarshal([]byte(f[3]), &fields) != nil {
+		return "", false
+	}
+	msg, ok := fields["error"].(string)
+	return msg, ok
+}
+
+// u012SchemaRedirect is kro failing to resolve a kardinal kind's schema
+// while the guide's step 1 applies the new CRDs: the API server rebuilds the
+// kardinal.io/v1alpha1 OpenAPI v3 document once per changed CRD, and kro's
+// request for the document by its hash is redirected to a newer one until
+// client-go gives up. kro requeues the Graph. Seen in one of eight upgrade
+// runs (upgrade-v0120 on 1.37): four lines in the same second, two seconds
+// before the new controller started. A line is expected only when that is
+// its whole error (u012OnlySchemaRedirect).
+var u012SchemaRedirect = regexp.MustCompile(`^build node "[A-Za-z0-9]+": resolve schema for kardinal\.io/v1alpha1, Kind=[A-Za-z]+: Get "/openapi/v3/apis/kardinal\.io/v1alpha1\?hash=[0-9A-F]+": stopped after 10 redirects$`)
+
+// u012OnlySchemaRedirect says whether kro's log line text has, as its only
+// error, a schema redirect (u012SchemaRedirect).
+func u012OnlySchemaRedirect(text string) bool {
+	msg, ok := u012KroError(text)
+	return ok && u012SchemaRedirect.MatchString(msg)
+}
+
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
 // released (its chart, CLI and kro) and follows "Upgrading from v0.12.0" in
 // docs/upgrade.md, running the guide's own commands, while versions are in
@@ -401,9 +439,11 @@ var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-man
 //   - neither the controller nor kro restarted, and neither logged an
 //     unexpected error from the upgrade on.
 //
-// Covers UPG-V0120-01, UPG-V0120-02, UPG-V0120-03, UPG-V0120-04, UPG-V0120-05.
+// Covers UPG-V0120-01, UPG-V0120-02, UPG-V0120-03, UPG-V0120-04, UPG-V0120-05, UPG-V0120-06.
 func TestUpgradeV0120_Estate(t *testing.T) {
-	u012Upgrade(t, u012From{pins: "V0120", cli: (*framework.Env).KardinalV0120, guideChart: guideChartV0120})
+	stuck := &u012Stuck{}
+	u012Upgrade(t, u012From{pins: "V0120", cli: (*framework.Env).KardinalV0120, guideChart: guideChartV0120,
+		extra: stuck.before, kroExpected: stuck.expected})
 }
 
 // u012Upgrade is TestUpgradeV0120_Estate's estate, upgrade and checks, from
@@ -1086,13 +1126,27 @@ func u012Upgrade(t *testing.T, from u012From) {
 		SeedTag: scale.SeedTag, Start: testStart, AllowEmpty: false, Logs: logs,
 		Skip: map[string]string{"env-content": "the rollbacks restore older versions on purpose; their content is checked above"}})
 	logs.Stop()
-	// The one error the guide expects (#1283): kro cannot read a health ref
-	// node between the chart upgrade and the new controller's removal of
-	// those nodes. Only that read, and only before the nodes were gone.
-	leveled, allowed, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
-		return at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line))
+	// The errors the guide expects: kro cannot read a health ref node
+	// between the chart upgrade and the new controller's removal of those
+	// nodes (#1283), and cannot resolve a kardinal kind's schema while the
+	// CRDs change. Only those, and only before the nodes were gone; and
+	// the ones a suite's own case expects.
+	var refs, schema, cases int
+	leveled, _, kroErrs := kroErrors(t, e, upgradeStart, func(at time.Time, line string) bool {
+		switch {
+		case at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line)):
+			refs++
+		case at.Before(refsGone) && u012OnlySchemaRedirect(line):
+			schema++
+		case from.kroExpected != nil && from.kroExpected(line, at):
+			cases++
+		default:
+			return false
+		}
+		return true
 	})
-	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283)", leveled, allowed)
+	t.Logf("kro: %d log lines with a level; %d errors read a health ref node before the controller removed them (#1283), %d resolved a schema while the CRDs changed, %d the suite's own cases expect",
+		leveled, refs, schema, cases)
 	assert.NotZero(t, leveled, "kro's log lines have a level the check reads")
 	assert.Empty(t, kroErrs, "kro logged no other error from the upgrade on")
 	assert.Equal(t, kroBefore, kroPods(t, e), "kro's Pods did not restart")
