@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -116,7 +115,13 @@ func TestDoctor_UnverifiedHeld(t *testing.T) {
 			reason, err := cmd.Flags().GetString("reason")
 			require.NoError(t, err)
 			assert.Equal(t, unverifiedOverrideReason, reason)
-			cmd.Flags().Visit(func(f *pflag.Flag) { assert.False(t, f.Hidden, "%s: --%s is hidden", fix, f.Name) })
+			for _, a := range rest {
+				if name, ok := strings.CutPrefix(a, "--"); ok {
+					f := cmd.Flags().Lookup(name)
+					require.NotNil(t, f, "%s: --%s", fix, name)
+					assert.False(t, f.Hidden, "%s: --%s is hidden", fix, name)
+				}
+			}
 		}
 		var out bytes.Buffer
 		require.NoError(t, printDoctorResults(&out, []doctorResult{r}))
