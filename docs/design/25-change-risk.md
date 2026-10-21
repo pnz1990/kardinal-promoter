@@ -1164,8 +1164,10 @@ type FleetWave struct {
   params as the actor policies take it, that refuses a CREATE, UPDATE or DELETE of a RiskProfile,
   an UPDATE of a Pipeline that changes `spec.risk`, and a DELETE of a DeploymentLog (7.2: a reseeded
   log forgets failures older than the retained Bundles), by a requester the AgentIndex names as an
-  agent. A person, a bot (CI applying GitOps) and the controller are not judged. Fail closed when
-  the index is not ready, as `<release>-actor` (spec 17 §5).
+  agent. A person, a bot (CI applying GitOps) and the controller are not judged. While the index is
+  not Ready (before its first build, `CompactFormat`, `IndexFull`), it refuses only ServiceAccount
+  requesters, never a person, unlike `<release>-actor` (spec 17 §5): the index's readiness never
+  keeps a person from fixing policy (spec 26 §11, the coordinator's decision on its review).
 - **Pipeline `spec.risk.profileRef`**: the namespace must be the Pipeline's own or an org policy
   namespace (CRD CEL rule for the shape; the controller checks the namespace list and sets
   `Ready=False` with `RiskProfileNamespace` otherwise). The third way to reach another namespace
@@ -1312,7 +1314,7 @@ DeploymentLog (§11), whose reseed would forget failures older than the retained
 | `fleet.waves`, `fleet.wavePreset` | unset | The v0.13 sliding window (`maxConcurrent`, `maxUnavailable`) |
 | `AgentIdentity.spec.trackRecord` | 30 days, at least 10 deployments | Computed for every agent once spec 28's DeploymentLog exists, but read by no decision until a policy names an `agent.*` track-record variable |
 | `--change-risk-max-jobs`, `--change-risk-max-jobs-per-namespace` | 8, 2 | Only in effect for Pipelines with `spec.risk` |
-| `<release>-risk-owners` | installed and bound with the chart, like the actor policies | Judges only agents' writes to RiskProfiles and `Pipeline.spec.risk` and their deletes of DeploymentLogs; without registered agents it refuses nothing |
+| `<release>-risk-owners` | installed and bound with the chart, like the actor policies | Judges only agents' writes to RiskProfiles and `Pipeline.spec.risk` and their deletes of DeploymentLogs, and, while the AgentIndex is not Ready, ServiceAccounts' (never a person's); with no registered agents and the index Ready, it refuses nothing. Spec 26 §11 adds the gate-input rules behind `admission.agentGateInputs` |
 
 ## 16. Decisions
 
@@ -1380,8 +1382,9 @@ status area feature source`, `test/e2e/README.md`), claimed by a test's `Covers 
 - Admission (`test/helm`, as `identity_admission_test.go`'s GRAPH-OBJECTS rows):
   `<release>-graph-objects` refuses a ChangeRisk a team creates or changes; `<release>-risk-owners`
   refuses an agent's RiskProfile create, update and delete, its change to `Pipeline.spec.risk` and
-  its delete of a DeploymentLog, admits a person's and a bot's, and fails closed while the
-  AgentIndex is not ready.
+  its delete of a DeploymentLog, admits a person's and a bot's; while the AgentIndex is not Ready,
+  refuses a ServiceAccount's and admits a person's (`TestRiskOwnersAvailabilityOnAPIServer`, spec
+  26 §18).
 
 Safety assertions that must be shown to fail (the QA rule): the Graph-only admission refusing a
 pre-created ChangeRisk; `<release>-risk-owners` refusing an agent's profile edit; an agent's

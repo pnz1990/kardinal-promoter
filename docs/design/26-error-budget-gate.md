@@ -10,7 +10,7 @@
 > and stop-the-line, §9; all on main), the existing MetricCheck and PolicyGate reconcilers, and the
 > `<release>-risk-owners` admission policy of [25-change-risk.md](25-change-risk.md) §11, which this
 > spec extends (§11; whichever spec lands first creates it), and #2446 (only the controller writes
-> PolicyGate and MetricCheck status), without which a namespace admin can forge the status a budget
+> kardinal's status subresources, PolicyGates' and MetricChecks' among them), without which a namespace admin can forge the status a budget
 > gate reads (§11).
 > Verified against: this repository at `main` (`95f53aec0`); kro v0.10.0-rc.0 (`54a203b`, the pin of
 > `hack/install-kro.sh`) at `/local/home/rrroizma/kro-upstream`; Sloth
@@ -21,10 +21,14 @@
 > chapter 5 "Alerting on SLOs" and appendix B "Example Error Budget Policy". Source references are
 > `path:line` in those trees. Nothing here is implemented yet.
 >
-> **Off by default.** Nothing changes for a cluster that does not ask. No MetricCheck reads a budget
-> without `spec.errorBudget`; `slo.*` lists only such checks; the chart ships no SLO check, no gate,
-> and neither Sloth nor Pyrra; an unknown budget blocks only the gates that read it; the agent rules
-> of §11 judge only agents' writes, and refuse nothing else while the AgentIndex is Ready (§16.1).
+> **Defaults.** Budget evaluation is off by default: no MetricCheck reads a budget without
+> `spec.errorBudget`, `slo.*` lists only such checks, the chart ships no SLO check, no gate, and
+> neither Sloth nor Pyrra, and an unknown budget blocks only the gates that read it. **One rule is
+> on by default:** §11's agent rule (chart value `admission.agentGateInputs`, default `refuse`),
+> because the hole it closes exists for every gate, budgets or not. It changes v0.13's behaviour
+> for requesters the AgentIndex names as agents (they may no longer write gate templates or
+> hand-written MetricChecks) and, while the index is not Ready, for ServiceAccounts; it never
+> refuses a person. `allow` keeps v0.13's behaviour (§16.1).
 
 ---
 
@@ -115,8 +119,8 @@ rules that Sloth's metadata plugin writes for every SLO
 | `slo:current_burn_rate:ratio`, `slo:period_burn_rate:ratio` | burn rate over the shortest page window, and over the period |
 | `slo:period_error_budget_remaining:ratio` | `1 - slo:period_burn_rate:ratio`: the share of the budget left |
 
-Every series carries `sloth_service`, `sloth_slo` and `sloth_id` (`conventions/slo.go:21-23`,
-`GetSLOIDPromLabels`). `sloth_id` is `<service>-<slo name>` (`internal/storage/io/k8s_sloth.go:139`):
+Every series carries `sloth_service`, `sloth_slo` and `sloth_id` (the label names at
+`conventions/slo.go:21-23`, set by `GetSLOIDPromLabels`, `:34-40`). `sloth_id` is `<service>-<slo name>` (`internal/storage/io/k8s_sloth.go:139`):
 it does not include the namespace, so two namespaces with the same service and SLO names record
 colliding series unless their `spec.labels` differ.
 
@@ -140,12 +144,17 @@ Three facts about these series that the preset depends on:
   records the period ratio from the raw counters instead. The preset treats a NaN budget as
   unknown (7.1), so a quiet service on optimized rules fails closed, not open; the docs recommend
   `disableOptimized` for every SLO a gate reads; it is an option of the SLI rules plugin, set per
-  SLO through its `plugins.chain` (`sli_rules_v1/plugin.go:24-26`). (The NaN propagation is PromQL
+  SLO through its `plugins.chain` (`sli_rules_v1/plugin.go:24-26`). That moves cost, it does not
+  remove it: kardinal still sends no long-range query (1.1), but Sloth's own period rule then
+  evaluates a raw rate over the whole period at every rule evaluation, in Prometheus. (The NaN propagation is PromQL
   semantics; the contract row METRIC-EB-07 confirms it on a real Sloth, and that the plugin option
   replaces the optimized rule, §18.)
-- **The window catalog is the controller's.** Sloth's Kubernetes controller takes the period of an
-  SLO without one from `--default-slo-period`, and `--slo-period-windows-path` replaces the built-in
-  window sets (`cmd/sloth/commands/k8scontroller.go:105-106`). The preset's defaults (5.2) assume
+- **The window catalog is the controller's.** The `PrometheusServiceLevel` CRD has no per-SLO
+  period (`pkg/kubernetes/api/sloth/v1/types.go:55-92`): every SLO gets the controller's
+  `defaultWindowPeriod` (`internal/storage/io/k8s_sloth.go:143`; `--default-slo-period`, 30d by
+  default), and `--slo-period-windows-path` replaces the built-in window sets
+  (`cmd/sloth/commands/k8scontroller.go:105-106`). The preset reads the period from
+  `slo:time_period:days`, so it follows whatever the controller uses. The preset's defaults (5.2) assume
   the built-in catalog; a controller run with its own catalog needs the gate to name the same pairs
   in `windows`.
 
@@ -170,12 +179,14 @@ is left out of the response (`main.go:947-950`), and a NaN `remaining` with requ
 
 | Series | Value | When |
 |--------|-------|------|
-| `<metric>:burnrate<window>{slo="<name>"}` | the **error ratio** over `<window>` (not divided by the budget); its alerts compare it with `factor * (1 - target)` (`slo/rules.go:139-148`) | always; `<metric>` is the indicator's total metric without `_total`/`_count` (`slo/rules.go:431-449`) |
-| `pyrra_objective`, `pyrra_window`, `pyrra_availability{slo="<name>"}` | target ratio, window in seconds, availability over the window (`slo/rules.go:1508-1512,1513-1517,1580-1584`) | only when the operator runs with `--generic-rules`, which defaults to `false` (`main.go:91`), and only for SLOs without `grouping`: `GenericRules` returns `ErrGroupingUnsupported` for those (`slo/rules.go:1521-1523`), and the operator ignores that error (`kubernetes/controllers/servicelevelobjective.go:309-312`) |
+| `<metric>:burnrate<window>{slo="<name>"}` | the **error ratio** over `<window>` (not divided by the budget); its alerts compare it with `factor * (1 - target)` (`slo/rules.go:139-148`) | always; `<metric>` is the indicator's total metric without `_total`/`_count`, or the gauge metric for a boolGauge SLO (`slo/rules.go:431-449`) |
+| `pyrra_objective`, `pyrra_window`, `pyrra_availability{slo="<name>"}` | target ratio, window in seconds, availability over the window (`slo/rules.go:1508-1512,1513-1517,1580-1584`) | only when the operator runs with `--generic-rules`, which defaults to `false` (`main.go:91`), and, for ratio, latency and boolGauge SLOs, only without `grouping`: `GenericRules` returns `ErrGroupingUnsupported` for those (`slo/rules.go:1521-1523`), but not for latencyNative ones (`slo/rules.go:1743-1783`), and the operator ignores that error (`kubernetes/controllers/servicelevelobjective.go:309-312`) |
 
 The `slo` label is the SLO's name (`slo/rules.go:596-608`). The `pyrra_*` series carry only it and
 the objective's labels with the `pyrra.dev/` prefix, recorded without the prefix (`pyrra.dev/team`
-on the objective is `team` on the series, `slo/rules.go:601-605,1502`); the `:burnrate` series also
+on the objective is `team` on the series, `slo/rules.go:601-605,1502`), and, with
+`ruleOutput.enableDescriptionAsLabel`, a `description` label (`slo/rules.go:1504-1506`); the
+`:burnrate` series also
 carry every equality matcher of the indicator's selector (`slo/rules.go:77-82`). No series carries the
 namespace (the objective holds it internally, `servicelevelobjective_types.go:614-619`), so two
 namespaces with the same SLO name collide in a shared Prometheus, as Sloth's do.
@@ -260,7 +271,7 @@ Plain recording rules, named as in the workbook (`job:slo_errors_per_request:rat
 // burn rates from recording rules instead of running spec.query.
 // +kubebuilder:validation:XValidation:rule="(self.source == 'sloth') == has(self.sloth) && (self.source == 'pyrra') == has(self.pyrra) && (self.source == 'prometheus') == has(self.prometheus)",message="set exactly the block of errorBudget.source"
 // +kubebuilder:validation:XValidation:rule="!(has(self.alertWindows) && has(self.windows))",message="set alertWindows or windows, not both"
-// +kubebuilder:validation:XValidation:rule="!(self.source == 'pyrra' && has(self.groupBy))",message="Pyrra records no budget for grouped SLOs: use source prometheus"
+// +kubebuilder:validation:XValidation:rule="!(self.source == 'pyrra' && has(self.groupBy))",message="the pyrra preset reads no grouped SLO (Pyrra records no budget for most of them): use source prometheus"
 type ErrorBudgetSpec struct {
 	// +kubebuilder:validation:Enum=sloth;pyrra;prometheus
 	Source     string                 `json:"source"`
@@ -419,8 +430,9 @@ budget would then be wrong.
   pattern cannot check keys); metric names `^[a-zA-Z_:][a-zA-Z0-9_:]*$`; `objective` is a ratio in
   (0, 1), checked by a pattern; windows are Prometheus durations (`PromDuration`, 4.2), not the
   interval pattern (`metriccheck_types.go:74`), which allows no `d` or `w` and would refuse `30d`.
-  A read objective is compared with a given one to within 1e-9: Pyrra records `target / 100`
-  (`slo/rules.go:1510`), so 99.9 is 0.9990000000000001.
+  A read objective is compared with a given one to within 1e-9: Pyrra computes `target / 100`
+  (`kubernetes/api/v1alpha1/servicelevelobjective_types.go:643`, parsed at `:414`; `slo/rules.go:1510`
+  only formats it), so 99.9 is 0.9990000000000001.
 
 ## 5. Queries
 
@@ -651,7 +663,7 @@ When the expression is false the gate's `status.reason` names the numbers:
 | Budget NaN | The budget series is NaN: Sloth's optimized period rule after an idle 5 minutes (3.1), or no requests over the whole period | `result: Fail`, reason `budget series is NaN (...)`; values cleared; `lastKnownAt` kept | `known: false`; `noTraffic` as computed |
 | No data | A series is missing: rules not loaded, tool not running, wrong matcher, window not recorded, an error counter never exported (5.2) | `result: Fail`, reason names the missing series and these causes; values cleared; `lastKnownAt` kept | `known: false` |
 | Query error | Prometheus unreachable, 5xx, timeout, egress refused, response over the read cap | `result: Fail`, reason `prometheus query error: ...` (`metriccheck/reconciler.go:227-231`); values cleared; `lastKnownAt` kept | `known: false` |
-| Stale | No evaluation for three intervals (controller down, Limiter starved, status writes failing) | unchanged | `stale: true`, `known: false` |
+| Stale | No evaluation for three intervals (controller down, Limiter starved, status writes failing) | unchanged: going stale writes nothing, so no MetricCheck event wakes the gate | `stale: true`, `known: false`, from the gate's next evaluation, which is due at `validUntil` at the latest (below) |
 | Suspended | `spec.suspend` (per-promotion instance of a finished Bundle) | unchanged until `validUntil` | stale after `validUntil` |
 | Written by an older controller | After a downgrade, the older controller moved `lastEvaluatedAt` and left `status.errorBudget` as it was (§16) | unchanged until the next evaluation | `known: false` (`lastKnownAt` ≠ `lastEvaluatedAt`) |
 
@@ -685,9 +697,18 @@ expression: >
 clock at evaluation, the same place metric staleness is decided (`reconciler.go:832`, the clock at
 `:607-611`); no clock enters Graph CEL. A gate blocked or passed by this rule says so in its reason
 (`slo "checkout-availability" unknown for 12m (prometheus query error: ...): allowed by expression`).
-The docs warn that `!slo.x.known || ...` is an unbounded fail-open. The bound is as precise as the
-gate's re-evaluation: a MetricCheck status change wakes it (6), and otherwise its `recheckInterval`
-(default 5m) does.
+The docs warn that `!slo.x.known || ...` is an unbounded fail-open.
+
+**The gate re-evaluates when a value it read expires.** A check goes stale because its evaluations
+stopped, and going stale writes nothing, so no MetricCheck event wakes the gate: today it would keep
+its last `ready: true` until its `recheckInterval` (5m by default; the reconciler requeues at it,
+`policygate/reconciler.go:297,410,445`), and `checkRequiredGates` trusts that status. So the
+PolicyGate reconciler requeues at `min(recheckInterval, the earliest validUntil of the slo and
+metrics checks the evaluation read)`, the instant its last result stops being fresh, and a stale
+check never passes past its `validUntil` (metrics included: `metricResultStale`,
+`reconciler.go:832-835`, already reads a stale result as `Stale`, and gains the same wake-up). The
+bound of a fail-open is as precise: a MetricCheck status change wakes the gate (6), and a value's
+expiry does.
 
 ## 8. Hotfix exceptions
 
@@ -836,13 +857,15 @@ can patch a check's `status.errorBudget`, or a gate instance's `status.ready`, w
 `checkRequiredGates` trusts (`pkg/reconciler/promotionstep/reconciler.go:2380-2404`). That is inside
 the trust boundary the security guide states (namespace `edit` and `admin` holders are owners as far
 as kardinal can check, and can already pass as kro through impersonation,
-`docs/guides/security.md:1059-1071`, ledger G16), but it is a one-command forgery. #2446 (v0.13.1)
-adds a controller-only rule for both; this spec depends on it, since a budget gate's whole input is
-a MetricCheck's status.
+`docs/guides/security.md:1059-1071`, ledger G16), but it is a one-command forgery, and the same
+holds for every kardinal status outside the Graph's kinds (a Pipeline's, a Bundle's). #2446
+(v0.13.1) adds a controller-only rule for them; this spec depends on it, since a budget gate's whole
+input is a MetricCheck's status.
 
 **Agents may not change a gate's inputs** (new; §15.1). `<release>-risk-owners`, the admission policy
 of spec 25 §11 (a ValidatingAdmissionPolicy with the AgentIndex as params; whichever spec lands
-first creates it), also refuses, for a requester the AgentIndex names as an agent:
+first creates it), also refuses, for a requester the AgentIndex names as an agent, when the chart
+value `admission.agentGateInputs` is `refuse` (the default; `allow` renders none of these rules):
 
 - a CREATE, UPDATE or DELETE of a MetricCheck written by hand;
 - a CREATE, UPDATE or DELETE of a PolicyGate template. Creating is refused too: most gates only add
@@ -862,12 +885,22 @@ How it matches, so it costs kro nothing and misses nothing:
   MetricChecks), an agent's override on one is recorded but never honoured (8 (d)), and a deleted
   instance is recreated by the Graph.
 - **DELETE** reads `oldObject` (`object` is null on DELETE).
-- **While the AgentIndex is not Ready** (a fresh install, a controller outage, `IndexFull`), the
-  policy refuses the writes it checks, people's included, as the actor policies do
-  (`actor-admission.yaml:26-29`), with the same message telling the operator what to do. Gate and
-  check edits by people wait for the index; a controller outage stops promotions anyway.
+- **While the AgentIndex is not Ready, a person is never refused.** The index is not Ready before
+  its first build (no status yet), with `CompactFormat` (a later release wrote it: an upgrade or a
+  rollback in progress), and with `IndexFull`, the only reason the controller writes `Ready=False`
+  (`pkg/reconciler/agentidentity/reconciler.go:193-198`); a controller outage leaves the condition
+  as it was. In those states the rule cannot tell an agent from a person, so it refuses only
+  ServiceAccount requesters (`system:serviceaccount:` usernames, kro and the controller already left
+  out), whatever kind they write; once the index is Ready, it refuses whoever the index names as an
+  agent, ServiceAccount or not. A GitOps tool's ServiceAccount applying gate templates in such a
+  window is refused, with the reason, and retries; a person, including whoever fixes a bad org gate,
+  is never held by the index. This is narrower than the actor policies, which refuse every write
+  they check while the index is not Ready (`actor-admission.yaml:23-43`): those guard promotion
+  actions, this rule guards the path that fixes policy. The rule applies to every rule of
+  `<release>-risk-owners`, spec 25's included (spec 25 §11 is amended to match).
 
-A person, a bot and the controller are not judged, and neither is an agent the AgentIndex does not
+A person and the controller are never judged, a bot (a ServiceAccount the index does not name) only
+while the index is not Ready, and an agent the AgentIndex does not
 name (one running on a person's credentials, or one whose change a GitOps bot applies; 15.1). The
 gap predates this spec: no admission rule judges these writes today (`<release>-actor` matches
 Bundles, Approvals, Verdicts and ChangeWindows, `actor-admission.yaml:197-206`), so an agent bound
@@ -934,7 +967,7 @@ inject PromQL.
 | Gate created mid-incident | Reaches the environments not yet started of versions in flight (v0.13); started steps go on | Freeze or pause for those (9) |
 | Downgrade, then upgrade again | Status values left by the older controller | `known` needs `lastKnownAt` = `lastEvaluatedAt` (6, 16) |
 | A namespace admin patches a check's or a gate's status | Until #2446, a forged `ready` or budget can start a step | #2446's controller-only status rule (11) |
-| The AgentIndex is not Ready | `<release>-risk-owners` refuses the gate and check writes it judges, people's included | As the actor policies; the message says how to recover (11) |
+| The AgentIndex is not Ready (before its first build, `CompactFormat`, `IndexFull`) | `<release>-risk-owners` refuses the writes it judges from ServiceAccounts, never from a person | The message says why and how to recover; a GitOps tool retries (11) |
 
 ## 13. Scale
 
@@ -1071,7 +1104,7 @@ is) from using it.
 | The chart | ships no MetricCheck, no PolicyGate, no Sloth or Pyrra | Nothing is gated until a team or an org writes a gate |
 | `alertWindows` | the tool's set for the SLO's period (5.2) | Factors follow the SLO's period |
 | An unknown budget (no data, query error, stale, NaN) | blocks the gates that read it | Fail-open only as the gate states it (7.2) |
-| `<release>-risk-owners` rules of §11 | installed and bound with the chart | Judge only agents' writes to hand-written checks and gate templates; while the AgentIndex is not Ready they refuse the writes they check, people's included, as the actor policies do (11) |
+| `admission.agentGateInputs` (the §11 rules of `<release>-risk-owners`) | `refuse` | **On by default, a change from v0.13:** a requester the AgentIndex names as an agent may not create, change or delete a PolicyGate template or a hand-written MetricCheck; while the index is not Ready, a ServiceAccount may not; a person always may. `allow` renders none of these rules (11) |
 
 ## 17. Decisions
 
@@ -1085,7 +1118,8 @@ is) from using it.
 | EB6 | Per-target mapping | per-environment checks; per-promotion template; grouped check | **Per-environment by name; grouped for fleets** (10): one query per fleet |
 | EB7 | Burn-rate windows | fixed workbook table; tool-specific sets; computed from budget percent | **Named sets per tool, factors from `budgetPercent` or given** (5.3): the windows a tool records are the only ones that can be read |
 | EB8 | Query shape | one query per value; one combined query; PromQL alert expression | **One combined query of raw values** (5.1): one Limiter slot; status shows the deciding rates |
-| EB9 | Who may change a gate's inputs | RBAC only; refuse agents; only the org | **Refuse agents** (11, 15.1): an agent's write to a hand-written MetricCheck or a gate template is the way around a budget gate; people keep RBAC; org gates keep the org namespace |
+| EB9 | Who may change a gate's inputs | RBAC only; refuse agents; only the org | **Refuse agents, on by default behind `admission.agentGateInputs`** (11, 15.1): an agent's write to a hand-written MetricCheck or a gate template is the way around any gate; people keep RBAC; org gates keep the org namespace (coordinator's decision on QA-2's review) |
+| EB17 | The agent rules while the AgentIndex is not Ready | refuse every write they check, as the actor policies; refuse ServiceAccounts only; admit everything | **ServiceAccounts only** (11): the index's readiness never refuses a person, so policy can always be fixed; an agent cannot pass as a person, and a ServiceAccount waits for the index (coordinator's decision) |
 | EB10 | A NaN budget | 1.0 (allow); unknown (fail closed) | **Unknown** (7.1): Sloth's optimized period rule is NaN for a whole period after one idle 5 minutes, and Pyrra reports 1 only with requests |
 | EB11 | Pyrra's period | read `pyrra_window` first; required in spec | **Required** (5.2), checked against `pyrra_window`: the series names depend on it, and a first read would be a second request |
 | EB12 | Sloth's window set | `google-30d` always; from the SLO's period | **From `slo:time_period:days`** (5.2), in the same query: Sloth chooses its set the same way, and both sets read the same windows |
@@ -1133,6 +1167,8 @@ testify, `-race`):
   fleet names that prefix each other); the slo line on a passing gate's reason, in the step's
   `status.decision`;
 - wake-ups: a MetricCheck change wakes a gate that reads `slo` only in `requiredWhen` (`readsSLO`);
+  a gate requeues at the earliest `validUntil` of the checks it read, and a check that goes stale
+  with no write blocks the gate at that instant, not at `recheckInterval`;
 - `pkg/graph`: `ExprReadsMetric` on `slo.<name>` and in `requiredWhen`; matcher placeholders
   rendered, and leftovers refused by the reconciler; the upstream hold on `errorBudget` with no
   `query`;
@@ -1144,14 +1180,16 @@ testify, `-race`):
 - admission (`test/helm`, as `identity_admission_test.go`'s rows): `<release>-risk-owners` refuses an
   agent's create, update and delete of a hand-written MetricCheck and of a PolicyGate template;
   admits a person's and a bot's writes, and kro's and the controller's instances; judges a write
-  that adds or removes `kardinal.io/bundle`; reads `oldObject` on DELETE. Its fail-closed while the
-  AgentIndex is not Ready needs a real API server: a `TestRiskOwnersAvailabilityOnAPIServer` in the
-  `Makefile:103` list, as `TestActorIndexAvailabilityOnAPIServer` is.
+  that adds or removes `kardinal.io/bundle`; reads `oldObject` on DELETE; renders no rule with
+  `admission.agentGateInputs: allow`. Its behaviour while the AgentIndex is not Ready (no status,
+  `CompactFormat`, `IndexFull`: a person's write admitted, a ServiceAccount's refused) needs a real
+  API server: a `TestRiskOwnersAvailabilityOnAPIServer` in the `Makefile:103` list, as
+  `TestActorIndexAvailabilityOnAPIServer` is.
 
 Safety assertions that must be shown to fail (the QA rule): fail closed on unknown, on a NaN budget
 and on two matching SLOs; org namespace isolation, including no `slo` fallback; the agent refusals;
-a gate woken by a change it reads only in `requiredWhen`; a quiet short window not clearing a page
-burn. Each PR breaks the property on purpose and shows the test failing.
+a gate woken by a change it reads only in `requiredWhen`; a gate re-evaluated when a value it read
+expires; a quiet short window not clearing a page burn. Each PR breaks the property on purpose and shows the test failing.
 
 **Fake-client journeys** (real builder and reconcilers on a fake client), named EBJ, in a new
 `test/e2e/error_budget_journey_test.go` as `test/e2e/actor_policy_journey_test.go`, with scenario
@@ -1221,9 +1259,9 @@ None of these exists yet (audited 2026-10-21: no code, no issue).
 | 1 | `feat(api)`: MetricCheck `spec.errorBudget` and `status.errorBudget` (types incl. `specHash`, CRD rules with `all` and `matches`, ordered Prometheus durations, `threshold.text` exclusive, printer columns), `TestErrorBudgetOnAPIServer` in the envtest list. Risky PR (CRD) | m | none |
 | 2 | `feat(metriccheck)`: the preset query builder and vector reader for sloth, pyrra and prometheus (raw values, the grouped aggregation with unaggregated metadata and the 2 MiB grouped cap, window names with `model.Duration`, Sloth's set from the period, Pyrra's windows from `pyrra.window`, the objective tolerance), burn rates and `burning` in Go (a quiet short window takes the long window's rate), rounding, the states of 7.1 (a NaN budget unknown, `lastKnownAt`, `specHash`), the pinned conventions file. Risky PR (go.mod) | l | 1 |
 | 3 | `feat(graph)`: per-promotion presets: `ExprReadsMetric` reads `slo` and `requiredWhen`; matcher placeholders rendered and refused; the upstream hold on `errorBudget` | s | 1 |
-| 4 | `feat(policygate)`: the `slo.*` variable (`known`, `unknownMinutes` with its maximum, groups, `{}` on a list failure, no org-template fallback), the slo lines in every reason of a gate that reads `slo`, the `readsSLO` wake-up over the expression and `requiredWhen`, the update predicate; `docs/reference/cel-context.md` and its docs test | m | 2; #2446 (status is the controller's) |
+| 4 | `feat(policygate)`: the `slo.*` variable (`known`, `unknownMinutes` with its maximum, groups, `{}` on a list failure, no org-template fallback), the slo lines in every reason of a gate that reads `slo`, the `readsSLO` wake-up over the expression and `requiredWhen`, the update predicate, the requeue at the earliest `validUntil` it read (7.2); `docs/reference/cel-context.md` and its docs test | m | 2; #2446 (status is the controller's) |
 | 5 | `feat(policygate)`: fleet target to group resolution through `graph.FleetOf` (target name and target label), one `groups` entry per fleet target | s | 4 |
-| 6 | `feat(chart)`: `<release>-risk-owners` refuses agents' writes to hand-written MetricChecks and to PolicyGate templates (objectSelector on `kardinal.io/bundle`, kro and the controller left out before the params are read, `oldObject` on DELETE), with helm tests and `TestRiskOwnersAvailabilityOnAPIServer`. Shared with spec 25 §18 row 13 (#2425): whichever lands first creates the policy | s | none |
+| 6 | `feat(chart)`: `<release>-risk-owners` refuses agents' writes to hand-written MetricChecks and to PolicyGate templates, behind `admission.agentGateInputs` (default `refuse`; objectSelector on `kardinal.io/bundle`, kro and the controller left out before the params are read, `oldObject` on DELETE, only ServiceAccounts refused while the index is not Ready, for every rule of the policy), with helm tests and `TestRiskOwnersAvailabilityOnAPIServer`. Shared with spec 25 §18 row 13 (#2425): whichever lands first creates the policy | s | none |
 | 7 | `feat(cli,ui)`: the budget in `kardinal why`, `policy simulate` and the stage drawer | s | 4 |
 | 8 | `docs`: the error-budget gate page (Sloth with `disableOptimized`, Pyrra with `--generic-rules`, plain-rule recipes, the Pyrra `web` recipe and its caveats, fail-open guidance, the hotfix pattern and holds, the freeze interplay, the gaming table of 15.1, `egress.allowlist`); `docs/metric-checks.md` and `docs/policy-gates.md`; the regenerated API reference; changelog | m | 4, 6 |
 | 9 | `test(e2e)`: METRIC-EB-01..10 with their coverage rows, `sloth.sh` and `pyrra.sh` with pins, `TestScale_ErrorBudget`, the `upgrade-v0130` test, and the soak invariants in #2403. Risky PR (e2e components) | m | each feature; 8 (the rows' `source`); #2403 |
