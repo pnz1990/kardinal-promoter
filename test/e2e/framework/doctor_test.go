@@ -52,6 +52,20 @@ func TestWithoutDoctorCheck(t *testing.T) {
 			assert.Equal(t, tc.want, WithoutDoctorCheck(t, tc.in, label))
 		})
 	}
+	// Exactly one row of the label, and a summary (QA-5 on #2393): two rows,
+	// none, a longer label that starts with it, or no summary is an error.
+	for name, stdout := range map[string]string{
+		"two rows":            head + row("WARN", label, "a") + row("PASS", label, "b") + "\n2 check(s) passed, 1 warning(s)\n",
+		"none":                head + "\n1 check(s) passed\n",
+		"a longer label only": head + row("FAIL", label+" (prod)", "refused") + "\n1 check(s) passed, 1 failed\n",
+		"no summary":          head + row("WARN", label, "a"),
+	} {
+		_, _, _, err := withoutDoctorCheck(CLIResult{Stdout: stdout}, label)
+		assert.Error(t, err, name)
+	}
+	_, _, ok := DoctorCheck(head+row("FAIL", label+" (prod)", "refused"), label)
+	assert.False(t, ok, "a longer label is another check")
+
 	result, detail, ok := DoctorCheck(head+row("WARN", label, "v0.14.0 refuses them: a/p (b) (all namespaces)")+hint, label)
 	assert.True(t, ok)
 	assert.Equal(t, "WARN", result)
