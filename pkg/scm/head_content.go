@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
@@ -40,6 +41,14 @@ type HeadContentComparer interface {
 // push there, so its blobs are never kept, and a pack past the bound is not
 // read further (#2095 QA). A var, so a test can lower it.
 var maxHeadPeek int64 = 64 << 20
+
+// headPeekTimeout bounds one peek of a remote head, from the ref
+// advertisement to the commit: a server that stalls part-way through its
+// response (a hostile or broken one: git-upload-pack always ends its
+// stream) would otherwise hold the scan, and the step's reconcile worker,
+// until the caller's context ends (#2375). The caller's deadline wins when
+// it is sooner. A var, so a test can lower it.
+var headPeekTimeout = 2 * time.Minute
 
 // drainBound is the least peekCommit reads after it cancels the fetch, to
 // reach the transport through go-git's buffers above it (#2364).
@@ -85,10 +94,16 @@ func (c *GoGitClient) SameContentAsHead(ctx context.Context, dir, remote, branch
 	}
 	proxyOpts, release := sshScope(ctx, am)
 	defer release()
-	theirs, err := peekCommit(ctx, urls[0], am, proxyOpts, plumbing.NewBranchReferenceName(branch), plumbing.NewHash(sha), maxHeadPeek)
+	peekCtx, cancel := context.WithTimeout(ctx, headPeekTimeout)
+	defer cancel()
+	theirs, err := peekCommit(peekCtx, urls[0], am, proxyOpts, plumbing.NewBranchReferenceName(branch), plumbing.NewHash(sha), maxHeadPeek)
 	switch {
 	case errors.Is(err, errHeadTooLarge):
 		return false, nil
+	case err != nil && ctx.Err() == nil && errors.Is(peekCtx.Err(), context.DeadlineExceeded):
+		// Retried as any fetch error is: a slow server is not someone
+		// else's head.
+		return false, fmt.Errorf("git fetch %s %s: the server did not send the head's commit within %s", remote, branch, headPeekTimeout)
 	case err != nil:
 		return false, fmt.Errorf("git fetch %s %s: %s", remote, branch, gitErrorText(err))
 	case theirs == nil:
