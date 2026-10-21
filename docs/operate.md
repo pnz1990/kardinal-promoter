@@ -296,6 +296,7 @@ non-finite rate or a burst below 1.
 | `RollbackRefused` | RollbackPolicy | the `RollbackRefused` condition |
 | `InvalidSpec` | ChangeWindow | `Valid=False` condition |
 | `FreezeAuditFailed` | ChangeWindow | for a freeze's start, the `FreezeAudited` condition, missing until the `FreezeStarted` AuditEvent is written; for a lift whose `FreezeLifted` record still fails after 2 minutes, the controller's warning log only ([Freezes](agentic/freezes.md#who-froze-and-who-lifted-it)) |
+| `StatusWriteRefused` | PromotionReceipt | `kardinal_receipt_status_writes_refused_total{step}` and the controller's error log; fix the cause, then restart the controller ([Receipts](receipts.md)) |
 | `NotificationDropped`, `NotificationTemplateFailed` | NotificationHook | `status.failureMessage` and `kardinal_notifications_dropped_total{reason}` |
 | `ShardNotRunning`, `ShardHomeConflict` | Namespace | the controller's warning log only |
 | `ControllerSecretReferenceable` | Secret (the controller's SCM token) | the `kardinal.io/referenceable=true` label on that Secret, and the controller's warning log |
