@@ -125,6 +125,32 @@ spec:
 			want: "spec.scope.namespaces[0] in body should match"},
 		{name: "bad autonomy", spec: "  subjects: [{kind: User, name: u}]\n  sponsor: {user: alice}\n  scope: {}\n  autonomy: always",
 			want: "spec.autonomy in body should be one of [auto approve deny]"},
+		// Budgets (docs/design/24-agent-budgets.md section 4.1); the whole
+		// table runs on real API servers in test/helm's
+		// TestAgentBudgetsOnAPIServer.
+		{name: "budgets", spec: ok + `
+  budgets:
+  - {name: prod, environments: [prod, "prod-*"], versionsPerDay: 5, maxConcurrent: 2, fleetTargetsPerHour: 40, maxUnavailable: 1, fleetShare: "25%"}
+  - {name: pre-prod, environments: [uat], namespaces: ["payments-*"], versionsPerDay: 50}
+  budgetExemptions:
+  - {name: inc-4211, namespace: payments, pipeline: checkout, environment: prod, reason: hotfix, expiresAt: "2026-10-15T12:00:00Z", createdBy: bob}`},
+		{name: "a budget rule with no limit", spec: ok + "\n  budgets: [{name: prod, environments: [prod]}]",
+			want: "a budget rule sets at least one limit"},
+		{name: "budgets over the sum", spec: ok + `
+  budgets:
+  - {name: a, environments: [prod], fleetTargetsPerHour: 1000}
+  - {name: b, environments: [uat], versionsPerDay: 500, maxConcurrent: 1}`,
+			want: "sum to at most 1500 over all rules"},
+		{name: "budgets at the sum", spec: ok + `
+  budgets:
+  - {name: a, environments: [prod], fleetTargetsPerHour: 1000}
+  - {name: b, environments: [uat], versionsPerDay: 400, maxConcurrent: 100}`},
+		{name: "a fleetShare of 0%", spec: ok + "\n  budgets: [{name: prod, environments: [prod], fleetShare: \"0%\"}]",
+			want: "spec.budgets[0].fleetShare in body should match"},
+		{name: "a fleetShare over 100%", spec: ok + "\n  budgets: [{name: prod, environments: [prod], fleetShare: \"101%\"}]",
+			want: "spec.budgets[0].fleetShare"},
+		{name: "a star inside a budget environment", spec: ok + "\n  budgets: [{name: prod, environments: [\"p*d\"], maxConcurrent: 1}]",
+			want: "spec.budgets[0].environments[0] in body should match"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			errs := errsOf(id(tc.spec))

@@ -64,6 +64,9 @@ type AuditEventSpec struct {
 	// FreezeExempted is written once per exemption when a PromotionStep goes
 	// on through an active freeze under it (kardinal override --freeze),
 	// naming who made the exemption and why.
+	// BudgetExempted is written once when an agent's PromotionStep goes on
+	// under a budget exemption (AgentIdentity spec.budgetExemptions), naming
+	// who made it, why and until when.
 	// GateChanged is written by the BundleReconciler when a PolicyGate
 	// template that applies to a Promoting version was created, edited or
 	// deleted and the version's Graph got the change; gates lists the
@@ -73,7 +76,7 @@ type AuditEventSpec struct {
 	// failed health check records PromotionFailed (RollbackStarted when
 	// onHealthFailure is rollback), and a blocked gate records GateEvaluated
 	// with outcome Failure.
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed;ChangeRequestOpened;ChangeRequestLinked;ChangeRequestApproved;ChangeRequestRejected;GateChanged
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;PromotionRejected;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated;GateOverridden;ApprovalRecorded;ApprovalRevoked;HoldCreated;HoldReleased;HoldBundleMissing;BundleRejected;APIWrite;VerdictRecorded;VerdictRevoked;FreezeExempted;PipelinePaused;PipelineResumed;FreezeStarted;FreezeLifted;PRMerged;ReceiptFailed;ChangeRequestOpened;ChangeRequestLinked;ChangeRequestApproved;ChangeRequestRejected;GateChanged;BudgetExempted
 	Action string `json:"action"`
 
 	// Outcome describes the result of the action.
@@ -240,7 +243,7 @@ var AuditActions = []string{
 	"BundleRejected", "APIWrite", "VerdictRecorded", "VerdictRevoked", "FreezeExempted",
 	"PipelinePaused", "PipelineResumed", "FreezeStarted", "FreezeLifted",
 	"PRMerged", "ReceiptFailed", "ChangeRequestOpened", "ChangeRequestLinked", "ChangeRequestApproved", "ChangeRequestRejected",
-	"GateChanged",
+	"GateChanged", "BudgetExempted",
 }
 
 // AuditOutcomes are the values spec.outcome accepts.

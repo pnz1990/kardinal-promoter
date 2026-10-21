@@ -53,6 +53,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentbudget"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
@@ -252,6 +253,10 @@ type Reconciler struct {
 	// Receipts, when set, turns promotion receipts on: a decision snapshot
 	// when a step starts and a PromotionReceipt when it is Verified.
 	Receipts *ReceiptConfig
+
+	// Budgets turns the agent budget hold on (--agent-budgets); nil: off,
+	// and no AgentIdentity watch or index is registered.
+	Budgets *BudgetConfig
 }
 
 // now returns the current time from NowFn, or time.Now when it is nil.
@@ -986,6 +991,13 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 			}
 			return ctrl.Result{RequeueAfter: requeueGateWait}, nil
 		}
+	}
+
+	// An agent's version waits for its budget's grant last, so a step the
+	// holds above keep back takes no budget place (docs/design/
+	// 24-agent-budgets.md section 7.2).
+	if held, res, holdErr := r.holdForBudget(ctx, log, ps); held {
+		return res, holdErr
 	}
 
 	env := findEnv(pipeline, ps.Spec.Environment)
@@ -2698,6 +2710,15 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A branch turn that ends wakes the oldest step waiting for it
 		// (branchQueue), so the branch does not sit idle until its requeue.
 		WatchesRawSource(source.Channel(r.turnWakeups(), &handler.EnqueueRequestForObject{}))
+	if r.Budgets != nil {
+		// A ledger write wakes only the steps of the grants it added
+		// (budgetWakes), through the steps-by-agent index the budget
+		// reconciler reads too.
+		if err := agentbudget.IndexStepsByBudgetAgent(context.Background(), mgr.GetFieldIndexer()); err != nil {
+			return err
+		}
+		b = b.Watches(&v1alpha1.AgentIdentity{}, r.budgetWakes())
+	}
 	return shard.Active().Complete(b, tracing.WrapReconciler("promotionstep", r), &v1alpha1.PromotionStepList{})
 }
 

@@ -221,3 +221,20 @@ func SubjectKey(s v1alpha1.AgentSubject) string {
 	}
 	return s.Name
 }
+
+// BudgetRuleApplies reports whether budget rule r applies to a step in
+// namespace ns, in environment env, of fleet (its fleet environment; "" for
+// none): its namespace matches r.Namespaces (default every namespace) and
+// its environment, or its fleet's, matches r.Environments
+// (docs/design/24-agent-budgets.md section 4.1). The budget reconciler, the
+// step hold and the translator's fold all decide with it.
+func BudgetRuleApplies(r *v1alpha1.AgentBudgetRule, ns, env, fleet string) bool {
+	nss := r.Namespaces
+	if len(nss) == 0 {
+		nss = []string{"*"}
+	}
+	if !Matches(nss, ns) {
+		return false
+	}
+	return Matches(r.Environments, env) || (fleet != "" && Matches(r.Environments, fleet))
+}
