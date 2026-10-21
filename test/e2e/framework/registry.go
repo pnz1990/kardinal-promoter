@@ -22,6 +22,27 @@ import (
 	"time"
 )
 
+// RegistryTransport is an HTTP transport for one test's pushes to a
+// registry from the host, by up to parallel requests at a time: it keeps as
+// many connections per host idle as it may open (MaxIdleConnsPerHost and
+// MaxConnsPerHost), so each push reuses one. http.DefaultTransport keeps 2
+// per host: parallel pushes through it close the others after each request,
+// each closed connection holds its local port in TIME_WAIT for a minute, and
+// at scale the host runs out of ports (connect: cannot assign requested
+// address, TestScale_Attestations in the release gate's scale-full). Its idle
+// connections are closed when the test ends.
+func RegistryTransport(t *testing.T, parallel int) *http.Transport {
+	t.Helper()
+	if parallel < 1 {
+		t.Fatalf("RegistryTransport: parallel %d", parallel)
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConnsPerHost, tr.MaxConnsPerHost = parallel, parallel
+	tr.MaxIdleConns = max(tr.MaxIdleConns, parallel)
+	t.Cleanup(tr.CloseIdleConnections)
+	return tr
+}
+
 // Environment variables hack/e2e/components/registry.sh sets.
 const (
 	// EnvRegistry is the public OCI registry's base URL in the cluster.

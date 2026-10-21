@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -253,7 +252,9 @@ func TestScale_Attestations(t *testing.T) {
 		"metadata": map[string]any{"scanFinishedOn": time.Now().UTC().Format(time.RFC3339)}}
 	digest := func(i, j int) string { return fmt.Sprintf("sha256:%064x", 1+i*len(attestImages)+j) }
 	pushStart := time.Now()
-	require.NoError(t, scale.Parallel(16, n*len(attestImages), func(k int) error {
+	const pushers = 16
+	transport := framework.RegistryTransport(t, pushers)
+	require.NoError(t, scale.Parallel(pushers, n*len(attestImages), func(k int) error {
 		i, j := k/len(attestImages), k%len(attestImages)
 		d := digest(i, j)
 		var bundles [][]byte
@@ -274,7 +275,7 @@ func TestScale_Attestations(t *testing.T) {
 		}
 		for _, b := range bundles {
 			if err := signtest.PushBundle(ctx, reg.HostRepository(repo), d, b, []name.Option{name.Insecure},
-				remote.WithTransport(http.DefaultTransport)); err != nil {
+				remote.WithTransport(transport)); err != nil {
 				return fmt.Errorf("push %s: %w", d, err)
 			}
 		}
