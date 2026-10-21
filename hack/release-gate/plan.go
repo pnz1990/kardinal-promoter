@@ -706,7 +706,7 @@ func unitSteps(r *Repo, o Options) []Step {
 	ent := Step{ID: "scenario-enterprise", Area: areaUnit, Title: "enterprise scenario at full size", Heavy: true, Tests: "tests.json",
 		MinTests: 2,
 		// KARDINAL_SCENARIO_SCALE=full: the agent scale scenario at its full
-		// 5,000 AgentIdentities, which PR CI runs at 2,000.
+		// 7,500 AgentIdentities, which PR CI runs at 2,000.
 		// KARDINAL_SCENARIO_CHAOS=full: the controller restarts with 32
 		// seeds, which PR CI runs 16 of.
 		Script: `KARDINAL_SCENARIO_ENTERPRISE=full KARDINAL_SCENARIO_SCALE=full KARDINAL_SCENARIO_CHAOS=full go test -count=1 -timeout 30m -json -run '^TestEnterprise_' ./test/scenario/enterprise/... > "$STEP_DIR/tests.json"`}

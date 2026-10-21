@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 )
 
@@ -43,11 +44,13 @@ func percentile(d []time.Duration, p int) time.Duration {
 // TestActorPolicyLatencyOnAPIServer (#1936) measures, on a real API
 // server with the chart's policies, the latency of kro's re-apply of a gate
 // instance and of a person's version, with 2,000 registered agents and
-// with an index near its bound. The actor policy converts the whole index
-// for every request it matches; kro's gate writes are no longer matched
-// (only gates labelled kardinal.io/override-check are), so their p99 stays
-// flat as the registry grows. Opt in: KARDINAL_ACTOR_LATENCY=1 (it creates
-// thousands of AgentIdentities).
+// with 4,200 (the object format's bound under #1959), then with the same
+// 4,200 in the compact format and with 7,500 (#2071). The actor policy
+// converts the whole index for every request it matches; kro's gate writes
+// are no longer matched (only gates labelled kardinal.io/override-check
+// are), so their p99 stays flat as the registry grows. A person's version
+// at 4,200 takes at most half as long in the compact format (p50). Opt in:
+// KARDINAL_ACTOR_LATENCY=1 (it creates thousands of AgentIdentities).
 //
 // Covers ACTOR-PERF-01.
 func TestActorPolicyLatencyOnAPIServer(t *testing.T) {
@@ -86,14 +89,17 @@ func TestActorPolicyLatencyOnAPIServer(t *testing.T) {
 		return cl
 	}
 	kro, alice := as("system:serviceaccount:team-a:kardinal-graph"), as("alice")
-	idxR := &agentidentity.IndexReconciler{Client: asController(t, cfg, sch), Name: "kardinal-promoter"}
+	// The object format first (no Reader: the policies' labels are not
+	// read), then the compact one.
+	ctrlc := asController(t, cfg, sch)
+	idxR := &agentidentity.IndexReconciler{Client: ctrlc, Name: "kardinal-promoter"}
 
 	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a",
 		Labels: map[string]string{"kardinal.io/pipeline": "checkout", "kardinal.io/environment": "prod"}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
 	const samples = 200
 	n, b := 0, 0
-	measure := func(label string) (gateP99, bundleP99 time.Duration) {
+	measure := func(label string) (gateP99, bundleP50, bundleP99 time.Duration) {
 		var gates, bundles []time.Duration
 		for i := 0; i < samples; i++ {
 			gate.Spec.Message = fmt.Sprintf("pass %d", i)
@@ -109,7 +115,7 @@ func TestActorPolicyLatencyOnAPIServer(t *testing.T) {
 		t.Logf("%-22s kro gate re-apply p50 %6s p99 %6s | person's version p50 %6s p99 %6s", label,
 			percentile(gates, 50).Round(10*time.Microsecond), percentile(gates, 99).Round(10*time.Microsecond),
 			percentile(bundles, 50).Round(10*time.Microsecond), percentile(bundles, 99).Round(10*time.Microsecond))
-		return percentile(gates, 99), percentile(bundles, 99)
+		return percentile(gates, 99), percentile(bundles, 50), percentile(bundles, 99)
 	}
 	grow := func(to int) {
 		for ; n < to; n++ {
@@ -123,22 +129,36 @@ func TestActorPolicyLatencyOnAPIServer(t *testing.T) {
 		require.NoError(t, err)
 		var idx v1alpha1.AgentIndex
 		require.NoError(t, admin.Get(ctx, client.ObjectKey{Name: "kardinal-promoter"}, &idx))
-		require.True(t, meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), "index Ready at %d agents", to)
+		_, built := actor.Readable(&idx.Status)
+		require.True(t, built, "index built at %d agents", to)
+		require.Equal(t, idxR.Reader != nil, actor.IsCompact(&idx.Status), "the index's format at %d agents", to)
 		raw, err := json.Marshal(idx)
 		require.NoError(t, err)
-		t.Logf("index: %d agents, %d KiB", to, len(raw)/1024)
+		t.Logf("index: %d agents, %d KiB (compact %v, %d bytes counted)", to, len(raw)/1024, actor.IsCompact(&idx.Status), idx.Status.Bytes)
 		time.Sleep(3 * time.Second) // the policies' param informer sees it
 	}
 	grow(1)
 	require.NoError(t, kro.Create(ctx, gate))
 	measure("1 agent")
 	grow(2000)
-	g2000, b2000 := measure("2,000 agents")
+	g2000, _, b2000 := measure("2,000 agents")
 	grow(4200)
-	gCap, bCap := measure("4,200 agents (bound)")
+	gCap, bCapP50, bCap := measure("4,200 agents (bound)")
 	assert.Less(t, g2000, 50*time.Millisecond, "kro's gate re-apply at 2,000 agents")
 	assert.Less(t, gCap, 50*time.Millisecond, "kro's gate re-apply near the bound")
 	t.Logf("a person's version still pays the conversion: p99 %s at 2,000, %s near the bound", b2000, bCap)
+
+	// The compact format (#2071): the chart's policies are labelled for it.
+	idxR.Reader = ctrlc
+	grow(4200)
+	gC, cCapP50, cCap := measure("4,200 agents, compact")
+	grow(7500)
+	g7500, c7500P50, c7500 := measure("7,500 agents, compact")
+	assert.Less(t, gC, 50*time.Millisecond, "kro's gate re-apply at 4,200 agents, compact")
+	assert.Less(t, g7500, 50*time.Millisecond, "kro's gate re-apply at 7,500 agents, compact")
+	t.Logf("a person's version at 4,200: p50 %s / p99 %s in the object format, %s / %s compact (%.1fx); at 7,500 compact %s / %s",
+		bCapP50, bCap, cCapP50, cCap, float64(bCapP50)/float64(cCapP50), c7500P50, c7500)
+	assert.LessOrEqual(t, 2*cCapP50, bCapP50, "a person's version at 4,200 agents takes at most half as long compact (p50)")
 }
 
 // TestActorWriteLatencyOnAPIServer (#1936 follow-up) measures the writes the

@@ -5,6 +5,7 @@ package scenario
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -308,13 +309,63 @@ func (w *World) EditAgent(name string, edit func(*v1alpha1.AgentIdentity)) error
 	return nil
 }
 
-// IndexReady reports whether the agent index is built (Ready True).
+// IndexReady reports whether the agent index is built, in either format
+// (actor.Readable).
 func (w *World) IndexReady() bool {
 	var idx v1alpha1.AgentIndex
 	if err := w.Client.Get(w.Ctx, types.NamespacedName{Name: Release}, &idx); err != nil {
 		return false
 	}
-	return meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready")
+	_, built := actor.Readable(&idx.Status)
+	return built
+}
+
+// IndexCondition is the readiness condition of idx's current format:
+// CompactReady in the compact one (#2071), Ready in the legacy one.
+func IndexCondition(idx *v1alpha1.AgentIndex) *metav1.Condition {
+	if actor.IsCompact(&idx.Status) {
+		return meta.FindStatusCondition(idx.Status.Conditions, actor.ConditionCompactReady)
+	}
+	return meta.FindStatusCondition(idx.Status.Conditions, "Ready")
+}
+
+// IndexEntryCount is how many users and groups idx's current format holds
+// (the legacy guard of a compact index aside).
+func IndexEntryCount(idx *v1alpha1.AgentIndex) (users, groups int) {
+	if actor.IsCompact(&idx.Status) {
+		return len(idx.Status.CompactUsers), len(idx.Status.CompactGroups)
+	}
+	return len(idx.Status.Users), len(idx.Status.Groups)
+}
+
+// SubsetIndex is idx with every k-th entry of its current format kept, by
+// key order (k <= 0: none), for the admission calibrations.
+func SubsetIndex(idx *v1alpha1.AgentIndex, k int) *v1alpha1.AgentIndex {
+	out := idx.DeepCopy()
+	if actor.IsCompact(&idx.Status) {
+		out.Status.CompactUsers, out.Status.CompactGroups = everyKth(idx.Status.CompactUsers, k), everyKth(idx.Status.CompactGroups, k)
+		return out
+	}
+	out.Status.Users, out.Status.Groups = everyKth(idx.Status.Users, k), everyKth(idx.Status.Groups, k)
+	return out
+}
+
+func everyKth[V any](m map[string]V, k int) map[string]V {
+	if k <= 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := map[string]V{}
+	for i, key := range keys {
+		if i%k == 0 {
+			out[key] = m[key]
+		}
+	}
+	return out
 }
 
 // Ship creates b as the plan's actor, as kardinal create bundle does, and
@@ -359,10 +410,11 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 		}
 		var idx v1alpha1.AgentIndex
 		require.NoError(t, w.Client.Get(w.Ctx, types.NamespacedName{Name: Release}, &idx))
-		c := meta.FindStatusCondition(idx.Status.Conditions, "Ready")
+		c := IndexCondition(&idx)
 		require.NotNil(t, c)
 		assert.Equal(t, actor.ReasonIndexFull, c.Reason)
-		assert.Empty(t, idx.Status.Users, "a full index is written empty")
+		users, _ := IndexEntryCount(&idx)
+		assert.Zero(t, users, "a full index is written empty")
 	}
 	v := ImageBundle(ns, PipelineName, "1.2.0")
 	refusedBy := func(id Identity, stamp *v1alpha1.Actor) {

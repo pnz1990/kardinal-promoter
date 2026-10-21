@@ -5,7 +5,7 @@
 # go test ./... (under -race in CI: 150 AgentIdentities, 3 tenants, 1 burst); mode
 # medium is KARDINAL_SCENARIO_ENTERPRISE=full (CI's scenario-enterprise job,
 # no -race: 2,000 AgentIdentities, 80 Pipelines in 20 tenants); mode full is
-# KARDINAL_SCENARIO_SCALE=full (the release gate, no -race: 5,000
+# KARDINAL_SCENARIO_SCALE=full (the release gate, no -race: 7,500
 # AgentIdentities, 200 Pipelines in 50 tenants, 98 agents, 2 bursts). The scenario fails when a measure goes
 # past its budget.
 #
@@ -25,14 +25,17 @@
 # ratio median / calibration median under budget / calibration, so the
 # host's load moves both sides (#2035, #2039).
 #
-# Measured in full (5,000 AgentIdentities, after #1959): calibration
-# 170-185us; agents' Bundles and people's Approvals p50 42-45ms, p99 46ms
-# idle and 49-65ms with the host loaded (logged, not bounded: each converts
-# about a MiB of index, and the tail moves with memory pressure); kro's
-# gates p50 0.05ms. In medium (2,000): calibration 166us, Bundles and
-# Approvals p50 16.5ms, kro 0.05ms. The full Bundle and Approval budget is
-# #1959's 50ms bound; medium's is it scaled to 2,000 identities and rounded
-# up (30ms);
+# Measured in full (5,000 AgentIdentities, after #1959, the index's object
+# format): calibration 170-185us; agents' Bundles and people's Approvals
+# p50 42-45ms, p99 46ms idle and 49-65ms with the host loaded (logged, not
+# bounded: each converts about a MiB of index, and the tail moves with
+# memory pressure); kro's gates p50 0.05ms. In medium (2,000): calibration
+# 166us, Bundles and Approvals p50 16.5ms, kro 0.05ms. In the compact
+# format (#2071), on one loaded host (calibration 226-291us): Bundles p50
+# 55ms at 5,000 before, 16ms at 5,000 and 20ms at 7,500 (87x the
+# calibration), Approvals the same; medium 6.6-6.8ms. The full Bundle and
+# Approval budget is #1959's 50ms bound; medium's is it scaled to 2,000
+# identities and rounded up (30ms);
 # kro's guards #1936's fix (it converted the index too before it). Quick
 # mode runs under -race (calibration 1.9ms) with wide budgets.
 scale.quick.index.bytes 1048576

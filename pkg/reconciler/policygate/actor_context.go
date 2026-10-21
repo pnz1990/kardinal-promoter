@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 // actorContext is the actor CEL variable: the Bundle's actor stamp
@@ -88,7 +89,13 @@ func (r *Reconciler) buildAgentContext(ctx context.Context, gate *kardinalv1alph
 		}
 		return nil, fmt.Errorf("get AgentIndex %s: %w", r.AgentIndexName, err)
 	}
-	entry, ok := indexEntry(&idx.Status, author.Agent)
+	// The entries of the index's current format (#2071, actor.Readable); an
+	// index not built registers no one.
+	entries, built := actor.Readable(&idx.Status)
+	if !built {
+		return out, nil
+	}
+	entry, ok := indexEntry(entries, author.Agent)
 	if !ok || !id.Status.Ready || id.Status.ObservedGeneration != id.Generation {
 		return out, nil
 	}

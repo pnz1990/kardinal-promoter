@@ -27,6 +27,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -43,26 +44,25 @@ func mcpIndex(pipelines ...string) *v1alpha1.AgentIndex {
 	return idx
 }
 
-// mcpCompactIndex is mcpIndex as a later release writes it (#2071): the
-// entry in the compact format, Ready False (CompactFormat), CompactReady
-// True, and in the legacy Groups the guard that release keeps for its own
-// older readers, which every authenticated requester matches as a blocked
-// agent.
+// mcpCompactIndex is mcpIndex as the controller writes it in the compact
+// format (#2071): the entry as one string, Ready False (CompactFormat),
+// CompactReady True, and in the legacy Groups the guard for older readers,
+// which every authenticated requester matches as a blocked agent.
 func mcpCompactIndex(pipelines ...string) *v1alpha1.AgentIndex {
 	idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}
 	idx.Status.CompactUsers = map[string]string{mcpAgent: "fixer\x7falice@example.com\x7fapprove\x7f*\x7f" +
 		strings.Join(pipelines, "\x1f") + "\x7f*\x7f"}
-	idx.Status.Groups = map[string]v1alpha1.AgentIndexEntry{"system:authenticated": {Agent: "agent-index-in-a-newer-format",
-		Sponsor: "upgrade-kardinal-to-read-it", Blocked: "kardinal's agent index is in the compact format of a newer release"}}
+	idx.Status.Groups = map[string]v1alpha1.AgentIndexEntry{actor.LegacyReaderGroup: actor.LegacyReaderGuard}
 	meta.SetStatusCondition(&idx.Status.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: "CompactFormat"})
 	meta.SetStatusCondition(&idx.Status.Conditions, metav1.Condition{Type: "CompactReady", Status: metav1.ConditionTrue, Reason: "Built"})
 	return idx
 }
 
-// TestMCP_StampsAgainstACompactIndex (#2071): against the compact index of
-// a later release, this CLI stamps the agent as against its own index (the
-// later release's guard for older readers is not read), and refuses it out
-// of the scope the compact entry names, before writing anything.
+// TestMCP_StampsAgainstACompactIndex (#2071): against the compact index
+// (which v0.13's CLI reads the same way), the CLI stamps the agent as
+// against the legacy one (the guard for older readers is not read), and
+// refuses it out of the scope the compact entry names, before writing
+// anything.
 // Covers ACTOR-INDEX-04.
 func TestMCP_StampsAgainstACompactIndex(t *testing.T) {
 	t.Parallel()

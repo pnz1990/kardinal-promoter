@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -49,8 +50,24 @@ func registry(autonomy string, suspended, notReady bool) []client.Object {
 	}
 	idx := &kardinalv1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: indexName},
 		Status: kardinalv1alpha1.AgentIndexStatus{Users: map[string]kardinalv1alpha1.AgentIndexEntry{
-			"system:serviceaccount:ci:fixer": entry}}}
+			"system:serviceaccount:ci:fixer": entry},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}}
 	return []client.Object{id, idx}
+}
+
+// compactRegistry is registry with the AgentIndex in the compact format
+// (#2071), as the controller writes it once the actor policies read it.
+func compactRegistry(autonomy string, suspended, notReady bool) []client.Object {
+	objs := registry(autonomy, suspended, notReady)
+	idx := objs[1].(*kardinalv1alpha1.AgentIndex)
+	enc, _ := actor.EncodeEntry(idx.Status.Users["system:serviceaccount:ci:fixer"])
+	idx.Status = kardinalv1alpha1.AgentIndexStatus{
+		Users:        map[string]kardinalv1alpha1.AgentIndexEntry{},
+		Groups:       map[string]kardinalv1alpha1.AgentIndexEntry{actor.LegacyReaderGroup: actor.LegacyReaderGuard},
+		CompactUsers: map[string]string{"system:serviceaccount:ci:fixer": enc},
+		Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
+			{Type: actor.ConditionCompactReady, Status: metav1.ConditionTrue, Reason: "Built"}}}
+	return objs
 }
 
 // evalGate reconciles gate (twice: idempotent) against bundle and objs and
@@ -130,6 +147,15 @@ func TestAgentContext(t *testing.T) {
 		{"deleted is not registered", fixerStamp(), nil, "!agent.registered && agent.name == 'fixer'", true},
 		{"a person's version", &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "bob"},
 			registry("auto", false, false), "!agent.registered && agent.name == '' && !agent.suspended", true},
+		// The compact index format (#2071) is read the same way.
+		{"registered, compact index", fixerStamp(), compactRegistry("auto", false, false),
+			"agent.registered && agent.name == 'fixer' && agent.sponsor == 'alice' && agent.autonomy == 'auto' && !agent.suspended", true},
+		{"suspended, compact index", fixerStamp(), compactRegistry("auto", true, false), "agent.registered && agent.suspended", true},
+		{"an index not built registers no one", fixerStamp(), func() []client.Object {
+			objs := registry("auto", false, false)
+			objs[1].(*kardinalv1alpha1.AgentIndex).Status.Conditions = nil
+			return objs
+		}(), "!agent.registered", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

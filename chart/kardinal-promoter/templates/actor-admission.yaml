@@ -20,30 +20,64 @@ actorChecks: the variables and validations of the actor policies, a
 transliteration of pkg/actor Derive and Scope. $controllers is passed in.
 */}}
 {{- /*
-indexState: indexReady (Ready True), compact (Ready's reason is
-CompactFormat: a later release wrote the index in its compact format, #2071,
-whose entries this release's policies do not read) and full (Ready's reason
-is IndexFull: the entries are over the bound, and written empty). An index
-that is not Ready makes the policies refuse every write they check;
-indexNotReadyMessage says why and what to do: finish the upgrade or the
-rollback, remove AgentIdentities, or retry while the controller builds it.
+indexMatches: the variables that read the AgentIndex param in either of its
+formats (pkg/actor/compact.go, #2071), after a "groups" variable. compact
+is true when the current format is the compact one: Ready's reason is
+CompactFormat, which a controller of an older release overwrites, so stale
+compact entries are never read. matches is the requester's entries, by
+username then by group, each {agent, sponsor, namespaces, pipelines,
+environments, blocked} with blocked '' when it may act: the compact entry
+"agent RS sponsor RS autonomy RS namespaces RS pipelines RS environments RS
+blocked" (RS \x7f, lists joined with \x1f) split, or the legacy object.
+indexReady is CompactReady (compact) or Ready (legacy) True. A transliteration
+of pkg/actor Readable and DecodeEntry.
 */}}
-{{- define "kardinal-promoter.indexState" -}}
-- name: indexReady
-  expression: >-
-    has(params.status) && has(params.status.conditions) &&
-    params.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+{{- define "kardinal-promoter.indexMatches" -}}
 - name: compact
   expression: >-
     has(params.status) && has(params.status.conditions) &&
     params.status.conditions.exists(c, c.type == 'Ready' && has(c.reason) && c.reason == 'CompactFormat')
+- name: compactRaw
+  expression: >-
+    !variables.compact ? [] :
+    (has(params.status.compactUsers) && request.userInfo.username in params.status.compactUsers
+      ? [params.status.compactUsers[request.userInfo.username]] : []) +
+    (has(params.status.compactGroups)
+      ? variables.groups.filter(g, g in params.status.compactGroups).map(g, params.status.compactGroups[g]) : [])
+- name: legacyRaw
+  expression: >-
+    variables.compact || !has(params.status) ? [] :
+    (has(params.status.users) && request.userInfo.username in params.status.users
+      ? [params.status.users[request.userInfo.username]] : []) +
+    (has(params.status.groups)
+      ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+- name: matches
+  expression: >-
+    variables.compactRaw.map(s, s.split('\x7f', 7)).map(f, size(f) == 7
+      ? {'agent': dyn(f[0]), 'sponsor': dyn(f[1]),
+         'namespaces': dyn(f[3] == '' ? [] : f[3].split('\x1f')),
+         'pipelines': dyn(f[4] == '' ? [] : f[4].split('\x1f')),
+         'environments': dyn(f[5] == '' ? [] : f[5].split('\x1f')),
+         'blocked': dyn(f[6])}
+      : {'agent': dyn(''), 'sponsor': dyn(''), 'namespaces': dyn([]), 'pipelines': dyn([]), 'environments': dyn([]),
+         'blocked': dyn('the agent index entry is malformed')}) +
+    variables.legacyRaw.map(e, {'agent': dyn(e.agent), 'sponsor': dyn(e.sponsor),
+      'namespaces': dyn(has(e.namespaces) ? e.namespaces : []),
+      'pipelines': dyn(has(e.pipelines) ? e.pipelines : []),
+      'environments': dyn(has(e.environments) ? e.environments : []),
+      'blocked': dyn(has(e.blocked) ? e.blocked : '')})
+- name: indexReady
+  expression: >-
+    has(params.status) && has(params.status.conditions) &&
+    params.status.conditions.exists(c, c.type == (variables.compact ? 'CompactReady' : 'Ready') && c.status == 'True')
 - name: full
   expression: >-
     has(params.status) && has(params.status.conditions) &&
-    params.status.conditions.exists(c, c.type == 'Ready' && has(c.reason) && c.reason == 'IndexFull')
+    params.status.conditions.exists(c, c.type == (variables.compact ? 'CompactReady' : 'Ready') &&
+      has(c.reason) && c.reason == 'IndexFull')
 {{- end }}
 {{- define "kardinal-promoter.indexNotReadyMessage" -}}
-variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read: finish the upgrade (or the rollback) and retry" : variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses the writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)"
+variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses the writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)"
 {{- end }}
 {{- define "kardinal-promoter.actorChecks" -}}
 variables:
@@ -51,13 +85,9 @@ variables:
     expression: request.userInfo.username in {{ .controllers }}
   - name: groups
     expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-  # The index entries that match the requester: by username, then by group.
-  - name: matches
-    expression: >-
-      (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-        ? [params.status.users[request.userInfo.username]] : []) +
-      (has(params.status) && has(params.status.groups)
-        ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+  # The index entries that match the requester: by username, then by group,
+  # in either format.
+  {{- include "kardinal-promoter.indexMatches" . | nindent 2 }}
   - name: agent
     expression: "size(variables.matches) > 0"
   - name: entry
@@ -116,10 +146,9 @@ variables:
       variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
   - name: check
     expression: "!variables.controller && size(variables.stamps) > 0"
-  # The index is built: a Ready condition that is True. Until then (just
-  # created, or IndexFull) every write the policy judges is refused: the
-  # registry fails closed.
-  {{- include "kardinal-promoter.indexState" . | nindent 2 }}
+  # indexReady (indexMatches): the index is built. Until then (just created,
+  # or IndexFull) every write the policy judges is refused: the registry
+  # fails closed. A full index says so (retrying does not help).
 validations:
   - expression: "!variables.check || variables.indexReady"
     messageExpression: >-
@@ -130,10 +159,10 @@ validations:
       'you (' + request.userInfo.username + ') match more than one AgentIdentity (' +
       variables.matches.map(m, m.agent).join(', ') + '); ask a cluster admin to fix the agent registry'
     reason: Forbidden
-  - expression: "!variables.check || variables.matches.all(m, !has(m.blocked))"
+  - expression: "!variables.check || variables.matches.all(m, m.blocked == '')"
     messageExpression: >-
       'agent ' + variables.entry.agent + ' may not act: ' +
-      variables.matches.filter(m, has(m.blocked)).map(m, m.blocked).join('; ')
+      variables.matches.filter(m, m.blocked != '').map(m, m.blocked).join('; ')
     reason: Forbidden
   # Break-glass is for people (docs/design/18-actor-policy.md section 6):
   # an agent may not let a pipeline through a freeze.
@@ -185,6 +214,9 @@ metadata:
   name: {{ include "kardinal-promoter.fullname" . }}-actor
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    # It reads the compact index format (#2071): the controller writes that
+    # format only while all three actor policies carry this label.
+    kardinal.io/agent-index-format: compact
 spec:
   failurePolicy: Fail
   paramKind:
@@ -220,6 +252,9 @@ metadata:
   name: {{ include "kardinal-promoter.fullname" . }}-actor-records
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    # It reads the compact index format (#2071): the controller writes that
+    # format only while all three actor policies carry this label.
+    kardinal.io/agent-index-format: compact
 spec:
   failurePolicy: Fail
   paramKind:
@@ -249,12 +284,7 @@ spec:
       expression: request.userInfo.username in {{ $controllers }}
     - name: groups
       expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-    - name: matches
-      expression: >-
-        (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-          ? [params.status.users[request.userInfo.username]] : []) +
-        (has(params.status) && has(params.status.groups)
-          ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+    {{- include "kardinal-promoter.indexMatches" . | nindent 4 }}
     - name: agent
       expression: "size(variables.matches) > 0"
     - name: entry
@@ -264,12 +294,9 @@ spec:
         variables.agent ? 'agent' :
         request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
     {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
-    {{- include "kardinal-promoter.indexState" . | nindent 4 }}
   validations:
     # Absence from the index means "not an agent", so a stamp is judged only
-    # against a built index; a later release's compact index (#2071) is not
-    # read at all (its legacy maps hold a guard for this release, not its
-    # agents).
+    # against a built index, in either format (indexReady).
     - expression: "variables.controller || variables.indexReady || variables.stamps.all(s, s == null)"
       messageExpression: >-
         {{ include "kardinal-promoter.indexNotReadyMessage" . }}
@@ -340,6 +367,9 @@ metadata:
   name: {{ include "kardinal-promoter.fullname" . }}-actor-overrides
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    # It reads the compact index format (#2071): the controller writes that
+    # format only while all three actor policies carry this label.
+    kardinal.io/agent-index-format: compact
 spec:
   failurePolicy: Fail
   paramKind:

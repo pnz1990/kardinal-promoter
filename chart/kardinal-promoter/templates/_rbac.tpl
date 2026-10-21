@@ -362,6 +362,16 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["validatingadmissionpolicies"]
   verbs: ["get"]
   resourceNames: [{{ printf "%s-agent-index" (include "kardinal-promoter.fullname" .) | quote }}]
+# The actor policies: the leader writes the AgentIndex in the compact format
+# only while all three are labelled kardinal.io/agent-index-format: compact,
+# that is, read it (#2071, pkg/reconciler/agentidentity compactAllowed).
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies"]
+  verbs: ["get"]
+  resourceNames:
+    {{- range list "-actor" "-actor-records" "-actor-overrides" }}
+    - {{ printf "%s%s" (include "kardinal-promoter.fullname" $) . | quote }}
+    {{- end }}
 {{- if or .Values.ui.auth.tokenReview .Values.bundleAPI.tokenReview }}
 # ui.auth.tokenReview, bundleAPI.tokenReview: the UI API and the Bundle API
 # validate each bearer token with a TokenReview and authorize it with a
@@ -398,6 +408,12 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["configmaps"]
   resourceNames: ["kardinal-version"]
   verbs: ["get", "update", "patch"]
+# The controller's own Deployment, read by name and uncached: the agent index
+# switches to its compact format once the rollout has finished (#2071).
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: [{{ include "kardinal-promoter.fullname" . | quote }}]
+  verbs: ["get"]
 {{- with include "kardinal-promoter.githubSecretName" . }}
 # The SCM token Secret, polled by the SecretWatcher to reload a rotated token.
 # Rendered only when a name is set: empty resourceNames would mean every Secret.

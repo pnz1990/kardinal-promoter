@@ -1,0 +1,5 @@
+---
+section: Changed
+---
+
+- **The agent index is compact: admission is about three times faster, and kardinal supports up to 7,000 AgentIdentities** (#2071, [Scale and limits](operate.md#scale-and-limits)). The controller writes each entry of the AgentIndex as one string (`status.compactUsers`, `status.compactGroups`) instead of an object (`status.users`, `status.groups`), and the actor policies read it with `split`. The API server copies the whole index for every write those policies check, and strings are cheaper to copy. In the agent scale scenario, on one host, an agent's Bundle took 55 ms (p50) at 5,000 AgentIdentities before and 16 ms after, and 20 ms at 7,500. An AgentIdentity takes about 115 bytes of the 1 MiB bound instead of about 210, so the index is full at about 9,100 AgentIdentities instead of 5,000. The supported limit goes from 4,000 to 7,000, and the release gate's scale scenario now runs 7,500. The index's `CompactReady` condition says it is built; its `Ready` condition is False with the reason `CompactFormat`, so older readers refuse rather than misread it ([The index format](actors.md#the-index-format)).

@@ -5,15 +5,15 @@ between several controllers, see [Sharding controllers](sharding.md).
 
 ## Scale and limits
 
-What kardinal is tested at, and the limits that bound it. Supported: **up to 4,000
-AgentIdentities per cluster**. That is about 80% of the agent index's bound, and admission
+What kardinal is tested at, and the limits that bound it. Supported: **up to 7,000
+AgentIdentities per cluster**. That is about three quarters of the agent index's bound, and admission
 stays under 50 ms (below). The rest of this section is the measured numbers.
 
 Measured with the agent scale scenario (`test/scenario/enterprise/agents/scale`, full size,
 which the release gate runs). Every write goes through the API server's
 ValidatingAdmissionPolicy plugin with the chart's policies.
 
-- 5,000 AgentIdentities, 200 Pipelines in 50 tenant namespaces, and 98 agents shipping 3
+- 7,500 AgentIdentities, 200 Pipelines in 50 tenant namespaces, and 98 agents shipping 2
   bursts of versions at once.
 - People approve prod and review PRs.
 - Each burst converges in 23 controller rounds: every version Verified in every
@@ -21,13 +21,13 @@ ValidatingAdmissionPolicy plugin with the chart's policies.
 
 | Write | Admission p50 | Admission p99 |
 |---|---|---|
-| A Bundle created by an agent | 42 ms | 47 ms |
-| An Approval created by a person | 42 ms | 47 ms |
-| A gate instance created or updated by kro | 0.05 ms | 0.2 ms |
+| A Bundle created by an agent | 20 ms | 22 ms |
+| An Approval created by a person | 20 ms | 21 ms |
+| A gate instance created or updated by kro | 0.06 ms | 0.07 ms |
 
-The p99 is each write's fastest of three admissions, on an otherwise idle core. A loaded
-API server or a garbage-collection pause makes one request slower; the cost of admitting it
-is the same.
+The p99 is each write's fastest of three admissions. The host was shared: an admission without
+the index took 0.23 ms, against 0.18 ms on an idle one. A loaded API server or a
+garbage-collection pause makes one request slower; the cost of admitting it is the same.
 
 ### The agent index
 
@@ -35,46 +35,55 @@ The actor policies read one object per installation, the
 [agent index](actors.md#how-the-actor-is-verified), as their parameter.
 
 - **Admission cost.** Admitting a Bundle or an Approval reads the whole index, so its cost
-  grows with the number of AgentIdentities. The p99 of the whole admission was 44 ms at 4,200 on
-  kube-apiserver (#1959), and 47 ms at 5,000 in the scale scenario (the table under
-  [Scale and limits](#scale-and-limits)). kro's gate writes do not read it.
+  grows with the number of AgentIdentities. kro's gate writes do not read it. In runs on the
+  same host, an agent's Bundle took 55 ms (p50) at 5,000 AgentIdentities in the index's object
+  format, 16 ms at 5,000 in its compact format, and 20 ms at 7,500.
 - **The size bound.** The index is bounded at **1 MiB** of entries. An AgentIdentity takes
-  about 210 bytes: one ServiceAccount or user subject, a namespace scope and a sponsor. One
+  about 115 bytes: one ServiceAccount or user subject, a namespace scope and a sponsor. One
   that lists more subjects, namespaces, Pipelines or environments takes more.
 
 | AgentIdentities | Index size | Of the 1 MiB bound |
 |---|---|---|
-| 1,000 | 202 KiB | 20% |
-| 2,000 | 407 KiB | 40% |
-| 4,000 | 815 KiB | 80% |
-| 5,000 | 1,019 KiB | 99.5% |
+| 2,000 | 225 KiB | 22% |
+| 5,000 | 562 KiB | 55% |
+| 7,000 | 786 KiB | 77% |
+| 7,500 | 840 KiB | 82% |
+| 9,000 | 1,011 KiB | 99% |
 
-At about **5,000** AgentIdentities of that size, the index is full.
+The 7,500 row is measured; the others are 115 bytes each. At about **9,100** AgentIdentities of
+that size, the index is full.
 
-- A full index is not Ready (`IndexFull`).
+- A full index is not built (`CompactReady` is False, `IndexFull`).
 - kardinal then refuses every write the actor policy checks, people's included, until
   AgentIdentities or subjects are removed.
-- Keep under 4,000 AgentIdentities, or fewer if yours list several subjects or scopes.
-- Watch the index's Ready condition:
+- Keep under 7,000 AgentIdentities, or fewer if yours list several subjects or scopes.
+- Watch the index's conditions:
   `kubectl get agentindex kardinal-promoter -o jsonpath='{.status.conditions}'`.
 
 The index reports how full it is: `status.bytes`, `status.maxBytes` and a `NearFull`
 condition from 80% ([Register an agent](actors.md#register-an-agent)).
 
-#### Why the bound stays at 4,000 for now
+**The object format.** Releases before v0.14 write each entry as an object, which takes about
+210 bytes, so their index is full at about 5,000 AgentIdentities. A v0.14 controller writes it
+too during an upgrade from v0.13, until its rollout finishes
+([The index format](actors.md#the-index-format)). Downgrading to v0.13 with more than about
+5,000 AgentIdentities fills it, and kardinal refuses every write the actor policy checks: remove
+AgentIdentities first.
+
+#### Why the bound is where it is
 
 For each request a policy matches, the API server turns the policy's parameter into a CEL
 value before any expression runs. It does that for the matchConditions too. For a custom
 resource such as the agent index, it copies the whole object each time. For a built-in kind
 such as a ConfigMap, it reads lazily and the cost doesn't grow with size. So admission cost
-grows with the index, whatever the policy reads from it. Measured on its own at 5,000
-AgentIdentities, that conversion takes about 22 to 27 ms per request: 21.7 ms and 27.1 ms in
-the two benchmarks of the conversion alone on #2071. It is part of the 42 to
-47 ms that the whole admission of a Bundle or an Approval takes at 5,000 (the table under
-[Scale and limits](#scale-and-limits)), about half of it. The rest is the policies' own work and
-the API server's. The two were measured on different hosts, so compare them only roughly.
+grows with the index, whatever the policy reads from it.
 
-Three ways to lift the bound were checked (#2071) and none ships in v0.13:
+The compact format makes each entry one string instead of an object with seven fields, which
+is cheaper to copy: about 2.8 times in the benchmark of the conversion alone on #2071 (27.1 ms at
+5,000 AgentIdentities as objects, 9.6 ms as strings). The 1 MiB bound keeps the cost bounded.
+
+Three ways to lift the bound further were checked
+([design note 29](design/29-agent-index-scale.md)), and none ships:
 
 - **An index per namespace.** Absence from the index means "not an agent". An agent writing
   outside its own namespace would be absent from that namespace's index and pass as a person,
@@ -87,7 +96,7 @@ Three ways to lift the bound were checked (#2071) and none ships in v0.13:
   On a cluster with larger ConfigMaps it would grow further, and kardinal can't bound that.
 
 A lazy conversion for custom-resource parameters in the API server would let a sharded index
-pay only for the shard a request reads. Until then, plan for up to 4,000 AgentIdentities
+pay only for the shard a request reads. Until then, plan for up to 7,000 AgentIdentities
 per cluster.
 
 ## Sizing kro

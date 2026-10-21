@@ -71,6 +71,15 @@ chart no longer ships. Downgrade the chart along with the controller (`helm roll
 ClusterRole is back. When you upgrade again, the controller removes those nodes and their reader
 RoleBindings at startup.
 
+**From v0.14.0** (not released yet). A controller older than v0.14.0 reads only the object
+format of the agent index, and v0.14.0 writes it in the compact format
+([The index format](actors.md#the-index-format)). Roll back the chart with the controller
+(`helm rollback`): an older controller does not know v0.14.0's `--controller-deployment` flag, so
+an older image under the v0.14.0 chart exits at its start. After `helm rollback`, the older
+policies refuse the writes they check until an older controller has rebuilt the index, at its
+start, within seconds. The object format is full at about 5,000 AgentIdentities: with more,
+remove some before you downgrade, or every write the actor policy checks is refused.
+
 ## Upgrading from v0.12.0
 
 !!! note "v0.13.0 is not released yet"

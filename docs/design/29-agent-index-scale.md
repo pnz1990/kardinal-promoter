@@ -3,6 +3,9 @@
 > Status: **Decided (2026-10-20)**: v0.14.0 ships design C, compact entries in the one index
 > (#2071). The per-namespace index, PodTemplate params and a ConfigMap opt-in are rejected
 > (§6). The upstream issue is on the owner's list (Appendix A).
+> Implemented for v0.14.0 (#2071): the format, its readers and its upgrade path are in
+> [The index format](../actors.md#the-index-format), the measured numbers in
+> [Scale and limits](../operate.md#scale-and-limits).
 > Created: 2026-10-20
 > Depends on: [17-actors.md](17-actors.md) §5 (the actor policy and the AgentIndex) and
 > [18-actor-policy.md](18-actor-policy.md).

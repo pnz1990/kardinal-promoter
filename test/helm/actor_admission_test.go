@@ -4,8 +4,13 @@
 package helm
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
@@ -34,6 +40,24 @@ func actorAdmissionObjects(release string) []string {
 // reviewer (an OIDC user), parked (suspended), and late (conflicts with fixer).
 func actorRegistry(t *testing.T) *v1alpha1.AgentIndexStatus {
 	t.Helper()
+	return actorRegistryWith(t, actor.Evaluate)
+}
+
+// actorRegistryCompact is actorRegistry in the compact format (#2071), as the
+// controller writes it once the actor policies read it: Ready False,
+// CompactFormat, and CompactReady True.
+func actorRegistryCompact(t *testing.T) *v1alpha1.AgentIndexStatus {
+	t.Helper()
+	st := actorRegistryWith(t, actor.EvaluateCompact)
+	st.Conditions = []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
+		{Type: actor.ConditionCompactReady, Status: metav1.ConditionTrue, Reason: "Built"},
+	}
+	return st
+}
+
+func actorRegistryWith(t *testing.T, evaluate func([]v1alpha1.AgentIdentity, int) actor.Registry) *v1alpha1.AgentIndexStatus {
+	t.Helper()
 	at := func(m int) metav1.Time { return metav1.NewTime(time.Date(2026, 10, 1, 0, m, 0, 0, time.UTC)) }
 	id := func(name string, m int, sponsor string, scope v1alpha1.AgentScope, subjects ...v1alpha1.AgentSubject) v1alpha1.AgentIdentity {
 		return v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: at(m)},
@@ -43,7 +67,7 @@ func actorRegistry(t *testing.T) *v1alpha1.AgentIndexStatus {
 		Environments: []string{"test", "uat"}}
 	parked := id("parked", 2, "bob", scope, v1alpha1.AgentSubject{Kind: "ServiceAccount", Namespace: "ci", Name: "parked"})
 	parked.Spec.Suspended = true
-	reg := actor.Evaluate([]v1alpha1.AgentIdentity{
+	reg := evaluate([]v1alpha1.AgentIdentity{
 		id("fixer", 0, "alice", scope, v1alpha1.AgentSubject{Kind: "ServiceAccount", Namespace: "ci", Name: "fixer"},
 			v1alpha1.AgentSubject{Kind: "Group", Name: "oidc:agents-fixer"}),
 		id("reviewer", 1, "alice", v1alpha1.AgentScope{Namespaces: []string{"*"}}, v1alpha1.AgentSubject{Kind: "User", Name: "oidc:reviewer"}),
@@ -140,17 +164,42 @@ func gateObj(t *testing.T, ns, env string, overrides ...v1alpha1.PolicyGateOverr
 
 // TestActorAdmission runs the admission cases of docs/design/17-actors.md
 // section 13 through the chart's <release>-actor policy, and each through
+// actorCase is one request of TestActorAdmission.
+type actorCase struct {
+	name  string
+	req   actorReq
+	where actor.Where
+	deny  string // a substring of the refusal; "" admits
+	// stamp marks a refusal about the stamp the client wrote, which only
+	// the policy sees; noParity a request that stamps nothing new.
+	stamp, noParity bool
+}
+
 // actor.Derive and actor.Scope: the policy is a transliteration of them, and
-// the two must agree on every case.
+// the two must agree on every case, over an index in each format (#2071):
+// the object format, the compact one, and the compact one an older
+// controller wrote the object format over (its stale compact entries are
+// not read).
+// Covers ACTOR-INDEX-01.
 func TestActorAdmission(t *testing.T) {
 	t.Parallel()
 	vap := identityPolicy(t, "actor")
 	require.NotNil(t, vap.Spec.ParamKind)
 	assert.Equal(t, "AgentIndex", vap.Spec.ParamKind.Kind)
-	idx := actorRegistry(t)
-	ready := *idx
-	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
-	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: ready})
+	legacy := *actorRegistry(t)
+	legacy.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	compact := actorRegistryCompact(t)
+	// An older controller rewrote the legacy maps and Ready after this
+	// release's wrote the compact ones (pkg/actor/compact.go): the compact
+	// maps left on the server are stale, here one that knows no agent but
+	// parked, unblocked, and must not be read.
+	stale := legacy
+	staleIDs := actor.EvaluateCompact([]v1alpha1.AgentIdentity{{ObjectMeta: metav1.ObjectMeta{Name: "parked"},
+		Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: "ci", Name: "parked"}},
+			Sponsor: v1alpha1.AgentSponsor{User: "bob"}, Scope: v1alpha1.AgentScope{Namespaces: []string{"*"}}}}}, actor.MaxIndexBytes)
+	stale.CompactUsers, stale.CompactGroups = staleIDs.Index.CompactUsers, staleIDs.Index.CompactGroups
+	stale.Conditions = append([]metav1.Condition{}, legacy.Conditions...)
+	stale.Conditions = append(stale.Conditions, metav1.Condition{Type: actor.ConditionCompactReady, Status: metav1.ConditionTrue, Reason: "Built"})
 
 	fixerSA := "system:serviceaccount:ci:fixer"
 	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
@@ -161,15 +210,7 @@ func TestActorAdmission(t *testing.T) {
 			CreatedBy: by, Actor: a}
 	}
 	type where = actor.Where
-	tests := []struct {
-		name  string
-		req   actorReq
-		where where
-		deny  string // a substring of the refusal; "" admits
-		// stamp marks a refusal about the stamp the client wrote, which only
-		// the policy sees; noParity a request that stamps nothing new.
-		stamp, noParity bool
-	}{
+	tests := []actorCase{
 		{name: "1 human without a stamp", req: actorReq{resource: "bundles", namespace: "payments-eu", user: "alice",
 			object: bundleObj(t, "payments-eu", "checkout", nil)}},
 		{name: "2 human stamped human", req: actorReq{resource: "bundles", namespace: "x", user: "alice",
@@ -243,6 +284,26 @@ func TestActorAdmission(t *testing.T) {
 			user: "system:serviceaccount:payments-eu:kardinal-graph", object: gateObj(t, "payments-eu", "prod")}, noParity: true},
 	}
 	gates := identityPolicy(t, "actor-overrides")
+	for _, format := range []struct {
+		name string
+		st   *v1alpha1.AgentIndexStatus
+	}{{"legacy", &legacy}, {"compact", compact}, {"stale compact maps after an older writer", &stale}} {
+		params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: *format.st})
+		// What the controller and the CLI decide with: actor.Source reads
+		// the current format the same way (actor.Readable).
+		idx, ok := actor.Readable(format.st)
+		require.True(t, ok, format.name)
+		t.Run(format.name, func(t *testing.T) {
+			actorCases(t, vap, gates, params, idx, tests)
+		})
+	}
+}
+
+// actorCases runs TestActorAdmission's cases against params, and checks
+// pkg/actor's answer with idx.
+func actorCases(t *testing.T, vap, gates *admissionregistrationv1.ValidatingAdmissionPolicy, params map[string]interface{},
+	idx *v1alpha1.AgentIndexStatus, tests []actorCase) {
+	t.Helper()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Gate overrides are checked by their own policy (#1936), with
@@ -281,8 +342,8 @@ func TestActorAdmission(t *testing.T) {
 // created), or one not Ready (IndexFull), denies every write the policy
 // judges, people's included, until the controller has built it: the
 // registry fails closed. A full index says so, and what to do (retrying
-// does not help: QA-3 on #2384). A Ready index with no agents admits people
-// and bots.
+// does not help: QA-3 on #2384), in either format. A Ready index with no
+// agents admits people and bots.
 func TestActorAdmission_IndexNotReady(t *testing.T) {
 	t.Parallel()
 	vap := identityPolicy(t, "actor")
@@ -292,141 +353,75 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 	assert.Contains(t, evalActor(t, vap, empty, req), "kardinal's agent index is not ready yet")
 	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
-	got := evalActor(t, vap, full, req)
-	assert.Contains(t, got, "kardinal's agent index is full (IndexFull")
-	assert.Contains(t, got, "remove AgentIdentities or subjects")
-	assert.NotContains(t, got, "retry")
+	isFull := func(got string) {
+		t.Helper()
+		assert.Contains(t, got, "kardinal's agent index is full (IndexFull")
+		assert.Contains(t, got, "remove AgentIdentities or subjects")
+		assert.NotContains(t, got, "retry")
+	}
+	isFull(evalActor(t, vap, full, req))
 	ready := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}})
 	assert.Empty(t, evalActor(t, vap, ready, req))
+	// The compact format (#2071): CompactReady decides, Ready is False.
+	compact := func(status metav1.ConditionStatus, reason string) map[string]interface{} {
+		return asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+			Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{
+				{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
+				{Type: actor.ConditionCompactReady, Status: status, Reason: reason}}}})
+	}
+	assert.Empty(t, evalActor(t, vap, compact(metav1.ConditionTrue, "Built"), req))
+	isFull(evalActor(t, vap, compact(metav1.ConditionFalse, "IndexFull"), req))
 	// The controller is exempt: it refuses on its own when its index is not ready.
 	req.user = controllerUser
 	assert.Empty(t, evalActor(t, vap, empty, req))
 }
 
-// laterCompactIndex is the AgentIndex as a later release writes it in its
-// compact format (#2071): agent fixer's entry as one string, Ready False with
-// reason CompactFormat, CompactReady True, and in the legacy Groups the guard
-// that release files under system:authenticated for older readers (here
-// with the public values QA-3 forged a stamp from on #2372).
-func laterCompactIndex(t *testing.T) map[string]interface{} {
-	t.Helper()
-	return asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: v1alpha1.AgentIndexStatus{
-		CompactUsers: map[string]string{"system:serviceaccount:ci:fixer": "fixer\x7falice\x7fauto\x7fpayments-*\x7f*\x7f*\x7f"},
-		Groups: map[string]v1alpha1.AgentIndexEntry{"system:authenticated": {Agent: "agent-index-in-a-newer-format",
-			Sponsor: "upgrade-kardinal-to-read-it", Blocked: "the compact format of a newer release"}},
-		Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
-			{Type: actor.ConditionCompactReady, Status: metav1.ConditionTrue, Reason: "Built"}}}})
-}
-
-// TestActorPolicies_LaterCompactIndex (#2071): this release's actor
-// policies never read a later release's compact index. Its -actor and
-// -actor-overrides refuse every write they check, people's included, and
-// -actor-records every stamped record, a forged stamp of the later
-// release's guard among them (QA-3's probe on #2372, which a records policy
-// that judged stamps against any index admitted), each saying the index is
-// in a newer format: the state after a helm rollback, until a controller of
-// this release has rebuilt the index. Unstamped records and the
-// controller's writes go on.
-// Covers ACTOR-INDEX-05.
-func TestActorPolicies_LaterCompactIndex(t *testing.T) {
-	t.Parallel()
-	params := laterCompactIndex(t)
-	const newer = "kardinal's agent index is in the compact format of a newer release"
-	fixerSA := "system:serviceaccount:ci:fixer"
-	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
-	guard := func(p string) *v1alpha1.Actor {
-		return &v1alpha1.Actor{Kind: "agent", Principal: p, Agent: "agent-index-in-a-newer-format", Sponsor: "upgrade-kardinal-to-read-it"}
-	}
-	human := func(p string) *v1alpha1.Actor { return &v1alpha1.Actor{Kind: "human", Principal: p} }
-	pause := func(stamp *v1alpha1.Actor) map[string]interface{} {
-		return asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu",
-			Labels: map[string]string{"kardinal.io/actor-check": "true"}},
-			Spec: v1alpha1.PipelineSpec{Paused: true, LastChange: &v1alpha1.PipelineChange{Action: "Pause", By: "x", Actor: stamp}}})
-	}
-	unpaused := asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu"}})
-	authed := []string{"system:authenticated"}
-	for _, tc := range []struct {
-		name, policy string
-		req          actorReq
-		deny         string
-	}{
-		{"an agent's version", "actor", actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA, groups: authed,
-			object: bundleObj(t, "payments-eu", "checkout", fixer)}, newer},
-		{"a person's version", "actor", actorReq{resource: "bundles", namespace: "x", user: "alice", groups: authed,
-			object: bundleObj(t, "x", "checkout", human("alice"))}, newer},
-		{"a person's version stamped with the guard", "actor", actorReq{resource: "bundles", namespace: "x", user: "alice",
-			groups: authed, object: bundleObj(t, "x", "checkout", guard("alice"))}, newer},
-		{"the controller's version", "actor", actorReq{resource: "bundles", namespace: "x", user: controllerUser,
-			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "controller", Principal: controllerUser})}, ""},
-		{"a person's gate override", "actor-overrides", actorReq{resource: "policygates", namespace: "payments-eu", user: "alice",
-			groups: authed, object: gateObj(t, "payments-eu", "uat", v1alpha1.PolicyGateOverride{Reason: "r", Stage: "uat",
-				ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), CreatedBy: "alice", Actor: human("alice")})}, newer},
-		{"a person's pause", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu", user: "alice", groups: authed,
-			object: pause(human("alice")), old: unpaused}, newer},
-		{"QA-3: a person's pause stamped with the guard", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu",
-			user: "alice", groups: authed, object: pause(guard("alice")), old: unpaused}, newer},
-		{"QA-3: an agent's pause stamped with the guard", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu",
-			user: fixerSA, groups: authed, object: pause(guard(fixerSA)), old: unpaused}, newer},
-		{"an agent's pause stamped as itself", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu",
-			user: fixerSA, groups: authed, object: pause(fixer), old: unpaused}, newer},
-		{"an unstamped pause", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu", user: "alice",
-			groups: authed, object: pause(nil), old: unpaused}, ""},
-		{"the controller's pause", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu", user: controllerUser,
-			object: pause(&v1alpha1.Actor{Kind: "controller", Principal: controllerUser}), old: unpaused}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := evalActor(t, identityPolicy(t, tc.policy), params, tc.req)
-			if tc.deny == "" {
-				assert.Empty(t, got)
-				return
-			}
-			assert.Contains(t, got, tc.deny)
-		})
-	}
-}
-
 // TestActorRecords_IndexNotReady: <release>-actor-records judges a stamp
-// only against a built index: absence from it means "not an agent", so
-// against an index not yet built (no status) or full (IndexFull, written
-// empty) an agent could record a pause stamped as a person or a bot. Every
-// stamped record is refused until the controller has built it; unstamped
-// records go on, and a built index admits the honest stamp.
+// only against a built index, in either format: absence from it means "not
+// an agent", so against an index not yet built (no status) or full
+// (IndexFull, written empty; CompactReady False in the compact format) an
+// agent could record a pause stamped as a person or a bot. Every stamped
+// record is refused until the controller has built it; unstamped records go
+// on, and a built index, in either format, admits the honest stamp.
 // Covers ACTOR-INDEX-05.
 func TestActorRecords_IndexNotReady(t *testing.T) {
 	t.Parallel()
 	vap := identityPolicy(t, "actor-records")
 	fixerSA := "system:serviceaccount:ci:fixer"
-	bot := &v1alpha1.Actor{Kind: "bot", Principal: fixerSA}
-	pause := func(stamp *v1alpha1.Actor) map[string]interface{} {
-		return asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu",
-			Labels: map[string]string{"kardinal.io/actor-check": "true"}},
-			Spec: v1alpha1.PipelineSpec{Paused: true, LastChange: &v1alpha1.PipelineChange{Action: "Pause", By: "x", Actor: stamp}}})
-	}
-	unpaused := asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu"}})
 	req := func(stamp *v1alpha1.Actor) actorReq {
-		return actorReq{resource: "pipelines", namespace: "payments-eu", user: fixerSA, object: pause(stamp), old: unpaused}
+		o, old := pipelineRecord(stamp)
+		return actorReq{resource: "pipelines", namespace: "payments-eu", user: fixerSA,
+			groups: []string{"system:authenticated"}, object: o, old: old}
+	}
+	bot := &v1alpha1.Actor{Kind: "bot", Principal: fixerSA}
+	index := func(st v1alpha1.AgentIndexStatus) map[string]interface{} {
+		return asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: st})
 	}
 	empty := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
 	delete(empty, "status")
-	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
-		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
+	fullCompact := *actorRegistryCompact(t)
+	fullCompact.CompactUsers, fullCompact.CompactGroups = nil, nil
+	fullCompact.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
+		{Type: actor.ConditionCompactReady, Status: metav1.ConditionFalse, Reason: actor.ReasonIndexFull}}
 	for name, tc := range map[string]struct {
 		params map[string]interface{}
 		deny   string
 	}{
-		"never built": {empty, "kardinal's agent index is not ready yet"},
-		"full":        {full, "kardinal's agent index is full (IndexFull"},
+		"never built":   {empty, "kardinal's agent index is not ready yet"},
+		"full":          {index(v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}), "kardinal's agent index is full (IndexFull"},
+		"full, compact": {index(fullCompact), "kardinal's agent index is full (IndexFull"},
 	} {
 		assert.Contains(t, evalActor(t, vap, tc.params, req(bot)), tc.deny, name)
 		assert.Empty(t, evalActor(t, vap, tc.params, req(nil)), "%s: an unstamped pause", name)
 	}
-	idx := actorRegistry(t)
-	ready := *idx
-	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
-	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: ready})
-	assert.Contains(t, evalActor(t, vap, params, req(bot)), "actor must be {kind: agent", "built: the agent may not pass as a bot")
-	assert.Empty(t, evalActor(t, vap, params, req(&v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"})))
+	legacy := *actorRegistry(t)
+	legacy.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	for name, st := range map[string]v1alpha1.AgentIndexStatus{"built": legacy, "built, compact": *actorRegistryCompact(t)} {
+		params := index(st)
+		assert.Contains(t, evalActor(t, vap, params, req(bot)), "actor must be {kind: agent", "%s: the agent may not pass as a bot", name)
+		assert.Empty(t, evalActor(t, vap, params, req(&v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"})), name)
+	}
 }
 
 // TestActorAdmission_Binding: the binding reads the release's AgentIndex and
@@ -630,4 +625,240 @@ func TestActorAdmission_FreezeLift(t *testing.T) {
 		Actor: &v1alpha1.Actor{Kind: "human", Principal: "bob"}, ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))}
 	assert.Empty(t, evalActor(t, vap, params, actorReq{resource: "changewindows", user: "bob",
 		old: freeze(lifted), object: freeze(lifted, ex)}), "the recorded lift is not checked against bob")
+}
+
+// olderActorPolicies are testdata/actor-policies-v0.12.yaml's: the actor
+// policies of v0.12.0 to v0.13, by suffix.
+func olderActorPolicies(t *testing.T, release string) map[string]*admissionregistrationv1.ValidatingAdmissionPolicy {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "actor-policies-"+release+".yaml"))
+	require.NoError(t, err)
+	out := map[string]*admissionregistrationv1.ValidatingAdmissionPolicy{}
+	dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
+	for {
+		var vap admissionregistrationv1.ValidatingAdmissionPolicy
+		if err := dec.Decode(&vap); err != nil {
+			break
+		}
+		out[strings.TrimPrefix(vap.Name, "kardinal-promoter-")] = &vap
+	}
+	require.Len(t, out, 3)
+	return out
+}
+
+// pipelineRecord is a Pipeline write that adds spec.lastChange with stamp,
+// as kardinal pause does, for <release>-actor-records.
+func pipelineRecord(stamp *v1alpha1.Actor) (object, old map[string]interface{}) {
+	change := map[string]interface{}{"reason": "r"}
+	if stamp != nil {
+		change["actor"] = map[string]interface{}{"kind": stamp.Kind, "principal": stamp.Principal,
+			"agent": stamp.Agent, "sponsor": stamp.Sponsor}
+		if stamp.Agent == "" {
+			delete(change["actor"].(map[string]interface{}), "agent")
+			delete(change["actor"].(map[string]interface{}), "sponsor")
+		}
+	}
+	return map[string]interface{}{"metadata": map[string]interface{}{"labels": map[string]interface{}{"kardinal.io/actor-check": "true"}},
+			"spec": map[string]interface{}{"lastChange": change}},
+		map[string]interface{}{"spec": map[string]interface{}{}}
+}
+
+// actorNameLimits is the maxLength of the agent and of the sponsor of every
+// actor stamp in the CRDs (config/crd/bases): every object property named
+// actor (spec.actor, a hold's, a lastChange's, a rejection's, an
+// override's...) that has agent and sponsor.
+func actorNameLimits(t *testing.T) map[string]int64 {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(repoRoot(t), "config", "crd", "bases", "*.yaml"))
+	require.NoError(t, err)
+	out := map[string]int64{}
+	var walk func(path string, n map[string]interface{})
+	walk = func(path string, n map[string]interface{}) {
+		props, _ := n["properties"].(map[string]interface{})
+		for name, v := range props {
+			child, _ := v.(map[string]interface{})
+			if name == "actor" {
+				if cp, ok := child["properties"].(map[string]interface{}); ok && cp["agent"] != nil && cp["sponsor"] != nil {
+					for _, f := range []string{"agent", "sponsor"} {
+						switch ml := cp[f].(map[string]interface{})["maxLength"].(type) {
+						case int64:
+							out[path+".actor."+f] = ml
+						case float64:
+							out[path+".actor."+f] = int64(ml)
+						default:
+							t.Fatalf("%s.actor.%s has no maxLength (%T)", path, f, ml)
+						}
+					}
+				}
+			}
+			walk(path+"."+name, child)
+		}
+		if items, ok := n["items"].(map[string]interface{}); ok {
+			walk(path+"[]", items)
+		}
+	}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		require.NoError(t, err)
+		var crd map[string]interface{}
+		require.NoError(t, utilyaml.Unmarshal(raw, &crd))
+		spec, _ := crd["spec"].(map[string]interface{})
+		names, _ := spec["names"].(map[string]interface{})
+		versions, _ := spec["versions"].([]interface{})
+		for _, v := range versions {
+			schema := v.(map[string]interface{})["schema"].(map[string]interface{})["openAPIV3Schema"].(map[string]interface{})
+			walk(fmt.Sprint(names["kind"]), schema)
+		}
+	}
+	return out
+}
+
+// TestLegacyReaderGuardCannotBeStamped (QA-3 on #2372): v0.12's
+// <release>-actor-records, which judges a stamp against the index without
+// checking Ready, finds actor.LegacyReaderGuard for every requester of a
+// compact index and admits a stamp naming its agent and sponsor. Both are
+// longer than any actor stamp in any CRD may name, so the API server's
+// schema refuses such a write before admission; a helm rollback leaves the
+// CRDs in place.
+// Covers ACTOR-INDEX-01.
+func TestLegacyReaderGuardCannotBeStamped(t *testing.T) {
+	t.Parallel()
+	limits := actorNameLimits(t)
+	require.GreaterOrEqual(t, len(limits), 10, "actor stamps found in the CRDs: %v", limits)
+	for path, max := range limits {
+		assert.LessOrEqual(t, max, int64(actor.MaxActorNameLength), path)
+		if strings.HasSuffix(path, ".agent") {
+			assert.Greater(t, int64(len(actor.LegacyReaderGuard.Agent)), max, "%s: the guard's agent cannot be stamped", path)
+		} else {
+			assert.Greater(t, int64(len(actor.LegacyReaderGuard.Sponsor)), max, "%s: the guard's sponsor cannot be stamped", path)
+		}
+	}
+}
+
+// TestOlderActorPoliciesFailClosed (#2071): the actor policies of an older
+// release (v0.12, and v0.13 with #2384), against an index this release wrote
+// in the compact format (left in place by a helm rollback, or a controller
+// upgraded before its chart), refuse every write they check, people's and
+// agents', and never admit an agent as a person.
+//
+//   - v0.12: <release>-actor and -actor-overrides see Ready False;
+//     -actor-records, which does not check Ready, finds
+//     actor.LegacyReaderGuard for every authenticated requester, so it
+//     admits only a stamp naming the guard (QA-3's forged pauses), which the
+//     schema refuses (TestLegacyReaderGuardCannotBeStamped).
+//   - v0.13: every policy refuses a compact index ("in the compact format
+//     of a newer release"), the forged guard stamps included.
+//
+// The controller is exempt as before, and a write with no stamp to check is
+// admitted.
+// Covers ACTOR-INDEX-01, ACTOR-INDEX-05.
+func TestOlderActorPoliciesFailClosed(t *testing.T) {
+	t.Parallel()
+	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: *actorRegistryCompact(t)})
+	authn := []string{"system:authenticated"}
+	fixerSA := "system:serviceaccount:ci:fixer"
+	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
+	guard := func(p string) *v1alpha1.Actor {
+		return &v1alpha1.Actor{Kind: "agent", Principal: p, Agent: actor.LegacyReaderGuard.Agent, Sponsor: actor.LegacyReaderGuard.Sponsor}
+	}
+	reviewer := "oidc:reviewer" // an OIDC user registered as an agent
+	record := func(user string, stamp *v1alpha1.Actor) actorReq {
+		o, old := pipelineRecord(stamp)
+		return actorReq{resource: "pipelines", namespace: "payments-eu", user: user, groups: authn, object: o, old: old}
+	}
+	const (
+		notReady = "agent index is not ready"
+		newer    = "in the compact format of a newer release"
+		// schema: the policy cannot tell, the CRD schema refuses the stamp.
+		schema = "schema"
+	)
+	for _, release := range []string{"v0.12", "v0.13"} {
+		older := olderActorPolicies(t, release)
+		v12 := release == "v0.12"
+		pick := func(at12, at13 string) string {
+			if v12 {
+				return at12
+			}
+			return at13
+		}
+		for _, tc := range []struct {
+			name, policy string
+			req          actorReq
+			deny         string
+		}{
+			{"a person's version", "actor", actorReq{resource: "bundles", namespace: "x", user: "alice", groups: authn,
+				object: bundleObj(t, "x", "checkout", nil)}, pick(notReady, newer)},
+			{"an agent's stamped version", "actor", actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA,
+				groups: authn, object: bundleObj(t, "payments-eu", "checkout", fixer)}, pick(notReady, newer)},
+			{"an OIDC agent stamps itself human", "actor", actorReq{resource: "bundles", namespace: "x", user: reviewer, groups: authn,
+				object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "human", Principal: reviewer})}, pick(notReady, newer)},
+			{"a person's version stamped with the guard", "actor", actorReq{resource: "bundles", namespace: "x", user: "alice",
+				groups: authn, object: bundleObj(t, "x", "checkout", guard("alice"))}, pick(notReady, newer)},
+			{"an agent's override", "actor-overrides", actorReq{resource: "policygates", namespace: "payments-eu", user: fixerSA, groups: authn,
+				old: gateObj(t, "payments-eu", "uat"), object: gateObj(t, "payments-eu", "uat", v1alpha1.PolicyGateOverride{Reason: "r", Stage: "uat",
+					ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), CreatedBy: fixerSA, Actor: fixer})}, pick(notReady, newer)},
+			{"a person's stamped pause", "actor-records", record("alice", &v1alpha1.Actor{Kind: "human", Principal: "alice"}),
+				pick("agent: "+actor.LegacyReaderGuard.Agent, newer)},
+			{"an OIDC agent's pause stamped human", "actor-records", record(reviewer, &v1alpha1.Actor{Kind: "human", Principal: reviewer}),
+				pick("agent: "+actor.LegacyReaderGuard.Agent, newer)},
+			{"an agent's pause stamped as itself", "actor-records", record(fixerSA, fixer),
+				pick("agent: "+actor.LegacyReaderGuard.Agent, newer)},
+			{"QA-3: a person's pause stamped with the guard", "actor-records", record("alice", guard("alice")), pick(schema, newer)},
+			{"QA-3: an agent's pause stamped with the guard", "actor-records", record(fixerSA, guard(fixerSA)), pick(schema, newer)},
+			{"a pause with no stamp", "actor-records", record("alice", nil), ""},
+			{"the controller", "actor", actorReq{resource: "bundles", namespace: "x", user: controllerUser, groups: authn,
+				object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "human", Principal: "alice", Via: "ui"})}, ""},
+		} {
+			t.Run(release+"/"+tc.name, func(t *testing.T) {
+				got := evalActor(t, older[tc.policy], params, tc.req)
+				switch tc.deny {
+				case "":
+					assert.Empty(t, got)
+				case schema:
+					assert.Empty(t, got, "%s's -actor-records cannot tell the guard's stamp from an agent's", release)
+					assert.Greater(t, len(actor.LegacyReaderGuard.Agent), actor.MaxActorNameLength, "the schema refuses it")
+					assert.Greater(t, len(actor.LegacyReaderGuard.Sponsor), actor.MaxActorNameLength, "the schema refuses it")
+				default:
+					assert.Contains(t, got, tc.deny)
+				}
+			})
+		}
+	}
+}
+
+// TestActorRecordsAdmission: <release>-actor-records reads either format
+// (#2071) and agrees with pkg/actor on who the requester is.
+// Covers ACTOR-INDEX-01.
+func TestActorRecordsAdmission(t *testing.T) {
+	t.Parallel()
+	vap := identityPolicy(t, "actor-records")
+	legacy := *actorRegistry(t)
+	legacy.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
+	fixerSA := "system:serviceaccount:ci:fixer"
+	fixer := &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"}
+	authn := []string{"system:authenticated"}
+	for _, st := range []*v1alpha1.AgentIndexStatus{&legacy, actorRegistryCompact(t)} {
+		params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: *st})
+		for _, tc := range []struct {
+			name, user string
+			stamp      *v1alpha1.Actor
+			deny       string
+		}{
+			{"a person", "alice", &v1alpha1.Actor{Kind: "human", Principal: "alice"}, ""},
+			{"an agent as itself", fixerSA, fixer, ""},
+			{"an agent stamps itself human", fixerSA, &v1alpha1.Actor{Kind: "human", Principal: fixerSA}, "actor must be {kind: agent"},
+			{"an OIDC agent stamps itself human", "oidc:reviewer", &v1alpha1.Actor{Kind: "human", Principal: "oidc:reviewer"}, "actor must be {kind: agent"},
+		} {
+			t.Run(fmt.Sprintf("%v/%s", actor.IsCompact(st), tc.name), func(t *testing.T) {
+				o, old := pipelineRecord(tc.stamp)
+				got := evalActor(t, vap, params, actorReq{resource: "pipelines", namespace: "payments-eu", user: tc.user,
+					groups: authn, object: o, old: old})
+				if tc.deny == "" {
+					assert.Empty(t, got)
+				} else {
+					assert.Contains(t, got, tc.deny)
+				}
+			})
+		}
+	}
 }

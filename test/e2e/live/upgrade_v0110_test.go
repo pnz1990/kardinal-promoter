@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/invariants"
@@ -619,12 +620,14 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 		_, err := e.Kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().Get(ctx, name, metav1.GetOptions{})
 		require.NoError(t, err, "binding %s", name)
 	}
-	framework.Eventually(t, time.Minute, "the release's AgentIndex is Ready", func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, time.Minute, "the release's AgentIndex is built", func(ctx context.Context) (bool, string) {
 		var idx v1alpha1.AgentIndex
 		if err := e.Client.Get(ctx, types.NamespacedName{Name: framework.ControllerDeployment}, &idx); err != nil {
 			return false, err.Error()
 		}
-		return meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready"), fmt.Sprint(idx.Status.Conditions)
+		// In either of its formats (pkg/actor Readable, #2071).
+		_, built := actor.Readable(&idx.Status)
+		return built, fmt.Sprint(idx.Status.Conditions)
 	})
 	var stored v1alpha1.BundleList
 	require.NoError(t, e.Client.List(ctx, &stored, client.InNamespace(s.approve.NS)))

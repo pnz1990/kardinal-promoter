@@ -19,6 +19,7 @@ import (
 
 	"github.com/rs/zerolog"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,7 +39,7 @@ import (
 // ConditionReady is the condition both kinds carry.
 const ConditionReady = "Ready"
 
-func evaluate(ctx context.Context, c client.Client, maxBytes int) ([]v1alpha1.AgentIdentity, actor.Registry, error) {
+func evaluate(ctx context.Context, c client.Client, maxBytes int, compact bool) ([]v1alpha1.AgentIdentity, actor.Registry, error) {
 	var list v1alpha1.AgentIdentityList
 	if err := c.List(ctx, &list); err != nil {
 		return nil, actor.Registry{}, fmt.Errorf("list agent identities: %w", err)
@@ -46,7 +47,95 @@ func evaluate(ctx context.Context, c client.Client, maxBytes int) ([]v1alpha1.Ag
 	if maxBytes == 0 {
 		maxBytes = actor.MaxIndexBytes
 	}
+	if compact {
+		return list.Items, actor.EvaluateCompact(list.Items, maxBytes), nil
+	}
 	return list.Items, actor.Evaluate(list.Items, maxBytes), nil
+}
+
+// actorPolicies are the suffixes of the chart's actor policies, the readers
+// of the index admission decides with (templates/actor-admission.yaml).
+var actorPolicies = []string{"-actor", "-actor-records", "-actor-overrides"}
+
+// rolloutWait is how often a leader that waits for its Deployment's rollout
+// before the compact format (format) looks again.
+const rolloutWait = 15 * time.Second
+
+// format decides the format of the next build of idx: compact, and wait
+// when the build is legacy only because the rollout has not finished
+// (Reconcile then looks again after rolloutWait).
+//
+//   - The legacy format while any of the chart's actor policies does not
+//     read the compact one (compactAllowed).
+//   - Compact when idx already is: an upgrade between releases that both
+//     read it never goes back to the legacy format, which is about twice
+//     the size and could overflow the bound.
+//   - From the legacy format, compact once every replica of the controller's
+//     Deployment runs its current template (rolledOut): a replica of a
+//     release older than v0.13.0 (v0.13 reads the compact format, #2384)
+//     reads only the legacy format and would answer the UI API and the
+//     Bundle API with 503 until it stopped.
+//
+// It is decided on every build, and a new leader builds once it starts (its
+// watches list every AgentIdentity), so the format follows the policies at
+// the next build: after a helm upgrade the new controller's build at the end
+// of the rollout writes compact; after a rollback the older release's
+// controllers, whose start-up build finds the index not Ready, write legacy,
+// and until then the older policies fail closed (actor.LegacyReaderGuard).
+func (r *IndexReconciler) format(ctx context.Context, idx *v1alpha1.AgentIndex) (compact, wait bool) {
+	if !r.compactAllowed(ctx) {
+		return false, false
+	}
+	if actor.IsCompact(&idx.Status) || r.rolledOut(ctx) {
+		return true, false
+	}
+	return false, true
+}
+
+// rolledOut reports whether every replica of Deployment runs its current
+// template: the Deployment controller has observed its spec and counts no
+// pod of an older ReplicaSet (status.replicas, the pods not terminating, is
+// status.updatedReplicas). Scaling or a replaced pod does not change that;
+// a rollout does until its last older pod is terminating. True without a
+// Deployment (tests); false when it cannot be read.
+func (r *IndexReconciler) rolledOut(ctx context.Context) bool {
+	if r.Deployment.Name == "" {
+		return true
+	}
+	var d appsv1.Deployment
+	if err := r.Reader.Get(ctx, r.Deployment, &d); err != nil {
+		zerolog.Ctx(ctx).Debug().Err(err).Str("deployment", r.Deployment.String()).
+			Msg("the agent index stays in the legacy format until the controller's Deployment can be read")
+		return false
+	}
+	done := d.Status.ObservedGeneration >= d.Generation && d.Status.Replicas == d.Status.UpdatedReplicas
+	if !done {
+		zerolog.Ctx(ctx).Debug().Str("deployment", r.Deployment.String()).Int32("replicas", d.Status.Replicas).
+			Int32("updated", d.Status.UpdatedReplicas).
+			Msg("the agent index stays in the legacy format until the controller's rollout finishes")
+	}
+	return done
+}
+
+// compactAllowed reports whether every one of the chart's actor policies
+// reads the compact format (label actor.LabelIndexFormat). With a policy
+// missing, unlabelled or unreadable (a chart of an older release, or its
+// RBAC) the index stays in the legacy format every release reads.
+func (r *IndexReconciler) compactAllowed(ctx context.Context) bool {
+	if r.Reader == nil {
+		return false
+	}
+	for _, suffix := range actorPolicies {
+		var vap admissionregistrationv1.ValidatingAdmissionPolicy
+		if err := r.Reader.Get(ctx, client.ObjectKey{Name: r.Name + suffix}, &vap); err != nil {
+			zerolog.Ctx(ctx).Debug().Err(err).Str("policy", r.Name+suffix).Msg("the agent index stays in the legacy format")
+			return false
+		}
+		if vap.Labels[actor.LabelIndexFormat] != actor.FormatCompact {
+			return false
+		}
+	}
+	return true
 }
 
 // writeStatuses writes each AgentIdentity's verdict from reg, patching only
@@ -118,8 +207,17 @@ type IndexReconciler struct {
 	// was deleted after the install (a collection delete, or with the guard
 	// unbound): the controller recreates it with the guard's Helm ownership
 	// labels and annotations, so Helm adopts it on the next upgrade (#1959).
-	Guard  string
+	Guard string
+	// Reader reads the guard, the actor policies <Name>-actor,
+	// -actor-records and -actor-overrides, and Deployment: the index is
+	// written in the compact format while all three policies are labelled
+	// for it (format). Nil: the legacy format.
 	Reader client.Reader
+	// Deployment is the controller's own Deployment (Helm sets it,
+	// --controller-deployment): the index switches from the legacy format
+	// to the compact one only once its rollout has finished (rolledOut).
+	// Empty: no wait.
+	Deployment types.NamespacedName
 }
 
 // ErrIndexNotCreated: the chart has not created the index yet.
@@ -183,7 +281,12 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 			return reconcile.Result{}, fmt.Errorf("get agent index %s: %w", r.Name, err)
 		}
 	}
-	ids, reg, err := evaluate(ctx, r.Client, r.MaxIndexBytes)
+	compact, wait := r.format(ctx, &idx)
+	var result reconcile.Result
+	if wait {
+		result.RequeueAfter = rolloutWait
+	}
+	ids, reg, err := evaluate(ctx, r.Client, r.MaxIndexBytes, compact)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -199,12 +302,26 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 		cond.Message = "the agent index is over its size bound: remove AgentIdentities or subjects; until then kardinal " +
 			"refuses the writes the actor policy checks"
 	}
-	meta.SetStatusCondition(&want.Conditions, cond)
+	if compact {
+		// The compact format (pkg/actor/compact.go): CompactReady says it is
+		// built, and Ready, which the readers of older releases decide with,
+		// is False, so they fail closed. Ready's reason tells this release's
+		// readers which format is current: an older writer overwrites it.
+		cond.Type = actor.ConditionCompactReady
+		meta.SetStatusCondition(&want.Conditions, cond)
+		meta.SetStatusCondition(&want.Conditions, metav1.Condition{Type: ConditionReady, Status: metav1.ConditionFalse,
+			Reason: actor.ReasonCompactFormat, ObservedGeneration: idx.Generation,
+			Message: "the index is in the compact format (see CompactReady): the actor policies, controllers and CLIs " +
+				"of older releases refuse the writes they check until a controller of their release rebuilds it"})
+	} else {
+		meta.SetStatusCondition(&want.Conditions, cond)
+		meta.RemoveStatusCondition(&want.Conditions, actor.ConditionCompactReady)
+	}
 	want.Bytes, want.MaxBytes = int64(reg.Bytes), int64(reg.MaxBytes)
 	meta.SetStatusCondition(&want.Conditions, nearFull(reg, idx.Generation))
 	if equalIndex(idx.Status, want) {
 		r.setIndexMetrics(reg)
-		return reconcile.Result{}, r.statuses(ctx, &idx, ids, reg)
+		return result, r.statuses(ctx, &idx, ids, reg)
 	}
 	// The index first, then the statuses: admission decides with the index,
 	// so a suspension or a scope change takes effect once it is written, not
@@ -221,9 +338,10 @@ func (r *IndexReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (r
 	}
 	r.setIndexMetrics(reg)
 	zerolog.Ctx(ctx).Info().Str("agentindex", r.Name).Int("identities", reg.Index.ObservedIdentities).
-		Int("users", len(want.Users)).Int("groups", len(want.Groups)).Msg("agent index written")
+		Int("users", len(want.Users)+len(want.CompactUsers)).Int("groups", len(want.Groups)+len(want.CompactGroups)).
+		Bool("compact", compact).Int("bytes", reg.Bytes).Msg("agent index written")
 	r.dropManagedFields(ctx, &idx)
-	return reconcile.Result{}, r.statuses(ctx, &idx, ids, reg)
+	return result, r.statuses(ctx, &idx, ids, reg)
 }
 
 // setIndexMetrics records the index's size once its status says it. Only
@@ -239,8 +357,8 @@ func (r *IndexReconciler) setIndexMetrics(reg actor.Registry) {
 }
 
 // NearFullPercent is the share of the bound from which the AgentIndex is
-// NearFull (#2076): kardinal supports up to 4,000 AgentIdentities, about 80%
-// of the bound (docs/operate.md#scale-and-limits).
+// NearFull (#2076): kardinal supports up to 7,000 AgentIdentities, about 75%
+// of the bound in the compact format (docs/operate.md#scale-and-limits).
 const NearFullPercent = 80
 
 // ConditionNearFull is the AgentIndex condition that warns, before the
@@ -348,9 +466,10 @@ func (e *ensureIndex) Start(ctx context.Context) error {
 		// leader's IndexReconciler keeps it current, and a start-up build
 		// from this replica's cache could be older than it (#1917).
 		var idx v1alpha1.AgentIndex
-		if err := e.r.Get(ctx, client.ObjectKey{Name: e.r.Name}, &idx); err == nil &&
-			meta.IsStatusConditionTrue(idx.Status.Conditions, ConditionReady) {
-			return nil
+		if err := e.r.Get(ctx, client.ObjectKey{Name: e.r.Name}, &idx); err == nil {
+			if _, built := actor.Readable(&idx.Status); built {
+				return nil
+			}
 		}
 		builder := *e.r
 		builder.StatusesDisabled = true
@@ -376,6 +495,12 @@ func equalIndex(a, b v1alpha1.AgentIndexStatus) bool {
 		}
 		if len(s.Groups) == 0 {
 			s.Groups = nil
+		}
+		if len(s.CompactUsers) == 0 {
+			s.CompactUsers = nil
+		}
+		if len(s.CompactGroups) == 0 {
+			s.CompactGroups = nil
 		}
 		return s
 	}

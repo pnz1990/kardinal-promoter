@@ -15,10 +15,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -34,6 +36,7 @@ func scheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
 	require.NoError(t, admissionregistrationv1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
 	return s
 }
 
@@ -347,4 +350,256 @@ func TestReconcile_AgentIndexNearFull(t *testing.T) {
 			assert.Equal(t, float64(-1), testutil.ToFloat64(observability.AgentIndexBytes))
 		})
 	}
+}
+
+// actorPolicy is one of the chart's actor policies, labelled for the compact
+// index format when compact is true.
+func actorPolicy(name string, compact bool) *admissionregistrationv1.ValidatingAdmissionPolicy {
+	vap := &admissionregistrationv1.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	if compact {
+		vap.Labels = map[string]string{actor.LabelIndexFormat: actor.FormatCompact}
+	}
+	return vap
+}
+
+// TestIndex_CompactFormat (#2071): the leader writes the compact format only
+// while all three actor policies read it, and goes back to the legacy one
+// when they no longer do (a helm rollback). An older writer's legacy index
+// is read as legacy, and the leader converts it back.
+// Covers ACTOR-INDEX-02.
+func TestIndex_CompactFormat(t *testing.T) {
+	ctx := context.Background()
+	idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k"}}
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).
+		WithObjects(id("fixer", 0, "alice", sa("ci", "fixer")), idx,
+			actorPolicy("k-actor", true), actorPolicy("k-actor-records", true), actorPolicy("k-actor-overrides", true)).
+		WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}).Build()
+	r := &agentidentity.IndexReconciler{Client: c, Name: "k", ChartCreated: true, Reader: c}
+	get := func() v1alpha1.AgentIndexStatus {
+		t.Helper()
+		var got v1alpha1.AgentIndex
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &got))
+		return got.Status
+	}
+	fixer := "system:serviceaccount:ci:fixer"
+
+	_, err := r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	st := get()
+	assert.True(t, actor.IsCompact(&st))
+	ready := meta.FindStatusCondition(st.Conditions, agentidentity.ConditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status, "older readers see it not Ready")
+	assert.True(t, meta.IsStatusConditionTrue(st.Conditions, actor.ConditionCompactReady))
+	assert.Empty(t, st.Users)
+	assert.Equal(t, map[string]v1alpha1.AgentIndexEntry{actor.LegacyReaderGroup: actor.LegacyReaderGuard}, st.Groups)
+	got, ok := actor.Readable(&st)
+	require.True(t, ok)
+	assert.Equal(t, "fixer", got.Users[fixer].Agent)
+	compactBytes := st.Bytes
+
+	// An older controller writes the legacy format over it: it rewrites
+	// Ready and the legacy maps, and leaves the compact maps stale.
+	var old v1alpha1.AgentIndex
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &old))
+	old.Status.Users = map[string]v1alpha1.AgentIndexEntry{fixer: {Agent: "fixer", Sponsor: "alice", Namespaces: []string{"*"},
+		Pipelines: []string{"*"}, Environments: []string{"*"}, Autonomy: "approve", Blocked: "suspended"}}
+	old.Status.Groups = nil
+	meta.SetStatusCondition(&old.Status.Conditions, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"})
+	require.NoError(t, c.Status().Update(ctx, &old))
+	st = get()
+	got, ok = actor.Readable(&st)
+	require.True(t, ok)
+	assert.Equal(t, "suspended", got.Users[fixer].Blocked, "the older writer's legacy entry is current, the compact one stale")
+
+	// The leader converts it back, from the AgentIdentities.
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	st = get()
+	got, ok = actor.Readable(&st)
+	require.True(t, ok)
+	assert.True(t, actor.IsCompact(&st))
+	assert.Empty(t, got.Users[fixer].Blocked)
+
+	// A rollback: the policies no longer read the compact format.
+	var vap admissionregistrationv1.ValidatingAdmissionPolicy
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k-actor-records"}, &vap))
+	vap.Labels = nil
+	require.NoError(t, c.Update(ctx, &vap))
+	_, err = r.Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	st = get()
+	assert.False(t, actor.IsCompact(&st))
+	assert.True(t, meta.IsStatusConditionTrue(st.Conditions, agentidentity.ConditionReady))
+	assert.Nil(t, meta.FindStatusCondition(st.Conditions, actor.ConditionCompactReady))
+	assert.Empty(t, st.CompactUsers)
+	assert.NotContains(t, st.Groups, actor.LegacyReaderGroup)
+	assert.Equal(t, "fixer", st.Users[fixer].Agent)
+	assert.Greater(t, st.Bytes, compactBytes, "the same entries take more bytes as objects")
+}
+
+// TestIndex_CompactNeedsEveryPolicy: one actor policy missing, unlabelled or
+// unreadable keeps the legacy format; an install without the chart's
+// policies stays legacy.
+// Covers ACTOR-INDEX-02.
+func TestIndex_CompactNeedsEveryPolicy(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name     string
+		policies []client.Object
+		chart    bool
+		compact  bool
+	}{
+		{"all three", []client.Object{actorPolicy("k-actor", true), actorPolicy("k-actor-records", true), actorPolicy("k-actor-overrides", true)}, true, true},
+		{"one missing", []client.Object{actorPolicy("k-actor", true), actorPolicy("k-actor-records", true)}, true, false},
+		{"one unlabelled", []client.Object{actorPolicy("k-actor", true), actorPolicy("k-actor-records", false), actorPolicy("k-actor-overrides", true)}, true, false},
+		{"an index the controller creates, the policies labelled", []client.Object{actorPolicy("k-actor", true), actorPolicy("k-actor-records", true), actorPolicy("k-actor-overrides", true)}, false, true},
+		{"an index the controller creates, no policies", nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append([]client.Object{id("fixer", 0, "alice", sa("ci", "fixer")), &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k"}}}, tc.policies...)
+			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(objs...).
+				WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}).Build()
+			_, err := (&agentidentity.IndexReconciler{Client: c, Name: "k", ChartCreated: tc.chart, Reader: c}).Reconcile(ctx, reconcile.Request{})
+			require.NoError(t, err)
+			var got v1alpha1.AgentIndex
+			require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &got))
+			assert.Equal(t, tc.compact, actor.IsCompact(&got.Status))
+			_, ok := actor.Readable(&got.Status)
+			assert.True(t, ok, "built in either format")
+		})
+	}
+
+	// Unreadable (the RBAC of an older chart): legacy.
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).
+		WithObjects(id("fixer", 0, "alice", sa("ci", "fixer")), &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k"}}).
+		WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}).
+		WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*admissionregistrationv1.ValidatingAdmissionPolicy); ok {
+				return apierrors.NewForbidden(admissionregistrationv1.Resource("validatingadmissionpolicies"), key.Name, errors.New("rbac"))
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		}}).Build()
+	_, err := (&agentidentity.IndexReconciler{Client: c, Name: "k", ChartCreated: true, Reader: c}).Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	var got v1alpha1.AgentIndex
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &got))
+	assert.False(t, actor.IsCompact(&got.Status))
+}
+
+// TestIndex_CompactFull: over the bound in the compact format, CompactReady
+// is False (IndexFull): the policies of this release fail closed too.
+// Covers ACTOR-INDEX-02.
+func TestIndex_CompactFull(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).
+		WithObjects(id("fixer", 0, "alice", sa("ci", "fixer")), &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k"}},
+			actorPolicy("k-actor", true), actorPolicy("k-actor-records", true), actorPolicy("k-actor-overrides", true)).
+		WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}).Build()
+	_, err := (&agentidentity.IndexReconciler{Client: c, Name: "k", ChartCreated: true, Reader: c, MaxIndexBytes: 20}).Reconcile(ctx, reconcile.Request{})
+	require.NoError(t, err)
+	var got v1alpha1.AgentIndex
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &got))
+	cr := meta.FindStatusCondition(got.Status.Conditions, actor.ConditionCompactReady)
+	require.NotNil(t, cr)
+	assert.Equal(t, metav1.ConditionFalse, cr.Status)
+	assert.Equal(t, actor.ReasonIndexFull, cr.Reason)
+	_, ok := actor.Readable(&got.Status)
+	assert.False(t, ok)
+}
+
+// TestIndex_CompactWaitsForTheRollout covers the switch from the legacy
+// format during a rolling upgrade: the leader keeps the legacy format, and
+// looks again, until no replica of an older ReplicaSet is left (an older
+// release's replica reads only the legacy format), then writes compact and
+// stays compact through later rollouts (a release that reads it too).
+// Covers ACTOR-INDEX-02.
+func TestIndex_CompactWaitsForTheRollout(t *testing.T) {
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: "kardinal-system", Name: "kardinal-promoter"}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name, Generation: 2},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 2, UpdatedReplicas: 1}}
+	fixer := "system:serviceaccount:ci:fixer"
+	// The index an older release's controller built.
+	legacy := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k"}, Status: v1alpha1.AgentIndexStatus{
+		Users: map[string]v1alpha1.AgentIndexEntry{fixer: {Agent: "fixer", Sponsor: "alice", Namespaces: []string{"*"}}},
+		Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built",
+			LastTransitionTime: metav1.Now()}}}}
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).
+		WithObjects(id("fixer", 0, "alice", sa("ci", "fixer")), legacy, dep,
+			actorPolicy("k-actor", true), actorPolicy("k-actor-records", true), actorPolicy("k-actor-overrides", true)).
+		WithStatusSubresource(&v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{}, &appsv1.Deployment{}).Build()
+	r := &agentidentity.IndexReconciler{Client: c, Name: "k", ChartCreated: true, Reader: c, Deployment: key}
+	rollout := func(generation, observed int64, replicas, updated int32) {
+		t.Helper()
+		var d appsv1.Deployment
+		require.NoError(t, c.Get(ctx, key, &d))
+		d.Generation = generation
+		require.NoError(t, c.Update(ctx, &d))
+		require.NoError(t, c.Get(ctx, key, &d))
+		d.Status = appsv1.DeploymentStatus{ObservedGeneration: observed, Replicas: replicas, UpdatedReplicas: updated}
+		require.NoError(t, c.Status().Update(ctx, &d))
+	}
+	build := func(wantCompact, wantWait bool, why string) {
+		t.Helper()
+		res, err := r.Reconcile(ctx, reconcile.Request{})
+		require.NoError(t, err)
+		var got v1alpha1.AgentIndex
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &got))
+		assert.Equal(t, wantCompact, actor.IsCompact(&got.Status), why)
+		st, ok := actor.Readable(&got.Status)
+		require.True(t, ok, why)
+		assert.Equal(t, "fixer", st.Users[fixer].Agent, why)
+		if wantWait {
+			assert.Positive(t, res.RequeueAfter, "%s: it looks again", why)
+		} else {
+			assert.Zero(t, res.RequeueAfter, "%s: nothing to wait for", why)
+		}
+		if !wantCompact {
+			assert.True(t, meta.IsStatusConditionTrue(got.Status.Conditions, agentidentity.ConditionReady),
+				"%s: the legacy index is Ready for the older replicas", why)
+		}
+	}
+
+	build(false, true, "an older replica runs")
+	rollout(3, 2, 2, 2)
+	build(false, true, "the Deployment controller has not observed the latest spec")
+	rollout(3, 3, 2, 2)
+	build(true, false, "every replica runs the current template")
+
+	// A later rollout (to a release that reads the compact format too) and
+	// a scale-up keep it compact: back to legacy would double its size.
+	rollout(4, 4, 3, 1)
+	build(true, false, "a later rollout")
+	rollout(5, 5, 2, 2)
+	build(true, false, "the rollout done")
+
+	// An older release's replica that starts after the switch (a rollback of
+	// the image alone) writes the legacy format at its start: the leader then
+	// waits for that rollout to finish again.
+	var old v1alpha1.AgentIndex
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "k"}, &old))
+	old.Status = *legacy.Status.DeepCopy()
+	require.NoError(t, c.Status().Update(ctx, &old))
+	rollout(6, 6, 3, 1)
+	build(false, true, "an older replica rebuilt it during a rollout")
+
+	// An unreadable Deployment keeps the legacy format.
+	require.NoError(t, c.Delete(ctx, dep))
+	build(false, true, "the Deployment cannot be read")
+}
+
+// TestEnsureIndex_Compact: a replica's start-up build leaves a built compact
+// index alone (its Ready is False by design), so a new replica does not write
+// over the leader's index during a rollout.
+// Covers ACTOR-INDEX-02.
+func TestEnsureIndex_Compact(t *testing.T) {
+	ctx := context.Background()
+	var patches atomic.Int32
+	st := actor.EvaluateCompact(nil, actor.MaxIndexBytes).Index
+	st.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
+		{Type: actor.ConditionCompactReady, Status: metav1.ConditionTrue, Reason: "Built"}}
+	c := countingClient(t, &patches, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k"}, Status: st})
+	require.NoError(t, agentidentity.NewEnsureIndexForTest(c, "k").Start(ctx))
+	assert.Zero(t, patches.Load(), "a built compact index is not rebuilt at start-up")
 }

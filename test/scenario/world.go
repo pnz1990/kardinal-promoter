@@ -201,7 +201,10 @@ type World struct {
 	crash       crashState
 
 	// The agent registry and admission (Options.Actors).
-	api         *APIServer
+	api *APIServer
+	// policies holds the chart's admission policies, for the agent index
+	// reconciler's choice of format (nil without startAPIServer).
+	policies    client.Reader
 	index       *airec.IndexReconciler
 	indexDirty  atomic.Bool
 	indexPaused atomic.Bool
