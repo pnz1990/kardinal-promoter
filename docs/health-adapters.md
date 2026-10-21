@@ -328,6 +328,11 @@ health:
 !!! info "New in v0.13.0"
     v0.12.0 and earlier reach a remote cluster only with credentials in the kubeconfig Secret. The [changelog](changelog.md) lists every change since v0.12.0.
 
+!!! warning "Tested against fakes in v0.13.0"
+    EKS credentials are tested against fake STS and EKS APIs, not against a real EKS cluster or
+    AWS account. A real-cloud validation is planned for v0.13.1. Try them on a test cluster before
+    you rely on them.
+
 With `kubeconfigSecretRef.eks`, the controller authenticates to an EKS cluster with its own AWS
 identity (IRSA or EKS Pod Identity), the way `aws eks get-token` does, but in the controller, with
 no command run and no long-lived token anywhere:

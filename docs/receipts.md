@@ -174,6 +174,11 @@ The keyless certificate names the ServiceAccount, not the cluster: always pin th
 
 #### KMS keys
 
+!!! warning "Tested against fakes in v0.13.0"
+    KMS signing is tested against a fake AWS KMS JSON API and a fake Cloud KMS gRPC API, not
+    against a real AWS or Google Cloud account. A real-cloud validation is planned for v0.13.1.
+    Try it with a test key before you rely on it.
+
 The controller image is built with two KMS providers (Go build tags `kms_aws` and `kms_gcp`). A
 key reference for any other provider is refused at start, naming the provider and the ones built
 in. kardinal calls the provider itself and never sigstore's CLI-plugin fallback, which runs a
