@@ -134,6 +134,7 @@ nav:
     - Verify with agents: agentic/verify-with-agents.md
     - Actor-aware policy: agentic/policy.md
     - Freeze agents, stop the line: agentic/freezes.md
+    - Agent budgets: agent-budgets.md
   - How-to:
     - Use the UI: ui.md
     - Ship versions from CI: ci-integration.md
