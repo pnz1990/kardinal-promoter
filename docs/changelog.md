@@ -175,6 +175,24 @@ Follow [Upgrading from v0.12.0](upgrade.md#upgrading-from-v0120); the same steps
 - **The release gate says what it does not run** (#2303, #2304, #2282) — its report lists each item of `hack/release-gate/not-run.txt` (receipts signed with a real cloud KMS key, a real EKS cluster for the EKS health adapter and as a multi-cluster spoke, public-good sigstore, real ServiceNow and Jira, what `release.yml` publishes, running the artifacts for platforms other than linux/amd64, a 100,000-receipt stress run, and Kubernetes 1.36; #2371) with why the gate does not run it and the coverage rows or `release.yml` job that stand in for it, so a GO verdict does not read as proof of them. A covered `test/e2e/coverage.tsv` row that no test claims any more holds the verdict. A suite `hack/e2e/matrix.txt` pins to its minors runs on those only, and the report lists its other minor as PINNED with the reason. The gate builds every binary `release.yml` ships, for its platform. Live suites on one host take cluster slots first come, first served, the release gate's first, and `hack/e2e/local-live.sh` takes `-run`, `-count` and `-p`.
 - **Unit tests get no credentials and no late guard** (#2321) — the kube guard (`test/kubetest`) now keeps every credential of your machine from guarded tests and the processes they start, as `kubetest.Isolated` lists: a global gitconfig with only a commit identity, no system config and a repository's own credential helper and extra header reset; an empty docker config and no podman or helm logins; no AWS (instance metadata off), Google, Azure, GitHub or GitLab credentials, netrc or ssh agent, and an ssh command that offers no key. A test's `git push`, registry read or AWS credential chain reaches none of them; a test that needs one sets its own. `make hygiene` refuses a guard that runs after the tests start (through a helper, a `defer` or an `if`), a read of the home directory at package initialization, and a child process started with an environment built from scratch and no `HOME`, which a controller-runtime child would turn into the login account's `~/.kube/config`. A child test binary handed a home (`kubetest.HomeEnv`) uses it, so the controller's `-help` test leaves no `/tmp/kardinal-unit-home-*` behind ([CONTRIBUTING.md](https://github.com/pnz1990/kardinal-promoter/blob/main/CONTRIBUTING.md)).
 
+## [v0.12.4] — 2026-10-21
+
+A patch release of v0.12.3 with two fixes: the CLI, the controller and its images are built with
+Go 1.26.10, for GO-2026-6809 in the standard library's `crypto/x509`, which every outbound HTTPS
+connection reached (#2385); and a git-push that loses a race to another writer's update on a
+shared branch no longer fails (#2351). It changes no CRD, value or admission policy. Upgrade the
+chart in place with `--version 0.12.4` (and the CLI with it), following
+[Upgrading from v0.12.3](https://github.com/pnz1990/kardinal-promoter/blob/release/v0.12/docs/upgrade.md#upgrading-from-v0123); from v0.11.0, follow
+[Upgrading from v0.11.0](upgrade.md#upgrading-from-v0110) with `--version 0.12.4`.
+
+### Fixed
+
+- **A git-push on a shared branch no longer fails when its push loses a race to another writer's update still in flight** (#2351). A server refuses such a push with "cannot lock ref" or "failed to lock" while the other update holds the branch's lock. The fetch that follows could still see the branch at the commit the change was made on, so the step failed with "refused as non-fast-forward, but the remote branch did not move". git-push now fetches the branch again, backing off for up to 2 seconds, and rebases once it moves. A branch that hasn't moved by then is still reported as stuck, and the step's message now gives the server's reason, such as `cannot lock ref 'refs/heads/main': Unable to create '…/main.lock': File exists` for a stale lock file.
+
+### Security
+
+- **Built with Go 1.26.10** (#2385), for GO-2026-6809 in the standard library's `crypto/x509`. TLS clients verify the server's certificate with `x509.Certificate.Verify`, which that release fixes, so every outbound HTTPS connection was affected: the CLI's calls to the Kubernetes API, and the controller's to the SCM, registries, sigstore, ticketing and webhooks. v0.12.3's CLI and its `kardinal-controller-*` binaries were built with go1.26.9. Its controller and render images happened to be built with go1.27.3, which has the fix, because their Dockerfiles used a floating `golang:1.27-alpine`. They are now built with go.mod's toolchain, pinned by digest.
+
 ## [v0.12.3] — 2026-10-20
 
 A patch release of v0.12.2 with one fix: a verify gate, or an approval gate that only reads
@@ -1223,6 +1241,7 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 [Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.13.0...HEAD
 [v0.13.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...v0.13.0
+[v0.12.4]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.3...v0.12.4
 [v0.12.3]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.2...v0.12.3
 [v0.12.2]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.1...v0.12.2
 [v0.12.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...v0.12.1
