@@ -95,8 +95,8 @@ func TestBuilder_VerifyGate(t *testing.T) {
 		assert.EqualValues(t, 1, m["highFindings"])
 		assert.Equal(t, "2026-10-14T10:00:00Z", m["createdAt"])
 	}
-	assert.Equal(t, []string{"a-r1", "f-person", "z-r2"}, names,
-		"this Bundle UID, uat, explore; agents only when allowed; anyone who is not an agent with no allowedUsers")
+	assert.Equal(t, []string{"a-r1", "z-r2"}, names,
+		"this Bundle UID, uat, explore; agents only when allowed; no person: the gate lists only agents (#2411)")
 
 	for _, g := range res.GateInstances {
 		if g.Labels["kardinal.io/gate-template"] == "explore" {
@@ -104,6 +104,71 @@ func TestBuilder_VerifyGate(t *testing.T) {
 			assert.Equal(t, "uat", g.Spec.Verify.Environment, "GateInstances carry the resolved policy")
 		}
 	}
+}
+
+// TestBuilder_VerifyGateOneAllowlist (#2411): allowedAgents, allowedUsers
+// and allowedGroups are one allowlist when spec.verdicts is copied: a gate
+// that lists only agents copies no person's Verdict, a listed user or group
+// is copied with them, and only a gate that lists nobody copies every
+// person's (and no agent's).
+//
+// Covers GATE-VERIFY-10.
+func TestBuilder_VerifyGateOneAllowlist(t *testing.T) {
+	uid := "uid-app-v1"
+	person := func(name, by string, groups ...string) map[string]interface{} {
+		v := verdictObj(name, "uat", "explore", "pass", uid, nil)
+		spec := v["spec"].(map[string]interface{})
+		spec["by"] = by
+		if len(groups) > 0 {
+			spec["groups"] = toAny(groups)
+		}
+		return v
+	}
+	verdicts := []interface{}{
+		verdictObj("agent-qa", "uat", "explore", "pass", uid, agentActor("qa")),
+		person("carol", "carol@example.com"),
+		person("dave", "dave@example.com", "qa-team"),
+		person("erin", "erin@example.com", "devs"),
+	}
+	for _, tc := range []struct {
+		name   string
+		policy kardinalv1alpha1.GateVerifyPolicy
+		want   []string
+	}{
+		{"agents only", kardinalv1alpha1.GateVerifyPolicy{AllowedAgents: []string{"qa"}}, []string{"agent-qa"}},
+		{"agents and a user", kardinalv1alpha1.GateVerifyPolicy{AllowedAgents: []string{"qa"}, AllowedUsers: []string{"carol@example.com"}},
+			[]string{"agent-qa", "carol"}},
+		{"agents and a group", kardinalv1alpha1.GateVerifyPolicy{AllowedAgents: []string{"qa"}, AllowedGroups: []string{"qa-team"}},
+			[]string{"agent-qa", "dave"}},
+		{"a user only", kardinalv1alpha1.GateVerifyPolicy{AllowedUsers: []string{"carol@example.com"}}, []string{"carol"}},
+		{"nobody listed", kardinalv1alpha1.GateVerifyPolicy{}, []string{"carol", "dave", "erin"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.policy.Check, tc.policy.Required = "explore", 1
+			res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "uat", "prod"),
+				Bundle: makeBundle("app-v1", "app"), PolicyGates: []kardinalv1alpha1.PolicyGate{verifyGateFor("prod", tc.policy)}})
+			require.NoError(t, err)
+			var names []string
+			for _, o := range renderObjectsWith(t, res.Graph, map[string]interface{}{graph.VerdictsNodeID: verdicts}) {
+				if o.Object["kind"] != "PolicyGate" || objLabels(o.Object)["kardinal.io/gate-template"] != "explore" {
+					continue
+				}
+				for _, x := range o.Object["spec"].(map[string]interface{})["verdicts"].([]interface{}) {
+					names = append(names, x.(map[string]interface{})["name"].(string))
+				}
+			}
+			assert.Equal(t, tc.want, names)
+		})
+	}
+}
+
+// toAny is ss as a JSON list.
+func toAny(ss []string) []interface{} {
+	out := make([]interface{}, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
 
 // TestBuilder_VerifyGateWithApprovals: approval gates stay in ApprovalGates
@@ -410,5 +475,6 @@ func TestTemplateRules(t *testing.T) {
 // reuses a release branch's label.
 func TestRenderLabel(t *testing.T) {
 	assert.Equal(t, fmt.Sprint(graph.RenderVersion), graph.RenderLabel)
-	assert.Equal(t, 3, graph.RenderVersion, "v0.12.3 labels its Graphs 2: main renders differently, so it is past 2 (#2346)")
+	assert.Equal(t, 4, graph.RenderVersion, "v0.12.3 labels its Graphs 2: main renders differently, so it is past 2 (#2346); "+
+		"verify gates copy a person's Verdict only when they list people or nobody (#2411)")
 }

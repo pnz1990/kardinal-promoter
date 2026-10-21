@@ -169,8 +169,38 @@ func TestTallyVerdicts(t *testing.T) {
 			outcome:  lifecycle.VerifyWaiting,
 		},
 		{
+			name:     "a gate that lists only agents counts no person (#2411)",
+			policy:   v1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{"qa"}},
+			author:   alice,
+			verdicts: []v1.GateVerdict{verdict("v1", bob, "pass", 1, 0, 0)},
+			outcome:  lifecycle.VerifyWaiting,
+			blocked:  "waiting for verdicts: 0 of 1",
+			reasons: map[string]string{"v1": "bob is not an allowed verifier: the gate counts only the agents in verify.allowedAgents (qa); " +
+				"list people in verify.allowedUsers or allowedGroups to count them"},
+		},
+		{
+			name:   "a group listed with agents counts its members (#2411)",
+			policy: v1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{"qa"}, AllowedGroups: []string{"qa-team"}},
+			author: alice,
+			verdicts: []v1.GateVerdict{func() v1.GateVerdict {
+				v := verdict("v1", bob, "pass", 1, 0, 0)
+				v.Groups = []string{"qa-team"}
+				return v
+			}()},
+			outcome: lifecycle.VerifyVerified,
+			counted: map[string]bool{"v1": true},
+		},
+		{
+			name:     "a person in no list of a gate that lists people does not count",
+			policy:   v1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{"qa"}, AllowedUsers: []string{"carol"}},
+			author:   alice,
+			verdicts: []v1.GateVerdict{verdict("v1", bob, "pass", 1, 0, 0)},
+			outcome:  lifecycle.VerifyWaiting,
+			reasons:  map[string]string{"v1": "bob is not in verify.allowedUsers or allowedGroups"},
+		},
+		{
 			name:   "a person and an agent make two votes",
-			policy: v1.GateVerifyPolicy{Required: 2, AllowedAgents: []string{"qa"}},
+			policy: v1.GateVerifyPolicy{Required: 2, AllowedAgents: []string{"qa"}, AllowedUsers: []string{"bob"}},
 			author: alice,
 			verdicts: []v1.GateVerdict{verdict("v1", bob, "pass", 1, 0, 0),
 				verdict("v2", v1.Actor{Kind: v1.ActorAgent, Principal: "sa:q2", Agent: "qa", Sponsor: "carol"}, "pass", 2, 1, 1)},
@@ -304,6 +334,11 @@ func TestVerdictContext(t *testing.T) {
 	assert.Empty(t, none.Blocked())
 }
 
+// TestVerdictStandingOf: whether a verdict would count, and why not, as
+// kardinal verify tells its writer. allowedAgents, allowedUsers and
+// allowedGroups are one allowlist (#2411).
+//
+// Covers GATE-VERIFY-10.
 func TestVerdictStandingOf(t *testing.T) {
 	g := verifyGate(v1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{"qa", "fixer"}})
 	assert.True(t, lifecycle.VerdictStandingOf(g, alice, qa, nil).Counts)
@@ -311,6 +346,14 @@ func TestVerdictStandingOf(t *testing.T) {
 	assert.False(t, s.Counts)
 	assert.Contains(t, s.Reason, "the author's party")
 	assert.False(t, lifecycle.VerdictStandingOf(&v1.PolicyGate{}, alice, qa, nil).Counts)
+	// One allowlist (#2411): the gate lists only agents, so a person learns
+	// from kardinal verify why theirs does not count and how to change it.
+	s = lifecycle.VerdictStandingOf(g, alice, bob, nil)
+	assert.False(t, s.Counts)
+	assert.Equal(t, "bob is not an allowed verifier: the gate counts only the agents in verify.allowedAgents (qa, fixer); "+
+		"list people in verify.allowedUsers or allowedGroups to count them", s.Reason)
+	assert.True(t, lifecycle.VerdictStandingOf(verifyGate(v1.GateVerifyPolicy{Required: 1}), alice, bob, nil).Counts,
+		"a gate that lists nobody counts any person")
 }
 
 func TestVerifyDeadline(t *testing.T) {

@@ -81,7 +81,10 @@ const (
 //   - 3: v0.12.3 (release/v0.12's #2271 backport) labels its Graphs 2, and
 //     main renders differently from it: the upgrade from v0.12.3 re-renders
 //     them once too, as from v0.12.0 to v0.12.2 (#2346).
-const RenderVersion = 3
+//   - 4: a verify gate copies a person's Verdict only when it lists people
+//     or nobody (one allowlist, #2411): a Promoting Bundle's verify gates
+//     stop copying the Verdicts the tally no longer counts.
+const RenderVersion = 4
 
 // RenderLabel is the LabelRenderVersion value this controller writes on every
 // Graph and compares, for equality, with the one a Graph carries. On main it
@@ -92,7 +95,7 @@ const RenderVersion = 3
 // release, for example "3-v0.12.4". It must never take main's next integer.
 // v0.12.3 did, labelling its Graphs 2 while main rendered differently under
 // 2, and so the upgrade from it to main re-rendered nothing (#2346).
-const RenderLabel = "3"
+const RenderLabel = "4"
 
 // LabelRenderVersion is the label of a Graph that holds the RenderVersion it
 // was rendered with.

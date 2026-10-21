@@ -495,6 +495,14 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 					before.envs, after.envs, gates, r.now()); ok {
 					b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
 				}
+				// A Graph rendered before the verify rule became one
+				// allowlist: its gates of agents only stop counting
+				// people's verdicts now, which the record says (#2411).
+				if renderedBefore(g.Labels[graph.LabelRenderVersion], verifyOneAllowlistRender) {
+					for _, e := range verifyRuleChangeEntries(b, pipeline, gates, r.now()) {
+						b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
+					}
+				}
 			}
 		}
 		log.Info().Str("graph", name).Str("renderVersion", g.Labels[graph.LabelRenderVersion]).

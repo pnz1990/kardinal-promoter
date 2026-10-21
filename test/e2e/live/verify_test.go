@@ -19,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -352,6 +353,71 @@ func TestGate_VerifyOnePartyUIDTimeout(t *testing.T) {
 		assert.Contains(t, why, "the author's party (alice@example.com)")
 	}
 	a.noStep(t, bundle, "prod", 15*time.Second)
+}
+
+// TestGate_VerifyAgentsOnly (#2411): a verify gate that lists only agents
+// counts no person's verdict (allowedAgents, allowedUsers and allowedGroups
+// are one allowlist). A person with the verifier role records a pass with
+// kardinal verify: the Verdict is admitted and kardinal verify says the
+// gate does not count it and how to list people; the gate keeps waiting and
+// prod gets no step. Once the gate's template lists the person in
+// allowedUsers, the change reaches the version in flight: the same pass
+// counts and prod promotes.
+//
+// Covers GATE-VERIFY-11.
+func TestGate_VerifyAgentsOnly(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	c := e.CLI(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "uat", "prod")
+	gate := verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{"qa-explorer"}})
+	e.CreateGate(t, gate)
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", false, "waiting for verdicts: 0 of 1", gateTimeout)
+
+	const carol = "carol@example.com"
+	kc := userKubeconfig(t, e, a.ns, carol)
+	_, err := e.Kube.RbacV1().RoleBindings(a.ns).Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "carol-verifier", Namespace: a.ns},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: verifierRole},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: carol}},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	waitBoundNamed(t, e, a.ns, "carol-verifier")
+	r := c.Exec(framework.CLIOptions{Kubeconfig: kc},
+		c.Args(a.ns, "verify", pipelineName, "uat", "--check", "explore", "--pass", "--summary", "checkout works")...)
+	require.Equal(t, 0, r.Code, r.Output())
+	assert.Contains(t, r.Stdout, "Recorded: "+carol+" finds "+bundle+" pass in uat for explore")
+	assert.Contains(t, r.Stdout, "not counted by gate explore-qa: "+carol+" is not an allowed verifier: the gate counts only "+
+		"the agents in verify.allowedAgents (qa-explorer); list people in verify.allowedUsers or allowedGroups to count them")
+	var verdicts v1alpha1.VerdictList
+	require.NoError(t, e.Client.List(ctx, &verdicts, client.InNamespace(a.ns)))
+	require.Len(t, verdicts.Items, 1, "the Verdict is admitted and kept")
+	assert.Equal(t, carol, verdicts.Items[0].Spec.By)
+	framework.Consistently(t, 20*time.Second, "the gate counts no person's verdict", func(ctx context.Context) (bool, string) {
+		g, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "explore-qa")
+		if err != nil || !ok {
+			return false, fmt.Sprint(ok, err)
+		}
+		return !g.Status.Ready && strings.Contains(g.Status.Reason, "waiting for verdicts: 0 of 1"), framework.DescribeGate(g)
+	})
+	a.noStep(t, bundle, "prod", 5*time.Second)
+
+	// The gate's template lists carol: the change reaches the version in
+	// flight, and her pass counts.
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var g v1alpha1.PolicyGate
+		if err := e.Client.Get(ctx, client.ObjectKeyFromObject(gate), &g); err != nil {
+			return err
+		}
+		g.Spec.Verify.AllowedUsers = []string{carol}
+		return e.Client.Update(ctx, &g)
+	}))
+	e.WaitGateReady(t, a.ns, bundle, "prod", "explore-qa", true, "verified: 1 of 1 ("+carol+")", gateTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 }
 
 // TestGate_VerifyByPerson: a person records verdicts with kardinal verify. A

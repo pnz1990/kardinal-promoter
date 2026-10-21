@@ -41,9 +41,9 @@ spec:
     environment: uat           # where the version runs; default: prod's only direct upstream
     required: 2                # passing votes needed (default 1)
     maxFailures: 0             # failing votes tolerated (default 0: any fail blocks)
-    allowedAgents: [qa-explorer]
-    allowedUsers: []           # people and bots; both lists empty: anyone who is not an agent
-    allowedGroups: []
+    allowedAgents: [qa-explorer] # the writers who count: agents, people and groups are one list,
+    allowedUsers: []           #   so this gate counts qa-explorer only; with all three empty,
+    allowedGroups: []          #   any person or bot counts (no agent does)
     excludeAuthor: true        # default: the version's author party never counts
     onInconclusive: retry      # hold | retry | fail (default hold)
     retries: 1                 # with retry: further attempts per AgentRun
@@ -78,8 +78,11 @@ skips; or it has no `environment` and its environment has no single direct upstr
 A Verdict counts for a gate when it is for this very version (its Bundle UID), the gate's
 Pipeline, environment and check, and:
 
-1. **its writer may verify**: an agent only when it is in `allowedAgents`; anyone else when listed
-   in `allowedUsers` or `allowedGroups`, or when both are empty;
+1. **its writer may verify**: `allowedAgents`, `allowedUsers` and `allowedGroups` are one
+   allowlist. An agent counts only when it is in `allowedAgents`; anyone else only when listed in
+   `allowedUsers` or `allowedGroups`. A gate that lists only agents counts no person's verdict, and
+   `kardinal verify` tells the person why; only a gate that lists nobody counts every person's
+   and bot's verdict (and no agent's);
 2. **it is not the author's party**: with `excludeAuthor` (the default), the version's author,
    the author's agent and that agent's sponsor never count. An agent's verdict on its own party's
    work never counts, whatever `excludeAuthor` says;
@@ -99,6 +102,8 @@ Patterns:
 | One agent must pass | `required: 1, run: {count: 1}` |
 | 2 of 3 runs, one bad run tolerated | `required: 2, maxFailures: 1, run: {count: 3}` |
 | A flaky agent: retry inconclusive once | `onInconclusive: retry, retries: 1` |
+| Only the QA agent | `allowedAgents: [qa-explorer]` (no person counts) |
+| The QA agent or a QA lead | `allowedAgents: [qa-explorer], allowedUsers: [lead@example.com]` |
 | An agent and a person must both pass | two gates: one with `allowedAgents`, one with `allowedUsers` |
 | Explore for up to an hour, then do not hold the release | `timeout: 1h, onTimeout: allow` |
 

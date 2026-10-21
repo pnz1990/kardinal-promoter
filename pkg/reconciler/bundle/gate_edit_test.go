@@ -614,6 +614,63 @@ func TestRenderVersion_UpgradeRecordsRuleChange(t *testing.T) {
 	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
 }
 
+// #2411: a Graph rendered before render version 4 copied a person's
+// verdict onto a verify gate of agents only, which counted it; re-rendered on
+// upgrade it no longer does, and the version's trail says why: one
+// GateChanged for that gate, naming the rule change (the template is
+// unchanged), and none for a verify gate that lists people or nobody, or
+// for a gate without verify. A Graph already at the current render version
+// records none, and a second reconcile records nothing more.
+//
+// Covers GATE-VERIFY-12.
+func TestRenderVersion_UpgradeRecordsVerifyRuleChange(t *testing.T) {
+	agents := gateTemplate("qa-only", "prod", false)
+	agents.Generation = 2
+	agents.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1, AllowedAgents: []string{"qa-explorer"}}
+	lead := gateTemplate("qa-or-lead", "prod", false)
+	lead.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "smoke", Required: 1, AllowedAgents: []string{"qa-explorer"},
+		AllowedUsers: []string{"lead@example.com"}}
+	anyone := gateTemplate("anyone", "prod", false)
+	anyone.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "a11y", Required: 1}
+	cab := gateTemplate("cab", "prod", false)
+	cab.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1}
+	g := newGateEditRig(t, gateEditPipeline(), agents, lead, anyone, cab, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+
+	// A Graph at the current render version: nothing to say. Nor for one
+	// rendered from render version 4 on, which the re-render still renders
+	// again (a release branch's label, a later controller's): its gates
+	// already count agents only (QA-5 on #2429).
+	g.renderOlder(t, "app-v1", graph.RenderLabel, func(map[string]interface{}) {})
+	lcReconcile(t, g.r, "app-v1")
+	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+	for _, label := range []string{"4-v0.13.1", "5"} {
+		updates := g.writes("app-v1", "update")
+		g.renderOlder(t, "app-v1", label, func(map[string]interface{}) {})
+		lcReconcile(t, g.r, "app-v1")
+		require.Greater(t, g.writes("app-v1", "update"), updates+1, "label %s: rendered again", label)
+		require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"), "label %s: no rule change to record", label)
+	}
+
+	// A Graph rendered before #2411 (render version 3).
+	g.renderOlder(t, "app-v1", "3", func(map[string]interface{}) {})
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1, "one record, for the gate of agents only")
+	var current kardinalv1alpha1.PolicyGate
+	require.NoError(t, g.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "qa-only"}, &current))
+	d := graph.TemplateDigest(current)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{{Template: "qa-only", Namespace: "default",
+		OldDigest: d, NewDigest: d, OldGeneration: current.Generation, NewGeneration: current.Generation}}, got[0].Gates)
+	assert.Equal(t, "prod", got[0].Environment)
+	assert.Contains(t, got[0].Message, "the controller's verify rule changed (v0.13): only the agents listed in verify.allowedAgents count")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
+
 // renderOlder rewrites Bundle b's Graph to what an earlier controller left:
 // the render-version label set to label ("" removes it), and edit applied to
 // each PolicyGateData template entry.

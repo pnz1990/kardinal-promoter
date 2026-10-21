@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,6 +139,68 @@ func init() {
 	audit.RegisterCoalescer(AuditActionGateChanged, coalesceGateChanges)
 }
 
+// verifyOneAllowlistRender is the render version from which a verify gate's
+// allowedAgents, allowedUsers and allowedGroups are one allowlist (#2411): a
+// gate that lists only agents copies, and counts, no person's verdict.
+const verifyOneAllowlistRender = 4
+
+// labelRuleChange marks a GateChanged record of a rule the controller
+// changed, not a template edit: it is never merged with another record,
+// whose merge would drop it (its digest and generation do not change).
+const labelRuleChange = "kardinal.io/rule-change"
+
+// renderedBefore reports whether a Graph carrying render label l was
+// rendered by a controller before render version v: no label, an integer
+// below v, or a release branch's "<n>-v<patch>" (graph.RenderLabel) whose n
+// is below v.
+func renderedBefore(l string, v int) bool {
+	n, _, _ := strings.Cut(l, "-")
+	ver, err := strconv.Atoi(n)
+	return l == "" || (err == nil && ver < v)
+}
+
+// verifyRuleChangeEntries are the GateChanged entries a Promoting Bundle b
+// gets when its Graph, rendered before verifyOneAllowlistRender, is
+// rendered again on upgrade: one for each verify gate that applies to it
+// and lists only agents, whose copy no longer counts a person's verdict
+// (#2411). The template did not change, the controller's rule did, so its
+// digest and generation are the same before and after; the message says
+// why, and a person's verdict the copy drops reads as that change, not as a
+// revocation nobody made. Each entry is named after the version and the
+// template, so it is written once.
+func verifyRuleChangeEntries(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline,
+	gates []kardinalv1alpha1.PolicyGate, now time.Time) []kardinalv1alpha1.PendingAuditEvent {
+	var out []kardinalv1alpha1.PendingAuditEvent
+	for _, g := range translator.ApplicableGates(pipeline, gates) {
+		p := g.Spec.Verify
+		if p == nil || len(p.AllowedAgents) == 0 || len(p.AllowedUsers) > 0 || len(p.AllowedGroups) > 0 {
+			continue
+		}
+		key := g.Namespace + "/" + g.Name
+		digest := graph.TemplateDigest(g)
+		gc := kardinalv1alpha1.AuditGateChange{Template: g.Name, Namespace: g.Namespace, OldDigest: digest, NewDigest: digest,
+			OldGeneration: g.Generation, NewGeneration: g.Generation, Manager: lastManager(g.ManagedFields)}
+		sum := sha256.Sum256([]byte("verify-one-allowlist|" + key))
+		out = append(out, audit.Entry(gateChangeName(b.Name, sum[:]), map[string]string{
+			lifecycle.LabelPipeline: b.Spec.Pipeline,
+			lifecycle.LabelBundle:   b.Name,
+			"kardinal.io/action":    AuditActionGateChanged,
+			labelRuleChange:         "verify-one-allowlist",
+		}, kardinalv1alpha1.AuditEventSpec{
+			BundleName:   b.Name,
+			PipelineName: b.Spec.Pipeline,
+			Environment:  gateEnvironment(g),
+			Action:       AuditActionGateChanged,
+			Outcome:      "Success",
+			Message: fmt.Sprintf("PolicyGate %s changed under version %s on upgrade: the controller's verify rule changed (v0.13): "+
+				"only the agents listed in verify.allowedAgents count (%s); a person's or bot's verdict no longer counts on it (#2411)",
+				key, b.Name, strings.Join(p.AllowedAgents, ", ")),
+			Gates: []kardinalv1alpha1.AuditGateChange{gc},
+		}, metav1.NewTime(now)))
+	}
+	return out
+}
+
 // coalesceGateChanges merges two unwritten GateChanged records of the same
 // version, older first, when the audit outbox is full: one record then
 // says how each template went from its stamp in the older record to its
@@ -150,6 +213,9 @@ func init() {
 // stamp is the newer record's old one. The bound makes this rare; the
 // omitted count is then an upper bound.
 func coalesceGateChanges(older, newer kardinalv1alpha1.PendingAuditEvent) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	if older.Labels[labelRuleChange] != "" || newer.Labels[labelRuleChange] != "" {
+		return kardinalv1alpha1.PendingAuditEvent{}, false // a rule change says why on its own
+	}
 	o, n := older.Spec, newer.Spec
 	if o.BundleName != n.BundleName || o.PipelineName != n.PipelineName {
 		return kardinalv1alpha1.PendingAuditEvent{}, false

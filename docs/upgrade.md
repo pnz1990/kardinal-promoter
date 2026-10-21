@@ -187,6 +187,27 @@ something for you:
   [Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces) has
   the same list with kubectl, and says who may set the label.
 
+- **A verify gate that lists only agents counts only agents.** `verify.allowedAgents`,
+  `allowedUsers` and `allowedGroups` are one allowlist from v0.13.0. Under v0.12, a gate with
+  `allowedAgents` and no `allowedUsers` or `allowedGroups` also counted every person's verdict:
+  anyone the chart's approver or verifier role lets write a Verdict could pass it. From v0.13.0
+  it counts only its agents. Run `kardinal doctor` with the v0.13.0 CLI before you upgrade: its
+  "Verify gates of agents only" check (a WARN against v0.12) names those gates, and marks the
+  ones where a person's verdict counted on a gate instance still kept. To keep counting those
+  people, list them in `allowedUsers` or `allowedGroups` now (v0.12 has the fields):
+
+    ```yaml
+    verify:
+      allowedAgents: [qa-explorer]
+      allowedUsers: [qa-lead@example.com]   # or allowedGroups: [qa]
+    ```
+
+    The new controller renders every promoting version's Graph again, once, so a version in flight
+    whose gate counted a person's pass waits again until an allowed verifier passes it. Its trail
+    says why: a `GateChanged` AuditEvent for each such gate ("the controller's verify rule changed
+    (v0.13)"), and `VerdictRevoked` for the person's verdict ("no longer counted: the gate counts
+    only its agents") ([How verdicts count](agentic/verify-with-agents.md#how-verdicts-count)).
+
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
 fields to AgentIdentities, Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals
 and ImageVerifications; Pipelines and RenderRuns accept quoted keys in YAML paths only once the
@@ -231,7 +252,8 @@ kubectl get bundles -A
 WARN in two ways. If it names Pipelines, their `spec.policyNamespaces` still needs a label or a
 chart entry (step 1), and against the next release, which refuses them, that becomes a FAIL. If it
 names no Pipeline, it checked one namespace only, or none, because you may not list Pipelines in
-every namespace: run it as a user who may.
+every namespace: run it as a user who may. "Verify gates of agents only" passes and names the
+verify gates that count only their agents (step 1).
 
 ## Upgrading from v0.11.0
 

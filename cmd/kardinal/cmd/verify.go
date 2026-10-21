@@ -40,7 +40,9 @@ of <pipeline>: it passed, failed or was inconclusive for --check. Give a Bundle
 instead with kardinal verify <bundle> --env <env>. A verify gate downstream
 counts the verdicts of the checks it waits for (docs/agentic/verify-with-agents.md).
 An agent's verdict counts only on a gate that lists it in verify.allowedAgents,
-and never on work of its own party (its sponsor's, or its own).`,
+and never on work of its own party (its sponsor's, or its own); anyone else's
+only on a gate that lists them (verify.allowedUsers or allowedGroups) or
+lists nobody at all.`,
 		Example: `  # an exploratory test agent in CI reports
   kardinal verify checkout uat --check exploratory-qa --pass \
     --summary "checkout, refunds and coupons work" --evidence https://ci.example.com/runs/88123
@@ -392,7 +394,9 @@ A PolicyGate with spec.verify downstream of the environment counts the
 Verdicts for its check: it is ready when its expression is true, at least
 verify.required votes pass and no more than verify.maxFailures fail. An
 agent's verdict counts only when the gate lists the agent in
-verify.allowedAgents, and never on its own party's work.
+verify.allowedAgents, and never on its own party's work. allowedAgents,
+allowedUsers and allowedGroups are one allowlist: anyone else's verdict counts
+only when the gate lists them, or lists nobody at all.
 
   --fail, --inconclusive   need --summary.
   --revoke                 deletes your latest Verdict (or --name).

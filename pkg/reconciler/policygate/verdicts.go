@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -86,8 +87,8 @@ func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.
 	for _, v := range gate.Spec.Verdicts {
 		byName[v.Name] = v
 	}
-	enqueue := func(rec kardinalv1alpha1.GateVerdictStatus, action string) {
-		if e, ok := r.verdictAuditEntry(gate, rec, byName[rec.Name].Actor, action); ok {
+	enqueue := func(rec kardinalv1alpha1.GateVerdictStatus, action, why string) {
+		if e, ok := r.verdictAuditEntry(gate, rec, byName[rec.Name].Actor, action, why); ok {
 			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
 		}
 	}
@@ -101,13 +102,13 @@ func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.
 	}
 	for _, rec := range records {
 		if !seen(old, rec.Name) {
-			enqueue(rec, auditActionVerdictRecorded)
+			enqueue(rec, auditActionVerdictRecorded, "")
 			observability.VerdictsTotal.WithLabelValues(t.Policy.Check, rec.Result, verifierKind(byName[rec.Name])).Inc()
 		}
 	}
 	for _, o := range old {
 		if !seen(records, o.Name) {
-			enqueue(o, auditActionVerdictRevoked)
+			enqueue(o, auditActionVerdictRevoked, droppedByOneAllowlist(t.Policy, o))
 		}
 	}
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
@@ -123,12 +124,27 @@ func verifierKind(v kardinalv1alpha1.GateVerdict) string {
 	return lifecycle.VerifierActor(v).Kind
 }
 
+// droppedByOneAllowlist is why a counted verdict left the gate's verdicts
+// without anyone revoking it, or "": a person's or bot's verdict that a
+// controller before #2411 counted on a gate that lists only agents, and that
+// the Graph rendered since no longer copies (allowedAgents, allowedUsers and
+// allowedGroups are one allowlist). No verdict of a person counts on such a
+// gate from v0.13, so a counted one leaving it is exactly that change.
+func droppedByOneAllowlist(p *kardinalv1alpha1.GateVerifyPolicy, rec kardinalv1alpha1.GateVerdictStatus) string {
+	if p == nil || !rec.Counted || strings.HasPrefix(rec.Verifier, "agent ") ||
+		len(p.AllowedAgents) == 0 || len(p.AllowedUsers) > 0 || len(p.AllowedGroups) > 0 {
+		return ""
+	}
+	return "no longer counted: the gate counts only its agents (#2411)"
+}
+
 // verdictAuditEntry is the outbox entry recording that rec appeared in or
-// left the gate's verdicts, and false for a gate a Graph did not create. The
-// name is derived from the gate, the action and the Verdict's name, so a
-// retried write is the same record.
+// left the gate's verdicts, and false for a gate a Graph did not create; why,
+// when set, replaces what the record says of its counting. The name is
+// derived from the gate, the action and the Verdict's name, so a retried
+// write is the same record.
 func (r *Reconciler) verdictAuditEntry(gate *kardinalv1alpha1.PolicyGate, rec kardinalv1alpha1.GateVerdictStatus,
-	stamp *kardinalv1alpha1.Actor, action string) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	stamp *kardinalv1alpha1.Actor, action, why string) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
 	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
@@ -140,7 +156,10 @@ func (r *Reconciler) verdictAuditEntry(gate *kardinalv1alpha1.PolicyGate, rec ka
 		base = base[:limit]
 	}
 	counted := "counted"
-	if !rec.Counted {
+	switch {
+	case why != "":
+		counted = why
+	case !rec.Counted:
 		counted = "not counted: " + rec.Reason
 	}
 	verb := map[string]string{auditActionVerdictRecorded: "recorded", auditActionVerdictRevoked: "revoked"}[action]

@@ -273,8 +273,8 @@ spec:
     required: 2                      # votes that must pass; 1-20, default 1
     maxFailures: 0                   # counted fails tolerated; 0-20, default 0 (any fail blocks)
     allowedAgents: [qa-explorer]     # agents whose verdicts count; agents count ONLY when listed (opt-in)
-    allowedUsers: []                 # people and bots whose verdicts count
-    allowedGroups: []                #   (both empty: any non-agent with RBAC on verdicts)
+    allowedUsers: []                 # people and bots whose verdicts count; the three lists are one
+    allowedGroups: []                #   allowlist (all empty: any non-agent with RBAC on verdicts)
     excludeAuthor: true              # default true: the version's author party never counts (6.2)
     onInconclusive: retry            # hold | retry | fail; default hold
     retries: 1                       # with retry: further attempts per AgentRun; 1-5, default 1
@@ -303,7 +303,11 @@ fails is the reason it does not count, shown in the gate status):
    - An agent (`actor.kind == agent`) only when `actor.agent` is in `allowedAgents`. There is no
      wildcard: agent verification is opt-in per agent, as agent approvals are (E7).
    - Anyone else when `spec.by` is in `allowedUsers` or a `spec.groups` entry is in
-     `allowedGroups`; with both empty, anyone but an agent.
+     `allowedGroups`; with all three lists empty, anyone but an agent. The three lists are one
+     allowlist (#2411): a gate that lists only agents counts no person. Before v0.13.0 an empty
+     `allowedUsers` and `allowedGroups` let every person count even when `allowedAgents` was set,
+     so "only this agent verifies" could not be written, and every approver (the chart's approver
+     role may write Verdicts) could pass such a gate.
    The Graph applies this filter already (5.1); the reconciler applies it again, so the CLI and
    the UI explain it with the same function.
 2. **One party.** With `excludeAuthor: true`, a Verdict does not count when

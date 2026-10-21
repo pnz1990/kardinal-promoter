@@ -492,3 +492,55 @@ func TestCoalesceGateChanges_ThreeMoves(t *testing.T) {
 	assert.Equal(t, []string{"prod"}, m.Spec.Gates[0].EnvironmentsRemoved)
 	assert.Contains(t, m.Spec.Message, "platform-policies/prod-freeze moved (generation 2): no longer in prod")
 }
+
+// TestRenderedBefore (#2411): a Graph's render label predates a render
+// version when it has none, a lower integer, or a release branch's
+// "<n>-v<patch>" with a lower n; the current label and later ones do not.
+func TestRenderedBefore(t *testing.T) {
+	for label, want := range map[string]bool{"": true, "2": true, "3": true, "3-v0.12.4": true,
+		"4": false, "4-v0.13.1": false, "5": false} {
+		assert.Equal(t, want, renderedBefore(label, verifyOneAllowlistRender), "label %q", label)
+	}
+	assert.False(t, renderedBefore(graph.RenderLabel, verifyOneAllowlistRender), "the current label")
+}
+
+// TestVerifyRuleChangeEntries (#2411): the re-render records one
+// GateChanged per verify gate of agents only that applies to the version,
+// naming the rule change with the template's digest and generation
+// unchanged; a verify gate that lists people, groups or nobody, a gate
+// without verify and one for another environment get none. Rule-change
+// records are never merged into others.
+func TestVerifyRuleChangeEntries(t *testing.T) {
+	p, b := gateAuditFixture()
+	agents := gateAuditGate("qa-only", "prod", "true", 3)
+	agents.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "qa", AllowedAgents: []string{"qa", "fixer"}}
+	lead := gateAuditGate("qa-or-lead", "prod", "true", 1)
+	lead.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "qa", AllowedAgents: []string{"qa"}, AllowedUsers: []string{"lead"}}
+	group := gateAuditGate("qa-or-group", "prod", "true", 1)
+	group.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "qa", AllowedAgents: []string{"qa"}, AllowedGroups: []string{"qa"}}
+	anyone := gateAuditGate("anyone", "prod", "true", 1)
+	anyone.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "qa"}
+	elsewhere := gateAuditGate("qa-only-staging", "staging", "true", 1)
+	elsewhere.Spec.Verify = agents.Spec.Verify.DeepCopy()
+	plain := gateAuditGate("window", "prod", "true", 1)
+	now := time.Date(2026, 10, 21, 5, 0, 0, 0, time.UTC)
+	got := verifyRuleChangeEntries(b, p, []kardinalv1alpha1.PolicyGate{agents, lead, group, anyone, elsewhere, plain}, now)
+	require.Len(t, got, 1)
+	e := got[0]
+	assert.Equal(t, AuditActionGateChanged, e.Spec.Action)
+	assert.Equal(t, "prod", e.Spec.Environment)
+	assert.Equal(t, "app-v1", e.Spec.BundleName)
+	assert.Equal(t, "PolicyGate platform-policies/qa-only changed under version app-v1 on upgrade: the controller's verify rule "+
+		"changed (v0.13): only the agents listed in verify.allowedAgents count (qa, fixer); a person's or bot's verdict no longer "+
+		"counts on it (#2411)", e.Spec.Message)
+	d := graph.TemplateDigest(agents)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{{Template: "qa-only", Namespace: "platform-policies",
+		OldDigest: d, NewDigest: d, OldGeneration: 3, NewGeneration: 3}}, e.Spec.Gates)
+	again := verifyRuleChangeEntries(b, p, []kardinalv1alpha1.PolicyGate{agents}, now.Add(time.Minute))
+	assert.Equal(t, e.Name, again[0].Name, "named after the version and the template: written once")
+
+	_, ok := coalesceGateChanges(e, gateChangeRecord("app-v1", "app", "prod",
+		[]kardinalv1alpha1.AuditGateChange{{Template: "window", Namespace: "platform-policies", NewDigest: "sha256:b", NewGeneration: 2}},
+		0, 0, metav1.NewTime(now)))
+	assert.False(t, ok, "a rule change is not merged into a template change")
+}

@@ -270,19 +270,21 @@ type GateVerifyPolicy struct {
 
 	// AllowedAgents are the agents (AgentIdentity names) whose verdicts
 	// count. An agent's verdict counts only when the agent is listed.
+	// allowedAgents, allowedUsers and allowedGroups are one allowlist: a
+	// gate that lists only agents counts no person's verdict.
 	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	AllowedAgents []string `json:"allowedAgents,omitempty"`
 
 	// AllowedUsers are the usernames of people and bots whose verdicts
-	// count. With neither allowedUsers nor allowedGroups, every verdict by
-	// someone who is not an agent counts.
+	// count. Only when allowedAgents, allowedUsers and allowedGroups are all
+	// empty does every verdict by someone who is not an agent count.
 	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	AllowedUsers []string `json:"allowedUsers,omitempty"`
 
-	// AllowedGroups are groups: a verdict counts when one of its groups is
-	// listed.
+	// AllowedGroups are groups: a verdict by someone who is not an agent
+	// counts when one of its groups is listed.
 	// +kubebuilder:validation:MaxItems=64
 	// +optional
 	AllowedGroups []string `json:"allowedGroups,omitempty"`

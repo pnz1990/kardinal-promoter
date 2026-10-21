@@ -1261,7 +1261,7 @@ every gate where it was, so a working Graph's nodes do not change. The
 package's test renderer renders an optional with no value as null as kro does, and every test
 that renders a Graph checks no PolicyGate has a null `spec.approval` (`assertNoNullApproval`).
 A version already stuck when the fix ships recovers on upgrade: the fix bumps
-`graph.RenderVersion` (2; 3 on main since #2355), which every Graph carries as its `kardinal.io/render-version` label, and
+`graph.RenderVersion` (2; 3 on main since #2355; 4 since #2411), which every Graph carries as its `kardinal.io/render-version` label, and
 the Bundle reconciler re-translates a Promoting Bundle's Graph whose label differs once.
 **Smallest change, no upstream work yet.** Nothing upstream is needed: omitting the field is
 what `CELOmitFunction` is for. Requiring that alpha gate of every kardinal install is not worth
