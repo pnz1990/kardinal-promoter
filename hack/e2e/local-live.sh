@@ -968,12 +968,17 @@ room() {
 }
 
 # start_turn, under the .start flock: when there is room, records this start
-# (SLOTS_DIR/.last-start) and succeeds; otherwise it sets why.
+# (SLOTS_DIR/.last-start) and succeeds; otherwise it sets why. In the test
+# mode it also appends the start to SLOTS_DIR/.test-starts ("<cluster>
+# <milliseconds>"): the times the spacing is judged on, which the tests read
+# instead of their fake up.sh's clock (#2452: up.sh runs a while after the
+# start is recorded, and on a loaded host the two runs' whiles differ).
 # shellcheck disable=SC2329 # called through with_flock
 start_turn() {
   room
   [ -z "$why" ] || return 1
   printf '%s\n' "$now_ms_v" >"$SLOTS_DIR/.last-start"
+  [ -z "$test_mode" ] || printf '%s %s\n' "$KIND_CLUSTER" "$now_ms_v" >>"$SLOTS_DIR/.test-starts"
 }
 
 # wait_for_room waits until this run may start its cluster: the check and the
