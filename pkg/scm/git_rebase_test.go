@@ -17,6 +17,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -92,8 +93,14 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 	require.NoError(t, c.Push(ctx, first, "origin", "main", scm.GitAuth{}, false))
 	require.ErrorIs(t, c.Push(ctx, second, "origin", "main", scm.GitAuth{}, false), scm.ErrNonFastForward)
 
+	// Each rebase is a git operation of its own, counted by result (#2366).
+	rebases := func(result string) float64 {
+		return testutil.ToFloat64(scm.GitOperationsTotal.WithLabelValues("rebase", result))
+	}
+	ok0, conflict0 := rebases("ok"), rebases("conflict")
 	changed, err := c.RebaseOnRemote(ctx, second, "origin", "main", scm.GitAuth{})
 	require.NoError(t, err)
+	assert.Equal(t, ok0+1, rebases("ok"), "a rebase that landed")
 	assert.Equal(t, []string{"environments/b/kustomization.yaml", "environments/b/new/extra.yaml", "environments/b/old.yaml"}, changed)
 	require.NoError(t, c.Push(ctx, second, "origin", "main", scm.GitAuth{}, false))
 
@@ -116,6 +123,7 @@ func TestGoGitClient_RebaseOnRemote(t *testing.T) {
 
 	_, err = c.RebaseOnRemote(ctx, conflicting, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrRebaseConflict)
+	assert.Equal(t, conflict0+1, rebases("conflict"), "a rebase refused by the other writer's change")
 	assert.Contains(t, err.Error(), "environments/a/kustomization.yaml")
 	require.ErrorIs(t, c.Push(ctx, conflicting, "origin", "main", scm.GitAuth{}, false), scm.ErrNonFastForward,
 		"the refused commit is left as it was")
