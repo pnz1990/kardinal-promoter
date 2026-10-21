@@ -111,7 +111,12 @@ func preflightScript(t *testing.T, prefix string) string {
 	return ""
 }
 
-// isolatedGitEnv keeps the host's git config out of the tests.
+// isolatedGitEnv keeps the host's git config out of the tests, and turns
+// automatic maintenance off: git commit and git fetch otherwise start
+// 'git maintenance run --auto --detach', which can still be writing in the
+// repository (its objects/maintenance.lock) when t.TempDir removes it,
+// failing the test with "unlinkat .../.git/objects: directory not empty"
+// (#2388).
 var isolatedGitEnv = []string{
 	"GIT_CONFIG_NOSYSTEM=1",
 	"GIT_CONFIG_GLOBAL=" + os.DevNull,
@@ -119,6 +124,36 @@ var isolatedGitEnv = []string{
 	"GIT_AUTHOR_EMAIL=test@example.com",
 	"GIT_COMMITTER_NAME=test",
 	"GIT_COMMITTER_EMAIL=test@example.com",
+	"GIT_CONFIG_COUNT=2",
+	"GIT_CONFIG_KEY_0=maintenance.auto",
+	"GIT_CONFIG_VALUE_0=false",
+	"GIT_CONFIG_KEY_1=gc.auto",
+	"GIT_CONFIG_VALUE_1=0",
+}
+
+// TestIsolatedGitEnv_NoDetachedMaintenance (#2388): with isolatedGitEnv,
+// neither git commit nor git fetch starts automatic maintenance, which would
+// outlive the command and race t.TempDir's cleanup. GIT_TRACE shows every
+// command git starts.
+func TestIsolatedGitEnv_NoDetachedMaintenance(t *testing.T) {
+	t.Parallel() // writes only its temp dirs
+	traced := func(dir string, args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_TRACE=1"}, isolatedGitEnv...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)
+		return string(out)
+	}
+	origin, work := t.TempDir(), t.TempDir()
+	traced(origin, "init", "-q", "-b", "main")
+	commit := traced(origin, "commit", "-q", "--allow-empty", "-m", "A")
+	traced(work, "init", "-q")
+	traced(work, "remote", "add", "origin", origin)
+	fetch := traced(work, "fetch", "-q", "--no-tags", "origin", "+refs/heads/main:refs/heads/main")
+	for name, trace := range map[string]string{"commit": commit, "fetch": fetch} {
+		assert.NotRegexp(t, `run_command: git (maintenance run|gc) .*--auto`, trace, "git %s starts automatic maintenance", name)
+	}
 }
 
 // runReleaseStep runs a release.yml run: script the way Actions runs it with
