@@ -127,7 +127,7 @@ type facts struct {
 	maxBytes  int
 	// stampsVerified: the admission policy that checks an exemption's actor
 	// stamp from the requester is installed and bound now
-	// (--agent-budget-exemption-policy). Without it a person's stamp could
+	// (--agent-budget-exemption-policies). Without it a person's stamp could
 	// be written by anyone, so no stamped exemption counts.
 	stampsVerified bool
 }

@@ -80,7 +80,7 @@ type Reconciler struct {
 	NowFn func() time.Time
 	// ExemptionPolicy reports whether the admission policy that checks a
 	// budget exemption's actor stamp is installed and bound now
-	// (--agent-budget-exemption-policy; policygate.IdentityPolicyCheck, as
+	// (--agent-budget-exemption-policies; policygate.IdentityPolicyCheck, as
 	// for gate overrides). Nil or inactive: no stamped exemption counts, it
 	// is listed ignored: Unverified.
 	ExemptionPolicy PolicyCheck

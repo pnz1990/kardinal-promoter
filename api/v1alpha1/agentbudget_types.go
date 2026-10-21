@@ -134,7 +134,7 @@ type AgentBudgetExemption struct {
 	// section 11.3). The chart's actor admission policies verify it from the
 	// requester's username and groups, and the controller counts a stamped
 	// exemption only while that check is installed
-	// (--agent-budget-exemption-policy).
+	// (--agent-budget-exemption-policies).
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
 }
