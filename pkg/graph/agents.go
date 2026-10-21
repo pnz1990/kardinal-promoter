@@ -70,7 +70,30 @@ func agentGateTemplate(ceiling, ns string) kardinalv1alpha1.PolicyGate {
 // UnverifiedAgentGateMessage is the agent gates' message on a version
 // stamped unverified (#2451): why it is held, and the ways on.
 const UnverifiedAgentGateMessage = "the version was written while kardinal's agent index was not Ready, so it counts " +
-	"as an agent's: ship it again once the index is Ready, or a person overrides this gate"
+	"as an agent's (only a rollback to what was Verified here passes): ship it again once the index is Ready, " +
+	"or a person overrides this gate"
+
+// UnverifiedRollbackClause is what lets a version stamped unverified through
+// an agent gate (#2451): it is a rollback that deploys only what was
+// Verified in the gate's environment (rollback.restoresVerified). A rollback
+// is a stop; anything else stamped unverified is going, which needs
+// verification. A version the AgentIndex later names as an agent's is not
+// unverified any more, and the agent's own rules apply.
+const UnverifiedRollbackClause = "(actor.unverified && rollback.restoresVerified)"
+
+// unverifiedAgentGate is agent gate t for a version stamped unverified: its
+// expression also passes, and its approval is not required, for a rollback
+// to what was Verified here (UnverifiedRollbackClause), and its message says
+// why the version is held.
+func unverifiedAgentGate(t *kardinalv1alpha1.PolicyGate) {
+	t.Spec.Message = UnverifiedAgentGateMessage
+	t.Spec.Expression = "(" + t.Spec.Expression + ") || " + UnverifiedRollbackClause
+	if t.Spec.Approval != nil {
+		ap := *t.Spec.Approval
+		ap.RequiredWhen = "(" + ap.RequiredWhen + ") && !" + UnverifiedRollbackClause
+		t.Spec.Approval = &ap
+	}
+}
 
 // agentAuthored reports whether an agent created b (its actor stamp), or
 // someone the AgentIndex could not tell from one (unverified, #2451): its
@@ -107,7 +130,7 @@ func addAgentGates(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 		if !ok {
 			t = agentGateTemplate(ceiling, pipeline.Namespace)
 			if bundle.Spec.Actor.Kind == kardinalv1alpha1.ActorUnverified {
-				t.Spec.Message = UnverifiedAgentGateMessage
+				unverifiedAgentGate(&t)
 			}
 			templates[ceiling] = t
 		}

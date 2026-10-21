@@ -373,6 +373,9 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		if notes := changeRequestNotes(gate.Spec.Expression, celCtx); notes != "" {
 			reason = reason + "; " + notes
 		}
+		if notes := r.rollbackNotes(ctx, &gate, bundleName); notes != "" {
+			reason = reason + "; " + notes
+		}
 	}
 	// The rollback an environment is held on (spec.holds) passes the gates
 	// of that environment, with an explicit EXEMPT reason, the GateEvaluated
@@ -703,6 +706,11 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
+	rollbackCtx, err := r.buildRollbackContext(ctx, gate, &bundle)
+	if err != nil {
+		return nil, version, fmt.Errorf("rollback: %w", err)
+	}
+
 	commitCtx := map[string]interface{}{"verified": false, "method": "", "signer": "", "issuer": "", "authority": "", "agent": ""}
 	if strings.Contains(gate.Spec.Expression, commitRoot) {
 		var commitErr error
@@ -731,7 +739,74 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"changeRequests": crCtx,
 		"approvals":      tally.context(tally.Met()),
 		"verdicts":       tallyVerdicts(gate, &bundle, author, now).Context(),
+		"rollback":       rollbackCtx,
 	}, version, nil
+}
+
+// rollbackRoot is the CEL variable buildRollbackContext fills.
+const rollbackRoot = "rollback."
+
+// readsRollback reports whether gate's expression or approval.requiredWhen
+// may read rollback.*: only then is the environment's history read.
+func readsRollback(gate *kardinalv1alpha1.PolicyGate) bool {
+	if strings.Contains(gate.Spec.Expression, rollbackRoot) {
+		return true
+	}
+	return gate.Spec.Approval != nil && strings.Contains(gate.Spec.Approval.RequiredWhen, rollbackRoot)
+}
+
+// rollbackNotes says why a held version that names a rollbackOf is not a
+// rollback to what was Verified in the gate's environment, when the gate
+// reads rollback.*: a held rollback names what it would take. The reason is
+// kardinal's, but it names Bundles and refs the version's creator wrote, so
+// it goes to the gate's reason, never to its CEL context
+// (GATE-UNTRUSTED-01). It is read again only for such a gate.
+func (r *Reconciler) rollbackNotes(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleName string) string {
+	if !readsRollback(gate) {
+		return ""
+	}
+	var b kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &b); err != nil ||
+		b.Labels[lifecycle.LabelRollback] != "true" || b.Spec.Provenance == nil || b.Spec.Provenance.RollbackOf == "" {
+		return ""
+	}
+	why, err := lifecycle.RestoresVerifiedIn(ctx, r, b.Namespace, gatePipeline(gate, &b), gate.Labels[labelEnvironment], &b)
+	if err != nil || why == "" {
+		return ""
+	}
+	return "not a rollback to what was Verified in " + gate.Labels[labelEnvironment] + ": " + why
+}
+
+// gatePipeline is the Pipeline gate instance gate decides for: its
+// kardinal.io/pipeline label, which the Graph writes, else b's.
+func gatePipeline(gate *kardinalv1alpha1.PolicyGate, b *kardinalv1alpha1.Bundle) string {
+	if p := gate.Labels[labelPipeline]; p != "" {
+		return p
+	}
+	return b.Spec.Pipeline
+}
+
+// buildRollbackContext is the rollback CEL variable (#2451):
+// restoresVerified, whether the version is a rollback Bundle of its Pipeline
+// that deploys only what was Verified in the gate's environment
+// (lifecycle.RestoresVerifiedIn). The history is read only for a gate that
+// reads rollback.* and a version labelled a rollback; a read error fails the
+// gate closed. Why not goes to the gate's reason (rollbackNotes).
+//
+// Graph-first: a cross-CRD read of the gate context, like the hold exemption
+// (lifecycle.VerifyHeldRollback): PromotionSteps only the Graph writes.
+func (r *Reconciler) buildRollbackContext(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	bundle *kardinalv1alpha1.Bundle) (map[string]interface{}, error) {
+	out := map[string]interface{}{"restoresVerified": false}
+	if !readsRollback(gate) || bundle.Labels[lifecycle.LabelRollback] != "true" {
+		return out, nil
+	}
+	why, err := lifecycle.RestoresVerifiedIn(ctx, r, bundle.Namespace, gatePipeline(gate, bundle), gate.Labels[labelEnvironment], bundle)
+	if err != nil {
+		return nil, err
+	}
+	out["restoresVerified"] = why == ""
+	return out, nil
 }
 
 // directUpstreamSoakMinutes returns the soak minutes of the environments that

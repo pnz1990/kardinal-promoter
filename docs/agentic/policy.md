@@ -41,7 +41,8 @@ autonomy is `deny` is held in every environment, including versions already on t
 kardinal adds one gate, `kardinal-agents-<ceiling>`, to every environment of a version an agent
 created, so the wait shows like any other gate: in `kardinal why`, the inbox, the UI and the PR
 evidence. Versions people create get no such gate, except those stamped `unverified`, written
-while the agent index wasn't Ready: they count as an agent's
+while the agent index wasn't Ready: they count as an agent's, though a rollback to what was
+Verified in the environment passes
 ([While the index isn't Ready](../actors.md#while-the-index-isnt-ready)). A PolicyGate of your
 own may not be named `kardinal-agents-*`.
 

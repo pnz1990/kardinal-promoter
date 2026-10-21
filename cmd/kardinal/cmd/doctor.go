@@ -22,6 +22,7 @@
 //   6. Pipeline health       — optional via --pipeline flag
 //   7. Policy namespaces     — Pipelines whose spec.policyNamespaces names a namespace that has not agreed (#2286)
 //   8. Verify gates          — verify gates that list only agents, which count no person's verdict from v0.13.0 (#2411)
+//   9. Unverified versions   — versions an agent gate holds because they were shipped while the AgentIndex was not Ready (#2451)
 
 package cmd
 
@@ -133,7 +134,8 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 	}
 	controller := controllerVersion(ctx, client, controllerNS)
 	results = append(results, checkPolicyNamespaces(ctx, client, ns, controller,
-		readControllerRollout(ctx, client, controllerNS, time.Now())), checkVerifyGates(ctx, client, ns, controller))
+		readControllerRollout(ctx, client, controllerNS, time.Now())), checkVerifyGates(ctx, client, ns, controller),
+		checkUnverifiedHeld(ctx, client, ns))
 	if pipeline != "" {
 		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))
 		var p v1alpha1.Pipeline
@@ -156,7 +158,9 @@ func printDoctorResults(w io.Writer, results []doctorResult) error {
 		_, _ = fmt.Fprintf(w, "%s  %-*s  %s\n", icon, doctorColWidth, r.label, r.detail)
 		if r.hint != "" {
 			indent := strings.Repeat(" ", style.Width(icon)+2+doctorColWidth+2)
-			_, _ = fmt.Fprintf(w, "%s%s\n", indent, r.hint)
+			for _, line := range strings.Split(r.hint, "\n") {
+				_, _ = fmt.Fprintf(w, "%s%s\n", indent, line)
+			}
 		}
 		switch {
 		case r.failed:
@@ -554,6 +558,7 @@ const doctorReference = `  PASS  Controller reachable      kardinal-version Conf
   PASS  GitHub token              GITHUB_TOKEN set on the controller Deployment
   PASS  Policy namespaces shared  every spec.policyNamespaces entry agreed
   PASS  Verify gates of agents only  no verify gate lists only agents
+  PASS  Versions held as unverified  no version is held because of an unverified stamp
 
 Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
 garnet ✕), or INFO (i) when it cannot tell yet: run doctor again. The
@@ -610,5 +615,16 @@ list those people in allowedUsers or allowedGroups to keep counting them. It
 lists PolicyGates in every namespace or, when you may not, in the current
 one: a passing result there is a WARN, since the other namespaces were not
 checked.
+
+The unverified versions check lists the versions a kardinal-agents-* gate
+holds because they were stamped unverified: shipped while the agent index
+was not Ready, they count as an agent's and stay held after the index
+recovers (docs/actors.md, "While the index isn't Ready"). It is a WARN that
+names each one, with the kardinal override command that lets it through
+(or ship it again), and the other gates that also hold it. A version that
+is done, or whose writer the Ready index now names as an agent (the agent's
+rules hold it), is left out. While no agent index is Ready it is an INFO:
+make the index Ready first. It lists PolicyGates in every namespace or, when
+you may not, in the current one: a passing result there is a WARN.
 
 Use 'kardinal doctor' as the first troubleshooting step.`

@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // unverifiedStamp is a version written while the AgentIndex was not Ready
@@ -184,7 +185,8 @@ func TestAgentAutoGate_Unverified(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gate := makeGateInstance("kardinal-agents-auto-default-test--app-v1", "default", "app-v1",
-				"actor.kind != 'agent' || (agent.registered && !agent.suspended && agent.autonomy != 'deny')", "5m")
+				"(actor.kind != 'agent' || (agent.registered && !agent.suspended && agent.autonomy != 'deny')) || "+
+					graph.UnverifiedRollbackClause, "5m")
 			if tc.override {
 				gate.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{override}
 			}
@@ -193,5 +195,100 @@ func TestAgentAutoGate_Unverified(t *testing.T) {
 			got := evalGate(t, gate, b, tc.objs...)
 			assert.Equal(t, tc.ready, got.Status.Ready, got.Status.Reason)
 		})
+	}
+}
+
+// TestAgentGates_UnverifiedRollback (#2451, the coordinator's rule): a
+// rollback is a stop. A version stamped unverified passes the agent gates
+// (auto, approve and deny, as pkg/graph renders them for it) when it is a
+// rollback Bundle that deploys only what was Verified in the gate's
+// environment, by the facts the controller recorded (PromotionSteps), not
+// the markers its creator wrote. Anything else stays held, and the gate says
+// why: "rollback" used to ship a never-Verified image (an agent passing as
+// unverified), a rollbackOf that was never Verified there, one Verified only
+// in another environment, a Bundle not labelled a rollback, another
+// Pipeline's rollback. An agent's own rollback keeps the agent's rules, and
+// so does an unverified one once the Ready index names its writer as an
+// agent.
+// Covers ACTOR-INDEX-08.
+func TestAgentGates_UnverifiedRollback(t *testing.T) {
+	const auto = "actor.kind != 'agent' || (agent.registered && !agent.suspended && agent.autonomy != 'deny')"
+	gates := map[string]func() *kardinalv1alpha1.PolicyGate{
+		"kardinal-agents-auto": func() *kardinalv1alpha1.PolicyGate {
+			g := makeGateInstance("kardinal-agents-auto-default-prod--"+holdRB, "default", holdRB,
+				"("+auto+") || "+graph.UnverifiedRollbackClause, "5m")
+			g.Spec.Message = graph.UnverifiedAgentGateMessage
+			g.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true,
+				RequiredWhen: "(actor.kind == 'agent' && agent.autonomy == 'approve') && !" + graph.UnverifiedRollbackClause}
+			return g
+		},
+		"kardinal-agents-approve": func() *kardinalv1alpha1.PolicyGate {
+			g := makeGateInstance("kardinal-agents-approve-default-prod--"+holdRB, "default", holdRB,
+				"("+auto+") || "+graph.UnverifiedRollbackClause, "5m")
+			g.Spec.Message = graph.UnverifiedAgentGateMessage
+			g.Spec.Approval = &kardinalv1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true,
+				RequiredWhen: "(actor.kind == 'agent') && !" + graph.UnverifiedRollbackClause}
+			return g
+		},
+		"kardinal-agents-deny": func() *kardinalv1alpha1.PolicyGate {
+			g := makeGateInstance("kardinal-agents-deny-default-prod--"+holdRB, "default", holdRB,
+				"(actor.kind != 'agent') || "+graph.UnverifiedRollbackClause, "5m")
+			g.Spec.Message = graph.UnverifiedAgentGateMessage
+			return g
+		},
+	}
+	named := map[string]kardinalv1alpha1.AgentIndexEntry{"oidc:fixer-bot": {Agent: "fixer", Sponsor: "alice", Autonomy: "deny"}}
+	denyAgent := &kardinalv1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "fixer", Generation: 1},
+		Spec: kardinalv1alpha1.AgentIdentitySpec{Sponsor: kardinalv1alpha1.AgentSponsor{User: "alice"},
+			Subjects: []kardinalv1alpha1.AgentSubject{{Kind: "User", Name: "oidc:fixer-bot"}}, Autonomy: "deny"},
+		Status: kardinalv1alpha1.AgentIdentityStatus{Ready: true, ObservedGeneration: 1}}
+	for _, tc := range []struct {
+		name   string
+		env    string
+		edit   func(f *holdFixture)
+		objs   []client.Object
+		pass   bool
+		reason string // a substring of a held gate's reason
+	}{
+		{name: "a person's rollback to the version Verified here passes", env: "prod", pass: true},
+		{name: "rollback used to ship a never-Verified image stays held", env: "prod",
+			edit:   func(f *holdFixture) { f.rb.Spec.Images[0].Tag = "666" },
+			reason: "not a rollback to what was Verified in prod: image ghcr.io/org/app is not at rollbackOf nginx-demo-v1's ref ghcr.io/org/app:1"},
+		{name: "a never-Verified image next to the restored one stays held", env: "prod",
+			edit: func(f *holdFixture) {
+				f.rb.Spec.Images = append(f.rb.Spec.Images, kardinalv1alpha1.ImageRef{Repository: "ghcr.io/org/sidecar", Tag: "666"})
+			},
+			reason: "image ghcr.io/org/sidecar:666 was not deployed by a Bundle Verified in prod"},
+		{name: "a rollbackOf never Verified here stays held", env: "prod",
+			edit:   func(f *holdFixture) { f.steps[0].(*kardinalv1alpha1.PromotionStep).Status.State = "Failed" },
+			reason: "rollbackOf nginx-demo-v1 was never Verified in prod"},
+		{name: "Verified in another environment only stays held", env: "test",
+			reason: "rollbackOf nginx-demo-v1 was never Verified in test"},
+		{name: "not labelled a rollback stays held", env: "prod", edit: func(f *holdFixture) { f.rb.Labels = nil }},
+		{name: "another pipeline's rollback stays held", env: "prod", edit: func(f *holdFixture) { f.rb.Spec.Pipeline = "other" },
+			reason: "is not a rollback Bundle of pipeline"},
+		{name: "an agent's own rollback keeps the agent's rules", env: "prod",
+			edit: func(f *holdFixture) { f.rb.Spec.Actor = fixerStamp() }},
+		{name: "once Ready, a writer the index names as a deny agent keeps the agent's rules", env: "prod",
+			objs: []client.Object{readyIndex(named), denyAgent}},
+	} {
+		for tmpl, gate := range gates {
+			t.Run(tc.name+"/"+tmpl, func(t *testing.T) {
+				f := newHoldFixture()
+				f.pipeline.Spec.Holds = nil // no hold exemption: the agent gate decides alone
+				f.rb.Spec.Actor = unverifiedStamp()
+				if tc.edit != nil {
+					tc.edit(f)
+				}
+				g := gate()
+				g.Labels["kardinal.io/environment"] = tc.env
+				objs := append(append([]client.Object{f.pipeline, f.target}, f.steps...), f.others...)
+				got := evalGate(t, g, f.rb, append(objs, tc.objs...)...)
+				assert.Equal(t, tc.pass, got.Status.Ready, got.Status.Reason)
+				if !tc.pass {
+					assert.Contains(t, got.Status.Reason, tc.reason)
+				}
+			})
+		}
 	}
 }

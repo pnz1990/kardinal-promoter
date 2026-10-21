@@ -137,7 +137,9 @@ every grant:
 | Write | Stop or go | While the index isn't Ready |
 |-------|------------|-----------------------------|
 | A freeze, a pause, a hold, a rejection | Stop | Admitted, stamped `unverified` or unstamped |
-| A version (`kardinal ship`, `create bundle`, `promote`, `rollback`) | Go | Admitted stamped `unverified`, and held like an agent's: an agents-only freeze holds it, and every environment gets the agent gate, which holds it because it has no registered agent |
+| A version (`kardinal ship`, `create bundle`, `promote`) | Go | Admitted stamped `unverified`, and held like an agent's: an agents-only freeze holds it, and every environment gets the agent gate, which holds it because it has no registered agent |
+| A rollback (`kardinal rollback`) to a version Verified in the environment | Stop | Admitted stamped `unverified`. It passes the agent gate of each environment where it puts back only what was Verified there ([`rollback.restoresVerified`](reference/cel-context.md#rollback)). Its other gates, and an agents-only freeze, still apply |
+| Any other rollback, or a Bundle only labelled one | Go | Held like a version: "rollback" can't ship a version that never ran here |
 | An Approval, a Verdict | Go (a grant) | Admitted stamped `unverified`; it never counts toward a gate |
 | A gate override, a freeze exemption | Go (break-glass) | Admitted stamped `unverified`; it's recorded but not honoured |
 | A resume, a hold release, a freeze lift | Go | Admitted, stamped `unverified` or unstamped. Agents may do these too, so `unverified` changes nothing |
@@ -166,13 +168,16 @@ Once the index is Ready again:
   approval.
 - Otherwise the agent gate keeps holding the version, and says why. Ship it again, or a person
   overrides the gate: `kardinal override <pipeline> <env> --gate <gate> --reason <text>`,
-  where `<gate>` is the `kardinal-agents-*` gate `kardinal why` names.
+  where `<gate>` is the `kardinal-agents-*` gate `kardinal why` names. `kardinal doctor` lists
+  every version held only because of its `unverified` stamp, with that command for each.
 - Approvals, Verdicts, overrides and exemptions stamped `unverified` still don't count: decide
   or override again.
 
 **The cost.** During `IndexFull`, going waits for the index to be fixed: a version shipped then
 is held, approvals don't count, and a break-glass override or freeze exemption isn't honoured
-until the index is Ready again. People can still stop: freeze, pause, hold and reject. Watch
+until the index is Ready again. People can still stop: freeze, pause, hold, reject, and roll
+back to a version Verified in the environment. A version shipped then stays held after the
+index recovers, until it's shipped again or a person overrides its agent gate. Watch
 for the early warning, the index's `NearFull` condition and the `KardinalAgentIndexNearFull`
 alert (from 80% of the bound), and trim before it's full:
 
@@ -184,7 +189,10 @@ alert (from 80% of the bound), and trim before it's full:
    (`kubectl patch agentidentity <name> --type merge -p '{"spec":{"suspended":true}}'`, then
    `kubectl delete agentidentity <name>`), or edit its `spec.subjects` and `spec.scope`.
 4. The controller rebuilds the index within seconds. `kubectl get agentindex <release>` shows
-   it Ready, and override or ship again what waited.
+   it Ready.
+5. `kardinal doctor` lists the versions still held only because of their `unverified` stamp,
+   each with the `kardinal override` command that lets it through. Run those, or ship the
+   versions again.
 
 What this can't do:
 
