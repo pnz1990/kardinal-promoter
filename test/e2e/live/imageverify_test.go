@@ -34,13 +34,19 @@ import (
 // controller (in cluster), as with cosign's COSIGN_REPOSITORY.
 type signatures struct {
 	host, inCluster string
+	// transport is the test's own (framework.RegistryTransport): tests run
+	// in parallel, and http.DefaultTransport keeps only 2 connections per
+	// host idle between their pushes.
+	transport http.RoundTripper
 }
 
 func newSignatures(t *testing.T, ns string) signatures {
 	t.Helper()
 	r := framework.NewRegistry(t)
 	repo := "e2e/signatures-" + ns[len(ns)-8:]
-	return signatures{host: r.HostRepository(repo), inCluster: r.Repository(repo)}
+	// A push uploads its blobs up to 4 at a time (go-containerregistry's
+	// default jobs).
+	return signatures{host: r.HostRepository(repo), inCluster: r.Repository(repo), transport: framework.RegistryTransport(t, 4)}
 }
 
 func (s signatures) registryHost() string { return strings.SplitN(s.inCluster, "/", 2)[0] }
@@ -48,13 +54,13 @@ func (s signatures) registryHost() string { return strings.SplitN(s.inCluster, "
 func (s signatures) pushBundle(t *testing.T, digest string, bundle []byte) {
 	t.Helper()
 	require.NoError(t, signtest.PushBundle(context.Background(), s.host, digest, bundle,
-		[]name.Option{name.Insecure}, remote.WithTransport(http.DefaultTransport)))
+		[]name.Option{name.Insecure}, remote.WithTransport(s.transport)))
 }
 
 func (s signatures) pushLegacy(t *testing.T, digest string, payload, sig []byte) {
 	t.Helper()
 	require.NoError(t, signtest.PushLegacy(context.Background(), s.host, digest, payload, sig,
-		[]name.Option{name.Insecure}, remote.WithTransport(http.DefaultTransport)))
+		[]name.Option{name.Insecure}, remote.WithTransport(s.transport)))
 }
 
 // keyPolicy is an image policy with one key authority whose PEM public key
