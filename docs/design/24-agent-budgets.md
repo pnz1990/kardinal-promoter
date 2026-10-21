@@ -706,6 +706,14 @@ instances whose expression or `requiredWhen` contains `budget` and whose Bundle'
 `spec.actor.agent` is the agent: a new Bundle field index on `spec.actor.agent` (A5), then the
 instances of those Bundles (`instanceGateRequests`, `reconciler.go:1505`).
 
+**As built (W5).** `buildBudgetContext` (`pkg/reconciler/policygate/budget_context.go`) applies
+the rules with `actor.BudgetRuleApplies` to the instance's namespace, its `kardinal.io/environment`
+label and its `kardinal.io/fleet` label, the decision the reconciler, the step hold and the fold
+use. The AgentIdentity watch is registered only with `--agent-budgets`, through the shared
+`agentbudget.IndexBundlesByAgent`. `kardinal policy simulate --as-agent` reads the ledger named for
+the release's AgentIndex, else the agent's only ledger. `docs/reference/cel-context.md` documents
+the keys, and its examples are evaluated against the context by `TestDocumentedCELContext`.
+
 What gates are for here, and what they are not:
 
 ```yaml
