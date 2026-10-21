@@ -704,7 +704,7 @@ status:
       amber: {deployments: 10, failedDeployments: 2}
       red:   {deployments: 2, failedDeployments: 1}
     sufficient: true
-    truncated: false                         # a counted DeploymentLog dropped entries inside the window (7.2)
+    truncated: false                         # a counted DeploymentLog dropped or reseeded entries inside the window (7.2)
     lastFailureAt: "…"
     pipelines: 7
     computedAt: "…"
@@ -753,9 +753,11 @@ reconciler-written status, the Graph-first form for data that must outlive every
 per Bundle and is deleted with it, ledger G15).
 
 - **Truncation.** A DeploymentLog drops entries beyond `maxEntries` (100 by default) and sets its
-  `Truncated` condition (28 §5.4). If a counted log's oldest kept entry is newer than the window
-  start while it is `Truncated`, the agent's `trackRecord.truncated` is true, and policies can
-  require `!agent.trackRecordTruncated`.
+  `Truncated` condition (28 §5.4); a deleted log is recreated and seeded from the live objects with
+  the condition `Reseeded` (28 §12). The agent's `trackRecord.truncated` is true when a counted log
+  is `Truncated` and its oldest kept entry is newer than the window start, or is `Reseeded` with the
+  condition's `lastTransitionTime` inside the window: in both, entries of the window may be gone.
+  Policies can require `!agent.trackRecordTruncated`.
 - **Not the IndexReconciler.** Today's AgentIdentity status writer is `agentidentity.IndexReconciler`,
   which handles one fixed request and runs one `actor.Evaluate` over every AgentIdentity, writing
   the AgentIndex and every AgentIdentity's status (`pkg/reconciler/agentidentity/reconciler.go:97-100,
@@ -776,6 +778,33 @@ per Bundle and is deleted with it, ledger G15).
 - **Ledger.** Spec 28's G8 row says of the log "Display data: no promotion decision reads it". With
   earned autonomy a decision reads it, through `AgentIdentity.status.trackRecord`; whichever PR lands
   second updates that row (§19).
+
+**What it cannot do, and what would break it:**
+
+- **No pre-production failure rate (CR19).** The log holds final-environment deployments only (28
+  §2, "Deployment"), so an agent's failures in test or uat are not in its record, and an agent kept out of
+  every final environment (`environments[].agents: deny`) has no record at all; its
+  `trackRecordSufficient` stays false, which in the policies of 7.5 asks for a person. A
+  pre-production rate needs spec 28 to log pre-production outcomes (§18 row 16); reading live
+  PromotionSteps in the meantime would be a second, non-durable source with its own definition.
+- **Not live.** The record is as fresh as two reconcilers: the log's, on a final-environment step's
+  transition, then the track record's, on the log's change. A gate evaluated between a failure and
+  the track-record write sees the previous record (`computedAt` says when it was made). Stopping an
+  agent at once after a failure is spec 17's suspension, not this.
+- **One cluster.** An agent's deployments through another cluster's controller are not counted;
+  with `--watch-namespace`, only that namespace's (Sharding, above).
+- **A deleted log loses its history.** Spec 28 reseeds it from the live objects, so failures older
+  than the retained Bundles are gone. Spec 28's admission covers CREATE and UPDATE only (28 §11), so
+  `<release>-risk-owners` also refuses an agent's DELETE of a DeploymentLog (§11), and a reseed
+  inside the window sets `trackRecord.truncated` (above), so a person's deletion is visible to
+  policies.
+- **Asserted rework.** `fixOf` is the author's claim (28 AA3): the rework rate is the one figure an
+  agent moves by what it says (7.1).
+- **It starts short.** At upgrade the log holds what spec 28 seeds from the retained Bundles (§15).
+- **What would break it:** a gate that lists DeploymentLogs or computes a rate (the gate path must
+  read one status field); an entry's `riskTier` changing after the entry is `final`; the
+  track-record reconciler writing anything but `AgentIdentity.status.trackRecord`, or the
+  IndexReconciler reconciling on that write (a loop between the two).
 
 The budgets item of v0.14 (spec 24) does not count from these records: it keeps its own ledger in
 `AgentIdentity.status.usage` (24-agent-budgets.md §5.2). The two can be reconciled later if the
@@ -1004,12 +1033,17 @@ Rules:
   to "per fleet and wave", so a wave-2 target's group is the wave-1 targets. `maxConcurrent`,
   `maxUnavailable` and `paused` apply unchanged. The DAG entries gain `wave` (shown, not read by
   CEL).
-- **Status**: a per-fleet wave status lists each wave's targets for the UI and `kardinal get
-  pipelines` (`prod  wave 2/5  1/1 Verified, baking 3h12m left`). It cannot be
-  `Pipeline.status.fleets[]`: that list holds only resolved selector fleets (Application and
-  ClusterProfile), not static fleets or `Target` selectors (`pkg/reconciler/pipeline/fleets.go:46-62`,
-  `pipeline_types.go:1281-1287`); the field is `Pipeline.status.fleetWaves[]`, one per fleet
-  environment with waves.
+- **Status**: no new list. `Pipeline.status.environments` already has one entry per fleet target
+  (a fleet environment expands to its targets, `pkg/reconciler/pipeline/environments.go:32-39`),
+  with its `state` and `since`; each entry gains `fleetWave` (the target's wave; 0 outside a fleet
+  with waves), which the UI and `kardinal get pipelines` group by (`prod  wave 2/5  1/1 Verified`).
+  A separate list of each wave's target names would repeat every target name in the Pipeline
+  status, the controller's most-written object (#1719), and `Pipeline.status.fleets[]` cannot hold
+  it either: that list holds only resolved selector fleets (Application and ClusterProfile), not
+  static fleets or `Target` selectors (`pkg/reconciler/pipeline/fleets.go:46-62`,
+  `pipeline_types.go:1281-1287`). `fleetWave` is display only, as the rest of `environments` (no
+  controller decision reads it, `pipeline_types.go:1289-1293`); the builder assigns waves from the
+  spec and the targets.
 
 What would break this: a failed target keeps its wave from completing, so the next wave never
 starts, which is the intent (AWS stops on an alarm). A target removed from a selector fleet while
@@ -1104,7 +1138,7 @@ type FleetWave struct {
     BakeMinutes *int                `json:"bakeMinutes,omitempty"`
 }
 // FleetSpec gains: Waves []FleetWave (MaxItems=10); WavePreset string (Enum=aws;aws-fast)
-// PipelineStatus gains: FleetWaves []FleetWaveStatus {Environment, Waves [][]string} (9.4)
+// PipelineEnvironmentStatus gains: FleetWave int (display only; 0 outside a fleet with waves) (9.4)
 // DeploymentLogEntry (spec 28) gains: RiskTier string (Enum=green;amber;red, optional) (7.2)
 // BundleStatus gains: Risk *BundleRisk {Name, Phase, Score, Tier, Profile, Keys, ScoredAt}
 // AgentIdentitySpec gains: TrackRecord *TrackRecordSpec {WindowDays, MinDeployments}
@@ -1128,7 +1162,8 @@ type FleetWave struct {
   which `test/helm/chart_test.go` requires to list every CRD.
 - **`<release>-risk-owners`** (new, §14.1): a ValidatingAdmissionPolicy, with the AgentIndex as
   params as the actor policies take it, that refuses a CREATE, UPDATE or DELETE of a RiskProfile,
-  and an UPDATE of a Pipeline that changes `spec.risk`, by a requester the AgentIndex names as an
+  an UPDATE of a Pipeline that changes `spec.risk`, and a DELETE of a DeploymentLog (7.2: a reseeded
+  log forgets failures older than the retained Bundles), by a requester the AgentIndex names as an
   agent. A person, a bot (CI applying GitOps) and the controller are not judged. Fail closed when
   the index is not ready, as `<release>-actor` (spec 17 §5).
 - **Pipeline `spec.risk.profileRef`**: the namespace must be the Pipeline's own or an org policy
@@ -1166,7 +1201,7 @@ type FleetWave struct {
 | Base Bundle deleted between base choice and Job | Base commits are already in `status.base`; nothing changes | Base is recorded before the Job |
 | `head` asserted wrongly by CI | Score of the wrong commit; `sourceVerified: false` adds points (a person's or a bot's version); an agent's is not scored | The limit is stated (4.2); attestations remove it |
 | A DeploymentLog dropped entries (`maxEntries`) inside an agent's window | `trackRecord.truncated` true for that agent | Policies can require `!agent.trackRecordTruncated` |
-| An admin deletes a DeploymentLog | Spec 28 recreates and reseeds it from the live objects (condition `Reseeded`, 28 §12); the agent's record shrinks to what is left | Fewer deployments make `trackRecordSufficient` false sooner, which asks for a person (7.5) |
+| A person deletes a DeploymentLog (an agent's DELETE is refused, §11) | Spec 28 recreates and reseeds it from the live objects (condition `Reseeded`, 28 §12); failures older than the retained Bundles leave the agent's record | `trackRecord.truncated` is true while the reseed is inside the window (7.2); policies can require `!agent.trackRecordTruncated`, and fewer deployments make `trackRecordSufficient` false sooner, which asks for a person (7.5) |
 | Track-record reconciler behind | `trackRecord.computedAt` old; policies see the last record | The record changes slowly; a suspension (spec 17) does not depend on it |
 | Wave target fails | Wave never completes, next wave never starts; `maxUnavailable` stops starts | AWS behaviour: stop on alarm |
 
@@ -1239,13 +1274,14 @@ the person or CI job behind it) from lowering it. "Author" is whoever created th
 The track record (§7) is the other score an agent would want lower. It counts only Bundles that
 reached a final environment, from the controller's own deployment and failure definitions; an agent
 can pad it with small deployments (the residual "Padding the record"), which the per-tier counts
-expose (7.5). It cannot delete its failures: the records live in `Pipeline.status`, which only the
-Pipeline reconciler writes.
+expose (7.5). It cannot delete its failures: the records live in `DeploymentLog.status`, which
+only the controller writes (28 §11), and `<release>-risk-owners` refuses an agent's DELETE of a
+DeploymentLog (§11), whose reseed would forget failures older than the retained Bundles (7.2).
 
 ## 15. Upgrade from v0.13, and the defaults
 
 - New CRDs: `changerisks`, `riskprofiles`. New optional fields: `Pipeline.spec.risk`,
-  `FleetSpec.waves`, `FleetSpec.wavePreset`, `Pipeline.status.fleetWaves`, `Bundle.status.risk`,
+  `FleetSpec.waves`, `FleetSpec.wavePreset`, `Pipeline.status.environments[].fleetWave`, `Bundle.status.risk`,
   `AgentIdentity.spec.trackRecord`, `AgentIdentity.status.trackRecord`, and `riskTier` on spec 28's
   DeploymentLog entries. New CEL: `risk.*`, `agent.*` additions, `path.glob`. New admission policy:
   `<release>-risk-owners`.
@@ -1276,7 +1312,7 @@ Pipeline reconciler writes.
 | `fleet.waves`, `fleet.wavePreset` | unset | The v0.13 sliding window (`maxConcurrent`, `maxUnavailable`) |
 | `AgentIdentity.spec.trackRecord` | 30 days, at least 10 deployments | Computed for every agent once spec 28's DeploymentLog exists, but read by no decision until a policy names an `agent.*` track-record variable |
 | `--change-risk-max-jobs`, `--change-risk-max-jobs-per-namespace` | 8, 2 | Only in effect for Pipelines with `spec.risk` |
-| `<release>-risk-owners` | installed and bound with the chart, like the actor policies | Judges only agents' writes to RiskProfiles and `Pipeline.spec.risk`; without registered agents it refuses nothing |
+| `<release>-risk-owners` | installed and bound with the chart, like the actor policies | Judges only agents' writes to RiskProfiles and `Pipeline.spec.risk` and their deletes of DeploymentLogs; without registered agents it refuses nothing |
 
 ## 16. Decisions
 
@@ -1329,8 +1365,8 @@ status area feature source`, `test/e2e/README.md`), claimed by a test's `Covers 
   `jobUID` mismatch (`JobReplaced`); terminal phases; supersession before start; idempotency (a
   second reconcile writes nothing); the `slots.Limiter` budget.
 - Track-record reconciler: window edges, minimum, a `Truncated` log inside and outside the window,
-  by tier, a DeploymentLog reseeded, and the IndexReconciler not reconciling on a `trackRecord`
-  write (its new predicate).
+  a `Reseeded` log inside and outside the window (`truncated`), by tier, and the IndexReconciler
+  not reconciling on a `trackRecord` write (its new predicate).
 - PolicyGate (`pkg/reconciler/policygate`): `risk.*` and the new `agent.*` keys always present;
   hold while Pending with the reason and no new AuditEvent; evaluation error without `spec.risk`;
   the ChangeRisk watch (as the ChangeRequest watch, `reconciler.go:1479`) through
@@ -1343,8 +1379,9 @@ status area feature source`, `test/e2e/README.md`), claimed by a test's `Covers 
   across waves.
 - Admission (`test/helm`, as `identity_admission_test.go`'s GRAPH-OBJECTS rows):
   `<release>-graph-objects` refuses a ChangeRisk a team creates or changes; `<release>-risk-owners`
-  refuses an agent's RiskProfile create, update and delete and its change to `Pipeline.spec.risk`,
-  admits a person's and a bot's, and fails closed while the AgentIndex is not ready.
+  refuses an agent's RiskProfile create, update and delete, its change to `Pipeline.spec.risk` and
+  its delete of a DeploymentLog, admits a person's and a bot's, and fails closed while the
+  AgentIndex is not ready.
 
 Safety assertions that must be shown to fail (the QA rule): the Graph-only admission refusing a
 pre-created ChangeRisk; `<release>-risk-owners` refusing an agent's profile edit; an agent's
@@ -1387,7 +1424,7 @@ FLEET-WAVE rows as `TestGraph_FleetWave*` in `test/e2e/live/fleet_test.go`. Ther
 | RISK-04 | live | core | todo | gates | The Job Pod has no ServiceAccount token and cannot reach the API server (the Job probes it and the test reads the result) |
 | RISK-05 | live | core | todo | gates | `path.glob` in a gate expression |
 | RISK-06 | live | ui | todo | ui-api | An invalid literal glob refused by the UI validate endpoint (`TestUI_`, beside UIAPI-VALIDATECEL-01) |
-| RISK-07 | live | core | todo | actors | An agent's write to a RiskProfile and to `Pipeline.spec.risk` refused by `<release>-risk-owners`; a person's admitted |
+| RISK-07 | live | core | todo | actors | An agent's write to a RiskProfile and to `Pipeline.spec.risk`, and its delete of a DeploymentLog, refused by `<release>-risk-owners`; a person's admitted |
 | RISK-08 | live | core | todo | gates | An agent's version without verified provenance: `SourceUnverified`, tier red; with an attested image (the core suite's signing fixtures), scored from the verified source commit |
 | AGENT-TR-01 | live | core | todo | actors | An agent's track record in `AgentIdentity.status` from its DeploymentLog entries after deployments and a rollback; a `requiredWhen` on `agent.changeFailureRate` requires approval |
 | FLEET-WAVE-01 | live | core | todo | graph | `wavePreset: aws` with bake minutes shortened by explicit `waves` (1 minute) on 6 targets: waves 1, 1, 3, 1 in order |
@@ -1431,7 +1468,7 @@ are no longer dependencies.
 | 8 | Evidence: PR body row, `kardinal why`, UI stage drawer | s | 6 |
 | 9 | Spec 28's DeploymentLog (its §5.4-5.6, reconciler and `historyLimit` guard), plus `riskTier` on entries | m (spec 28's) | 2; lands before row 10 |
 | 10 | Track-record reconciler: `AgentIdentity.spec/status.trackRecord`, the DeploymentLog field index and watch, the IndexReconciler predicate, `agent.*` additions and their gate watch | m | 9 |
-| 11 | Fleet `waves` and `wavePreset`: schema, builder (waves, bake, edges), compact grouping, `status.fleetWaves`, CLI | l | none |
+| 11 | Fleet `waves` and `wavePreset`: schema, builder (waves, bake, edges), compact grouping, `status.environments[].fleetWave`, CLI | l | none |
 | 12 | `verify.requiredWhen` for the verify gate (8.2) | s | none |
 | 13 | `<release>-risk-owners` admission policy and its helm tests (§11, §14.1) | s | 3 |
 | 14 | Docs: user page "Change risk and adaptive pacing", cel-context reference, recipes of §7.5 and §8, the gaming table of §14.1 | m | 7, 10, 11, 13 |
