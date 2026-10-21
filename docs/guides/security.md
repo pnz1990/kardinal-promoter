@@ -239,7 +239,8 @@ PolicyGates are namespace-scoped:
   an org gate reads `metrics.*` from the MetricChecks of its own org policy namespace, so a team
   MetricCheck of the same name cannot decide it, and the `<release>-gate-overrides` admission
   policy lets only kro and the controller change a gate instance other than its `spec.overrides`.
-  An org gate can still be overridden, like any gate
+  An org gate can still be overridden, like any gate, and a team that holds the built-in `edit` or
+  `admin` role in its namespace can rewrite one
   ([Who can override an org gate](#who-can-override-an-org-gate)).
 - **Team-level gates** (team namespace): additive — injected alongside org gates. Teams add restrictions, not bypasses.
 
@@ -257,14 +258,15 @@ The controller reads org gates from the namespaces in `--policy-namespaces` (def
 
 An org gate's instances live in the Pipeline's namespace, so whoever may override gates there can
 force-pass it, for at most `controller.gateOverrideMaxMinutes` (24 hours by default), recorded with
-a verified `createdBy` and a `GateOverridden` AuditEvent
-([Override a gate in an emergency](../overrides.md)). With the chart's roles bound in that
-namespace, that is:
+a verified `createdBy` (`kardinal-ui` through a UI without TokenReview, below) and a
+`GateOverridden` AuditEvent ([Override a gate in an emergency](../overrides.md)). With the chart's
+roles bound in that namespace, that is:
 
 - `<fullname>-approver` and `<fullname>-admin`, which grant `update` on the virtual subresource
   `policygates/override`: the override in the UI, with `ui.auth.tokenReview`. Without it the UI
-  checks no user's RBAC, so whoever holds the shared UI token (`ui.auth.tokenSecretRef`), or may
-  port-forward to the controller, can override any gate the controller watches
+  checks no user's RBAC: whoever holds the shared UI token (`ui.auth.tokenSecretRef`), or, with no
+  UI auth mode set, anyone who may port-forward to the controller, can override any gate the
+  controller watches, and the override is recorded as `kardinal-ui`, not as a person
   ([UI API Access Control](#ui-api-access-control)).
 - Anyone with `update` or `patch` on `policygates` there, which `kardinal override` from a
   kubeconfig needs: `<fullname>-admin`, `<fullname>-approver` with `rbac.userRoles.directWrites`,
@@ -273,15 +275,22 @@ namespace, that is:
   there (it then aggregates the approver) or `admin` (it then aggregates
   `<fullname>-admin-extra`, which grants every verb on PolicyGates).
 
+Teams that hold the built-in `edit` or `admin` role in the namespace need no override at all:
+those roles let them act as the Graph ServiceAccount, which kardinal trusts as kro, so they can
+rewrite an org gate's instance there, its expression included, with no override record. That is
+permanent, and v0.13.1 does not change it
+([Who is trusted as kro in a namespace](#verified-identity)).
+
 An agent's override never opens a gate. RBAC cannot tell an org gate's instance from a team gate's
 in the same namespace: whoever may override one may override both. To keep teams from overriding
 org gates, bind the approver and admin roles in a team's namespace only to the people allowed to
-break glass (a platform on-call group, for example), give the team `<fullname>-promoter` and
-`<fullname>-viewer` instead, leave `aggregateToDefaultRoles` and `directWrites` off, and grant no
-`update` or `patch` on `policygates` in roles of your own.
+break glass (a platform on-call group, for example), give the team `<fullname>-promoter`,
+`<fullname>-viewer` and the stock `view` role instead of `edit` or `admin`, leave
+`aggregateToDefaultRoles` and `directWrites` off, and grant no `update` or `patch` on
+`policygates` in roles of your own.
 
-Until v0.13.1, whoever may write `policygates/status` in the namespace can also make an org gate's
-instance pass without an override, and without a record (#2446): see
+Until the fix planned for v0.13.1 (#2446), whoever may write `policygates/status` in the namespace
+can also make an org gate's instance pass without an override record: see
 [Verified identity](#verified-identity).
 
 ### Multi-tenant isolation
@@ -1106,17 +1115,19 @@ also steer which Verified version a rollback restores ([Rollback](../rollback.md
 not `edit`, where promotions must not be forged. A namespace's `edit`/`admin` holders are its
 owners as far as kardinal can check (ledger G16 has the upstream ask that would close this).
 
-**Until v0.13.1, gate and MetricCheck status is not protected (#2446).** No admission policy yet
-checks writes to `policygates/status`, or to the status of a MetricCheck you write (the
-per-promotion instances are covered by `<fullname>-graph-objects`), and a step that waits on a gate
-reads the gate instance's `status.ready`. So whoever may update those status subresources in a
-namespace can make an org gate's instance there pass, or decide a MetricCheck's result, without an
-override and without a `GateOverridden` record: `<fullname>-admin` (its `resources: ["*"]` covers
-status subresources), the built-in `admin` with `rbac.userRoles.aggregateToDefaultRoles` (it then
-aggregates `<fullname>-admin-extra`) and cluster admins. An org gate's result in a team namespace
-is only as trustworthy as those people. Until v0.13.1, which lets only the controller write those
-statuses, don't bind `admin`, `edit` or `<fullname>-admin` in team namespaces to people who must
-not pass org gates (`edit` holders can act as kro there, above).
+**Until the fix planned for v0.13.1 (#2446), gate and MetricCheck status is not protected.** No
+admission policy yet checks writes to `policygates/status`, or to the status of a MetricCheck you
+write (the per-promotion instances are covered by `<fullname>-graph-objects`), and a step that
+waits on a gate reads the gate instance's `status.ready`. So whoever may update those status
+subresources in a namespace can make an org gate's instance there pass, or decide a MetricCheck's
+result, without an override record (no `status.overrides` entry, no `GateOverridden` AuditEvent):
+`<fullname>-admin` (its `resources: ["*"]` covers status subresources), the built-in `admin` with
+`rbac.userRoles.aggregateToDefaultRoles` (it then aggregates `<fullname>-admin-extra`) and cluster
+admins. An org gate's result in a team namespace is only as trustworthy as those people. Until that
+fix, which lets only the controller write those statuses, don't bind `<fullname>-admin` (or `admin`
+with `aggregateToDefaultRoles`) in team namespaces to people who must not pass org gates. The fix
+does not change `edit` and `admin`: their holders stay trusted as kro (above), so keep them off
+those roles whatever the release.
 
 **Impersonation is full trust.** Anyone allowed to impersonate (`impersonate` RBAC) passes every
 check here as whoever they impersonate, the Graph ServiceAccount and the controller included; a
