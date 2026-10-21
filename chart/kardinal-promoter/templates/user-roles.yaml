@@ -63,9 +63,18 @@ built-in view, edit and admin ClusterRoles (viewer into view; promoter and
 approver into edit; admin-extra into admin), so existing namespace bindings
 to those roles grant kardinal access too.
 */}}
+{{- /*
+userRoles.kinds is every kardinal kind, by name: one per CRD in
+config/crd/bases (test/helm TestHelmTemplateUserRoles). The roles name them
+instead of "*", because RBAC's "*" also covers every subresource, status
+included, and a kind's status is the controller's (#2446).
+*/}}
+{{- define "kardinal-promoter.userRoles.kinds" -}}
+["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "changerequests", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications", "renderruns", "agentidentities", "agentindexes", "verdicts", "agentruns", "steptemplates", "promotionreceipts"]
+{{- end }}
 {{- define "kardinal-promoter.userRoles.readRules" }}
 - apiGroups: ["kardinal.io"]
-  resources: ["pipelines", "bundles", "policygates", "promotionsteps", "prstatuses", "metricchecks", "changerequests", "subscriptions", "notificationhooks", "rollbackpolicies", "scheduleclocks", "changewindows", "auditevents", "approvals", "scmproviders", "clusterscmproviders", "hookruns", "imageverifications", "renderruns", "agentidentities", "agentindexes", "verdicts", "agentruns", "steptemplates", "promotionreceipts"]
+  resources: {{ include "kardinal-promoter.userRoles.kinds" . }}
   verbs: ["get", "list", "watch"]
 # Step events in the UI.
 - apiGroups: [""]
@@ -184,10 +193,15 @@ metadata:
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
     {{- end }}
 rules:
+# Every kardinal kind by name, not "*": RBAC's "*" also covers every
+# subresource, status included, so a namespace admin, or anyone bound to this
+# role with a ClusterRoleBinding, could write the status of any kind,
+# cluster-scoped ones (a freeze's ChangeWindow) included. Status is the
+# controller's (#2446; <release>-status-writers refuses it to everyone else).
 - apiGroups: ["kardinal.io"]
-  resources: ["*"]
+  resources: {{ include "kardinal-promoter.userRoles.kinds" . }}
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
-# "*" does not cover subresources: name the virtual ones.
+# The virtual subresources the UI API and the admission policies check.
 - apiGroups: ["kardinal.io"]
   resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit", "bundles/reject", "changewindows/freeze"]
   verbs: ["update"]

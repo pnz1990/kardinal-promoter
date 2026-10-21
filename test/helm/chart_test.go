@@ -545,16 +545,24 @@ func userRoles(docs []map[string]interface{}, fullname string) map[string]map[st
 	return out
 }
 
-// rulesGrant reports whether rules grant verb on group/resource. As in RBAC,
-// "*" in resources does not match a subresource ("pipelines/pause").
+// rulesGrant reports whether rules grant verb on group/resource, matching as
+// RBAC does (ResourceMatches in k8s.io/kubernetes pkg/apis/rbac/v1): "*" in
+// resources matches every resource and every subresource ("pipelines/pause",
+// "policygates/status"), and "*/status" matches the status of every resource.
 func rulesGrant(d map[string]interface{}, group, resource, verb string) bool {
 	rules, _ := d["rules"].([]interface{})
 	for _, r := range rules {
 		in := func(key, want string) bool {
 			vals, _ := dig(r, key).([]interface{})
 			for _, v := range vals {
-				if v == want || (v == "*" && (key != "resources" || !strings.Contains(want, "/"))) {
+				s, _ := v.(string)
+				if s == want || s == "*" {
 					return true
+				}
+				if key == "resources" && strings.HasPrefix(s, "*/") {
+					if _, sub, ok := strings.Cut(want, "/"); ok && "*/"+sub == s {
+						return true
+					}
 				}
 			}
 			return false
@@ -564,6 +572,25 @@ func rulesGrant(d map[string]interface{}, group, resource, verb string) bool {
 		}
 	}
 	return false
+}
+
+// TestRulesGrant_MatchesAsRBAC: rulesGrant matches as RBAC does, so the
+// role tests above cannot pass on a grant RBAC would make: "*" covers every
+// resource and subresource, "*/status" every status.
+func TestRulesGrant_MatchesAsRBAC(t *testing.T) {
+	t.Parallel()
+	role := func(resources ...interface{}) map[string]interface{} {
+		return map[string]interface{}{"rules": []interface{}{map[string]interface{}{
+			"apiGroups": []interface{}{"kardinal.io"}, "resources": resources, "verbs": []interface{}{"update"}}}}
+	}
+	assert.True(t, rulesGrant(role("*"), "kardinal.io", "policygates/status", "update"), "* covers status")
+	assert.True(t, rulesGrant(role("*"), "kardinal.io", "pipelines/pause", "update"), "* covers a virtual subresource")
+	assert.True(t, rulesGrant(role("*/status"), "kardinal.io", "pipelines/status", "update"))
+	assert.False(t, rulesGrant(role("*/status"), "kardinal.io", "pipelines", "update"), "*/status is not the object")
+	assert.False(t, rulesGrant(role("*/status"), "kardinal.io", "pipelines/pause", "update"))
+	assert.False(t, rulesGrant(role("pipelines"), "kardinal.io", "pipelines/status", "update"), "a kind is not its status")
+	assert.False(t, rulesGrant(role("*"), "kardinal.io", "pipelines", "delete"), "verbs still match")
+	assert.False(t, rulesGrant(role("*"), "", "pods", "update"), "groups still match")
 }
 
 // TestHelmTemplateUserRoles verifies rbac.userRoles: the four ClusterRoles
@@ -614,6 +641,24 @@ func TestHelmTemplateUserRoles(t *testing.T) {
 	assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", "pipelines", "delete"))
 	for _, sub := range []string{"pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit"} {
 		assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", sub, "update"), "admin %s", sub)
+	}
+	// admin-extra names every kind, never "*" (which would cover every
+	// subresource): no user role grants a kind's status, cluster-scoped ones
+	// included (#2446).
+	for _, rule := range roles["admin-extra"]["rules"].([]interface{}) {
+		for _, res := range dig(rule, "resources").([]interface{}) {
+			assert.NotEqual(t, "*", res, "admin-extra names its kinds")
+			assert.False(t, strings.HasPrefix(res.(string), "*/"), "admin-extra names its subresources")
+		}
+	}
+	for _, f := range crds {
+		kind := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "kardinal.io_"), ".yaml")
+		for _, verb := range []string{"create", "update", "patch", "delete", "deletecollection"} {
+			assert.True(t, rulesGrant(roles["admin-extra"], "kardinal.io", kind, verb), "admin-extra may %s %s", verb, kind)
+		}
+		for _, r := range []map[string]interface{}{viewer, promoter, approver, roles["admin-extra"]} {
+			assert.False(t, rulesGrant(r, "kardinal.io", kind+"/status", "update"), "%v %s/status", dig(r, "metadata", "name"), kind)
+		}
 	}
 	assert.Equal(t, map[string]interface{}{"kardinal.io/aggregate-to-admin": "true", "app.kubernetes.io/instance": "kardinal-promoter"},
 		dig(admin, "aggregationRule", "clusterRoleSelectors").([]interface{})[0].(map[string]interface{})["matchLabels"])

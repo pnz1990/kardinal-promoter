@@ -577,7 +577,8 @@ func TestNotify_GiveUp(t *testing.T) {
 	orig := h.DeepCopy()
 	h.Status.FailedAttempts = 9
 	h.Status.NextRetryAt = ""
-	require.NoError(t, e.Client.Status().Patch(context.Background(), h, client.MergeFrom(orig)))
+	// As the controller: only it writes a hook's status (#2446).
+	require.NoError(t, e.AsController(t).Status().Patch(context.Background(), h, client.MergeFrom(orig)))
 	annotate(t, e, &v1alpha1.NotificationHook{ObjectMeta: metav1.ObjectMeta{Name: "giveup", Namespace: a.ns}})
 	h = waitHook(t, e, a.ns, "giveup", "the tenth attempt to give up", func(s v1alpha1.NotificationHookStatus) bool { return s.FailedAttempts == 0 })
 	assert.Equal(t, fmt.Sprintf("gave up on %s after 10 attempts: webhook returned HTTP 503", key), h.Status.FailureMessage)

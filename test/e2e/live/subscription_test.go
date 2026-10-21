@@ -363,7 +363,8 @@ func TestSub_ImageReturningDigest(t *testing.T) {
 	orig := s.DeepCopy()
 	s.Status.LastSeenDigest = d15
 	s.Status.LastBundleCreated = ""
-	require.NoError(t, e.Client.Status().Patch(context.Background(), s, client.MergeFrom(orig)))
+	// As the controller: only it writes a Subscription's status (#2446).
+	require.NoError(t, e.AsController(t).Status().Patch(context.Background(), s, client.MergeFrom(orig)))
 	poke(t, e, a.ns, "main")
 	waitSub(t, e, a.ns, "main", "the poll after the reset", func(st v1alpha1.SubscriptionStatus) bool {
 		return st.LastSeenDigest == d14
@@ -641,7 +642,8 @@ func TestSub_Dedupe(t *testing.T) {
 	orig := s.DeepCopy()
 	s.Status.LastSeenDigest = d13
 	s.Status.LastBundleCreated = ""
-	require.NoError(t, e.Client.Status().Patch(context.Background(), s, client.MergeFrom(orig)))
+	// As the controller: only it writes a Subscription's status (#2446).
+	require.NoError(t, e.AsController(t).Status().Patch(context.Background(), s, client.MergeFrom(orig)))
 	poke(t, e, a.ns, "dedupe")
 	waitSub(t, e, a.ns, "dedupe", "the poll after the reset", func(st v1alpha1.SubscriptionStatus) bool {
 		return st.LastSeenDigest == d14

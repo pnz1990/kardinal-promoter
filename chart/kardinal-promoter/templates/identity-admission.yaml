@@ -670,6 +670,60 @@ spec:
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "graph-objects") }}
 ---
 {{- /*
+status-writers (#2446): only the controller writes the status of these kinds.
+A status decides promotions (a gate's ready, a MetricCheck's result, a
+Bundle's phase), and RBAC cannot keep it from a namespace's admins: the
+resources ["*"] of <release>-admin-extra, and of the built-in admin and edit,
+covers every subresource, status included. Every namespaced kind with a
+status subresource that no other policy covers: graph-objects covers
+$graphKinds and the per-promotion MetricCheck and ChangeRequest instances
+(label kardinal.io/bundle; this policy leaves them to it, so one policy
+answers for each object), receipts covers PromotionReceipts.
+Cluster-scoped kinds are out: only cluster-wide RBAC reaches them, and every
+release's controller writes them. test/helm TestStatusWriters_Sweep places
+every status subresource of the CRDs.
+*/}}
+{{- $statusKinds := list "bundles" "changerequests" "metricchecks" "notificationhooks" "pipelines" "policygates" "rollbackpolicies" "scheduleclocks" "scmproviders" "subscriptions" }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-status-writers
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      # A status subresource takes only update and patch (UPDATE).
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["UPDATE"]
+        resources:
+          {{- range $statusKinds }}
+          - {{ . }}/status
+          {{- end }}
+  variables:
+    # This release's controller and the other kardinal controllers listed in
+    # admission.controllerUsernames (exact usernames).
+    - name: controller
+      expression: >-
+        request.userInfo.username in {{ prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+    # A per-promotion MetricCheck or ChangeRequest instance: graph-objects'.
+    # A status write cannot change labels, so oldObject's are the object's.
+    - name: instance
+      expression: >-
+        request.resource.resource in ['metricchecks', 'changerequests'] && oldObject != null &&
+        has(oldObject.metadata.labels) && 'kardinal.io/bundle' in oldObject.metadata.labels
+  validations:
+    - expression: variables.controller || variables.instance
+      messageExpression: >-
+        "only kardinal's controller writes the status of a " + request.kind.kind +
+        ": it decides promotions, so no one else may change it, cluster admins included (docs/guides/security.md#status-is-the-controllers)"
+      reason: Forbidden
+---
+{{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "status-writers") }}
+---
+{{- /*
 scoped-writes: what a caller limited to a virtual subresource of
 user-roles.yaml may change (docs/guides/security.md#user-roles). Separate
 from the identity policies above: those check names on every write, this one

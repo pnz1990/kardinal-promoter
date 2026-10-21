@@ -124,8 +124,11 @@ func (e *Env) DenyStatusWrites(t *testing.T, ns, name string) (policy string, li
 		},
 	}, fmt.Sprintf("request.namespace == %q && request.name == %q", ns, name),
 		fmt.Sprintf("e2e: status writes to MetricCheck %s/%s are denied", ns, name))
+	// The probes write as the controller: <release>-status-writers lets no one
+	// else write a MetricCheck's status (#2446).
+	asController := e.AsController(t)
 	Eventually(t, time.Minute, "the API server to deny status writes to "+ns+"/"+name, func(ctx context.Context) (bool, string) {
-		err := e.probeStatusWrite(ctx, ns, name)
+		err := probeStatusWrite(ctx, asController, ns, name)
 		return err != nil && strings.Contains(err.Error(), policy), fmt.Sprintf("dry-run status patch: %v", err)
 	})
 	lift = func() {
@@ -134,18 +137,18 @@ func (e *Env) DenyStatusWrites(t *testing.T, ns, name string) (policy string, li
 			t.Fatalf("delete admission policy %s: %v", policy, err)
 		}
 		Eventually(t, time.Minute, "the API server to allow status writes to "+ns+"/"+name, func(ctx context.Context) (bool, string) {
-			err := e.probeStatusWrite(ctx, ns, name)
+			err := probeStatusWrite(ctx, asController, ns, name)
 			return err == nil, fmt.Sprintf("dry-run status patch: %v", err)
 		})
 	}
 	return policy, lift
 }
 
-// probeStatusWrite is a dry-run status patch of the MetricCheck ns/name: it
-// goes through admission but changes nothing.
-func (e *Env) probeStatusWrite(ctx context.Context, ns, name string) error {
+// probeStatusWrite is a dry-run status patch of the MetricCheck ns/name by
+// c: it goes through admission but changes nothing.
+func probeStatusWrite(ctx context.Context, c client.Client, ns, name string) error {
 	mc := &v1alpha1.MetricCheck{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
-	return e.Client.Status().Patch(ctx, mc,
+	return c.Status().Patch(ctx, mc,
 		client.RawPatch(types.MergePatchType, []byte(`{"status":{"reason":"e2e dry-run probe"}}`)), client.DryRunAll)
 }
 
