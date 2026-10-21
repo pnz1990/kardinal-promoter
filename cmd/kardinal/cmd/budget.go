@@ -18,6 +18,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newBudgetCmd() *cobra.Command {
@@ -176,9 +177,9 @@ func budgetWaiting(ctx context.Context, c sigs_client.Client, agent string) []v1
 		return nil
 	}
 	out := []v1alpha1.PromotionStep{}
-	for _, s := range steps.Items {
-		if s.Status.Budget != nil && s.Status.Budget.Agent == agent && s.Status.Budget.State == "Waiting" {
-			out = append(out, s)
+	for i := range steps.Items {
+		if s := &steps.Items[i]; lifecycle.WaitsForBudget(s) && s.Status.Budget.Agent == agent {
+			out = append(out, *s)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {

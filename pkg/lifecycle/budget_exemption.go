@@ -100,6 +100,15 @@ func ExemptFromBudget(ctx context.Context, c client.Client, req BudgetExemptRequ
 	return agent, name, nil
 }
 
+// WaitsForBudget reports whether step s waits for its agent's budget: its
+// status.budget is Waiting and it has not started. A step that left Pending
+// without a grant (an unstarted step of a superseded version fails) keeps
+// its last status.budget, and is no request: the ledger counts requests the
+// same way (agentbudget's startedState).
+func WaitsForBudget(s *v1alpha1.PromotionStep) bool {
+	return s.Status.Budget != nil && s.Status.Budget.State == "Waiting" && (s.Status.State == "" || s.Status.State == "Pending")
+}
+
 // budgetAgent is the agent the exemption is for: req.Bundle's, else the
 // one whose step of the Pipeline waits for its budget in the environment.
 func budgetAgent(ctx context.Context, c client.Client, req BudgetExemptRequest) (string, error) {
@@ -119,9 +128,10 @@ func budgetAgent(ctx context.Context, c client.Client, req BudgetExemptRequest) 
 		return "", fmt.Errorf("list the steps of pipeline %s: %w", req.Pipeline, err)
 	}
 	agents := map[string]bool{}
-	for _, s := range steps.Items {
+	for i := range steps.Items {
+		s := &steps.Items[i]
 		target := s.Spec.Environment == req.Environment || s.Labels["kardinal.io/fleet"] == req.Environment
-		if target && s.Status.Budget != nil && s.Status.Budget.State == "Waiting" {
+		if target && WaitsForBudget(s) {
 			agents[s.Status.Budget.Agent] = true
 		}
 	}

@@ -59,6 +59,15 @@ func waitingStep(name, bundle string) *v1alpha1.PromotionStep {
 			Budget: &v1alpha1.PromotionStepBudget{Agent: "fixer", State: "Waiting", Since: &since, Rules: []string{"prod"}}}}
 }
 
+// cancelledStep is version bundle's prod step that waited for fixer's
+// budget until its version was superseded: it failed before it started and
+// kept its last status.budget.
+func cancelledStep(name, bundle string) *v1alpha1.PromotionStep {
+	s := waitingStep(name, bundle)
+	s.Status.State, s.Status.Message = "Failed", "bundle "+bundle+" was superseded before this step started"
+	return s
+}
+
 // TestBudgetCommand: kardinal budget shows each rule's counts, windows and
 // when room frees, the versions that wait, and the exemptions; -o json
 // prints status.usage; an agent without a ledger says why
@@ -68,10 +77,12 @@ func TestBudgetCommand(t *testing.T) {
 	ex := v1alpha1.AgentBudgetExemption{Name: "inc-1", Namespace: "payments", Pipeline: "checkout", Environment: "prod",
 		Bundle: "checkout-v6", Reason: "hotfix", CreatedBy: "bob", ExpiresAt: metav1.NewTime(budgetT0.Add(time.Hour))}
 	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).
-		WithObjects(budgetedAgent(5, ex), waitingStep("checkout-v7-prod", "checkout-v7")).Build()
+		WithObjects(budgetedAgent(5, ex), waitingStep("checkout-v7-prod", "checkout-v7"),
+			cancelledStep("checkout-v5-prod", "checkout-v5")).Build()
 	var out bytes.Buffer
 	require.NoError(t, budgetFn(context.Background(), &out, c, "fixer", "", budgetT0))
 	got := squeeze(out.String()) // the table's column widths aside
+	assert.NotContains(t, got, "checkout-v5", "a step that failed unstarted (its version superseded) no longer waits")
 	for _, want := range []string{
 		"Agent fixer (sponsor alice): 1 budget rule(s).",
 		"Ledger kardinal-promoter (evaluated 2026-10-15T10:00:00Z; current)",
@@ -143,6 +154,12 @@ func TestOverrideBudget(t *testing.T) {
 	// Nothing waits there.
 	assert.ErrorContains(t, overrideBudgetFn(&out, c, "payments", "checkout", "uat", "", "x", 0, budgetT0),
 		"no version of checkout waits for an agent's budget in uat")
+	// Only a superseded version's step, failed before it started, did.
+	gone := cancelledStep("checkout-v5-staging", "checkout-v5")
+	gone.Spec.Environment = "staging"
+	require.NoError(t, c.Create(context.Background(), gone))
+	assert.ErrorContains(t, overrideBudgetFn(&out, c, "payments", "checkout", "staging", "", "x", 0, budgetT0),
+		"no version of checkout waits for an agent's budget in staging")
 	// A person's version.
 	person := agentBundle.DeepCopy()
 	person.Name, person.ResourceVersion = "checkout-v8", ""

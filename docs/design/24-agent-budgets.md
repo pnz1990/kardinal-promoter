@@ -900,7 +900,7 @@ environment names, but no namespace, Pipeline or Bundle names (15.1).
 | The agent index is full or not built | Checked writes are refused by the actor policies, budgets or not; the budget reconciler and the step hold read the AgentIdentity, not the index, and carry on | Budgets never depend on the index (14.1) |
 | The AgentIdentity is deleted | Its steps that have not started hold; started ones run | 17-actors §3 requires suspension first; the `kardinal-agents-<ceiling>` gates also hold such versions |
 | The agent is suspended | Admission refuses its writes (17-actors); gates see `agent.suspended`; the ledger is kept | Suspension is the kill switch; budgets are a rate |
-| A request's Bundle is superseded | The step settles as Superseded; it leaves the queue | No grant wasted |
+| A request's Bundle is superseded | The step fails before it starts, as every unstarted step of a superseded version does ("superseded before this step started"); it keeps its last `status.budget` but is no request: the ledger, `kardinal budget` and `override --budget` count only steps that have not started (as built, W7) | No grant wasted |
 
 ## 14. Scale and the cost of a status write
 
