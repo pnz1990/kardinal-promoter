@@ -136,11 +136,13 @@ something for you:
   of every version still promoting again, once, so its gates become copies of the current
   templates. A gate created, edited, deleted or moved to other environments under v0.12 after the
   version started (v0.12 left those versions on the gates they started with) applies to it from
-  then on, and a `GateChanged` AuditEvent that says it happened on upgrade records it. On a kro
-  install with its alpha `CELOmitFunction` feature gate, the gates of a Graph that holds gates both
-  with and without an approval policy are deleted and created again once then. Later changes reach
-  the versions in flight at once, and are recorded the same way. If you relied on a version in
-  flight keeping an old gate, use `kardinal pause` or `kardinal hold` instead
+  then on, and a `GateChanged` AuditEvent that says it happened on upgrade records it. From
+  v0.12.0, v0.12.1 or v0.12.2 on a kro install with its alpha `CELOmitFunction` feature gate, the
+  gates of a Graph that holds gates both with and without an approval policy are deleted and
+  created again once then; from v0.12.3, which already splits those gates into their own
+  collections, the re-render updates them in place. Later changes reach the versions in flight at
+  once, and are recorded the same way. If you relied on a version in flight keeping an old gate,
+  use `kardinal pause` or `kardinal hold` instead
   ([When a new or edited gate takes effect](policy-gates.md#when-a-new-or-edited-gate-takes-effect)).
 - **`provenance.ciRunURL` refuses credential parameters.** Once the CRDs are applied, the Bundle
   CRD refuses a CI run URL with user info, a credential query or fragment parameter (a name such
