@@ -19,7 +19,8 @@ import (
 // and created again) get two names for the same record, so neither is
 // dropped as AlreadyExists; one Bundle gets the same name again, so a
 // retried write stays one record. A verdict's appearances name its records
-// too.
+// too. With no UID there is no record: a v0.14 gate record always names one
+// (QA-5 on #2395).
 func TestGateAuditNames_PerBundleUID(t *testing.T) {
 	r := &Reconciler{NowFn: func() time.Time { return time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC) }}
 	gate := &kardinalv1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "prod-cab", Namespace: "default",
@@ -55,6 +56,21 @@ func TestGateAuditNames_PerBundleUID(t *testing.T) {
 	}
 	for action, build := range builders {
 		t.Run(action, func(t *testing.T) {
+			_, written := map[string]func() (kardinalv1alpha1.PendingAuditEvent, bool){
+				"ApprovalRecorded": func() (kardinalv1alpha1.PendingAuditEvent, bool) {
+					return r.approvalAuditEntry(gate, approval, auditActionApprovalRecorded, "")
+				},
+				"GateOverridden": func() (kardinalv1alpha1.PendingAuditEvent, bool) {
+					return r.overrideAuditEntry(gate, override, overrideRec, "")
+				},
+				"VerdictRecorded": func() (kardinalv1alpha1.PendingAuditEvent, bool) {
+					return r.verdictAuditEntry(gate, verdict, nil, auditActionVerdictRecorded, "", 1)
+				},
+				"GateEvaluated": func() (kardinalv1alpha1.PendingAuditEvent, bool) {
+					return gateAuditEntry(gate, "", "Success", "ok", seen)
+				},
+			}[action]()
+			assert.False(t, written, "no record without the Bundle's UID")
 			a, b := build("uid-a", 1), build("uid-b", 1)
 			assert.Equal(t, "uid-a", a.Spec.BundleUID)
 			assert.Equal(t, "uid-b", b.Spec.BundleUID)

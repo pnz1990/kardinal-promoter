@@ -249,18 +249,31 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		return r.reconcileTemplate(ctx, &gate)
 	}
 
-	// The Bundle's UID goes on, and into the names of, the gate's audit
-	// records (#2380): a Bundle created again under its name has gates of
-	// the same names, and gets records of its own.
-	bundleUID, err := r.bundleUID(ctx, gate.Namespace, bundleName)
+	// The gate's Bundle, read once. Its UID goes on, and into the names of,
+	// the gate's audit records (#2380): a Bundle created again under its
+	// name has gates of the same names, and gets records of its own. A
+	// Bundle has no finalizer, so a delete (or replace --force) frees its
+	// name at once, while its gates are still being deleted: a gate older
+	// than the Bundle of its name is an earlier Bundle's, and evaluates and
+	// records nothing. Both creation times are the API server's, so they
+	// compare without skew. With no Bundle at all, the gate fails closed as
+	// before, but writes no record (it has no UID to name).
+	bundle, err := r.gateBundle(ctx, &gate, bundleName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	// Every override is recorded and audited once (GateOverridden), whatever
-	// the Bundle's phase, before anything else reads it.
-	if err := r.recordOverrides(ctx, &gate, bundleUID); err != nil {
-		return ctrl.Result{}, err
+	bundleUID := ""
+	if bundle != nil {
+		if !gate.CreationTimestamp.IsZero() && bundle.CreationTimestamp.After(gate.CreationTimestamp.Time) {
+			log.Debug().Str("bundle", bundleName).Msg("gate is an earlier Bundle's (created before this one): not evaluated")
+			return ctrl.Result{}, nil
+		}
+		bundleUID = string(bundle.UID)
+		// Every override is recorded and audited once (GateOverridden),
+		// whatever the Bundle's phase, before anything else reads it.
+		if err := r.recordOverrides(ctx, &gate, bundleUID); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// A settled Bundle never promotes again, so its gate instances are left
@@ -320,11 +333,12 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// (buildContext exposes the same count to the expression as verdicts.*).
 	var verdictTally lifecycle.VerdictTally
 	if gate.Spec.Verify != nil {
-		var bundle kardinalv1alpha1.Bundle
-		if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &bundle); err != nil {
-			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: %w", bundleName, err)
+		// The Bundle read whose UID names the verdict records: they name
+		// the UID they were tallied against.
+		if bundle == nil {
+			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: not found", bundleName)
 		}
-		verdictTally = tallyVerdicts(&gate, &bundle, now)
+		verdictTally = tallyVerdicts(&gate, bundle, now)
 		if err := r.recordVerdicts(ctx, &gate, verdictTally, bundleUID); apierrors.IsConflict(err) {
 			return ctrl.Result{}, err // a stale read: Reconcile evaluates again
 		} else if err != nil {
@@ -538,18 +552,18 @@ func (r *Reconciler) markGenerated(ctx context.Context, gate *kardinalv1alpha1.P
 	return true, nil
 }
 
-// bundleUID is the UID of the gate's Bundle, "" when there is none (it was
-// deleted: its gate goes too).
-func (r *Reconciler) bundleUID(ctx context.Context, namespace, bundleName string) (string, error) {
+// gateBundle is the gate's Bundle, nil when there is none (it was deleted:
+// its gate goes too).
+func (r *Reconciler) gateBundle(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleName string) (*kardinalv1alpha1.Bundle, error) {
 	var bundle kardinalv1alpha1.Bundle
-	err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: namespace}, &bundle)
+	err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &bundle)
 	if apierrors.IsNotFound(err) {
-		return "", nil
+		return nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("load bundle %s: %w", bundleName, err)
+		return nil, fmt.Errorf("load bundle %s: %w", bundleName, err)
 	}
-	return string(bundle.UID), nil
+	return &bundle, nil
 }
 
 // bundleSettled reports whether the gate's Bundle exists and is either

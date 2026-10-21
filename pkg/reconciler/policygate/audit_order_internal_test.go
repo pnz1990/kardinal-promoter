@@ -69,7 +69,7 @@ func TestGateAudit_FlipsWithinOneSecond(t *testing.T) {
 // does: the entry is stored in the gate's status and flushed.
 func writeGateAuditEvent(ctx context.Context, c client.Client, gate *kardinalv1alpha1.PolicyGate,
 	outcome, reason string, at metav1.Time) {
-	e, ok := gateAuditEntry(gate, "", outcome, reason, at)
+	e, ok := gateAuditEntry(gate, "uid-app-v2", outcome, reason, at)
 	if !ok {
 		return
 	}

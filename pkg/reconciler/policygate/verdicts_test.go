@@ -299,3 +299,62 @@ func TestPolicyGateReconciler_VerdictRecordsPerBundle(t *testing.T) {
 	assert.ElementsMatch(t, []string{"VerdictRecorded uid-a", "VerdictRecorded uid-b"}, trail)
 	assert.NotEqual(t, names[0], names[1])
 }
+
+// TestPolicyGateReconciler_EarlierBundlesGate (QA-5 on #2395): a Bundle has
+// no finalizer, so deleting it frees its name while its gates are still
+// being deleted, and a Bundle created again under the name can exist while
+// an earlier one's gate is reconciled. Such a gate is older than the Bundle
+// of its name: it evaluates and records nothing, so nothing names the new
+// Bundle's UID for the earlier Bundle's gate.
+func TestPolicyGateReconciler_EarlierBundlesGate(t *testing.T) {
+	created := metav1.NewTime(verifyNow.Add(-time.Hour))
+	gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
+	gate.Labels["kardinal.io/pipeline"] = "nginx-demo"
+	gate.CreationTimestamp = metav1.NewTime(created.Add(time.Second)) // after its Bundle
+	gate.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 1,
+		AllowedAgents: []string{"qa"}}
+	v := agentVerdict("r1", "qa", "bob", "pass", 1, 1, 0)
+	v.BundleUID = "uid-a"
+	gate.Spec.Verdicts = []kardinalv1alpha1.GateVerdict{v}
+	earlier := makeBundle("nginx-demo-v1", "default")
+	earlier.UID, earlier.CreationTimestamp = "uid-a", created
+	earlier.Status.Phase = "Promoting"
+	earlier.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, earlier).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}, &kardinalv1alpha1.Bundle{}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return verifyNow }
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "verify", Namespace: "default"}}
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	before, _ := verdictTrail(t, c)
+	require.Equal(t, []string{"VerdictRecorded uid-a"}, before)
+
+	// The Bundle is deleted and created again under its name; the earlier
+	// one's gate is still there.
+	require.NoError(t, c.Delete(context.Background(), earlier))
+	again := makeBundle("nginx-demo-v1", "default")
+	again.UID, again.CreationTimestamp = "uid-b", metav1.NewTime(created.Add(10*time.Second))
+	again.Status.Phase = "Promoting"
+	again.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
+	require.NoError(t, c.Create(context.Background(), again))
+	var b kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &b))
+	require.True(t, b.CreationTimestamp.After(gate.CreationTimestamp.Time), "the fixture: the Bundle is newer than the gate")
+	var old kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &old))
+	for range 2 {
+		_, err = r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+	}
+
+	var list kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(context.Background(), &list, client.InNamespace("default")))
+	for _, e := range list.Items {
+		assert.NotEqual(t, "uid-b", e.Spec.BundleUID, "%s %s names the new Bundle for the earlier one's gate", e.Spec.Action, e.Name)
+	}
+	var cur kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
+	assert.Equal(t, old.ResourceVersion, cur.ResourceVersion, "the earlier Bundle's gate is not evaluated: nothing is written")
+}

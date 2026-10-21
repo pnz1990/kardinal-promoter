@@ -191,7 +191,7 @@ func sameDecision(a, b kardinalv1alpha1.GateApprovalStatus) bool {
 func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	rec kardinalv1alpha1.GateApprovalStatus, action, bundleUID string) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
-	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
+	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" || bundleUID == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
 	seen := ""

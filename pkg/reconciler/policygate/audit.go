@@ -54,7 +54,7 @@ func gateAuditEntry(gate *kardinalv1alpha1.PolicyGate, bundleUID, outcome, reaso
 	pipelineName := labels["kardinal.io/pipeline"]
 	bundleName := labels["kardinal.io/bundle"]
 	envName := labels["kardinal.io/environment"]
-	if pipelineName == "" || bundleName == "" {
+	if pipelineName == "" || bundleName == "" || bundleUID == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
 

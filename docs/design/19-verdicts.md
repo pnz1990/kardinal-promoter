@@ -406,7 +406,16 @@ record's name hashes the action, the Verdict's name, the Bundle's UID and the ap
 Verdict that leaves and comes back is recorded again (the trail ends on the state), a retried
 write of one transition is one record, and a Bundle deleted and created again under its name,
 whose gates and Verdicts have the same names, gets records of its own. Approval and override
-records hash the Bundle's UID too.
+records hash the Bundle's UID too, and no gate record is written without one.
+
+The gate reads its Bundle by name, once per reconcile, and takes the UID from that read (the
+tally of verdicts uses the same read). A Bundle has no finalizer, so deleting it (or `kubectl
+replace --force`) frees the name at once while its gates are still being deleted: a gate whose
+`creationTimestamp` is before the Bundle's is an earlier Bundle's, and evaluates and records
+nothing (QA-5 on #2395). Both times come from the API server's clock, so they compare without
+skew, but in whole seconds: an earlier Bundle's gate created in the second the later Bundle was
+created in is not told apart. A gate whose Bundle is gone fails closed (`context error`) and
+writes no record.
 
 ### 6.6 CEL: `verdicts.*`
 
@@ -716,8 +725,11 @@ Each attempt runs at most once:
   the run in the Bundle's receipts. There must be at least one. Names repeat (a Bundle deleted
   and created again under its name has runs, Verdicts, gates and so records of the same names,
   and the earlier Bundle's records stay), so a receipt counts only when its statement names this
-  Bundle's UID, and an AuditEvent only when its `spec.bundleUID` is this Bundle's (#2380; the
-  controller writes it, and an AuditEvent's spec never changes). An AuditEvent written before
+  Bundle's UID, and an AuditEvent only when its `spec.bundleUID` is this Bundle's (#2380; an
+  AuditEvent's spec never changes). `spec.bundleUID` is the controller's only on a record with
+  `spec.actor`, which only the controller may create (`<release>-audit-actor`): anyone who may
+  create AuditEvents can write one without an actor, with any UID. The lookup reads only records
+  whose actor is the run's ServiceAccount, so it reads only the controller's. An AuditEvent written before
   v0.14 names no UID: it counts only when it is dated after the second this Bundle was created in
   (this Bundle's own record comes only after its run has run, so it never falls in that second).
   Both times are whole seconds from two clocks, `spec.timestamp` from the controller's and

@@ -149,7 +149,7 @@ func verifierKind(v kardinalv1alpha1.GateVerdict) string {
 func (r *Reconciler) verdictAuditEntry(gate *kardinalv1alpha1.PolicyGate, rec kardinalv1alpha1.GateVerdictStatus,
 	stamp *kardinalv1alpha1.Actor, action, bundleUID string, appearance int32) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
-	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
+	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" || bundleUID == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", action, rec.Name, bundleUID, appearance)))

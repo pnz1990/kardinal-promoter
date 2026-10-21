@@ -276,7 +276,7 @@ func stampVerifiedSince(gate *kardinalv1alpha1.PolicyGate, now time.Time) {
 func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	o *kardinalv1alpha1.PolicyGateOverride, rec kardinalv1alpha1.OverrideRecord, bundleUID string) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
-	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
+	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" || bundleUID == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false // nothing to attribute the record to
 	}
 	end := overrideEnd(o, rec.FirstSeen.Time, r.maxOverride())

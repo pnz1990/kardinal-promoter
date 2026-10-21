@@ -56,9 +56,12 @@ func makeGateInstance(name, ns, bundleName, expression, recheckInterval string) 
 	}
 }
 
+// makeBundle is a Bundle with a UID, as the API server gives every object
+// (the fake client gives none): a gate names its Bundle's UID on its audit
+// records, and writes none without one (#2380).
 func makeBundle(name, ns string) *kardinalv1alpha1.Bundle {
 	return &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID("uid-" + name)},
 		Spec: kardinalv1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: "nginx-demo",
@@ -148,6 +151,13 @@ func TestPolicyGateReconciler_BundleNotFound(t *testing.T) {
 	var got kardinalv1alpha1.PolicyGate
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "no-weekend", Namespace: "default"}, &got))
 	assert.False(t, got.Status.Ready, "gate must be blocked when bundle is missing")
+	assert.Contains(t, got.Status.Reason, "context error")
+	// No AuditEvent: with no Bundle there is no UID to name, and a v0.14
+	// gate record always names one (#2380, QA-5 on #2395).
+	var events kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(context.Background(), &events))
+	assert.Empty(t, events.Items)
+	assert.Empty(t, got.Status.PendingAuditEvents)
 }
 
 // TestPolicyGateReconciler_TemplateIgnored verifies templates (no bundle label) are processed
