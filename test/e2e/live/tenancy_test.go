@@ -94,11 +94,15 @@ func changeTemplate(t *testing.T, e *framework.Env, ns, name, secret, url string
 }
 
 // startTeam sets up team name on shard (default or b) and creates its
-// version: seed tag tag copied into the team's registry repository. The
-// image's repository is in none of the app's manifests, so the version
-// changes only the kustomization's images and the workload keeps running
-// podinfo (health notes the image as not verified); what matters here is
-// the evidence: its change, approval, receipts and referrers.
+// version: seed tag tag copied into the team's registry repository,
+// annotated with the team's namespace, so each run's image has a digest of
+// its own and only that run's receipts as referrers (the registry outlives
+// the namespaces: with the seed's digest, a second run, -count=2, found the
+// first run's receipts on it too). The image's repository is in none of the
+// app's manifests, so the version changes only the kustomization's images
+// and the workload keeps running podinfo (health notes the image as not
+// verified); what matters here is the evidence: its change, approval,
+// receipts and referrers.
 func startTeam(t *testing.T, e *framework.Env, name, shard, tag string) *team {
 	t.Helper()
 	tm := &team{app: newArgoApp(t, e, "test", "prod"), name: name, shard: shard, change: name + "-change",
@@ -116,7 +120,8 @@ func startTeam(t *testing.T, e *framework.Env, name, shard, tag string) *team {
 	e.CreateGate(t, g)
 	tm.apply(t, tm.pipeline(nil))
 	waitShardHolder(t, e, tm.ns, shard, time.Minute)
-	tm.digest = framework.NewRegistry(t).Copy(t, tag, tm.repo, tag)
+	tm.digest = framework.NewRegistry(t).CopyAnnotated(t, tag, tm.repo, tag+"-"+tm.ns,
+		map[string]string{"e2e.kardinal.io/namespace": tm.ns})
 	tm.bundle = e.CreateBundle(t, tm.ns, pipelineName, "--image", tm.image(t))
 	return tm
 }
@@ -174,6 +179,32 @@ func asServiceAccount(t *testing.T, e *framework.Env, ns, name string) client.Cl
 	t.Helper()
 	return impersonated(t, e, "system:serviceaccount:"+ns+":"+name,
 		"system:serviceaccounts", "system:serviceaccounts:"+ns, "system:authenticated")
+}
+
+// referrerProblems is what is wrong with the receipt referrers of tm's
+// image: anything but its test and prod receipts, both annotated with a
+// resource of its own namespace. Another tenant's referrer is one too many
+// and names another namespace.
+func referrerProblems(t *testing.T, tm *team) []string {
+	t.Helper()
+	res, entries := referrerResources(t, tm.repo, tm.digest)
+	var out []string
+	if len(res) != 2 {
+		out = append(out, fmt.Sprintf("%d receipt referrers, want its test and prod receipts: %v", len(res), res))
+	}
+	if entries != len(res) {
+		out = append(out, fmt.Sprintf("%d referrers in all, %d of them receipts with a resource", entries, len(res)))
+	}
+	for _, uri := range res {
+		r, err := receipt.ParseResourceURI(uri)
+		switch {
+		case err != nil:
+			out = append(out, fmt.Sprintf("a referrer with resource %q: %v", uri, err))
+		case r.Namespace != tm.ns:
+			out = append(out, "a referrer from namespace "+r.Namespace+": "+uri)
+		}
+	}
+	return out
 }
 
 // referrerResources are the resourceUris of the receipt referrers of
@@ -462,15 +493,22 @@ func TestTenancy_Evidence(t *testing.T) {
 				require.NotNil(t, s, "%s %s: conditions %+v", tm.name, env, got.Status.Conditions)
 				assert.Equal(t, metav1.ConditionTrue, s.Status, "%s's %s receipt is a referrer of its own image: %s", tm.name, env, s.Message)
 			}
-			res, entries := referrerResources(t, tm.repo, tm.digest)
-			assert.Len(t, res, 2, "%s's image has its test and prod receipts: %v", tm.name, res)
-			assert.Equal(t, len(res), entries, "%s's image has no other referrer, annotated or not", tm.name)
-			for _, uri := range res {
-				r, err := receipt.ParseResourceURI(uri)
-				require.NoError(t, err)
-				assert.Equal(t, tm.ns, r.Namespace, "a referrer of %s's image from another namespace: %s", tm.name, uri)
-			}
+			assert.Empty(t, referrerProblems(t, tm), "%s's image has its test and prod receipts as referrers, and no other", tm.name)
 		}
+
+		// The check reds: a receipt referrer of another tenant on team A's
+		// image (pushed here, as a shard allowed there would) is one too
+		// many, from the other namespace. The image is this run's own, so
+		// the next run does not see it.
+		reg := framework.NewRegistry(t)
+		foreign := receipt.ResourceURI(clusterIdentity(t, e), other.ns, pipelineName, "test")
+		_, err := (&receipt.Registry{Insecure: true}).PushReferrer(ctx, reg.HostRepository(a.repo), reg.HostRepository(a.repo),
+			a.digest, foreign, []byte("{}"))
+		require.NoError(t, err)
+		reds := referrerProblems(t, a)
+		require.Len(t, reds, 2, "the same check, with another tenant's referrer on team A's image, fails twice: %v", reds)
+		assert.True(t, strings.HasPrefix(reds[0], "3 receipt referrers, want its test and prod receipts: "), reds[0])
+		assert.Equal(t, "a referrer from namespace "+other.ns+": "+foreign, reds[1])
 	})
 }
 

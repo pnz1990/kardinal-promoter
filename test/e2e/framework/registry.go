@@ -256,6 +256,80 @@ func (r *Registry) Copy(t *testing.T, src, repo, dst string) string {
 	return digest
 }
 
+// CopyAnnotated is Copy with annotations added to the manifest (merged into
+// its own, if it has any), so the image has the seed's config and layers but
+// a digest of its own: one per distinct set of annotations. A test that
+// counts what the registry holds for its image (receipt referrers) annotates
+// it with its namespace, so a rerun (-count=2) gets a new image instead of
+// the first run's. Public registry only. It repeats Copy's steps rather than
+// sharing them, so Copy is unchanged for v0.13.0 (#2478 folds them).
+func (r *Registry) CopyAnnotated(t *testing.T, src, repo, dst string, annotations map[string]string) string {
+	t.Helper()
+	if r.from != nil {
+		t.Fatalf("CopyAnnotated %s:%s: not for the private registry", repo, dst)
+	}
+	ctx := context.Background()
+	get, err := doHTTP(ctx, http.MethodGet, r.api+"/v2/"+r.seed+"/manifests/"+src, map[string]string{"Accept": manifestTypes}, nil)
+	if err != nil || get.Status != http.StatusOK {
+		t.Fatalf("read seed manifest %s:%s: %v HTTP %d %s", r.seed, src, err, get.Status, clip(get.Body))
+	}
+	dec := json.NewDecoder(strings.NewReader(get.Body))
+	dec.UseNumber() // sizes stay integers
+	var manifest map[string]interface{}
+	if err := dec.Decode(&manifest); err != nil {
+		t.Fatalf("decode seed manifest %s:%s: %v", r.seed, src, err)
+	}
+	var blobs []string
+	if c, ok := manifest["config"].(map[string]interface{}); ok {
+		if d, ok := c["digest"].(string); ok {
+			blobs = append(blobs, d)
+		}
+	}
+	layers, _ := manifest["layers"].([]interface{})
+	for _, l := range layers {
+		if lm, ok := l.(map[string]interface{}); ok {
+			if d, ok := lm["digest"].(string); ok {
+				blobs = append(blobs, d)
+			}
+		}
+	}
+	if len(blobs) != len(layers)+1 {
+		t.Fatalf("seed manifest %s:%s: a config and %d layers, %d digests", r.seed, src, len(layers), len(blobs))
+	}
+	for _, d := range blobs {
+		res, err := doHTTP(ctx, http.MethodPost,
+			fmt.Sprintf("%s/v2/%s/blobs/uploads/?mount=%s&from=%s", r.api, repo, d, r.seed), nil, nil)
+		if err != nil || res.Status != http.StatusCreated {
+			t.Fatalf("mount blob %s into %s: %v HTTP %d %s", d, repo, err, res.Status, clip(res.Body))
+		}
+	}
+	merged := map[string]interface{}{}
+	if old, ok := manifest["annotations"].(map[string]interface{}); ok {
+		for k, v := range old {
+			merged[k] = v
+		}
+	}
+	for k, v := range annotations {
+		merged[k] = v
+	}
+	manifest["annotations"] = merged
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode manifest %s:%s: %v", repo, dst, err)
+	}
+	put, err := doHTTP(ctx, http.MethodPut, r.api+"/v2/"+repo+"/manifests/"+dst,
+		map[string]string{"Content-Type": get.Header.Get("Content-Type")}, body)
+	if err != nil || put.Status != http.StatusCreated {
+		t.Fatalf("push %s:%s: %v HTTP %d %s", repo, dst, err, put.Status, clip(put.Body))
+	}
+	digest := put.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		t.Fatalf("push %s:%s: no Docker-Content-Digest in the response", repo, dst)
+	}
+	t.Logf("pushed %s:%s (podinfo %s, annotated) %s", repo, dst, src, digest)
+	return digest
+}
+
 // copyFrom copies seed tag src of the public registry into r's repo as tag
 // dst, blob by blob (a mount cannot cross registries), and returns the
 // manifest digest, the same as the public copy's.
