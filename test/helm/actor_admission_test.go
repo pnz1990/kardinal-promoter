@@ -277,31 +277,130 @@ func TestActorAdmission(t *testing.T) {
 	}
 }
 
-// TestActorAdmission_IndexNotReady: an AgentIndex with no status (just
-// created), or one not Ready (IndexFull), denies every write the policy
-// judges, people's included, until the controller has built it: the
-// registry fails closed. A full index says so, and what to do (retrying
-// does not help: QA-3 on #2384). A Ready index with no agents admits people
-// and bots.
-func TestActorAdmission_IndexNotReady(t *testing.T) {
-	t.Parallel()
-	vap := identityPolicy(t, "actor")
-	req := actorReq{resource: "bundles", namespace: "x", user: "alice", object: bundleObj(t, "x", "checkout", nil)}
+// notReadyIndexes are the AgentIndex states that are not Ready (#2451):
+// never built (no status), full (IndexFull, entries written empty) and a
+// later release's compact format (CompactFormat), each with the message a
+// ServiceAccount gets.
+func notReadyIndexes(t *testing.T) map[string]struct {
+	params map[string]interface{}
+	why    string
+} {
+	t.Helper()
 	empty := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
 	delete(empty, "status")
-	assert.Contains(t, evalActor(t, vap, empty, req), "kardinal's agent index is not ready yet")
 	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
-	got := evalActor(t, vap, full, req)
-	assert.Contains(t, got, "kardinal's agent index is full (IndexFull")
-	assert.Contains(t, got, "remove AgentIdentities or subjects")
-	assert.NotContains(t, got, "retry")
+	return map[string]struct {
+		params map[string]interface{}
+		why    string
+	}{
+		"never built": {empty, "kardinal's agent index is not ready yet"},
+		"full":        {full, "kardinal's agent index is full (IndexFull"},
+		"compact":     {laterCompactIndex(t), "kardinal's agent index is in the compact format of a newer release"},
+	}
+}
+
+// TestActorAdmission_IndexNotReady (#2451): while the AgentIndex is not
+// Ready (never built, IndexFull, a later release's CompactFormat) the
+// index's readiness never refuses a person. <release>-actor and
+// -actor-overrides refuse a ServiceAccount's writes they check, with the
+// state's message (a full index says what to do, not to retry: QA-3 on
+// #2384). A person's version, freeze, exemption and gate override are
+// admitted unstamped or stamped {kind: unverified}; a human or agent stamp
+// (the compact index's guard among them) is refused, since it cannot be
+// verified. The controller is exempt. A Ready index derives the kind again:
+// human, and unverified is refused.
+// Covers ACTOR-INDEX-05, ACTOR-INDEX-06.
+func TestActorAdmission_IndexNotReady(t *testing.T) {
+	t.Parallel()
+	actorVAP, overridesVAP := identityPolicy(t, "actor"), identityPolicy(t, "actor-overrides")
+	fixerSA := "system:serviceaccount:ci:fixer"
+	authed := []string{"system:authenticated"}
+	unverified := func(p string) *v1alpha1.Actor { return &v1alpha1.Actor{Kind: "unverified", Principal: p} }
+	human := func(p string) *v1alpha1.Actor { return &v1alpha1.Actor{Kind: "human", Principal: p} }
+	guard := &v1alpha1.Actor{Kind: "agent", Principal: "alice", Agent: "agent-index-in-a-newer-format", Sponsor: "upgrade-kardinal-to-read-it"}
+	at := metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	freeze := func(stamp *v1alpha1.Actor, exemptions ...v1alpha1.FreezeExemption) map[string]interface{} {
+		return asMap(t, v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-freeze-all"},
+			Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: at, Reason: "INC-1",
+				Freeze: &v1alpha1.ChangeWindowFreeze{Actors: v1alpha1.FreezeAgents, CreatedBy: "alice", Actor: stamp, Exemptions: exemptions}}})
+	}
+	exemption := func(stamp *v1alpha1.Actor) v1alpha1.FreezeExemption {
+		return v1alpha1.FreezeExemption{Namespace: "payments-eu", Pipeline: "checkout", Reason: "hotfix", CreatedBy: "alice",
+			Actor: stamp, ExpiresAt: at}
+	}
+	override := func(stamp *v1alpha1.Actor) map[string]interface{} {
+		return gateObj(t, "payments-eu", "uat", v1alpha1.PolicyGateOverride{Reason: "r", Stage: "uat", ExpiresAt: at,
+			CreatedBy: "alice", Actor: stamp})
+	}
+	const mustUnverified = "actor must be {kind: unverified, principal: alice}"
+	cases := []struct {
+		name string
+		vap  *admissionregistrationv1.ValidatingAdmissionPolicy
+		req  actorReq
+		deny string // "": admitted; "index": the state's message
+	}{
+		{"a person's unstamped version", actorVAP, actorReq{resource: "bundles", namespace: "x", user: "alice", groups: authed,
+			object: bundleObj(t, "x", "checkout", nil)}, ""},
+		{"a person's version stamped unverified", actorVAP, actorReq{resource: "bundles", namespace: "x", user: "alice",
+			groups: authed, object: bundleObj(t, "x", "checkout", unverified("alice"))}, ""},
+		{"a person's version stamped human", actorVAP, actorReq{resource: "bundles", namespace: "x", user: "alice",
+			groups: authed, object: bundleObj(t, "x", "checkout", human("alice"))}, mustUnverified},
+		{"QA-3: a person's version stamped with the compact guard", actorVAP, actorReq{resource: "bundles", namespace: "x",
+			user: "alice", groups: authed, object: bundleObj(t, "x", "checkout", guard)}, mustUnverified},
+		{"a person's approval stamped unverified", actorVAP, actorReq{resource: "approvals", namespace: "x", user: "alice",
+			groups: authed, object: approvalObj(t, "x", "prod", unverified("alice"))}, ""},
+		{"a person's freeze", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
+			object: freeze(unverified("alice"))}, ""},
+		{"a person's freeze stamped human", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
+			object: freeze(human("alice"))}, mustUnverified},
+		{"a person's freeze exemption", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
+			old: freeze(unverified("alice")), object: freeze(unverified("alice"), exemption(unverified("alice")))}, ""},
+		{"a person's gate override", overridesVAP, actorReq{resource: "policygates", namespace: "payments-eu", user: "alice",
+			groups: authed, object: override(unverified("alice"))}, ""},
+		{"a person's gate override stamped human", overridesVAP, actorReq{resource: "policygates", namespace: "payments-eu",
+			user: "alice", groups: authed, object: override(human("alice"))}, mustUnverified},
+		{"a ServiceAccount's unstamped version", actorVAP, actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA,
+			groups: authed, object: bundleObj(t, "payments-eu", "checkout", nil)}, "index"},
+		{"a ServiceAccount's version stamped bot", actorVAP, actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA,
+			groups: authed, object: bundleObj(t, "payments-eu", "checkout", &v1alpha1.Actor{Kind: "bot", Principal: fixerSA})}, "index"},
+		{"a ServiceAccount's version stamped unverified", actorVAP, actorReq{resource: "bundles", namespace: "payments-eu",
+			user: fixerSA, groups: authed, object: bundleObj(t, "payments-eu", "checkout", unverified(fixerSA))}, "index"},
+		{"a ServiceAccount's gate override", overridesVAP, actorReq{resource: "policygates", namespace: "payments-eu", user: fixerSA,
+			groups: authed, object: override(&v1alpha1.Actor{Kind: "bot", Principal: fixerSA})}, "index"},
+		{"the controller's version", actorVAP, actorReq{resource: "bundles", namespace: "x", user: controllerUser,
+			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "controller", Principal: controllerUser, Via: "ui"})}, ""},
+	}
+	for state, idx := range notReadyIndexes(t) {
+		for _, tc := range cases {
+			t.Run(state+"/"+tc.name, func(t *testing.T) {
+				got := evalActor(t, tc.vap, idx.params, tc.req)
+				switch tc.deny {
+				case "":
+					assert.Empty(t, got)
+				case "index":
+					assert.Contains(t, got, idx.why)
+					if state == "full" {
+						assert.Contains(t, got, "remove AgentIdentities or subjects")
+						assert.NotContains(t, got, "retry", "retrying does not help a full index (QA-3 on #2384)")
+					}
+				default:
+					assert.Contains(t, got, tc.deny)
+					assert.Contains(t, got, "kardinal's agent index is not Ready, so it cannot tell you from an agent")
+				}
+			})
+		}
+	}
 	ready := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}})
-	assert.Empty(t, evalActor(t, vap, ready, req))
-	// The controller is exempt: it refuses on its own when its index is not ready.
-	req.user = controllerUser
-	assert.Empty(t, evalActor(t, vap, empty, req))
+	assert.Empty(t, evalActor(t, actorVAP, ready, actorReq{resource: "bundles", namespace: "x", user: "alice",
+		object: bundleObj(t, "x", "checkout", human("alice"))}), "a Ready index: a person is human")
+	got := evalActor(t, actorVAP, ready, actorReq{resource: "bundles", namespace: "x", user: "alice",
+		object: bundleObj(t, "x", "checkout", unverified("alice"))})
+	assert.Contains(t, got, "actor must be {kind: human, principal: alice}", "a Ready index: unverified is refused")
+	assert.NotContains(t, got, "cannot tell you from an agent")
+	assert.Empty(t, evalActor(t, actorVAP, ready, actorReq{resource: "bundles", namespace: "x", user: fixerSA,
+		object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "bot", Principal: fixerSA})}), "a Ready index: a bot")
 }
 
 // laterCompactIndex is the AgentIndex as a later release writes it in its
@@ -320,14 +419,15 @@ func laterCompactIndex(t *testing.T) map[string]interface{} {
 }
 
 // TestActorPolicies_LaterCompactIndex (#2071): this release's actor
-// policies never read a later release's compact index. Its -actor and
-// -actor-overrides refuse every write they check, people's included, and
-// -actor-records every stamped record, a forged stamp of the later
-// release's guard among them (QA-3's probe on #2372, which a records policy
-// that judged stamps against any index admitted), each saying the index is
-// in a newer format: the state after a helm rollback, until a controller of
-// this release has rebuilt the index. Unstamped records and the
-// controller's writes go on.
+// policies never read a later release's compact index: its entries, and
+// the guard its legacy Groups hold for older readers, are not read (QA-3's
+// probe on #2372: a records policy that judged stamps against any index
+// admitted a stamp forged from the guard's public values). So a
+// ServiceAccount's writes the policies check, an agent's among them, are
+// refused, saying the index is in a newer format; a person's are admitted
+// stamped unverified, never as the guard or as human (#2451). Unstamped
+// records and the controller's writes go on: the state after a helm
+// rollback, until a controller of this release has rebuilt the index.
 // Covers ACTOR-INDEX-05.
 func TestActorPolicies_LaterCompactIndex(t *testing.T) {
 	t.Parallel()
@@ -338,7 +438,7 @@ func TestActorPolicies_LaterCompactIndex(t *testing.T) {
 	guard := func(p string) *v1alpha1.Actor {
 		return &v1alpha1.Actor{Kind: "agent", Principal: p, Agent: "agent-index-in-a-newer-format", Sponsor: "upgrade-kardinal-to-read-it"}
 	}
-	human := func(p string) *v1alpha1.Actor { return &v1alpha1.Actor{Kind: "human", Principal: p} }
+	unverified := func(p string) *v1alpha1.Actor { return &v1alpha1.Actor{Kind: "unverified", Principal: p} }
 	pause := func(stamp *v1alpha1.Actor) map[string]interface{} {
 		return asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu",
 			Labels: map[string]string{"kardinal.io/actor-check": "true"}},
@@ -346,6 +446,7 @@ func TestActorPolicies_LaterCompactIndex(t *testing.T) {
 	}
 	unpaused := asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu"}})
 	authed := []string{"system:authenticated"}
+	const mustUnverified = "actor must be {kind: unverified, principal: alice}"
 	for _, tc := range []struct {
 		name, policy string
 		req          actorReq
@@ -354,18 +455,15 @@ func TestActorPolicies_LaterCompactIndex(t *testing.T) {
 		{"an agent's version", "actor", actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA, groups: authed,
 			object: bundleObj(t, "payments-eu", "checkout", fixer)}, newer},
 		{"a person's version", "actor", actorReq{resource: "bundles", namespace: "x", user: "alice", groups: authed,
-			object: bundleObj(t, "x", "checkout", human("alice"))}, newer},
+			object: bundleObj(t, "x", "checkout", unverified("alice"))}, ""},
 		{"a person's version stamped with the guard", "actor", actorReq{resource: "bundles", namespace: "x", user: "alice",
-			groups: authed, object: bundleObj(t, "x", "checkout", guard("alice"))}, newer},
+			groups: authed, object: bundleObj(t, "x", "checkout", guard("alice"))}, mustUnverified},
 		{"the controller's version", "actor", actorReq{resource: "bundles", namespace: "x", user: controllerUser,
 			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "controller", Principal: controllerUser})}, ""},
-		{"a person's gate override", "actor-overrides", actorReq{resource: "policygates", namespace: "payments-eu", user: "alice",
-			groups: authed, object: gateObj(t, "payments-eu", "uat", v1alpha1.PolicyGateOverride{Reason: "r", Stage: "uat",
-				ExpiresAt: metav1.NewTime(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)), CreatedBy: "alice", Actor: human("alice")})}, newer},
 		{"a person's pause", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu", user: "alice", groups: authed,
-			object: pause(human("alice")), old: unpaused}, newer},
+			object: pause(unverified("alice")), old: unpaused}, ""},
 		{"QA-3: a person's pause stamped with the guard", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu",
-			user: "alice", groups: authed, object: pause(guard("alice")), old: unpaused}, newer},
+			user: "alice", groups: authed, object: pause(guard("alice")), old: unpaused}, mustUnverified},
 		{"QA-3: an agent's pause stamped with the guard", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu",
 			user: fixerSA, groups: authed, object: pause(guard(fixerSA)), old: unpaused}, newer},
 		{"an agent's pause stamped as itself", "actor-records", actorReq{resource: "pipelines", namespace: "payments-eu",
@@ -386,13 +484,16 @@ func TestActorPolicies_LaterCompactIndex(t *testing.T) {
 	}
 }
 
-// TestActorRecords_IndexNotReady: <release>-actor-records judges a stamp
-// only against a built index: absence from it means "not an agent", so
-// against an index not yet built (no status) or full (IndexFull, written
-// empty) an agent could record a pause stamped as a person or a bot. Every
-// stamped record is refused until the controller has built it; unstamped
-// records go on, and a built index admits the honest stamp.
-// Covers ACTOR-INDEX-05.
+// TestActorRecords_IndexNotReady: <release>-actor-records judges a
+// ServiceAccount's stamp only against a built index: absence from it means
+// "not an agent", so against an index not yet built, full (written empty)
+// or a later release's compact format, an agent could record a pause
+// stamped as a bot. A ServiceAccount's stamped record is refused until the
+// controller has built it, and its unstamped record goes on. A person's
+// pause, resume or hold release is never refused for the index (#2451): it
+// is admitted stamped unverified, and a human stamp is refused, since it
+// cannot be verified. A built index admits the honest stamps.
+// Covers ACTOR-INDEX-05, ACTOR-INDEX-06.
 func TestActorRecords_IndexNotReady(t *testing.T) {
 	t.Parallel()
 	vap := identityPolicy(t, "actor-records")
@@ -404,29 +505,27 @@ func TestActorRecords_IndexNotReady(t *testing.T) {
 			Spec: v1alpha1.PipelineSpec{Paused: true, LastChange: &v1alpha1.PipelineChange{Action: "Pause", By: "x", Actor: stamp}}})
 	}
 	unpaused := asMap(t, v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments-eu"}})
-	req := func(stamp *v1alpha1.Actor) actorReq {
-		return actorReq{resource: "pipelines", namespace: "payments-eu", user: fixerSA, object: pause(stamp), old: unpaused}
+	req := func(user string, stamp *v1alpha1.Actor) actorReq {
+		return actorReq{resource: "pipelines", namespace: "payments-eu", user: user, object: pause(stamp), old: unpaused}
 	}
-	empty := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}})
-	delete(empty, "status")
-	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
-		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
-	for name, tc := range map[string]struct {
-		params map[string]interface{}
-		deny   string
-	}{
-		"never built": {empty, "kardinal's agent index is not ready yet"},
-		"full":        {full, "kardinal's agent index is full (IndexFull"},
-	} {
-		assert.Contains(t, evalActor(t, vap, tc.params, req(bot)), tc.deny, name)
-		assert.Empty(t, evalActor(t, vap, tc.params, req(nil)), "%s: an unstamped pause", name)
+	for state, idx := range notReadyIndexes(t) {
+		assert.Contains(t, evalActor(t, vap, idx.params, req(fixerSA, bot)), idx.why, "%s: a ServiceAccount's stamped pause", state)
+		assert.Empty(t, evalActor(t, vap, idx.params, req(fixerSA, nil)), "%s: a ServiceAccount's unstamped pause", state)
+		assert.Empty(t, evalActor(t, vap, idx.params, req("alice", &v1alpha1.Actor{Kind: "unverified", Principal: "alice"})),
+			"%s: a person's pause", state)
+		assert.Empty(t, evalActor(t, vap, idx.params, req("alice", nil)), "%s: a person's unstamped pause", state)
+		assert.Contains(t, evalActor(t, vap, idx.params, req("alice", &v1alpha1.Actor{Kind: "human", Principal: "alice"})),
+			"actor must be {kind: unverified, principal: alice}", "%s: a person's pause stamped human", state)
 	}
 	idx := actorRegistry(t)
 	ready := *idx
 	ready.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
 	params := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}, Status: ready})
-	assert.Contains(t, evalActor(t, vap, params, req(bot)), "actor must be {kind: agent", "built: the agent may not pass as a bot")
-	assert.Empty(t, evalActor(t, vap, params, req(&v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"})))
+	assert.Contains(t, evalActor(t, vap, params, req(fixerSA, bot)), "actor must be {kind: agent", "built: the agent may not pass as a bot")
+	assert.Empty(t, evalActor(t, vap, params, req(fixerSA, &v1alpha1.Actor{Kind: "agent", Principal: fixerSA, Agent: "fixer", Sponsor: "alice"})))
+	assert.Empty(t, evalActor(t, vap, params, req("alice", &v1alpha1.Actor{Kind: "human", Principal: "alice"})), "built: a person is human")
+	assert.Contains(t, evalActor(t, vap, params, req("alice", &v1alpha1.Actor{Kind: "unverified", Principal: "alice"})),
+		"actor must be {kind: human", "built: unverified is refused")
 }
 
 // TestActorAdmission_Binding: the binding reads the release's AgentIndex and

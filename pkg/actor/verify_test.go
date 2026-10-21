@@ -49,6 +49,12 @@ func TestVerifyStamp(t *testing.T) {
 		{"a group agent's own member", agent("oidc:bot1", "triage", "dave"), "oidc:bot1", idx, nil, false, "registered by group"},
 		{"the agent, wrong agent name", agent(fx, "other", "alice"), fx, idx, nil, false, "is agent fixer of alice"},
 		{"someone else's stamp", human, "carol", idx, nil, false, "names bob"},
+		// #2451: a person's stamp written while the index was not Ready is
+		// kept as unverified; an agent's is dropped once the index names it.
+		{"an unverified stamp, index missing", &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "bob"}, "bob", nil, missing, true, ""},
+		{"an unverified stamp, index built", &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "bob"}, "bob", idx, nil, true, ""},
+		{"an agent's unverified stamp, once the index names it", &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: fx},
+			fx, idx, nil, false, "says unverified, but the AgentIndex says"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

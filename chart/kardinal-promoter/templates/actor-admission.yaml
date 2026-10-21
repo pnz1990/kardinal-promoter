@@ -24,9 +24,13 @@ indexState: indexReady (Ready True), compact (Ready's reason is
 CompactFormat: a later release wrote the index in its compact format, #2071,
 whose entries this release's policies do not read) and full (Ready's reason
 is IndexFull: the entries are over the bound, and written empty). An index
-that is not Ready makes the policies refuse every write they check;
-indexNotReadyMessage says why and what to do: finish the upgrade or the
-rollback, remove AgentIdentities, or retry while the controller builds it.
+that is not Ready cannot tell an agent from a person, and its readiness
+never refuses a person (#2451): the policies refuse the writes they check
+only from ServiceAccounts then (sa), and anyone else's stamp must say
+unverified, never human (actorKind), so a person's decision is not counted
+from it. indexNotReadyMessage says why a ServiceAccount is refused and what
+to do: finish the upgrade or the rollback, remove AgentIdentities, or retry
+while the controller builds it.
 */}}
 {{- define "kardinal-promoter.indexState" -}}
 - name: indexReady
@@ -41,9 +45,33 @@ rollback, remove AgentIdentities, or retry while the controller builds it.
   expression: >-
     has(params.status) && has(params.status.conditions) &&
     params.status.conditions.exists(c, c.type == 'Ready' && has(c.reason) && c.reason == 'IndexFull')
+- name: sa
+  expression: request.userInfo.username.startsWith('system:serviceaccount:')
+{{- end }}
+{{- /*
+actorMatches: the index entries that match the requester, by username then
+by group, read from a Ready index only (IndexFull's entries are written
+empty, a compact index's legacy maps hold a guard), and the derived kind: a
+transliteration of pkg/actor Derive and Source.Resolve.
+*/}}
+{{- define "kardinal-promoter.actorMatches" -}}
+- name: matches
+  expression: >-
+    !variables.indexReady ? [] :
+    (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
+      ? [params.status.users[request.userInfo.username]] : []) +
+    (has(params.status) && has(params.status.groups)
+      ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+- name: agent
+  expression: "size(variables.matches) > 0"
+- name: entry
+  expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
+- name: kind
+  expression: >-
+    variables.agent ? 'agent' : variables.sa ? 'bot' : variables.indexReady ? 'human' : 'unverified'
 {{- end }}
 {{- define "kardinal-promoter.indexNotReadyMessage" -}}
-variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read: finish the upgrade (or the rollback) and retry" : variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses the writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)"
+variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read, so a ServiceAccount's writes the actor policy checks wait: finish the upgrade (or the rollback) and retry" : variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses a ServiceAccount's writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet, so a ServiceAccount's writes the actor policy checks wait; retry in a few seconds (kubectl get agentindex)"
 {{- end }}
 {{- define "kardinal-promoter.actorChecks" -}}
 variables:
@@ -51,21 +79,12 @@ variables:
     expression: request.userInfo.username in {{ .controllers }}
   - name: groups
     expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-  # The index entries that match the requester: by username, then by group.
-  - name: matches
-    expression: >-
-      (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-        ? [params.status.users[request.userInfo.username]] : []) +
-      (has(params.status) && has(params.status.groups)
-        ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
-  - name: agent
-    expression: "size(variables.matches) > 0"
-  - name: entry
-    expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
-  - name: kind
-    expression: >-
-      variables.agent ? 'agent' :
-      request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
+  # The index is built: a Ready condition that is True. Until then (just
+  # created, IndexFull, or a later release's compact format) a
+  # ServiceAccount's writes the policy judges are refused, and anyone else's
+  # stamp says unverified (#2451).
+  {{- include "kardinal-promoter.indexState" . | nindent 2 }}
+  {{- include "kardinal-promoter.actorMatches" . | nindent 2 }}
   # The stamps this request adds: the new object's (null when it has
   # none), or the gate's new override entries. A Bundle or Approval update
   # adds none (the CRD keeps spec.actor immutable).
@@ -116,12 +135,8 @@ variables:
       variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
   - name: check
     expression: "!variables.controller && size(variables.stamps) > 0"
-  # The index is built: a Ready condition that is True. Until then (just
-  # created, or IndexFull) every write the policy judges is refused: the
-  # registry fails closed.
-  {{- include "kardinal-promoter.indexState" . | nindent 2 }}
 validations:
-  - expression: "!variables.check || variables.indexReady"
+  - expression: "!variables.check || variables.indexReady || !variables.sa"
     messageExpression: >-
       {{ include "kardinal-promoter.indexNotReadyMessage" . }}
     reason: Forbidden
@@ -159,7 +174,9 @@ validations:
     messageExpression: >-
       'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
       (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
-      '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
+      '}, with no via: it names who you are, as the API server authenticated you' +
+      (variables.kind == 'unverified' ? " (kardinal's agent index is not Ready, so it cannot tell you from an agent)" : '') +
+      '; kardinal sets it for you'
     reason: Forbidden
   # An agent stays in its scope: the namespace always, the Bundle's
   # Pipeline, the Approval's environment, the gate's Pipeline and environment.
@@ -249,28 +266,16 @@ spec:
       expression: request.userInfo.username in {{ $controllers }}
     - name: groups
       expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-    - name: matches
-      expression: >-
-        (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-          ? [params.status.users[request.userInfo.username]] : []) +
-        (has(params.status) && has(params.status.groups)
-          ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
-    - name: agent
-      expression: "size(variables.matches) > 0"
-    - name: entry
-      expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
-    - name: kind
-      expression: >-
-        variables.agent ? 'agent' :
-        request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
-    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
     {{- include "kardinal-promoter.indexState" . | nindent 4 }}
+    {{- include "kardinal-promoter.actorMatches" . | nindent 4 }}
+    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
   validations:
-    # Absence from the index means "not an agent", so a stamp is judged only
-    # against a built index; a later release's compact index (#2071) is not
-    # read at all (its legacy maps hold a guard for this release, not its
-    # agents).
-    - expression: "variables.controller || variables.indexReady || variables.stamps.all(s, s == null)"
+    # Absence from the index means "not an agent", so a ServiceAccount's
+    # stamp is judged only against a built index; a later release's compact
+    # index (#2071) is not read at all (its legacy maps hold a guard for this
+    # release, not its agents). Anyone else's stamp is judged without it: it
+    # must say unverified (#2451).
+    - expression: "variables.controller || variables.indexReady || !variables.sa || variables.stamps.all(s, s == null)"
       messageExpression: >-
         {{ include "kardinal-promoter.indexNotReadyMessage" . }}
       reason: Forbidden
@@ -283,7 +288,9 @@ spec:
       messageExpression: >-
         'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
         (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
-        '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
+        '}, with no via: it names who you are, as the API server authenticated you' +
+        (variables.kind == 'unverified' ? " (kardinal's agent index is not Ready, so it cannot tell you from an agent)" : '') +
+        '; kardinal sets it for you'
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-records" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Allow")) }}

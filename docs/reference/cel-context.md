@@ -405,7 +405,7 @@ client) is not in the context: it is text the client writes, and no such text re
 
 | Field | Type | Example | When populated |
 |---|---|---|---|
-| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp |
+| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, `unverified` (a person while the agent index was not Ready: neither `human` nor `agent`, [Actors](../actors.md#how-the-actor-is-verified)), or `unknown` without a stamp |
 | `actor.principal` | string | `"system:serviceaccount:ci:fixer"` | The authenticated username; without a stamp `kardinal.io/created-by`; else `""` |
 | `actor.agent` | string | `"fixer"` | The AgentIdentity name when the kind is `agent`; else `""` |
 | `actor.sponsor` | string | `"alice@example.com"` | The agent's sponsor when the version was created, when the kind is `agent`; else `""` |

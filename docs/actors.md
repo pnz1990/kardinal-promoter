@@ -20,7 +20,7 @@ VERSION          ACTION    ACTOR                          ENV    PR    DURATION 
 
 | Field | Verified | What it is |
 |---|---|---|
-| `kind` | yes | `human`, `agent`, `bot` (a ServiceAccount that is not a registered agent, or the Bundle API's static token) or `controller` (kardinal acting on its own) |
+| `kind` | yes | `human`, `agent`, `bot` (a ServiceAccount that is not a registered agent, or the Bundle API's static token), `controller` (kardinal acting on its own) or `unverified` (a person written while the agent index was not Ready: see below) |
 | `principal` | yes | The username the API server authenticated |
 | `agent` | yes | The agent's name (its AgentIdentity), when `kind` is `agent` |
 | `sponsor` | yes | The person who answers for the agent, when `kind` is `agent`, as registered when the record was written |
@@ -52,14 +52,40 @@ admit a stamp only when it says exactly what the requester is:
 - an agent's `agent` and `sponsor` are the ones registered;
 - only kardinal's controller sets `via`.
 
-Until the controller has built the index (`kubectl get agentindex` shows its Ready
-condition), the policies refuse every version, Approval and override they check, and every
-stamped pause, hold release or rejection, people's included, with "kardinal's agent index is
-not ready yet", and the UI API and the Bundle API
-answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade;
-the controller reports ready only once the index is. Writes the policies do not check go on
-meanwhile: kro's gate instances, and the versions kardinal creates itself (automatic rollbacks,
-Subscriptions), so promotions already under way keep moving.
+While the index is not Ready, the policies can't tell an agent from a person, and its readiness
+never refuses a person (#2451). The index is not Ready for a few seconds after an install or
+an upgrade, before the controller's first build; while it's full (`IndexFull`: its entries are over
+the 1 MiB bound); and after a rollback from a later release that wrote it in a newer format
+(`CompactFormat`). In those states:
+
+- A ServiceAccount's checked writes (a version, an Approval, a Verdict, a gate override, a freeze
+  or its exemption, a stamped pause, hold release or rejection) are refused, with a message that
+  names the state and what to do: retry, remove AgentIdentities or subjects until the index fits,
+  or finish the upgrade or rollback. The UI API and the Bundle API answer such callers 503. A
+  ServiceAccount waits for the index.
+- Anyone else is admitted. The stamp kardinal writes then (`kardinal`, the UI, the Bundle API)
+  says `kind: unverified`, never `human`: the policies refuse a `human` stamp until the index is
+  Ready again, and a write without a stamp goes through as it always does.
+- An `unverified` Approval or Verdict never counts toward a gate: the person approves (or writes
+  the verdict) again once the index is Ready. Everywhere else, `unverified` reads as not an agent.
+  Gates see `actor.kind == "unverified"`, which is neither `human` nor `agent`. The UI shows the
+  person's name with "unverified".
+- Writes the policies don't check go on: kro's gate instances, and the versions kardinal creates
+  itself (automatic rollbacks, Subscriptions), so promotions already under way keep moving.
+
+What this can't do. An agent registered by a `User` or `Group` subject is, while the index isn't
+Ready, indistinguishable from a person:
+
+- If it writes through `kardinal` or the UI, its stamp says `unverified`, so its approvals and
+  verdicts don't count.
+- If it writes an unstamped version, Approval or Verdict with `kubectl`, the record reads as
+  `unknown`, which counts like a person's, as an unstamped record always has.
+- A version stamped `unverified` isn't held as an agent's: `agents: deny`, agent overrides and the
+  freeze's break-glass rule don't apply to it.
+- Once the controller is back on an older release, after a rollback to v0.13 or earlier, an
+  `unverified` stamp reads as a person's.
+
+The controller reports ready only once the index is.
 
 The chart creates the index, empty, before the policies (Helm installs it first), and the
 `<release>-agent-index` policy lets only the controller delete it (one by one or with

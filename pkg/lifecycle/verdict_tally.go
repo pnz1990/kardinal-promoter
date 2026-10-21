@@ -127,8 +127,13 @@ func verifierLabel(a kardinalv1alpha1.Actor) string {
 // anyone else only when it is in allowedUsers or one of its groups is in
 // allowedGroups. A gate that lists nobody at all counts every verdict by
 // someone who is not an agent; one that lists only agents counts agents
-// only.
+// only. An unverified verdict (written while the AgentIndex was not Ready,
+// #2451) never counts.
 func VerdictWriterAllowed(p *kardinalv1alpha1.GateVerifyPolicy, v kardinalv1alpha1.Actor, groups []string) (bool, string) {
+	if v.Kind == kardinalv1alpha1.ActorUnverified {
+		return false, fmt.Sprintf("%s is unverified: written while kardinal's agent index was not Ready, so it cannot count; "+
+			"write the verdict again", v.Principal)
+	}
 	if v.Kind == kardinalv1alpha1.ActorAgent {
 		if slices.Contains(p.AllowedAgents, v.Agent) {
 			return true, ""

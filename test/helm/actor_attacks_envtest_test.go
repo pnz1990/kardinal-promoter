@@ -256,8 +256,18 @@ func TestActorAttacksOnAPIServer(t *testing.T) {
 	require.NoError(t, ctrl.Status().Update(ctx, &idx))
 	time.Sleep(2 * time.Second)
 	b("not ready: correct override", merge(as(fx), "g", map[string]interface{}{L: "true"}, ov(fx, ag(fx, "fixer", "alice"))), true)
-	b("not ready: human bundle", as("alice", "qa-all").Create(ctx, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{GenerateName: "b-", Namespace: "payments-a"},
-		Spec: v1alpha1.BundleSpec{Pipeline: "p", Type: "image"}}), true)
+	// A person is never refused for the index (#2451): unstamped or
+	// stamped unverified; a human stamp cannot be verified.
+	personBundle := func(a *v1alpha1.Actor) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{GenerateName: "b-", Namespace: "payments-a"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "p", Type: "image", Actor: a}}
+	}
+	b("not ready: a person's unstamped bundle", as("alice", "qa-all").Create(ctx, personBundle(nil)), false)
+	b("not ready: a person's bundle stamped unverified", as("alice", "qa-all").Create(ctx,
+		personBundle(&v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "alice"})), false)
+	b("not ready: a person's bundle stamped human", as("alice", "qa-all").Create(ctx,
+		personBundle(&v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "alice"})), true)
+	b("not ready: a ServiceAccount's bundle", as(fx).Create(ctx, personBundle(nil)), true)
 	b("not ready: kro-style gate write, no overrides (unlabelled tmpl2)", admin.Create(ctx, &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "tmpl2", Namespace: "payments-a"},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}), false)
 	b("not ready: human override on unlabelled gate, no label", merge(as("alice", "qa-all"), "tmpl2", nil, ov("alice", nil)), true)

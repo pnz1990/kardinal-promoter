@@ -97,11 +97,11 @@ spec:
     - expression: >-
         variables.exempt || variables.newStamps.all(s, s == null || (s.principal == request.userInfo.username && !has(s.via) &&
           (request.userInfo.username.startsWith('system:serviceaccount:')
-            ? s.kind in ['bot', 'agent'] : s.kind in ['human', 'agent'])))
+            ? s.kind in ['bot', 'agent'] : s.kind in ['human', 'agent', 'unverified'])))
       messageExpression: >-
         'an actor stamp must name you (principal ' + request.userInfo.username +
         '), with no via, and kind ' +
-        (request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot or agent' : 'human or agent') +
+        (request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot or agent' : 'human, agent or unverified') +
         '; kardinal sets it for you'
       reason: Forbidden
 ---

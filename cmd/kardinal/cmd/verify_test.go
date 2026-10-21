@@ -31,7 +31,7 @@ func verifyFixture(t *testing.T, objs ...sigs_client.Object) sigs_client.Client 
 		Spec:       v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "uat"}, {Name: "prod"}}},
 		Status:     v1alpha1.PipelineStatus{Environments: []v1alpha1.PipelineEnvironmentStatus{{Name: "uat", Bundle: "app-v1"}}},
 	}
-	return fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(append([]sigs_client.Object{b, p}, objs...)...).Build()
+	return fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(append([]sigs_client.Object{b, p, readyAgentIndex()}, objs...)...).Build()
 }
 
 func verdictsIn(t *testing.T, c sigs_client.Client) []v1alpha1.Verdict {

@@ -31,7 +31,15 @@ func approveFixture(t *testing.T, phase string) sigs_client.Client {
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
 		Spec:       v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}},
 	}
-	return fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(b, p).Build()
+	return fake.NewClientBuilder().WithScheme(rejectScheme(t)).WithObjects(b, p, readyAgentIndex()).Build()
+}
+
+// readyAgentIndex is the release's AgentIndex, built (Ready) and naming no
+// agents: a person is human, a ServiceAccount a bot. Without a Ready index
+// the CLI stamps a person unverified (#2451, TestStampOf_IndexNotReady).
+func readyAgentIndex() *v1alpha1.AgentIndex {
+	return &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}}
 }
 
 func approvals(t *testing.T, c sigs_client.Client) []v1alpha1.Approval {

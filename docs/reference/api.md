@@ -155,7 +155,7 @@ Approval records that a person approved, or rejected, a Bundle for an environmen
 | `spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -184,7 +184,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | `spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -227,7 +227,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -263,7 +263,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `spec.rejected.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.rejected.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.rejected.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.rejected.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.rejected.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.rejected.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.rejected.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.rejected.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -302,7 +302,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.pendingAuditEvents[].spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.pendingAuditEvents[].spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.pendingAuditEvents[].spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.pendingAuditEvents[].spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -443,7 +443,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `status.pendingAuditEvents[].spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.pendingAuditEvents[].spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.pendingAuditEvents[].spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.pendingAuditEvents[].spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -504,7 +504,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `spec.freeze.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.freeze.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.freeze.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.freeze.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.freeze.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.freeze.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.freeze.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.freeze.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -521,7 +521,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `spec.freeze.exemptions[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.freeze.exemptions[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.freeze.exemptions[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.freeze.exemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.freeze.exemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.freeze.exemptions[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.freeze.exemptions[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.freeze.exemptions[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -539,7 +539,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `spec.freeze.lifted.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.freeze.lifted.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.freeze.lifted.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.freeze.lifted.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.freeze.lifted.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.freeze.lifted.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.freeze.lifted.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.freeze.lifted.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -572,7 +572,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `status.exemptions[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.exemptions[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.exemptions[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.exemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.exemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.exemptions[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.exemptions[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.exemptions[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1122,7 +1122,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.holds[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.holds[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.holds[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.holds[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.holds[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.holds[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.holds[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.holds[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1181,7 +1181,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.lastChange.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.lastChange.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.lastChange.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.lastChange.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.lastChange.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.lastChange.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.lastChange.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.lastChange.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1298,7 +1298,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.observedHolds[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.observedHolds[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.observedHolds[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.observedHolds[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.observedHolds[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.observedHolds[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.observedHolds[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.observedHolds[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1324,7 +1324,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.pendingAuditEvents[].spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.pendingAuditEvents[].spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.pendingAuditEvents[].spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.pendingAuditEvents[].spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1386,7 +1386,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.approvals[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.approvals[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.approvals[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.approvals[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.approvals[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.approvals[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1408,7 +1408,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.overrides[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.overrides[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.overrides[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.overrides[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.overrides[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.overrides[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.overrides[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.overrides[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1426,7 +1426,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.verdicts[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.verdicts[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.verdicts[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.verdicts[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.verdicts[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.verdicts[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.verdicts[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.verdicts[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1474,7 +1474,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.approvals[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.approvals[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.approvals[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.approvals[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.approvals[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.approvals[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1512,7 +1512,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.pendingAuditEvents[].spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.pendingAuditEvents[].spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.pendingAuditEvents[].spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1717,7 +1717,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].approvals[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.decision.gates[].approvals[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.decision.gates[].approvals[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.decision.gates[].approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.decision.gates[].approvals[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.decision.gates[].approvals[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.decision.gates[].approvals[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.decision.gates[].approvals[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1739,7 +1739,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.decision.gates[].override.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.decision.gates[].override.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.decision.gates[].override.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.decision.gates[].override.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.decision.gates[].override.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.decision.gates[].override.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.decision.gates[].override.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.decision.gates[].override.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1783,7 +1783,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.freezeExemptions[].exemption.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.freezeExemptions[].exemption.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.freezeExemptions[].exemption.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.freezeExemptions[].exemption.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.freezeExemptions[].exemption.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.freezeExemptions[].exemption.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.freezeExemptions[].exemption.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.freezeExemptions[].exemption.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -1823,7 +1823,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `status.pendingAuditEvents[].spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `status.pendingAuditEvents[].spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `status.pendingAuditEvents[].spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `status.pendingAuditEvents[].spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
@@ -2149,7 +2149,7 @@ Verdict records that a verifier (an agent, a person or CI) found a Bundle to pas
 | `spec.actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
 | `spec.actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
 | `spec.actor.asserted.session` | string |  | Session is the client's session or run identifier. |
-| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person (#2451). One of: `human`, `agent`, `bot`, `controller`, `unverified`. |
 | `spec.actor.principal` | string | yes | Principal is the username the API server authenticated. |
 | `spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |

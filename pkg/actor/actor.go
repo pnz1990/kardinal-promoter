@@ -34,7 +34,8 @@ var (
 	// ErrOutOfScope: the agent may not act here.
 	ErrOutOfScope = errors.New("out of the agent's scope")
 	// ErrIndexNotReady: the release's AgentIndex is missing or not built
-	// (Ready); nothing can be stamped until it is.
+	// (Ready): a ServiceAccount cannot be stamped until it is; anyone else
+	// is stamped unverified (Source.Resolve, #2451).
 	ErrIndexNotReady = errors.New("kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)")
 )
 
@@ -176,6 +177,9 @@ func Describe(a v1alpha1.Actor) string {
 		return s
 	case v1alpha1.ActorHuman:
 		s = a.Principal
+	case v1alpha1.ActorUnverified:
+		// Written while the AgentIndex was not Ready (#2451).
+		s = a.Principal + " (unverified)"
 	default:
 		// A record without a stamp: its v0.11 principal, when it has one.
 		if a.Principal == "" {

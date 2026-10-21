@@ -47,4 +47,16 @@ describe('ActorBadge (#1908)', () => {
     rerender(<ActorBadge actor={{ kind: 'human', name: 'bob', text: 'bob' }} />)
     expect(container.querySelector('.k-actor')).toHaveTextContent(/^bob$/)
   })
+
+  it('a person written while the agent index was not Ready says unverified, compact too (#2451)', () => {
+    const view = actorOfBundle(bundle({ kind: 'unverified', principal: 'bob' }, 'bob (unverified) via the UI'))
+    expect(view).toEqual({ kind: 'unverified', name: 'bob', text: 'bob (unverified) via the UI', asserted: undefined })
+    const { container, rerender } = render(<ActorBadge actor={view!} />)
+    const el = container.querySelector('.k-actor')!
+    expect(el).toHaveAttribute('data-actor-kind', 'unverified')
+    expect(el).toHaveTextContent(/^bob unverified$/)
+    expect(el).toHaveAttribute('title', 'bob (unverified) via the UI')
+    rerender(<ActorBadge actor={view!} compact />)
+    expect(container.querySelector('.k-actor')).toHaveTextContent(/^bob unverified$/)
+  })
 })

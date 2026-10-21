@@ -110,7 +110,7 @@
             "description": "Asserted holds what the client says about itself. It is recorded as written and never used for a security decision."
           },
           "kind": {
-            "description": "Kind is human, agent, bot or controller (docs/actors.md).",
+            "description": "Kind is human, agent, bot or controller (docs/actors.md), or unverified: a requester who is not a ServiceAccount, while the AgentIndex is not Ready, so not known to be a person.",
             "type": "string"
           },
           "principal": {

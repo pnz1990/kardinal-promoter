@@ -105,10 +105,13 @@ func assertedFor(ctx context.Context) v1alpha1.AssertedActor {
 }
 
 // stampOf is the actor stamp for a write by id at w (docs/actors.md): id
-// through the cluster's agent index, with the asserted fields. When the
-// index cannot be read the stamp is left out with a warning: the chart's
-// actor policy admits that for people and bots, and tells an agent which
-// stamp to write. It fails when id is an agent that may not act at w.
+// through the cluster's agent index, with the asserted fields. While no
+// index is Ready a person is stamped unverified (#2451), as the chart's
+// actor policy requires then. When the index cannot be read, or id is a
+// ServiceAccount and the index is not Ready, the stamp is left out with a
+// warning: the actor policy then decides (it refuses a ServiceAccount's
+// checked write until the index is Ready, and tells an agent which stamp to
+// write). It fails when id is an agent that may not act at w.
 func stampOf(ctx context.Context, c sigs_client.Client, id Identity, w actor.Where) (*v1alpha1.Actor, error) {
 	env := envOf(ctx)
 	src := &actor.Source{Reader: c}
