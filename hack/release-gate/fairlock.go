@@ -183,18 +183,11 @@ func selfRecord(p procFS) string {
 // names a process that is gone. at is the record's own time when the text
 // has none (a ticket's name).
 func recordDead(p procFS, record string, at time.Time) bool {
-	m := recordFields.FindStringSubmatch(strings.TrimSpace(record))
-	if m == nil {
+	r := parseRecord(record)
+	if !r.ok {
 		return false
 	}
-	pid, err := strconv.Atoi(m[1])
-	if err != nil {
-		return false
-	}
-	keys := map[string]string{}
-	for _, kv := range recordKey.FindAllStringSubmatch(m[3], -1) {
-		keys[kv[1]] = kv[2]
-	}
+	pid, keys := r.pid, r.keys
 	if b, ok := keys["boot"]; ok {
 		if cur := p.BootID(); cur != "" && b != cur {
 			return true
@@ -215,16 +208,63 @@ func recordDead(p procFS, record string, at time.Time) bool {
 	}
 	// An older client's record: a pid that started after the record was
 	// written is another process.
-	if recordTime.MatchString(m[2]) {
-		if parsed, err := time.Parse(time.RFC3339, m[2]); err == nil {
-			at = parsed
-		}
+	if !r.at.IsZero() {
+		at = r.at
 	}
 	if at.IsZero() {
 		return false
 	}
 	started := p.BootTime().Add(time.Duration(start) * time.Second / clockTicks)
 	return started.After(at.Add(time.Second))
+}
+
+// parsedRecord is a record's fields (recordFields): whether it has them
+// (matched), and then its pid (ok when it is a number), its own time (zero
+// when it has none) and its keys, which callers only read.
+type parsedRecord struct {
+	matched, ok bool
+	pid         int
+	at          time.Time
+	keys        map[string]string
+}
+
+// recordParses holds parseRecord's results by record text: every waiter
+// judges every ticket on each poll, and the regexp's backtracking was most
+// of a waiter's CPU (#2292's way, for hack/release-gate's tests). At
+// maxRecordParses texts it starts again.
+var (
+	recordParses     sync.Map
+	recordParseCount atomic.Int64
+)
+
+const maxRecordParses = 4096
+
+// parseRecord is record's fields, parsed once per text.
+func parseRecord(record string) *parsedRecord {
+	if v, ok := recordParses.Load(record); ok {
+		return v.(*parsedRecord)
+	}
+	r := &parsedRecord{}
+	if m := recordFields.FindStringSubmatch(strings.TrimSpace(record)); m != nil {
+		r.matched = true
+		if pid, err := strconv.Atoi(m[1]); err == nil {
+			r.ok, r.pid, r.keys = true, pid, map[string]string{}
+			for _, kv := range recordKey.FindAllStringSubmatch(m[3], -1) {
+				r.keys[kv[1]] = kv[2]
+			}
+			if recordTime.MatchString(m[2]) {
+				if parsed, err := time.Parse(time.RFC3339, m[2]); err == nil {
+					r.at = parsed
+				}
+			}
+		}
+	}
+	if recordParseCount.Add(1) > maxRecordParses {
+		recordParses.Range(func(k, _ any) bool { recordParses.Delete(k); return true })
+		recordParseCount.Store(1)
+	}
+	recordParses.Store(record, r)
+	return r
 }
 
 // seq makes this process's ticket names unique however fast it queues.
@@ -883,7 +923,7 @@ func reapTickets(p procFS, q string, log func(string, ...any), warned map[string
 			log("warning: ticket %s is a waiter on code from before #2226 (%s); it can move the lock from under its holder: rebase it onto main",
 				e.Name(), strings.TrimSpace(record))
 		}
-		if !recordFields.MatchString(strings.TrimSpace(record)) {
+		if !parseRecord(record).matched {
 			record += " pid " + parts[2] // an older client's ticket text has no pid
 		}
 		if recordDead(p, record, time.Unix(0, ns)) {

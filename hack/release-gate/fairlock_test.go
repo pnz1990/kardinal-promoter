@@ -1002,3 +1002,27 @@ func TestDeadDir_EmptyOwner(t *testing.T) {
 	f.reclaim()
 	assert.NoDirExists(t, slot, "reclaimed, not wedged forever")
 }
+
+// TestParseRecord_Memo: a record's fields are parsed once per text, the same
+// as the regexp reads them, and the memo starts again at maxRecordParses.
+func TestParseRecord_Memo(t *testing.T) {
+	r := parseRecord("ENGINEER-4 pid 7 2026-10-21T00:00:00Z boot=b start=9 beat=1")
+	require.True(t, r.matched && r.ok)
+	assert.Equal(t, 7, r.pid)
+	assert.Equal(t, map[string]string{"boot": "b", "start": "9", "beat": "1"}, r.keys)
+	assert.Equal(t, time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC), r.at)
+	assert.Same(t, r, parseRecord("ENGINEER-4 pid 7 2026-10-21T00:00:00Z boot=b start=9 beat=1"), "parsed once")
+	assert.False(t, parseRecord("an older client's text").matched)
+	big := parseRecord("x pid 99999999999999999999 now")
+	assert.True(t, big.matched)
+	assert.False(t, big.ok, "a pid that is no int: matched, not ok")
+	for i := 0; i < maxRecordParses+10; i++ {
+		parseRecord(fmt.Sprintf("w%d pid %d now", i, i))
+	}
+	assert.LessOrEqual(t, recordParseCount.Load(), int64(maxRecordParses))
+	n := 0
+	recordParses.Range(func(_, _ any) bool { n++; return true })
+	assert.LessOrEqual(t, n, maxRecordParses, "the memo starts again")
+	again := parseRecord("ENGINEER-4 pid 7 2026-10-21T00:00:00Z boot=b start=9 beat=1")
+	assert.Equal(t, 7, again.pid)
+}
