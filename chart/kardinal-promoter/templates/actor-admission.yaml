@@ -20,11 +20,13 @@ actorChecks: the variables and validations of the actor policies, a
 transliteration of pkg/actor Derive and Scope. $controllers is passed in.
 */}}
 {{- /*
-indexState: indexReady (Ready True) and compact (Ready's reason is
+indexState: indexReady (Ready True), compact (Ready's reason is
 CompactFormat: a later release wrote the index in its compact format, #2071,
-whose entries this release's policies do not read). A compact index is not
-Ready, so the policies refuse every write they check until a controller of
-this release has rebuilt it (a rollback); indexNotReadyMessage says which.
+whose entries this release's policies do not read) and full (Ready's reason
+is IndexFull: the entries are over the bound, and written empty). An index
+that is not Ready makes the policies refuse every write they check;
+indexNotReadyMessage says why and what to do: finish the upgrade or the
+rollback, remove AgentIdentities, or retry while the controller builds it.
 */}}
 {{- define "kardinal-promoter.indexState" -}}
 - name: indexReady
@@ -35,9 +37,13 @@ this release has rebuilt it (a rollback); indexNotReadyMessage says which.
   expression: >-
     has(params.status) && has(params.status.conditions) &&
     params.status.conditions.exists(c, c.type == 'Ready' && has(c.reason) && c.reason == 'CompactFormat')
+- name: full
+  expression: >-
+    has(params.status) && has(params.status.conditions) &&
+    params.status.conditions.exists(c, c.type == 'Ready' && has(c.reason) && c.reason == 'IndexFull')
 {{- end }}
 {{- define "kardinal-promoter.indexNotReadyMessage" -}}
-variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read: finish the upgrade (or the rollback) and retry" : "kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)"
+variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read: finish the upgrade (or the rollback) and retry" : variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses the writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)"
 {{- end }}
 {{- define "kardinal-promoter.actorChecks" -}}
 variables:

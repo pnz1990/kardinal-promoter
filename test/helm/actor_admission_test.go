@@ -280,7 +280,9 @@ func TestActorAdmission(t *testing.T) {
 // TestActorAdmission_IndexNotReady: an AgentIndex with no status (just
 // created), or one not Ready (IndexFull), denies every write the policy
 // judges, people's included, until the controller has built it: the
-// registry fails closed. A Ready index with no agents admits people and bots.
+// registry fails closed. A full index says so, and what to do (retrying
+// does not help: QA-3 on #2384). A Ready index with no agents admits people
+// and bots.
 func TestActorAdmission_IndexNotReady(t *testing.T) {
 	t.Parallel()
 	vap := identityPolicy(t, "actor")
@@ -290,7 +292,10 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 	assert.Contains(t, evalActor(t, vap, empty, req), "kardinal's agent index is not ready yet")
 	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
-	assert.Contains(t, evalActor(t, vap, full, req), "kardinal's agent index is not ready yet")
+	got := evalActor(t, vap, full, req)
+	assert.Contains(t, got, "kardinal's agent index is full (IndexFull")
+	assert.Contains(t, got, "remove AgentIdentities or subjects")
+	assert.NotContains(t, got, "retry")
 	ready := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}})
 	assert.Empty(t, evalActor(t, vap, ready, req))
@@ -406,9 +411,15 @@ func TestActorRecords_IndexNotReady(t *testing.T) {
 	delete(empty, "status")
 	full := asMap(t, v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "IndexFull"}}}})
-	for name, params := range map[string]map[string]interface{}{"never built": empty, "full": full} {
-		assert.Contains(t, evalActor(t, vap, params, req(bot)), "kardinal's agent index is not ready yet", name)
-		assert.Empty(t, evalActor(t, vap, params, req(nil)), "%s: an unstamped pause", name)
+	for name, tc := range map[string]struct {
+		params map[string]interface{}
+		deny   string
+	}{
+		"never built": {empty, "kardinal's agent index is not ready yet"},
+		"full":        {full, "kardinal's agent index is full (IndexFull"},
+	} {
+		assert.Contains(t, evalActor(t, vap, tc.params, req(bot)), tc.deny, name)
+		assert.Empty(t, evalActor(t, vap, tc.params, req(nil)), "%s: an unstamped pause", name)
 	}
 	idx := actorRegistry(t)
 	ready := *idx

@@ -164,7 +164,8 @@ The AgentIdentity is ready unless it is invalid:
 - **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 5,000
   AgentIdentities of one subject each, blocked ones included; kardinal supports up to 4,000, see
   [Scale and limits](operate.md#scale-and-limits)). The whole index is then not Ready, and kardinal refuses every write
-  the actor policy checks until AgentIdentities or subjects are removed.
+  the actor policy checks until AgentIdentities or subjects are removed, with "kardinal's
+  agent index is full (IndexFull: ...): remove AgentIdentities or subjects until it fits".
 
 The subjects of an AgentIdentity that is not ready are refused, with its reason, rather than
 treated as people.

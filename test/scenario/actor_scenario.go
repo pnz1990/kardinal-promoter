@@ -253,7 +253,7 @@ var ActorRefusals = []ActorRefusal{
 			return w.Client.Create(w.Ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: Release}})
 		},
 		Fix: func(w *World, p *Plan) error { w.PauseIndex(false); return nil }, Shipper: "human"},
-	{Actor: "index-overflow", Message: "kardinal's agent index is not ready yet", Index: true,
+	{Actor: "index-overflow", Message: "kardinal's agent index is full (IndexFull", Index: true,
 		// Suspended AgentIdentities count against the bound too; being
 		// suspended, they can be deleted to put it right.
 		Break: func(w *World, p *Plan) error {
