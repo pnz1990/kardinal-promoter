@@ -419,9 +419,10 @@ so the Graph is read once per gate, and a gate's Bundle is fixed for its life: a
 `status.bundleUID` names another Bundle is never this one's. kro records an object before it
 creates it and fills its UID in after; a gate matching such an entry by name is evaluated but not
 kept (the next look checks the UID), and only when it is not being deleted and was not created
-before the Graph (an earlier Bundle's gate always was). No other clock is compared: creation
-times can come from different API servers, and a gate restored before its Bundle and adopted by
-the Bundle's Graph, with no `status.bundleUID`, is the Bundle's.
+before the Graph (an earlier Bundle's gate always was). That is the only clock comparison, and
+it decides nothing for good: under skew between API servers it costs at most a recheck, until
+kro fills the UID in. Membership itself compares no clock, so a gate restored before its Bundle
+and adopted by the Bundle's Graph, with no `status.bundleUID`, is the Bundle's.
 
 A gate that is not its Bundle's writes no record and no evaluation, sets condition
 `InBundleGraph=False` (`GraphPending`: the Bundle has no Graph of its own yet; `NotListed`: the
@@ -429,9 +430,13 @@ Graph does not list the gate, or the gate was an earlier Bundle's), logs why, an
 again in 10 seconds (QA-5 on #2395). An earlier Bundle's gate that kro adopts (G17) is refused,
 not counted: its verdicts, overrides and ready flag are the earlier Bundle's. The new Bundle's
 step then waits on it until it is deleted (the condition says to delete it, and kro then creates
-the new Bundle's), which fails closed, as an audit trail needs. What remains: a gate from before
-v0.14 (no `status.bundleUID`) left behind and adopted by kro, by its UID, is taken as the new
-Bundle's. A gate whose Bundle is gone fails closed (`context error`) and writes no record.
+the new Bundle's), which fails closed, as an audit trail needs. kro itself never adopts another
+Graph's object: its template field manager is tied to the Graph's UID
+(`kro-graphengine.tmpl.<digest>`), and it refuses an object another Graph's manager owns. What
+remains: a gate with no kro template manager in its `managedFields` and no `status.bundleUID`,
+such as one a restore re-created with its managed fields reset, that the new Bundle's Graph
+adopts by its UID is taken as the new Bundle's. A gate whose Bundle is gone fails closed
+(`context error`) and writes no record.
 
 ### 6.6 CEL: `verdicts.*`
 
