@@ -152,6 +152,7 @@ func shape300(t *testing.T, batched bool) {
 	// on clones, pushes and rebases (#2366). The compact suite runs this
 	// test alone, on one controller replica.
 	before, beforeErr := e.ControllerMetrics(ctx)
+	start := time.Now()
 	a.apply(t, p)
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
 
@@ -184,6 +185,7 @@ func shape300(t *testing.T, batched bool) {
 	} else {
 		t.Logf("git spend not measured: controller metrics: before %v, after %v", beforeErr, err)
 	}
+	logConflicts(t, e, start)
 	var gates v1alpha1.PolicyGateList
 	require.NoError(t, e.Client.List(ctx, &gates, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
 	assert.Len(t, gates.Items, len(envs), "one gate instance per environment")
@@ -276,6 +278,26 @@ func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
 	}
 	t.Logf("wave times (#2349, #2366):\n%s\nall waves: %d pushes refused, %d rebases, %d fresh clones",
 		strings.Join(lines, "\n"), refusals, rebases, fresh)
+}
+
+// logConflicts logs how many of the controller's log lines since since are
+// update conflicts ("the object has been modified"), and how many of those
+// name a BranchWrite (#2405 review: a round's status writes must not
+// conflict with the Graph's rewrites of spec.requested).
+func logConflicts(t *testing.T, e *framework.Env, since time.Time) {
+	t.Helper()
+	all, bw := 0, 0
+	logs := e.ControllerLogs(t, since)
+	for _, l := range strings.Split(logs, "\n") {
+		if strings.Contains(l, "the object has been modified") {
+			all++
+			if strings.Contains(strings.ToLower(l), "branchwrite") {
+				bw++
+			}
+		}
+	}
+	t.Logf("update conflicts (#2405): %d controller log lines with \"the object has been modified\", %d of them naming a BranchWrite "+
+		"(%d KiB of logs read; the kubelet keeps only the current log file)", all, bw, len(logs)/1024)
 }
 
 // logGitSpend logs the controller's git clones, pushes and rebases between
