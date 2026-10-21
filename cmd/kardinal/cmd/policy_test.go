@@ -1181,6 +1181,54 @@ func TestPolicySimulate_Version(t *testing.T) {
 	assert.Contains(t, err.Error(), "9.9")
 }
 
+// TestPolicySimulate_AsAgentBudget: --as-agent's budget.* reads the agent's
+// current counts, from the ledger named for the release's AgentIndex, else
+// the agent's only ledger (a shard's installation); a person's version gets
+// budget.applies false (docs/design/24-agent-budgets.md section 10).
+// Covers BUDGET-CEL-01.
+func TestPolicySimulate_AsAgentBudget(t *testing.T) {
+	t.Parallel()
+	usage := func(used int32) v1alpha1.AgentUsage {
+		return v1alpha1.AgentUsage{ObservedGeneration: 1, Rules: []v1alpha1.AgentBudgetRuleUsage{{Name: "prod",
+			Versions: &v1alpha1.AgentBudgetCount{Limit: 4, Used: used}}}}
+	}
+	for _, tc := range []struct {
+		name   string
+		ledger map[string]v1alpha1.AgentUsage
+		asHum  bool
+		want   string
+	}{
+		{"half the day spent, in the release's ledger", map[string]v1alpha1.AgentUsage{"kardinal-promoter": usage(2)}, false, "RESULT: BLOCKED"},
+		{"a quarter spent", map[string]v1alpha1.AgentUsage{"kardinal-promoter": usage(1)}, false, "RESULT: PASS"},
+		{"the agent's only ledger is another installation's", map[string]v1alpha1.AgentUsage{"shard-ledger": usage(3)}, false, "RESULT: BLOCKED"},
+		{"the release's ledger wins over another", map[string]v1alpha1.AgentUsage{"kardinal-promoter": usage(1), "other": usage(4)}, false, "RESULT: PASS"},
+		{"a person's version", map[string]v1alpha1.AgentUsage{"kardinal-promoter": usage(4)}, true, "RESULT: PASS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := policyPipeline("demo", "test", "prod")
+			id := &v1alpha1.AgentIdentity{ObjectMeta: metav1.ObjectMeta{Name: "fixer", Generation: 1},
+				Spec: v1alpha1.AgentIdentitySpec{Subjects: []v1alpha1.AgentSubject{{Kind: "ServiceAccount", Namespace: "ci", Name: "fixer"}},
+					Sponsor: v1alpha1.AgentSponsor{User: "alice"}, Autonomy: v1alpha1.AutonomyAuto,
+					Budgets: []v1alpha1.AgentBudgetRule{{Name: "prod", Environments: []string{"prod"}, VersionsPerDay: 4}}},
+				Status: v1alpha1.AgentIdentityStatus{Ready: true, ObservedGeneration: 1, Usage: tc.ledger}}
+			idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"},
+				Status: v1alpha1.AgentIndexStatus{Users: map[string]v1alpha1.AgentIndexEntry{
+					"system:serviceaccount:ci:fixer": {Agent: "fixer", Sponsor: "alice", Autonomy: v1alpha1.AutonomyAuto}}}}
+			half := policyGate("half-the-day", "default", "prod",
+				`!budget.applies || budget.env.versions.used * 2 < budget.env.versions.limit`)
+			c := policyClient(t, p, id, idx, half)
+			opts := simulateOptions{Env: "prod", Time: "Tuesday 10am", AsAgent: "fixer"}
+			if tc.asHum {
+				opts = simulateOptions{Env: "prod", Time: "Tuesday 10am", AsHuman: "bob"}
+			}
+			out, err := runSimulate(t, c, opts)
+			require.NoError(t, err)
+			assert.Contains(t, out, tc.want)
+		})
+	}
+}
+
 // TestPolicySimulate_AsAgent: --as-agent stamps the simulated version as the
 // agent, so the Pipeline's agents gates and actor.* and agent.* apply;
 // --as-human stamps a person, who gets no agent gate.
