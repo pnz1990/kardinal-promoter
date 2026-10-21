@@ -102,6 +102,13 @@ The design follows the RenderRun pattern the compact shape already uses for
    (`promotionstep_types.go:95-104`: "The reconciler reads only this copy, never the source
    objects").
 
+**As built (#2405).** Three names differ from the sketches below. A request is a counter, not
+a time: the step's `status.writeRequest` (incremented on each ask), listed in `spec.requested`
+as `{step, uid, request}`, and answered by a result with the same step and UID and a request
+at least as new. The step's copy of the answers is `spec.live.writes` (a list, one per
+BranchWrite). `status.inFlight` also holds `commits`, each member's commit SHA, recorded with
+the push intent (§4.3). The API reference (`docs/reference/api.md`) has the fields as they are.
+
 ### 4.1 The CRD that owns the batch: BranchWrite
 
 A new namespaced CRD, **BranchWrite**: the writes of one Bundle's environments to one
@@ -256,12 +263,21 @@ covers fleets too, whose pacing decides which steps exist and so which ask.
   time.
 - **A hold (`spec.holds`, pause, freeze, slot, hooks).** These keep an existing step waiting
   before `await-write` runs (`lifecycle.go:36-135`), so it does not ask.
-  - A hold that arrives after the step asked but before its round froze: the step withdraws its
-    request by clearing `writeRequestedAt` when the hold is applied, and the Graph drops it from
-    `spec.requested`.
-  - A hold that arrives after the freeze does not stop that round. That is today's semantics too:
-    a step re-checks holds only at the start of a reconcile, and its write finishes within one
-    (`reconciler.go:1063-1071`).
+  - A pause, freeze or environment hold that arrives after the step asked: the BranchWrite
+    checks each member itself, read-only, as the step would before its next git step
+    (`holdIfPaused`, `holdIfFrozen`, `holdIfEnvironmentHeld`), when the round freezes its
+    members and again right before the push (§4.3 step 3). A member held at the first check
+    is not in the round. Steps do not withdraw their requests: the first draft's withdrawal
+    (clearing the request when the hold is applied) was replaced by these two checks, which
+    need no write by the step. The held member stays pending, unanswered, and the BranchWrite
+    looks again at `requeuePaused` until the hold ends. A read that fails holds the member.
+  - A hold that arrives after the round started is caught by the second check: the held
+    member is dropped, and the round is written again without it from a fresh clone, so its
+    change is in no pushed commit.
+  - What is left is the window between the second check and the push: one status write (the
+    push intent and the commits) and the push call. A hold that lands inside that window does
+    not stop that push, just as a hold that lands while a step is in `git-push` does not stop
+    the step's push.
 - **One member's update fails** (a path that is gone, a bad image reference): that member gets
   `error`, the others commit and push. The failed one retries on its own budget, then fails as
   today.

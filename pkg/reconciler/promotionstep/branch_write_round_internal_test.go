@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -129,6 +131,75 @@ func TestBranchWrite_HeldMidRound(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBranchWrite_FailedReadHolds (#2405 review): a read that fails holds,
+// as the step's freeze check does (a kill switch fails closed): a pause gate
+// or ChangeWindow list that cannot be read right before the push holds every
+// member, and a transient error reading one member's step holds that member,
+// not cancels it. Nothing held is pushed or answered; it stays pending.
+//
+// Covers GRAPH-COMPACT-10.
+func TestBranchWrite_FailedReadHolds(t *testing.T) {
+	down := errors.New("etcdserver: request timed out")
+	for _, tc := range []struct {
+		name string
+		// fails reports whether a read of key (kind/name) fails.
+		fails   func(key string) bool
+		written []string
+	}{
+		{name: "the pause gate", fails: func(k string) bool { return k == "PolicyGate/"+lifecycle.FreezeGateName("app") }},
+		{name: "the freeze list", fails: func(k string) bool { return k == "ChangeWindowList" }},
+		{name: "a member's step", fails: func(k string) bool { return k == "PromotionStep/app-"+writeBundle+"-uat" },
+			written: []string{"test"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newWriteHost(t, "test", "uat")
+			var failing atomic.Bool
+			c := h.client(interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if failing.Load() && tc.fails(kindOf(c, obj)+"/"+key.Name) {
+						return down
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if failing.Load() && tc.fails(kindOf(c, list)) {
+						return down
+					}
+					return c.List(ctx, list, opts...)
+				},
+			})
+			// The reads fail from after the round's clone: at the check
+			// right before the push.
+			git := &countingGit{GitClient: scm.NewGoGitClient(), afterFirstClone: func() { failing.Store(true) }}
+			res, err := h.reconcile(h.reconciler(c, git))
+			require.NoError(t, err)
+			assert.Equal(t, requeuePaused, res.RequeueAfter)
+			failing.Store(false)
+			bw := h.get(c)
+			assert.Nil(t, bw.Status.InFlight)
+			assert.EqualValues(t, len(tc.written), git.pushes.Load())
+			for _, e := range []string{"test", "uat"} {
+				if slices.Contains(tc.written, e) {
+					assert.Equal(t, h.commitOf(e), bw.Status.Environments[e].CommitSHA, "%s: written", e)
+					continue
+				}
+				assert.NotContains(t, bw.Status.Environments, e, "%s: held, not answered (not cancelled)", e)
+				assert.Equal(t, "v1", h.tagOf(e), "%s: not pushed", e)
+			}
+			assert.Equal(t, 2-len(tc.written), h.pending(c))
+		})
+	}
+}
+
+// kindOf is obj's kind in c's scheme.
+func kindOf(c client.Client, obj runtime.Object) string {
+	gvk, err := c.GroupVersionKindFor(obj)
+	if err != nil {
+		return ""
+	}
+	return gvk.Kind
 }
 
 // TestBranchWrite_MemberGoneMidRound (#2405 review): a member's step that
