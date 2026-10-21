@@ -209,9 +209,11 @@ kubectl get pipelines -A
 kubectl get bundles -A
 ```
 
-`kardinal doctor` passes every check, and every Pipeline is Ready. A WARN from "Policy namespaces
-shared" names the Pipelines whose `spec.policyNamespaces` still needs a label or a chart entry
-(step 1); it becomes a FAIL against the next release, which refuses them.
+`kardinal doctor` passes every check, and every Pipeline is Ready. "Policy namespaces shared" can
+WARN in two ways. If it names Pipelines, their `spec.policyNamespaces` still needs a label or a
+chart entry (step 1), and against the next release, which refuses them, that becomes a FAIL. If it
+names no Pipeline, it checked one namespace only, or none, because you may not list Pipelines in
+every namespace: run it as a user who may.
 
 ## Upgrading from v0.11.0
 
