@@ -55,6 +55,11 @@ type BuildInput struct {
 	// gate of it reads gets an instance node for that environment
 	// (buildChangeRequestNode).
 	ChangeRequests []kardinalv1alpha1.ChangeRequest
+	// AgentBudgets are the budget rules of the agent that made Bundle (its
+	// AgentIdentity spec.budgets), when agent budgets are on: they are folded
+	// into its fleet targets' pacing (foldBudgets). Nil folds nothing, so a
+	// person's version's Graph is unchanged.
+	AgentBudgets []kardinalv1alpha1.AgentBudgetRule
 }
 
 // BuildResult is the output of the graph builder.
@@ -181,10 +186,11 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 4: collect and match PolicyGates by environment
-	members, _, err := fleetMembers(input.Pipeline)
+	members, byFleet, err := fleetMembers(input.Pipeline)
 	if err != nil {
 		return nil, err
 	}
+	foldBudgets(members, byFleet, input.Pipeline.Namespace, input.AgentBudgets)
 	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates, members)
 	if err := addAgentGates(input.Pipeline, input.Bundle, filteredEnvs, members, input.PolicyGates, gatesByEnv); err != nil {
 		return nil, err

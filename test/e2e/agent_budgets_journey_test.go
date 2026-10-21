@@ -90,11 +90,12 @@ func (w *budgetWorld) reconcileStep(ns, name string) {
 	require.NoError(w.t, err)
 }
 
-// settle runs the budget reconciler and every step's reconciler until
-// nothing changes: what the controller's watches would do.
+// settle runs the budget reconciler and every step's reconciler until a
+// round changes nothing: what the controller's watches would do.
 func (w *budgetWorld) settle() {
 	w.t.Helper()
-	for range 40 {
+	last := ""
+	for range 500 {
 		_, err := w.ledger.Reconcile(w.ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "fixer"}})
 		require.NoError(w.t, err)
 		var steps v1alpha1.PromotionStepList
@@ -104,7 +105,19 @@ func (w *budgetWorld) settle() {
 				w.reconcileStep(s.Namespace, s.Name)
 			}
 		}
+		var id v1alpha1.AgentIdentity
+		require.NoError(w.t, w.c.Get(w.ctx, types.NamespacedName{Name: "fixer"}, &id))
+		require.NoError(w.t, w.c.List(w.ctx, &steps))
+		snap := id.ResourceVersion
+		for _, s := range steps.Items {
+			snap += "," + s.ResourceVersion
+		}
+		if snap == last {
+			return
+		}
+		last = snap
 	}
+	w.t.Fatal("the world did not settle in 500 rounds")
 }
 
 func (w *budgetWorld) step(ns, name string) v1alpha1.PromotionStep {
@@ -230,4 +243,103 @@ func TestBudgetJourney6People(t *testing.T) {
 	for _, g := range id.Status.Usage["kardinal-promoter"].Grants {
 		assert.NotEqual(t, "uid-3", g.BundleUID, "the superseded version was never granted")
 	}
+}
+
+// fleetWorld is newBudgetWorld with a Pipeline whose prod is a fleet of
+// targets t0..t<n-1>.
+func fleetWorld(t *testing.T, rules []v1alpha1.AgentBudgetRule, targets int) *budgetWorld {
+	t.Helper()
+	w := newBudgetWorld(t, rules)
+	fleet := &v1alpha1.FleetSpec{}
+	for i := range targets {
+		fleet.Targets = append(fleet.Targets, v1alpha1.FleetTarget{Name: fmt.Sprintf("t%d", i)})
+	}
+	require.NoError(t, w.c.Create(w.ctx, &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "payments"},
+		Spec: v1alpha1.PipelineSpec{Git: v1alpha1.PipelineGit{URL: "https://github.com/pnz1990/kardinal-demo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "prod", Approval: "auto", Fleet: fleet}}}}))
+	return w
+}
+
+// fleetVersion creates a version by author and one step per fleet target,
+// and returns the steps' names.
+func (w *budgetWorld) fleetVersion(author *v1alpha1.Actor, targets int) []string {
+	w.t.Helper()
+	w.n++
+	name := fmt.Sprintf("checkout-v%d", w.n)
+	uid := fmt.Sprintf("uid-%d", w.n)
+	require.NoError(w.t, w.c.Create(w.ctx, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "payments",
+		UID: types.UID(uid), Labels: map[string]string{"kardinal.io/pipeline": "checkout"}},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "checkout", Actor: author}}))
+	var names []string
+	for i := range targets {
+		env := fmt.Sprintf("prod-t%d", i)
+		step := makeJourneyStep(name+"-"+env, "checkout", name, env, "auto")
+		step.Namespace = "payments"
+		step.Labels["kardinal.io/bundle"], step.Labels["kardinal.io/environment"] = name, env
+		step.Labels["kardinal.io/fleet"], step.Labels["kardinal.io/bundle-uid"] = "prod", uid
+		step.CreationTimestamp = metav1.NewTime(w.now.Add(time.Duration(i) * time.Millisecond))
+		require.NoError(w.t, w.c.Create(w.ctx, step))
+		names = append(names, step.Name)
+	}
+	w.now = w.now.Add(time.Second)
+	return names
+}
+
+func (w *budgetWorld) countVerified(names []string) int {
+	w.t.Helper()
+	n := 0
+	for _, name := range names {
+		if w.verified("payments", name) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestBudgetJourney3FleetTargetsPerHour: a fleet of 20 targets with
+// fleetTargetsPerHour 5: five start, the rest wait, the next five start an
+// hour later.
+// Covers BUDGET-HOLD-01.
+func TestBudgetJourney3FleetTargetsPerHour(t *testing.T) {
+	w := fleetWorld(t, []v1alpha1.AgentBudgetRule{{Name: "prod", Environments: []string{"prod"}, FleetTargetsPerHour: 5}}, 20)
+	steps := w.fleetVersion(fixerStamp, 20)
+	w.settle()
+	assert.Equal(t, 5, w.countVerified(steps), "five targets in the first hour")
+	w.now = w.now.Add(time.Hour)
+	w.settle()
+	assert.Equal(t, 10, w.countVerified(steps), "five more an hour later")
+}
+
+// TestBudgetJourney7FleetShare: fleetShare 20% on a fleet of 10 targets:
+// two of the agent's targets are under way at once, the third waits for one
+// to settle; a person's version in the same fleet is not held.
+// Covers BUDGET-HOLD-01.
+func TestBudgetJourney7FleetShare(t *testing.T) {
+	w := fleetWorld(t, []v1alpha1.AgentBudgetRule{{Name: "prod", Environments: []string{"prod"}, FleetShare: "20%"}}, 10)
+	steps := w.fleetVersion(fixerStamp, 10)
+	for _, s := range steps {
+		w.reconcileStep("payments", s)
+	}
+	_, err := w.ledger.Reconcile(w.ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "fixer"}})
+	require.NoError(t, err)
+	var id v1alpha1.AgentIdentity
+	require.NoError(t, w.c.Get(w.ctx, types.NamespacedName{Name: "fixer"}, &id))
+	assert.Len(t, id.Status.Usage["kardinal-promoter"].Grants, 2, "20% of 10 targets")
+
+	person := w.fleetVersion(&v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}, 3)
+	for _, s := range person {
+		for range 20 {
+			w.reconcileStep("payments", s)
+		}
+	}
+	assert.Equal(t, 3, w.countVerified(person), "a person's version is paced by the fleet alone")
+
+	w.settle()
+	settled := 0
+	for _, n := range steps {
+		if st := w.step("payments", n).Status.State; st == "Verified" || st == "Superseded" {
+			settled++ // the person's newer version supersedes the agent's on the targets it shipped first
+		}
+	}
+	assert.Equal(t, 10, settled, "the rest follow as each settles")
 }

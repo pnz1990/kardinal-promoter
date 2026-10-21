@@ -165,25 +165,12 @@ func failedState(state string) bool {
 // startedState: the step is past Pending.
 func startedState(state string) bool { return state != "" && state != "Pending" }
 
-// matches reports whether rule r applies to a step in namespace ns, in
-// environment env, of fleet (its fleet environment; "" for none).
-func matches(r *v1alpha1.AgentBudgetRule, ns, env, fleet string) bool {
-	nss := r.Namespaces
-	if len(nss) == 0 {
-		nss = []string{"*"}
-	}
-	if !actor.Matches(nss, ns) {
-		return false
-	}
-	return actor.Matches(r.Environments, env) || (fleet != "" && actor.Matches(r.Environments, fleet))
-}
-
 // Matching are the names of the rules that apply to a step in namespace ns,
 // environment env, of fleet ("" for none), in spec order.
 func Matching(rules []v1alpha1.AgentBudgetRule, ns, env, fleet string) []string {
 	var out []string
 	for i := range rules {
-		if matches(&rules[i], ns, env, fleet) {
+		if actor.BudgetRuleApplies(&rules[i], ns, env, fleet) {
 			out = append(out, rules[i].Name)
 		}
 	}

@@ -950,7 +950,7 @@ func main() {
 		// patch of the previous reconcile (#1310).
 		APIReader: mgr.GetAPIReader(),
 		Translator: newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), providers, graphCompactAbove, logger).
-			WithControllerSecret(controllerSecret),
+			WithControllerSecret(controllerSecret).WithAgentBudgets(agentBudgets),
 		GraphChecker:     newGraphClient(mgr.GetConfig(), logger),
 		Recorder:         eventRecorder,
 		PolicyNamespaces: splitCSV(policyNamespaces),

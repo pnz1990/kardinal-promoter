@@ -611,6 +611,15 @@ The fold is a snapshot of the AgentIdentity at translation. A **tighter** budget
 through the grant; a **looser** one reaches an in-flight Graph only when it is rebuilt. The
 direction of staleness is the safe one, so AgentIdentity edits do not rebuild Graphs.
 
+**As built (W4).** With `--agent-budgets`, the translator reads the AgentIdentity of a version
+stamped `kind: agent` from the cache (`Translator.WithAgentBudgets`) and passes its rules as
+`BuildInput.AgentBudgets`; `graph.foldBudgets` lowers each fleet target's `maxConcurrent` and
+`maxUnavailable` (as resolved from the fleet's spec) by every rule that applies to the target,
+decided with `actor.BudgetRuleApplies`, the function the budget reconciler and the step hold use.
+A person's version, an unregistered agent and budgets off pass no rules, and their Graphs are
+byte for byte unchanged. `fleetShare` resolves against the fleet's targets at translation; the
+grant re-checks it against the fleet's current size (8.1).
+
 **Held targets and fleet places.** A target held for budget is a step that exists and is not
 settled, so it keeps its fleet place, exactly as the fleet's `maxConcurrent` means: no target
 behind it starts. Waiting steps per fleet are therefore at most the folded `maxConcurrent`. A
