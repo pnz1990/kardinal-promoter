@@ -11,8 +11,8 @@ import (
 // agent changes before a person looks, kept on its AgentIdentity. The budget
 // reconciler (pkg/reconciler/agentbudget, --agent-budgets) counts and grants
 // in status.usage, and the PromotionStep reconciler holds a step until its
-// grant. The chart's switch and admission checks (W6, #2437) come later in
-// v0.14; "planned" in a comment below marks what they add.
+// grant; the chart turns them on with actors.budgets.enabled. "Planned" in a
+// comment below marks what later v0.14 work adds.
 
 // AgentBudgetRule limits an agent's promotions into the environments it
 // matches. Every rule that matches a step applies. A limit that is not set
@@ -83,9 +83,10 @@ type AgentBudgetRule struct {
 }
 
 // AgentBudgetExemption is a break-glass exception to an agent's budgets: one
-// Pipeline environment, optionally one version, until it expires. Kept, not
-// enforced yet. Planned (W6, #2437): admission verifies createdBy and the
-// actor stamp, and that its maker is not of the agent's party
+// Pipeline environment, optionally one version, until it expires. The chart's
+// <release>-agent-budgets admission policy verifies createdBy and the actor
+// stamp, that its maker may exempt the agent and is not of the agent's
+// party, and that an existing exemption never changes
 // (docs/design/24-agent-budgets.md section 12).
 type AgentBudgetExemption struct {
 	// Name identifies the exemption (a DNS label), unique in the list.
@@ -121,8 +122,8 @@ type AgentBudgetExemption struct {
 	// after it first sees it.
 	ExpiresAt metav1.Time `json:"expiresAt"`
 
-	// CreatedBy is who made the exception. Planned (W6, #2437): admission
-	// verifies it is the requester's username.
+	// CreatedBy is who made the exception: admission verifies it is the
+	// requester's username.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	CreatedBy string `json:"createdBy"`
@@ -130,8 +131,10 @@ type AgentBudgetExemption struct {
 	// Actor is who made the exception, stamped as on freeze exemptions. An
 	// exemption whose actor is an agent, or that has none, is never
 	// honoured: break-glass is for people (docs/design/24-agent-budgets.md
-	// section 11.3). Planned (W6, #2437): the chart's actor admission policy
-	// verifies it from the requester's username and groups.
+	// section 11.3). The chart's actor admission policies verify it from the
+	// requester's username and groups, and the controller counts a stamped
+	// exemption only while that check is installed
+	// (--agent-budget-exemption-policy).
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
 }

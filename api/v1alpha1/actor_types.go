@@ -209,7 +209,7 @@ type AgentIdentitySpec struct {
 	// which bounds the ledger in status.usage. Where the controller runs
 	// with --agent-budgets, it counts and grants each agent's promotions in
 	// status.usage, and a step beyond a limit waits in Pending rather than
-	// fails. Planned (W6, #2437): the chart's switch, off by default. See
+	// fails: the chart's actors.budgets.enabled, off by default. See
 	// docs/design/24-agent-budgets.md.
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:XValidation:rule="self.map(r, (has(r.versionsPerDay) ? r.versionsPerDay : 0) + (has(r.maxConcurrent) ? r.maxConcurrent : 0) + (has(r.fleetTargetsPerHour) ? r.fleetTargetsPerHour : 0) + (has(r.maxUnavailable) ? r.maxUnavailable : 0)).sum() <= 1500",message="the budgets' versionsPerDay, maxConcurrent, fleetTargetsPerHour and maxUnavailable sum to at most 1500 over all rules"
@@ -218,10 +218,10 @@ type AgentIdentitySpec struct {
 	// +optional
 	Budgets []AgentBudgetRule `json:"budgets,omitempty"`
 
-	// BudgetExemptions are break-glass exceptions to the budgets. One made by
-	// an agent, or without an actor stamp, never counts. Planned: added with
-	// kardinal override --budget (W7, #2438) by someone the cluster lets
-	// exempt the agent, never of the agent's own party (W6, #2437).
+	// BudgetExemptions are break-glass exceptions to the budgets, added by
+	// someone the cluster lets exempt the agent (the exempt verb), never of
+	// the agent's own party. One made by an agent, or without an actor
+	// stamp, never counts. Planned: kardinal override --budget (W7, #2438).
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=map
 	// +listMapKey=name

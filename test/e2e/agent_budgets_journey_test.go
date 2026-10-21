@@ -62,7 +62,8 @@ func newBudgetWorld(t *testing.T, rules []v1alpha1.AgentBudgetRule, namespaces .
 	w.steps = &psrec.Reconciler{Client: c, SCM: &mockSCMForLoop{prURL: "https://github.com/pnz1990/kardinal-demo/pull/1", prNumber: 1},
 		GitClient: &mockGitForLoop{}, WorkDirFn: func(_, _ string) string { return t.TempDir() }, NowFn: clock,
 		Budgets: &psrec.BudgetConfig{Ledger: "kardinal-promoter"}}
-	w.ledger = &agentbudget.Reconciler{Client: c, APIReader: c, Ledger: "kardinal-promoter", NowFn: clock}
+	w.ledger = &agentbudget.Reconciler{Client: c, APIReader: c, Ledger: "kardinal-promoter", NowFn: clock,
+		ExemptionPolicy: stampPolicyInstalled{}}
 	return w
 }
 
@@ -343,3 +344,9 @@ func TestBudgetJourney7FleetShare(t *testing.T) {
 	}
 	assert.Equal(t, 10, settled, "the rest follow as each settles")
 }
+
+// stampPolicyInstalled is the chart's agent-budgets admission policy in
+// force: an exemption's stamp was checked from its requester.
+type stampPolicyInstalled struct{}
+
+func (stampPolicyInstalled) Active(context.Context) bool { return true }

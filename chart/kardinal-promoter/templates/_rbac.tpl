@@ -355,6 +355,13 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
   verbs: ["get"]
   resourceNames: [{{ printf "%s-gate-overrides" (include "kardinal-promoter.fullname" .) | quote }}]
+# A budget exemption's actor stamp counts only while the chart's
+# agent-budgets and actor-budgets admission policies and their bindings
+# exist (--agent-budget-exemption-policies): get on those objects by name.
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+  verbs: ["get"]
+  resourceNames: [{{ printf "%s-agent-budgets" (include "kardinal-promoter.fullname" .) | quote }}, {{ printf "%s-actor-budgets" (include "kardinal-promoter.fullname" .) | quote }}]
 # The agent index guard: when it exists and the chart's AgentIndex does not,
 # the index was deleted after the install, and the controller recreates it
 # with the guard's Helm ownership (pkg/reconciler/agentidentity).

@@ -419,3 +419,42 @@ func TestWatches(t *testing.T) {
 	q.Status.Environments[0].Bundle = "v2"
 	assert.True(t, environmentsChanged.Update(event.UpdateEvent{ObjectOld: p, ObjectNew: q}))
 }
+
+type policyState bool
+
+func (p policyState) Active(context.Context) bool { return bool(p) }
+
+// TestReconcileStampPolicy: a person's stamped exemption counts only while
+// the admission policies that check stamps are in force; every one of them
+// (AllPolicies); none configured is never (QA-3 on #2456).
+// Covers BUDGET-LEDGER-02.
+func TestReconcileStampPolicy(t *testing.T) {
+	assert.False(t, AllPolicies{}.Active(context.Background()), "no policy configured")
+	assert.False(t, AllPolicies{policyState(true), policyState(false)}.Active(context.Background()))
+	assert.True(t, AllPolicies{policyState(true), policyState(true)}.Active(context.Background()))
+
+	for _, tc := range []struct {
+		name    string
+		policy  PolicyCheck
+		ignored string
+	}{
+		{"in force", policyState(true), ""},
+		{"not in force", policyState(false), v1alpha1.ExemptionUnverified},
+		{"not configured", nil, v1alpha1.ExemptionUnverified},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := rule("prod", "prod")
+			r.MaxConcurrent = 1
+			id := identity(r)
+			id.Spec.BudgetExemptions = []v1alpha1.AgentBudgetExemption{{Name: "inc-1", Namespace: "payments", Pipeline: "checkout",
+				Environment: "prod", Reason: "r", ExpiresAt: metav1.NewTime(t0.Add(time.Hour)), CreatedBy: "bob",
+				Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "bob"}}}
+			w := newWorld(t, nil, id)
+			rec := w.reconciler(t0)
+			rec.ExemptionPolicy = tc.policy
+			w.reconcile(rec)
+			require.Len(t, w.usage().Exemptions, 1)
+			assert.Equal(t, tc.ignored, w.usage().Exemptions[0].Ignored)
+		})
+	}
+}

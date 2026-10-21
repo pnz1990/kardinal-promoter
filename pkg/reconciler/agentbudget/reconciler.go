@@ -78,6 +78,30 @@ type Reconciler struct {
 	// NowFn is the clock (nil: time.Now). It is read once per evaluation,
 	// only to write the ledger (section 6.2).
 	NowFn func() time.Time
+	// ExemptionPolicy reports whether the admission policy that checks a
+	// budget exemption's actor stamp is installed and bound now
+	// (--agent-budget-exemption-policy; policygate.IdentityPolicyCheck, as
+	// for gate overrides). Nil or inactive: no stamped exemption counts, it
+	// is listed ignored: Unverified.
+	ExemptionPolicy PolicyCheck
+}
+
+// PolicyCheck reports whether an admission policy is in force.
+type PolicyCheck interface {
+	Active(ctx context.Context) bool
+}
+
+// AllPolicies is in force while every one of its checks is; none is never.
+type AllPolicies []PolicyCheck
+
+// Active reports whether every check is active.
+func (a AllPolicies) Active(ctx context.Context) bool {
+	for _, c := range a {
+		if !c.Active(ctx) {
+			return false
+		}
+	}
+	return len(a) > 0
 }
 
 func (r *Reconciler) now() time.Time {
@@ -236,6 +260,9 @@ func clockless(u *v1alpha1.AgentUsage) *v1alpha1.AgentUsage {
 // live state of each grant, the steps to seed and the sizes.
 func (r *Reconciler) facts(ctx context.Context, id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage) (facts, error) {
 	f := facts{grants: map[grantKey]grantState{}, maxBytes: r.MaxObjectBytes}
+	if len(id.Spec.BudgetExemptions) > 0 && r.ExemptionPolicy != nil {
+		f.stampsVerified = r.ExemptionPolicy.Active(ctx)
+	}
 	if f.maxBytes == 0 {
 		f.maxBytes = DefaultMaxObjectBytes
 	}

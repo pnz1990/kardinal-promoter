@@ -125,6 +125,11 @@ type facts struct {
 	// maxBytes the size past which nothing more is granted.
 	baseBytes int
 	maxBytes  int
+	// stampsVerified: the admission policy that checks an exemption's actor
+	// stamp from the requester is installed and bound now
+	// (--agent-budget-exemption-policy). Without it a person's stamp could
+	// be written by anyone, so no stamped exemption counts.
+	stampsVerified bool
 }
 
 // outcome is one evaluation's result.
@@ -354,7 +359,7 @@ func evaluate(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, f facts, now
 	}
 
 	// 3. The exemptions as this writer sees them.
-	exemptions, inEffect, ignored := exemptionStates(id, old, now)
+	exemptions, inEffect, ignored := exemptionStates(id, old, now, f.stampsVerified)
 
 	// 4. The requests, in order: since, then creation, then namespace and
 	// name. Strict per rule: one that does not fit blocks the later ones of
@@ -610,7 +615,8 @@ func nextEvaluation(u *v1alpha1.AgentUsage, l *ledger, now time.Time) (*metav1.T
 
 // exemptionStates are the spec's exemptions as this writer sees them, the
 // names of those in effect, and the ones first seen as ignored.
-func exemptionStates(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, now time.Time) ([]v1alpha1.AgentBudgetExemptionState, map[string]bool, []ignoredExemption) {
+func exemptionStates(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, now time.Time,
+	verified bool) ([]v1alpha1.AgentBudgetExemptionState, map[string]bool, []ignoredExemption) {
 	seen := map[string]v1alpha1.AgentBudgetExemptionState{}
 	for _, s := range old.Exemptions {
 		seen[s.Name] = s
@@ -630,6 +636,8 @@ func exemptionStates(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, now t
 			reason = v1alpha1.ExemptionUnverified
 		case e.Actor.Kind == v1alpha1.ActorAgent:
 			reason, by = v1alpha1.ExemptionMadeByAgent, e.Actor.Agent
+		case !verified:
+			reason = v1alpha1.ExemptionUnverified // nothing checked the stamp
 		}
 		if reason != "" {
 			if st.Ignored == "" || !ok {
@@ -683,7 +691,7 @@ func setIgnoredCondition(conds *[]metav1.Condition, id *v1alpha1.AgentIdentity, 
 			parts = append(parts, s.Name+" (made by "+exemptionAgent(id, s.Name)+")")
 			reason = v1alpha1.ExemptionMadeByAgent
 		case v1alpha1.ExemptionUnverified:
-			parts = append(parts, s.Name+" (no actor stamp)")
+			parts = append(parts, s.Name+" ("+unverifiedWhy(id, s.Name)+")")
 			if reason == "" {
 				reason = v1alpha1.ExemptionUnverified
 			}
@@ -696,6 +704,17 @@ func setIgnoredCondition(conds *[]metav1.Condition, id *v1alpha1.AgentIdentity, 
 	meta.SetStatusCondition(conds, metav1.Condition{Type: ConditionExemptionIgnored, Status: metav1.ConditionTrue,
 		Reason: reason, ObservedGeneration: id.Generation, LastTransitionTime: metav1.NewTime(now),
 		Message: "these exemptions do not count, break-glass is for people: " + strings.Join(parts, ", ")})
+}
+
+// unverifiedWhy says why exemption name is unverified: no stamp, or a stamp
+// no admission policy checked.
+func unverifiedWhy(id *v1alpha1.AgentIdentity, name string) string {
+	for i := range id.Spec.BudgetExemptions {
+		if e := &id.Spec.BudgetExemptions[i]; e.Name == name && e.Actor != nil {
+			return "its actor stamp is not checked: the agent-budgets admission policy is not installed"
+		}
+	}
+	return "no actor stamp"
 }
 
 // exemptionAgent names the agent that made exemption name.

@@ -831,6 +831,28 @@ of `agentidentities`. Kubernetes 1.35 is the floor, so `authorizer` is available
 - This release's controller and `admission.controllerUsernames` are exempt (the UI API writes as
   the controller for callers it authenticated, with the caller as `createdBy`).
 
+**As built (W6, `chart/kardinal-promoter/templates/agent-budgets-admission.yaml`).**
+
+- `<release>-agent-budgets` holds the who-checks above with the API server's authorizer
+  (`manage`, `exempt`) and, needing no AgentIndex, that each new exemption's stamp names the
+  requester with no `via` (a ServiceAccount's says `bot` or `agent`). Removing an exemption needs
+  `exempt`, like adding one, so an incident commander can withdraw their own. The spec fields a
+  `manage` check guards are listed in the template, and a test keeps the list to
+  `AgentIdentitySpec`'s.
+- The agent check of the stamp is `<release>-actor-budgets`: the actor policies' own rules
+  (`kardinal-promoter.actorChecks`) on the new exemptions, against the AgentIndex. It is a policy
+  of its own, not a rule of `<release>-actor`, because a policy's AgentIndex param is resolved
+  before its match conditions and validations: matching every AgentIdentity write would refuse
+  all of them, registrations included, while the index object is missing. Its binding selects by
+  the label `kardinal.io/budget-exemptions: "true"`, which `<release>-agent-budgets` requires
+  exactly while the identity has exemptions; only those identities' writes need the index.
+- The controller counts a stamped exemption only while both policies and their bindings exist
+  (`--agent-budget-exemption-policies`, `policygate.IdentityPolicyCheck` for each, as for gate
+  overrides), and `--agent-budgets` refuses to start without the flag; the chart sets both.
+  Otherwise the exemption is listed `ignored: Unverified` (11.3).
+- `admin-extra` (aggregated into `<release>-admin`) gains `manage` and `exempt` on
+  `agentidentities`.
+
 The chart adds a ClusterRole `<release>-agent-budget-exempter` (`get, patch` and the custom verb
 `exempt` on `agentidentities`) for incident commanders. Because `patch` alone lets them write the
 whole object, the policy's `manage` check is what keeps them to exemptions.

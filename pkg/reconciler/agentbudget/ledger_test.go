@@ -272,7 +272,8 @@ func TestExemptions(t *testing.T) {
 	full := &v1alpha1.AgentUsage{ObservedGeneration: 1, Grants: []v1alpha1.AgentBudgetGrant{
 		{BundleUID: "x", Environment: "prod", Rules: []string{"prod"}, GrantedAt: metav1.NewTime(t0.Add(-time.Hour))}}}
 	busy := func() facts {
-		return facts{grants: map[grantKey]grantState{{"x", "prod"}: running()}, requests: []request{ask("a", "prod", t0)}}
+		return facts{grants: map[grantKey]grantState{{"x", "prod"}: running()}, requests: []request{ask("a", "prod", t0)},
+			stampsVerified: true}
 	}
 
 	t.Run("in effect: granted without room, counted", func(t *testing.T) {
@@ -296,7 +297,7 @@ func TestExemptions(t *testing.T) {
 	t.Run("the 24-hour cap from first sight, and no restart once expired", func(t *testing.T) {
 		id := agent(r)
 		id.Spec.BudgetExemptions = []v1alpha1.AgentBudgetExemption{ex("inc-1", person, t0.Add(7*24*time.Hour))}
-		first := evaluate(id, full, facts{grants: map[grantKey]grantState{{"x", "prod"}: running()}}, t0)
+		first := evaluate(id, full, facts{grants: map[grantKey]grantState{{"x", "prod"}: running()}, stampsVerified: true}, t0)
 		assert.Equal(t, t0.Add(ExemptionCap), first.usage.Exemptions[0].ExpiresAt.Time)
 		later := t0.Add(ExemptionCap + time.Minute)
 		out := evaluate(id, first.usage, busy(), later)
@@ -306,7 +307,7 @@ func TestExemptions(t *testing.T) {
 	t.Run("removal ends it", func(t *testing.T) {
 		id := agent(r)
 		id.Spec.BudgetExemptions = []v1alpha1.AgentBudgetExemption{ex("inc-1", person, t0.Add(time.Hour))}
-		first := evaluate(id, full, facts{grants: map[grantKey]grantState{{"x", "prod"}: running()}}, t0)
+		first := evaluate(id, full, facts{grants: map[grantKey]grantState{{"x", "prod"}: running()}, stampsVerified: true}, t0)
 		id.Spec.BudgetExemptions, id.Generation = nil, 2
 		out := evaluate(id, first.usage, busy(), t0.Add(time.Minute))
 		assert.Empty(t, out.granted)
@@ -339,6 +340,22 @@ func TestExemptions(t *testing.T) {
 			assert.True(t, unchanged(out.usage, again.usage))
 		})
 	}
+	t.Run("a stamped exemption counts only while the stamp policy is in force", func(t *testing.T) {
+		id := agent(r)
+		id.Spec.BudgetExemptions = []v1alpha1.AgentBudgetExemption{ex("inc-1", person, t0.Add(time.Hour))}
+		f := busy()
+		f.stampsVerified = false
+		out := evaluate(id, full, f, t0)
+		assert.Empty(t, out.granted, "anyone could have written a person's stamp")
+		assert.Equal(t, v1alpha1.ExemptionUnverified, out.usage.Exemptions[0].Ignored)
+		c := meta.FindStatusCondition(out.usage.Conditions, ConditionExemptionIgnored)
+		require.NotNil(t, c)
+		assert.Contains(t, c.Message, "inc-1 (its actor stamp is not checked: the agent-budgets admission policy is not installed)")
+		f.stampsVerified = true
+		back := evaluate(id, out.usage, f, t0.Add(time.Minute))
+		require.Len(t, back.granted, 1, "counted once the policy is back")
+		assert.Equal(t, t0.Add(time.Hour), back.usage.Exemptions[0].ExpiresAt.Time, "from its first sight: the cap does not restart")
+	})
 	t.Run("the condition goes once the exemption is removed", func(t *testing.T) {
 		id := agent(r)
 		id.Spec.BudgetExemptions = []v1alpha1.AgentBudgetExemption{ex("inc-1", nil, t0.Add(time.Hour))}

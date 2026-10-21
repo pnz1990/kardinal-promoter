@@ -78,16 +78,17 @@ spec:
                 type: string
               budgetExemptions:
                 description: |-
-                  BudgetExemptions are break-glass exceptions to the budgets. One made by
-                  an agent, or without an actor stamp, never counts. Planned: added with
-                  kardinal override --budget (W7, #2438) by someone the cluster lets
-                  exempt the agent, never of the agent's own party (W6, #2437).
+                  BudgetExemptions are break-glass exceptions to the budgets, added by
+                  someone the cluster lets exempt the agent (the exempt verb), never of
+                  the agent's own party. One made by an agent, or without an actor
+                  stamp, never counts. Planned: kardinal override --budget (W7, #2438).
                 items:
                   description: |-
                     AgentBudgetExemption is a break-glass exception to an agent's budgets: one
-                    Pipeline environment, optionally one version, until it expires. Kept, not
-                    enforced yet. Planned (W6, #2437): admission verifies createdBy and the
-                    actor stamp, and that its maker is not of the agent's party
+                    Pipeline environment, optionally one version, until it expires. The chart's
+                    <release>-agent-budgets admission policy verifies createdBy and the actor
+                    stamp, that its maker may exempt the agent and is not of the agent's
+                    party, and that an existing exemption never changes
                     (docs/design/24-agent-budgets.md section 12).
                   properties:
                     actor:
@@ -95,8 +96,10 @@ spec:
                         Actor is who made the exception, stamped as on freeze exemptions. An
                         exemption whose actor is an agent, or that has none, is never
                         honoured: break-glass is for people (docs/design/24-agent-budgets.md
-                        section 11.3). Planned (W6, #2437): the chart's actor admission policy
-                        verifies it from the requester's username and groups.
+                        section 11.3). The chart's actor admission policies verify it from the
+                        requester's username and groups, and the controller counts a stamped
+                        exemption only while that check is installed
+                        (--agent-budget-exemption-policy).
                       properties:
                         agent:
                           description: Agent is the AgentIdentity name, when kind
@@ -176,8 +179,8 @@ spec:
                       type: string
                     createdBy:
                       description: |-
-                        CreatedBy is who made the exception. Planned (W6, #2437): admission
-                        verifies it is the requester's username.
+                        CreatedBy is who made the exception: admission verifies it is the
+                        requester's username.
                       maxLength: 253
                       minLength: 1
                       type: string
@@ -238,7 +241,7 @@ spec:
                   which bounds the ledger in status.usage. Where the controller runs
                   with --agent-budgets, it counts and grants each agent's promotions in
                   status.usage, and a step beyond a limit waits in Pending rather than
-                  fails. Planned (W6, #2437): the chart's switch, off by default. See
+                  fails: the chart's actors.budgets.enabled, off by default. See
                   docs/design/24-agent-budgets.md.
                 items:
                   description: |-

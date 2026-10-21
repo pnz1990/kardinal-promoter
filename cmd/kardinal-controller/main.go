@@ -191,7 +191,7 @@ func main() {
 			"Bundle API's writes from (the chart's actor admission policy reads it; Helm sets the release name). "+
 			"Empty: no agent registry, every caller is a person or a bot (docs/actors.md).")
 	var agentBudgets bool
-	var agentBudgetLedger string
+	var agentBudgetLedger, agentBudgetExemptionPolicies string
 	flag.BoolVar(&agentBudgets, "agent-budgets", false,
 		"Count and grant agents' promotions against their AgentIdentity spec.budgets "+
 			"(docs/design/24-agent-budgets.md). Off: budgets are kept, not enforced.")
@@ -199,6 +199,11 @@ func main() {
 		"The ledger (AgentIdentity status.usage key) this installation counts budgets in. Default: --agent-index, "+
 			"this release. Every shard of one installation sets the default shard's; only the controller whose "+
 			"--agent-index is the ledger, and that owns cluster-scoped kinds, writes it.")
+	flag.StringVar(&agentBudgetExemptionPolicies, "agent-budget-exemption-policies", "",
+		"Comma-separated names of the ValidatingAdmissionPolicies (each with a binding of the same name) that check a "+
+			"budget exemption's createdBy and actor stamp (the chart's <release>-agent-budgets and <release>-actor-budgets). "+
+			"A stamped exemption counts only while all of them exist; --agent-budgets refuses to start without them. "+
+			"Set by the chart.")
 	var apiAuditEvents bool
 	flag.BoolVar(&apiAuditEvents, "api-audit-events", true,
 		"Write an AuditEvent (action APIWrite) naming the caller for every write through the UI API and the "+
@@ -812,10 +817,16 @@ func main() {
 		switch {
 		case err != nil:
 			logger.Fatal().Err(err).Msg("agent budgets")
+		case len(splitCSV(agentBudgetExemptionPolicies)) == 0:
+			// Without the policy anyone with update on AgentIdentities could
+			// stamp an exemption as a person's (QA-3 on #2456).
+			logger.Fatal().Msg("--agent-budgets needs --agent-budget-exemption-policies, the admission policies that check a " +
+				"budget exemption's stamp (the chart's actors.budgets.enabled sets both)")
 		case !writes:
 			logger.Info().Str("ledger", ledger).Msg("agent budgets: another controller writes ledger " + ledger + "; this one reads it")
 		default:
-			budgets := &agentbudgetrecon.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Ledger: ledger}
+			budgets := &agentbudgetrecon.Reconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Ledger: ledger,
+				ExemptionPolicy: exemptionPolicies(mgr.GetAPIReader(), splitCSV(agentBudgetExemptionPolicies))}
 			// An Event on an AgentIdentity, a cluster-scoped kind, is written
 			// in the default namespace, where namespace mode grants no Event
 			// writes; there the ledger's conditions and the log report.
@@ -1729,4 +1740,15 @@ func remoteClusters(eksRoleARNs, eksRoleARNsByNamespace string) (*healthpkg.Remo
 		r.EKS = &healthpkg.EKSAuth{AllowedRoleARNs: roles, AllowedRoleARNsByNamespace: byNamespace}
 	}
 	return r, nil
+}
+
+// exemptionPolicies is the stamp check of budget exemptions: every named
+// admission policy and its binding exist (policygate.IdentityPolicyCheck,
+// read uncached with a TTL).
+func exemptionPolicies(reader sigs_client.Reader, names []string) agentbudgetrecon.AllPolicies {
+	out := make(agentbudgetrecon.AllPolicies, 0, len(names))
+	for _, n := range names {
+		out = append(out, &policygaterecon.IdentityPolicyCheck{Reader: reader, Name: n})
+	}
+	return out
 }

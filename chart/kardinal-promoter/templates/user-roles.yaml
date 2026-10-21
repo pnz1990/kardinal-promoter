@@ -191,6 +191,11 @@ rules:
 - apiGroups: ["kardinal.io"]
   resources: ["pipelines/pause", "pipelines/hold", "pipelines/edit", "policygates/override", "policygates/edit", "bundles/reject", "changewindows/freeze"]
   verbs: ["update"]
+# Agent budgets (agent-budgets-admission.yaml): manage changes an
+# AgentIdentity beyond its exemptions, exempt adds and removes exemptions.
+- apiGroups: ["kardinal.io"]
+  resources: ["agentidentities"]
+  verbs: ["manage", "exempt"]
 ---
 # Freeze agents and stop the line (kardinal freeze, unfreeze, override
 # --freeze, and the UI's controls). Freezes are cluster-scoped ChangeWindows:

@@ -957,6 +957,21 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	require.True(t, ok)
 	assert.Nil(t, freezes.Spec.MatchResources)
 	delete(team, "kardinal-promoter-freezes")
+	// The agent budget policies (agent-budgets-admission.yaml) match
+	// cluster-scoped AgentIdentities: one binding each, without a namespace
+	// selector, in every mode; actor-budgets selects by its label.
+	for _, name := range []string{"kardinal-promoter-agent-budgets", "kardinal-promoter-agent-budgets-off"} {
+		b, ok := team[name]
+		require.True(t, ok, name)
+		assert.Nil(t, b.Spec.MatchResources, name)
+		delete(team, name)
+	}
+	ab, ok := team["kardinal-promoter-actor-budgets"]
+	require.True(t, ok)
+	require.NotNil(t, ab.Spec.MatchResources)
+	assert.Nil(t, ab.Spec.MatchResources.NamespaceSelector)
+	assert.Equal(t, map[string]string{"kardinal.io/budget-exemptions": "true"}, ab.Spec.MatchResources.ObjectSelector.MatchLabels)
+	delete(team, "kardinal-promoter-actor-budgets")
 	assert.Len(t, team, len(policies))
 	for _, name := range policies {
 		b, ok := team[name]
@@ -969,6 +984,9 @@ func TestIdentityAdmission_ShardMode(t *testing.T) {
 	delete(def, "kardinal-promoter-agent-identities")
 	delete(def, "kardinal-promoter-freezes")
 	delete(def, "kardinal-promoter-agent-index")
+	delete(def, "kardinal-promoter-agent-budgets")
+	delete(def, "kardinal-promoter-agent-budgets-off")
+	delete(def, "kardinal-promoter-actor-budgets")
 	assert.Len(t, def, 2*len(policies))
 	for _, name := range policies {
 		labelled, unlabelled := def[name], def[name+"-unlabelled"]

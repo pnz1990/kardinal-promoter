@@ -1,0 +1,257 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+The agent budgets admission policies (docs/design/24-agent-budgets.md
+sections 12 and 17.4).
+
+<release>-agent-budgets checks who changes an AgentIdentity's budgets and who
+lets an agent through them, whether budgets are enforced or not (an
+AgentIdentity is cluster-scoped and shared by every installation):
+- any spec change other than adding or removing budgetExemptions entries
+  needs the manage verb on the AgentIdentity (cluster admins, <release>-admin);
+- adding or removing an exemption needs the exempt verb
+  (<release>-agent-budget-exempter);
+- each new exemption names the requester (createdBy), carries an actor stamp
+  that names the requester as the API server authenticated them (what needs
+  no AgentIndex; <release>-actor refuses an agent's), and its maker is not of
+  the agent's party: not the sponsor, a User subject, a ServiceAccount
+  subject or a member of a Group subject;
+- an existing exemption never changes (remove it and add another);
+- an AgentIdentity carries the label kardinal.io/budget-exemptions: "true"
+  exactly while it has exemptions.
+This release's controller and admission.controllerUsernames are exempt from
+the who-checks: the UI API writes exemptions for the callers it
+authenticated.
+
+<release>-actor-budgets checks the new exemptions' actor stamps against the
+AgentIndex with <release>-actor's rules (an agent's is refused, whatever its
+subject kind). Its binding selects AgentIdentities by the label, so only an
+identity with exemptions needs the AgentIndex to exist: the AgentIndex param
+of the actor policies is resolved before any of their conditions, and a
+binding without a selector would refuse every AgentIdentity write while the
+index is missing.
+
+The controller counts a stamped exemption only while both policies and their
+bindings exist (--agent-budget-exemption-policies).
+
+<release>-agent-budgets-off, rendered only while actors.budgets.enabled is
+false, warns (never refuses) on a write that sets budgets or exemptions:
+they are kept, not enforced.
+*/}}
+{{- $controller := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "kardinal-promoter.serviceAccountName" .) }}
+{{- $controllers := prepend (.Values.admission.controllerUsernames | default list) $controller | toJson }}
+{{- $name := printf "%s-agent-budgets" (include "kardinal-promoter.fullname" .) }}
+{{- /* The AgentIdentity spec fields other than budgetExemptions: a change of
+any needs manage. TestAgentBudgetsPolicyNamesEverySpecField keeps the list
+to AgentIdentitySpec's fields. */}}
+{{- $fields := list "description" "subjects" "sponsor" "scope" "autonomy" "suspended" "signingIdentities" "budgets" }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentidentities"]
+  variables:
+    - name: controller
+      expression: request.userInfo.username in {{ $controllers }}
+    - name: groups
+      expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
+    - name: exemptions
+      expression: "has(object.spec.budgetExemptions) ? object.spec.budgetExemptions : []"
+    - name: oldExemptions
+      expression: "oldObject != null && has(oldObject.spec.budgetExemptions) ? oldObject.spec.budgetExemptions : []"
+    - name: oldNames
+      expression: "variables.oldExemptions.map(e, e.name)"
+    - name: names
+      expression: "variables.exemptions.map(e, e.name)"
+    # The exemptions this write adds, and whether it removes any.
+    - name: added
+      expression: "variables.exemptions.filter(e, !(e.name in variables.oldNames))"
+    - name: removed
+      expression: "variables.oldNames.exists(n, !(n in variables.names))"
+    # The spec other than budgetExemptions is unchanged.
+    - name: otherSpecUnchanged
+      expression: >-
+        oldObject == null || (
+        {{- range $i, $f := $fields }}{{ if $i }} &&{{ end }}
+          (has(object.spec.{{ $f }}) == has(oldObject.spec.{{ $f }}) && (!has(object.spec.{{ $f }}) || object.spec.{{ $f }} == oldObject.spec.{{ $f }}))
+        {{- end }})
+    # The requester is of the agent's party (17-actors section 10.3).
+    - name: party
+      expression: >-
+        object.spec.sponsor.user == request.userInfo.username ||
+        object.spec.subjects.exists(s,
+          (s.kind == 'User' && s.name == request.userInfo.username) ||
+          (s.kind == 'Group' && s.name in variables.groups) ||
+          (s.kind == 'ServiceAccount' && has(s.__namespace__) &&
+            'system:serviceaccount:' + s.__namespace__ + ':' + s.name == request.userInfo.username))
+    - name: serviceAccount
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:')"
+    - name: labelled
+      expression: >-
+        has(object.metadata.labels) && 'kardinal.io/budget-exemptions' in object.metadata.labels &&
+        object.metadata.labels['kardinal.io/budget-exemptions'] == 'true'
+    # The requester's verbs on this AgentIdentity, from the API server's
+    # authorizer.
+    - name: mayManage
+      expression: >-
+        authorizer.group('kardinal.io').resource('agentidentities').name(object.metadata.name).check('manage').allowed()
+    - name: mayExempt
+      expression: >-
+        authorizer.group('kardinal.io').resource('agentidentities').name(object.metadata.name).check('exempt').allowed()
+  validations:
+    - expression: "variables.labelled == (size(variables.exemptions) > 0)"
+      message: >-
+        an AgentIdentity carries the label kardinal.io/budget-exemptions: "true" exactly while it has
+        spec.budgetExemptions entries (the actor policy checks their stamps by it); kardinal override --budget sets it
+      reason: Invalid
+    - expression: >-
+        variables.exemptions.all(e, !(e.name in variables.oldNames) ||
+          variables.oldExemptions.exists(o, o.name == e.name && o == e))
+      message: >-
+        an existing spec.budgetExemptions entry never changes: remove it and add another
+        (kardinal override --budget)
+      reason: Forbidden
+    - expression: >-
+        variables.controller || variables.otherSpecUnchanged || variables.mayManage
+      messageExpression: >-
+        'changing AgentIdentity ' + object.metadata.name + ' other than its budget exemptions needs the manage verb ' +
+        'on agentidentities (cluster admins and {{ include "kardinal-promoter.fullname" . }}-admin have it)'
+      reason: Forbidden
+    - expression: >-
+        variables.controller || oldObject == null || (size(variables.added) == 0 && !variables.removed) || variables.mayExempt
+      messageExpression: >-
+        'adding or removing a budget exemption of AgentIdentity ' + object.metadata.name + ' needs the exempt verb ' +
+        'on agentidentities ({{ include "kardinal-promoter.fullname" . }}-agent-budget-exempter)'
+      reason: Forbidden
+    - expression: >-
+        variables.controller || variables.added.all(e, e.createdBy == request.userInfo.username)
+      messageExpression: >-
+        'every new spec.budgetExemptions entry must have createdBy "' + request.userInfo.username +
+        '", your own username; kardinal override --budget sets it for you'
+      reason: Forbidden
+    - expression: >-
+        variables.controller || size(variables.added) == 0 || !variables.party
+      messageExpression: >-
+        'you (' + request.userInfo.username + ') are of agent ' + object.metadata.name +
+        '\'s party (its sponsor or a subject): someone else must let it through its budget'
+      reason: Forbidden
+    - expression: >-
+        variables.controller || variables.added.all(e, has(e.actor) && e.actor.principal == request.userInfo.username &&
+          !has(e.actor.via) && (variables.serviceAccount ? e.actor.kind in ['bot', 'agent'] : e.actor.kind in ['human', 'agent']))
+      messageExpression: >-
+        'every new spec.budgetExemptions entry needs an actor stamp naming you (principal ' + request.userInfo.username +
+        '), with no via, and kind ' + (variables.serviceAccount ? 'bot or agent' : 'human or agent') +
+        '; kardinal override --budget sets it for you'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: ["Deny"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-actor-budgets
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: kardinal.io/v1alpha1
+    kind: AgentIndex
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentidentities"]
+  {{- include "kardinal-promoter.actorChecks" (dict "controllers" $controllers) | nindent 2 }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-actor-budgets
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "kardinal-promoter.fullname" . }}-actor-budgets
+  validationActions: ["Deny"]
+  paramRef:
+    name: {{ include "kardinal-promoter.fullname" . }}
+    parameterNotFoundAction: Deny
+  matchResources:
+    objectSelector:
+      matchLabels:
+        kardinal.io/budget-exemptions: "true"
+---
+# Incident commanders: let an agent through its budget. patch alone would let
+# them write the whole AgentIdentity; <release>-agent-budgets keeps them to
+# exemptions (the manage verb).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-agent-budget-exempter
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["agentidentities"]
+    verbs: ["get", "list", "watch", "patch", "exempt"]
+{{- if not .Values.actors.budgets.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-off
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Ignore
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kardinal.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["agentidentities"]
+  variables:
+    - name: budgets
+      expression: "has(object.spec.budgets) ? object.spec.budgets : []"
+    - name: exemptions
+      expression: "has(object.spec.budgetExemptions) ? object.spec.budgetExemptions : []"
+    - name: changed
+      expression: >-
+        oldObject == null ? (size(variables.budgets) > 0 || size(variables.exemptions) > 0) :
+        (variables.budgets != (has(oldObject.spec.budgets) ? oldObject.spec.budgets : []) ||
+         variables.exemptions != (has(oldObject.spec.budgetExemptions) ? oldObject.spec.budgetExemptions : []))
+  validations:
+    - expression: "!variables.changed || (size(variables.budgets) == 0 && size(variables.exemptions) == 0)"
+      message: >-
+        agent budgets are off in this release (actors.budgets.enabled): they are kept but not enforced
+      reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-off
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}-off
+  validationActions: ["Warn"]
+{{- end }}
