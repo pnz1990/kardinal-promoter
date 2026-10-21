@@ -22,6 +22,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
@@ -133,11 +135,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			continue
 		case apierrors.IsNotFound(err):
 			return reconcile.Result{}, nil
-		case err != nil:
-			if refused(err) {
-				kubeevent.Emit(r.Recorder, base, corev1.EventTypeWarning, ReasonLedgerWriteRefused, "Grant",
-					fmt.Sprintf("ledger %s could not be written, so this installation grants nothing for the agent: %v", r.Ledger, err))
+		case err != nil && refused(err):
+			// Refused for what it is: retrying with backoff would be refused
+			// again. Say so, and wait for the next event (TerminalError).
+			kubeevent.Emit(r.Recorder, base, corev1.EventTypeWarning, ReasonLedgerWriteRefused, "Grant",
+				fmt.Sprintf("ledger %s could not be written, so this installation grants nothing for the agent: %v", r.Ledger, err))
+			if old != nil {
+				r.markWriteRefused(ctx, req.Name, err)
 			}
+			return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("write agent budget ledger %s of %s: %w", r.Ledger, req.Name, err))
+		case err != nil:
 			return reconcile.Result{}, fmt.Errorf("write agent budget ledger %s of %s: %w", r.Ledger, req.Name, err)
 		}
 		for _, e := range out.ignored {
@@ -152,6 +159,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				Str("exemption", g.Exemption).Msg("agent budget granted")
 		}
 		return result, nil
+	}
+}
+
+// markWriteRefused tries a minimal write of the existing ledger's LedgerFull
+// condition (reason WriteRefused), so the ledger says why it stopped
+// granting. A ledger the API server will not take at all (a 17th) has no
+// entry to write it in: the event and kardinal doctor say so. Its own
+// failure is only logged.
+func (r *Reconciler) markWriteRefused(ctx context.Context, name string, cause error) {
+	var id v1alpha1.AgentIdentity
+	if err := r.APIReader.Get(ctx, types.NamespacedName{Name: name}, &id); err != nil {
+		return
+	}
+	u, ok := id.Status.Usage[r.Ledger]
+	if !ok {
+		return
+	}
+	if c := meta.FindStatusCondition(u.Conditions, ConditionLedgerFull); c != nil && c.Reason == FullWriteRefused {
+		return
+	}
+	base := id.DeepCopy()
+	meta.SetStatusCondition(&u.Conditions, metav1.Condition{Type: ConditionLedgerFull, Status: metav1.ConditionTrue,
+		Reason: FullWriteRefused, ObservedGeneration: u.ObservedGeneration, LastTransitionTime: metav1.NewTime(r.now()),
+		Message: kubeevent.Truncate("the API server refused the ledger's last write, so nothing more is granted: " + cause.Error())})
+	id.Status.Usage[r.Ledger] = u
+	if err := r.Client.Status().Patch(ctx, &id, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("agentidentity", name).Msg("the refused agent budget ledger's condition could not be written either")
 	}
 }
 
@@ -491,17 +525,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	ctx := context.Background()
 	idx := mgr.GetFieldIndexer()
-	if err := idx.IndexField(ctx, &v1alpha1.PromotionStep{}, IndexStepBudgetAgent, StepBudgetAgent); err != nil {
-		return fmt.Errorf("index PromotionStep by %s: %w", IndexStepBudgetAgent, err)
-	}
-	if err := idx.IndexField(ctx, &v1alpha1.Bundle{}, IndexBundleUID, BundleUID); err != nil {
-		return fmt.Errorf("index Bundle by %s: %w", IndexBundleUID, err)
-	}
-	if err := idx.IndexField(ctx, &v1alpha1.Bundle{}, IndexBundleAgent, BundleAgent); err != nil {
-		return fmt.Errorf("index Bundle by %s: %w", IndexBundleAgent, err)
-	}
-	if err := idx.IndexField(ctx, &v1alpha1.AgentIdentity{}, IndexUnavailableLedgers, UnavailableLedgers); err != nil {
-		return fmt.Errorf("index AgentIdentity by %s: %w", IndexUnavailableLedgers, err)
+	for _, register := range []func(context.Context, client.FieldIndexer) error{
+		IndexStepsByBudgetAgent, IndexBundlesByUID, IndexBundlesByAgent, IndexAgentsWithUnavailable} {
+		if err := register(ctx, idx); err != nil {
+			return err
+		}
 	}
 	b := ctrl.NewControllerManagedBy(mgr).Named("agentbudget").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).

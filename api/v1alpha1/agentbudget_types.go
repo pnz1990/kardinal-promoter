@@ -10,9 +10,9 @@ import (
 // Agent budgets (docs/design/24-agent-budgets.md): limits on how much an
 // agent changes before a person looks, kept on its AgentIdentity. The budget
 // reconciler (pkg/reconciler/agentbudget, --agent-budgets) counts and grants
-// in status.usage. The step hold (W3, #2434) and the chart's switch and
-// admission checks (W6, #2437) come later in v0.14; "planned" in a comment
-// below marks what they add.
+// in status.usage, and the PromotionStep reconciler holds a step until its
+// grant. The chart's switch and admission checks (W6, #2437) come later in
+// v0.14; "planned" in a comment below marks what they add.
 
 // AgentBudgetRule limits an agent's promotions into the environments it
 // matches. Every rule that matches a step applies. A limit that is not set
@@ -307,9 +307,8 @@ type AgentUsage struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// PromotionStepBudget is a step's place against its agent's budgets.
-// Planned (W3, #2434): written by the PromotionStep reconciler only; nothing
-// writes it yet.
+// PromotionStepBudget is a step's place against its agent's budgets,
+// written by the PromotionStep reconciler only.
 type PromotionStepBudget struct {
 	// Agent is the AgentIdentity whose budgets hold the step.
 	// +kubebuilder:validation:MaxLength=253

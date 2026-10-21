@@ -237,9 +237,9 @@ spec:
                   applies. The four counted limits of all rules sum to at most 1,500,
                   which bounds the ledger in status.usage. Where the controller runs
                   with --agent-budgets, it counts and grants each agent's promotions in
-                  status.usage. Not enforced yet: the step hold that makes a step beyond
-                  a limit wait rather than fail is W3 (#2434), and the chart's switch,
-                  off by default, is W6 (#2437). See docs/design/24-agent-budgets.md.
+                  status.usage, and a step beyond a limit waits in Pending rather than
+                  fails. Planned (W6, #2437): the chart's switch, off by default. See
+                  docs/design/24-agent-budgets.md.
                 items:
                   description: |-
                     AgentBudgetRule limits an agent's promotions into the environments it

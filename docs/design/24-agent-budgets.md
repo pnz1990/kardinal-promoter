@@ -480,6 +480,27 @@ write.
 of this ledger and enqueues only the steps of new grants (found by the Bundle UID and
 environment labels). A grant wakes one step; a status write that grants nothing wakes none.
 
+**As built (W3, `pkg/reconciler/promotionstep/budget.go`).** The order of the checks differs
+from the list above in three places, each toward fewer held steps and never toward an unbudgeted
+start:
+
+- The grant is looked up first (step 5 before 2-4): a grant is never revoked, so a step that has
+  one goes on whatever the spec or the ledger's generation says now.
+- Whether a rule applies (step 4) is decided from the spec, with the reconciler's `Matching`,
+  not from `usage.rules`: a rule just added holds the step before the ledger has caught up (it
+  waits on step 3), and a step no rule of the spec matches passes even while the ledger is
+  behind.
+- A step held on step 3 also writes `status.budget` (Waiting), so the reconciler sees the
+  request at once; a waiting step that no rule matches any more (budgets removed or narrowed)
+  clears it before it goes on.
+
+Waking as built: the handler lists the agent's steps through the `status.budget.agent` index
+(registered once, `agentbudget.IndexStepsByBudgetAgent`, shared with the budget reconciler) and
+enqueues the Pending ones of the grants the write added, found by the `kardinal.io/bundle-uid`
+label or, for a step of a non-compact Graph, its Bundle's UID; and every waiting step of the agent
+when the ledger caught up with the spec, or the spec changed. A step held because its agent is
+not registered has no `status.budget`, and re-checks on the one-minute fallback.
+
 ### 7.3 The reconciler side: granting
 
 A new controller, `pkg/reconciler/agentbudget`, reconciles AgentIdentities (one work-queue key

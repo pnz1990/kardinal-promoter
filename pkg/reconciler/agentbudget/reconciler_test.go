@@ -5,6 +5,7 @@ package agentbudget
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,7 +59,9 @@ func newWorld(t *testing.T, refuse error, objs ...client.Object) *world {
 			obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 			if _, ok := obj.(*v1alpha1.AgentIdentity); ok {
 				w.patches.Add(1)
-				if refuse != nil {
+				// The refusal is for the ledger's writes (they carry
+				// grants or rules), not a condition-only write.
+				if data, _ := patch.Data(obj); refuse != nil && strings.Contains(string(data), `"rules"`) {
 					return refuse
 				}
 			}
@@ -257,14 +260,70 @@ func TestReconcileEvents(t *testing.T) {
 	assert.Empty(t, fr.Events, "not repeated")
 	assert.Equal(t, v1alpha1.ExemptionMadeByAgent, w.usage().Exemptions[0].Ignored)
 
+	// A refused write: a Warning, a terminal error (retried on the next
+	// event, not with backoff forever), and LedgerFull WriteRefused in the
+	// ledger when it exists.
 	refused := apierrors.NewInvalid(schema.GroupKind{Group: "kardinal.io", Kind: "AgentIdentity"}, "fixer", nil)
-	w2 := newWorld(t, refused, identity(r))
+	existing := identity(r)
+	existing.Status.Usage = map[string]v1alpha1.AgentUsage{ledgerName: {ObservedGeneration: 0}}
+	w2 := newWorld(t, refused, existing)
 	rec2 := w2.reconciler(t0)
 	rec2.Recorder = fr
 	_, err := rec2.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "fixer"}})
 	require.Error(t, err)
+	assert.ErrorIs(t, err, reconcile.TerminalError(nil), "not retried with backoff")
 	require.Len(t, fr.Events, 1)
 	assert.Contains(t, <-fr.Events, "ledger kardinal-promoter could not be written")
+	c := meta.FindStatusCondition(w2.usage().Conditions, ConditionLedgerFull)
+	require.NotNil(t, c, "the ledger says why it stopped granting")
+	assert.Equal(t, FullWriteRefused, c.Reason)
+
+	// No ledger yet (a 17th): nothing to write the condition in.
+	w3 := newWorld(t, refused, identity(r))
+	_, err = w3.reconciler(t0).Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "fixer"}})
+	assert.ErrorIs(t, err, reconcile.TerminalError(nil))
+	assert.Nil(t, w3.usage())
+}
+
+// TestReconcileRequeuesUnchanged: a re-run that writes nothing still
+// requeues for when room frees, so a waiting request is granted then
+// (QA-3 on #2456).
+// Covers BUDGET-LEDGER-01.
+func TestReconcileRequeuesUnchanged(t *testing.T) {
+	r := rule("prod", "prod")
+	r.VersionsPerDay = 1
+	b1, b2 := bundle("v1", "u-1"), bundle("v2", "u-2")
+	w := newWorld(t, nil, identity(r), b1, b2, pipeline(),
+		step(b1, "prod", "Pending", t0), step(b2, "prod", "Pending", t0.Add(time.Second)))
+	w.reconcile(w.reconciler(t0))
+	w.setState("v1-prod", "Verified")
+	w.reconcile(w.reconciler(t0.Add(time.Minute)))
+	patches := w.patches.Load()
+	res := w.reconcile(w.reconciler(t0.Add(time.Hour)))
+	assert.Equal(t, patches, w.patches.Load(), "unchanged: no write")
+	assert.Equal(t, 23*time.Hour, res.RequeueAfter, "v2 waits until v1's grant leaves the 24 hour window")
+}
+
+// TestOwnedBy: a step is a request only when its Bundle's admission-verified
+// actor is this agent: kind agent, not merely the agent's name (QA-3 on
+// #2456).
+// Covers BUDGET-LEDGER-01.
+func TestOwnedBy(t *testing.T) {
+	b := bundle("v1", "u-1")
+	assert.True(t, ownedBy(b, "fixer"))
+	assert.False(t, ownedBy(b, "other"))
+	b.Spec.Actor.Kind = v1alpha1.ActorHuman
+	assert.False(t, ownedBy(b, "fixer"), "a person's version is never the agent's")
+	b.Spec.Actor = nil
+	assert.False(t, ownedBy(b, "fixer"))
+
+	r := rule("prod", "prod")
+	r.MaxConcurrent = 1
+	person := bundle("v2", "u-2")
+	person.Spec.Actor.Kind = v1alpha1.ActorHuman
+	w := newWorld(t, nil, identity(r), person, pipeline(), step(person, "prod", "Pending", t0))
+	w.reconcile(w.reconciler(t0))
+	assert.Empty(t, grantedUIDs(w.usage()), "a person's step is not a request")
 }
 
 // TestReconcileSeedsAndUnavailable: a new ledger seeds the agent's started

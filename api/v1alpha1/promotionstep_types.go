@@ -551,8 +551,7 @@ type PromotionStepStatus struct {
 
 	// Budget is the step's place against its agent's budgets
 	// (AgentIdentity spec.budgets): Waiting while the ledger has no room,
-	// then Granted. Absent for a step no budget applies to. Planned (W3,
-	// #2434): nothing writes it yet.
+	// then Granted. Absent for a step no budget applies to.
 	// +optional
 	Budget *PromotionStepBudget `json:"budget,omitempty"`
 }

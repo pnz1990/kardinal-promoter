@@ -801,9 +801,14 @@ func main() {
 		logger.Warn().Msg("--agent-index is not set: no agent registry; every caller is recorded as a person or a bot")
 	}
 	// Agent budgets (docs/design/24-agent-budgets.md section 15.2): one
-	// writer per installation's ledger.
+	// writer per installation's ledger; every shard's steps wait for its
+	// grants.
+	var stepBudgets *psreconciler.BudgetConfig
 	if agentBudgets {
 		ledger, writes, err := agentbudgetrecon.Ledger(agentBudgetLedger, agentIndexName, gate.OwnsClusterScoped())
+		if err == nil {
+			stepBudgets = &psreconciler.BudgetConfig{Ledger: ledger}
+		}
 		switch {
 		case err != nil:
 			logger.Fatal().Err(err).Msg("agent budgets")
@@ -1108,6 +1113,7 @@ func main() {
 		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
 		SCMWaitTimeout:  scmWaitTimeout,
 		Receipts:        receipts,
+		Budgets:         stepBudgets,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

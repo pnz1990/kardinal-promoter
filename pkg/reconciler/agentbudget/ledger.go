@@ -64,6 +64,8 @@ const (
 	FullGrants      = "GrantCap"
 	FullAgentGrants = "AgentGrantCap"
 	FullObjectSize  = "ObjectSize"
+	// FullWriteRefused: the API server refused the ledger's last write.
+	FullWriteRefused = "WriteRefused"
 )
 
 // Limit names, as in spec.budgets and usage.rules[].exhausted.
@@ -176,8 +178,9 @@ func matches(r *v1alpha1.AgentBudgetRule, ns, env, fleet string) bool {
 	return actor.Matches(r.Environments, env) || (fleet != "" && actor.Matches(r.Environments, fleet))
 }
 
-// matching are the rules of rules that apply to a step, in spec order.
-func matching(rules []v1alpha1.AgentBudgetRule, ns, env, fleet string) []string {
+// Matching are the names of the rules that apply to a step in namespace ns,
+// environment env, of fleet ("" for none), in spec order.
+func Matching(rules []v1alpha1.AgentBudgetRule, ns, env, fleet string) []string {
 	var out []string
 	for i := range rules {
 		if matches(&rules[i], ns, env, fleet) {
@@ -327,7 +330,7 @@ func evaluate(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, f facts, now
 		st := f.grants[grantKey{g.BundleUID, g.Environment}]
 		if respec {
 			if st.bundleFound {
-				g.Rules = matching(rules, st.namespace, g.Environment, g.Fleet)
+				g.Rules = Matching(rules, st.namespace, g.Environment, g.Fleet)
 			} else {
 				kept := g.Rules[:0:0]
 				for _, n := range g.Rules {
@@ -350,7 +353,7 @@ func evaluate(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, f facts, now
 		if l.has(s.key) {
 			continue
 		}
-		rs := matching(rules, s.namespace, s.key.env, s.fleet)
+		rs := Matching(rules, s.namespace, s.key.env, s.fleet)
 		if len(rs) == 0 {
 			continue
 		}
@@ -392,7 +395,7 @@ func evaluate(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, f facts, now
 	full := ""
 	var fresh []int // indexes in l.grants of this evaluation's grants
 	for _, q := range reqs {
-		rs := matching(rules, q.namespace, q.key.env, q.fleet)
+		rs := Matching(rules, q.namespace, q.key.env, q.fleet)
 		if len(rs) == 0 {
 			continue // no rule holds it: the step passes on its own
 		}

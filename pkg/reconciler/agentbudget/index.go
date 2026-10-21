@@ -4,10 +4,37 @@
 package agentbudget
 
 import (
+	"context"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
+
+// IndexStepsByBudgetAgent registers IndexStepBudgetAgent once per indexer:
+// the budget reconciler and the step hold both read it.
+func IndexStepsByBudgetAgent(ctx context.Context, indexer client.FieldIndexer) error {
+	return lifecycle.IndexOnce(ctx, indexer, &v1alpha1.PromotionStep{}, IndexStepBudgetAgent, StepBudgetAgent)
+}
+
+// IndexBundlesByAgent registers IndexBundleAgent once per indexer: the
+// budget reconciler (seeding) and the gates' budget.* context (W5) both read
+// it.
+func IndexBundlesByAgent(ctx context.Context, indexer client.FieldIndexer) error {
+	return lifecycle.IndexOnce(ctx, indexer, &v1alpha1.Bundle{}, IndexBundleAgent, BundleAgent)
+}
+
+// IndexBundlesByUID registers IndexBundleUID once per indexer.
+func IndexBundlesByUID(ctx context.Context, indexer client.FieldIndexer) error {
+	return lifecycle.IndexOnce(ctx, indexer, &v1alpha1.Bundle{}, IndexBundleUID, BundleUID)
+}
+
+// IndexAgentsWithUnavailable registers IndexUnavailableLedgers once per
+// indexer.
+func IndexAgentsWithUnavailable(ctx context.Context, indexer client.FieldIndexer) error {
+	return lifecycle.IndexOnce(ctx, indexer, &v1alpha1.AgentIdentity{}, IndexUnavailableLedgers, UnavailableLedgers)
+}
 
 // The cache's field indexes the budget reconciler reads through
 // (docs/design/24-agent-budgets.md section 5.2, A5).

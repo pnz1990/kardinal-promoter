@@ -90,7 +90,7 @@ func TestMatching(t *testing.T) {
 		{"a namespace not listed", "shop", "prod-eu", "", []string{"prod"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, matching(rules, tc.ns, tc.env, tc.fleet))
+			assert.Equal(t, tc.want, Matching(rules, tc.ns, tc.env, tc.fleet))
 		})
 	}
 }
