@@ -15,6 +15,11 @@
 #                 their durations in hack/e2e/durations.txt so the parts
 #                 take about as long (CI splits the core suite across jobs
 #                 this way)
+#   DURATIONS     the durations file SHARD splits by (default
+#                 hack/e2e/durations.txt; the release gate's full scale
+#                 profile has its own)
+#   SKIP          go test -skip pattern: these tests do not run (nor count
+#                 in a SHARD split)
 #   KIND_CLUSTER  cluster name (default kardinal-e2e-SUITE)
 #   KARDINAL_E2E_TIMEOUT   go test -timeout (default 90m per repetition; the
 #                 scale suite's full and soak profiles need more, e.g. 4h)
@@ -40,6 +45,8 @@ target_cluster
 cd "$REPO_ROOT"
 go build -o "$E2E_OUT/bin/report" ./test/e2e/report
 RUN=${RUN:-$KARDINAL_E2E_RUN}
+SKIP=${SKIP:-}
+DURATIONS=${DURATIONS:-$(dirname "$0")/durations.txt}
 COUNT=${COUNT:-1}
 # The upgrade test upgrades the cluster's v0.8.1 release, so it runs once.
 case $SUITE in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121 | upgrade-v0123) [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1" ;; esac
@@ -77,8 +84,8 @@ if [ -n "${SHARD:-}" ]; then
   fi
   i=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}
   list=$(go test -tags e2e ./test/e2e/live -list "$RUN")
-  mapfile -t tests < <(grep '^Test' <<<"$list")
-  mapfile -t mine < <(printf '%s\n' "${tests[@]}" | shard_tests "$i" "$n" "$(dirname "$0")/durations.txt")
+  mapfile -t tests < <(grep '^Test' <<<"$list" | { if [ -n "$SKIP" ]; then grep -Ev -- "$SKIP" || true; else cat; fi; })
+  mapfile -t mine < <(printf '%s\n' "${tests[@]}" | shard_tests "$i" "$n" "$DURATIONS")
   [ "${#mine[@]}" -gt 0 ] || die "SHARD=$SHARD: no tests (${#tests[@]} match $RUN)"
   # Test names are identifiers, so the exact-name pattern needs no quoting.
   RUN="^($(IFS='|'; echo "${mine[*]}"))\$"
@@ -90,7 +97,7 @@ PARALLEL=${KARDINAL_E2E_PARALLEL:-}
 # report decides: go test also fails the package for an expected failure
 # (scale.KnownBug), which report does not count as one.
 set +o pipefail
-go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "${KARDINAL_E2E_TIMEOUT:-$((90 * COUNT))m}" \
+go test -tags e2e ./test/e2e/live -run "$RUN" ${SKIP:+-skip "$SKIP"} -count="$COUNT" -timeout "${KARDINAL_E2E_TIMEOUT:-$((90 * COUNT))m}" \
   ${PARALLEL:+-parallel "$PARALLEL"} -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"
 exit "${PIPESTATUS[2]}"
