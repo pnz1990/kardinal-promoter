@@ -26,8 +26,10 @@ permissions:
 # request's CI. The red-main workflow reads only finished green or failed
 # runs and names every merge since the last green one; a release tags the
 # commit its gate ran on, after the push freeze, so that commit gets its run.
+# red-main's one re-run of a failed main run has a group of its own (the run
+# id), so it neither replaces the newest merge's queued run nor is replaced.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.ref == 'refs/heads/main' && github.run_attempt != 1 && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
