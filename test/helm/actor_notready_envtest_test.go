@@ -32,10 +32,12 @@ import (
 
 // TestActorIndexNotReadyOnAPIServer (#2451): on a real kube-apiserver with
 // the chart's policies, in each state the AgentIndex is not Ready (never
-// built: no status; IndexFull; a later release's CompactFormat), the index's
-// readiness never refuses a person: their version, freeze, freeze exemption
-// and CLI pause are admitted, stamped unverified as kardinal writes them,
-// and refused only stamped human (it cannot be verified). A ServiceAccount's
+// built: no status; IndexFull; a later release's CompactFormat), a person
+// is never refused a stop-the-line write: their version, freeze, freeze
+// exemption and CLI pause are admitted, stamped unverified as kardinal
+// writes them, and refused only stamped human (it cannot be verified); a
+// raw Approval must carry the unverified stamp, and its refusal gives the
+// fix. A ServiceAccount's
 // version, freeze exemption and stamped pause are refused, with the state's
 // message.
 // Covers ACTOR-INDEX-06.
@@ -147,6 +149,19 @@ func TestActorIndexNotReadyOnAPIServer(t *testing.T) {
 		err = exempt(as(ci), ci, nil)
 		require.Error(t, err, "%s: a ServiceAccount's freeze exemption", state.name)
 		require.Contains(t, err.Error(), state.why)
+
+		// A raw Approval must carry the unverified stamp (it decides a gate);
+		// the refusal says how.
+		approval := func(name string, a *v1alpha1.Actor) *v1alpha1.Approval {
+			return &v1alpha1.Approval{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%d", name, i), Namespace: "team-a",
+				Labels: map[string]string{"kardinal.io/bundle": "b1", "kardinal.io/environment": "test"}},
+				Spec: v1alpha1.ApprovalSpec{Bundle: "b1", BundleUID: "u1", Environment: "test", User: "alice", Decision: "approve", Actor: a}}
+		}
+		err = as("alice").Create(ctx, approval("raw", nil))
+		require.Error(t, err, "%s: a person's unstamped Approval", state.name)
+		require.Contains(t, err.Error(), "an Approval needs the unverified actor stamp now. Use kardinal approve or the UI, which set it, "+
+			"or set spec.actor: {kind: unverified, principal: alice} yourself")
+		require.NoError(t, as("alice").Create(ctx, approval("stamped", unverified("alice"))), "%s: a person's stamped Approval", state.name)
 
 		require.NoError(t, pause(as("alice"), "alice", unverified("alice")), "%s: a person's CLI pause", state.name)
 		err = pause(as(ci), ci, &v1alpha1.Actor{Kind: "bot", Principal: ci})

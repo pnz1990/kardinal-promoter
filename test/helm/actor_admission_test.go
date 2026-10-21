@@ -132,6 +132,12 @@ func approvalObj(t *testing.T, ns, env string, stamp *v1alpha1.Actor) map[string
 		Spec: v1alpha1.ApprovalSpec{Bundle: "b", BundleUID: "u", Environment: env, User: "x", Decision: "approve", Actor: stamp}})
 }
 
+func verdictObj(t *testing.T, ns, env string, stamp *v1alpha1.Actor) map[string]interface{} {
+	return asMap(t, v1alpha1.Verdict{ObjectMeta: metav1.ObjectMeta{Name: "v", Namespace: ns},
+		Spec: v1alpha1.VerdictSpec{Pipeline: "checkout", Bundle: "b", BundleUID: "u", Environment: env, Check: "qa",
+			Result: "pass", Summary: "ok", By: "x", Actor: stamp}})
+}
+
 func gateObj(t *testing.T, ns, env string, overrides ...v1alpha1.PolicyGateOverride) map[string]interface{} {
 	return asMap(t, v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: ns,
 		Labels: map[string]string{"kardinal.io/bundle": "b", "kardinal.io/pipeline": "checkout", "kardinal.io/environment": env}},
@@ -305,9 +311,11 @@ func notReadyIndexes(t *testing.T) map[string]struct {
 // index's readiness never refuses a person. <release>-actor and
 // -actor-overrides refuse a ServiceAccount's writes they check, with the
 // state's message (a full index says what to do, not to retry: QA-3 on
-// #2384). A person's version, freeze, exemption and gate override are
-// admitted unstamped or stamped {kind: unverified}; a human or agent stamp
-// (the compact index's guard among them) is refused, since it cannot be
+// #2384). A person is never refused a stop-the-line write: their version,
+// freeze, exemption and gate override are admitted unstamped or stamped
+// {kind: unverified}; a raw Approval or Verdict must carry the unverified
+// stamp, and the refusal says how to get it. A human or agent stamp (the
+// compact index's guard among them) is refused, since it cannot be
 // verified. The controller is exempt. A Ready index derives the kind again:
 // human, and unverified is refused.
 // Covers ACTOR-INDEX-05, ACTOR-INDEX-06.
@@ -350,6 +358,16 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 			user: "alice", groups: authed, object: bundleObj(t, "x", "checkout", guard)}, mustUnverified},
 		{"a person's approval stamped unverified", actorVAP, actorReq{resource: "approvals", namespace: "x", user: "alice",
 			groups: authed, object: approvalObj(t, "x", "prod", unverified("alice"))}, ""},
+		// A raw Approval or Verdict must carry the unverified stamp: it
+		// decides a gate, and unstamped it would read as a person's.
+		{"a person's unstamped approval", actorVAP, actorReq{resource: "approvals", namespace: "x", user: "alice",
+			groups: authed, object: approvalObj(t, "x", "prod", nil)}, "stamp:approval"},
+		{"a person's verdict stamped unverified", actorVAP, actorReq{resource: "verdicts", namespace: "x", user: "alice",
+			groups: authed, object: verdictObj(t, "x", "uat", unverified("alice"))}, ""},
+		{"a person's unstamped verdict", actorVAP, actorReq{resource: "verdicts", namespace: "x", user: "alice",
+			groups: authed, object: verdictObj(t, "x", "uat", nil)}, "stamp:verdict"},
+		{"a person's verdict stamped human", actorVAP, actorReq{resource: "verdicts", namespace: "x", user: "alice",
+			groups: authed, object: verdictObj(t, "x", "uat", human("alice"))}, mustUnverified},
 		{"a person's freeze", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
 			object: freeze(unverified("alice"))}, ""},
 		{"a person's freeze stamped human", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
@@ -384,6 +402,14 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 						assert.Contains(t, got, "remove AgentIdentities or subjects")
 						assert.NotContains(t, got, "retry", "retrying does not help a full index (QA-3 on #2384)")
 					}
+				case "stamp:approval":
+					assert.Equal(t, "kardinal's agent index is not Ready, so it cannot tell you from an agent: an Approval needs the "+
+						"unverified actor stamp now. Use kardinal approve or the UI, which set it, or set spec.actor: "+
+						"{kind: unverified, principal: alice} yourself. An unverified decision does not count toward a gate: "+
+						"decide again once the index is Ready (kubectl get agentindex)", got)
+				case "stamp:verdict":
+					assert.Contains(t, got, "a Verdict needs the unverified actor stamp now. Use kardinal verify, which set it, "+
+						"or set spec.actor: {kind: unverified, principal: alice} yourself.")
 				default:
 					assert.Contains(t, got, tc.deny)
 					assert.Contains(t, got, "kardinal's agent index is not Ready, so it cannot tell you from an agent")
@@ -395,6 +421,8 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 		Status: v1alpha1.AgentIndexStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}}})
 	assert.Empty(t, evalActor(t, actorVAP, ready, actorReq{resource: "bundles", namespace: "x", user: "alice",
 		object: bundleObj(t, "x", "checkout", human("alice"))}), "a Ready index: a person is human")
+	assert.Empty(t, evalActor(t, actorVAP, ready, actorReq{resource: "approvals", namespace: "x", user: "alice",
+		object: approvalObj(t, "x", "prod", nil)}), "a Ready index: a person's unstamped approval")
 	got := evalActor(t, actorVAP, ready, actorReq{resource: "bundles", namespace: "x", user: "alice",
 		object: bundleObj(t, "x", "checkout", unverified("alice"))})
 	assert.Contains(t, got, "actor must be {kind: human, principal: alice}", "a Ready index: unverified is refused")

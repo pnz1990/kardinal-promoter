@@ -52,36 +52,36 @@ admit a stamp only when it says exactly what the requester is:
 - an agent's `agent` and `sponsor` are the ones registered;
 - only kardinal's controller sets `via`.
 
-While the index is not Ready, the policies can't tell an agent from a person, and its readiness
-never refuses a person (#2451). The index is not Ready for a few seconds after an install or
-an upgrade, before the controller's first build; while it's full (`IndexFull`: its entries are over
-the 1 MiB bound); and after a rollback from a later release that wrote it in a newer format
-(`CompactFormat`). In those states:
+While the index isn't Ready, a person is never refused a stop-the-line write; a raw Approval or
+Verdict must carry the unverified stamp (#2451). The policies can't tell an agent from a person then.
+The index isn't Ready for a few seconds after an install or an upgrade, before the controller's
+first build; while it's full (`IndexFull`: its entries are over the 1 MiB bound); and after a
+rollback from a later release that wrote it in a newer format (`CompactFormat`). In those states:
 
+- A person is never refused a stop-the-line write: a version, a freeze or its exemption, a gate
+  override, a pause, resume or hold release, a rejection. The stamp kardinal writes then
+  (`kardinal`, the UI, the Bundle API) says `kind: unverified`, never `human`. The policies refuse a
+  `human` stamp until the index is Ready again, and an unstamped write goes through.
+- A raw Approval or Verdict must carry the unverified stamp: it decides a gate, and unstamped it
+  would read as a person's. `kardinal approve`, the UI and `kardinal verify` set it. With `kubectl`,
+  set `spec.actor: {kind: unverified, principal: <your username>}`. The refusal says so.
+- An `unverified` Approval or Verdict never counts toward a gate: decide again once the index is
+  Ready. Everywhere else, `unverified` reads as not an agent. Gates see
+  `actor.kind == "unverified"`, which is neither `human` nor `agent`. The UI shows the person's name
+  with "unverified".
 - A ServiceAccount's checked writes (a version, an Approval, a Verdict, a gate override, a freeze
-  or its exemption, a stamped pause, hold release or rejection) are refused, with a message that
-  names the state and what to do: retry, remove AgentIdentities or subjects until the index fits,
-  or finish the upgrade or rollback. The UI API and the Bundle API answer such callers 503. A
-  ServiceAccount waits for the index.
-- Anyone else is admitted. The stamp kardinal writes then (`kardinal`, the UI, the Bundle API)
-  says `kind: unverified`, never `human`: the policies refuse a `human` stamp until the index is
-  Ready again, and a write without a stamp goes through as it always does.
-- An `unverified` Approval or Verdict never counts toward a gate: the person approves (or writes
-  the verdict) again once the index is Ready. Everywhere else, `unverified` reads as not an agent.
-  Gates see `actor.kind == "unverified"`, which is neither `human` nor `agent`. The UI shows the
-  person's name with "unverified".
+  exemption, a stamped pause, hold release or rejection) are refused, with a message that names the
+  state and what to do: retry, remove AgentIdentities or subjects until the index fits, or finish
+  the upgrade or rollback. The UI API and the Bundle API answer such callers 503. A ServiceAccount
+  waits for the index.
 - Writes the policies don't check go on: kro's gate instances, and the versions kardinal creates
   itself (automatic rollbacks, Subscriptions), so promotions already under way keep moving.
 
-What this can't do. An agent registered by a `User` or `Group` subject is, while the index isn't
-Ready, indistinguishable from a person:
+What this can't do. An agent registered by a `User` or `Group` subject is indistinguishable from a
+person while the index isn't Ready:
 
-- If it writes through `kardinal` or the UI, its stamp says `unverified`, so its approvals and
-  verdicts don't count.
-- If it writes an unstamped version, Approval or Verdict with `kubectl`, the record reads as
-  `unknown`, which counts like a person's, as an unstamped record always has.
-- A version stamped `unverified` isn't held as an agent's: `agents: deny`, agent overrides and the
-  freeze's break-glass rule don't apply to it.
+- A version it ships then (stamped `unverified`, or unstamped with `kubectl`) isn't held as an
+  agent's: `agents: deny`, agent overrides and the freeze's break-glass rule don't apply to it.
 - Once the controller is back on an older release, after a rollback to v0.13 or earlier, an
   `unverified` stamp reads as a person's.
 

@@ -24,11 +24,13 @@ indexState: indexReady (Ready True), compact (Ready's reason is
 CompactFormat: a later release wrote the index in its compact format, #2071,
 whose entries this release's policies do not read) and full (Ready's reason
 is IndexFull: the entries are over the bound, and written empty). An index
-that is not Ready cannot tell an agent from a person, and its readiness
-never refuses a person (#2451): the policies refuse the writes they check
-only from ServiceAccounts then (sa), and anyone else's stamp must say
-unverified, never human (actorKind), so a person's decision is not counted
-from it. indexNotReadyMessage says why a ServiceAccount is refused and what
+that is not Ready cannot tell an agent from a person (#2451): a person is
+never refused a stop-the-line write then (a version, a freeze or its
+exemption, a gate override, a pause, resume or hold release, a rejection);
+a raw Approval or Verdict must carry the unverified stamp. The policies
+refuse the writes they check from ServiceAccounts (sa), and anyone else's
+stamp must say unverified, never human (actorMatches), so a person's
+decision is not counted from it. indexNotReadyMessage says why a ServiceAccount is refused and what
 to do: finish the upgrade or the rollback, remove AgentIdentities, or retry
 while the controller builds it.
 */}}
@@ -139,6 +141,21 @@ validations:
   - expression: "!variables.check || variables.indexReady || !variables.sa"
     messageExpression: >-
       {{ include "kardinal-promoter.indexNotReadyMessage" . }}
+    reason: Forbidden
+  # While the index is not Ready a person is never refused a stop-the-line
+  # write (a version, a freeze or its exemption, a gate override); a raw
+  # Approval or Verdict must carry the unverified stamp (#2451): it decides a
+  # gate, and unstamped it would read as a person's, from an agent the index
+  # names by User or Group too.
+  - expression: >-
+      !variables.check || variables.indexReady || variables.sa ||
+      !(request.resource.resource in ['approvals', 'verdicts']) || variables.stamps.all(s, s != null)
+    messageExpression: >-
+      "kardinal's agent index is not Ready, so it cannot tell you from an agent: " +
+      (request.resource.resource == 'approvals' ? 'an Approval' : 'a Verdict') + " needs the unverified actor stamp now. Use " +
+      (request.resource.resource == 'approvals' ? 'kardinal approve or the UI' : 'kardinal verify') +
+      ", which set it, or set spec.actor: {kind: unverified, principal: " + request.userInfo.username + "} yourself." +
+      " An unverified decision does not count toward a gate: decide again once the index is Ready (kubectl get agentindex)"
     reason: Forbidden
   - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
     messageExpression: >-
