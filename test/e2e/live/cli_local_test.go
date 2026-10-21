@@ -1022,18 +1022,21 @@ func TestCLI_DoctorPolicyNamespaces(t *testing.T) {
 	ns := e.Namespace(t)
 	other := e.Namespace(t) // another team's: not labelled
 	barePipeline(t, e, ns, pipelineName, func(p *v1alpha1.Pipeline) { p.Spec.PolicyNamespaces = []string{other} })
-	waitShared := func(want metav1.ConditionStatus) {
+	// PolicyNamespacesShared is False while a namespace has not agreed, and
+	// absent once every one has.
+	waitShared := func(what string, done func(c *metav1.Condition, generation int64) bool) {
 		t.Helper()
-		framework.Eventually(t, 2*time.Minute, "PolicyNamespacesShared="+string(want), func(ctx context.Context) (bool, string) {
+		framework.Eventually(t, 2*time.Minute, what, func(ctx context.Context) (bool, string) {
 			var p v1alpha1.Pipeline
 			if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipelineName}, &p); err != nil {
 				return false, err.Error()
 			}
-			c := meta.FindStatusCondition(p.Status.Conditions, "PolicyNamespacesShared")
-			return c != nil && c.Status == want && c.ObservedGeneration == p.Generation, fmt.Sprint(p.Status.Conditions)
+			return done(meta.FindStatusCondition(p.Status.Conditions, "PolicyNamespacesShared"), p.Generation), fmt.Sprint(p.Status.Conditions)
 		})
 	}
-	waitShared(metav1.ConditionFalse)
+	waitShared("PolicyNamespacesShared=False", func(c *metav1.Condition, generation int64) bool {
+		return c != nil && c.Status == metav1.ConditionFalse && c.ObservedGeneration == generation
+	})
 	entry := ns + "/" + pipelineName + " (" + other + ")"
 	policyRow := func(r framework.CLIResult) (string, string) {
 		t.Helper()
@@ -1092,7 +1095,7 @@ func TestCLI_DoctorPolicyNamespaces(t *testing.T) {
 	}
 	p.Annotations["e2e.kardinal.io/recheck"] = "now"
 	require.NoError(t, e.Client.Update(ctx, &p))
-	waitShared(metav1.ConditionTrue)
+	waitShared("PolicyNamespacesShared gone", func(c *metav1.Condition, _ int64) bool { return c == nil })
 
 	_, detail = policyRow(cli.Run("", "doctor"))
 	assert.NotContains(t, detail, ns+"/"+pipelineName, "no longer named once its namespace agreed")
