@@ -22,27 +22,37 @@ type NotRunItem struct {
 	Evidence     []Evidence
 }
 
-// Evidence is a test/e2e/coverage.tsv row, with its tier, or a job of
-// .github/workflows/release.yml.
+// Evidence is a test/e2e/coverage.tsv row, with its tier, a job of
+// .github/workflows/release.yml, or a hack/e2e/matrix.txt job (suite and
+// Kubernetes minor), which the nightly e2e-live run runs.
 type Evidence struct {
 	Row, Tier string
 	Job       string
+	Matrix    string // "core 1.36"
 }
 
 func (e Evidence) String() string {
-	if e.Job != "" {
+	switch {
+	case e.Job != "":
 		return fmt.Sprintf("release.yml job `%s`", e.Job)
+	case e.Matrix != "":
+		return fmt.Sprintf("nightly e2e-live `%s` (hack/e2e/matrix.txt)", e.Matrix)
 	}
 	return fmt.Sprintf("%s (%s)", e.Row, e.Tier)
 }
 
-const releaseJobPrefix = "release.yml:"
+const (
+	releaseJobPrefix = "release.yml:"
+	matrixPrefix     = "matrix.txt:"
+)
 
 // readNotRun reads "item | reason | evidence" lines; # starts a comment.
 // The evidence is comma-separated: coverage.tsv row IDs, whose status must
-// be covered, or release.yml:<job>. A line without a reason or evidence, a
-// row that is not in coverage.tsv or not covered, and a job release.yml
-// does not have are errors, so the list cannot cite evidence that is gone.
+// be covered, release.yml:<job>, or matrix.txt:<suite> <minor>. A line
+// without a reason or evidence, a row that is not in coverage.tsv or not
+// covered, a job release.yml does not have, and a suite and minor no
+// matrix.txt line runs are errors, so the list cannot cite evidence that is
+// gone.
 // An empty list is an error too: every release ships things the gate does
 // not run, so an empty list would read as proof of them.
 func readNotRun(root string) ([]NotRunItem, error) {
@@ -55,7 +65,7 @@ func readNotRun(root string) ([]NotRunItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	var jobs map[string]bool
+	var jobs, matrix map[string]bool
 	var out []NotRunItem
 	for n, l := range strings.Split(string(data), "\n") {
 		l = strings.TrimSpace(l)
@@ -91,6 +101,24 @@ func readNotRun(root string) ([]NotRunItem, error) {
 				it.Evidence = append(it.Evidence, Evidence{Job: job})
 				continue
 			}
+			if m, ok := strings.CutPrefix(ref, matrixPrefix); ok {
+				if matrix == nil {
+					lines, _, err := readMatrix(filepath.Join(root, "hack", "e2e", "matrix.txt"))
+					if err != nil {
+						return nil, err
+					}
+					matrix = map[string]bool{}
+					for _, ml := range lines {
+						matrix[ml.Suite+" "+ml.Minor] = true
+					}
+				}
+				m = strings.Join(strings.Fields(m), " ")
+				if !matrix[m] {
+					return nil, fmt.Errorf("%s: %s cites %s%s, which no hack/e2e/matrix.txt line runs (want %s<suite> <minor>)", at, it.Item, matrixPrefix, m, matrixPrefix)
+				}
+				it.Evidence = append(it.Evidence, Evidence{Matrix: m})
+				continue
+			}
 			row, ok := rows[ref]
 			if !ok {
 				return nil, fmt.Errorf("%s: %s cites %s, which is not a row of test/e2e/coverage.tsv", at, it.Item, ref)
@@ -101,13 +129,13 @@ func readNotRun(root string) ([]NotRunItem, error) {
 			it.Evidence = append(it.Evidence, Evidence{Row: ref, Tier: row.tier})
 		}
 		if len(it.Evidence) == 0 {
-			return nil, fmt.Errorf("%s: %s has no evidence (coverage.tsv rows or %s<job>)", at, it.Item, releaseJobPrefix)
+			return nil, fmt.Errorf("%s: %s has no evidence (coverage.tsv rows, %s<job> or %s<suite> <minor>)", at, it.Item, releaseJobPrefix, matrixPrefix)
 		}
 		out = append(out, it)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("%s lists nothing: every release ships things the gate does not run (cloud KMS keys, "+
-			"EKS, the public-good sigstore, ticketing vendors, publishing, other platforms), and an empty list reads as proof of them", path)
+			"EKS, the public-good sigstore, ticketing vendors, publishing, other platforms, Kubernetes minors the gate skips), and an empty list reads as proof of them", path)
 	}
 	return out, nil
 }
