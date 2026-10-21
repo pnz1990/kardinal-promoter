@@ -447,6 +447,11 @@ type simulateReport struct {
 	// on the way to the environment: Fails (the version fails there, so
 	// Blocked) or NotChecked (#2011).
 	Verification previewVerification `json:"verification,omitzero"`
+	// PolicyNamespaces is why the controller translates no new version of
+	// the Pipeline (Blocked): its spec.policyNamespaces names a namespace
+	// that has not agreed to share its PolicyGates (#2286), whose gates are
+	// left out of Gates.
+	PolicyNamespaces string `json:"policyNamespaces,omitempty"`
 }
 
 // policySimulateFn is the testable implementation of policy simulate.
@@ -460,6 +465,9 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 		out.WriteString("RESULT: BLOCKED\n")
 		if f := rep.Verification.Fails; f != "" {
 			fmt.Fprintf(&out, "Blocked by: verification\nMessage: %q\n\n", f+"; the controller fails the version")
+		}
+		if m := rep.PolicyNamespaces; m != "" {
+			fmt.Fprintf(&out, "Blocked by: spec.policyNamespaces\nMessage: %q\n\n", m+"; the controller translates no new version")
 		}
 		for _, r := range rep.Gates {
 			if r.Pass {
@@ -537,6 +545,11 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	if err != nil {
 		return nil, fmt.Errorf("collect policy gates: %w", err)
 	}
+	// A new version of a Pipeline naming a namespace that has not agreed
+	// waits in the controller (#2286): without its gates, and blocked. A
+	// version already promoting kept them.
+	var refusedMsg string
+	refused := translator.RefusedPolicyNamespaces(pipe, opts.PolicyNamespaces)
 	bundle := simulatedBundle(pipe, simTime)
 	if opts.Version != "" {
 		name, err := resolveBundleRef(ctx, c, ns, pipe.Name, opts.Version)
@@ -551,6 +564,19 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		bundle.ResourceVersion = ""
 		// The gates it would meet in env, whatever its own intent says.
 		bundle.Spec.Intent = nil
+		if real.Status.GraphRef != "" {
+			refused = nil
+		}
+	}
+	if len(refused) > 0 {
+		refusedMsg = (&translator.PolicyNamespacesError{NotShared: refused}).Error()
+		kept := templates[:0:0]
+		for _, g := range templates {
+			if !slices.Contains(refused, g.Namespace) {
+				kept = append(kept, g)
+			}
+		}
+		templates = kept
 	}
 	indexName, err := simulatedActor(ctx, c, bundle, opts.AsAgent, opts.AsHuman)
 	if err != nil {
@@ -588,8 +614,8 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 	ev.metricsAt = opts.Now.UTC()
 
 	rep := &simulateReport{Pipeline: pipe.Name, Environment: opts.Env, Time: simTime, Gates: []simulateGate{},
-		Verification: verification}
-	if verification.Fails != "" {
+		Verification: verification, PolicyNamespaces: refusedMsg}
+	if verification.Fails != "" || refusedMsg != "" {
 		rep.Blocked = true
 	}
 	candidates := nextWindowCandidates(ctx, c, simTime)

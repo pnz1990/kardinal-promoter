@@ -344,10 +344,15 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	desiredConflict := pathConflict(&p, peers)
 	// spec.policyNamespaces entries that have not agreed to be read (#2286):
-	// a warning only, re-checked as Namespaces are not watched.
-	desiredShared, sharedRecheck := r.policyNamespacesShared(ctx, &p)
+	// refused (Ready=False, and the Bundle reconciler translates no new
+	// version from status.policyNamespaces), re-checked as Namespaces are not
+	// watched.
+	desiredShared, desiredPolicyNS, sharedRecheck := r.policyNamespacesShared(ctx, &p)
 	if sharedRecheck > 0 && (result.RequeueAfter == 0 || sharedRecheck < result.RequeueAfter) {
 		result.RequeueAfter = sharedRecheck
+	}
+	if desired.Status == metav1.ConditionTrue && desiredPolicyNS != nil && len(desiredPolicyNS.NotShared) > 0 {
+		desired = notSharedReady(&p, desiredPolicyNS.NotShared)
 	}
 
 	// Retired Bundles (#1492) keep their steps in status.retiredSteps.
@@ -394,12 +399,14 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if desiredShared != nil {
 		sharedMatch = conditionMatches(p.Status.Conditions, *desiredShared)
 	}
+	policyNSMatch := policyNamespacesEqual(p.Status.PolicyNamespaces, desiredPolicyNS)
 	secretMatch := meta.FindStatusCondition(p.Status.Conditions, conditionSecretReferenceable) == nil
 	fleetsMatch := fleetsEqual(p.Status.Fleets, desiredFleets)
 	envsMatch := environmentsEqual(p.Status.Environments, desiredEnvs) &&
 		p.Status.Summary == desiredSummary && p.Status.EnvironmentSummary == desiredEnvLine &&
 		failedVersionEqual(p.Status.FailedVersion, desiredFailed)
-	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && sharedMatch && secretMatch && fleetsMatch && envsMatch {
+	if condMatch && phaseMatch && metricsMatch && pausedMatch && conflictMatch && sharedMatch && policyNSMatch && secretMatch &&
+		fleetsMatch && envsMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -429,6 +436,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPolicyNamespacesShared)
 	}
 	meta.RemoveStatusCondition(&p.Status.Conditions, conditionSecretReferenceable)
+	p.Status.PolicyNamespaces = desiredPolicyNS
 	p.Status.DeploymentMetrics = desiredMetrics
 	p.Status.Fleets = desiredFleets
 	p.Status.Environments = desiredEnvs

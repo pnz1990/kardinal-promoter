@@ -558,6 +558,7 @@ func TestCLI_PolicyListLastEvaluated(t *testing.T) {
 	c := e.CLI(t)
 	a := newArgoApp(t, e, "test")
 	ns, orgNS, otherNS := a.ns, e.Namespace(t), e.Namespace(t)
+	e.SharePolicyGates(t, orgNS) // spec.policyNamespaces needs its consent (#2286)
 	e.CreateGate(t, framework.Gate(ns, "entry", "test", openExpr, recheck))
 	audit := framework.Gate(orgNS, "audit", "test", "true", recheck)
 	audit.Labels["kardinal.io/scope"] = "org"

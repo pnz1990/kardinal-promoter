@@ -93,6 +93,8 @@ func TestTranslate_EndToEnd(t *testing.T) {
 				kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},
 			)
 			p.Spec.PolicyNamespaces = []string{"team-a-extra"}
+			// The Pipeline reconciler found that team-a-extra agreed (#2286).
+			p.Status.PolicyNamespaces = &kardinalv1alpha1.PipelinePolicyNamespaces{ObservedGeneration: p.Generation}
 			p.Annotations = map[string]string{graph.AnnotationGraphShape: shape}
 
 			name, err := tr.Translate(ctx, p, teamBundle(nil))

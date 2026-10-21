@@ -108,6 +108,15 @@ func (t *Translator) Translate(ctx context.Context,
 		return "", graph.Invalid(fmt.Errorf("translator.Translate: %w", err))
 	}
 
+	// A new version of a Pipeline whose spec.policyNamespaces names a
+	// namespace that has not agreed to share its gates waits (#2286). A
+	// version already promoting (it has a Graph) keeps reading them.
+	if bundle.Status.GraphRef == "" {
+		if err := policyNamespacesAgreed(pipeline, t.policyNS); err != nil {
+			return "", fmt.Errorf("translator.Translate: %w", err)
+		}
+	}
+
 	// Collect PolicyGates from the org policy namespaces, the Pipeline's
 	// spec.policyNamespaces, and the Pipeline namespace.
 	gates, err := t.collectGates(ctx, pipeline)

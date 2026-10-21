@@ -2162,9 +2162,10 @@ spec:
                   field are team gates: they never count as org gates and never grant a skip.
                   Any other namespace listed must agree to be read: the label
                   kardinal.io/policy-shareable=true on it, or the controller's
-                  --policy-shareable-namespaces. One that has not is still read for now,
-                  and the Pipeline's PolicyNamespacesShared condition is False naming it;
-                  a later release refuses it.
+                  --policy-shareable-namespaces. One that has not is refused (#2286): the
+                  Pipeline is Ready=False (PolicyNamespaceNotShared) and its new versions
+                  wait, naming it, until it agrees or the entry is removed; a version
+                  already promoting keeps the gates it started with.
                 items:
                   type: string
                 type: array
@@ -3356,6 +3357,32 @@ spec:
                 - Promoting
                 - Unknown
                 type: string
+              policyNamespaces:
+                description: |-
+                  PolicyNamespaces is what the Pipeline reconciler found reading the
+                  namespaces of spec.policyNamespaces that must agree to share their
+                  PolicyGates (#2286). The Bundle reconciler translates a new version
+                  only from a result for the Pipeline's current generation, and never
+                  reads a namespace it names in notShared.
+                properties:
+                  notShared:
+                    description: |-
+                      NotShared are the namespaces of spec.policyNamespaces that have not
+                      agreed to share their PolicyGates, sorted. A namespace the controller
+                      could not read keeps its last result; one that does not exist is named
+                      like one that is not labelled.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  observedGeneration:
+                    description: ObservedGeneration is the Pipeline's generation the
+                      check is for.
+                    format: int64
+                    type: integer
+                required:
+                - observedGeneration
+                type: object
               summary:
                 description: |-
                   Summary is one sentence on where the Pipeline's versions are, for

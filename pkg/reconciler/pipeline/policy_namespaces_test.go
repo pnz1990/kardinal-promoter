@@ -55,8 +55,10 @@ func policyNamespaceEvents(rec *events.FakeRecorder) int {
 // --policy-shareable-namespaces need nothing. Any other namespace, one
 // labelled otherwise ("True" too) and one that does not exist set
 // PolicyNamespacesShared=False (NotShared) naming each (sorted, once, a
-// missing one like the others), with one Warning Event. Ready is unchanged:
-// the gates are still read. A namespace that needed a read is read again
+// missing one like the others), with one Warning Event, and the Pipeline is
+// refused (#2286): Ready=False (PolicyNamespaceNotShared), and
+// status.policyNamespaces names them for this generation, which every case
+// writes. A namespace that needed a read is read again
 // within 5 minutes, agreed or not; with none to read there is no recheck.
 //
 // Covers GATE-POLNS-02.
@@ -106,7 +108,21 @@ func TestPipelineReconciler_PolicyNamespacesShared(t *testing.T) {
 			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
 			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
 			require.NotNil(t, ready)
-			assert.Equal(t, metav1.ConditionTrue, ready.Status, "Ready is unchanged: %s", ready.Message)
+			// status.policyNamespaces, what the Bundle reconciler reads: for
+			// this generation, naming the namespaces that have not agreed.
+			require.NotNil(t, got.Status.PolicyNamespaces)
+			assert.Equal(t, got.Generation, got.Status.PolicyNamespaces.ObservedGeneration)
+			if tt.want == "" {
+				assert.Empty(t, got.Status.PolicyNamespaces.NotShared)
+				assert.Equal(t, metav1.ConditionTrue, ready.Status, ready.Message)
+			} else {
+				assert.Equal(t, strings.Split(tt.want, ", "), got.Status.PolicyNamespaces.NotShared)
+				// Refused (#2286 v0.14): Ready=False, new versions wait.
+				assert.Equal(t, metav1.ConditionFalse, ready.Status)
+				assert.Equal(t, pipeline.ReasonPolicyNamespaceNotShared, ready.Reason)
+				assert.Contains(t, ready.Message, strings.Split(tt.want, ", ")[0])
+				assert.Contains(t, ready.Message, "new versions wait")
+			}
 			cond := meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared")
 			// What kardinal doctor reads from the condition (#2286).
 			flagged, names := pipeline.NotSharedPolicyNamespaces(&got)
@@ -127,7 +143,8 @@ func TestPipelineReconciler_PolicyNamespacesShared(t *testing.T) {
 			assert.NotContains(t, cond.Message, "not found", "the message does not tell which namespaces exist")
 			assert.Contains(t, cond.Message, "kardinal.io/policy-shareable=true")
 			assert.Contains(t, cond.Message, "--policy-shareable-namespaces")
-			assert.Contains(t, cond.Message, "still read")
+			assert.Contains(t, cond.Message, "They are refused")
+			assert.Contains(t, cond.Message, "keeps the gates it started with")
 			assert.Equal(t, 1, policyNamespaceEvents(rec), "one Warning Event over two reconciles")
 		})
 	}
@@ -177,6 +194,14 @@ func (f *policyNamespaceFixture) reconcile() (*metav1.Condition, time.Duration) 
 	var got kardinalv1alpha1.Pipeline
 	require.NoError(f.t, f.c.Get(context.Background(), f.req.NamespacedName, &got))
 	return meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared"), res.RequeueAfter
+}
+
+// status is the Pipeline's status.policyNamespaces as stored.
+func (f *policyNamespaceFixture) status() *kardinalv1alpha1.PipelinePolicyNamespaces {
+	f.t.Helper()
+	var got kardinalv1alpha1.Pipeline
+	require.NoError(f.t, f.c.Get(context.Background(), f.req.NamespacedName, &got))
+	return got.Status.PolicyNamespaces
 }
 
 // setLabel sets or (shareable "") removes the consent label of namespace name.
@@ -276,12 +301,48 @@ func TestPipelineReconciler_PolicyNamespacesUnreadable(t *testing.T) {
 		assert.Equal(t, "PolicyNamespaceUnreadable", cond.Reason)
 		assert.Contains(t, cond.Message, "PolicyGates: team-b. ", "team-c was never read: its last result is not known")
 		assert.Equal(t, 1, policyNamespaceEvents(f.rec))
+		// Not checked for this generation (#2286): no new version is
+		// translated until team-c is read.
+		assert.Nil(t, f.status(), "no status.policyNamespaces for a generation not fully read")
 		delete(f.failing, "team-c")
 		cond, _ = f.reconcile()
 		require.NotNil(t, cond)
 		assert.Equal(t, "NotShared", cond.Reason)
 		assert.Contains(t, cond.Message, "PolicyGates: team-b, team-c. ")
 		assert.Equal(t, 1, policyNamespaceEvents(f.rec), "team-c, now read, is news")
+		require.NotNil(t, f.status())
+		assert.Equal(t, []string{"team-b", "team-c"}, f.status().NotShared)
+	})
+
+	t.Run("a kept result stays current; after a spec change it is not", func(t *testing.T) {
+		f := newPolicyNamespaceFixture(t, []string{"team-b", "team-c"}, policyNamespace("team-b", "true"), policyNamespace("team-c", ""))
+		_, _ = f.reconcile()
+		first := f.status()
+		require.NotNil(t, first)
+		assert.Equal(t, []string{"team-c"}, first.NotShared)
+		// The same generation, a failed read: the last result is kept, for
+		// this generation.
+		f.failing["team-b"], f.failing["team-c"] = timeout, timeout
+		_, _ = f.reconcile()
+		assert.Equal(t, first, f.status(), "kept: team-b agreed, team-c did not")
+		// A spec change while the reads fail: the status stays for the older
+		// generation, so the Bundle reconciler waits for a read.
+		var p kardinalv1alpha1.Pipeline
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		p.Spec.HistoryLimit = 7
+		p.Generation++ // the API server's; the fake client does not bump it
+		require.NoError(t, f.c.Update(context.Background(), &p))
+		_, after := f.reconcile()
+		assert.Equal(t, time.Minute, after)
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		require.NotNil(t, p.Status.PolicyNamespaces)
+		assert.Less(t, p.Status.PolicyNamespaces.ObservedGeneration, p.Generation, "not checked for the new generation")
+		delete(f.failing, "team-b")
+		delete(f.failing, "team-c")
+		_, _ = f.reconcile()
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		assert.Equal(t, p.Generation, p.Status.PolicyNamespaces.ObservedGeneration)
+		assert.Equal(t, []string{"team-c"}, p.Status.PolicyNamespaces.NotShared)
 	})
 }
 
@@ -345,4 +406,29 @@ func TestPipelineReconciler_PolicyNamespacesReader(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(p), &got))
 	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared"),
 		"team-b is labelled where Reader reads it")
+}
+
+// TestNotSharedPolicyNamespaces (#2286): what kardinal doctor reads, from
+// status.policyNamespaces when the controller wrote it (v0.14), else from a
+// v0.13 controller's PolicyNamespacesShared condition.
+func TestNotSharedPolicyNamespaces(t *testing.T) {
+	v013 := metav1.Condition{Type: "PolicyNamespacesShared", Status: metav1.ConditionFalse, Reason: "NotShared",
+		Message: "spec.policyNamespaces names namespaces that have not agreed to share their PolicyGates: old-a. Label each kardinal.io/policy-shareable=true"}
+	for name, tc := range map[string]struct {
+		status     kardinalv1alpha1.PipelineStatus
+		flagged    bool
+		namespaces []string
+	}{
+		"status field":       {kardinalv1alpha1.PipelineStatus{PolicyNamespaces: &kardinalv1alpha1.PipelinePolicyNamespaces{NotShared: []string{"team-b"}}}, true, []string{"team-b"}},
+		"the field wins":     {kardinalv1alpha1.PipelineStatus{Conditions: []metav1.Condition{v013}, PolicyNamespaces: &kardinalv1alpha1.PipelinePolicyNamespaces{NotShared: []string{"team-b"}}}, true, []string{"team-b"}},
+		"field says agreed":  {kardinalv1alpha1.PipelineStatus{Conditions: []metav1.Condition{v013}, PolicyNamespaces: &kardinalv1alpha1.PipelinePolicyNamespaces{}}, false, nil},
+		"a v0.13 controller": {kardinalv1alpha1.PipelineStatus{Conditions: []metav1.Condition{v013}}, true, []string{"old-a"}},
+		"neither":            {kardinalv1alpha1.PipelineStatus{}, false, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			flagged, names := pipeline.NotSharedPolicyNamespaces(&kardinalv1alpha1.Pipeline{Status: tc.status})
+			assert.Equal(t, tc.flagged, flagged)
+			assert.Equal(t, tc.namespaces, names)
+		})
+	}
 }

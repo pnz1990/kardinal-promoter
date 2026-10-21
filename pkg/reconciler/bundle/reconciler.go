@@ -134,6 +134,17 @@ const requeueSlow = 30 * time.Second
 // used yet is translated again.
 const providerRefRetry = 15 * time.Second
 
+// policyNamespacesRetry is how soon a version waiting for a namespace of
+// spec.policyNamespaces to agree is tried again when no Pipeline update
+// wakes it (policyNamespacesChanged does, as soon as the Pipeline
+// reconciler writes the new result).
+const policyNamespacesRetry = time.Minute
+
+// reasonPolicyNamespaceNotShared is the Ready=False reason of a version
+// waiting for a namespace of spec.policyNamespaces to agree to share its
+// PolicyGates (#2286), as on the Pipeline.
+const reasonPolicyNamespaceNotShared = "PolicyNamespaceNotShared"
+
 // BundleTranslator is the interface the BundleReconciler uses to translate a
 // Bundle+Pipeline into a kro Graph. Abstracted as an interface for testability.
 type BundleTranslator interface {
@@ -1376,6 +1387,9 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		// fails the same way, so fail the Bundle with the reason.
 		return r.markInvalid(ctx, log, b, &pipeline, err)
 	}
+	if translator.IsPolicyNamespacesError(err) {
+		return r.waitForPolicyNamespaces(ctx, log, b, err)
+	}
 	if err != nil {
 		// An API or RBAC error (timeout, conflict, missing permission), or a
 		// spec.git.providerRef that cannot be used yet. Stay Available and
@@ -1425,6 +1439,35 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		fmt.Sprintf("graph %s created; promotion started for pipeline %s", graphName, b.Spec.Pipeline))
 	observability.BundlesTotal.WithLabelValues(phasePromoting).Inc()
 	return ctrl.Result{}, nil
+}
+
+// waitForPolicyNamespaces keeps b, a new version, Available while its
+// Pipeline's spec.policyNamespaces names a namespace that has not agreed to
+// share its PolicyGates, or the Pipeline reconciler has not checked the
+// Pipeline's generation yet (#2286): Ready=False with the reason, a Warning
+// Event when the namespaces it names change, and a retry. It fails nothing:
+// once the namespace agrees or the entry is removed, the version is
+// translated.
+func (r *Reconciler) waitForPolicyNamespaces(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
+	cause error) (ctrl.Result, error) {
+	var e *translator.PolicyNamespacesError
+	_ = errors.As(cause, &e)
+	patch := statusPatch(b.DeepCopy())
+	msg := "waiting: " + e.Error()
+	if setBundleCondition(b, condReady, metav1.ConditionFalse, reasonPolicyNamespaceNotShared, msg) {
+		if err := r.Status().Patch(ctx, b, patch); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("patch bundle status %s: %w", reasonPolicyNamespaceNotShared, err)
+		}
+		if !e.Unchecked {
+			r.event(b, corev1.EventTypeWarning, reasonPolicyNamespaceNotShared, msg)
+		}
+	}
+	log.Info().Bool("unchecked", e.Unchecked).Strs("notShared", e.NotShared).
+		Msg("version waits for spec.policyNamespaces to agree")
+	return ctrl.Result{RequeueAfter: policyNamespacesRetry}, nil
 }
 
 // countPromoting counts the other Promoting Bundles of b's pipeline.
@@ -2333,7 +2376,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(bundleLabelMapper)).
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(r.pipelineBundles),
-			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, fleetsChanged))).
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, fleetsChanged, policyNamespacesChanged))).
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.gateBundles),
 			builder.WithPredicates(gateTemplateChanged))
 	return shard.Active().Complete(b, tracing.WrapReconciler("bundle", r), &kardinalv1alpha1.BundleList{})
@@ -2504,6 +2547,21 @@ var fleetsChanged = predicate.Funcs{
 		oldP, okOld := e.ObjectOld.(*kardinalv1alpha1.Pipeline)
 		newP, okNew := e.ObjectNew.(*kardinalv1alpha1.Pipeline)
 		return okOld && okNew && !equality.Semantic.DeepEqual(oldP.Status.Fleets, newP.Status.Fleets)
+	},
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
+// policyNamespacesChanged passes a Pipeline update whose
+// status.policyNamespaces changed: a version waiting for a namespace of
+// spec.policyNamespaces to agree is translated as soon as the Pipeline
+// reconciler finds it did (#2286).
+var policyNamespacesChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldP, okOld := e.ObjectOld.(*kardinalv1alpha1.Pipeline)
+		newP, okNew := e.ObjectNew.(*kardinalv1alpha1.Pipeline)
+		return okOld && okNew && !equality.Semantic.DeepEqual(oldP.Status.PolicyNamespaces, newP.Status.PolicyNamespaces)
 	},
 	CreateFunc:  func(event.CreateEvent) bool { return false },
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },

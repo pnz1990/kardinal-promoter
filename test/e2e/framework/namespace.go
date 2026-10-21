@@ -98,3 +98,21 @@ func namespaceFor(testName, nonce string) string {
 	}
 	return "e2e-" + base + "-" + suffix
 }
+
+// SharePolicyGates labels namespace ns kardinal.io/policy-shareable=true:
+// it agrees to have its PolicyGates read by other namespaces' Pipelines
+// through spec.policyNamespaces, which v0.14 refuses without it (#2286).
+func (e *Env) SharePolicyGates(t *testing.T, ns string) {
+	t.Helper()
+	var n corev1.Namespace
+	if err := e.Client.Get(context.Background(), types.NamespacedName{Name: ns}, &n); err != nil {
+		t.Fatalf("get namespace %s: %v", ns, err)
+	}
+	if n.Labels == nil {
+		n.Labels = map[string]string{}
+	}
+	n.Labels["kardinal.io/policy-shareable"] = "true"
+	if err := e.Client.Update(context.Background(), &n); err != nil {
+		t.Fatalf("label namespace %s kardinal.io/policy-shareable=true: %v", ns, err)
+	}
+}

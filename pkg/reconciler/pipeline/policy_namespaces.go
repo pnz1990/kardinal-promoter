@@ -29,9 +29,10 @@ import (
 // them. A namespace agrees with the label kardinal.io/policy-shareable=true,
 // or by being listed in --policy-shareable-namespaces; the org policy
 // namespaces, which every Pipeline reads, and the Pipeline's own need
-// nothing. The gates are still read: the condition, and a Warning Event when
-// its list changes, say that a later release refuses them. The condition is
-// absent when every namespace listed agreed. It does not change Ready.
+// nothing. Those that have not are refused (v0.14): the condition, a Warning
+// Event when its list changes, Ready=False (PolicyNamespaceNotShared), and
+// status.policyNamespaces, from which the Bundle reconciler translates no new
+// version. The condition is absent when every namespace listed agreed.
 //
 // Reason NotShared: every namespace was read. Reason
 // PolicyNamespaceUnreadable: a namespace could not be read (an API error
@@ -45,6 +46,11 @@ const (
 	reasonPolicyNamespaceUnreadable = "PolicyNamespaceUnreadable"
 	eventPolicyNamespaceNotShared   = "PolicyNamespaceNotShared"
 )
+
+// ReasonPolicyNamespaceNotShared is the reason of a Pipeline's Ready=False
+// while its spec.policyNamespaces names a namespace that has not agreed to
+// share its PolicyGates, and of a Bundle's wait for it (#2286).
+const ReasonPolicyNamespaceNotShared = "PolicyNamespaceNotShared"
 
 // policyNamespaceRecheck is how soon a Pipeline that names a namespace
 // needing consent is read again, agreed or not: Namespaces are not watched
@@ -114,6 +120,10 @@ func (r *Reconciler) checkPolicyNamespaces(ctx context.Context, p *kardinalv1alp
 // doctor lists before an upgrade to a controller that refuses them. It reads
 // the condition this package writes, so the message's format stays here.
 func NotSharedPolicyNamespaces(p *kardinalv1alpha1.Pipeline) (bool, []string) {
+	if st := p.Status.PolicyNamespaces; st != nil {
+		return len(st.NotShared) > 0, st.NotShared
+	}
+	// A controller that did not write status.policyNamespaces (v0.13).
 	c := meta.FindStatusCondition(p.Status.Conditions, conditionPolicyNamespacesShared)
 	if c == nil || c.Status != metav1.ConditionFalse {
 		return false, nil
@@ -137,11 +147,19 @@ func lastNotShared(conditions []metav1.Condition) []string {
 }
 
 // policyNamespacesShared returns p's PolicyNamespacesShared condition (nil
-// when every namespace of spec.policyNamespaces agreed) and how soon to read
-// the namespaces again (0: none needs it). A namespace that could not be
-// read counts as its last read found it: named if the stored condition named
-// it.
-func (r *Reconciler) policyNamespacesShared(ctx context.Context, p *kardinalv1alpha1.Pipeline) (*metav1.Condition, time.Duration) {
+// when every namespace of spec.policyNamespaces agreed), the
+// status.policyNamespaces to write, and how soon to read the namespaces
+// again (0: none needs it).
+//
+// A namespace that could not be read keeps the result of its last read
+// (named if the last result named it), while the last result is for p's
+// generation: an API blip neither refuses a namespace that agreed nor lets
+// one through that had not. After a spec change there is no last result to
+// keep, so the status is left as it was, for an older generation, and the
+// Bundle reconciler translates no new version until a read succeeds (in
+// policyNamespaceRetry).
+func (r *Reconciler) policyNamespacesShared(ctx context.Context, p *kardinalv1alpha1.Pipeline) (
+	*metav1.Condition, *kardinalv1alpha1.PipelinePolicyNamespaces, time.Duration) {
 	chk := r.checkPolicyNamespaces(ctx, p)
 	recheck := time.Duration(0)
 	if chk.read {
@@ -149,24 +167,61 @@ func (r *Reconciler) policyNamespacesShared(ctx context.Context, p *kardinalv1al
 	}
 	ns := chk.notShared
 	reason := reasonPolicyNamespaceNotShared
+	current := true
 	if len(chk.unreadable) > 0 {
 		recheck, reason = policyNamespaceRetry, reasonPolicyNamespaceUnreadable
-		last := lastNotShared(p.Status.Conditions)
+		var last []string
+		last, current = lastNotSharedOf(p)
 		for _, u := range chk.unreadable {
 			if slices.Contains(last, u) {
 				ns = append(ns, u)
 			}
 		}
 	}
-	if len(ns) == 0 {
-		return nil, recheck
-	}
 	sort.Strings(ns)
+	status := p.Status.PolicyNamespaces
+	if current {
+		status = &kardinalv1alpha1.PipelinePolicyNamespaces{ObservedGeneration: p.Generation, NotShared: ns}
+	}
+	if len(ns) == 0 {
+		return nil, status, recheck
+	}
 	return &metav1.Condition{Type: conditionPolicyNamespacesShared, Status: metav1.ConditionFalse,
 		Reason: reason, ObservedGeneration: p.Generation,
 		Message: notSharedPrefix + strings.Join(ns, ", ") + notSharedSuffix + fmt.Sprintf("%s=true, or list it in the controller's "+
-			"--policy-shareable-namespaces (chart controller.policyShareableNamespaces). Their gates are still read; "+
-			"a later release refuses them (#2286)", kardinalv1alpha1.LabelPolicyShareable)}, recheck
+			"--policy-shareable-namespaces (chart controller.policyShareableNamespaces), or remove it from spec.policyNamespaces. "+
+			"They are refused: the Pipeline's new versions wait until each agrees or is removed, and a version already promoting "+
+			"keeps the gates it started with (#2286)", kardinalv1alpha1.LabelPolicyShareable)}, status, recheck
+}
+
+// lastNotSharedOf is the namespaces p's last check named, and whether that
+// check is for p's current generation: status.policyNamespaces, or, from a
+// controller that did not write it (v0.13), the condition's list.
+func lastNotSharedOf(p *kardinalv1alpha1.Pipeline) ([]string, bool) {
+	if st := p.Status.PolicyNamespaces; st != nil {
+		return st.NotShared, st.ObservedGeneration == p.Generation
+	}
+	c := meta.FindStatusCondition(p.Status.Conditions, conditionPolicyNamespacesShared)
+	return lastNotShared(p.Status.Conditions), c != nil && c.ObservedGeneration == p.Generation
+}
+
+// notSharedReady is the Ready condition of a Pipeline whose
+// spec.policyNamespaces names namespaces (ns) that have not agreed: it is
+// refused, its new versions wait (#2286).
+func notSharedReady(p *kardinalv1alpha1.Pipeline, ns []string) metav1.Condition {
+	return metav1.Condition{Type: "Ready", Status: metav1.ConditionFalse, Reason: ReasonPolicyNamespaceNotShared,
+		ObservedGeneration: p.Generation,
+		Message: fmt.Sprintf("spec.policyNamespaces names %s, which has not agreed to share its PolicyGates: new versions wait "+
+			"until it is labelled %s=true, listed in the controller's --policy-shareable-namespaces, or removed (#2286)",
+			strings.Join(ns, ", "), kardinalv1alpha1.LabelPolicyShareable)}
+}
+
+// policyNamespacesEqual reports whether a and b are the same check.
+func policyNamespacesEqual(a, b *kardinalv1alpha1.PipelinePolicyNamespaces) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ObservedGeneration == b.ObservedGeneration && slices.Equal(a.NotShared, b.NotShared)
 }
 
 // policyNamespacesNews reports whether desired names other namespaces than
