@@ -174,6 +174,10 @@ func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
 //
 // Covers SCM-GIT-REBASE-INFLIGHT-01.
 func TestGoGitClient_RebaseOnRemote_UpdateInFlight(t *testing.T) {
+	// The other writer's push lands at 300ms; a slow runner can take longer
+	// than the 2s default to apply it (a push delayed to 2.1s failed). The
+	// wait only has to outlast the push; the cancellation below ends it.
+	scm.SetNotMovedWaitForTest(t, 30*time.Second)
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n", "README.md": "r\n"})
@@ -306,6 +310,9 @@ func TestGoGitClient_RebaseOnRemote_CanceledDuringFetch(t *testing.T) {
 //
 // Covers SCM-GIT-REBASE-INFLIGHT-01.
 func TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock(t *testing.T) {
+	// The other update lands at 300ms; the wait only has to outlast it on a
+	// slow runner (as in TestGoGitClient_RebaseOnRemote_UpdateInFlight).
+	scm.SetNotMovedWaitForTest(t, 30*time.Second)
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n", "environments/b/kustomization.yaml": "b: 1\n"})
