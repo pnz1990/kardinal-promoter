@@ -317,12 +317,16 @@ A Pipeline whose `spec.policyNamespaces` names a namespace that has not agreed g
 Event `PolicyNamespaceNotShared` each time that list changes. A namespace that does not exist is
 named like one that is not labelled; the controller log tells them apart. In this release the gates
 of those namespaces are still read and `Ready` is unchanged; a later release refuses them (#2286).
+Once every namespace listed has agreed (or needs nothing), the condition is `True` with reason
+`Shared`, for the Pipeline's current generation. It is absent only on a Pipeline without
+`spec.policyNamespaces`, or one the controller has not reconciled yet.
 
 The controller reads the named Namespaces again every 5 minutes, so a label added or removed later
 shows within that time. When a read fails (an API error other than not found), the namespace keeps
 the result of its last read: the condition's reason becomes `PolicyNamespaceUnreadable`, its list
 stays as it was, and the read is retried within a minute. An API blip neither raises nor clears the
-warning.
+warning. A `True` condition stays as it was, for the generation it checked, so after a spec change
+the Pipeline counts as not checked yet until a read succeeds.
 
 To list the Pipelines that name a namespace that has not agreed (every one a later release refuses),
 run `kardinal doctor`. Its "Policy namespaces shared" check names each such Pipeline and the

@@ -42,6 +42,16 @@ func TestWithoutDoctorCheck(t *testing.T) {
 			CLIResult{Code: 1, Stdout: head + row("FAIL", `Pipeline "missing"`, "not found") +
 				"\n1 check(s) passed, 1 warning(s), 1 failed\n", Stderr: "1 pre-flight check(s) failed\n"},
 		},
+		"info, a Pipeline not checked yet": {
+			CLIResult{Stdout: head + row("INFO", label, "not checked yet: a/p (all namespaces)") + hint +
+				"\n1 check(s) passed, 1 to run again\n"},
+			CLIResult{Stdout: head + "\n1 check(s) passed\n"},
+		},
+		"info beside another": {
+			CLIResult{Stdout: head + row("INFO", "Other", "later") + row("INFO", label, "not checked yet") + hint +
+				"\n1 check(s) passed, 1 warning(s), 2 to run again\n"},
+			CLIResult{Stdout: head + row("INFO", "Other", "later") + "\n1 check(s) passed, 1 warning(s), 1 to run again\n"},
+		},
 		"the only failure": {
 			CLIResult{Code: 1, Stdout: head + row("FAIL", label, "refused, their new versions wait: a/p (b)") + hint +
 				"\n1 check(s) passed, 1 failed\n", Stderr: "1 pre-flight check(s) failed\n"},

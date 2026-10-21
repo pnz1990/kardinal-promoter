@@ -212,6 +212,15 @@ write a PromotionReceipt, whether or not receipts are on) and, with `rbac.userRo
 
 **4. Check the result.**
 
+First run `kardinal version` until its `Controller:` line shows the version you upgraded to. The
+new controller's Pod is Ready a few seconds before it takes over from the old one, and only the
+controller in charge records its version. If you run `kardinal doctor` sooner, it reports the
+upgrade as in progress (`INFO`: run it again) instead of checking the old controller.
+
+```bash
+kardinal version
+```
+
 ```bash
 kardinal doctor
 kubectl get pipelines -A
@@ -280,6 +289,15 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --
 ```
 
 **4. Check the result.**
+
+First run `kardinal version` until its `Controller:` line shows the version you upgraded to. The
+new controller's Pod is Ready a few seconds before it takes over from the old one, and only the
+controller in charge records its version. If you run `kardinal doctor` sooner, it reports the
+upgrade as in progress (`INFO`: run it again) instead of checking the old controller.
+
+```bash
+kardinal version
+```
 
 ```bash
 kardinal doctor
@@ -367,6 +385,15 @@ would keep the value you set, which the schema rejects.
 
 **7. Check the result.**
 
+First run `kardinal version` until its `Controller:` line shows the version you upgraded to. The
+new controller's Pod is Ready a few seconds before it takes over from the old one, and only the
+controller in charge records its version. If you run `kardinal doctor` sooner, it reports the
+upgrade as in progress (`INFO`: run it again) instead of checking the old controller.
+
+```bash
+kardinal version
+```
+
 ```bash
 kardinal doctor
 kubectl get pipelines -A
@@ -450,6 +477,15 @@ If `helm get values kardinal-promoter -n kardinal-system` shows `validatingAdmis
 would keep the value you set, which the schema rejects.
 
 **8. Check the result.**
+
+First run `kardinal version` until its `Controller:` line shows the version you upgraded to. The
+new controller's Pod is Ready a few seconds before it takes over from the old one, and only the
+controller in charge records its version. If you run `kardinal doctor` sooner, it reports the
+upgrade as in progress (`INFO`: run it again) instead of checking the old controller.
+
+```bash
+kardinal version
+```
 
 ```bash
 kardinal doctor
@@ -606,6 +642,15 @@ It adds:
 - a leader-election Role and RoleBinding.
 
 **9. Check the result.**
+
+First run `kardinal version` until its `Controller:` line shows the version you upgraded to. The
+new controller's Pod is Ready a few seconds before it takes over from the old one, and only the
+controller in charge records its version. If you run `kardinal doctor` sooner, it reports the
+upgrade as in progress (`INFO`: run it again) instead of checking the old controller.
+
+```bash
+kardinal version
+```
 
 ```bash
 kardinal doctor

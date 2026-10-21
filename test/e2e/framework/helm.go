@@ -325,6 +325,38 @@ func (r *Release) WaitRolledOut(t *testing.T, timeout time.Duration) {
 	})
 }
 
+// LeaderVersion is the version the controller's leader recorded in the
+// kardinal-version ConfigMap of r's namespace, what kardinal version shows
+// as Controller ("" when there is none yet).
+func (r *Release) LeaderVersion(t *testing.T) string {
+	t.Helper()
+	var cm corev1.ConfigMap
+	err := r.e.Client.Get(context.Background(), types.NamespacedName{Namespace: r.Namespace, Name: "kardinal-version"}, &cm)
+	if apierrors.IsNotFound(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("get ConfigMap %s/kardinal-version: %v", r.Namespace, err)
+	}
+	return cm.Data["version"]
+}
+
+// WaitLeaderVersionChanged waits until the controller's leader records a
+// version other than before (LeaderVersion before an upgrade): the upgrade
+// guide's wait for kardinal version to show the new controller. Right after
+// a rollout the new Pod is Ready before it holds the Lease, and only the
+// leader records its version (#2383).
+func (r *Release) WaitLeaderVersionChanged(t *testing.T, before string, timeout time.Duration) {
+	t.Helper()
+	Eventually(t, timeout, "the new controller leads (kardinal-version is not "+before+")", func(ctx context.Context) (bool, string) {
+		var cm corev1.ConfigMap
+		if err := r.e.Client.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: "kardinal-version"}, &cm); err != nil {
+			return false, err.Error()
+		}
+		return cm.Data["version"] != before, "kardinal-version is " + cm.Data["version"]
+	})
+}
+
 // Logs returns the controller container's log of pod (previous: the
 // container's last terminated run).
 func (r *Release) Logs(t *testing.T, pod string, previous bool) string {
