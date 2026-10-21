@@ -151,7 +151,7 @@ func TestMCPClientLabel(t *testing.T) {
 		require.NoError(t, err)
 		cs, err := mcp.NewClient(&mcp.Implementation{Name: name, Version: version}, nil).Connect(t.Context(), ct, nil)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
+		closeMCPOnCleanup(t, cs, ss)
 		return &mcp.CallToolRequest{Session: ss}
 	}
 	base := "kardinal-mcp/" + CLIVersion

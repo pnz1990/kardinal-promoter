@@ -114,9 +114,32 @@ func mcpClientAt(t *testing.T, version string, opts mcpOptions, funcs *intercept
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil).
 		Connect(ctx, ct, &mcp.ClientSessionOptions{ProtocolVersion: version})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
+	closeMCPOnCleanup(t, cs, ss)
 	return cs, c
 }
+
+// closeMCPOnCleanup closes the client session when t ends and waits, at
+// most mcpCloseWait, for the server session to end. A tool handler that
+// hangs and ignores its context would hold the wait for ever: the test
+// would never end, and go test, which prints a test's output only once
+// it ends (without -v), would drop the failure that names the call when
+// its -timeout ends the binary (QA-5 on #2459).
+func closeMCPOnCleanup(t *testing.T, cs *mcp.ClientSession, ss *mcp.ServerSession) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = cs.Close()
+		done := make(chan struct{})
+		go func() { _ = ss.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(mcpCloseWait):
+			t.Logf("the MCP server session did not end within %s: a tool handler is still running", mcpCloseWait)
+		}
+	})
+}
+
+// mcpCloseWait bounds closeMCPOnCleanup's wait for the server session.
+const mcpCloseWait = 5 * time.Second
 
 // fixedIdentity is an identity func that answers id.
 func fixedIdentity(id Identity) func(context.Context, sigs_client.Client) (Identity, error) {
@@ -136,7 +159,14 @@ func mcpProcessForTest(t *testing.T) {
 // call calls tool with args and returns the result and its JSON.
 func call(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]any) (*mcp.CallToolResult, map[string]any) {
 	t.Helper()
-	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: args})
+	deadline, ok := t.Deadline()
+	ctx, cancel := context.WithDeadline(context.Background(), hostileCallDeadline(time.Now(), deadline, ok))
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	hung := ctx.Err() != nil
+	cancel()
+	if err != nil && hung {
+		t.Logf("%s did not answer by its deadline; every goroutine:\n%s", tool, goroutineDump())
+	}
 	require.NoError(t, err, tool)
 	require.NotEmpty(t, res.Content, tool)
 	text, ok := res.Content[0].(*mcp.TextContent)

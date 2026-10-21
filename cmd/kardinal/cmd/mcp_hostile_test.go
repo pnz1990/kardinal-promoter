@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	require.NoError(t, err)
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "hostile-agent", Version: "1"}, nil).Connect(ctx, ct, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
+	closeMCPOnCleanup(t, cs, ss)
 	return w, cs, agent
 }
 
@@ -166,6 +167,83 @@ func toolArgs(t *testing.T, cs *mcp.ClientSession) map[string]struct {
 		out[tool.Name] = e
 	}
 	return out
+}
+
+// hostileCallDeadline is when TestMCP_HostileInputs gives up on one call. A
+// call takes under a second, even under -race on two loaded CPUs (#2455: at
+// most 0.86s of 1,035 calls), so the bound only names a call that hangs
+// before go test's -timeout ends the binary without saying which: the test
+// binary's deadline less hostileReportMargin (the time to log the goroutines
+// and fail), never less than hostileMinWait from now, and hostileNoDeadline
+// from now without -timeout. It is not a fixed 20s: in #2445's docs-tests job
+// the whole runner stalled for about 20s (every package still running took
+// 19.5s to 22.9s longer than in its rerun), and the call in flight failed
+// for having waited (#2455).
+//
+// Near the binary's deadline, the minimum would outlast the binary: the
+// call then ends hostileLastWait before the deadline (it may already have
+// passed), time for the session's bounded close (mcpCloseWait) and the
+// report, so that call is named too (QA-5 on #2459).
+func hostileCallDeadline(now, deadline time.Time, ok bool) time.Time {
+	if !ok {
+		return now.Add(hostileNoDeadline)
+	}
+	if d := deadline.Add(-hostileReportMargin); d.After(now.Add(hostileMinWait)) {
+		return d
+	}
+	if last := deadline.Add(-hostileLastWait); last.Before(now.Add(hostileMinWait)) {
+		return last
+	}
+	return now.Add(hostileMinWait)
+}
+
+const (
+	// hostileReportMargin leaves the session's bounded close (mcpCloseWait)
+	// and the report before the binary's deadline.
+	hostileReportMargin = 10 * time.Second
+	hostileLastWait     = mcpCloseWait + time.Second
+	hostileMinWait      = 20 * time.Second
+	hostileNoDeadline   = 5 * time.Minute
+)
+
+// goroutineDump is every goroutine's stack, identical stacks once each
+// (pprof's debug=1), for a call that hung: where it is stuck.
+func goroutineDump() string {
+	var b strings.Builder
+	if err := pprof.Lookup("goroutine").WriteTo(&b, 1); err != nil {
+		return "(no goroutine dump: " + err.Error() + ")"
+	}
+	return b.String()
+}
+
+// TestHostileCallDeadline (#2455): a hostile call waits until shortly before
+// the test binary's deadline, at least hostileMinWait unless that would
+// outlast the binary, and a bounded time without one; the dump of a hung
+// call shows the goroutines' frames.
+func TestHostileCallDeadline(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 21, 6, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name     string
+		deadline time.Time
+		ok       bool
+		want     time.Time
+	}{
+		{"no -timeout", time.Time{}, false, now.Add(5 * time.Minute)},
+		{"the binary's deadline far off", now.Add(100 * time.Second), true, now.Add(90 * time.Second)},
+		{"just past the minimum", now.Add(31 * time.Second), true, now.Add(21 * time.Second)},
+		{"the minimum fits before the deadline", now.Add(28 * time.Second), true, now.Add(20 * time.Second)},
+		{"the minimum would outlast the binary", now.Add(25 * time.Second), true, now.Add(19 * time.Second)},
+		{"past the deadline", now.Add(-time.Second), true, now.Add(-7 * time.Second)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, hostileCallDeadline(now, tt.deadline, tt.ok))
+		})
+	}
+	dump := goroutineDump()
+	assert.True(t, strings.HasPrefix(dump, "goroutine profile: total "), "pprof's debug=1 goroutine profile: %.80s", dump)
+	assert.Contains(t, dump, "TestHostileCallDeadline", "the dump holds the frames of the goroutines it was taken from")
 }
 
 // TestMCP_HostileInputs: every tool, every string argument, every value of
@@ -286,11 +364,16 @@ func hostileInputs(t *testing.T, admission bool) {
 				}
 				args[arg] = v
 				before, writes := snap, w.Writes()
-				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				deadline, ok := t.Deadline()
+				ctx, cancel := context.WithDeadline(context.Background(), hostileCallDeadline(time.Now(), deadline, ok))
 				res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+				hung := ctx.Err() != nil
 				cancel()
 				calls++
 				what := fmt.Sprintf("%s %s=%s(%.40q)", name, arg, h.Kind, h.Value)
+				if err != nil && hung {
+					t.Logf("%s did not answer by its deadline; every goroutine:\n%s", what, goroutineDump())
+				}
 				require.NoError(t, err, "%s: the transport failed", what)
 				require.NotEmpty(t, res.Content, what)
 				var changed []string
