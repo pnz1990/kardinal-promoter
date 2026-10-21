@@ -1759,12 +1759,18 @@ func TestLoadLock_EmptyOwnerIsNoOwner(t *testing.T) {
 			require.NoError(t, cmd.Start())
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
+			// A case that stays shows it within a second; a reclaim gets 30,
+			// because a loaded -race runner took 1.07 s for one (#2430).
+			wait := time.Second
+			if reclaimed {
+				wait = 30 * time.Second
+			}
 			select {
 			case err := <-done:
 				require.True(t, reclaimed, "it took the lock beside a holder writing its owner: %s", out.String())
 				require.NoError(t, err, "%s", out.String())
 				assert.Contains(t, out.String(), "which has had no owner for a minute")
-			case <-time.After(time.Second):
+			case <-time.After(wait):
 				_ = cmd.Process.Kill()
 				<-done
 				require.False(t, reclaimed, "an old empty owner wedged the lock: %s", out.String())
