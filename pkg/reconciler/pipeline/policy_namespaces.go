@@ -108,6 +108,19 @@ func (r *Reconciler) checkPolicyNamespaces(ctx context.Context, p *kardinalv1alp
 	return chk
 }
 
+// NotSharedPolicyNamespaces reports whether p's PolicyNamespacesShared
+// condition is False, and the namespaces of its spec.policyNamespaces it
+// names as not agreeing to share their PolicyGates (#2286): what kardinal
+// doctor lists before an upgrade to a controller that refuses them. It reads
+// the condition this package writes, so the message's format stays here.
+func NotSharedPolicyNamespaces(p *kardinalv1alpha1.Pipeline) (bool, []string) {
+	c := meta.FindStatusCondition(p.Status.Conditions, conditionPolicyNamespacesShared)
+	if c == nil || c.Status != metav1.ConditionFalse {
+		return false, nil
+	}
+	return true, lastNotShared(p.Status.Conditions)
+}
+
 // lastNotShared are the namespaces conditions' PolicyNamespacesShared
 // condition named.
 func lastNotShared(conditions []metav1.Condition) []string {
