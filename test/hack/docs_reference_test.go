@@ -73,6 +73,7 @@ func metricNames(t *testing.T, root string) map[string]string {
 // for a metric it does not (V013 docs audit A8: two metrics shipped without
 // one).
 func TestMetricsReferenceListsEveryMetric(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	root := repoRoot(t)
 	names := metricNames(t, root)
 	require.Greater(t, len(names), 25, "the scan finds the registered metrics")

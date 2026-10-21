@@ -76,6 +76,7 @@ var ciFuzzTarget = regexp.MustCompile(`(\./[\w./-]+):(Fuzz\w+)`)
 // added to one place only, or neither, fails here (#2078 follow-up: CI's job
 // listed four of six).
 func TestFuzzTargetsAllRun(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	targets := repoFuzzTargets(t)
 	require.NotEmpty(t, targets)
 

@@ -140,6 +140,7 @@ func (h *localLiveHost) read(name string) string {
 // cluster's state in the shared state directory, prints the summary, posts
 // it with -pr, and deletes the cluster and releases both however it ends.
 func TestLocalLive(t *testing.T) {
+	t.Parallel() // its runs each on a fake host of their own: beside the package's others (#2292)
 	t.Run("a passing run: summary, comment, cleanup", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own
 		h := newLocalLiveHost(t)

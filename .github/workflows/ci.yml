@@ -274,18 +274,16 @@ jobs:
           # test/helm renders the chart for every profile and builds the
           # controller with each ldflags mistake; it runs at ~115s of the
           # 120s budget on a runner, so it gets its own 300s (#2156) until
-          # its slow tests are split. test/hack (TestLocalLive and the
-          # heavy-load lock tests) passed 120s on a runner after #2242-#2244:
-          # it keeps 300s too (#2292) until those tests run in parallel.
-          # Every other package keeps 120s; cmd/kardinal/cmd left this list
-          # once its tests that change no package variable ran in parallel
-          # (#2194).
-          hack=github.com/kardinal-promoter/kardinal-promoter/test/hack
+          # its slow tests are split. test/hack is back to 120s (#2292): its
+          # lock and local-live tests run in parallel, and its docs tests read
+          # each page once. Every other package keeps 120s; cmd/kardinal/cmd
+          # left this list once its tests that change no package variable ran
+          # in parallel (#2194).
           others=()
           slow=()
           for p in "${packages[@]}"; do
             case "$p" in
-              "$helm" | "$hack") slow+=("$p") ;;
+              "$helm") slow+=("$p") ;;
               *) others+=("$p") ;;
             esac
           done
@@ -338,15 +336,14 @@ jobs:
           echo "${#packages[@]} packages: ${packages[*]}"
           # As in the shards: test/helm's PromQL tests need promtool, and
           # fail without it in CI (test/helm reads the docs since #2289), and
-          # the packages the shards give 300s (test/helm #2156, test/hack
-          # #2292) get it here too. Every other package
-          # keeps 120s.
+          # the packages the shards give 300s (test/helm #2156) get it here
+          # too. test/hack is back to 120s (#2292), as in the shards. Every
+          # other package keeps 120s.
           others=()
           slow=()
           for p in "${packages[@]}"; do
             case "$p" in
               ./test/helm/) bash hack/ci/install-promtool.sh; slow+=("$p") ;;
-              ./test/hack/) slow+=("$p") ;;
               *) others+=("$p") ;;
             esac
           done

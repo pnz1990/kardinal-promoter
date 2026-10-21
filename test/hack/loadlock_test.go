@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -158,12 +159,12 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 		// the slot (any reordering of the clear before the close, #2316 QA).
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		cmd := loadlock(t, lock, "sleep", "30")
-		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_BEFORE_UNLOCK=2", "LOADLOCK_TEST_FLOCK_WAIT=10")
 		out := &syncBuf{}
 		cmd.Stdout, cmd.Stderr = out, out
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
-		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "2") },
 			10*time.Second, 5*time.Millisecond, "parked before the unlock")
 		start := time.Now()
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -183,25 +184,25 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 		// waits on a second fd while the first still holds it.
 		lock := filepath.Join(t.TempDir(), "LOADLOCK")
 		cmd := loadlock(t, lock, "sleep", "30")
-		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_UNLOCK=1", "LOADLOCK_TEST_FLOCK_WAIT=10")
+		cmd.Env = append(cmd.Env, "LOADLOCK_TEST_AFTER_UNLOCK=2", "LOADLOCK_TEST_FLOCK_WAIT=10")
 		out := &syncBuf{}
 		cmd.Stdout, cmd.Stderr = out, out
 		require.NoError(t, cmd.Start())
 		exited := make(chan error, 1)
 		go func() { exited <- cmd.Wait() }()
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
-		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "1") },
+		require.Eventually(t, func() bool { return sleepingChild(cmd.Process.Pid, "2") },
 			10*time.Second, 5*time.Millisecond, "parked after the unlock")
 		f, err := os.OpenFile(filepath.Join(lock+".queue", ".reclaim"), os.O_WRONLY|os.O_CREATE, 0o644)
 		require.NoError(t, err)
 		defer f.Close()
 		require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB), "the flock is let go before the park")
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-		// The trap runs once the 1s park is done; the release then waits.
+		// The trap runs once the 2s park is done; the release then waits.
 		select {
 		case err := <-exited:
 			t.Fatalf("it ended (%v) while the test held the flock: released without it: %s", err, out.String())
-		case <-time.After(1500 * time.Millisecond):
+		case <-time.After(2500 * time.Millisecond):
 		}
 		slots, _ := filepath.Glob(filepath.Join(lock+".d", "[0-9]*"))
 		assert.Len(t, slots, 1, "the slot stays until the release has the flock")
@@ -226,6 +227,40 @@ case "$*" in *LOADLOCK.d/[0-9]) sleep 1 ;; esac
 		assert.Equal(t, 2, exitCode(err))
 	})
 }
+
+// holderRuns reports whether one of lock's waiters (cmds) runs as its
+// holder: a slot's owner, or with no ticket in its queue (it gives the lock
+// back, or starts).
+func holderRuns(lock string, cmds []*exec.Cmd) bool {
+	holders := map[string]bool{}
+	entries, _ := os.ReadDir(lock + ".queue")
+	queued := map[string]bool{}
+	for _, e := range entries {
+		if i := strings.LastIndexByte(e.Name(), '-'); i > 0 {
+			queued[e.Name()[i+1:]] = true
+		}
+	}
+	slots, _ := filepath.Glob(filepath.Join(lock+".d", "*", "owner"))
+	for _, o := range slots {
+		if b, err := os.ReadFile(o); err == nil {
+			if m := ownerPid.FindStringSubmatch(string(b)); m != nil {
+				holders[m[1]] = true
+			}
+		}
+	}
+	for _, c := range cmds {
+		if st := procState(c.Process.Pid); st == "gone" || strings.HasPrefix(st, "state Z") {
+			continue // it ended
+		}
+		if pid := strconv.Itoa(c.Process.Pid); holders[pid] || !queued[pid] {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerPid is a slot owner record's pid.
+var ownerPid = regexp.MustCompile(`(?:^|\s)pid (\d+)(?:\s|$)`)
 
 // dirID is dir's inode and change time: the same directory across looks.
 func dirID(dir string) (string, error) {
@@ -286,8 +321,22 @@ func lockDump(lock string) string {
 	return b.String()
 }
 
-// sleepingChild reports whether pid has a child running "sleep ARG".
+// sleepingChild reports whether pid has a child running "sleep ARG". It
+// reads pid's list of children, one file; without it, it scans /proc, which
+// on a busy host can take longer than the park it looks for (#2292).
 func sleepingChild(pid int, arg string) bool {
+	isSleep := func(dir string) bool {
+		cl, err := os.ReadFile(filepath.Join(dir, "cmdline"))
+		return err == nil && string(cl) == "sleep\x00"+arg+"\x00"
+	}
+	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid)); err == nil {
+		for _, c := range strings.Fields(string(b)) {
+			if isSleep(filepath.Join("/proc", c)) {
+				return true
+			}
+		}
+		return false
+	}
 	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
 	for _, st := range stats {
 		b, err := os.ReadFile(st)
@@ -296,11 +345,7 @@ func sleepingChild(pid int, arg string) bool {
 		}
 		// pid (comm) state ppid ...: comm can hold spaces, so from its ')'.
 		f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
-		if len(f) < 2 || f[1] != strconv.Itoa(pid) {
-			continue
-		}
-		cl, err := os.ReadFile(filepath.Join(filepath.Dir(st), "cmdline"))
-		if err == nil && string(cl) == "sleep\x00"+arg+"\x00" {
+		if len(f) >= 2 && f[1] == strconv.Itoa(pid) && isSleep(filepath.Dir(st)) {
 			return true
 		}
 	}
@@ -443,6 +488,7 @@ func TestLoadLock_Fair(t *testing.T) {
 // TestLoadLock_Races (#2202 QA): the reclaim and liveness races of the
 // first fair lock.
 func TestLoadLock_Races(t *testing.T) {
+	t.Parallel() // each lock its own temp dir: its CPU beside the others' sleeps and waits (#2292)
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	run := func(t *testing.T, lock, owner string, args ...string) *exec.Cmd {
 		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
@@ -452,7 +498,10 @@ func TestLoadLock_Races(t *testing.T) {
 	t.Run("25 locks at once, 8 waiters each on a dead holder: one holder at a time, none wedged", func(t *testing.T) {
 		// Locks in parallel, so reapers overlap (#2226 QA: sequential rounds
 		// never interleaved two, and #2202's script passed them).
-		rounds := 2 // CI time; LOADLOCK_STRESS=5 for the review-size run
+		// One round in PR CI (its CPU is most of the package's, #2292); the
+		// nightly lock-stress job (shared-branch-soak.yml) runs ten
+		// (LOADLOCK_STRESS=10), and a review-size run five.
+		rounds := 1
 		if v := os.Getenv("LOADLOCK_STRESS"); v != "" {
 			n, err := strconv.Atoi(v)
 			require.NoError(t, err)
@@ -509,8 +558,13 @@ func TestLoadLock_Races(t *testing.T) {
 			}
 			// A round takes seconds; a lock with no owner for five looks a
 			// second apart, the same LOCK each time (its inode and ctime: a
-			// view made again is a new one), is wedged now, not at the
-			// timeout. Its dump says why (QA-3, #2316).
+			// view made again is a new one), while none of its holders runs
+			// (a slot's owner, or a waiter without a ticket), is wedged now,
+			// not at the timeout. Its dump says why (QA-3, #2316). A holder
+			// that runs is changing the view: a runner with the lock stress
+			// tests side by side stretched one fork of that (the take's mv,
+			// the release's rmdir) past five seconds (#2334's nightly dumps:
+			// the holder in D, dup_mmap).
 			ownerless := map[string]int{}
 			seen := map[string]string{}
 			deadline := time.After(60 * time.Second)
@@ -527,7 +581,7 @@ func TestLoadLock_Races(t *testing.T) {
 						lock := filepath.Join(lr.dir, "LOADLOCK")
 						id, lerr := dirID(lock)
 						_, oerr := os.Stat(filepath.Join(lock, "owner"))
-						if lerr == nil && oerr != nil {
+						if lerr == nil && oerr != nil && !holderRuns(lock, lr.cmds) {
 							if seen[lock] != id {
 								seen[lock], ownerless[lock] = id, 0
 							}
@@ -726,6 +780,7 @@ func (s *syncBuf) String() string {
 // TestLoadLock_Counting: under load 32 two hold the lock at once and a third
 // waits; at load 32 or above one does. LOCK/owner lists every holder.
 func TestLoadLock_Counting(t *testing.T) {
+	t.Parallel() // each lock its own temp dir: its CPU beside the others' sleeps and waits (#2292)
 	script := filepath.Join(repoRoot(t), "hack", "loadlock.sh")
 	start := func(t *testing.T, lock, owner, load string, args ...string) (*exec.Cmd, *syncBuf) {
 		cmd := exec.Command("bash", append([]string{script, "-l", lock, "-o", owner, "-r", "0.05", "--"}, args...)...)
@@ -800,10 +855,14 @@ func TestLoadLock_Counting(t *testing.T) {
 			dirs = append(dirs, dir)
 			for i := 0; i < 8; i++ {
 				// Two places in the critical section; a third holder finds both
-				// taken. Held long enough (0.5s) that the next waiter's turn
-				// comes while it holds, on a busy CI runner too.
+				// taken. The first in1 holder of a lock waits (30s at most)
+				// for an in2 holder beside it, so two hold it at once however
+				// slow the next waiter's turn (#2348 QA: beside the package's
+				// other lock tests, 160 waiters starved through a 0.5s hold).
 				cmd := exec.Command("bash", script, "-l", lock, "-o", fmt.Sprintf("w%d", i), "-r", "0.05", "--", "sh", "-c",
-					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi; sleep 0.5; rmdir "$0/$p"`, dir)
+					`if mkdir "$0/in1" 2>/dev/null; then p=in1; elif mkdir "$0/in2" 2>/dev/null; then p=in2; touch "$0/two"; else touch "$0/overflow"; exit 0; fi
+if [ $p = in1 ]; then n=0; while [ ! -e "$0/two" ] && [ $n -lt 600 ]; do sleep 0.05; n=$((n + 1)); done; else sleep 0.5; fi
+rmdir "$0/$p"`, dir)
 				cmd.Env = append(os.Environ(), "LOADLOCK=", "LOADLOCK_TEST=1", "LOADLOCK_TEST_LOAD=0")
 				require.NoError(t, cmd.Start())
 				cmds = append(cmds, cmd)
@@ -841,6 +900,7 @@ func TestLoadLock_Counting(t *testing.T) {
 // testdata) and a bare mkdir LOCK. Older clients hold the lock alone, new
 // ones two at once on an idle host.
 func TestLoadLock_MixedClients(t *testing.T) {
+	t.Parallel() // each lock its own temp dir: its CPU beside the others' sleeps and waits (#2292)
 	root := repoRoot(t)
 	script := filepath.Join(root, "hack", "loadlock.sh")
 	old2202 := filepath.Join(root, "test", "hack", "testdata", "loadlock-2202.sh")
@@ -1141,7 +1201,10 @@ func TestLoadLock_FailingToolsAreNoUnsafeAnswer(t *testing.T) {
 	// turn (find) and reaches the decisions (the script before #2242 QA's
 	// fix reclaimed the long-held slot and joined the exclusive holder).
 	for _, tools := range [][]string{{"cat", "grep", "cut", "awk", "sed", "find"}, {"cat", "grep"}} {
-		t.Run(strings.Join(tools, ","), func(t *testing.T) { failingToolsAreNoUnsafeAnswer(t, tools) })
+		t.Run(strings.Join(tools, ","), func(t *testing.T) {
+			t.Parallel() // each its own lock (#2292)
+			failingToolsAreNoUnsafeAnswer(t, tools)
+		})
 	}
 }
 
@@ -1188,6 +1251,7 @@ func failingToolsAreNoUnsafeAnswer(t *testing.T, tools []string) {
 		{"a load it cannot parse", []string{"LOADLOCK_TEST_LOAD=99"}, []string{"LOADLOCK_TEST_LOAD=busy"}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel() // each its own lock (#2292)
 			dir := t.TempDir()
 			lock := filepath.Join(dir, "LOADLOCK")
 			stop, held, ran := filepath.Join(dir, "stop"), filepath.Join(dir, "held"), filepath.Join(dir, "ran")
@@ -1244,12 +1308,19 @@ func TestLoadLock_StatThatCannotBeOpened(t *testing.T) {
 			require.NoError(t, cmd.Start())
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
+			// A live holder's slot is waited on: a second shows it. A dead
+			// one's is reclaimed, and the run may take longer than that on a
+			// busy runner (the package's lock tests run side by side, #2292).
+			within := time.Second
+			if tc.reclaim {
+				within = 20 * time.Second
+			}
 			select {
 			case err := <-done:
 				require.True(t, tc.reclaim, "it took the lock from a live holder: %s", out.String())
 				require.NoError(t, err, "%s", out.String())
 				assert.Contains(t, out.String(), "removed lock slot "+slot)
-			case <-time.After(time.Second):
+			case <-time.After(within):
 				_ = cmd.Process.Kill()
 				<-done
 				require.False(t, tc.reclaim, "the dead holder's slot was never reclaimed: %s", out.String())

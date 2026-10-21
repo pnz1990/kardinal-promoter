@@ -9,10 +9,23 @@ name: Shared-branch soak
 # logs are uploaded. It runs nightly on main and on a manual dispatch
 # (gh workflow run shared-branch-soak.yml --ref <branch>). Branch protection
 # does not require it.
+#
+# The lock-stress job is the heavy-load lock's nightly soak (#2292, #2334):
+# PR CI runs TestLoadLock_Races' 25 locks of 8 waiters once, and this runs
+# the lock stress tests at their review size three times (LOADLOCK_STRESS=10
+# rounds, LOADLOCK_STRESS_LOCKS=50) under -race, so the rare "left with no
+# owner" shows up with its dump (the lock dirs, owners, each waiter's /proc
+# state and output, in the test's log). A dispatch runs one job or both
+# (-f soak=lock-stress|shared-branch|all).
 on:
   schedule:
     - cron: '15 1 * * *'
   workflow_dispatch:
+    inputs:
+      soak:
+        description: 'Which soak: shared-branch, lock-stress or all'
+        required: false
+        default: all
 
 permissions:
   contents: read
@@ -24,6 +37,7 @@ concurrency:
 jobs:
   soak:
     name: Shared-branch writers x200 under load
+    if: github.event_name != 'workflow_dispatch' || inputs.soak == 'all' || inputs.soak == 'shared-branch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -56,4 +70,39 @@ jobs:
         with:
           name: shared-branch-soak-logs
           path: soak-logs/
+          retention-days: 30
+
+  lock-stress:
+    name: Heavy-load lock stress x3 at review size
+    if: github.event_name != 'workflow_dispatch' || inputs.soak == 'all' || inputs.soak == 'lock-stress'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build the test binary
+        run: go test -race -c -o "$RUNNER_TEMP/hack.test" ./test/hack/
+      - name: Run the lock stress tests
+        env:
+          KUBECONFIG: /dev/null
+          LOADLOCK_STRESS: "10"
+          LOADLOCK_STRESS_LOCKS: "50"
+        run: |
+          mkdir -p lock-stress-logs
+          logs=$PWD/lock-stress-logs
+          cd test/hack
+          rc=0
+          "$RUNNER_TEMP/hack.test" -test.run '^TestLoadLock_(Races|Counting|MixedClients)$' \
+            -test.count=3 -test.timeout=55m -test.v > "$logs/lock-stress.log" 2>&1 || rc=$?
+          grep -E -- '^\s*--- (PASS|FAIL): TestLoadLock_(Races|Counting|MixedClients)\b' "$logs/lock-stress.log" || true
+          grep -h -A60 -- 'left with no owner\|never got their lock' "$logs/lock-stress.log" || true
+          exit "$rc"
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: lock-stress-logs
+          path: lock-stress-logs/
           retention-days: 30

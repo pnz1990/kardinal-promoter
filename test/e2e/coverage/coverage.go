@@ -112,7 +112,9 @@ func Tests(root string) ([]Test, error) {
 		if !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments)
+		// No object resolution: only the declarations and their doc comments are
+		// read, and resolving the objects is a fifth of the parse (#2292).
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}

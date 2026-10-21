@@ -41,6 +41,9 @@ func TestNoConflictMarkers(t *testing.T) {
 		if err != nil || bytes.IndexByte(data, 0) >= 0 {
 			continue // removed in the work tree, or binary
 		}
+		if !bytes.Contains(data, []byte("<<<<<<<")) && !bytes.Contains(data, []byte("=======")) && !bytes.Contains(data, []byte(">>>>>>>")) {
+			continue // no marker in it, so no line to match (#2292)
+		}
 		for i, line := range strings.Split(string(data), "\n") {
 			if conflictMarker.MatchString(strings.TrimSuffix(line, "\r")) {
 				found = append(found, path+":"+strconv.Itoa(i+1)+": "+line)

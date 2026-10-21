@@ -356,6 +356,15 @@ var (
 	mdHeading   = regexp.MustCompile(`^#{1,6}\s+(.*?)\s*#*\s*$`)
 )
 
+// blockName is goBlockName's match of l, without the regexp on a line with
+// no tab first (#2292).
+func blockName(l string) []string {
+	if !strings.HasPrefix(l, "\t") {
+		return nil
+	}
+	return goBlockName.FindStringSubmatch(l)
+}
+
 // goDecls counts the top-level declarations of a Go file by name: Func,
 // Type.Method, Type, and each var and const name, also in blocks.
 func goDecls(lines []string) map[string]int {
@@ -365,11 +374,15 @@ func goDecls(lines []string) map[string]int {
 		if block {
 			if strings.HasPrefix(l, ")") {
 				block = false
-			} else if m := goBlockName.FindStringSubmatch(l); m != nil {
+			} else if m := blockName(l); m != nil {
 				for _, n := range strings.Split(m[1], ", ") {
 					out[n]++
 				}
 			}
+			continue
+		}
+		// Every declaration regexp starts with one of these (#2292).
+		if !strings.HasPrefix(l, "func ") && !strings.HasPrefix(l, "type ") && !strings.HasPrefix(l, "var ") && !strings.HasPrefix(l, "const ") {
 			continue
 		}
 		switch {
@@ -403,7 +416,10 @@ func mdHeadings(lines []string) map[string]int {
 			fence = !fence
 			continue
 		}
-		if m := mdHeading.FindStringSubmatch(l); m != nil && !fence {
+		if !strings.HasPrefix(l, "#") || fence {
+			continue
+		}
+		if m := mdHeading.FindStringSubmatch(l); m != nil {
 			out[m[1]]++
 		}
 	}
@@ -428,6 +444,10 @@ func changelogAnchors(lines []string) map[string]map[string]int {
 	anchors := map[string]map[string]int{}
 	release := ""
 	for _, line := range lines {
+		// Each regexp only on a line it can match (#2292).
+		if !strings.HasPrefix(line, "## [") && !strings.HasPrefix(line, "- **") && !strings.HasPrefix(line, "###") {
+			continue
+		}
 		if m := changelogRelease.FindStringSubmatch(line); m != nil {
 			release = m[1]
 			continue
@@ -443,6 +463,20 @@ func changelogAnchors(lines []string) map[string]map[string]int {
 		anchors[text][release]++
 	}
 	return anchors
+}
+
+// changelogAnchorsMemo holds changelogAnchors of each changelog read, by its
+// text: every row's changelog refs share them (#2292).
+var changelogAnchorsMemo sync.Map
+
+func memoChangelogAnchors(lines []string) map[string]map[string]int {
+	key := strings.Join(lines, "\n")
+	if v, ok := changelogAnchorsMemo.Load(key); ok {
+		return v.(map[string]map[string]int)
+	}
+	a := changelogAnchors(lines)
+	changelogAnchorsMemo.Store(key, a)
+	return a
 }
 
 // changelogRefProblem checks the anchor of a docs/changelog.md#<anchor> ref:
@@ -461,7 +495,7 @@ func changelogRefProblem(root string, files map[string][]string, anchor string) 
 		lines = strings.Split(text, "\n")
 		files[changelogPath] = lines
 	}
-	anchors := changelogAnchors(lines)
+	anchors := memoChangelogAnchors(lines)
 	text, release := anchor, ""
 	if i := strings.LastIndex(anchor, "@"); i > 0 {
 		if _, known := releasesOf(anchors)[anchor[i+1:]]; known {

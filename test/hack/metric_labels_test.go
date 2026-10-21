@@ -32,6 +32,7 @@ var targetLabels = map[string]bool{
 // the controller's packages and refuses a label named like a scrape target
 // label.
 func TestMetricLabelsAvoidTargetLabels(t *testing.T) {
+	t.Parallel() // reads the repo, writes only its temp dirs: beside the package's others (#2292)
 	root := repoRoot(t)
 	found := 0
 	for _, dir := range []string{"pkg", "cmd"} {
