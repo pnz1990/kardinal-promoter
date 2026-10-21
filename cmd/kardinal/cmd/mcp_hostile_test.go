@@ -95,7 +95,7 @@ func mcpWorld(t *testing.T, admission bool) (*scenario.World, *mcp.ClientSession
 	require.NoError(t, err)
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "hostile-agent", Version: "1"}, nil).Connect(ctx, ct, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cs.Close(); _ = ss.Wait() })
+	closeMCPOnCleanup(t, cs, ss)
 	return w, cs, agent
 }
 
@@ -179,6 +179,11 @@ func toolArgs(t *testing.T, cs *mcp.ClientSession) map[string]struct {
 // the whole runner stalled for about 20s (every package still running took
 // 19.5s to 22.9s longer than in its rerun), and the call in flight failed
 // for having waited (#2455).
+//
+// Near the binary's deadline, the minimum would outlast the binary: the
+// call then ends hostileLastWait before the deadline (it may already have
+// passed), time for the session's bounded close (mcpCloseWait) and the
+// report, so that call is named too (QA-5 on #2459).
 func hostileCallDeadline(now, deadline time.Time, ok bool) time.Time {
 	if !ok {
 		return now.Add(hostileNoDeadline)
@@ -186,11 +191,17 @@ func hostileCallDeadline(now, deadline time.Time, ok bool) time.Time {
 	if d := deadline.Add(-hostileReportMargin); d.After(now.Add(hostileMinWait)) {
 		return d
 	}
+	if last := deadline.Add(-hostileLastWait); last.Before(now.Add(hostileMinWait)) {
+		return last
+	}
 	return now.Add(hostileMinWait)
 }
 
 const (
+	// hostileReportMargin leaves the session's bounded close (mcpCloseWait)
+	// and the report before the binary's deadline.
 	hostileReportMargin = 10 * time.Second
+	hostileLastWait     = mcpCloseWait + time.Second
 	hostileMinWait      = 20 * time.Second
 	hostileNoDeadline   = 5 * time.Minute
 )
@@ -206,8 +217,9 @@ func goroutineDump() string {
 }
 
 // TestHostileCallDeadline (#2455): a hostile call waits until shortly before
-// the test binary's deadline, never less than hostileMinWait, and a bounded
-// time without one; the dump of a hung call shows the goroutines' frames.
+// the test binary's deadline, at least hostileMinWait unless that would
+// outlast the binary, and a bounded time without one; the dump of a hung
+// call shows the goroutines' frames.
 func TestHostileCallDeadline(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 21, 6, 0, 0, 0, time.UTC)
@@ -220,8 +232,9 @@ func TestHostileCallDeadline(t *testing.T) {
 		{"no -timeout", time.Time{}, false, now.Add(5 * time.Minute)},
 		{"the binary's deadline far off", now.Add(100 * time.Second), true, now.Add(90 * time.Second)},
 		{"just past the minimum", now.Add(31 * time.Second), true, now.Add(21 * time.Second)},
-		{"near the deadline: the minimum", now.Add(25 * time.Second), true, now.Add(20 * time.Second)},
-		{"past the deadline: the minimum", now.Add(-time.Second), true, now.Add(20 * time.Second)},
+		{"the minimum fits before the deadline", now.Add(28 * time.Second), true, now.Add(20 * time.Second)},
+		{"the minimum would outlast the binary", now.Add(25 * time.Second), true, now.Add(19 * time.Second)},
+		{"past the deadline", now.Add(-time.Second), true, now.Add(-7 * time.Second)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
