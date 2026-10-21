@@ -373,6 +373,15 @@ func TestGoGitClient_RebaseOnRemote_BaseMissing(t *testing.T) {
 	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrRebaseBaseMissing)
 	assert.Contains(t, err.Error(), "1111111111111111111111111111111111111111")
+
+	// A context that ends during the base's fetch is the cancellation, not
+	// a missing base: git-push redoes the change from a fresh clone on
+	// ErrRebaseBaseMissing (QA-2's probe on #2387).
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = c.RebaseOnRemote(canceled, work, "origin", "main", scm.GitAuth{})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, scm.ErrRebaseBaseMissing)
 }
 
 // TestGoGitClient_RebaseOnRemote_BaseFetched (#1606): a HEAD made on an

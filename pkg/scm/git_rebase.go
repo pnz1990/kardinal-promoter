@@ -147,6 +147,12 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 		// The base is an earlier head of the branch: fetch the branch's
 		// recent history once, deep enough for the writers since (#1606).
 		if ferr := fetch(rebaseBaseDepth); ferr != nil {
+			// A context that ended is the error (fetch wraps it), not a
+			// missing base: git-push would redo the change from a fresh
+			// clone instead of returning the cancellation.
+			if ctx.Err() != nil {
+				return nil, ferr
+			}
 			return nil, fmt.Errorf("rebase: commit %s, parent of HEAD %s (%v): %w",
 				local.ParentHashes[0], local.Hash, ferr, ErrRebaseBaseMissing)
 		}
