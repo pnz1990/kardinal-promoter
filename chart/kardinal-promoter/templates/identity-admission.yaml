@@ -672,9 +672,11 @@ spec:
 {{- /*
 status-writers (#2446): only the controller writes the status of these kinds.
 A status decides promotions (a gate's ready, a MetricCheck's result, a
-Bundle's phase), and RBAC cannot keep it from a namespace's admins: the
-resources ["*"] of <release>-admin-extra, and of the built-in admin and edit,
-covers every subresource, status included. Every namespaced kind with a
+Bundle's phase), and RBAC alone cannot keep it the controller's: in RBAC,
+resources ["*"] covers every subresource, status included, as
+<release>-admin-extra's did before #2446 and a role of your own with "*" on
+kardinal.io still does (the built-in admin and edit have no kardinal.io rules
+but what the chart aggregates into them). Every namespaced kind with a
 status subresource that no other policy covers: graph-objects covers
 $graphKinds and the per-promotion MetricCheck and ChangeRequest instances
 (label kardinal.io/bundle; this policy leaves them to it, so one policy

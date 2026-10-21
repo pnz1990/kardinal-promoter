@@ -1088,6 +1088,13 @@ only the controller writes it:
 - Cluster-scoped kinds (AgentIdentity, ChangeWindow, ClusterScmProvider, StepTemplate) are left
   out. Only cluster-wide RBAC reaches them, and no chart role grants their status, even bound with
   a ClusterRoleBinding: their status is trusted to whoever holds cluster-wide write RBAC on it.
+  That matters most for freezes: a freeze's ChangeWindow holds steps while its `status.active` is
+  true or its status is behind its spec, and its exemptions are read from `status.exemptions`
+  (`FreezeActive`, `pkg/reconciler/changewindow/freeze.go:120-128`). So whoever may update
+  `changewindows/status` cluster-wide, or holds `*` on `kardinal.io` in a ClusterRole bound
+  cluster-wide, can lift a freeze by writing `{"active": false, "observedGeneration": <its
+  generation>}`, or exempt a Pipeline from it, with no FreezeLifted record. Never grant those
+  outside the controller.
   A policy would not fit: every kardinal release's controller writes them, and a binding's
   namespace selector does not limit a cluster-scoped object to one release, so each release would
   refuse the others' controllers.

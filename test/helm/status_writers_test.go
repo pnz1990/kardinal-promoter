@@ -214,6 +214,17 @@ func TestStatusWriters_Admits(t *testing.T) {
 			"%s instance: graph-objects refuses a tenant's status write", kind)
 		assert.True(t, admitsGroups(t, graphObjects, inst, inst, controller, sa, req), "%s instance: the controller's", kind)
 	}
+	// The exception is MetricChecks' and ChangeRequests' only: a gate
+	// instance (labelled kardinal.io/bundle) is still status-writers', since
+	// graph-objects does not match policygates/status (QA-2 on #2485).
+	gate := map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": "PolicyGate",
+		"metadata": map[string]interface{}{"name": "x", "namespace": "payments",
+			"labels": map[string]interface{}{"kardinal.io/bundle": "b1"}}, "spec": statusFixtures["policygates"].spec}
+	gateReq := map[string]interface{}{"subResource": "status", "kind": map[string]interface{}{"kind": "PolicyGate"},
+		"resource": map[string]interface{}{"group": "kardinal.io", "resource": "policygates"}}
+	assert.False(t, admitsGroups(t, vap, gate, gate, "alice", []interface{}{"system:authenticated"}, gateReq),
+		"a gate instance's status stays the controller's")
+	assert.True(t, admitsGroups(t, vap, gate, gate, controller, sa, gateReq), "the controller writes a gate instance's status")
 	require.NotNil(t, vap.Spec.MatchConstraints)
 	for _, r := range vap.Spec.MatchConstraints.ResourceRules {
 		assert.Equal(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Update}, r.Operations,
