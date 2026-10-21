@@ -1229,6 +1229,9 @@ func TestPolicySimulate_AsAgent(t *testing.T) {
 // the refused namespace's gates left out; a version already promoting (it
 // has a Graph) is not blocked for it, and meets that namespace's gates as
 // its Graph has them, not as they are now (an error when its Graph is gone).
+// While the Pipeline's generation is not checked yet, a new version is
+// blocked the same way ("not checked yet"), and one promoting meets its
+// Graph's gates of every namespace that must agree.
 // Covers GATE-POLNS-05.
 func TestPolicySimulate_RefusedPolicyNamespace(t *testing.T) {
 	t.Parallel()
@@ -1278,4 +1281,22 @@ func TestPolicySimulate_RefusedPolicyNamespace(t *testing.T) {
 	_, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", Version: "demo-v2"})
 	require.Error(t, err, "its Graph is gone: what it kept is not known")
 	assert.Contains(t, err.Error(), "keeps the gates of team-b it started with")
+
+	// A generation the controller has not checked yet (QA-2 on #2381): no
+	// new version is translated, and team-b, which must agree, is not read.
+	unchecked := pipe()
+	unchecked.Generation = 3
+	c = policyClient(t, unchecked, promoting.DeepCopy(), started.DeepCopy(),
+		policyGate("team-gate", "default", "prod", "true"),
+		policyGate("refused-gate", "team-b", "prod", "true"))
+	out, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
+	require.NoError(t, err)
+	assert.Contains(t, out, "RESULT: BLOCKED")
+	assert.Contains(t, out, "Blocked by: spec.policyNamespaces")
+	assert.Contains(t, out, "not checked yet for this generation of the Pipeline")
+	assert.NotContains(t, out, "refused-gate", "a namespace that must agree is not read before the check")
+	out, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", Version: "demo-v1"})
+	require.NoError(t, err)
+	assert.NotContains(t, out, "spec.policyNamespaces", "a version promoting is not blocked for it")
+	assert.Contains(t, out, "Blocked by: refused-gate", "it meets team-b's gate as its Graph has it")
 }

@@ -568,10 +568,13 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		return nil, fmt.Errorf("collect policy gates: %w", err)
 	}
 	// A new version of a Pipeline naming a namespace that has not agreed
-	// waits in the controller (#2286): without its gates, and blocked. A
-	// version already promoting keeps them as its Graph has them.
+	// waits in the controller (#2286), and so does every new version while
+	// the Pipeline's generation is not checked yet: blocked, and without
+	// those namespaces' gates (CollectGates does not read them). A version
+	// already promoting keeps theirs as its Graph has them.
 	var refusedMsg string
-	refused := translator.RefusedPolicyNamespaces(pipe, opts.PolicyNamespaces)
+	agreed := translator.PolicyNamespacesAgreed(pipe, opts.PolicyNamespaces)
+	inFlight := false
 	bundle := simulatedBundle(pipe, simTime)
 	if opts.Version != "" {
 		name, err := resolveBundleRef(ctx, c, ns, pipe.Name, opts.Version)
@@ -586,8 +589,9 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		bundle.ResourceVersion = ""
 		// The gates it would meet in env, whatever its own intent says.
 		bundle.Spec.Intent = nil
-		if real.Status.GraphRef != "" && len(refused) > 0 {
-			kept, err := keptPolicyGates(ctx, c, &real, refused)
+		inFlight = real.Status.GraphRef != ""
+		if unread := translator.UnreadPolicyNamespaces(pipe, opts.PolicyNamespaces); inFlight && len(unread) > 0 {
+			kept, err := keptPolicyGates(ctx, c, &real, unread)
 			if err != nil {
 				return nil, err
 			}
@@ -595,18 +599,10 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 			slices.SortFunc(templates, func(a, b v1alpha1.PolicyGate) int {
 				return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 			})
-			refused = nil
 		}
 	}
-	if len(refused) > 0 {
-		refusedMsg = (&translator.PolicyNamespacesError{NotShared: refused}).Error()
-		kept := templates[:0:0]
-		for _, g := range templates {
-			if !slices.Contains(refused, g.Namespace) {
-				kept = append(kept, g)
-			}
-		}
-		templates = kept
+	if agreed != nil && !inFlight {
+		refusedMsg = agreed.Error()
 	}
 	indexName, err := simulatedActor(ctx, c, bundle, opts.AsAgent, opts.AsHuman)
 	if err != nil {

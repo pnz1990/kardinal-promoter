@@ -332,7 +332,7 @@ func (t *Translator) collectGates(ctx context.Context,
 	// A namespace of spec.policyNamespaces that has not agreed to share its
 	// gates is never read, nor one that must agree before the Pipeline's
 	// generation is checked (#2286).
-	for _, ns := range unreadPolicyNamespaces(pipeline, t.policyNS) {
+	for _, ns := range UnreadPolicyNamespaces(pipeline, t.policyNS) {
 		scanned[ns] = true
 	}
 	for _, list := range [][]string{t.policyNS, pipeline.Spec.PolicyNamespaces, {pipeline.Namespace}} {

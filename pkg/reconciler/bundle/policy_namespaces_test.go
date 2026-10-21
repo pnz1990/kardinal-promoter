@@ -188,3 +188,60 @@ func TestBundleReconciler_UpstreamEvidenceWaitsForPolicyNamespaces(t *testing.T)
 	require.NotNil(t, ev)
 	assert.Equal(t, "VerifyGate", ev.Reason, "team-b's verify gate is seen: %s", ev.Message)
 }
+
+// TestBundleReconciler_GraphGoneWaitsForPolicyNamespaces (#2286, QA-2 on
+// #2381): a version in flight whose Graph was deleted while its Pipeline
+// names a refused namespace is not built again (Translate refuses it,
+// GraphGone): it stays Promoting with GraphSynced=False
+// PolicyNamespaceNotShared saying what unblocks it, one Warning Event over
+// reconciles, no GraphSyncFailed, and a retry within a minute; once the
+// namespace agrees the Graph is built again.
+// Covers GATE-POLNS-07.
+func TestBundleReconciler_GraphGoneWaitsForPolicyNamespaces(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}}},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting", GraphRef: "my-app-my-app-v1"},
+	}
+	c := indexedBuilder(newScheme()).WithObjects(pipeline, b).WithStatusSubresource(&kardinalv1alpha1.Bundle{}).Build()
+	tr := &mockTranslator{graphName: "my-app-my-app-v1", err: fmt.Errorf("translator.Translate: %w",
+		&translator.PolicyNamespacesError{NotShared: []string{"team-b"}, GraphGone: true})}
+	rec := events.NewFakeRecorder(10)
+	r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: &mockGraphCheckerV2{exists: false}, Recorder: rec}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"}}
+
+	for range 2 {
+		res, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err, "a wait, not an error to back off on")
+		assert.Positive(t, res.RequeueAfter)
+		assert.LessOrEqual(t, res.RequeueAfter, time.Minute)
+	}
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Equal(t, "Promoting", got.Status.Phase)
+	synced := findCondition(got.Status.Conditions, "GraphSynced")
+	require.NotNil(t, synced)
+	assert.Equal(t, metav1.ConditionFalse, synced.Status)
+	assert.Equal(t, "PolicyNamespaceNotShared", synced.Reason)
+	assert.Contains(t, synced.Message, "label it kardinal.io/policy-shareable=true")
+	warnings := 0
+	for len(rec.Events) > 0 {
+		e := <-rec.Events
+		assert.NotContains(t, e, "GraphSyncFailed")
+		if strings.Contains(e, "PolicyNamespaceNotShared") {
+			warnings++
+		}
+	}
+	assert.Equal(t, 1, warnings, "one Event over reconciles")
+
+	tr.err = nil // team-b agreed
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, tr.called)
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.NotEqual(t, "PolicyNamespaceNotShared", findCondition(got.Status.Conditions, "GraphSynced").Reason)
+}

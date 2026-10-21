@@ -234,9 +234,12 @@ func TestTranslate_InFlightGraphGoneFailsClosed(t *testing.T) {
 	b.Status.GraphRef = "payments-payments-x7k2m" // deleted
 
 	_, err := tr.Translate(ctx, p, b)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "keep the gates of team-b it started with")
-	assert.False(t, IsPolicyNamespacesError(err), "not the wait of a new version: the version's Graph is gone")
+	var pnsErr *PolicyNamespacesError
+	require.ErrorAs(t, err, &pnsErr, "a wait for team-b, with what unblocks it (QA-2 on #2381)")
+	assert.True(t, pnsErr.GraphGone)
+	assert.Equal(t, []string{"team-b"}, pnsErr.NotShared)
+	assert.Contains(t, err.Error(), "the version's Graph is gone, and the gates of team-b it started with were only there")
+	assert.Contains(t, err.Error(), "label it kardinal.io/policy-shareable=true")
 	list, lErr := dyn.Resource(graph.GraphGVR).Namespace(b.Namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, lErr)
 	assert.Empty(t, list.Items, "no Graph is built without the gates")

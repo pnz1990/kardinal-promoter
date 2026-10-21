@@ -1819,11 +1819,17 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			})
 		}
 	case policyWait:
+		// Unchecked: seconds after a Pipeline change. Otherwise a version in
+		// flight whose Graph is gone waits for the namespace to agree: one
+		// Warning Event says what unblocks it.
 		reason := reasonPolicyNamespaceNotShared
 		if e := (*translator.PolicyNamespacesError)(nil); errors.As(syncErr, &e) && e.Unchecked {
 			reason = reasonPolicyNamespacesUnchecked
 		}
-		setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, reason, "waiting: "+syncErr.Error())
+		msg := "waiting: " + syncErr.Error()
+		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, reason, msg) && reason == reasonPolicyNamespaceNotShared {
+			after = append(after, func() { r.event(b, corev1.EventTypeWarning, reasonPolicyNamespaceNotShared, msg) })
+		}
 	case syncErr != nil:
 		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "UpdateFailed", syncErr.Error()) {
 			msg := syncErr.Error()

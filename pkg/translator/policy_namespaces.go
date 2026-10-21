@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
@@ -20,14 +22,23 @@ import (
 // translated once the namespace agrees or the entry is removed. Unchecked:
 // the Pipeline reconciler has not checked the Pipeline's current generation
 // yet (status.policyNamespaces), so nothing is read before it has.
+// GraphGone: the version in flight whose Graph was deleted is not built
+// again, since the gates of NotShared it started with were only there.
 type PolicyNamespacesError struct {
 	NotShared []string
 	Unchecked bool
+	GraphGone bool
 }
 
 func (e *PolicyNamespacesError) Error() string {
 	if e.Unchecked {
 		return "spec.policyNamespaces is not checked yet for this generation of the Pipeline: waiting for the Pipeline reconciler"
+	}
+	if e.GraphGone {
+		ns := strings.Join(e.NotShared, ", ")
+		return fmt.Sprintf("the version's Graph is gone, and the gates of %s it started with were only there: it is built again "+
+			"once %s agrees to share its PolicyGates (label it %s=true, or list it in the controller's --policy-shareable-namespaces) "+
+			"or is removed from spec.policyNamespaces (#2286)", ns, ns, kardinalv1alpha1.LabelPolicyShareable)
 	}
 	return fmt.Sprintf("spec.policyNamespaces names %s, which has not agreed to share its PolicyGates: label it %s=true, "+
 		"list it in the controller's --policy-shareable-namespaces, or remove it from spec.policyNamespaces (#2286)",
@@ -89,10 +100,11 @@ func RefusedPolicyNamespaces(pipeline *kardinalv1alpha1.Pipeline, orgNS []string
 	return nil
 }
 
-// unreadPolicyNamespaces is the namespaces of pipeline's
+// UnreadPolicyNamespaces is the namespaces of pipeline's
 // spec.policyNamespaces whose gates are not read: those refused, and, while
-// the generation is not checked yet, every one that must agree.
-func unreadPolicyNamespaces(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) []string {
+// the generation is not checked yet, every one that must agree. A version
+// in flight keeps theirs as its Graph has them.
+func UnreadPolicyNamespaces(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) []string {
 	var e *PolicyNamespacesError
 	if !errors.As(PolicyNamespacesAgreed(pipeline, orgNS), &e) {
 		return nil
@@ -132,6 +144,9 @@ func (t *Translator) frozenGates(ctx context.Context, pipeline *kardinalv1alpha1
 		return nil, nil, fmt.Errorf("keep the gates of %s for version %s: no Graph client", strings.Join(refused, ", "), bundle.Name)
 	}
 	g, err := t.graphClient.Get(ctx, bundle.Namespace, bundle.Status.GraphRef)
+	if apierrors.IsNotFound(err) {
+		return nil, nil, &PolicyNamespacesError{NotShared: refused, GraphGone: true}
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("keep the gates of %s it started with for version %s: read its Graph: %w",
 			strings.Join(refused, ", "), bundle.Name, err)
