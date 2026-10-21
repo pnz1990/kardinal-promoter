@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
@@ -439,6 +440,19 @@ func TestAgentEvidence_RecreatedRun(t *testing.T) {
 	e.WaitGateReady(t, a.ns, bundle, "prod", journeyVerify, true, "verified: 1 of 1", gateTimeout)
 	e.WaitGateReady(t, a.ns, bundle, "prod", "people", false, "", gateTimeout)
 
+	// The gate is its version's: the version's Graph lists it (#2380, QA-5
+	// on #2395), which the gate records once.
+	var bv v1alpha1.Bundle
+	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &bv))
+	vg, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", journeyVerify)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, string(bv.UID), vg.Status.BundleUID, "the gate names the version whose Graph lists it")
+	if c := meta.FindStatusCondition(vg.Status.Conditions, "InBundleGraph"); assert.NotNil(t, c, "InBundleGraph") {
+		assert.Equal(t, metav1.ConditionTrue, c.Status, c.Message)
+		assert.Equal(t, "Listed", c.Reason, c.Message)
+	}
+
 	// Mid-gate, the run is deleted as kro deletes one (only kardinal may:
 	// the graph-objects admission policy), as when a Graph is applied again
 	// without it.
@@ -515,8 +529,6 @@ func TestAgentEvidence_RecreatedRun(t *testing.T) {
 	// The verify gate's trail of V's Verdict (#2380): recorded, revoked when
 	// it stopped counting, recorded again when it counted again, each a
 	// record of its own that names this version's UID. It ends on the state.
-	var bv v1alpha1.Bundle
-	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Namespace: a.ns, Name: bundle}, &bv))
 	var trail []string
 	framework.Eventually(t, gateTimeout, "the verify gate's trail of V's Verdict ends recorded", func(ctx context.Context) (bool, string) {
 		var events v1alpha1.AuditEventList
