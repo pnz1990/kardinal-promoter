@@ -289,9 +289,8 @@ break glass (a platform on-call group, for example), give the team `<fullname>-p
 `aggregateToDefaultRoles` and `directWrites` off, and grant no `update` or `patch` on
 `policygates` in roles of your own.
 
-Until the fix planned for v0.13.1 (#2446), whoever may write `policygates/status` in the namespace
-can also make an org gate's instance pass without an override record: see
-[Verified identity](#verified-identity).
+A gate's status is not a way around it: only the controller writes it
+([Status is the controller's](#status-is-the-controllers)).
 
 ### Multi-tenant isolation
 
@@ -1066,9 +1065,40 @@ chart installs a `ValidatingAdmissionPolicy` with a `Deny` binding, per release:
 | `<fullname>-audit-actor` | Only this release's controller (and `admission.controllerUsernames`) creates an AuditEvent that names an actor (`spec.actor`). |
 | `<fullname>-agent-identities` | An AgentIdentity is deleted only once `spec.suspended` is true: deleting it turns its subjects into people or bots. |
 | `<fullname>-graph-objects` | The objects a promotion Graph makes and nothing else should: PromotionSteps, PRStatuses, HookRuns, RenderRuns, ImageVerifications and per-promotion MetricCheck instances (label `kardinal.io/bundle`; a MetricCheck you write is not checked), spec, metadata and status. Only kro, this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` may create or change them. kro counts only when it impersonates the namespace's Graph ServiceAccount: a request as that ServiceAccount that carries `authentication.kubernetes.io/credential-id` (a token from `kubectl create token`, a bound token) or `authentication.kubernetes.io/pod-name` (a Pod running as it) is refused, so `kubectl create token` and Pods running as the Graph ServiceAccount do not pass as kro. Admission cannot tell kro's impersonation from anyone else's: whoever may impersonate the Graph ServiceAccount, or read a legacy token Secret of it, passes as kro (see Trust below). The garbage collector and the namespace controller may update them, as they do while deleting objects (owner references, their `orphan`/`foregroundDeletion` finalizers); kardinal's own finalizers are removed by its controller. Deleting one is not checked, since the Graph recreates it (deleting a failed PromotionStep retries it), except HookRuns: only kro, the controllers, the garbage collector and the namespace controller delete them, and anyone else gets a message of its own ("HookRuns record that a hook ran; only kardinal deletes them ..."). The step's `status.hookRecords` keeps a recreated HookRun from running its hook again, but deleting the step as well (allowed: it is the documented retry) drops that record, and the Graph's new HookRun would run the hook a second time. Argo Rollouts AnalysisRuns labelled `kardinal.io/bundle` are protected on create only: the Rollouts controller writes them afterwards. No one may turn an existing MetricCheck into an instance (kro adopts by name, see below). |
+| `<fullname>-status-writers` | (new in v0.13.1) Only this release's controller ServiceAccount and the exact usernames in `admission.controllerUsernames` update the status of Bundles, ChangeRequests, MetricChecks, NotificationHooks, Pipelines, PolicyGates, RollbackPolicies, ScheduleClocks, ScmProviders and Subscriptions, cluster-admins included; per-promotion MetricCheck and ChangeRequest instances are `<fullname>-graph-objects`'. See [Status is the controller's](#status-is-the-controllers). |
 
 Anyone who may impersonate other users or groups (`impersonate` RBAC) passes these checks as
 whoever they impersonate: treat `impersonate` as full trust.
+
+#### Status is the controller's
+
+(New in v0.13.1.) A kardinal object's status records what the controller found: whether a gate
+allows, a MetricCheck's result, a Bundle's Graph, a Pipeline's consents. Promotions act on it, so
+only the controller writes it:
+
+- `<fullname>-status-writers` refuses every status update of the kinds in the table above by
+  anyone but the controller, cluster-admins included. The Graph's kinds and per-promotion
+  instances are `<fullname>-graph-objects`', PromotionReceipts `<fullname>-receipts`', and the
+  release's AgentIndex `<fullname>-agent-index`'. Every status subresource of a kardinal CRD is one
+  of these, or cluster-scoped (below).
+- RBAC alone cannot keep it: in RBAC, `resources: ["*"]` covers every subresource, status
+  included. The chart's roles name their kinds instead and grant no status; `<fullname>-admin`
+  did grant `*` before v0.13.1. A role of your own with `*` on `kardinal.io` reaches every status,
+  and the policy refuses those writes.
+- Cluster-scoped kinds (AgentIdentity, ChangeWindow, ClusterScmProvider, StepTemplate) are left
+  out. Only cluster-wide RBAC reaches them, and no chart role grants their status, even bound with
+  a ClusterRoleBinding: their status is trusted to whoever holds cluster-wide write RBAC on it.
+  That matters most for freezes: a freeze's ChangeWindow holds steps while its `status.active` is
+  true or its status is behind its spec, and its exemptions are read from `status.exemptions`
+  (`FreezeActive`, `pkg/reconciler/changewindow/freeze.go:120-128`). So whoever may update
+  `changewindows/status` cluster-wide, or holds `*` on `kardinal.io` in a ClusterRole bound
+  cluster-wide, can lift a freeze by writing `{"active": false, "observedGeneration": <its
+  generation>}`, or exempt a Pipeline from it, with no FreezeLifted record. Never grant those
+  outside the controller.
+  A policy would not fit: every kardinal release's controller writes them, and a binding's
+  namespace selector does not limit a cluster-scoped object to one release, so each release would
+  refuse the others' controllers.
+- To change a status by hand on purpose, delete the policy's binding; `helm upgrade` restores it.
 
 What a caller can do with overrides depends on its access. A caller allowed to update
 PolicyGates (full edit) can add an override only in its own name, but can also remove any
@@ -1115,19 +1145,10 @@ also steer which Verified version a rollback restores ([Rollback](../rollback.md
 not `edit`, where promotions must not be forged. A namespace's `edit`/`admin` holders are its
 owners as far as kardinal can check (ledger G16 has the upstream ask that would close this).
 
-**Until the fix planned for v0.13.1 (#2446), gate and MetricCheck status is not protected.** No
-admission policy yet checks writes to `policygates/status`, or to the status of a MetricCheck you
-write (the per-promotion instances are covered by `<fullname>-graph-objects`), and a step that
-waits on a gate reads the gate instance's `status.ready`. So whoever may update those status
-subresources in a namespace can make an org gate's instance there pass, or decide a MetricCheck's
-result, without an override record (no `status.overrides` entry, no `GateOverridden` AuditEvent):
-`<fullname>-admin` (its `resources: ["*"]` covers status subresources), the built-in `admin` with
-`rbac.userRoles.aggregateToDefaultRoles` (it then aggregates `<fullname>-admin-extra`) and cluster
-admins. An org gate's result in a team namespace is only as trustworthy as those people. Until that
-fix, which lets only the controller write those statuses, don't bind `<fullname>-admin` (or `admin`
-with `aggregateToDefaultRoles`) in team namespaces to people who must not pass org gates. The fix
-does not change `edit` and `admin`: their holders stay trusted as kro (above), so keep them off
-those roles whatever the release.
+Gate and MetricCheck status is the controller's alone ([Status is the controller's](#status-is-the-controllers),
+v0.13.1): `<fullname>-admin` and cluster admins cannot pass a gate by writing its status. That does
+not change `edit` and `admin`: their holders stay trusted as kro (above), so keep them off those
+roles in team namespaces whose org gates must hold.
 
 **Impersonation is full trust.** Anyone allowed to impersonate (`impersonate` RBAC) passes every
 check here as whoever they impersonate, the Graph ServiceAccount and the controller included; a
@@ -1427,7 +1448,7 @@ API and the Bundle API, and they work the same for `kubectl` and the `kardinal` 
 | `<fullname>-freezer` | every verb on `changewindows`, `update` on `changewindows/freeze`; bind it with a ClusterRoleBinding | Incident commanders ([Freezes](../agentic/freezes.md)) |
 | `<fullname>-auditor` | (new in v0.13.0) `get` and `list` on the namespaced kinds `kardinal audit evidence-pack` reads: `auditevents`, `approvals`, `policygates`, `bundles`, `pipelines`, `verdicts`, `promotionreceipts`, `changerequests`; no write. Bind it with a RoleBinding in each namespace an auditor may read, or a ClusterRoleBinding for all. Not part of the admin role | Auditors ([Produce an evidence pack](../compliance.md#produce-an-evidence-pack)) |
 | `<fullname>-auditor-cluster` | (new in v0.13.0) `get` and `list` on the cluster-scoped kinds of the pack, `changewindows` and `agentidentities`, and on `validatingadmissionpolicies` and their bindings; no write and no namespace's records. Always a ClusterRoleBinding, next to `<fullname>-auditor`. Not part of the admin role | Auditors |
-| `<fullname>-admin` | every verb on every kardinal kind, `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
+| `<fullname>-admin` | every verb on every kardinal kind (by name; not their status, which only the controller writes, [Status is the controller's](#status-is-the-controllers)), `update` on `pipelines/pause`, `pipelines/hold`, `pipelines/edit`, `policygates/override`, `policygates/edit` and `bundles/reject`; aggregates the three above | Pipeline owners |
 
 AgentIdentities are public to every authenticated user by default (`actors.directory.public: true`, the `<fullname>-agent-directory-reader` binding), so a namespace auditor and everyone else can read the agent registry whatever their roles; set it to `false` to limit that ([Who can read the registry](../actors.md#who-can-read-the-registry)).
 

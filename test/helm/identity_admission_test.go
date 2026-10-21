@@ -23,7 +23,7 @@ import (
 // release (identity-admission.yaml).
 func identityAdmissionObjects(release string) []string {
 	var out []string
-	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "verdicts", "bundle-creator", "graph-objects", "scoped-writes"} {
+	for _, p := range []string{"bundle-rejection", "gate-overrides", "approvals", "verdicts", "bundle-creator", "graph-objects", "status-writers", "scoped-writes"} {
 		out = append(out, "ValidatingAdmissionPolicy/"+release+"-"+p, "ValidatingAdmissionPolicyBinding/"+release+"-"+p)
 	}
 	return out

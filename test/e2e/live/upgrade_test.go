@@ -276,6 +276,10 @@ func (u *upgrade) ratchetWrite(kind, name, write string) string {
 		}
 		return head + fmt.Sprintf(`patch policygate %s --type merge -p '{"spec":{"message":"ratchet"}}'`, name)
 	case "status":
+		// As the controller: <release>-status-writers lets no one else write
+		// the status (#2446), and the ratchet is the CRD's, whoever writes.
+		head += fmt.Sprintf("--as=system:serviceaccount:%[1]s:%[2]s --as-group=system:serviceaccounts --as-group=system:serviceaccounts:%[1]s ",
+			framework.ControllerNamespace, framework.ControllerServiceAccount)
 		if kind == "pipeline" {
 			return head + fmt.Sprintf(`patch pipeline %s --subresource status --type merge -p '{"status":{"phase":"Degraded"}}'`, name)
 		}
