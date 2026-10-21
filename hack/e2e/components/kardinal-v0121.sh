@@ -47,7 +47,7 @@ args=(
 if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret scm-webhook >/dev/null 2>&1; then
   args+=(--set webhook.secretRef.name=scm-webhook)
 fi
-"${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$V0121_CHART" --version "$V0121_CHART_VERSION" \
+"${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$V0121_CHART:$V0121_CHART_VERSION@$V0121_CHART_DIGEST" \
   -n "$KARDINAL_NS" --create-namespace "${args[@]}" >/dev/null
 "${KUBECTL[@]}" -n "$KARDINAL_NS" rollout status "deploy/$KARDINAL_RELEASE" --timeout=180s >/dev/null
 
