@@ -176,9 +176,10 @@ something for you:
   `controller.policyShareableNamespaces`. After the upgrade, a Pipeline naming one that has not is
   `PolicyNamespacesShared=False` (reason `NotShared`) with a `PolicyNamespaceNotShared` Warning
   Event. In this release its gates are still read and `Ready` is unchanged; the next release
-  refuses them. Label or list those namespaces; the command in
-  [Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces) lists
-  the Pipelines it concerns, and the same section says who may set the label.
+  refuses them. Label or list those namespaces. After the upgrade, `kardinal doctor`'s "Policy
+  namespaces shared" check (step 4) names the Pipelines it concerns and their namespaces;
+  [Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces) has
+  the same list with kubectl, and says who may set the label.
 
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
 fields to AgentIdentities, Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals
@@ -211,7 +212,11 @@ kubectl get pipelines -A
 kubectl get bundles -A
 ```
 
-`kardinal doctor` passes every check, and every Pipeline is Ready.
+`kardinal doctor` passes every check, and every Pipeline is Ready. "Policy namespaces shared" can
+WARN in two ways. If it names Pipelines, their `spec.policyNamespaces` still needs a label or a
+chart entry (step 1), and against the next release, which refuses them, that becomes a FAIL. If it
+names no Pipeline, it checked one namespace only, or none, because you may not list Pipelines in
+every namespace: run it as a user who may.
 
 ## Upgrading from v0.11.0
 
