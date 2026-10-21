@@ -790,12 +790,14 @@ func upgradeRecords(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipel
 // retrying, however long the AuditEvent write fails.
 //
 // An entry the API server would never accept (a dry-run create refused as
-// Invalid, BadRequest or Forbidden, or one audit.Validate refuses) is not
-// waited for: it is dropped, with an AuditRecordRefused Warning Event and
+// Invalid or BadRequest, or one audit.Validate refuses) is not waited for:
+// it is dropped, with an AuditRecordRefused Warning Event and
 // kardinal_audit_events_dropped_total{reason="refused"}, so a re-render,
 // which can recover a version stuck under a rendering bug (#2271), never
-// waits on a record that cannot be written. Any other error is returned: the
-// Graph stays as it is and the reconcile backs off.
+// waits on a record that cannot be written. So is one whose namespace is
+// being deleted. These are what audit.Flush drops. Any other error, a
+// Forbidden included (an exceeded AuditEvent quota frees up), is returned:
+// the Graph stays as it is and the reconcile backs off.
 func (r *Reconciler) unrecorded(ctx context.Context, b *kardinalv1alpha1.Bundle,
 	entries []kardinalv1alpha1.PendingAuditEvent) ([]kardinalv1alpha1.PendingAuditEvent, error) {
 	if len(entries) == 0 {
@@ -829,12 +831,18 @@ func (r *Reconciler) unrecorded(ctx context.Context, b *kardinalv1alpha1.Bundle,
 			r.refusedRecord(ctx, b, e, err)
 			continue
 		}
+		// What the outbox writer (audit.Flush) drops is dropped here, and
+		// nothing else: a Forbidden, an exceeded AuditEvent quota among them,
+		// may pass, and Flush keeps such an entry until it does.
 		switch err := r.Create(ctx, audit.Event(b.Namespace, e), client.DryRunAll); {
 		case err == nil:
 			out = append(out, e)
 		case apierrors.IsAlreadyExists(err):
 			// Written meanwhile.
-		case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) || apierrors.IsForbidden(err):
+		case apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
+			zerolog.Ctx(ctx).Debug().Err(err).Str("auditEvent", e.Name).
+				Msg("namespace is being deleted — the upgrade's audit record is not written")
+		case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
 			r.refusedRecord(ctx, b, e, err)
 		default:
 			return nil, fmt.Errorf("dry-run create auditevent %s: %w", e.Name, err)

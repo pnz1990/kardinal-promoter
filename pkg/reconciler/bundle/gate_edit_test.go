@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -863,6 +864,54 @@ func TestRenderVersion_TransientRecordErrorBacksOff(t *testing.T) {
 	lcReconcile(t, g.r, "app-v1")
 	assert.Equal(t, graph.RenderLabel, label())
 	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "each once")
+}
+
+// #2443 (QA-5 on 379b454d0): a Forbidden dry run is no refusal for good:
+// an AuditEvent quota answers "exceeded quota" until retention frees room,
+// and audit.Flush keeps such an entry. The record is not dropped, the Graph
+// keeps its label and the reconcile backs off; once the quota has room the
+// records are stored, then the Graph is rendered again. A namespace being
+// deleted is dropped quietly, as Flush drops it: no refused count.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_QuotaIsNoRefusal(t *testing.T) {
+	full := true
+	g, label := upgradeRig(t, interceptor.Funcs{Create: auditEventCreate(func(dryRun bool) error {
+		if dryRun && full {
+			return apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "auditevents"}, "app-v1-gate-x",
+				errors.New("exceeded quota: audit, requested: count/auditevents.kardinal.io=1, used: count/auditevents.kardinal.io=100, limited: count/auditevents.kardinal.io=100"))
+		}
+		return nil
+	})})
+	dropped := testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused"))
+	res := lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "backs off")
+	assert.Equal(t, "3", label(), "kept until the quota has room")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+	assert.Equal(t, dropped, testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused")), "not dropped")
+
+	full = false
+	lcReconcile(t, g.r, "app-v1")
+	require.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "stored")
+	assert.Equal(t, "3", label())
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label())
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "each once")
+
+	t.Run("a namespace being deleted", func(t *testing.T) {
+		g, label := upgradeRig(t, interceptor.Funcs{Create: auditEventCreate(func(dryRun bool) error {
+			if !dryRun {
+				return nil
+			}
+			return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 403, Reason: metav1.StatusReasonForbidden,
+				Message: "unable to create new content in namespace default because it is being terminated",
+				Details: &metav1.StatusDetails{Causes: []metav1.StatusCause{{Type: corev1.NamespaceTerminatingCause}}}}}
+		})})
+		lcReconcile(t, g.r, "app-v1")
+		assert.Equal(t, graph.RenderLabel, label(), "nothing to wait for")
+		assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+		assert.Equal(t, dropped, testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused")), "not counted as refused")
+	})
 }
 
 // #2443 (QA-5): a record stored in the Bundle's outbox counts as recorded,
