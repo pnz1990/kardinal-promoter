@@ -36,9 +36,10 @@ import (
 //
 // Covers RECEIPT-OCI-06.
 func TestParseNamespaceRepositories(t *testing.T) {
-	got, err := ParseNamespaceRepositories(" team-a = ghcr.io/team-a/, docker.io/team-a ; team-b=registry.local:5000/b ;")
+	got, err := ParseNamespaceRepositories(" team-a = ghcr.io/team-a/, docker.io/team-a ; team-b=registry.local:5000/b ; team-c=localhost:5000,10.0.0.7:5000/c")
 	require.NoError(t, err)
-	assert.Equal(t, map[string][]string{"team-a": {"ghcr.io/team-a/", "docker.io/team-a"}, "team-b": {"registry.local:5000/b"}}, got)
+	assert.Equal(t, map[string][]string{"team-a": {"ghcr.io/team-a/", "docker.io/team-a"}, "team-b": {"registry.local:5000/b"},
+		"team-c": {"localhost:5000", "10.0.0.7:5000/c"}}, got)
 	empty, err := ParseNamespaceRepositories("")
 	require.NoError(t, err)
 	assert.Empty(t, empty)
@@ -49,6 +50,9 @@ func TestParseNamespaceRepositories(t *testing.T) {
 		"team-a=":                        "no repositories",
 		"team-a=ghcr.io/a/../b":          "is not a registry",
 		"team-a=ghcr.io/A/":              "is not a registry",
+		"team-a=*":                       "there are no wildcards",
+		"team-a=*/team-a/":               "there are no wildcards",
+		"team-a=ghcr.io:99999/a/":        "is not a registry",
 	} {
 		_, err := ParseNamespaceRepositories(v)
 		require.Error(t, err, v)
@@ -238,9 +242,11 @@ func TestOCIScopeFor_Sources(t *testing.T) {
 		Annotations: map[string]string{AnnotationOCIRepositories: " docker.io/team-a ,ghcr.io/team-a/extra"}}}
 	bad := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-b",
 		Annotations: map[string]string{AnnotationOCIRepositories: "ghcr.io/team-b/,ghcr.io/x/.."}}}
+	wildcard := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-w",
+		Annotations: map[string]string{AnnotationOCIRepositories: "*"}}}
 	reads := 0
 	plain := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-c"}}
-	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(ns, bad, plain).
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(ns, bad, plain, wildcard).
 		WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 			if _, ok := obj.(*corev1.Namespace); ok {
 				reads++
@@ -261,6 +267,8 @@ func TestOCIScopeFor_Sources(t *testing.T) {
 	assert.Equal(t, []string{"ghcr.io/team-a/"}, mapOnly.entries, "the annotation ignored")
 	assert.Nil(t, scopeOf(OCISink{PerNamespace: PerNamespaceRequired, NamespaceAnnotation: true}, "team-c").entries, "no entries at all")
 	assert.Nil(t, scopeOf(OCISink{PerNamespace: PerNamespaceRequired, NamespaceAnnotation: true}, "gone").entries, "a Namespace gone has none")
+	w := scopeOf(OCISink{PerNamespace: PerNamespaceNarrow, NamespaceAnnotation: true}, "team-w")
+	assert.Contains(t, w.invalid, "there are no wildcards", "an annotation of * is refused, not taken as a wildcard")
 	invalid := scopeOf(OCISink{PerNamespace: PerNamespaceNarrow, NamespaceAnnotation: true}, "team-b")
 	assert.Contains(t, invalid.invalid, `"ghcr.io/x/.."`)
 	if ok, why := invalid.allowed("ghcr.io/team-b/app"); assert.False(t, ok) {

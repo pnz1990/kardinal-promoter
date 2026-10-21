@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -78,19 +79,34 @@ func ParseNamespaceRepositories(v string) (map[string][]string, error) {
 }
 
 // parseEntryList splits a comma-separated list of allowedRepositories
-// entries, refusing one that does not parse.
+// entries, refusing one that does not parse, or whose registry is not a
+// host name with an optional port: "*" parses as a registry, matches
+// nothing and would be taken for a wildcard (QA-2 on #2382).
 func parseEntryList(list string) ([]string, error) {
 	var out []string
 	for _, e := range strings.Split(list, ",") {
 		if e = strings.TrimSpace(e); e == "" {
 			continue
 		}
-		if _, _, ok := parseAllowed(e); !ok {
-			return nil, fmt.Errorf("%q is not a registry or a registry and path prefix (ghcr.io/acme/)", e)
+		reg, _, ok := parseAllowed(e)
+		if !ok || !registryHost(reg) {
+			return nil, fmt.Errorf("%q is not a registry or a registry and path prefix (ghcr.io/acme/); there are no wildcards", e)
 		}
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// registryHost reports whether reg is a host name (DNS subdomain) with an
+// optional port.
+func registryHost(reg string) bool {
+	host, port, hasPort := strings.Cut(reg, ":")
+	if hasPort {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	return len(validation.IsDNS1123Subdomain(host)) == 0
 }
 
 // matchesAny reports whether repo's parsed registry is an entry's and its

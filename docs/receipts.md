@@ -269,14 +269,17 @@ Shards with a list each separate the pushes too, but shards are not a trust boun
 
 `receipts.sinks.oci.perNamespace` (`--receipt-oci-per-namespace`) holds a receipt's referrers to
 the repositories of the receipt's namespace too. A namespace's repositories (registries, or
-registries and path prefixes, matched as above) come from two places, together:
+registries and path prefixes, matched as above; there are no wildcards, and an entry such as
+`*` is refused) come from two places, together:
 
 - `receipts.sinks.oci.namespaceRepositories` (`--receipt-oci-namespace-repositories`), the
   release's map: `{team-a: [ghcr.io/team-a/], team-b: [ghcr.io/team-b/, docker.io/team-b]}`. A bad
   entry stops the controller at start;
 - the Namespace's annotation `kardinal.io/receipt-oci-repositories`
   (`kubectl annotate namespace team-a kardinal.io/receipt-oci-repositories=ghcr.io/team-a/`), unless
-  `receipts.sinks.oci.namespaceAnnotation` is `false`. It is as strong as the right to edit that
+  `receipts.sinks.oci.namespaceAnnotation` is `false`. The annotation adds to the map's entries for
+  that namespace: it can widen what the map gives a namespace, not only fill in for one the map
+  leaves out, always within `allowedRepositories`. It is as strong as the right to edit that
   Namespace: Kubernetes' stock `admin` and `edit` roles do not grant it, but platforms that let
   tenants edit their Namespace's metadata (a self-service ClusterRole, Capsule, the Hierarchical
   Namespace Controller) hand it to the tenant. On those, set `namespaceAnnotation: false` and use
@@ -297,7 +300,8 @@ and the message names the image, the namespace and the list that refused it. It 
 - a Namespace the controller cannot read pushes nothing, and is tried again with backoff
   (`Stored` `False`, reason `NamespaceUnreadable`);
 - an annotation with an entry that does not parse pushes nothing for that namespace until it is
-  fixed, and the condition names the entry;
+  fixed, and the condition names the entry. Receipts stored meanwhile keep no referrer: like any
+  refusal, they reach `Stored` with `RepositoryNotAllowed` and are not tried again after the fix;
 - removing a namespace's repositories later leaves the referrers already pushed; only later
   receipts are held to the new list.
 
