@@ -5,8 +5,10 @@ package actor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -28,7 +30,8 @@ type Source struct {
 // Index returns the agent index's entries in the legacy shape, whatever
 // format is current (Readable). With Name set (the controller) a missing or
 // not built index is ErrIndexNotReady. Without (the CLI) no ready index is
-// nil: the CLI then writes no stamp, and the actor policy decides.
+// ErrIndexNotReady too; no AgentIndex kind at all (a cluster without
+// kardinal's actors) is nil, no agents.
 func (s *Source) Index(ctx context.Context) (*v1alpha1.AgentIndexStatus, error) {
 	if s == nil || s.Reader == nil {
 		return nil, nil
@@ -61,12 +64,19 @@ func (s *Source) Index(ctx context.Context) (*v1alpha1.AgentIndexStatus, error) 
 			return st, nil
 		}
 	}
-	return nil, nil
+	return nil, fmt.Errorf("no AgentIndex is ready: %w", ErrIndexNotReady)
 }
 
-// Resolve derives u's actor and checks the agent's scope at w.
+// Resolve derives u's actor and checks the agent's scope at w. While the
+// index is not Ready (ErrIndexNotReady) a requester who is not a
+// ServiceAccount is resolved as unverified, as the actor policies admit
+// them (#2451): never refused because of the index, never counted as a
+// person. A ServiceAccount gets ErrIndexNotReady: it waits for the index.
 func (s *Source) Resolve(ctx context.Context, u User, w Where) (Resolved, error) {
 	idx, err := s.Index(ctx)
+	if errors.Is(err, ErrIndexNotReady) && !strings.HasPrefix(u.Username, ServiceAccountPrefix) {
+		return Resolved{Actor: v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: u.Username}}, nil
+	}
 	if err != nil {
 		return Resolved{}, err
 	}

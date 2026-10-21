@@ -213,7 +213,10 @@ func verifyPolicyFromData(d map[string]interface{}) *kardinalv1alpha1.GateVerify
 // Verdicts of this very Bundle (spec.bundleUID == the Bundle's UID) and
 // Pipeline, for the item's verified environment and check, sorted by name,
 // at most maxCopiedVerdicts of them. Filtering before the cap means Verdicts
-// that cannot count cannot crowd out the ones that do.
+// that cannot count cannot crowd out the ones that do, with one exception:
+// an unverified Verdict (#2451) is copied so the gate says why it does not
+// count (lifecycle.VerdictWriterAllowed). At worst many of them hold the gate
+// back, which is a stop, never a go.
 //
 // A Verdict without spec.run counts when its writer is allowed: the three
 // lists are one allowlist (lifecycle.VerdictWriterAllowed, #2411), so an

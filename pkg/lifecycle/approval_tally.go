@@ -94,6 +94,10 @@ const (
 	// ApprovalOwnParty: the caller is an agent of the author's party; an
 	// agent never counts on its own party's work.
 	ApprovalOwnParty ApprovalBlock = "OwnParty"
+	// ApprovalUnverified: the decision is stamped unverified, written while
+	// the AgentIndex was not Ready (#2451): its writer may be an agent the
+	// index names by User or Group, so it never counts as a person's.
+	ApprovalUnverified ApprovalBlock = "Unverified"
 )
 
 // Held reports whether b means the policy cannot be met at all, whatever
@@ -168,6 +172,9 @@ func (a Approver) actorOf() kardinalv1alpha1.Actor {
 // policy p for a Bundle by author, or ApprovalOpen.
 func approvalDecisionBlock(p *kardinalv1alpha1.GateApprovalPolicy, a Approver, author kardinalv1alpha1.Actor) ApprovalBlock {
 	who := a.actorOf()
+	if who.Kind == kardinalv1alpha1.ActorUnverified {
+		return ApprovalUnverified
+	}
 	if who.Kind == kardinalv1alpha1.ActorAgent {
 		// Agent approvals are opt-in, by name, and never count on the
 		// agent's own party's work (18-actor-policy section 5).
@@ -216,7 +223,9 @@ func partyRelation(author, approver kardinalv1alpha1.Actor) string {
 //   - a person counts when in allowedUsers or one of allowedGroups (anyone
 //     when both are empty) and, with excludeAuthor, not of the author's party;
 //   - an agent counts only when the gate opts in (allowAgents and the agent
-//     in allowedAgents), and never on its own party's work.
+//     in allowedAgents), and never on its own party's work;
+//   - an unverified decision (written while the AgentIndex was not Ready)
+//     never counts (#2451).
 func ApprovalDecisionCounts(p *kardinalv1alpha1.GateApprovalPolicy, a Approver, author kardinalv1alpha1.Actor) (bool, string) {
 	switch approvalDecisionBlock(p, a, author) {
 	case ApprovalNotAllowed:
@@ -229,6 +238,8 @@ func ApprovalDecisionCounts(p *kardinalv1alpha1.GateApprovalPolicy, a Approver, 
 		return false, fmt.Sprintf("agent %s is not in approval.allowedAgents", a.actorOf().Agent)
 	case ApprovalOwnParty:
 		return false, partyRelation(author, a.actorOf()) + " (an agent never counts on its own party's work)"
+	case ApprovalUnverified:
+		return false, "unverified: written while kardinal's agent index was not Ready, so it cannot count as a person's; approve again"
 	}
 	return true, ""
 }

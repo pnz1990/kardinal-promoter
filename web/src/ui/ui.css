@@ -103,6 +103,7 @@
 .k-actor--agent .k-actor__glyph { color: var(--k-ink); }
 .k-actor__name { overflow: hidden; text-overflow: ellipsis; font-weight: var(--k-weight-semibold); }
 .k-actor__sponsor { color: var(--k-ink-3); }
+.k-actor__qualifier { color: var(--k-ink-3); }
 
 .k-badge {
   display: inline-flex;

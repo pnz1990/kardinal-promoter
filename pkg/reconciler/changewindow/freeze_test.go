@@ -66,6 +66,14 @@ func byAgent(e kardinalv1alpha1.FreezeExemption) kardinalv1alpha1.FreezeExemptio
 	return e
 }
 
+// unverifiedBy is e written by bob while the AgentIndex was not Ready
+// (#2451).
+func unverifiedBy(e kardinalv1alpha1.FreezeExemption) kardinalv1alpha1.FreezeExemption {
+	e.CreatedBy = "bob"
+	e.Actor = &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorUnverified, Principal: "bob"}
+	return e
+}
+
 // TestEvaluate_FreezeWithoutEnd: a freeze may omit end and is then active
 // from start on; a blackout that is not a freeze still needs one.
 func TestEvaluate_FreezeWithoutEnd(t *testing.T) {
@@ -208,6 +216,48 @@ func TestReconciler_AgentExemptionIgnored(t *testing.T) {
 	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, changewindow.ConditionExemptionIgnored))
 }
 
+// TestReconciler_UnverifiedExemptionIgnored (#2451): grants don't count from
+// unverified. An exemption written while the AgentIndex was not Ready is
+// recorded but never in effect, and ExemptionIgnored says why and what to
+// do, next to an agent's.
+// Covers ACTOR-INDEX-06.
+func TestReconciler_UnverifiedExemptionIgnored(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	for _, tc := range []struct {
+		name       string
+		exemptions []kardinalv1alpha1.FreezeExemption
+		reason     string
+		message    []string
+	}{
+		{"unverified", []kardinalv1alpha1.FreezeExemption{unverifiedBy(exempt("prod", "", "2026-10-14T11:00:00Z")),
+			exempt("uat", "", "2026-10-14T11:00:00Z")}, "Unverified",
+			[]string{"1 exemption(s) written while kardinal's agent index was not Ready do not count: exempt again once the index is Ready"}},
+		{"unverified and an agent's", []kardinalv1alpha1.FreezeExemption{unverifiedBy(exempt("prod", "", "2026-10-14T11:00:00Z")),
+			byAgent(exempt("test", "", "2026-10-14T11:00:00Z")), exempt("uat", "", "2026-10-14T11:00:00Z")}, "MadeByAgent",
+			[]string{"1 exemption(s) made by an agent do not count", "1 exemption(s) written while kardinal's agent index was not Ready"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cw := freezeWindow("kardinal-freeze-everyone", kardinalv1alpha1.FreezeEveryone, nil, tc.exemptions...)
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(cw).WithStatusSubresource(cw).Build()
+			r := &changewindow.Reconciler{Client: c, NowFn: func() time.Time { return at("2026-10-14T10:00:00Z") }}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: cw.Name}}
+			_, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			var got kardinalv1alpha1.ChangeWindow
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			require.Len(t, got.Status.Exemptions, 1, "only the verified person's")
+			assert.Equal(t, "uat", got.Status.Exemptions[0].Environment)
+			cond := meta.FindStatusCondition(got.Status.Conditions, changewindow.ConditionExemptionIgnored)
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.reason, cond.Reason)
+			for _, m := range tc.message {
+				assert.Contains(t, cond.Message, m)
+			}
+		})
+	}
+}
+
 // TestFreezesFor: which active freezes select a step, from the windows'
 // status only: actors, namespaces, exemptions in both status and spec, and a
 // status behind the spec counting as active without exemptions.
@@ -218,6 +268,8 @@ func TestFreezesFor(t *testing.T) {
 	personVersion.Author = kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorHuman, Principal: "bob"}
 	unstamped := agentVersion
 	unstamped.Author = kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorUnknown, Principal: "bob"}
+	unverifiedVersion := agentVersion // written while the AgentIndex was not Ready (#2451)
+	unverifiedVersion.Author = kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorUnverified, Principal: "bob"}
 
 	reconciled := func(w *kardinalv1alpha1.ChangeWindow, active bool) *kardinalv1alpha1.ChangeWindow {
 		w.Status.ObservedGeneration = w.Generation
@@ -235,6 +287,8 @@ func TestFreezesFor(t *testing.T) {
 		{"an agent freeze holds an agent's version", reconciled(freezeWindow("f", "agents", nil), true), agentVersion, true, false},
 		{"an agent freeze lets a person's version through", reconciled(freezeWindow("f", "agents", nil), true), personVersion, false, false},
 		{"an agent freeze lets an unstamped version through", reconciled(freezeWindow("f", "agents", nil), true), unstamped, false, false},
+		// Covers ACTOR-INDEX-06.
+		{"an agent freeze holds an unverified version", reconciled(freezeWindow("f", "agents", nil), true), unverifiedVersion, true, false},
 		{"stop-the-line holds a person's version", reconciled(freezeWindow("f", "everyone", nil), true), personVersion, true, false},
 		{"an inactive freeze holds nothing", reconciled(freezeWindow("f", "everyone", nil), false), personVersion, false, false},
 		{"another namespace", reconciled(freezeWindow("f", "everyone", []string{"billing-*"}), true), personVersion, false, false},
@@ -254,6 +308,8 @@ func TestFreezesFor(t *testing.T) {
 			forPipeline("cart", exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
 		{"an agent's exemption never counts", reconciled(freezeWindow("f", "everyone", nil,
 			byAgent(exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
+		{"an unverified exemption never counts", reconciled(freezeWindow("f", "everyone", nil,
+			unverifiedBy(exempt("prod", "", "2026-10-14T11:00:00Z"))), true), personVersion, true, false},
 		// Being deleted (#2034): its audit finalizer keeps it; a lift mark
 		// alone (an unfreeze whose delete failed) changes nothing.
 		{"a freeze deleted by kardinal unfreeze holds nothing", lifting(reconciled(freezeWindow("f", "everyone", nil), true), true, true), personVersion, false, false},

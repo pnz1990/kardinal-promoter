@@ -98,7 +98,7 @@ func ValidateExpression(expr string) error {
 // Context variables (populated by buildContext in reconciler.go and documented,
 // with a test that holds the docs to it, in docs/reference/cel-context.md):
 //   - actor, agent (docs/design/18-actor-policy.md), bundle, environment,
-//     metrics, upstream, changewindow, changeRequests, approvals
+//     metrics, upstream, changewindow, changeRequests, approvals, rollback
 //   - schedule — a plain map variable {isWeekend:bool, hour:int, dayOfWeek:string}
 //     NOTE: schedule.* is a map injection, NOT a CEL library function.
 //     It is only available here (PolicyGate CEL context), not in kro
@@ -119,6 +119,7 @@ func newEvaluator() (*evaluator, error) {
 		goccel.Variable("changeRequests", goccel.DynType),
 		goccel.Variable("approvals", goccel.DynType),
 		goccel.Variable("verdicts", goccel.DynType),
+		goccel.Variable("rollback", goccel.DynType),
 		ext.Strings(),
 		library.JSON(),
 		library.Maps(),

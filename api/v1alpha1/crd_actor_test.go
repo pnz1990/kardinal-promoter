@@ -31,13 +31,17 @@ spec:
 		{name: "human", actor: `{kind: human, principal: alice}`},
 		{name: "agent", actor: `{kind: agent, principal: "system:serviceaccount:ci:fixer", agent: fixer, sponsor: alice}`},
 		{name: "controller", actor: `{kind: controller, principal: c, via: subscription}`},
+		// #2451: a person written while the AgentIndex was not Ready.
+		{name: "unverified", actor: `{kind: unverified, principal: alice}`},
+		{name: "unverified with an agent", actor: `{kind: unverified, principal: p, agent: fixer, sponsor: alice}`,
+			want: "actor.agent and actor.sponsor are set exactly when actor.kind is agent"},
 		{name: "asserted", actor: `{kind: human, principal: alice, asserted: {model: m, session: s, client: c}}`},
 		{name: "agent without sponsor", actor: `{kind: agent, principal: p, agent: fixer}`,
 			want: "actor.agent and actor.sponsor are set exactly when actor.kind is agent"},
 		{name: "human with an agent", actor: `{kind: human, principal: p, agent: fixer, sponsor: alice}`,
 			want: "actor.agent and actor.sponsor are set exactly when actor.kind is agent"},
 		{name: "controller without via", actor: `{kind: controller, principal: c}`, want: "a controller actor says why it acted"},
-		{name: "unknown kind", actor: `{kind: unknown, principal: p}`, want: "spec.actor.kind in body should be one of [human agent bot controller]"},
+		{name: "unknown kind", actor: `{kind: unknown, principal: p}`, want: "spec.actor.kind in body should be one of [human agent bot controller unverified]"},
 		{name: "bad via", actor: `{kind: human, principal: p, via: cli}`, want: "spec.actor.via in body should be one of"},
 		{name: "no principal", actor: `{kind: human, principal: ""}`, want: "spec.actor.principal in body should be at least 1 chars long"},
 	} {

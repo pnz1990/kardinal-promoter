@@ -247,10 +247,13 @@ func TestAgentIndexReady(t *testing.T) {
 	assert.NoError(t, check(req), "a built compact index is ready")
 }
 
-// TestUIAPI_ActorRefusals: a suspended agent is refused (403), and while the
-// release's AgentIndex is missing or not Ready every stamped write answers
-// 503, never a stamp from an empty registry (the controller is exempt from
-// the actor policy, so it must fail closed itself).
+// TestUIAPI_ActorRefusals: a suspended agent is refused (403). While the
+// release's AgentIndex is missing or not Ready (#2451) a ServiceAccount's
+// stamped write answers 503: the index alone can clear it, and the
+// controller, exempt from the actor policy, fails closed itself. A person
+// is served, stamped unverified (via the UI), never refused because of the
+// index and never stamped human from an empty registry.
+// Covers ACTOR-INDEX-06.
 func TestUIAPI_ActorRefusals(t *testing.T) {
 	c, actors := actorFixture(t)
 	s := newUIAPIServer(c, zerolog.Nop())
@@ -265,15 +268,29 @@ func TestUIAPI_ActorRefusals(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "kardinal-promoter"}, &idx))
 	idx.Status = v1alpha1.AgentIndexStatus{}
 	require.NoError(t, c.Update(context.Background(), &idx))
-	for _, user := range []string{"system:serviceaccount:ci:parked", "bob"} {
-		w = uiPost(t, s, sink, user, "/api/v1/ui/bundles", body)
-		assert.Equal(t, http.StatusServiceUnavailable, w.Code, "%s: %s", user, w.Body.String())
-		assert.Contains(t, w.Body.String(), "agent index is not ready")
-	}
-	require.NoError(t, c.Delete(context.Background(), &idx))
-	w = uiPost(t, s, sink, "bob", "/api/v1/ui/bundles", body)
+	w = uiPost(t, s, sink, "system:serviceaccount:ci:parked", "/api/v1/ui/bundles", body)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "agent index is not ready")
 	var bundles v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundles))
-	assert.Empty(t, bundles.Items)
+	assert.Empty(t, bundles.Items, "no version from a ServiceAccount")
+
+	stamped := func(user string) *v1alpha1.Actor {
+		t.Helper()
+		w := uiPost(t, s, sink, user, "/api/v1/ui/bundles", body)
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+		require.NoError(t, c.List(context.Background(), &bundles))
+		for i := range bundles.Items {
+			if a := bundles.Items[i].Spec.Actor; a != nil && a.Principal == user {
+				return a
+			}
+		}
+		t.Fatalf("no version by %s", user)
+		return nil
+	}
+	assert.Equal(t, &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "bob", Via: v1alpha1.ViaUI}, stamped("bob"),
+		"a person, while the index is not Ready")
+	require.NoError(t, c.Delete(context.Background(), &idx))
+	assert.Equal(t, &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "carol", Via: v1alpha1.ViaUI}, stamped("carol"),
+		"a person, while the index is missing")
 }

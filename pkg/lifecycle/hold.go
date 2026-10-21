@@ -230,6 +230,27 @@ func VerifyHeldRollback(ctx context.Context, c client.Reader, p *v1alpha1.Pipeli
 	return &b, ""
 }
 
+// RestoresVerifiedIn is "" when b is a rollback Bundle of pipeline (label
+// kardinal.io/rollback) that deploys only what was Verified in env: its
+// spec.provenance.rollbackOf was Verified there, b deploys rollbackOf's refs
+// for every repository rollbackOf names, and everything else b deploys was
+// deployed by a Bundle Verified there, all compared exactly
+// (restoresVerified with exactImage, as for a held rollback). These are
+// facts the controller recorded (PromotionSteps, which only the Graph
+// writes), not markers b's creator writes. Otherwise it says why not. A
+// rollback to what ran in env is a stop: the agent gates let one stamped
+// unverified through (#2451). An error is one reading the history.
+func RestoresVerifiedIn(ctx context.Context, c client.Reader, ns, pipeline, env string, b *v1alpha1.Bundle) (string, error) {
+	if b.Labels[LabelRollback] != "true" || b.Spec.Pipeline != pipeline {
+		return fmt.Sprintf("bundle %s is not a rollback Bundle of pipeline %s", b.Name, pipeline), nil
+	}
+	hist, err := loadEnvHistory(ctx, c, ns, pipeline, env)
+	if err != nil {
+		return "", err
+	}
+	return restoresVerified(ctx, c, ns, env, b, hist, exactImage), nil
+}
+
 // imageMatch reports whether two image refs name one artifact.
 type imageMatch func(a, b v1alpha1.ImageRef) bool
 

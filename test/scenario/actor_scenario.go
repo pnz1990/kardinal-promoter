@@ -18,6 +18,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 )
 
@@ -166,8 +167,10 @@ func agentStamp(id Identity, agent string) *v1alpha1.Actor {
 
 // ActorRefusals are the writes the actor policy refuses: a forged stamp, an
 // agent posing as a person, a suspended agent, an agent out of its scope, an
-// agent that conflicts with an older one, and the agent index missing, not
-// built yet and over its size bound (fail closed).
+// agent that conflicts with an older one, and the agent index missing
+// (everyone's: the binding has no param), not built yet and over its size
+// bound (a ServiceAccount's, fail closed: a person is never refused for the
+// index, #2451).
 var ActorRefusals = []ActorRefusal{
 	{Actor: "forged", Message: "actor must be {kind: human, principal: dev@corp.example.com}",
 		Write: func(w *World, p *Plan, b *v1alpha1.Bundle) (Identity, *v1alpha1.Actor) {
@@ -252,7 +255,8 @@ var ActorRefusals = []ActorRefusal{
 			}
 			return w.Client.Create(w.Ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: Release}})
 		},
-		Fix: func(w *World, p *Plan) error { w.PauseIndex(false); return nil }, Shipper: "human"},
+		// A ServiceAccount: a person is never refused for the index (#2451).
+		Fix: func(w *World, p *Plan) error { w.PauseIndex(false); return nil }, Shipper: "bot"},
 	{Actor: "index-overflow", Message: "kardinal's agent index is full (IndexFull", Index: true,
 		// Suspended AgentIdentities count against the bound too; being
 		// suspended, they can be deleted to put it right.
@@ -275,7 +279,7 @@ var ActorRefusals = []ActorRefusal{
 				}
 			}
 			return nil
-		}, Shipper: "human"},
+		}, Shipper: "bot"}, // a ServiceAccount: a person is never refused for the index (#2451)
 }
 
 // The matrix's index bound, and the AgentIdentities that overflow it: the
@@ -406,11 +410,26 @@ func RunActorRefusal(t *testing.T, w *World, p *Plan, r *ActorRefusal, fail func
 		if !r.Stalls && !w.RunUntil(MaxRounds, func() bool { return w.BundlePhase(ns)[before.Name] == "Verified" }) {
 			fail("%s: bundle %s admitted before the outage not Verified during it", r.Actor, before.Name)
 		}
-		// Still refused while the index is out.
-		cliErr, reasons, err := w.CreateBundle(ActorIdentities["human"], v.DeepCopy())
+		// Still refused while the index is out: the shipper's version (a
+		// ServiceAccount's; with the index missing, anyone's, since the
+		// binding finds no param).
+		cliErr, reasons, err := w.CreateBundle(ActorIdentities[r.Shipper], v.DeepCopy())
 		require.NoError(t, err)
 		require.NoError(t, cliErr)
 		assert.NotEmpty(t, reasons, "%s: a version was admitted during the outage", r.Actor)
+		if !r.Stalls {
+			// A person is never refused for the index (#2451): admitted
+			// (checked, not written), stamped unverified.
+			person := ActorIdentities["human"]
+			pv := v.DeepCopy()
+			lifecycle.StampCreatedBy(pv, person.Username)
+			stamp, err := w.StampFor(person, actor.Where{Namespace: pv.Namespace, Pipeline: pv.Spec.Pipeline})
+			require.NoError(t, err)
+			require.NotNil(t, stamp)
+			assert.Equal(t, v1alpha1.ActorUnverified, stamp.Kind, "%s: a person is stamped unverified", r.Actor)
+			pv.Spec.Actor = stamp
+			assert.NoError(t, w.AdmitCreate(w.CtxOf(person), pv), "%s: a person's version during the outage", r.Actor)
+		}
 	}
 	if r.Fix != nil {
 		require.NoError(t, r.Fix(w, p))

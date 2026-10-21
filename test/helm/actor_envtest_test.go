@@ -425,7 +425,9 @@ func TestActorsOnAPIServer(t *testing.T) {
 	t.Log("ok 23b stamps without the index")
 
 	// 24 index recreated, status not yet written (what a replica does first):
-	// still closed; the controller, exempt, refuses on its own (503).
+	// closed to ServiceAccounts; a person is never refused for the index, and
+	// stamped unverified, not human (#2451); the controller, exempt, refuses
+	// a ServiceAccount on its own (503).
 	require.NoError(t, admin.Create(ctx, &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter"}}))
 	require.Eventually(t, func() bool {
 		var idx v1alpha1.AgentIndex
@@ -437,12 +439,19 @@ func TestActorsOnAPIServer(t *testing.T) {
 			return as("system:serviceaccount:ci:parked").Create(ctx, bundle("payments-a", "checkout", nil))
 		},
 		"agent out of scope, no stamp": func() error { return as(fx).Create(ctx, bundle("other", "anything", nil)) },
-		"human, no stamp":              func() error { return as("alice").Create(ctx, bundle("payments-a", "checkout", nil)) },
 	} {
 		err := try()
-		require.Error(t, err, "24 an index without status denies: %s", name)
+		require.Error(t, err, "24 an index without status denies a ServiceAccount: %s", name)
 		require.Contains(t, err.Error(), "agent index is not ready", name)
 	}
+	err = as("alice").Create(ctx, bundle("payments-a", "checkout", nil))
+	require.Error(t, err, "24 a person, no stamp: going needs verification")
+	require.Contains(t, err.Error(), "a version needs the unverified actor stamp now")
+	require.NoError(t, as("alice").Create(ctx, bundle("payments-a", "checkout",
+		&v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "alice"})), "24 a person, stamped unverified")
+	err = as("alice").Create(ctx, bundle("payments-a", "checkout", &v1alpha1.Actor{Kind: "human", Principal: "alice"}))
+	require.Error(t, err, "24 a person stamped human: it cannot be verified")
+	require.Contains(t, err.Error(), "actor must be {kind: unverified")
 	build()
 	require.Eventually(t, func() bool {
 		return as("alice").Create(ctx, bundle("payments-a", "checkout", nil)) == nil
@@ -454,8 +463,9 @@ func TestActorsOnAPIServer(t *testing.T) {
 // TestActorIndexOverflowOnAPIServer: 700 AgentIdentities of 16 subjects
 // each are past the index bound, blocked entries included: the controller
 // writes the index empty and not Ready (it fits in etcd), the AgentIdentities
-// say IndexFull, and admission refuses the writes it judges until
-// AgentIdentities are removed (fail closed). (QA on #1857, F2.)
+// say IndexFull, and admission refuses a ServiceAccount's writes it judges
+// until AgentIdentities are removed (fail closed), saying the index is full;
+// a person's are admitted, stamped unverified (#2451). (QA on #1857, F2.)
 func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 	require.NotEmpty(t, os.Getenv("KUBEBUILDER_ASSETS"))
 	env := &envtest.Environment{CRDDirectoryPaths: []string{filepath.Join(repoRoot(t), "config", "crd", "bases")}, ErrorIfCRDPathMissing: true}
@@ -510,12 +520,21 @@ func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 	require.NoError(t, admin.Create(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "alice-all"},
 		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
 		Subjects: []rbacv1.Subject{{Kind: "User", APIGroup: rbacv1.GroupName, Name: "alice"}}}))
+	c = rest.CopyConfig(cfg)
+	c.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:team-a:ci"}
+	ci, err := client.New(c, client.Options{Scheme: sch})
+	require.NoError(t, err)
+	version := func(a *v1alpha1.Actor) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{GenerateName: "b-", Namespace: "team-a"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "p", Type: "image", Actor: a}}
+	}
 	require.Eventually(t, func() bool {
-		err := alice.Create(ctx, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{GenerateName: "b-", Namespace: "team-a"},
-			Spec: v1alpha1.BundleSpec{Pipeline: "p", Type: "image"}})
+		err := ci.Create(ctx, version(nil))
 		return err != nil && strings.Contains(err.Error(), "agent index is full (IndexFull") &&
 			strings.Contains(err.Error(), "remove AgentIdentities or subjects")
-	}, 30*time.Second, 500*time.Millisecond, "a full index fails closed, and says it is full")
+	}, 30*time.Second, 500*time.Millisecond, "a full index fails closed for a ServiceAccount, and says it is full")
+	require.NoError(t, alice.Create(ctx, version(&v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "alice"})),
+		"a person is never refused for the index (#2451)")
 }
 
 // asController is a client of cfg acting as the release's controller, the
@@ -558,7 +577,9 @@ func helmInstallOrder(docs []renderedDoc) []renderedDoc {
 // the chart (the AgentIndex before the policies), and before the controller
 // has built the index, the actor policy admits what it does not check, kro's
 // gate instances and the controller's own versions, and refuses only what it
-// checks, with "agent index is not ready". The API server would otherwise
+// checks from a ServiceAccount, with "agent index is not ready"; a person's
+// version is admitted stamped unverified, as kardinal writes it, and refused
+// unstamped with the fix (#2451). The API server would otherwise
 // refuse every write the policy matches ("no params found") while the index
 // is missing, the controller's and kro's included. Once the controller has
 // built the index, people pass again; nobody but the controller may delete
@@ -617,11 +638,18 @@ func TestActorIndexAvailabilityOnAPIServer(t *testing.T) {
 		return &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("b%d", n), Namespace: "team-a"},
 			Spec: v1alpha1.BundleSpec{Pipeline: "checkout", Type: "image"}}
 	}
-	// The policies load: a person's version waits for the index.
+	// The policies load: a ServiceAccount's version waits for the index; a
+	// person's does not, stamped unverified (#2451).
 	require.Eventually(t, func() bool {
-		err := as("alice").Create(ctx, bundle())
+		err := as("system:serviceaccount:team-a:ci").Create(ctx, bundle())
 		return err != nil && strings.Contains(err.Error(), "agent index is not ready")
-	}, 30*time.Second, 500*time.Millisecond, "a checked write waits for the index")
+	}, 30*time.Second, 500*time.Millisecond, "a ServiceAccount's checked write waits for the index")
+	err = as("alice").Create(ctx, bundle())
+	require.Error(t, err, "a person's unstamped version, before the index is built: going needs verification")
+	require.Contains(t, err.Error(), "a version needs the unverified actor stamp now")
+	stamped := bundle()
+	stamped.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "alice"}
+	require.NoError(t, as("alice").Create(ctx, stamped), "a person's version stamped unverified, before the index is built")
 	g := gate()
 	require.NoError(t, kro.Create(ctx, g), "kro creates a gate instance before the index is built")
 	g.Spec.Message = "re-applied"

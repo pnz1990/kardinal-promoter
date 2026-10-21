@@ -129,7 +129,7 @@ export interface DeployedRelease {
 
 /** Who shipped a version, in short (the UI API's uiActorRef). */
 export interface ActorRef {
-  kind: 'human' | 'agent' | 'bot' | 'controller'
+  kind: 'human' | 'agent' | 'bot' | 'controller' | 'unverified'
   /** The verified Kubernetes user ("system:serviceaccount:ci:fixer", "alice"). */
   principal?: string
   agent?: string
@@ -242,7 +242,7 @@ export interface Bundle {
 /** Who made a change (docs/actors.md). kind, principal, agent, sponsor and
  *  via are verified; asserted is what the client said about itself. */
 export interface Actor {
-  kind: 'human' | 'agent' | 'bot' | 'controller' | 'unknown'
+  kind: 'human' | 'agent' | 'bot' | 'controller' | 'unverified' | 'unknown'
   principal: string
   agent?: string
   sponsor?: string

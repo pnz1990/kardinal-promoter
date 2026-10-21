@@ -19,6 +19,7 @@ package changewindow
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -127,7 +128,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if meta.SetStatusCondition(&cw.Status.Conditions, validCondition(res, cw.Generation, now)) {
 		changed = true
 	}
-	if setExemptionIgnored(&cw, ex.byAgents, now) {
+	if setExemptionIgnored(&cw, ex.byAgents, ex.unverified, now) {
 		changed = true
 	}
 	if changed {
@@ -228,8 +229,9 @@ type exemptionState struct {
 	ends []time.Time
 	// records is the status record of every entry.
 	records []kardinalv1alpha1.FreezeExemptionRecord
-	// byAgents counts the entries an agent made.
-	byAgents int
+	// byAgents counts the entries an agent made; unverified, those written
+	// while the AgentIndex was not Ready (#2451).
+	byAgents, unverified int
 }
 
 // freezeExemptions works out the exemptions of f at now from the records of
@@ -264,7 +266,11 @@ func freezeExemptions(f *kardinalv1alpha1.ChangeWindowFreeze, old []kardinalv1al
 			st.records = append(st.records, rec)
 		}
 		if exemptionByAgent(e) {
-			st.byAgents++
+			if e.Actor.Kind == kardinalv1alpha1.ActorUnverified {
+				st.unverified++
+			} else {
+				st.byAgents++
+			}
 			continue
 		}
 		if now.Before(until) {
@@ -275,16 +281,28 @@ func freezeExemptions(f *kardinalv1alpha1.ChangeWindowFreeze, old []kardinalv1al
 	return st
 }
 
-// setExemptionIgnored sets ExemptionIgnored while agents' exemptions are
-// listed, and removes it when none is. It reports whether it changed.
-func setExemptionIgnored(cw *kardinalv1alpha1.ChangeWindow, byAgents int, now time.Time) bool {
-	if byAgents == 0 {
+// setExemptionIgnored sets ExemptionIgnored while agents' or unverified
+// exemptions are listed, and removes it when none is. It reports whether it
+// changed.
+func setExemptionIgnored(cw *kardinalv1alpha1.ChangeWindow, byAgents, unverified int, now time.Time) bool {
+	if byAgents == 0 && unverified == 0 {
 		return meta.RemoveStatusCondition(&cw.Status.Conditions, ConditionExemptionIgnored)
 	}
+	reason := "MadeByAgent"
+	var msgs []string
+	if byAgents > 0 {
+		msgs = append(msgs, fmt.Sprintf("%d exemption(s) made by an agent do not count: break-glass is for people", byAgents))
+	}
+	if unverified > 0 {
+		if byAgents == 0 {
+			reason = "Unverified"
+		}
+		msgs = append(msgs, fmt.Sprintf("%d exemption(s) written while kardinal's agent index was not Ready do not count: "+
+			"exempt again once the index is Ready", unverified))
+	}
 	return meta.SetStatusCondition(&cw.Status.Conditions, metav1.Condition{Type: ConditionExemptionIgnored,
-		Status: metav1.ConditionTrue, Reason: "MadeByAgent", ObservedGeneration: cw.Generation,
-		LastTransitionTime: metav1.NewTime(now),
-		Message:            fmt.Sprintf("%d exemption(s) made by an agent do not count: break-glass is for people", byAgents)})
+		Status: metav1.ConditionTrue, Reason: reason, ObservedGeneration: cw.Generation,
+		LastTransitionTime: metav1.NewTime(now), Message: strings.Join(msgs, "; ")})
 }
 
 func (r *Reconciler) now() time.Time {

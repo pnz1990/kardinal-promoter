@@ -16,6 +16,7 @@ PASS  Controller reachable      kardinal-version ConfigMap in the controller nam
   PASS  GitHub token              GITHUB_TOKEN set on the controller Deployment
   PASS  Policy namespaces shared  every spec.policyNamespaces entry agreed
   PASS  Verify gates of agents only  no verify gate lists only agents
+  PASS  Versions held as unverified  no version is held because of an unverified stamp
 
 Each check is PASS, WARN or FAIL (on a terminal a green ✓, an ochre ! or a
 garnet ✕), or INFO (i) when it cannot tell yet: run doctor again. The
@@ -72,6 +73,17 @@ list those people in allowedUsers or allowedGroups to keep counting them. It
 lists PolicyGates in every namespace or, when you may not, in the current
 one: a passing result there is a WARN, since the other namespaces were not
 checked.
+
+The unverified versions check lists the versions a kardinal-agents-* gate
+holds because they were stamped unverified: shipped while the agent index
+was not Ready, they count as an agent's and stay held after the index
+recovers (docs/actors.md, "While the index isn't Ready"). It is a WARN that
+names each one, with the kardinal override command that lets it through
+(or ship it again), and the other gates that also hold it. A version that
+is done, or whose writer the Ready index now names as an agent (the agent's
+rules hold it), is left out. While no agent index is Ready it is an INFO:
+make the index Ready first. It lists PolicyGates in every namespace or, when
+you may not, in the current one: a passing result there is a WARN.
 
 Use 'kardinal doctor' as the first troubleshooting step.
 

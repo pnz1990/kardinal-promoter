@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -60,7 +61,8 @@ func evalGate(t *testing.T, gate *kardinalv1alpha1.PolicyGate, bundle *kardinalv
 	t.Helper()
 	bundle.Status.Phase = "Promoting"
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(append(objs, gate, bundle)...).
-		WithStatusSubresource(gate, bundle).Build()
+		WithStatusSubresource(gate, bundle).
+		WithIndex(&kardinalv1alpha1.Bundle{}, lifecycle.IndexBundlePipeline, lifecycle.BundlePipeline).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.AgentIndexName = indexName

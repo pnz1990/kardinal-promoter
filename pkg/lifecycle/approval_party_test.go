@@ -177,3 +177,37 @@ func TestBundleAuthor(t *testing.T) {
 	b.Spec.Actor = agentActor("fixer", "alice")
 	assert.Equal(t, *b.Spec.Actor, BundleAuthor(b))
 }
+
+// TestDecisions_Unverified (#2451): an approval or a verdict stamped
+// unverified (written while the AgentIndex was not Ready) never counts, as
+// a person's or an agent's: its writer may be an agent the index names by
+// User or Group. The reason says so, and what to do. The same person's
+// decision stamped human counts.
+// Covers ACTOR-INDEX-06.
+func TestDecisions_Unverified(t *testing.T) {
+	unverified := &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "bob"}
+	author := v1alpha1.Actor{Kind: v1alpha1.ActorHuman, Principal: "alice"}
+	for name, p := range map[string]*v1alpha1.GateApprovalPolicy{
+		"no policy":    nil,
+		"anyone":       {Required: 1},
+		"bob is named": {Required: 1, AllowedUsers: []string{"bob"}, ExcludeAuthor: true},
+		"agents too":   {Required: 1, AllowAgents: true, AllowedAgents: []string{"fixer"}},
+	} {
+		ok, why := ApprovalDecisionCounts(p, Approver{User: "bob", Actor: unverified}, author)
+		assert.False(t, ok, name)
+		assert.Contains(t, why, "unverified: written while kardinal's agent index was not Ready", name)
+		assert.Contains(t, why, "approve again", name)
+		ok, _ = ApprovalDecisionCounts(p, Approver{User: "bob", Actor: human("bob")}, author)
+		assert.True(t, ok, "%s: the same person, stamped human", name)
+	}
+	for name, p := range map[string]*v1alpha1.GateVerifyPolicy{
+		"anyone":       {Check: "qa", Required: 1},
+		"bob is named": {Check: "qa", Required: 1, AllowedUsers: []string{"bob"}},
+	} {
+		ok, why := VerdictWriterAllowed(p, *unverified, nil)
+		assert.False(t, ok, name)
+		assert.Contains(t, why, "bob is unverified", name)
+		ok, _ = VerdictWriterAllowed(p, *human("bob"), nil)
+		assert.True(t, ok, "%s: the same person, stamped human", name)
+	}
+}

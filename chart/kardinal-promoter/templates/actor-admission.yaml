@@ -24,9 +24,19 @@ indexState: indexReady (Ready True), compact (Ready's reason is
 CompactFormat: a later release wrote the index in its compact format, #2071,
 whose entries this release's policies do not read) and full (Ready's reason
 is IndexFull: the entries are over the bound, and written empty). An index
-that is not Ready makes the policies refuse every write they check;
-indexNotReadyMessage says why and what to do: finish the upgrade or the
-rollback, remove AgentIdentities, or retry while the controller builds it.
+that is not Ready cannot tell an agent from a person (#2451), so stopping is
+always allowed and going needs verification (docs/actors.md, "While the
+index isn't Ready"). Anyone else's stamp than a ServiceAccount's must say
+unverified, never human (actorMatches), and unverified counts as an agent
+for every restriction and as nobody for every grant. A person's freeze,
+pause, hold and rejection go through stamped unverified or unstamped; what
+lets a version go (a version, an Approval, a Verdict, a gate override, a
+freeze exemption) must carry the unverified stamp (goStamps). The policies
+refuse the writes they check from ServiceAccounts (sa), but for a stop: a
+new freeze, unstamped (stopOnly), as -actor-records admits an unstamped
+pause, hold or rejection. indexNotReadyMessage says why a ServiceAccount is
+refused and what to do: finish the upgrade or the rollback, remove
+AgentIdentities, or retry while the controller builds it.
 */}}
 {{- define "kardinal-promoter.indexState" -}}
 - name: indexReady
@@ -41,9 +51,33 @@ rollback, remove AgentIdentities, or retry while the controller builds it.
   expression: >-
     has(params.status) && has(params.status.conditions) &&
     params.status.conditions.exists(c, c.type == 'Ready' && has(c.reason) && c.reason == 'IndexFull')
+- name: sa
+  expression: request.userInfo.username.startsWith('system:serviceaccount:')
+{{- end }}
+{{- /*
+actorMatches: the index entries that match the requester, by username then
+by group, read from a Ready index only (IndexFull's entries are written
+empty, a compact index's legacy maps hold a guard), and the derived kind: a
+transliteration of pkg/actor Derive and Source.Resolve.
+*/}}
+{{- define "kardinal-promoter.actorMatches" -}}
+- name: matches
+  expression: >-
+    !variables.indexReady ? [] :
+    (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
+      ? [params.status.users[request.userInfo.username]] : []) +
+    (has(params.status) && has(params.status.groups)
+      ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
+- name: agent
+  expression: "size(variables.matches) > 0"
+- name: entry
+  expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
+- name: kind
+  expression: >-
+    variables.agent ? 'agent' : variables.sa ? 'bot' : variables.indexReady ? 'human' : 'unverified'
 {{- end }}
 {{- define "kardinal-promoter.indexNotReadyMessage" -}}
-variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read: finish the upgrade (or the rollback) and retry" : variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses the writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet; retry in a few seconds (kubectl get agentindex)"
+variables.compact ? "kardinal's agent index is in the compact format of a newer release, which this release cannot read, so a ServiceAccount's writes the actor policy checks wait: finish the upgrade (or the rollback) and retry" : variables.full ? "kardinal's agent index is full (IndexFull: its entries are over its 1 MiB bound), so kardinal refuses a ServiceAccount's writes the actor policy checks: remove AgentIdentities or subjects until it fits (kubectl get agentindex)" : "kardinal's agent index is not ready yet, so a ServiceAccount's writes the actor policy checks wait; retry in a few seconds (kubectl get agentindex)"
 {{- end }}
 {{- define "kardinal-promoter.actorChecks" -}}
 variables:
@@ -51,21 +85,12 @@ variables:
     expression: request.userInfo.username in {{ .controllers }}
   - name: groups
     expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-  # The index entries that match the requester: by username, then by group.
-  - name: matches
-    expression: >-
-      (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-        ? [params.status.users[request.userInfo.username]] : []) +
-      (has(params.status) && has(params.status.groups)
-        ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
-  - name: agent
-    expression: "size(variables.matches) > 0"
-  - name: entry
-    expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
-  - name: kind
-    expression: >-
-      variables.agent ? 'agent' :
-      request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
+  # The index is built: a Ready condition that is True. Until then (just
+  # created, IndexFull, or a later release's compact format) a
+  # ServiceAccount's writes the policy judges are refused, and anyone else's
+  # stamp says unverified (#2451).
+  {{- include "kardinal-promoter.indexState" . | nindent 2 }}
+  {{- include "kardinal-promoter.actorMatches" . | nindent 2 }}
   # The stamps this request adds: the new object's (null when it has
   # none), or the gate's new override entries. A Bundle or Approval update
   # adds none (the CRD keeps spec.actor immutable).
@@ -116,14 +141,53 @@ variables:
       variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
   - name: check
     expression: "!variables.controller && size(variables.stamps) > 0"
-  # The index is built: a Ready condition that is True. Until then (just
-  # created, or IndexFull) every write the policy judges is refused: the
-  # registry fails closed.
-  {{- include "kardinal-promoter.indexState" . | nindent 2 }}
+  # The stamps of what this request adds that lets a version go, which
+  # going needs verification for (#2451): a version, an Approval, a Verdict,
+  # new gate overrides, new freeze exemptions. A freeze and its lift are not
+  # among them (a lift, like a resume, is not restricted for agents either).
+  - name: goStamps
+    expression: >-
+      variables.freeze ? variables.exemptionStamps :
+      variables.gate || request.resource.resource in ['bundles', 'approvals', 'verdicts'] ? variables.stamps : []
+  # A new freeze and nothing else (no exemption, no lift), unstamped: a stop,
+  # which a ServiceAccount may write while the index is not Ready (#2451),
+  # so an incident bot can freeze during IndexFull. Its stamp could not be
+  # judged then, so it must leave it out (kardinal freeze does).
+  - name: stopOnly
+    expression: >-
+      variables.freeze && oldObject == null && size(variables.exemptionStamps) == 0 &&
+      size(variables.freezeStamps) == 1 && variables.freezeStamps[0] == null
 validations:
-  - expression: "!variables.check || variables.indexReady"
+  - expression: "!variables.check || variables.indexReady || !variables.sa || variables.stopOnly"
     messageExpression: >-
       {{ include "kardinal-promoter.indexNotReadyMessage" . }}
+    reason: Forbidden
+  # While the index is not Ready, stopping is always allowed and going needs
+  # verification (#2451): a person is never refused a stop-the-line write;
+  # what lets a version go (a version, an Approval, a Verdict, a gate
+  # override, a freeze exemption) must carry the unverified stamp, which
+  # counts as an agent's for every restriction and as nobody's for every
+  # grant. Unstamped, it would read as a person's, from an agent the index
+  # names by User or Group too.
+  - expression: >-
+      !variables.check || variables.indexReady || variables.sa || variables.goStamps.all(s, s != null)
+    messageExpression: >-
+      "kardinal's agent index is not Ready, so it cannot tell you from an agent: " +
+      {'bundles': 'a version', 'approvals': 'an Approval', 'verdicts': 'a Verdict', 'policygates': 'a gate override',
+       'changewindows': 'a freeze exemption'}[request.resource.resource] +
+      " needs the unverified actor stamp now. Use " +
+      {'bundles': 'kardinal ship, create bundle or rollback, or the UI', 'approvals': 'kardinal approve or the UI', 'verdicts': 'kardinal verify',
+       'policygates': 'kardinal override or the UI',
+       'changewindows': 'kardinal override --freeze or the UI'}[request.resource.resource] +
+      ", which set it, or set " +
+      {'bundles': 'spec.actor', 'approvals': 'spec.actor', 'verdicts': 'spec.actor', 'policygates': 'the override\'s actor',
+       'changewindows': 'the exemption\'s actor'}[request.resource.resource] +
+      ": {kind: unverified, principal: " + request.userInfo.username + "} yourself. " +
+      (request.resource.resource == 'bundles'
+        ? "An unverified version is held like an agent's: ship it again once the index is Ready (kubectl get agentindex)"
+        : request.resource.resource in ['approvals', 'verdicts']
+        ? "An unverified decision does not count toward a gate: decide again once the index is Ready (kubectl get agentindex)"
+        : "An unverified override or exemption is recorded but not honoured: break-glass waits until the index is Ready (kubectl get agentindex)")
     reason: Forbidden
   - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
     messageExpression: >-
@@ -159,7 +223,9 @@ validations:
     messageExpression: >-
       'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
       (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
-      '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
+      '}, with no via: it names who you are, as the API server authenticated you' +
+      (variables.kind == 'unverified' ? " (kardinal's agent index is not Ready, so it cannot tell you from an agent)" : '') +
+      '; kardinal sets it for you'
     reason: Forbidden
   # An agent stays in its scope: the namespace always, the Bundle's
   # Pipeline, the Approval's environment, the gate's Pipeline and environment.
@@ -249,28 +315,16 @@ spec:
       expression: request.userInfo.username in {{ $controllers }}
     - name: groups
       expression: "has(request.userInfo.groups) ? request.userInfo.groups : []"
-    - name: matches
-      expression: >-
-        (has(params.status) && has(params.status.users) && request.userInfo.username in params.status.users
-          ? [params.status.users[request.userInfo.username]] : []) +
-        (has(params.status) && has(params.status.groups)
-          ? variables.groups.filter(g, g in params.status.groups).map(g, params.status.groups[g]) : [])
-    - name: agent
-      expression: "size(variables.matches) > 0"
-    - name: entry
-      expression: "variables.agent ? variables.matches[0] : {'agent': '', 'sponsor': ''}"
-    - name: kind
-      expression: >-
-        variables.agent ? 'agent' :
-        request.userInfo.username.startsWith('system:serviceaccount:') ? 'bot' : 'human'
-    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
     {{- include "kardinal-promoter.indexState" . | nindent 4 }}
+    {{- include "kardinal-promoter.actorMatches" . | nindent 4 }}
+    {{- include "kardinal-promoter.recordStamps" . | nindent 4 }}
   validations:
-    # Absence from the index means "not an agent", so a stamp is judged only
-    # against a built index; a later release's compact index (#2071) is not
-    # read at all (its legacy maps hold a guard for this release, not its
-    # agents).
-    - expression: "variables.controller || variables.indexReady || variables.stamps.all(s, s == null)"
+    # Absence from the index means "not an agent", so a ServiceAccount's
+    # stamp is judged only against a built index; a later release's compact
+    # index (#2071) is not read at all (its legacy maps hold a guard for this
+    # release, not its agents). Anyone else's stamp is judged without it: it
+    # must say unverified (#2451).
+    - expression: "variables.controller || variables.indexReady || !variables.sa || variables.stamps.all(s, s == null)"
       messageExpression: >-
         {{ include "kardinal-promoter.indexNotReadyMessage" . }}
       reason: Forbidden
@@ -283,7 +337,9 @@ spec:
       messageExpression: >-
         'actor must be {kind: ' + variables.kind + ', principal: ' + request.userInfo.username +
         (variables.agent ? ', agent: ' + variables.entry.agent + ', sponsor: ' + variables.entry.sponsor : '') +
-        '}, with no via: it names who you are, as the API server authenticated you; kardinal sets it for you'
+        '}, with no via: it names who you are, as the API server authenticated you' +
+        (variables.kind == 'unverified' ? " (kardinal's agent index is not Ready, so it cannot tell you from an agent)" : '') +
+        '; kardinal sets it for you'
       reason: Forbidden
 ---
 {{- include "kardinal-promoter.identityBindings" (dict "root" . "policy" "actor-records" "paramRef" (dict "name" (include "kardinal-promoter.fullname" .) "parameterNotFoundAction" "Allow")) }}

@@ -889,10 +889,17 @@ func overflowAtScale(t *testing.T, w *scenario.World, reg registry, sz agentSize
 	_, refused, err := w.CreateBundle(a.id, b)
 	require.NoError(t, err)
 	assert.Contains(t, strings.Join(refused, "; "), "kardinal's agent index is full (IndexFull", "an agent's version while the index is full")
+	// A person is never refused for the index (#2451): admitted (checked,
+	// not written), stamped unverified.
 	person := scenario.Identity{Username: "person-00@corp.example.com", Groups: []string{"system:authenticated"}}
-	_, refused, err = w.CreateBundle(person, scenario.ImageBundle(a.ns, a.pipeline, "8.0.1"))
+	pv := scenario.ImageBundle(a.ns, a.pipeline, "8.0.1")
+	stamp, err := w.StampFor(person, actor.Where{Namespace: pv.Namespace, Pipeline: pv.Spec.Pipeline})
 	require.NoError(t, err)
-	assert.Contains(t, strings.Join(refused, "; "), "kardinal's agent index is full (IndexFull", "a person's version while the index is full")
+	require.NotNil(t, stamp)
+	assert.Equal(t, v1alpha1.ActorUnverified, stamp.Kind, "a person is stamped unverified while the index is full")
+	pv.Spec.Actor = stamp
+	assert.NoError(t, w.AdmitCreate(w.CtxOf(person), pv),
+		"a person's version while the index is full")
 	controller := scenario.ImageBundle(a.ns, a.pipeline, "8.0.2")
 	controller.Spec.Actor = actor.Controller(scenario.ControllerUser, v1alpha1.ViaAPI)
 	assert.NoError(t, w.AdmitCreate(w.Ctx, controller), "the controller's version while the index is full")

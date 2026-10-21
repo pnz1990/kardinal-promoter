@@ -52,8 +52,10 @@ The actor policies read one object per installation, the
 At about **5,000** AgentIdentities of that size, the index is full.
 
 - A full index is not Ready (`IndexFull`).
-- kardinal then refuses every write the actor policy checks, people's included, until
-  AgentIdentities or subjects are removed.
+- Until AgentIdentities or subjects are removed, kardinal refuses a ServiceAccount's checked
+  writes, and a person can stop (freeze, pause, hold, reject) but not go: a version is held,
+  approvals don't count, and break-glass waits
+  ([While the index isn't Ready](actors.md#while-the-index-isnt-ready)).
 - Keep under 4,000 AgentIdentities, or fewer if yours list several subjects or scopes.
 - Watch the index's Ready condition:
   `kubectl get agentindex kardinal-promoter -o jsonpath='{.status.conditions}'`.

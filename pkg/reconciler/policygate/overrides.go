@@ -178,8 +178,7 @@ func (r *Reconciler) recordOverrides(ctx context.Context, gate *kardinalv1alpha1
 			next = append(next, rec)
 		}
 		if agentOverride(o) {
-			ignored = append(ignored, fmt.Sprintf("%q by agent %s: overrides by agents are not honoured",
-				o.Reason, o.Actor.Agent))
+			ignored = append(ignored, fmt.Sprintf("%q by %s", o.Reason, agentOverrideRefusal(o)))
 		}
 		if futureDated(o, rec.FirstSeen.Time) {
 			ignored = append(ignored, fmt.Sprintf("%q by %s created %s, more than %s after the controller first saw it",
@@ -305,8 +304,7 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 		gate.Name, by, stage, end.UTC().Format(time.RFC3339), o.Reason)
 	if agentOverride(o) {
 		outcome = "Failure"
-		msg = fmt.Sprintf("override of gate %s by %s not honoured: overrides by agents are not honoured: %s",
-			gate.Name, by, o.Reason)
+		msg = fmt.Sprintf("override of gate %s not honoured: by %s: %s", gate.Name, agentOverrideRefusal(o), o.Reason)
 	}
 	suffix := "-override-" + rec.Key
 	base := gate.Name
@@ -326,10 +324,22 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 }
 
 // agentOverride reports whether o was made by an agent (its actor stamp says
-// kind agent). Such an override never opens a gate: break-glass is a
-// person's act (docs/design/18-actor-policy.md section 6). The stamp is
-// checked by the chart's actor admission policy, and an agent cannot write
-// an override without one.
+// kind agent), or by someone the AgentIndex could not tell from one
+// (unverified, #2451). Such an override never opens a gate: break-glass is
+// a person's act (docs/design/18-actor-policy.md section 6), and needs
+// verification. The stamp is checked by the chart's actor admission policy,
+// and an agent cannot write an override without one, nor anyone while the
+// index is not Ready.
 func agentOverride(o *kardinalv1alpha1.PolicyGateOverride) bool {
-	return o.Actor != nil && o.Actor.Kind == kardinalv1alpha1.ActorAgent
+	return o.Actor != nil && actor.AgentLike(*o.Actor)
+}
+
+// agentOverrideRefusal is who made o, an agentOverride, and why it is not
+// honoured.
+func agentOverrideRefusal(o *kardinalv1alpha1.PolicyGateOverride) string {
+	if o.Actor.Kind == kardinalv1alpha1.ActorUnverified {
+		return o.Actor.Principal + " (unverified): written while kardinal's agent index was not Ready, " +
+			"so it is not honoured; override again once the index is Ready"
+	}
+	return "agent " + o.Actor.Agent + ": overrides by agents are not honoured"
 }

@@ -3,20 +3,22 @@
 
 // ActorBadge.tsx — who made a change (docs/actors.md), the same everywhere: a
 // glyph for the kind (a person, an agent, a bot, the controller) and the name,
-// an agent with "for <sponsor>". Never color alone: the glyph and the words
-// say the kind, the title and screen readers get the full sentence, and what a
-// client asserted about itself is labelled as asserted.
+// an agent with "for <sponsor>", a person written while kardinal's agent index
+// was not Ready with "unverified" (#2451: it never counts as a person's
+// decision). Never color alone: the glyph and the words say the kind, the
+// title and screen readers get the full sentence, and what a client asserted
+// about itself is labelled as asserted.
 import type { ActorKind, ActorView } from '../actor'
 import { Icon, type IconName } from './Icon'
 import { cx } from './cx'
 
 const GLYPH: Record<ActorKind, IconName> = {
-  human: 'person', agent: 'agent', bot: 'bot', controller: 'controller', unknown: 'person',
+  human: 'person', agent: 'agent', bot: 'bot', controller: 'controller', unverified: 'person', unknown: 'person',
 }
 
 /** The kind as a screen reader says it before the name. */
 const KIND_WORD: Record<ActorKind, string> = {
-  human: '', agent: 'agent', bot: 'bot', controller: '', unknown: '',
+  human: '', agent: 'agent', bot: 'bot', controller: '', unverified: '', unknown: '',
 }
 
 export interface ActorBadgeProps {
@@ -35,6 +37,7 @@ export function ActorBadge({ actor, compact, className }: ActorBadgeProps) {
       <Icon name={GLYPH[actor.kind]} className="k-actor__glyph" />
       {kind && <span className="sr-only">{kind} </span>}
       <span className="k-actor__name">{actor.name}</span>
+      {actor.kind === 'unverified' && <>{' '}<span className="k-actor__qualifier">unverified</span></>}
       {!compact && actor.sponsor && <>{' '}<span className="k-actor__sponsor">for {actor.sponsor}</span></>}
     </span>
   )

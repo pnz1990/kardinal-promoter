@@ -13,6 +13,12 @@ const (
 	ActorAgent      = "agent"
 	ActorBot        = "bot"
 	ActorController = "controller"
+	// ActorUnverified is a requester who is not a ServiceAccount, written
+	// while the AgentIndex is not Ready (#2451): it cannot be told from an
+	// agent registered by User or Group, so it is admitted but never
+	// counted as a person where a person's decision is required (approvals,
+	// verdicts).
+	ActorUnverified = "unverified"
 	// ActorUnknown is a read-side value for records without a stamp; the
 	// schema does not accept it in one.
 	ActorUnknown = "unknown"
@@ -35,8 +41,10 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind == 'agent' ? (has(self.agent) && has(self.sponsor)) : (!has(self.agent) && !has(self.sponsor))",message="actor.agent and actor.sponsor are set exactly when actor.kind is agent"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'controller' || has(self.via)",message="a controller actor says why it acted (actor.via)"
 type Actor struct {
-	// Kind is human, agent, bot or controller (docs/actors.md).
-	// +kubebuilder:validation:Enum=human;agent;bot;controller
+	// Kind is human, agent, bot or controller (docs/actors.md), or
+	// unverified: a requester who is not a ServiceAccount, while the
+	// AgentIndex is not Ready, so not known to be a person (#2451).
+	// +kubebuilder:validation:Enum=human;agent;bot;controller;unverified
 	// +kubebuilder:validation:MaxLength=16
 	Kind string `json:"kind"`
 

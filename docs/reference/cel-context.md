@@ -25,6 +25,7 @@ Graph `readyWhen` and template expressions run in kro's CEL environment, not thi
 | `agent` | map | The version's agent as the registry says now. See [`agent.*`](#agent) |
 | `attestations` | map | The version's verified attestations: SLSA provenance, vulnerability scans after VEX, any in-toto predicate. See [`attestations.*`](#attestations) |
 | `commit` | map | The config commit's verified signature, and the agent whose workload signed it. See [`commit.*`](#commit) |
+| `rollback` | map | Whether the version is a rollback to what was Verified in this environment. See [`rollback.*`](#rollback) |
 
 ---
 
@@ -405,12 +406,13 @@ client) is not in the context: it is text the client writes, and no such text re
 
 | Field | Type | Example | When populated |
 |---|---|---|---|
-| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp |
+| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp. A version stamped `unverified` (written while the agent index wasn't Ready) reads as `agent`, with no agent or sponsor, so `actor.kind != "agent"` gates and the agent gates hold it ([Actors](../actors.md#while-the-index-isnt-ready)); once the index is Ready and names its writer as an agent by user, it reads as that agent |
 | `actor.principal` | string | `"system:serviceaccount:ci:fixer"` | The authenticated username; without a stamp `kardinal.io/created-by`; else `""` |
 | `actor.agent` | string | `"fixer"` | The AgentIdentity name when the kind is `agent`; else `""` |
 | `actor.sponsor` | string | `"alice@example.com"` | The agent's sponsor when the version was created, when the kind is `agent`; else `""` |
 | `actor.via` | string | `"ui"` | `ui` or `api` when the controller wrote the version for its caller, `subscription` or `auto-rollback` for its own; else `""` |
-| `actor.verified` | bool | `true` | Always; `true` when the version has a stamp |
+| `actor.verified` | bool | `true` | Always; `true` when the version has a stamp, but `false` while `actor.unverified` is `true` |
+| `actor.unverified` | bool | `false` | Always; `true` when the version was stamped `unverified` and the agent index doesn't name its writer as an agent |
 
 ```cel
 # Only stamped versions (refuse v0.11 clients and hand-written Bundles)
@@ -444,6 +446,25 @@ actor.kind != "agent" || (agent.registered && !agent.suspended)
 
 # Agents with autonomy auto ship here; others wait (pair with approval.requiredWhen)
 actor.kind != "agent" || agent.autonomy == "auto"
+```
+
+## `rollback.*`
+
+Whether the version is a rollback that only puts back what already ran in this gate's
+environment. kardinal reads it from the facts it recorded, the environment's PromotionSteps,
+which only the promotion Graph writes, not from the markers the version's creator wrote.
+
+| Field | Type | Example | When populated |
+|---|---|---|---|
+| `rollback.restoresVerified` | bool | `true` | Always; `true` when the version is a rollback Bundle of this Pipeline (label `kardinal.io/rollback`, as `kardinal rollback` writes it) whose `spec.provenance.rollbackOf` was Verified in this environment, that deploys `rollbackOf`'s exact refs for every repository `rollbackOf` names, and whose other images, config commit and chart were each deployed by a Bundle Verified here |
+
+When a gate that reads `rollback.*` holds a version that names a `rollbackOf`, its reason says
+which of these failed. The agent gates of a version stamped `unverified` read it: a rollback is
+a stop, so such a rollback passes them ([Actors](../actors.md#while-the-index-isnt-ready)).
+
+```cel
+# A change freeze that lets a rollback to what ran here through
+!changewindow.isBlocked("q4-holiday-freeze") || rollback.restoresVerified
 ```
 
 ## `attestations.*`

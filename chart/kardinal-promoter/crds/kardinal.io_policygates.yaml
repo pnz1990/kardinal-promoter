@@ -276,12 +276,16 @@ spec:
                               type: string
                           type: object
                         kind:
-                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          description: |-
+                            Kind is human, agent, bot or controller (docs/actors.md), or
+                            unverified: a requester who is not a ServiceAccount, while the
+                            AgentIndex is not Ready, so not known to be a person (#2451).
                           enum:
                           - human
                           - agent
                           - bot
                           - controller
+                          - unverified
                           maxLength: 16
                           type: string
                         principal:
@@ -425,12 +429,16 @@ spec:
                               type: string
                           type: object
                         kind:
-                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          description: |-
+                            Kind is human, agent, bot or controller (docs/actors.md), or
+                            unverified: a requester who is not a ServiceAccount, while the
+                            AgentIndex is not Ready, so not known to be a person (#2451).
                           enum:
                           - human
                           - agent
                           - bot
                           - controller
+                          - unverified
                           maxLength: 16
                           type: string
                         principal:
@@ -565,12 +573,16 @@ spec:
                               type: string
                           type: object
                         kind:
-                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          description: |-
+                            Kind is human, agent, bot or controller (docs/actors.md), or
+                            unverified: a requester who is not a ServiceAccount, while the
+                            AgentIndex is not Ready, so not known to be a person (#2451).
                           enum:
                           - human
                           - agent
                           - bot
                           - controller
+                          - unverified
                           maxLength: 16
                           type: string
                         principal:
@@ -889,12 +901,16 @@ spec:
                               type: string
                           type: object
                         kind:
-                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          description: |-
+                            Kind is human, agent, bot or controller (docs/actors.md), or
+                            unverified: a requester who is not a ServiceAccount, while the
+                            AgentIndex is not Ready, so not known to be a person (#2451).
                           enum:
                           - human
                           - agent
                           - bot
                           - controller
+                          - unverified
                           maxLength: 16
                           type: string
                         principal:
@@ -1238,13 +1254,16 @@ spec:
                                   type: string
                               type: object
                             kind:
-                              description: Kind is human, agent, bot or controller
-                                (docs/actors.md).
+                              description: |-
+                                Kind is human, agent, bot or controller (docs/actors.md), or
+                                unverified: a requester who is not a ServiceAccount, while the
+                                AgentIndex is not Ready, so not known to be a person (#2451).
                               enum:
                               - human
                               - agent
                               - bot
                               - controller
+                              - unverified
                               maxLength: 16
                               type: string
                             principal:

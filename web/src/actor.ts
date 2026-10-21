@@ -8,7 +8,7 @@
 
 import type { Actor, ActorRef, Bundle } from './types'
 
-export type ActorKind = 'human' | 'agent' | 'bot' | 'controller' | 'unknown'
+export type ActorKind = 'human' | 'agent' | 'bot' | 'controller' | 'unverified' | 'unknown'
 
 /** What ActorBadge shows. */
 export interface ActorView {

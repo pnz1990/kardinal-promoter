@@ -20,7 +20,7 @@ VERSION          ACTION    ACTOR                          ENV    PR    DURATION 
 
 | Field | Verified | What it is |
 |---|---|---|
-| `kind` | yes | `human`, `agent`, `bot` (a ServiceAccount that is not a registered agent, or the Bundle API's static token) or `controller` (kardinal acting on its own) |
+| `kind` | yes | `human`, `agent`, `bot` (a ServiceAccount that is not a registered agent, or the Bundle API's static token), `controller` (kardinal acting on its own) or `unverified` (written by someone who isn't a ServiceAccount while the agent index wasn't Ready; it counts as an agent for every restriction and as nobody for every grant: [While the index isn't Ready](#while-the-index-isnt-ready)) |
 | `principal` | yes | The username the API server authenticated |
 | `agent` | yes | The agent's name (its AgentIdentity), when `kind` is `agent` |
 | `sponsor` | yes | The person who answers for the agent, when `kind` is `agent`, as registered when the record was written |
@@ -52,14 +52,10 @@ admit a stamp only when it says exactly what the requester is:
 - an agent's `agent` and `sponsor` are the ones registered;
 - only kardinal's controller sets `via`.
 
-Until the controller has built the index (`kubectl get agentindex` shows its Ready
-condition), the policies refuse every version, Approval and override they check, and every
-stamped pause, hold release or rejection, people's included, with "kardinal's agent index is
-not ready yet", and the UI API and the Bundle API
-answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade;
-the controller reports ready only once the index is. Writes the policies do not check go on
-meanwhile: kro's gate instances, and the versions kardinal creates itself (automatic rollbacks,
-Subscriptions), so promotions already under way keep moving.
+While the index isn't Ready, the policies can't tell an agent from a person: see
+[While the index isn't Ready](#while-the-index-isnt-ready).
+
+The controller reports ready only once the index is.
 
 The chart creates the index, empty, before the policies (Helm installs it first), and the
 `<release>-agent-index` policy lets only the controller delete it (one by one or with
@@ -92,15 +88,17 @@ carry it. Add it yourself if you write `spec.overrides` with `kubectl`, scripts 
 tools: the refusal names it.
 
 An agent must stamp what it writes; a person or a bot may leave the stamp out, as before
-v0.12. An agent that is suspended, or out of its scope, is refused. `kardinal` sets the stamp
+v0.12, except on what lets a version go while the index isn't Ready (below). An agent that is
+suspended, or out of its scope, is refused. `kardinal` sets the stamp
 for you: `create bundle`, `ship`, `promote`, `rollback`, `approve` and `override` read your
 identity and the agent index, and refuse an agent out of its scope before writing anything.
 The UI and the Bundle API stamp for the caller they authenticated, with the same rules.
 `kardinal` and the controller also read the index in the compact format that v0.14 writes
 (#2071), so this release's CLI keeps stamping agents correctly against a cluster upgraded to
 v0.14. This release's policies never read that format: against a compact index (after a
-rollback from v0.14, until this release's controller has rebuilt the index) they refuse every
-write they check with "kardinal's agent index is in the compact format of a newer release".
+rollback from v0.14, until this release's controller has rebuilt the index) the index isn't
+Ready (`CompactFormat`): they refuse a ServiceAccount's checked writes with "kardinal's agent
+index is in the compact format of a newer release", and treat a person's as below.
 
 A refusal says what to write:
 
@@ -120,6 +118,110 @@ kardinal ship checkout --image ghcr.io/acme/checkout:1.5.0
 ```
 
 `KARDINAL_ACTOR_CLIENT` names the tool. Unset variables record nothing.
+
+### While the index isn't Ready
+
+The index isn't Ready in three cases:
+
+- For a few seconds after a fresh install, before the controller's first build. An upgrade
+  from v0.12 or later keeps the index the earlier release built, and it stays Ready; only an
+  upgrade from v0.11 or earlier starts without one.
+- While it's full (`IndexFull`: its entries are over the 1 MiB bound).
+- After a rollback from a later release that wrote it in a newer format (`CompactFormat`).
+
+The policies can't tell an agent from a person then, so the rule is: **stopping is always
+allowed, and going needs verification** (#2451). A person's write is stamped
+`kind: unverified`, and `unverified` counts as an agent for every restriction and as nobody for
+every grant:
+
+| Write | Stop or go | While the index isn't Ready |
+|-------|------------|-----------------------------|
+| A freeze, a pause, a hold, a rejection | Stop | Admitted, stamped `unverified` or unstamped. A ServiceAccount's too, unstamped, so an incident bot can freeze during `IndexFull` |
+| A version (`kardinal ship`, `create bundle`, `promote`) | Go | Admitted stamped `unverified`, and held like an agent's: an agents-only freeze holds it, and every environment gets the agent gate, which holds it because it has no registered agent |
+| A rollback (`kardinal rollback`) to a version Verified in the environment | Stop | Admitted stamped `unverified`. It passes the agent gate of each environment where it puts back only what was Verified there ([`rollback.restoresVerified`](reference/cel-context.md#rollback)). Its other gates, and an agents-only freeze, still apply |
+| Any other rollback, or a Bundle only labelled one | Go | Held like a version: "rollback" can't ship a version that never ran here |
+| An Approval, a Verdict | Go (a grant) | Admitted stamped `unverified`; it never counts toward a gate |
+| A gate override, a freeze exemption | Go (break-glass) | Admitted stamped `unverified`; it's recorded but not honoured |
+| A resume, a hold release, a freeze lift | Go | A person's is admitted, stamped `unverified` or unstamped: agents may do these too, so `unverified` changes nothing. A ServiceAccount's freeze lift is refused |
+
+- `kardinal`, the UI and the Bundle API write the `unverified` stamp for you. The policies
+  refuse a `human` stamp until the index is Ready again, since it can't be verified.
+- Unstamped, a version, an Approval, a Verdict, a gate override or a freeze exemption would read
+  as a person's, so it's refused. The refusal gives the fix: use `kardinal` or the UI, or set
+  `actor: {kind: unverified, principal: <your username>}` yourself (`spec.actor` on a version,
+  an Approval or a Verdict).
+- Gates see `actor.kind == "agent"` with `actor.unverified` true and `actor.verified` false,
+  and no agent or sponsor. The UI shows the person's name with "unverified".
+- A ServiceAccount's checked writes are refused: a version, an Approval, a Verdict, a gate
+  override, a freeze exemption, a freeze lift, and a stamped freeze, pause, resume, hold, hold
+  release or rejection. The message names the state and what to do: retry, remove
+  AgentIdentities or subjects until the index fits, or finish the upgrade or rollback. The UI
+  API and the Bundle API answer such callers 503. A ServiceAccount waits for the index to go.
+- A ServiceAccount can still stop. Its new freeze is admitted unstamped (with no exemption or
+  lift in it), and so is an unstamped pause, hold or rejection. `kardinal` leaves the stamp out
+  for a ServiceAccount while the index isn't Ready, so `kardinal freeze` from an incident bot
+  works during `IndexFull`. Its stamp can't be judged then, so a stamped one is refused. An
+  unstamped resume or hold release is a record the policies don't check, for anyone; whether an
+  agent should be refused those is
+  [#2474](https://github.com/pnz1990/kardinal-promoter/issues/2474).
+- Writes the policies don't check go on: kro's gate instances, and the versions kardinal creates
+  itself (automatic rollbacks, Subscriptions), so promotions already under way keep moving.
+
+Once the index is Ready again:
+
+- An `unverified` stamp stays `unverified`: its writer couldn't be verified when it was written.
+  If the index now names the writer as an agent by a `User` subject, the controller treats the
+  version as that agent's: `agent.*` is the agent's, and the one-party rule refuses its sponsor's
+  approval.
+- Otherwise the agent gate keeps holding the version, and says why. Ship it again, or a person
+  overrides the gate: `kardinal override <pipeline> <env> --gate <gate> --reason <text>`,
+  where `<gate>` is the `kardinal-agents-*` gate `kardinal why` names. `kardinal doctor` lists
+  every version held only because of its `unverified` stamp, with that command for each.
+- Approvals, Verdicts, overrides and exemptions stamped `unverified` still don't count: decide
+  or override again.
+
+**The cost.** During `IndexFull`, going waits for the index to be fixed: a version shipped then
+is held, approvals don't count, and a break-glass override or freeze exemption isn't honoured
+until the index is Ready again. People can still stop: freeze, pause, hold, reject, and roll
+back to a version Verified in the environment. A version shipped then stays held after the
+index recovers, until it's shipped again or a person overrides its agent gate. Watch
+for the early warning, the index's `NearFull` condition and the `KardinalAgentIndexNearFull`
+alert (from 80% of the bound), and trim before it's full:
+
+1. `kubectl get agentindex <release>` shows `status.bytes` against `status.maxBytes`.
+2. List the AgentIdentities (`kubectl get agentidentities`) and pick the ones you no longer
+   need, or subjects and scope patterns you can drop. A suspended AgentIdentity still takes
+   its space.
+3. Remove their RBAC first. Then suspend and delete each one
+   (`kubectl patch agentidentity <name> --type merge -p '{"spec":{"suspended":true}}'`, then
+   `kubectl delete agentidentity <name>`), or edit its `spec.subjects` and `spec.scope`.
+4. The controller rebuilds the index within seconds. `kubectl get agentindex <release>` shows
+   it Ready.
+5. `kardinal doctor` lists the versions still held only because of their `unverified` stamp,
+   each with the `kardinal override` command that lets it through. Run those, or ship the
+   versions again.
+
+What this can't do:
+
+- **Agents registered by a `Group` subject.** The stamp records the writer's username, not
+  their groups, so once the index is Ready an `unverified` version can't be matched to such an
+  agent. Its agent gate still holds it, but the one-party rule can't see its sponsor, so the
+  sponsor's approval counts as anyone's.
+- **A rollback to v0.13.0.** v0.13.0 doesn't know the `unverified` kind and reads it as a
+  person's: its Approvals, Verdicts and overrides would count, and its versions wouldn't be
+  held. Roll a v0.14 release back to v0.13.1 or later, where an actor kind it doesn't know
+  never counts toward anything
+  ([#2471](https://github.com/pnz1990/kardinal-promoter/issues/2471)).
+- **Several releases on one cluster** ([sharding](sharding.md)). The CLI stamps from the first
+  Ready AgentIndex by name, and each release's policies check against their own. If one
+  release's index isn't Ready while another's is, a CLI write to the not-Ready release's
+  namespaces is refused with the stamp that release expects (`unverified`); write it with that
+  stamp, or retry once both are Ready. Freezes are cluster-scoped, so every release checks them:
+  while the releases disagree, write a freeze unstamped with `kubectl`. The UI and the Bundle
+  API stamp from their own release's index, so they agree with its policies.
+- **`kardinal status`, `inbox` and `why`** count approvals from the stamp as written. For an
+  `unverified` version whose writer the index now names as an agent, they may show its
+  sponsor's approval as counting. The gate doesn't count it and says why.
 
 ## Register an agent
 
@@ -163,9 +265,11 @@ The AgentIdentity is ready unless it is invalid:
 - **InvalidSigningIdentity**: a `signingIdentities[].subjectRegExp` does not compile.
 - **IndexFull**: the agent index is past its size bound (1 MiB of entries, about 5,000
   AgentIdentities of one subject each, blocked ones included; kardinal supports up to 4,000, see
-  [Scale and limits](operate.md#scale-and-limits)). The whole index is then not Ready, and kardinal refuses every write
-  the actor policy checks until AgentIdentities or subjects are removed, with "kardinal's
-  agent index is full (IndexFull: ...): remove AgentIdentities or subjects until it fits".
+  [Scale and limits](operate.md#scale-and-limits)). The whole index is then not Ready until
+  AgentIdentities or subjects are removed: kardinal refuses a ServiceAccount's checked writes
+  with "kardinal's agent index is full (IndexFull: ...): remove AgentIdentities or subjects
+  until it fits", and a person can stop but not go
+  ([While the index isn't Ready](#while-the-index-isnt-ready)).
 
 The subjects of an AgentIdentity that is not ready are refused, with its reason, rather than
 treated as people.
