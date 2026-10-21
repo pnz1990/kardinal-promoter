@@ -38,7 +38,7 @@ import (
 
 // guideChartV0120 is the chart reference of the "Upgrading from v0.12.0"
 // guide: the test replaces it with the checkout's chart.
-const guideChartV0120 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3"
+const guideChartV0120 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.4"
 
 // u012From is the v0.12 release an upgrade-v012x suite upgrades from: the
 // prefix of its pins in hack/e2e/versions.env (V0120 for v0.12.0), which its

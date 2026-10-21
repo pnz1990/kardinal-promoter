@@ -29,7 +29,7 @@ import (
 
 // guideChartV0122 is the chart reference of the "Upgrading from v0.12.2"
 // guide: the test replaces it with the checkout's chart.
-const guideChartV0122 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3"
+const guideChartV0122 = "oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.4"
 
 // TestUpgradeV0122_Estate is TestUpgradeV0120_Estate from kardinal-promoter
 // v0.12.2 as released (its chart, digest-pinned image, CLI and kro;
