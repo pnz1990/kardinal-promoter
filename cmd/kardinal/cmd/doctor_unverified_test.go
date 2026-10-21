@@ -31,9 +31,11 @@ import (
 // names as an agent. While no index is Ready it is an INFO; with nothing
 // held it passes, a WARN when only the current namespace could be listed.
 //
+// Not parallel: it parses each fix with NewRootCmd, which binds the global
+// flags to package variables (TestParallelTestsChangeNoPackageVariable).
+//
 // Covers CLI-DOCTOR-05.
 func TestDoctor_UnverifiedHeld(t *testing.T) {
-	t.Parallel()
 	evaluated := metav1.Now()
 	gate := func(ns, bundle, env, tmpl string, ready bool) *v1alpha1.PolicyGate {
 		return &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: tmpl + "-" + env + "--" + bundle, Namespace: ns,
@@ -92,7 +94,6 @@ func TestDoctor_UnverifiedHeld(t *testing.T) {
 		}})
 	}
 	t.Run("lists each held version with its fix", func(t *testing.T) {
-		t.Parallel()
 		c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(estate(true)...).Build()
 		r := checkUnverifiedHeld(context.Background(), c, "team-a")
 		assert.Equal(t, doctorWarn, r.icon)
@@ -123,7 +124,6 @@ func TestDoctor_UnverifiedHeld(t *testing.T) {
 			"every line of the hint is indented")
 	})
 	t.Run("the index not Ready yet is an INFO", func(t *testing.T) {
-		t.Parallel()
 		c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(estate(false)...).Build()
 		r := checkUnverifiedHeld(context.Background(), c, "team-a")
 		assert.Equal(t, doctorInfo, r.icon)
@@ -131,7 +131,6 @@ func TestDoctor_UnverifiedHeld(t *testing.T) {
 		assert.Contains(t, r.detail, "3 version(s) stamped unverified are held, and the agent index is not Ready yet")
 	})
 	t.Run("nothing held passes", func(t *testing.T) {
-		t.Parallel()
 		c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(index(true),
 			bundle("team-a", "checkout-rb", "Promoting", unverified("alice")),
 			gate("team-a", "checkout-rb", "prod", "kardinal-agents-auto", true)).Build()
@@ -140,7 +139,6 @@ func TestDoctor_UnverifiedHeld(t *testing.T) {
 		assert.Equal(t, "no version is held because of an unverified stamp (all namespaces)", r.detail)
 	})
 	t.Run("only the current namespace", func(t *testing.T) {
-		t.Parallel()
 		c := forbidCluster(fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(estate(true)...)).Build()
 		r := checkUnverifiedHeld(context.Background(), c, "team-a")
 		assert.Equal(t, doctorWarn, r.icon)
