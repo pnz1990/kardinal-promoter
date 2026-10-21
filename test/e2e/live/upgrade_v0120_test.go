@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -359,14 +360,38 @@ var u012HealthRefForbidden = regexp.MustCompile(`apply \\"health[A-Z][A-Za-z0-9]
 // gone (#1283).
 var u012HealthWatchForbidden = regexp.MustCompile(`dynamic-controller\.watch-manager\tWatch error\t\{"gvr": "(apps/v1, Resource=deployments|argoproj\.io/v1alpha1, Resource=(applications|rollouts)|kustomize\.toolkit\.fluxcd\.io/v1, Resource=kustomizations|flagger\.app/v1beta1, Resource=canaries)", "error": "(failed to list \*v1\.PartialObjectMetadata: )?[a-z.]+ is forbidden: User \\"system:serviceaccount:[^\\"]+\\" cannot (list|watch) resource `)
 
-// u012SchemaRedirect matches kro failing to resolve a kardinal kind's schema
+// u012KroError is the error field of kro's log line text (the kubelet's
+// timestamp cut off: time, level, message and its JSON fields,
+// tab-separated), and whether the line has one.
+func u012KroError(text string) (string, bool) {
+	f := strings.SplitN(text, "\t", 4)
+	if len(f) != 4 {
+		return "", false
+	}
+	var fields map[string]interface{}
+	if json.Unmarshal([]byte(f[3]), &fields) != nil {
+		return "", false
+	}
+	msg, ok := fields["error"].(string)
+	return msg, ok
+}
+
+// u012SchemaRedirect is kro failing to resolve a kardinal kind's schema
 // while the guide's step 1 applies the new CRDs: the API server rebuilds the
 // kardinal.io/v1alpha1 OpenAPI v3 document once per changed CRD, and kro's
 // request for the document by its hash is redirected to a newer one until
 // client-go gives up. kro requeues the Graph. Seen in one of eight upgrade
 // runs (upgrade-v0120 on 1.37): four lines in the same second, two seconds
-// before the new controller started.
-var u012SchemaRedirect = regexp.MustCompile(`build node \\"[A-Za-z0-9]+\\": resolve schema for kardinal\.io/v1alpha1, Kind=[A-Za-z]+: Get \\"/openapi/v3/apis/kardinal\.io/v1alpha1\?hash=[0-9A-F]+\\": stopped after 10 redirects`)
+// before the new controller started. A line is expected only when that is
+// its whole error (u012OnlySchemaRedirect).
+var u012SchemaRedirect = regexp.MustCompile(`^build node "[A-Za-z0-9]+": resolve schema for kardinal\.io/v1alpha1, Kind=[A-Za-z]+: Get "/openapi/v3/apis/kardinal\.io/v1alpha1\?hash=[0-9A-F]+": stopped after 10 redirects$`)
+
+// u012OnlySchemaRedirect says whether kro's log line text has, as its only
+// error, a schema redirect (u012SchemaRedirect).
+func u012OnlySchemaRedirect(text string) bool {
+	msg, ok := u012KroError(text)
+	return ok && u012SchemaRedirect.MatchString(msg)
+}
 
 // TestUpgradeV0120_Estate builds an estate under kardinal-promoter v0.12.0 as
 // released (its chart, CLI and kro) and follows "Upgrading from v0.12.0" in
@@ -1111,7 +1136,7 @@ func u012Upgrade(t *testing.T, from u012From) {
 		switch {
 		case at.Before(refsGone) && (u012HealthRefForbidden.MatchString(line) || u012HealthWatchForbidden.MatchString(line)):
 			refs++
-		case at.Before(refsGone) && u012SchemaRedirect.MatchString(line):
+		case at.Before(refsGone) && u012OnlySchemaRedirect(line):
 			schema++
 		case from.kroExpected != nil && from.kroExpected(line, at):
 			cases++

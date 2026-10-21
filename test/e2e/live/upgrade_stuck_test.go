@@ -8,6 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -45,6 +47,8 @@ func u012Extras(cases ...func(t *testing.T, e *framework.Env, from u012From) fun
 
 // u012NullApproval is what the API server answers kro for a gate instance
 // rendered with spec.approval: null (#2271): the PolicyGate CRD refuses it.
+// The Graph's condition message carries it as is; kro's log line carries it
+// inside its JSON error field (u012OnlyRefusal).
 const u012NullApproval = `spec.approval in body must be of type object: "null"`
 
 // u012Stuck is a case of the suites from the releases with #2271
@@ -63,7 +67,9 @@ const u012NullApproval = `spec.approval in body must be of type object: "null"`
 //     Verdict, recorded with this release's CLI;
 //   - the version then promotes to prod and is Verified: the same Bundle,
 //     the same uat step, and the people instance and alice's approval given
-//     under the release.
+//     under the release;
+//   - the rule of neither gate changed, so the upgrade records no GateChanged
+//     for the version.
 //
 // kro's refusals from the upgrade on are expected until the explore-qa
 // instance exists (expected); after it, one is an error the estate's kro
@@ -75,13 +81,29 @@ type u012Stuck struct {
 }
 
 // expected says whether kro's error line text, logged at at, is a refusal
-// of the stuck version's explore-qa instance from before it existed. kro
-// logs the API server's answer inside a JSON string, its quotes escaped.
+// of the stuck version's explore-qa instance from before it existed.
 func (s *u012Stuck) expected(text string, at time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ns != "" && !s.created.IsZero() && at.Before(s.created) &&
-		strings.Contains(text, s.ns) && strings.Contains(strings.ReplaceAll(text, `\"`, `"`), u012NullApproval)
+		u012OnlyRefusal(text, s.ns)
+}
+
+// u012OnlyRefusal says whether kro's log line text holds, as its only error
+// (u012KroError), the refusal of ns's explore-qa instance for a null
+// spec.approval (#2271): a line that bundles it with another error is not
+// expected, so the kro check still reports it (ENGINEER-1's matcher, QA-5
+// on #2360).
+func u012OnlyRefusal(text, ns string) bool {
+	msg, ok := u012KroError(text)
+	if !ok {
+		return false
+	}
+	q := regexp.QuoteMeta(ns)
+	return regexp.MustCompile(`^(apply: )?apply "VerifyGates\d*": item ` + q + `/explore-qa-` + q + `-prod--[a-z0-9-]+: ` +
+		`PolicyGate\.kardinal\.io "explore-qa-` + q + `-prod--[a-z0-9-]+" is invalid: \[spec\.approval: Invalid value: "null": ` +
+		`spec\.approval in body must be of type object: "null", <nil>: Invalid value: null: some validation rules were not ` +
+		`checked because the object was invalid; correct the existing errors to complete validation\]$`).MatchString(msg)
 }
 
 // u012Graph is the Graph of bundle in ns: there is exactly one.
@@ -235,5 +257,8 @@ func (s *u012Stuck) before(t *testing.T, e *framework.Env, from u012From) func()
 			assert.Equal(t, approved.UID, gate.UID, "the people instance is the one v%s's Graph made", fromVersion)
 			assert.True(t, gate.Status.Ready, "alice's approval from v%s still counts: %s", fromVersion, framework.DescribeGate(gate))
 		}
+		var evs v1alpha1.AuditEventList
+		require.NoError(t, e.Client.List(ctx, &evs, client.InNamespace(f.NS), client.MatchingLabels{"kardinal.io/action": "GateChanged"}))
+		assert.Empty(t, evs.Items, "the upgrade changed no rule of %s's gates", b)
 	}
 }
