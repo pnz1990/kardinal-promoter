@@ -231,8 +231,9 @@ status:
           unavailable: false
           exemption: ""             # the exemption it used, if any
           seeded: false             # recorded from a step that started before the ledger existed (17.2)
-      exemptions:                   # the exemptions in effect, as this reconciler decided
+      exemptions:                   # the spec's exemptions as this reconciler saw them (11.3)
         - {name: inc-4211, firstSeenAt: "2026-10-15T09:00:04Z", expiresAt: "2026-10-15T12:00:00Z"}
+        - {name: by-bot, firstSeenAt: "2026-10-15T09:30:00Z", expiresAt: "2026-10-15T09:30:00Z", ignored: MadeByAgent}
       conditions: [...]             # Current; LedgerFull (only here: never in status.conditions, A6)
 ```
 
@@ -525,6 +526,33 @@ Pipeline names, C12, so the mapping enqueues those few agents and their reconcil
 Bundle UIDs); its own requeue, and a resync every 5 minutes while seeded grants are unsettled
 (17.2), because a seeded step has no `status.budget` and so sends no event the mapping sees.
 
+**As built (W2, `pkg/reconciler/agentbudget`).** The decision is one function, `evaluate`, over
+the ledger read and the facts gathered from the cache; it reads no clock and no object, and is
+tested on its own. Details the steps above leave open:
+
+- A grant's `settled` is recomputed at each evaluation from its step: a step recreated by the
+  Graph (a retry) is under way again and counts in `maxConcurrent` again; its grant is found by
+  Bundle and environment, so it is not charged a second version.
+- After a spec change, each grant's `rules` are re-derived from its Bundle's namespace and its
+  environment or fleet; a grant whose Bundle is gone keeps the rules that are still defined.
+- A settled, available grant is dropped once it is older than every window it counts in: 24 h
+  for a version grant under a `versionsPerDay` rule, 1 h for a fleet target under a
+  `fleetTargetsPerHour` rule, at once otherwise.
+- A Conflict is recomputed from an uncached read up to three times, then returned (the work queue
+  retries with backoff). Any other refused write, such as a 17th ledger (15.2), is a Warning
+  event `BudgetLedgerWriteRefused` on the AgentIdentity.
+- `LedgerFull` (reason `GrantCap`, `AgentGrantCap` or `ObjectSize`) is set, with one Warning
+  event `BudgetLedgerFull`, when 2,000 grants, 3,000 across the agent's ledgers, or 1 MiB of
+  AgentIdentity JSON would be passed; this evaluation's grants are dropped newest first until the
+  object fits.
+- Events go to the AgentIdentity, so only when the controller watches every namespace (an Event
+  on a cluster-scoped object is written in `default`); in namespace mode the ledger's conditions
+  and the log say the same.
+- Triggers as built: AgentIdentity generation changes (not the ledger's own writes); a step with
+  `status.budget` created, deleted, or changing `state` or `status.budget`; a Pipeline whose
+  `status.environments` changed, mapped through the index of agents holding an unavailable grant
+  in this ledger; and the reconciler's own requeue.
+
 ### 7.4 What this does not hold
 
 Steps already past Pending when a budget is added or tightened keep running; they are counted
@@ -703,8 +731,21 @@ later states), so a hold cannot time out into a failure.
 - `kardinal override <pipeline> <env> --budget --reason <why> [--bundle <name>] [--expires-in 1h]`
   adds an exemption to the AgentIdentity of the Bundle's agent, as the caller.
 - The budget reconciler treats an exemption as in effect from when it first sees it until
-  `min(expiresAt, firstSeenAt + 24h)` (admission has no clock, so the cap is applied here), and
-  writes the ones in effect to `status.usage.<ledger>.exemptions`.
+  `min(expiresAt, firstSeenAt + 24h)` (admission has no clock, so the cap is applied here). It
+  lists every spec exemption in `status.usage.<ledger>.exemptions` with that `expiresAt`, and keeps
+  an expired one listed until it is removed from the spec, so the cap never restarts.
+- **An exemption an agent made never counts** (break-glass is for people, as for freeze
+  exemptions, `pkg/reconciler/changewindow/freeze.go` `exemptionByAgent`). The author is the
+  exemption's `actor` stamp, not `createdBy`: `createdBy` holds a username only, and an agent can
+  be a Group subject, which only the requester's groups reveal (`pkg/actor/actor.go` `Derive`).
+  The stamp is what `<release>-actor` derives from `request.userInfo`, username and groups,
+  against the agent index (12). An exemption stamped `kind: agent` is listed with
+  `ignored: MadeByAgent`, and one with no stamp with `ignored: Unverified` (W6 requires a stamp on
+  every new exemption, so an unstamped one was never verified). Neither grants anything. The
+  ledger's `ExemptionIgnored` condition names each, and the reconciler emits one Warning event
+  (`BudgetExemptionIgnored`) per exemption on the AgentIdentity, not repeated on re-runs. While
+  the agent index is not Ready, what admission accepts and stamps follows #2451 (index
+  readiness never refuses a person); the reconciler reads the stamp it is given.
 - An exempt grant needs no room but is counted, so the record stays honest and later requests
   see the true usage.
 - The step that proceeds on an exempt grant writes one `BudgetExempted` AuditEvent through its
@@ -731,6 +772,12 @@ of `agentidentities`. Kubernetes 1.35 is the floor, so `authorizer` is available
   Cluster admins (`*` verbs) pass; the chart's `<release>-admin` ClusterRole gains `manage`.
 - Each new exemption requires `check('exempt')` on the same object, and
   `createdBy == request.userInfo.username`.
+- Each new exemption carries an `actor` stamp, checked by `<release>-actor` as freeze exemptions'
+  are (W6): the stamp must say what `request.userInfo`, username and groups, is against the agent
+  index, and an agent's is refused (`chart/kardinal-promoter/templates/actor-admission.yaml:140`,
+  "break-glass is for people"). The budget reconciler ignores an exemption stamped as an agent's
+  or not stamped (11.3), so the controller's own writes, which `<release>-actor` exempts, are held
+  to the same rule. Behaviour while the index is not Ready is #2451's.
 - The creator may not be of the agent's party (17-actors §10.3): not the sponsor, not a User
   subject, not a ServiceAccount subject's username, and not in a Group subject:
 
@@ -880,7 +927,9 @@ ledger by release and ran the budget reconciler in the default shard only: a non
 steps would then read an entry nobody writes, and wait forever (A1).
 
 **One ledger per installation.** `status.usage` is keyed by the **ledger name**,
-`--agent-budget-ledger` (chart `actors.budgets.ledger`), which defaults to the release name.
+`--agent-budget-ledger` (chart `actors.budgets.ledger`), which defaults to the release name: in
+the controller, its `--agent-index`, which the chart sets to the release's full name
+(`agentbudget.Ledger`).
 Every shard of one sharded installation sets it to the default shard's release name. The budget
 reconciler runs only in the controller that owns cluster-scoped kinds
 (`Gate.OwnsClusterScoped`, `pkg/shard/shard.go:242`) and whose release name is the ledger, so
@@ -940,9 +989,13 @@ ledger, or to use one ledger for installations that are shards of one.
 
 When an entry has no ledger yet (an upgrade, or a budget just added), the reconciler records a
 grant with `seeded: true` for each step of the agent's Bundles that already started in a rule's
-environments (state past Pending, `status.startedAt` inside the window, or not settled). So a
-budget added at noon counts the morning's promotions that still have steps; ones already retired
-are not counted. The docs say so.
+environments (state past Pending, started inside the window, or not settled). A PromotionStep
+has no `status.startedAt` (as built), so a seeded grant's `grantedAt` is the earliest
+`status.steps[].startedAt`, else `status.stateTransitionTime`, else the step's creation. Seeding
+runs when the ledger is new and after every spec change (a rule just added counts what it
+matches), and skips a Bundle and environment the ledger already holds. So a budget added at noon
+counts the morning's promotions that still have steps; ones already retired are not counted. The
+docs say so.
 
 ### 17.3 Later
 

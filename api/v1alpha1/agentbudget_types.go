@@ -8,11 +8,11 @@ import (
 )
 
 // Agent budgets (docs/design/24-agent-budgets.md): limits on how much an
-// agent changes before a person looks, kept on its AgentIdentity. This
-// release has the API only: the fields are validated and kept, not enforced.
-// The budget reconciler (W2, #2433), the step hold (W3, #2434) and the
-// chart's switch and admission checks (W6, #2437) come later in v0.14;
-// "planned" in a comment below marks what they add.
+// agent changes before a person looks, kept on its AgentIdentity. The budget
+// reconciler (pkg/reconciler/agentbudget, --agent-budgets) counts and grants
+// in status.usage. The step hold (W3, #2434) and the chart's switch and
+// admission checks (W6, #2437) come later in v0.14; "planned" in a comment
+// below marks what they add.
 
 // AgentBudgetRule limits an agent's promotions into the environments it
 // matches. Every rule that matches a step applies. A limit that is not set
@@ -117,8 +117,8 @@ type AgentBudgetExemption struct {
 	// +kubebuilder:validation:MaxLength=256
 	Reason string `json:"reason"`
 
-	// ExpiresAt ends the exemption. Planned (W2, #2433): the controller
-	// also ends it 24 hours after it first sees it.
+	// ExpiresAt ends the exemption. The controller also ends it 24 hours
+	// after it first sees it.
 	ExpiresAt metav1.Time `json:"expiresAt"`
 
 	// CreatedBy is who made the exception. Planned (W6, #2437): admission
@@ -127,11 +127,11 @@ type AgentBudgetExemption struct {
 	// +kubebuilder:validation:MaxLength=253
 	CreatedBy string `json:"createdBy"`
 
-	// Actor is who made the exception, stamped as on freeze exemptions.
-	// Planned: the chart's actor admission policy verifies it from the
-	// requester's username and groups (W6, #2437), and an exemption whose
-	// actor is an agent is never honoured (W2, #2433): break-glass is for
-	// people (docs/design/24-agent-budgets.md section 11.3).
+	// Actor is who made the exception, stamped as on freeze exemptions. An
+	// exemption whose actor is an agent, or that has none, is never
+	// honoured: break-glass is for people (docs/design/24-agent-budgets.md
+	// section 11.3). Planned (W6, #2437): the chart's actor admission policy
+	// verifies it from the requester's username and groups.
 	// +optional
 	Actor *Actor `json:"actor,omitempty"`
 }
@@ -234,8 +234,21 @@ type AgentBudgetGrant struct {
 	Exemption string `json:"exemption,omitempty"`
 }
 
-// AgentBudgetExemptionState is an exemption in effect, as the ledger's
-// writer decided it.
+// Reasons an exemption is ignored (AgentBudgetExemptionState.Ignored, and
+// the ledger's ExemptionIgnored condition).
+const (
+	// ExemptionMadeByAgent: its actor stamp is an agent's. Break-glass is
+	// for people.
+	ExemptionMadeByAgent = "MadeByAgent"
+	// ExemptionUnverified: it has no actor stamp, so nothing verified that a
+	// person made it.
+	ExemptionUnverified = "Unverified"
+)
+
+// AgentBudgetExemptionState is one spec.budgetExemptions entry as the
+// ledger's writer saw it: when it first saw it, and until when it counts. It
+// stays listed after it expires, until it is removed from the spec, so the
+// 24-hour cap cannot be restarted.
 type AgentBudgetExemptionState struct {
 	// Name is the exemption's name.
 	// +kubebuilder:validation:MaxLength=63
@@ -243,13 +256,19 @@ type AgentBudgetExemptionState struct {
 	// FirstSeenAt is when the controller first saw it.
 	FirstSeenAt metav1.Time `json:"firstSeenAt"`
 	// ExpiresAt is when it stops counting: its expiresAt, or earlier with
-	// the controller's 24-hour cap.
+	// the controller's 24-hour cap. An ignored exemption never counts; its
+	// expiresAt is its firstSeenAt.
 	ExpiresAt metav1.Time `json:"expiresAt"`
+	// Ignored, when set, says why the exemption never counts: MadeByAgent
+	// (its actor stamp is an agent's) or Unverified (it has no stamp).
+	// +kubebuilder:validation:Enum=MadeByAgent;Unverified
+	// +optional
+	Ignored string `json:"ignored,omitempty"`
 }
 
 // AgentUsage is one ledger: an installation's count of an agent's
-// promotions against its budgets. Planned (W2, #2433): written by that
-// installation's budget reconciler only; nothing writes it yet.
+// promotions against its budgets, written by that installation's budget
+// reconciler only.
 type AgentUsage struct {
 	// ObservedGeneration is the spec generation this entry was computed for.
 	// +optional
@@ -272,7 +291,8 @@ type AgentUsage struct {
 	// +kubebuilder:validation:MaxItems=2000
 	// +optional
 	Grants []AgentBudgetGrant `json:"grants,omitempty"`
-	// Exemptions are the exemptions in effect.
+	// Exemptions are the spec's exemptions as the writer saw them: the ones
+	// in effect, the expired ones and the ignored ones.
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=map
 	// +listMapKey=name

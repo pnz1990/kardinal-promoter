@@ -78,10 +78,10 @@ spec:
                 type: string
               budgetExemptions:
                 description: |-
-                  BudgetExemptions are break-glass exceptions to the budgets. Kept, not
-                  enforced yet. Planned: added with kardinal override --budget (W7,
-                  #2438) by someone the cluster lets exempt the agent, never of the
-                  agent's own party and never an agent (W6, #2437; W2, #2433).
+                  BudgetExemptions are break-glass exceptions to the budgets. One made by
+                  an agent, or without an actor stamp, never counts. Planned: added with
+                  kardinal override --budget (W7, #2438) by someone the cluster lets
+                  exempt the agent, never of the agent's own party (W6, #2437).
                 items:
                   description: |-
                     AgentBudgetExemption is a break-glass exception to an agent's budgets: one
@@ -92,11 +92,11 @@ spec:
                   properties:
                     actor:
                       description: |-
-                        Actor is who made the exception, stamped as on freeze exemptions.
-                        Planned: the chart's actor admission policy verifies it from the
-                        requester's username and groups (W6, #2437), and an exemption whose
-                        actor is an agent is never honoured (W2, #2433): break-glass is for
-                        people (docs/design/24-agent-budgets.md section 11.3).
+                        Actor is who made the exception, stamped as on freeze exemptions. An
+                        exemption whose actor is an agent, or that has none, is never
+                        honoured: break-glass is for people (docs/design/24-agent-budgets.md
+                        section 11.3). Planned (W6, #2437): the chart's actor admission policy
+                        verifies it from the requester's username and groups.
                       properties:
                         agent:
                           description: Agent is the AgentIdentity name, when kind
@@ -189,8 +189,8 @@ spec:
                       type: string
                     expiresAt:
                       description: |-
-                        ExpiresAt ends the exemption. Planned (W2, #2433): the controller
-                        also ends it 24 hours after it first sees it.
+                        ExpiresAt ends the exemption. The controller also ends it 24 hours
+                        after it first sees it.
                       format: date-time
                       type: string
                     name:
@@ -235,10 +235,11 @@ spec:
                   versions a day, promotions at once, fleet targets an hour, failures
                   left in place, and a share of a fleet. Every rule that matches a step
                   applies. The four counted limits of all rules sum to at most 1,500,
-                  which bounds the ledger in status.usage. Kept, not enforced yet:
-                  enforcement is W2 (#2433) and W3 (#2434), where a step beyond a limit
-                  waits rather than fails, behind a release switch that is off by
-                  default (W6, #2437). See docs/design/24-agent-budgets.md.
+                  which bounds the ledger in status.usage. Where the controller runs
+                  with --agent-budgets, it counts and grants each agent's promotions in
+                  status.usage. Not enforced yet: the step hold that makes a step beyond
+                  a limit wait rather than fail is W3 (#2434), and the chart's switch,
+                  off by default, is W6 (#2437). See docs/design/24-agent-budgets.md.
                 items:
                   description: |-
                     AgentBudgetRule limits an agent's promotions into the environments it
@@ -571,8 +572,8 @@ spec:
                 additionalProperties:
                   description: |-
                     AgentUsage is one ledger: an installation's count of an agent's
-                    promotions against its budgets. Planned (W2, #2433): written by that
-                    installation's budget reconciler only; nothing writes it yet.
+                    promotions against its budgets, written by that installation's budget
+                    reconciler only.
                   properties:
                     conditions:
                       description: |-
@@ -644,22 +645,35 @@ spec:
                       format: date-time
                       type: string
                     exemptions:
-                      description: Exemptions are the exemptions in effect.
+                      description: |-
+                        Exemptions are the spec's exemptions as the writer saw them: the ones
+                        in effect, the expired ones and the ignored ones.
                       items:
                         description: |-
-                          AgentBudgetExemptionState is an exemption in effect, as the ledger's
-                          writer decided it.
+                          AgentBudgetExemptionState is one spec.budgetExemptions entry as the
+                          ledger's writer saw it: when it first saw it, and until when it counts. It
+                          stays listed after it expires, until it is removed from the spec, so the
+                          24-hour cap cannot be restarted.
                         properties:
                           expiresAt:
                             description: |-
                               ExpiresAt is when it stops counting: its expiresAt, or earlier with
-                              the controller's 24-hour cap.
+                              the controller's 24-hour cap. An ignored exemption never counts; its
+                              expiresAt is its firstSeenAt.
                             format: date-time
                             type: string
                           firstSeenAt:
                             description: FirstSeenAt is when the controller first
                               saw it.
                             format: date-time
+                            type: string
+                          ignored:
+                            description: |-
+                              Ignored, when set, says why the exemption never counts: MadeByAgent
+                              (its actor stamp is an agent's) or Unverified (it has no stamp).
+                            enum:
+                            - MadeByAgent
+                            - Unverified
                             type: string
                           name:
                             description: Name is the exemption's name.
@@ -909,10 +923,10 @@ spec:
                   type: object
                 description: |-
                   Usage is the agent's budget ledgers, one per installation that sees
-                  the agent, keyed by the ledger name. Planned (W2, #2433): each is
-                  written by its installation's budget reconciler only, keyed by
-                  --agent-budget-ledger (by default the release name); nothing writes
-                  them yet. An agent without budgets has none.
+                  the agent, keyed by the ledger name: --agent-budget-ledger, by
+                  default the controller's --agent-index (its release). Each is written
+                  by its installation's budget reconciler only (--agent-budgets). An
+                  agent without budgets has none.
 
                   At most 16 ledgers, holding at most 3,000 grants between them (each
                   at most 2,000): the cap keeps one AgentIdentity under etcd's object
