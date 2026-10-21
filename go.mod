@@ -2,7 +2,7 @@ module github.com/kardinal-promoter/kardinal-promoter
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	cloud.google.com/go/kms v1.33.0

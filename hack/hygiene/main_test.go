@@ -198,3 +198,49 @@ func TestBulkyFiles(t *testing.T) {
 	assert.True(t, strings.HasPrefix(got[0], "file docs/big.webp: "), got[0])
 	assert.True(t, strings.HasPrefix(got[1], "file release-gate: a committed ELF binary"), got[1])
 }
+
+// TestGoImages (#2385): a Dockerfile stage FROM golang builds with go.mod's
+// toolchain (its go line without one), pinned by digest; any other golang
+// reference is reported with the line and the image to use. Other images,
+// and files that are not Dockerfiles, are not checked.
+func TestGoImages(t *testing.T) {
+	const digest = "@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca"
+	goMod := "module x\n\ngo 1.26.0\n\ntoolchain go1.26.10\n"
+	assert.Empty(t, goImages(fakeRepo(map[string]string{
+		"go.mod": goMod,
+		"Dockerfile": "FROM node:26-alpine AS ui\nFROM --platform=$BUILDPLATFORM golang:1.26.10-alpine" + digest + " AS builder\n" +
+			"FROM alpine:3.24\n",
+		"render.Dockerfile":         "from docker.io/library/golang:1.26.10" + digest + "\n",
+		"hack/e2e/x.Dockerfile":     "FROM alpine:3.24\n",
+		"docs/notes.md":             "FROM golang:1.27-alpine\n", // not a Dockerfile
+		"hack/e2e/Dockerfile.notes": "FROM golang:1.27-alpine\n", // nor this
+	})), "go.mod's toolchain, by digest")
+
+	got := goImages(fakeRepo(map[string]string{
+		"go.mod": goMod,
+		"Dockerfile": "# builder\nFROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder\n" +
+			"FROM golang:1.26.10-alpine AS nodigest\n" +
+			"FROM golang:1.26.9-alpine" + digest + " AS old\n" +
+			"FROM golang AS bare\n" +
+			"FROM golang:${GO} AS arg\n",
+		"sub/render.Dockerfile": "FROM golang:1.26.10-bookworm\n",
+	}))
+	assert.Equal(t, []string{
+		"file Dockerfile: line 2 builds FROM golang:1.27-alpine, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file Dockerfile: line 3 builds FROM golang:1.26.10-alpine, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file Dockerfile: line 4 builds FROM golang:1.26.9-alpine" + digest + ", not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-alpine@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file Dockerfile: line 5 builds FROM golang, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file Dockerfile: line 6 builds FROM golang:${GO}, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+		"file sub/render.Dockerfile: line 1 builds FROM golang:1.26.10-bookworm, not go.mod's toolchain go1.26.10 pinned by digest: use golang:1.26.10-bookworm@sha256:<its digest>, and move go.mod's toolchain line and the image together",
+	}, got)
+
+	// Without a toolchain line, the go line is the Go.
+	assert.Empty(t, goImages(fakeRepo(map[string]string{
+		"go.mod":     "module x\n\ngo 1.26.10\n",
+		"Dockerfile": "FROM golang:1.26.10-alpine" + digest + "\n",
+	})))
+	assert.Len(t, goImages(fakeRepo(map[string]string{
+		"go.mod":     "module x\n\ngo 1.26.0\n",
+		"Dockerfile": "FROM golang:1.26.10-alpine" + digest + "\n",
+	})), 1)
+}
