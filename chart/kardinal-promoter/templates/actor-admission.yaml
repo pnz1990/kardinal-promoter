@@ -24,15 +24,19 @@ indexState: indexReady (Ready True), compact (Ready's reason is
 CompactFormat: a later release wrote the index in its compact format, #2071,
 whose entries this release's policies do not read) and full (Ready's reason
 is IndexFull: the entries are over the bound, and written empty). An index
-that is not Ready cannot tell an agent from a person (#2451): a person is
-never refused a stop-the-line write then (a version, a freeze or its
-exemption, a gate override, a pause, resume or hold release, a rejection);
-a raw Approval or Verdict must carry the unverified stamp. The policies
-refuse the writes they check from ServiceAccounts (sa), and anyone else's
-stamp must say unverified, never human (actorMatches), so a person's
-decision is not counted from it. indexNotReadyMessage says why a ServiceAccount is refused and what
-to do: finish the upgrade or the rollback, remove AgentIdentities, or retry
-while the controller builds it.
+that is not Ready cannot tell an agent from a person (#2451), so stopping is
+always allowed and going needs verification (docs/actors.md, "While the
+index isn't Ready"). Anyone else's stamp than a ServiceAccount's must say
+unverified, never human (actorMatches), and unverified counts as an agent
+for every restriction and as nobody for every grant. A person's freeze,
+pause, hold and rejection go through stamped unverified or unstamped; what
+lets a version go (a version, an Approval, a Verdict, a gate override, a
+freeze exemption) must carry the unverified stamp (goStamps). The policies
+refuse the writes they check from ServiceAccounts (sa), but for a stop: a
+new freeze, unstamped (stopOnly), as -actor-records admits an unstamped
+pause, hold or rejection. indexNotReadyMessage says why a ServiceAccount is
+refused and what to do: finish the upgrade or the rollback, remove
+AgentIdentities, or retry while the controller builds it.
 */}}
 {{- define "kardinal-promoter.indexState" -}}
 - name: indexReady
@@ -145,8 +149,16 @@ variables:
     expression: >-
       variables.freeze ? variables.exemptionStamps :
       variables.gate || request.resource.resource in ['bundles', 'approvals', 'verdicts'] ? variables.stamps : []
+  # A new freeze and nothing else (no exemption, no lift), unstamped: a stop,
+  # which a ServiceAccount may write while the index is not Ready (#2451),
+  # so an incident bot can freeze during IndexFull. Its stamp could not be
+  # judged then, so it must leave it out (kardinal freeze does).
+  - name: stopOnly
+    expression: >-
+      variables.freeze && oldObject == null && size(variables.exemptionStamps) == 0 &&
+      size(variables.freezeStamps) == 1 && variables.freezeStamps[0] == null
 validations:
-  - expression: "!variables.check || variables.indexReady || !variables.sa"
+  - expression: "!variables.check || variables.indexReady || !variables.sa || variables.stopOnly"
     messageExpression: >-
       {{ include "kardinal-promoter.indexNotReadyMessage" . }}
     reason: Forbidden

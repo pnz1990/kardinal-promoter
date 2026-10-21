@@ -136,13 +136,13 @@ every grant:
 
 | Write | Stop or go | While the index isn't Ready |
 |-------|------------|-----------------------------|
-| A freeze, a pause, a hold, a rejection | Stop | Admitted, stamped `unverified` or unstamped |
+| A freeze, a pause, a hold, a rejection | Stop | Admitted, stamped `unverified` or unstamped. A ServiceAccount's too, unstamped, so an incident bot can freeze during `IndexFull` |
 | A version (`kardinal ship`, `create bundle`, `promote`) | Go | Admitted stamped `unverified`, and held like an agent's: an agents-only freeze holds it, and every environment gets the agent gate, which holds it because it has no registered agent |
 | A rollback (`kardinal rollback`) to a version Verified in the environment | Stop | Admitted stamped `unverified`. It passes the agent gate of each environment where it puts back only what was Verified there ([`rollback.restoresVerified`](reference/cel-context.md#rollback)). Its other gates, and an agents-only freeze, still apply |
 | Any other rollback, or a Bundle only labelled one | Go | Held like a version: "rollback" can't ship a version that never ran here |
 | An Approval, a Verdict | Go (a grant) | Admitted stamped `unverified`; it never counts toward a gate |
 | A gate override, a freeze exemption | Go (break-glass) | Admitted stamped `unverified`; it's recorded but not honoured |
-| A resume, a hold release, a freeze lift | Go | Admitted, stamped `unverified` or unstamped. Agents may do these too, so `unverified` changes nothing |
+| A resume, a hold release, a freeze lift | Go | A person's is admitted, stamped `unverified` or unstamped: agents may do these too, so `unverified` changes nothing. A ServiceAccount's freeze lift is refused |
 
 - `kardinal`, the UI and the Bundle API write the `unverified` stamp for you. The policies
   refuse a `human` stamp until the index is Ready again, since it can't be verified.
@@ -152,11 +152,18 @@ every grant:
   an Approval or a Verdict).
 - Gates see `actor.kind == "agent"` with `actor.unverified` true and `actor.verified` false,
   and no agent or sponsor. The UI shows the person's name with "unverified".
-- A ServiceAccount's checked writes (a version, an Approval, a Verdict, a gate override, a freeze
-  exemption, a stamped pause, hold release or rejection) are refused, with a message that names the
-  state and what to do: retry, remove AgentIdentities or subjects until the index fits, or finish
-  the upgrade or rollback. The UI API and the Bundle API answer such callers 503. A ServiceAccount
-  waits for the index.
+- A ServiceAccount's checked writes are refused: a version, an Approval, a Verdict, a gate
+  override, a freeze exemption, a freeze lift, and a stamped freeze, pause, resume, hold, hold
+  release or rejection. The message names the state and what to do: retry, remove
+  AgentIdentities or subjects until the index fits, or finish the upgrade or rollback. The UI
+  API and the Bundle API answer such callers 503. A ServiceAccount waits for the index to go.
+- A ServiceAccount can still stop. Its new freeze is admitted unstamped (with no exemption or
+  lift in it), and so is an unstamped pause, hold or rejection. `kardinal` leaves the stamp out
+  for a ServiceAccount while the index isn't Ready, so `kardinal freeze` from an incident bot
+  works during `IndexFull`. Its stamp can't be judged then, so a stamped one is refused. An
+  unstamped resume or hold release is a record the policies don't check, for anyone; whether an
+  agent should be refused those is
+  [#2474](https://github.com/pnz1990/kardinal-promoter/issues/2474).
 - Writes the policies don't check go on: kro's gate instances, and the versions kardinal creates
   itself (automatic rollbacks, Subscriptions), so promotions already under way keep moving.
 

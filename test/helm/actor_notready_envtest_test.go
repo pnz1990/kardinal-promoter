@@ -38,9 +38,9 @@ import (
 // stamped unverified as kardinal writes them, and refused stamped human (it
 // cannot be verified); what lets a version go (a version, an Approval, a
 // gate override, a freeze exemption) must carry the unverified stamp, and
-// its refusal gives the fix. A ServiceAccount's
-// version, freeze exemption and stamped pause are refused, with the state's
-// message.
+// its refusal gives the fix. A ServiceAccount may stop too: its unstamped
+// freeze is admitted. Its version, stamped freeze, freeze exemption, freeze
+// lift and stamped pause are refused, with the state's message.
 // Covers ACTOR-INDEX-06.
 func TestActorIndexNotReadyOnAPIServer(t *testing.T) {
 	require.NotEmpty(t, os.Getenv("KUBEBUILDER_ASSETS"))
@@ -152,6 +152,33 @@ func TestActorIndexNotReadyOnAPIServer(t *testing.T) {
 		require.NoError(t, exempt(as("bob"), "bob", unverified("bob")), "%s: a person's freeze exemption", state.name)
 		err = exempt(as(ci), ci, nil)
 		require.Error(t, err, "%s: a ServiceAccount's freeze exemption", state.name)
+		require.Contains(t, err.Error(), state.why)
+
+		// Creating a freeze is a stop: an incident bot's freeze is admitted,
+		// unstamped as kardinal freeze writes it then; its exemption and its
+		// lift are go-writes, refused with the state's message (QA-2 on
+		// #2462).
+		botFreeze := &v1alpha1.ChangeWindow{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("kardinal-freeze-everyone-ci-%d", i)},
+			Spec: v1alpha1.ChangeWindowSpec{Type: "blackout", Start: metav1.Now(), Reason: "PAGE-7",
+				Freeze: &v1alpha1.ChangeWindowFreeze{Actors: "everyone", CreatedBy: ci}}}
+		require.NoError(t, as(ci).Create(ctx, botFreeze), "%s: a ServiceAccount freezes", state.name)
+		stampedBot := botFreeze.DeepCopy()
+		stampedBot.ResourceVersion, stampedBot.Name = "", stampedBot.Name+"-stamped"
+		stampedBot.Spec.Freeze.Actor = &v1alpha1.Actor{Kind: "bot", Principal: ci}
+		err = as(ci).Create(ctx, stampedBot)
+		require.Error(t, err, "%s: a ServiceAccount's stamped freeze: its stamp cannot be judged", state.name)
+		require.Contains(t, err.Error(), state.why)
+		var cur v1alpha1.ChangeWindow
+		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(botFreeze), &cur))
+		cur.Spec.Freeze.Exemptions = []v1alpha1.FreezeExemption{{Namespace: "team-a", Pipeline: "checkout", Reason: "hotfix",
+			CreatedBy: ci, ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))}}
+		err = as(ci).Update(ctx, &cur)
+		require.Error(t, err, "%s: a ServiceAccount's exemption of its own freeze", state.name)
+		require.Contains(t, err.Error(), state.why)
+		require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(botFreeze), &cur))
+		cur.Spec.Freeze.Lifted = &v1alpha1.FreezeLift{By: ci}
+		err = as(ci).Update(ctx, &cur)
+		require.Error(t, err, "%s: a ServiceAccount lifts its freeze", state.name)
 		require.Contains(t, err.Error(), state.why)
 
 		// A raw Approval must carry the unverified stamp (it decides a gate);

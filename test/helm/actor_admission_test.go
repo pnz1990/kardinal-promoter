@@ -312,7 +312,8 @@ func notReadyIndexes(t *testing.T) map[string]struct {
 // -actor-overrides refuse a ServiceAccount's writes they check, with the
 // state's message (a full index says what to do, not to retry: QA-3 on
 // #2384). Stopping is always allowed and going needs verification: a
-// person's freeze is admitted unstamped or stamped {kind: unverified}; what
+// person's freeze is admitted unstamped or stamped {kind: unverified}, and a
+// ServiceAccount's new freeze unstamped (not its exemption or lift); what
 // lets a version go (a version, an Approval, a Verdict, a gate override, a
 // freeze exemption) must carry the unverified stamp, and the refusal says
 // how to get it and what it will do. A human or agent stamp (the
@@ -341,6 +342,12 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 	override := func(stamp *v1alpha1.Actor) map[string]interface{} {
 		return gateObj(t, "payments-eu", "uat", v1alpha1.PolicyGateOverride{Reason: "r", Stage: "uat", ExpiresAt: at,
 			CreatedBy: "alice", Actor: stamp})
+	}
+	// lifted is freeze f lifted by by, unstamped, as kardinal unfreeze writes
+	// it before the delete.
+	lifted := func(f map[string]interface{}, by string) map[string]interface{} {
+		f["spec"].(map[string]interface{})["freeze"].(map[string]interface{})["lifted"] = map[string]interface{}{"by": by}
+		return f
 	}
 	const mustUnverified = "actor must be {kind: unverified, principal: alice}"
 	cases := []struct {
@@ -395,6 +402,20 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 			user: fixerSA, groups: authed, object: bundleObj(t, "payments-eu", "checkout", unverified(fixerSA))}, "index"},
 		{"a ServiceAccount's gate override", overridesVAP, actorReq{resource: "policygates", namespace: "payments-eu", user: fixerSA,
 			groups: authed, object: override(&v1alpha1.Actor{Kind: "bot", Principal: fixerSA})}, "index"},
+		// Creating a freeze is a stop, so an incident bot may freeze; its
+		// stamp cannot be judged, so it leaves it out (QA-2 on #2462).
+		{"a ServiceAccount's unstamped freeze", actorVAP, actorReq{resource: "changewindows", user: fixerSA, groups: authed,
+			object: freeze(nil)}, ""},
+		{"a ServiceAccount's freeze stamped bot", actorVAP, actorReq{resource: "changewindows", user: fixerSA, groups: authed,
+			object: freeze(&v1alpha1.Actor{Kind: "bot", Principal: fixerSA})}, "index"},
+		{"a ServiceAccount's new freeze with an exemption", actorVAP, actorReq{resource: "changewindows", user: fixerSA,
+			groups: authed, object: freeze(nil, exemption(nil))}, "index"},
+		{"a ServiceAccount's exemption", actorVAP, actorReq{resource: "changewindows", user: fixerSA, groups: authed,
+			old: freeze(nil), object: freeze(nil, exemption(nil))}, "index"},
+		{"a ServiceAccount's freeze lift", actorVAP, actorReq{resource: "changewindows", user: fixerSA, groups: authed,
+			old: freeze(nil), object: lifted(freeze(nil), fixerSA)}, "index"},
+		{"a ServiceAccount's new freeze created lifted", actorVAP, actorReq{resource: "changewindows", user: fixerSA,
+			groups: authed, object: lifted(freeze(nil), fixerSA)}, "index"},
 		{"the controller's version", actorVAP, actorReq{resource: "bundles", namespace: "x", user: controllerUser,
 			object: bundleObj(t, "x", "checkout", &v1alpha1.Actor{Kind: "controller", Principal: controllerUser, Via: "ui"})}, ""},
 	}
