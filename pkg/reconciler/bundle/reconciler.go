@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -465,7 +464,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		log.Info().Str("graph", graphName).Msg("graph recreated after external deletion")
 		return nil
 	}
-	if g != nil && b.Status.Phase == phasePromoting && g.Labels[graph.LabelRenderVersion] != strconv.Itoa(graph.RenderVersion) {
+	if g != nil && b.Status.Phase == phasePromoting && g.Labels[graph.LabelRenderVersion] != graph.RenderLabel {
 		// Rendered by a controller that renders Graphs differently: the
 		// version in flight gets the current rendering once, so one stuck
 		// under a rendering bug recovers on upgrade (#2271).
@@ -476,7 +475,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return fmt.Errorf("re-render graph %s: %w", name, tErr)
 		}
 		log.Info().Str("graph", name).Str("renderVersion", g.Labels[graph.LabelRenderVersion]).
-			Int("currentRenderVersion", graph.RenderVersion).Msg("graph rendered by an earlier controller — re-translated in place")
+			Str("currentRenderVersion", graph.RenderLabel).Msg("graph rendered by an earlier controller — re-translated in place")
 		return nil
 	}
 	if g != nil {

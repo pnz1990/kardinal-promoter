@@ -5,7 +5,6 @@ package graph_test
 
 import (
 	"fmt"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -174,7 +173,7 @@ func TestBuilder_VerifyGateWithApprovalPolicy(t *testing.T) {
 	assert.EqualValues(t, 1, policy["required"])
 	assert.NotNil(t, got["explore"].Object["spec"].(map[string]interface{})["verify"])
 
-	assert.Equal(t, strconv.Itoa(graph.RenderVersion), res.Graph.Labels[graph.LabelRenderVersion],
+	assert.Equal(t, graph.RenderLabel, res.Graph.Labels[graph.LabelRenderVersion],
 		"the Graph carries the render version it was built with (#2271)")
 
 	// No gate with a policy: every verify gate stays in VerifyGates, as before.
