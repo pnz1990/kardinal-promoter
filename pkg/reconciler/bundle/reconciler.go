@@ -721,8 +721,12 @@ func snapshotGates(g *graph.Graph) gateSnapshot {
 		stale: g.Labels[graph.LabelRenderVersion] != graph.RenderLabel}
 }
 
-// auditGraph is b's Graph, read for its gate copies, or nil when it cannot be
-// read (a gate change is then not recorded, and a warning says so).
+// auditGraph is b's Graph, read for its gate copies, or nil. No Graph under
+// its name (NotFound: a version a v0.8.1 controller started, or one whose
+// Graph is retired) has no gate copies, so there is nothing to compare, and
+// that is logged at debug (#2461). Any other failure to read it (Forbidden, a
+// timeout, a GraphChecker that cannot read Graphs) means a gate change is not
+// recorded, and a warning says so.
 func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle) *graph.Graph {
 	if r.GraphChecker == nil {
 		return nil
@@ -731,12 +735,18 @@ func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kard
 	if name == "" {
 		name = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
 	}
-	g, _, err := r.readGraph(ctx, b.Namespace, name)
-	if err != nil || g == nil {
+	// readGraph maps NotFound, and only NotFound, to (nil, false, nil).
+	g, exists, err := r.readGraph(ctx, b.Namespace, name)
+	switch {
+	case err == nil && g != nil:
+		return g
+	case err == nil && !exists:
+		log.Debug().Str("graph", name).Msg("no Graph to read gate copies from: no gate change to compare")
+		return nil
+	default:
 		log.Warn().Err(err).Str("graph", name).Msg("cannot read the Graph's gate copies: a gate change is not recorded as an AuditEvent")
 		return nil
 	}
-	return g
 }
 
 // errGatesNotApplied is the error of a re-translate for changed PolicyGate
