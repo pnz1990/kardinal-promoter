@@ -1,0 +1,5 @@
+---
+section: Development
+---
+
+- **The `upgrade-v0130` live suite** (#2467) — `TestUpgradeV0130_Estate` sets up v0.13.0 as released (its pinned chart, image, CLI and kro, with signed receipts) and builds an estate with v0.13's evidence in flight: an agent's version that passed an attestations gate and an agent verifier and is held by a ServiceNow change request with approvals naming its ticket, an org gate a person overrode, gates read through `spec.policyNamespaces` from a namespace that agreed to share them and from one that has not, and agents' versions. It follows "Upgrading from v0.13.0" and then rolls back. Both ways, it checks that objects, receipts, overrides, the AgentIndex and actor stamps survive, that render labels change as #2359 says, and that receipts signed by either release verify with either CLI. It runs on 1.35 and 1.37. Until v0.13.0 is released, its component installs nothing and the test skips, saying why.

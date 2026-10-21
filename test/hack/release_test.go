@@ -1473,6 +1473,13 @@ func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 // controller image and CLI are: V<X>_CHART_DIGEST in hack/e2e/versions.env
 // is a sha256 digest, no component installs its chart by version alone, and
 // the pinned reference is the only use of $V<X>_CHART.
+//
+// A suite prepared before its release is out (upgrade-v0130 before v0.13.0)
+// has its three pins empty, all of them: its component must then check them
+// before it installs anything, and say why it did not
+// (KARDINAL_E2E_V<X>_UNRELEASED, which its test skips on), so nothing installs
+// that release unpinned. TestReleaseUpgradeSuiteForPreviousRelease requires
+// the pins of the previous release's suite, so they are set once it is out.
 func TestUpgradeComponentsPinTheirChartByDigest(t *testing.T) {
 	root := repoRoot(t)
 	env, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "versions.env"))
@@ -1490,11 +1497,21 @@ func TestUpgradeComponentsPinTheirChartByDigest(t *testing.T) {
 		x := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(c), "kardinal-v"), ".sh")
 		v := "V" + x
 		t.Run(filepath.Base(c), func(t *testing.T) {
-			assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, pins[v+"_CHART_DIGEST"],
-				"versions.env %s_CHART_DIGEST is the chart's OCI manifest digest", v)
 			src, err := os.ReadFile(c)
 			require.NoError(t, err)
 			ref := fmt.Sprintf(`upgrade --install "$KARDINAL_RELEASE" "$%[1]s_CHART:$%[1]s_CHART_VERSION@$%[1]s_CHART_DIGEST"`, v)
+			if pins[v+"_CHART_DIGEST"] == "" {
+				for _, k := range []string{"_CONTROLLER_DIGEST", "_CLI_SHA256"} {
+					assert.Empty(t, pins[v+k], "versions.env pins %s all at once: %s%s is set and %s_CHART_DIGEST is not", v, v, k, v)
+				}
+				guard := fmt.Sprintf(`if [ -z "$%[1]s_CHART_DIGEST" ] || [ -z "$%[1]s_CONTROLLER_DIGEST" ] || [ -z "$%[1]s_CLI_SHA256" ]; then`, v)
+				g, i := strings.Index(string(src), guard), strings.Index(string(src), ref)
+				assert.True(t, g >= 0 && (i < 0 || g < i), "%s checks its empty pins before it installs: %s", filepath.Base(c), guard)
+				assert.Contains(t, string(src), "env_set KARDINAL_E2E_"+v+"_UNRELEASED ", "%s says why it installed nothing", filepath.Base(c))
+			} else {
+				assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, pins[v+"_CHART_DIGEST"],
+					"versions.env %s_CHART_DIGEST is the chart's OCI manifest digest", v)
+			}
 			assert.True(t, strings.Contains(string(src), ref), "%s installs its chart pinned by digest: %s", filepath.Base(c), ref)
 			byVersion := fmt.Sprintf(`--version "$%s_CHART_VERSION"`, v)
 			assert.False(t, strings.Contains(string(src), byVersion), "%s installs its chart by digest, not by version alone (%s)", filepath.Base(c), byVersion)

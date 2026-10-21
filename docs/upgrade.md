@@ -71,6 +71,82 @@ chart no longer ships. Downgrade the chart along with the controller (`helm roll
 ClusterRole is back. When you upgrade again, the controller removes those nodes and their reader
 RoleBindings at startup.
 
+## Upgrading from v0.13.0
+
+!!! note "v0.14.0 is not released yet"
+    These steps take a v0.13.0 installation to the next release, v0.14.0, once it is released:
+    `<version>` in the commands is that release's chart version. Until then v0.13.0 is the latest
+    release, and there is nothing to upgrade to.
+
+The upgrade suite runs these steps as written (`TestUpgradeV0130_Estate`, on the oldest and newest
+supported Kubernetes minors) while v0.13's evidence is in flight: signed receipts, an agent's
+version through an attestations gate, an agent verifier's verdict and a ServiceNow change request
+with approvals that name its ticket, an org gate a person overrode, and gates read through
+`spec.policyNamespaces` from a namespace that agreed to share them and from one that has not. It
+then rolls back to v0.13.0 (step 5) with a version in flight that the new release started, and
+makes the same checks.
+
+What v0.13.0 stored keeps working. Versions in flight keep their Graphs, PromotionSteps, PRs, gate
+instances, change requests, approvals, verdicts and overrides, and finish. Receipts v0.13.0 signed
+stay as they are: the new controller signs none of them again, and they verify with the new CLI.
+The AgentIndex is the same object, and agents' versions keep their actor stamps. At its first start
+the new controller renders the Graph of each version still promoting again, once and in place, only
+when the Graph's `kardinal.io/render-version` label differs from its own, that is, only when the
+release renders Graphs differently; otherwise it leaves every Graph as it is.
+
+v0.14.0 targets the same kro as v0.13.0 (`v0.10.0-rc.0`), so kro is not upgraded.
+
+**1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section lists
+every change since v0.13.0. Its "Before you upgrade" entries are the ones that can change something
+for you.
+
+**2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs a v0.13.0
+install from the chart created, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every new
+default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**4. Check the result.** First run `kardinal version` until its `Controller:` line shows the
+version you upgraded to: the new controller's Pod is Ready a few seconds before it takes over, and
+only the controller in charge records its version.
+
+```bash
+kardinal version
+```
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes, and every Pipeline is Ready. "Policy namespaces shared" warns while a
+Pipeline's `spec.policyNamespaces` names a namespace that has not agreed to share its gates, and
+names those Pipelines and namespaces
+([Sharing gates with other namespaces](policy-gates.md#sharing-gates-with-other-namespaces)).
+
+**5. If you roll back.** `helm rollback` returns the release to the chart, values and controller
+it ran before the upgrade:
+
+```bash
+helm rollback kardinal-promoter --namespace kardinal-system --wait --timeout 3m
+```
+
+Then use the v0.13.0 CLI again. Helm does not roll the CRDs back, so v0.13.0 runs against the
+new ones. Versions in flight go on under v0.13.0, those the new controller started included: they
+keep their Graphs, steps and PRs. v0.13.0 renders the Graph of each version still promoting again,
+once, only when the new controller labelled it with another `kardinal.io/render-version`. Receipts
+the new controller signed verify with the v0.13.0 CLI. To upgrade again, run steps 2 to 4.
+
 ## Upgrading from v0.12.0
 
 !!! note "v0.13.0 is not released yet"

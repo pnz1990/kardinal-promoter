@@ -90,32 +90,46 @@ type u0110Snapshot struct {
 
 func (s *u0110Estate) snapshot(t *testing.T) u0110Snapshot {
 	t.Helper()
+	return snapshotOf(t, s.e, fleetNamespaces(s.fleets())...)
+}
+
+func fleetNamespaces(fleets []*scale.Fleet) []string {
+	var out []string
+	for _, f := range fleets {
+		out = append(out, f.NS)
+	}
+	return out
+}
+
+// snapshotOf is what namespaces hold at one moment.
+func snapshotOf(t *testing.T, e *framework.Env, namespaces ...string) u0110Snapshot {
+	t.Helper()
 	ctx := context.Background()
 	snap := u0110Snapshot{bundles: map[string]v1alpha1.Bundle{}, steps: map[string]v1alpha1.PromotionStep{},
 		graphs: map[string]types.UID{}, prs: map[string]int{}}
-	for _, f := range s.fleets() {
+	for _, ns := range namespaces {
 		var bl v1alpha1.BundleList
-		require.NoError(t, s.e.Client.List(ctx, &bl, client.InNamespace(f.NS)))
+		require.NoError(t, e.Client.List(ctx, &bl, client.InNamespace(ns)))
 		for _, b := range bl.Items {
-			snap.bundles[f.NS+"/"+b.Name] = b
+			snap.bundles[ns+"/"+b.Name] = b
 		}
 		var sl v1alpha1.PromotionStepList
-		require.NoError(t, s.e.Client.List(ctx, &sl, client.InNamespace(f.NS)))
+		require.NoError(t, e.Client.List(ctx, &sl, client.InNamespace(ns)))
 		for _, st := range sl.Items {
-			snap.steps[f.NS+"/"+st.Name] = st
+			snap.steps[ns+"/"+st.Name] = st
 		}
-		graphs, err := s.e.Dynamic.Resource(framework.GraphGVR).Namespace(f.NS).List(ctx, metav1.ListOptions{})
+		graphs, err := e.Dynamic.Resource(framework.GraphGVR).Namespace(ns).List(ctx, metav1.ListOptions{})
 		require.NoError(t, err)
 		for _, g := range graphs.Items {
 			if g.GetDeletionTimestamp() == nil {
-				snap.graphs[f.NS+"/"+g.GetLabels()["kardinal.io/bundle"]] = g.GetUID()
+				snap.graphs[ns+"/"+g.GetLabels()["kardinal.io/bundle"]] = g.GetUID()
 			}
 		}
 		var pl v1alpha1.PRStatusList
-		require.NoError(t, s.e.Client.List(ctx, &pl, client.InNamespace(f.NS)))
+		require.NoError(t, e.Client.List(ctx, &pl, client.InNamespace(ns)))
 		for _, p := range pl.Items {
 			if p.Spec.PRNumber != 0 {
-				snap.prs[f.NS+"/"+p.Labels["kardinal.io/bundle"]+"/"+p.Labels["kardinal.io/environment"]] = p.Spec.PRNumber
+				snap.prs[ns+"/"+p.Labels["kardinal.io/bundle"]+"/"+p.Labels["kardinal.io/environment"]] = p.Spec.PRNumber
 			}
 		}
 	}
@@ -649,6 +663,12 @@ func TestUpgradeV0110_Estate(t *testing.T) {
 // label on the objects users write: Pipelines, Bundles and gate templates.
 func u0110AllKinds(t *testing.T, e *framework.Env, s *u0110Estate) {
 	t.Helper()
+	allKindsIn(t, e, fleetNamespaces(s.fleets())...)
+}
+
+// allKindsIn is u0110AllKinds over namespaces.
+func allKindsIn(t *testing.T, e *framework.Env, namespaces ...string) {
+	t.Helper()
 	ctx := context.Background()
 	lists := []client.ObjectList{
 		&v1alpha1.PipelineList{}, &v1alpha1.BundleList{}, &v1alpha1.PolicyGateList{}, &v1alpha1.PromotionStepList{},
@@ -657,25 +677,25 @@ func u0110AllKinds(t *testing.T, e *framework.Env, s *u0110Estate) {
 		&v1alpha1.ImageVerificationList{}, &v1alpha1.RollbackPolicyList{}, &v1alpha1.ScmProviderList{},
 	}
 	label := client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"labels":{"e2e.kardinal.io/after-upgrade":"true"}}}`))
-	for _, f := range s.fleets() {
+	for _, ns := range namespaces {
 		for _, l := range lists {
-			require.NoError(t, e.Client.List(ctx, l, client.InNamespace(f.NS)), "list %T in %s with this release's types", l, f.NS)
+			require.NoError(t, e.Client.List(ctx, l, client.InNamespace(ns)), "list %T in %s with this release's types", l, ns)
 		}
 		var pl v1alpha1.PipelineList
-		require.NoError(t, e.Client.List(ctx, &pl, client.InNamespace(f.NS)))
+		require.NoError(t, e.Client.List(ctx, &pl, client.InNamespace(ns)))
 		for i := range pl.Items {
-			assert.NoError(t, e.Client.Patch(ctx, &pl.Items[i], label), "label Pipeline %s/%s", f.NS, pl.Items[i].Name)
+			assert.NoError(t, e.Client.Patch(ctx, &pl.Items[i], label), "label Pipeline %s/%s", ns, pl.Items[i].Name)
 		}
 		var bl v1alpha1.BundleList
-		require.NoError(t, e.Client.List(ctx, &bl, client.InNamespace(f.NS)))
+		require.NoError(t, e.Client.List(ctx, &bl, client.InNamespace(ns)))
 		for i := range bl.Items {
-			assert.NoError(t, e.Client.Patch(ctx, &bl.Items[i], label), "label Bundle %s/%s", f.NS, bl.Items[i].Name)
+			assert.NoError(t, e.Client.Patch(ctx, &bl.Items[i], label), "label Bundle %s/%s", ns, bl.Items[i].Name)
 		}
 		var gl v1alpha1.PolicyGateList
-		require.NoError(t, e.Client.List(ctx, &gl, client.InNamespace(f.NS)))
+		require.NoError(t, e.Client.List(ctx, &gl, client.InNamespace(ns)))
 		for i := range gl.Items {
 			if gl.Items[i].Labels["kardinal.io/bundle"] == "" { // a template, not an instance
-				assert.NoError(t, e.Client.Patch(ctx, &gl.Items[i], label), "label PolicyGate %s/%s", f.NS, gl.Items[i].Name)
+				assert.NoError(t, e.Client.Patch(ctx, &gl.Items[i], label), "label PolicyGate %s/%s", ns, gl.Items[i].Name)
 			}
 		}
 	}
