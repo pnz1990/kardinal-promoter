@@ -41,6 +41,10 @@ type HeadContentComparer interface {
 // read further (#2095 QA). A var, so a test can lower it.
 var maxHeadPeek int64 = 64 << 20
 
+// drainBound is the least peekCommit reads after it cancels the fetch, to
+// reach the transport through go-git's buffers above it (#2364).
+const drainBound = 1 << 20
+
 // errHeadTooLarge is a remote head that cannot be read within maxHeadPeek.
 var errHeadTooLarge = errors.New("the head's pack is larger than kardinal reads to compare it")
 
@@ -139,7 +143,9 @@ func peekCommit(ctx context.Context, url string, am transport.AuthMethod, proxy 
 	// its peek) may still hold packets of the pack, and a read they serve
 	// does not reach it. One read, as before, could be served there; then
 	// nothing killed a local upload-pack and Close waited for it for ever
-	// (#2364). The reads are bounded by limit.
+	// (#2364). The reads have a bound of their own, drainBound at least:
+	// the buffers hold a few KiB, and a bound below them (a small limit)
+	// would stop before the transport again.
 	fetchCtx, cancel := context.WithCancel(ctx)
 	resp, err := sess.UploadPack(fetchCtx, req)
 	if err != nil {
@@ -149,7 +155,7 @@ func peekCommit(ctx context.Context, url string, am transport.AuthMethod, proxy 
 	defer func() {
 		cancel()
 		buf := make([]byte, 32<<10)
-		for read := int64(0); read <= limit; {
+		for read, bound := int64(0), max(limit, drainBound); read <= bound; {
 			n, err := resp.Read(buf)
 			if err != nil {
 				break

@@ -235,23 +235,38 @@ func TestSameContentAsHead_ServerKeepsWriting(t *testing.T) {
 		"#!/bin/sh\n"+envUploadPackProxy+"='"+real+"' exec '"+self+"' -test.run='^$' \"$@\"\n"), 0o700))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	c := NewGoGitClient()
-	for i := range 10 {
-		type result struct {
-			same bool
-			err  error
-		}
-		done := make(chan result, 1)
-		go func() {
-			same, err := c.SameContentAsHead(context.Background(), ours, "origin", "kardinal/b/prod", TokenAuth(""), head)
-			done <- result{same, err}
-		}()
-		select {
-		case r := <-done:
-			require.NoError(t, r.err, "try %d", i)
-			assert.True(t, r.same, "try %d", i)
-		case <-time.After(30 * time.Second):
-			t.Fatalf("try %d: the check did not return in 30s: it waits on an upload-pack still writing", i)
-		}
+	for _, tc := range []struct {
+		name string
+		peek int64 // maxHeadPeek
+		same bool
+	}{
+		{name: "the check's bound", peek: maxHeadPeek, same: true},
+		// QA-2 on #2374: a peek bound below go-git's buffers must not bound
+		// the reads that reach the transport (past it the head is refused).
+		{name: "a 64-byte bound", peek: 64, same: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func(old int64) { maxHeadPeek = old }(maxHeadPeek)
+			maxHeadPeek = tc.peek
+			for i := range 10 {
+				type result struct {
+					same bool
+					err  error
+				}
+				done := make(chan result, 1)
+				go func() {
+					same, err := c.SameContentAsHead(context.Background(), ours, "origin", "kardinal/b/prod", TokenAuth(""), head)
+					done <- result{same, err}
+				}()
+				select {
+				case r := <-done:
+					require.NoError(t, r.err, "try %d", i)
+					assert.Equal(t, tc.same, r.same, "try %d", i)
+				case <-time.After(30 * time.Second):
+					t.Fatalf("try %d: the check did not return in 30s: it waits on an upload-pack still writing", i)
+				}
+			}
+		})
 	}
 }
 
