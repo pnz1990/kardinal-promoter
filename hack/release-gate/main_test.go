@@ -1704,3 +1704,72 @@ func TestReleaseTokenProblem(t *testing.T) {
 	assert.Contains(t, err.Error(), "-priority release needs RELEASE_GATE_PRIORITY_TOKEN matching "+token)
 	assert.NoError(t, releaseTokenProblem("", ""), "no shared queue to jump")
 }
+
+// TestPreviousReleaseFromEveryTag: the previous release is the highest
+// final tag of the commit's minor line from every tag, not only the ones
+// merged into HEAD. v0.12.3, tagged on release/v0.12 only, is main's
+// previous release; on the release branch it is the newest patch before the
+// commit, and a tag on HEAD is never its own previous release (the gate
+// re-run on the commit tagged v0.13.0 still upgrades from v0.12.3). A
+// release candidate, merged into HEAD or not, is no release.
+func TestPreviousReleaseFromEveryTag(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=e2e", "-c", "user.email=e2e@example.com",
+			"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	commit := func(msg string) string {
+		git("commit", "-q", "--allow-empty", "-m", msg)
+		return git("rev-parse", "HEAD")
+	}
+	prev := func(rev string) string {
+		t.Helper()
+		git("checkout", "-q", rev)
+		p, err := previousRelease(dir)
+		require.NoError(t, err)
+		return p
+	}
+	git("init", "-q", "-b", "main")
+	commit("v0.11")
+	git("tag", "v0.11.0")
+	commit("v0.12")
+	git("tag", "v0.12.0")
+	git("checkout", "-q", "-b", "release/v0.12")
+	commit("v0.12.1")
+	git("tag", "v0.12.1")
+	atTag := commit("v0.12.3")
+	git("tag", "v0.12.3")
+	afterTag := commit("toward v0.12.4")
+	git("tag", "v0.12.4-rc.1")
+	git("checkout", "-q", "-b", "release/v0.11", "v0.11.0")
+	commit("v0.11.9")
+	git("tag", "v0.11.9")
+	git("checkout", "-q", "main")
+	commit("v0.13 candidate")
+	git("tag", "v0.13.0-rc.1")
+	mainHead := commit("toward v0.13")
+
+	assert.Equal(t, "v0.12.3", prev(mainHead), "main: the latest v0.12 patch, though only release/v0.12 has it (v0.13.0-rc.1, merged, is no release)")
+	assert.Equal(t, "v0.12.3", prev(afterTag), "the release branch after v0.12.3: v0.12.3 (the release candidate is no release)")
+	assert.Equal(t, "v0.12.1", prev(atTag), "the commit tagged v0.12.3: the release before it")
+
+	git("checkout", "-q", "main")
+	git("tag", "v0.13.0")
+	assert.Equal(t, "v0.12.3", prev(mainHead), "the commit tagged v0.13.0: the latest v0.12 patch, not v0.13.0 itself")
+	git("checkout", "-q", "main")
+	afterMinor := commit("toward v0.14")
+	assert.Equal(t, "v0.13.0", prev(afterMinor), "after v0.13.0: v0.13.0, whatever the v0.12 line has")
+	assert.Equal(t, "v0.12.3", prev(afterTag), "the v0.12 line does not take v0.13.0, though it does not contain the branch")
+
+	empty := t.TempDir()
+	dir = empty
+	git("init", "-q", "-b", "main")
+	none := commit("no tags")
+	assert.Empty(t, prev(none), "no release yet")
+}

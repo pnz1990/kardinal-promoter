@@ -1273,10 +1273,10 @@ func TestReleaseDryRun(t *testing.T) {
 
 // TestReleaseUpgradeSuiteForPreviousRelease: hack/release-gate gives NO-GO
 // ("upgrade from vX | MISSING") when hack/e2e/matrix.txt has no
-// upgrade-v<X> suite for the previous release: the gate's, the newest final
-// tag merged into the commit and not on it, where the tags are fetched, else
-// the newest final release in docs/changelog.md older than Chart.yaml's
-// version. Its suite runs on the oldest and the newest KIND_NODE_1_*
+// upgrade-v<X> suite for the previous release: the gate's, where the tags
+// are fetched (the highest final tag of the commit's minor line, release
+// branches included), else the newest final release in docs/changelog.md
+// older than Chart.yaml's version. Its suite runs on the oldest and the newest KIND_NODE_1_*
 // minors, hack/e2e/up.sh runs its TestUpgradeV<X>_ test, which exists, and
 // it installs that release (components/kardinal-v<X>.sh, and the V<X>_ pins
 // of hack/e2e/versions.env name it). Every upgrade suite runs once (run.sh
@@ -1309,17 +1309,32 @@ func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 	current := parse(string(cv[1]))
 	changelog, err := os.ReadFile(filepath.Join(root, "docs", "changelog.md"))
 	require.NoError(t, err)
-	// Where the tags are fetched, the gate's own previous release: the
-	// newest final vX.Y.Z tag merged into HEAD that does not point at HEAD
-	// (hack/release-gate previousRelease). Between a patch release's tag and
-	// its successor's pins the changelog and the chart still name the tagged
-	// release, which the commits after the tag upgrade from.
+	// Where the tags are fetched, the gate's own previous release
+	// (hack/release-gate previousRelease): the highest final tag, from every
+	// tag that does not contain HEAD, of the minor line of the newest final
+	// tag merged into HEAD. Patch releases are tagged on release/vX.Y, not
+	// on main, and a v0.12 user upgrades to v0.13 from the latest patch.
 	prev, from := "", "git tags"
-	cmd := exec.Command("git", "tag", "--merged", "HEAD", "--no-contains", "HEAD", "--list", "v*", "--sort=-v:refname")
-	cmd.Dir = root
-	if out, err := cmd.Output(); err == nil {
+	tags := func(args ...string) []string {
+		cmd := exec.Command("git", append(append([]string{"tag"}, args...), "--list", "v*", "--sort=-v:refname")...)
+		cmd.Dir = root
+		out, err := cmd.Output()
+		if err != nil {
+			return nil
+		}
+		var final []string
 		for _, tag := range strings.Fields(string(out)) {
 			if regexp.MustCompile(`^v\d+\.\d+\.\d+$`).MatchString(tag) {
+				final = append(final, tag)
+			}
+		}
+		return final
+	}
+	if merged := tags("--merged", "HEAD", "--no-contains", "HEAD"); len(merged) > 0 {
+		line := merged[0][:strings.LastIndex(merged[0], ".")]
+		prev = strings.TrimPrefix(merged[0], "v")
+		for _, tag := range tags("--no-contains", "HEAD") {
+			if strings.HasPrefix(tag, line+".") {
 				prev = strings.TrimPrefix(tag, "v")
 				break
 			}

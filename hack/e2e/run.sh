@@ -42,7 +42,7 @@ go build -o "$E2E_OUT/bin/report" ./test/e2e/report
 RUN=${RUN:-$KARDINAL_E2E_RUN}
 COUNT=${COUNT:-1}
 # The upgrade test upgrades the cluster's v0.8.1 release, so it runs once.
-case $SUITE in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121) [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1" ;; esac
+case $SUITE in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121 | upgrade-v0123) [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1" ;; esac
 # shard_tests I N DURATIONS reads test names on stdin and prints part I of
 # N. Serial tests are dealt out first, longest first, to the part with the
 # least serial time; then the parallel ones, longest first, to the part

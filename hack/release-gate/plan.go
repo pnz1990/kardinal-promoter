@@ -294,22 +294,60 @@ func findFuzzTargets(root string) ([]FuzzTarget, error) {
 	return out, nil
 }
 
-// previousRelease is the newest vX.Y.Z tag (no release candidates) merged
-// into HEAD that does not point at HEAD: for a release candidate the
-// release before it.
+// previousRelease is the release users upgrade from to the one this commit
+// becomes: the highest vX.Y.Z tag (no release candidates) below it, from
+// every tag, not only the ones merged into HEAD. Patch releases are tagged
+// on release/vX.Y, so they are not ancestors of main: v0.12.3, cut there,
+// is what a v0.12 user upgrades from to v0.13.0.
+//
+// The newest final tag merged into HEAD that does not point at HEAD names
+// the minor line (v0.12.0 on main, v0.12.2 on release/v0.12 before
+// v0.12.3); the previous release is the highest final tag of that line
+// that does not contain HEAD. A tag on HEAD, or after it, is this commit's
+// own release or a later one, never the one before. A higher minor's tags
+// (v0.13.0 seen from release/v0.12) are not of the line.
 func previousRelease(root string) (string, error) {
-	cmd := exec.Command("git", "tag", "--merged", "HEAD", "--no-contains", "HEAD", "--list", "v*", "--sort=-v:refname")
-	cmd.Dir = root
-	out, err := cmd.Output()
+	merged, err := gitTags(root, "--merged", "HEAD", "--no-contains", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("git tag: %w", err)
+		return "", err
 	}
-	for _, t := range strings.Fields(string(out)) {
-		if releaseTag.MatchString(t) {
+	if len(merged) == 0 {
+		return "", nil
+	}
+	line := minorLine(merged[0])
+	all, err := gitTags(root, "--no-contains", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	for _, t := range all {
+		if minorLine(t) == line {
 			return t, nil
 		}
 	}
-	return "", nil
+	return merged[0], nil
+}
+
+// gitTags lists the vX.Y.Z tags (no release candidates) that git tag with
+// args lists, highest version first.
+func gitTags(root string, args ...string) ([]string, error) {
+	cmd := exec.Command("git", append(append([]string{"tag"}, args...), "--list", "v*", "--sort=-v:refname")...)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git tag: %w", err)
+	}
+	var tags []string
+	for _, t := range strings.Fields(string(out)) {
+		if releaseTag.MatchString(t) {
+			tags = append(tags, t)
+		}
+	}
+	return tags, nil
+}
+
+// minorLine is the vX.Y of release tag t.
+func minorLine(t string) string {
+	return t[:strings.LastIndex(t, ".")]
 }
 
 // upgradeSuite is the live suite that upgrades from release tag:

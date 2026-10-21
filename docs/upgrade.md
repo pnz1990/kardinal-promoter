@@ -81,8 +81,9 @@ RoleBindings at startup.
 The same steps take a v0.12.1, v0.12.2 or v0.12.3 installation: none of them changes a CRD, value
 or admission policy.
 
-The upgrade suites run these steps as written (`TestUpgradeV0120_Estate` from v0.12.0 and
-`TestUpgradeV0121_Estate` from v0.12.1, on the oldest and newest supported Kubernetes minors)
+The upgrade suites run these steps as written (`TestUpgradeV0120_Estate` from v0.12.0,
+`TestUpgradeV0121_Estate` from v0.12.1 and `TestUpgradeV0123_Estate` from v0.12.3, on the oldest
+and newest supported Kubernetes minors)
 while versions are in flight: bakes, open promotion PRs, a rollback, gates holding versions with
 approvals and Verdicts recorded, a running AgentRun, a freeze and, from v0.12.1, an automatic
 rollback. They keep their objects and finish.
