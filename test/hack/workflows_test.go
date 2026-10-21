@@ -604,16 +604,24 @@ func TestDockerfilesBuildWithTheToolchain(t *testing.T) {
 	require.NoError(t, err)
 	m := regexp.MustCompile(`(?m)^toolchain go(\S+)$`).FindSubmatch(mod)
 	require.NotNil(t, m, "go.mod names its toolchain")
-	want := regexp.MustCompile(`^golang:` + regexp.QuoteMeta(string(m[1])) + `-alpine@sha256:[0-9a-f]{64}$`)
+	// A golang image however its registry and namespace are spelled (QA-2
+	// on #2386, QA-5 on #2396): golang, library/golang, and either under
+	// Docker Hub's hosts docker.io, index.docker.io or registry-1.docker.io
+	// (a host in any case).
+	const hub = `^(?:(?i:docker\.io|index\.docker\.io|registry-1\.docker\.io)/)?(?:library/)?golang`
+	want := regexp.MustCompile(hub + `:` + regexp.QuoteMeta(string(m[1])) + `-alpine@sha256:[0-9a-f]{64}$`)
+	golang := regexp.MustCompile(hub + `(?:[:@]|$)`)
 	out, err := exec.Command("git", "-C", root, "ls-files", "*Dockerfile").Output()
 	require.NoError(t, err)
-	from := regexp.MustCompile(`(?m)^FROM\s+(?:--platform=\S+\s+)?(\S+)`)
+	// Instructions are case-insensitive and may be indented; FROM's flags
+	// come before the image.
+	from := regexp.MustCompile(`(?im)^\s*FROM\s+(?:--\S+\s+)*(\S+)`)
 	builds := map[string]int{}
 	for _, f := range strings.Fields(string(out)) {
 		src, err := os.ReadFile(filepath.Join(root, f))
 		require.NoError(t, err)
 		for _, s := range from.FindAllStringSubmatch(string(src), -1) {
-			if strings.HasPrefix(s[1], "golang:") || strings.HasPrefix(s[1], "golang@") {
+			if golang.MatchString(s[1]) {
 				builds[f]++
 				assert.Regexp(t, want, s[1], "%s builds with go.mod's toolchain go%s, pinned by digest", f, m[1])
 			}
