@@ -272,9 +272,27 @@ after v0.13.0 does not take them.
 6. **Back on main**, one PR:
    - adds the `## [vX.Y.Z]` section to `docs/changelog.md`;
    - deletes the cherry-picked fragments (main's other unreleased fragments stay);
-   - bumps the docs pins to vX.Y.Z when it is the newest release.
+   - bumps the docs pins to vX.Y.Z when it is the newest release;
+   - pins vX.Y.Z for its upgrade suite ([Pin the upgrade suite](#pin-the-upgrade-suite)).
 
    The docs site deploys from main.
+
+### Pin the upgrade suite
+
+The next release's gate upgrades from the newest patch of the minor before it
+(`TestReleaseUpgradeSuiteForPreviousRelease`): its suite, `upgrade-v<XYZ>`, installs that release
+pinned by digest (`hack/e2e/components/kardinal-v<XYZ>.sh`; add one, with its
+`TestUpgradeV<XYZ>_` test, on the last one's pattern when the release has none). Once
+`release.yml` has published a release, print its pins and put them in `hack/e2e/versions.env`:
+
+```bash
+hack/release/pin-upgrade.sh X.Y.Z
+```
+
+It prints `V<XYZ>_CHART_DIGEST`, `V<XYZ>_CONTROLLER_DIGEST` and `V<XYZ>_CLI_SHA256`, read from
+ghcr.io and the GitHub release (the CLI is downloaded and must match GitHub's digest of the asset).
+Until they are set the suite installs nothing and its test skips, and test/hack fails on main from
+the tag on, so the pull request that sets them merges first after a release.
 
 ## How to Contribute
 

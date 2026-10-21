@@ -15,8 +15,9 @@
 # Until v0.13.0 is released its pins in hack/e2e/versions.env are empty: this
 # script then installs nothing and writes why to the env file
 # (KARDINAL_E2E_V0130_UNRELEASED), and the suite's test skips with that
-# reason. Once the release is published it stops until the pins are set, and
-# says how to read them: nothing installs v0.13.0 unpinned.
+# reason. Once the release is published it stops until the pins are set
+# (hack/release/pin-upgrade.sh 0.13.0 prints them): nothing installs v0.13.0
+# unpinned.
 #
 # Env set for the tests:
 #   KARDINAL_E2E_V0130_CLI         the v0.13.0 kardinal CLI
@@ -37,13 +38,13 @@ if [ -z "$V0130_CHART_DIGEST" ] || [ -z "$V0130_CONTROLLER_DIGEST" ] || [ -z "$V
   code=$(curl -sS -o /dev/null -w '%{http_code}' -IL --retry 3 "$V0130_CLI_URL" || true)
   case $code in
     404)
-      why="kardinal-promoter v$V0130_CHART_VERSION is not released yet ($V0130_CLI_URL: HTTP 404), so there is nothing to upgrade from; once it is, pin V0130_CHART_DIGEST, V0130_CONTROLLER_DIGEST and V0130_CLI_SHA256 in hack/e2e/versions.env"
+      why="kardinal-promoter v$V0130_CHART_VERSION is not released yet ($V0130_CLI_URL: HTTP 404), so there is nothing to upgrade from; once it is, set its pins in hack/e2e/versions.env (hack/release/pin-upgrade.sh $V0130_CHART_VERSION)"
       env_set KARDINAL_E2E_V0130_UNRELEASED "$why"
       log "$why"
       exit 0
       ;;
     200)
-      die "kardinal-promoter v$V0130_CHART_VERSION is released: pin V0130_CHART_DIGEST (the chart's OCI manifest digest), V0130_CONTROLLER_DIGEST (the controller image's index digest) and V0130_CLI_SHA256 (the sha256 of $V0130_CLI_URL) in hack/e2e/versions.env"
+      die "kardinal-promoter v$V0130_CHART_VERSION is released: set V0130_CHART_DIGEST, V0130_CONTROLLER_DIGEST and V0130_CLI_SHA256 in hack/e2e/versions.env to what hack/release/pin-upgrade.sh $V0130_CHART_VERSION prints"
       ;;
     *) die "can't tell whether kardinal-promoter v$V0130_CHART_VERSION is released: $V0130_CLI_URL answered HTTP $code" ;;
   esac
