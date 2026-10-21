@@ -201,6 +201,32 @@ type AgentIdentitySpec struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +optional
 	SigningIdentities []AgentSigningIdentity `json:"signingIdentities,omitempty"`
+
+	// Budgets limit how much the agent promotes before a person looks:
+	// versions a day, promotions at once, fleet targets an hour, failures
+	// left in place, and a share of a fleet. Every rule that matches a step
+	// applies. The four counted limits of all rules sum to at most 1,500,
+	// which bounds the ledger in status.usage. Where the controller runs
+	// with --agent-budgets, it counts and grants each agent's promotions in
+	// status.usage, and a step beyond a limit waits in Pending rather than
+	// fails. Planned (W6, #2437): the chart's switch, off by default. See
+	// docs/design/24-agent-budgets.md.
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:XValidation:rule="self.map(r, (has(r.versionsPerDay) ? r.versionsPerDay : 0) + (has(r.maxConcurrent) ? r.maxConcurrent : 0) + (has(r.fleetTargetsPerHour) ? r.fleetTargetsPerHour : 0) + (has(r.maxUnavailable) ? r.maxUnavailable : 0)).sum() <= 1500",message="the budgets' versionsPerDay, maxConcurrent, fleetTargetsPerHour and maxUnavailable sum to at most 1500 over all rules"
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Budgets []AgentBudgetRule `json:"budgets,omitempty"`
+
+	// BudgetExemptions are break-glass exceptions to the budgets. One made by
+	// an agent, or without an actor stamp, never counts. Planned: added with
+	// kardinal override --budget (W7, #2438) by someone the cluster lets
+	// exempt the agent, never of the agent's own party (W6, #2437).
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	BudgetExemptions []AgentBudgetExemption `json:"budgetExemptions,omitempty"`
 }
 
 // AgentSigningIdentity is a Fulcio certificate identity: the OIDC issuer,
@@ -244,6 +270,24 @@ type AgentIdentityStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Usage is the agent's budget ledgers, one per installation that sees
+	// the agent, keyed by the ledger name: --agent-budget-ledger, by
+	// default the controller's --agent-index (its release). Each is written
+	// by its installation's budget reconciler only (--agent-budgets). An
+	// agent without budgets has none.
+	//
+	// At most 16 ledgers, holding at most 3,000 grants between them (each
+	// at most 2,000): the cap keeps one AgentIdentity under etcd's object
+	// size limit (docs/design/24-agent-budgets.md section 14). Sixteen is
+	// more installations than one agent should span, each counting the
+	// agent separately (section 15.2); a 17th installation's status write
+	// is refused, so it cannot grant, and its agent steps hold (fail
+	// closed) until a ledger is removed.
+	// +kubebuilder:validation:MaxProperties=16
+	// +kubebuilder:validation:XValidation:rule="self.map(k, has(self[k].grants) ? size(self[k].grants) : 0).sum() <= 3000",message="the ledgers hold at most 3000 grants between them"
+	// +optional
+	Usage map[string]AgentUsage `json:"usage,omitempty"`
 }
 
 // +kubebuilder:object:root=true

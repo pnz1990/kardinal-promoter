@@ -37,6 +37,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/labelvalue"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentbudget"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/fairqueue"
@@ -130,6 +131,11 @@ type Reconciler struct {
 	// agent.* reads (docs/design/18-actor-policy.md section 2.2). Empty: no
 	// agent registry, every agent reads as not registered.
 	AgentIndexName string
+	// BudgetLedger is the agent budget ledger budget.* reads
+	// (--agent-budget-ledger, with --agent-budgets): an AgentIdentity's
+	// status.usage key. Empty: budgets off, budget.applies is false
+	// (docs/design/24-agent-budgets.md section 10).
+	BudgetLedger string
 }
 
 // DefaultStatusHeartbeat is the controller's --gate-status-heartbeat default.
@@ -689,6 +695,10 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		return nil, version, fmt.Errorf("agent: %w", err)
 	}
 	tally := tallyApprovals(gate, author)
+	budgetCtx, err := r.buildBudgetContext(ctx, gate, author)
+	if err != nil {
+		return nil, version, fmt.Errorf("budget: %w", err)
+	}
 
 	// The version's attestations are read only when the expression
 	// references them, so a List failure blocks exactly those gates.
@@ -711,6 +721,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	return map[string]interface{}{
 		"actor":        actorContext(bundle.Spec.Actor, author),
 		"agent":        agentCtx,
+		"budget":       budgetCtx,
 		"attestations": attCtx,
 		"commit":       commitCtx,
 		"bundle":       bundleCtx,
@@ -1494,6 +1505,17 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// are re-evaluated at once (#1300).
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(stepRequiredGateRequests),
 			builder.WithPredicates(unstartedStepCreated))
+	if r.BudgetLedger != "" {
+		// Watch AgentIdentities: a change of this ledger's counts
+		// re-evaluates the gates of the agent's versions that read budget.*,
+		// through the spec.actor.agent Bundle index the budget reconciler
+		// registers too (docs/design/24-agent-budgets.md section 10).
+		if err := agentbudget.IndexBundlesByAgent(context.Background(), mgr.GetFieldIndexer()); err != nil {
+			return err
+		}
+		b = b.Watches(&kardinalv1alpha1.AgentIdentity{}, handler.EnqueueRequestsFromMapFunc(r.budgetGateRequests),
+			builder.WithPredicates(ledgerUsageChanged(r.BudgetLedger)))
+	}
 	return shard.Active().Complete(b, tracing.WrapReconciler("policygate", r), &kardinalv1alpha1.PolicyGateList{})
 }
 

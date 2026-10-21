@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 // LabelFleet is the label of a fleet target's PromotionStep, PRStatus and
@@ -140,6 +141,48 @@ func fleetMembers(p *kardinalv1alpha1.Pipeline) (map[string]fleetMember, map[str
 		}
 	}
 	return members, byFleet, nil
+}
+
+// foldBudgets folds an agent's budget rules into its fleet targets' pacing
+// (docs/design/24-agent-budgets.md section 8): each rule that applies to a
+// target takes its maxConcurrent down to the rule's maxConcurrent and to its
+// fleetShare of the fleet's targets (MaxUnavailableCount, rounded up, at
+// least one), and its maxUnavailable down to the rule's. The strictest
+// wins; 0 is no limit. An agent-wide bound of N implies a per-fleet bound of
+// N, so the fold never admits what the grant would refuse: it only keeps
+// steps from being created just to wait.
+func foldBudgets(members map[string]fleetMember, byFleet map[string][]string, ns string, rules []kardinalv1alpha1.AgentBudgetRule) {
+	if len(rules) == 0 {
+		return
+	}
+	for name, m := range members {
+		for i := range rules {
+			r := &rules[i]
+			if !actor.BudgetRuleApplies(r, ns, name, m.fleet) {
+				continue
+			}
+			m.maxConcurrent = minPositive(m.maxConcurrent, int(r.MaxConcurrent))
+			if r.FleetShare != "" {
+				share := intstr.FromString(r.FleetShare)
+				if n, err := MaxUnavailableCount(&share, len(byFleet[m.fleet])); err == nil {
+					m.maxConcurrent = minPositive(m.maxConcurrent, max(n, 1))
+				}
+			}
+			m.maxUnavailable = minPositive(m.maxUnavailable, int(r.MaxUnavailable))
+		}
+		members[name] = m
+	}
+}
+
+// minPositive is the smaller of a and b where 0 (or less) is no limit.
+func minPositive(a, b int) int {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	}
+	return min(a, b)
 }
 
 // MaxUnavailableCount is spec.fleet.maxUnavailable as a number of targets of
