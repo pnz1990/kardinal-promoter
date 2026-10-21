@@ -175,7 +175,7 @@ linux/amd64, which it only builds, a 100,000-receipt stress run, and
 Kubernetes 1.36. Each line gives the item, why the gate does not run it, and
 the evidence that stands in for it: covered `test/e2e/coverage.tsv` rows,
 `release.yml:<job>`, or `matrix.txt:<suite> <minor>` (a job the nightly
-e2e-live run runs). A line with no reason or evidence, or one citing a row,
+e2e-live run runs: it shows the job exists, not that it passed). A line with no reason or evidence, or one citing a row,
 job or matrix job that does not exist, stops the gate before it runs
 anything.
 
