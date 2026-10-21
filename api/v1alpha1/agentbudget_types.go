@@ -8,10 +8,11 @@ import (
 )
 
 // Agent budgets (docs/design/24-agent-budgets.md): limits on how much an
-// agent changes before a person looks, kept on its AgentIdentity. The
-// controller enforces them only when the release turns them on
-// (actors.budgets.enabled, off by default); otherwise they are kept, not
-// enforced.
+// agent changes before a person looks, kept on its AgentIdentity. This
+// release has the API only: the fields are validated and kept, not enforced.
+// The budget reconciler (W2, #2433), the step hold (W3, #2434) and the
+// chart's switch and admission checks (W6, #2437) come later in v0.14;
+// "planned" in a comment below marks what they add.
 
 // AgentBudgetRule limits an agent's promotions into the environments it
 // matches. Every rule that matches a step applies. A limit that is not set
@@ -82,8 +83,9 @@ type AgentBudgetRule struct {
 }
 
 // AgentBudgetExemption is a break-glass exception to an agent's budgets: one
-// Pipeline environment, optionally one version, until it expires. Admission
-// verifies createdBy, and that its maker is not of the agent's party
+// Pipeline environment, optionally one version, until it expires. Kept, not
+// enforced yet. Planned (W6, #2437): admission verifies createdBy and the
+// actor stamp, and that its maker is not of the agent's party
 // (docs/design/24-agent-budgets.md section 12).
 type AgentBudgetExemption struct {
 	// Name identifies the exemption (a DNS label), unique in the list.
@@ -115,14 +117,23 @@ type AgentBudgetExemption struct {
 	// +kubebuilder:validation:MaxLength=256
 	Reason string `json:"reason"`
 
-	// ExpiresAt ends the exemption. The controller also ends it 24 hours
-	// after it first sees it.
+	// ExpiresAt ends the exemption. Planned (W2, #2433): the controller
+	// also ends it 24 hours after it first sees it.
 	ExpiresAt metav1.Time `json:"expiresAt"`
 
-	// CreatedBy is who made the exception, as admission verified it.
+	// CreatedBy is who made the exception. Planned (W6, #2437): admission
+	// verifies it is the requester's username.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	CreatedBy string `json:"createdBy"`
+
+	// Actor is who made the exception, stamped as on freeze exemptions.
+	// Planned: the chart's actor admission policy verifies it from the
+	// requester's username and groups (W6, #2437), and an exemption whose
+	// actor is an agent is never honoured (W2, #2433): break-glass is for
+	// people (docs/design/24-agent-budgets.md section 11.3).
+	// +optional
+	Actor *Actor `json:"actor,omitempty"`
 }
 
 // AgentBudgetCount is one limit's room: the limit and what is used of it.
@@ -237,8 +248,8 @@ type AgentBudgetExemptionState struct {
 }
 
 // AgentUsage is one ledger: an installation's count of an agent's
-// promotions against its budgets, written by that installation's budget
-// reconciler only.
+// promotions against its budgets. Planned (W2, #2433): written by that
+// installation's budget reconciler only; nothing writes it yet.
 type AgentUsage struct {
 	// ObservedGeneration is the spec generation this entry was computed for.
 	// +optional
@@ -276,8 +287,9 @@ type AgentUsage struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// PromotionStepBudget is a step's place against its agent's budgets, written
-// by the PromotionStep reconciler only.
+// PromotionStepBudget is a step's place against its agent's budgets.
+// Planned (W3, #2434): written by the PromotionStep reconciler only; nothing
+// writes it yet.
 type PromotionStepBudget struct {
 	// Agent is the AgentIdentity whose budgets hold the step.
 	// +kubebuilder:validation:MaxLength=253

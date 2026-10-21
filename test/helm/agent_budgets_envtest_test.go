@@ -32,7 +32,8 @@ import (
 // budget section 4.1 lists and admits valid ones; an AgentIdentity without
 // budgets round-trips unchanged; the status ledger (status.usage) and a
 // PromotionStep's status.budget are written through the status subresource,
-// within their bounds.
+// within their bounds (at most 16 ledgers, 2,000 grants each and 3,000
+// between them).
 //
 // Covers BUDGET-API-01.
 func TestAgentBudgetsOnAPIServer(t *testing.T) {
@@ -85,9 +86,21 @@ spec:
 		}
 		return b.String()
 	}
+	// patterns is a rule with k environments, or k namespaces.
+	patterns := func(field string, k int) string {
+		p := make([]string, k)
+		for i := range p {
+			p[i] = fmt.Sprintf("p-%d", i)
+		}
+		if field == "environments" {
+			return "  budgets: [{name: prod, environments: [" + strings.Join(p, ", ") + "], maxConcurrent: 1}]"
+		}
+		return "  budgets: [{name: prod, environments: [prod], namespaces: [" + strings.Join(p, ", ") + "], maxConcurrent: 1}]"
+	}
 	const exemption = `  budgetExemptions:
   - {name: inc-4211, namespace: payments, pipeline: checkout, environment: prod, bundle: checkout-7f3c2a,
-     reason: "hotfix for INC-4211", expiresAt: "2026-10-15T12:00:00Z", createdBy: bob@example.com}
+     reason: "hotfix for INC-4211", expiresAt: "2026-10-15T12:00:00Z", createdBy: bob@example.com,
+     actor: {kind: human, principal: bob@example.com}}
 `
 	for _, tc := range []struct{ name, spec, want string }{
 		{"the spec's example", `  budgets:
@@ -97,6 +110,8 @@ spec:
 ` + exemption, ""},
 		{"fleetShare alone", `  budgets: [{name: fleet, environments: [prod], fleetShare: "100%"}]`, ""},
 		{"16 rules", rules(16), ""},
+		{"64 environments", patterns("environments", 64), ""},
+		{"64 namespaces", patterns("namespaces", 64), ""},
 		{"32 exemptions", exemptions(32), ""},
 		{"the sum at 1500", `  budgets:
   - {name: a, environments: [prod], fleetTargetsPerHour: 1000}
@@ -109,6 +124,8 @@ spec:
   - {name: prod, environments: [uat], maxConcurrent: 1}`, "Duplicate value"},
 		{"an exemption name twice", exemption + `  - {name: inc-4211, namespace: payments, pipeline: other, environment: prod,
      reason: again, expiresAt: "2026-10-15T12:00:00Z", createdBy: bob}`, "Duplicate value"},
+		{"65 environments", patterns("environments", 65), "spec.budgets[0].environments: Too many: 65: must have at most 64 items"},
+		{"65 namespaces", patterns("namespaces", 65), "spec.budgets[0].namespaces: Too many: 65: must have at most 64 items"},
 		{"a rule with no limit", `  budgets: [{name: prod, environments: [prod]}]`, "a budget rule sets at least one limit"},
 		{"a rule with no environments", `  budgets: [{name: prod, environments: [], maxConcurrent: 1}]`, "spec.budgets[0].environments: Invalid value"},
 		{"an empty namespaces list", `  budgets: [{name: prod, environments: [prod], namespaces: [], maxConcurrent: 1}]`,
@@ -121,10 +138,14 @@ spec:
 			"spec.budgets[0].name: Invalid value"},
 		{"versionsPerDay 0", `  budgets: [{name: prod, environments: [prod], versionsPerDay: 0}]`, "spec.budgets[0].versionsPerDay: Invalid value"},
 		{"versionsPerDay 501", `  budgets: [{name: prod, environments: [prod], versionsPerDay: 501}]`, "spec.budgets[0].versionsPerDay: Invalid value"},
+		{"maxConcurrent 0", `  budgets: [{name: prod, environments: [prod], maxConcurrent: 0}]`, "spec.budgets[0].maxConcurrent: Invalid value"},
 		{"maxConcurrent 101", `  budgets: [{name: prod, environments: [prod], maxConcurrent: 101}]`, "spec.budgets[0].maxConcurrent: Invalid value"},
+		{"fleetTargetsPerHour 0", `  budgets: [{name: prod, environments: [prod], fleetTargetsPerHour: 0}]`,
+			"spec.budgets[0].fleetTargetsPerHour: Invalid value"},
 		{"fleetTargetsPerHour 1001", `  budgets: [{name: prod, environments: [prod], fleetTargetsPerHour: 1001}]`,
 			"spec.budgets[0].fleetTargetsPerHour: Invalid value"},
 		{"maxUnavailable 0", `  budgets: [{name: prod, environments: [prod], maxUnavailable: 0}]`, "spec.budgets[0].maxUnavailable: Invalid value"},
+		{"maxUnavailable 101", `  budgets: [{name: prod, environments: [prod], maxUnavailable: 101}]`, "spec.budgets[0].maxUnavailable: Invalid value"},
 		{"fleetShare 0%", `  budgets: [{name: prod, environments: [prod], fleetShare: "0%"}]`, "spec.budgets[0].fleetShare: Invalid value"},
 		{"fleetShare 101%", `  budgets: [{name: prod, environments: [prod], fleetShare: "101%"}]`, "spec.budgets[0].fleetShare: Invalid value"},
 		{"fleetShare 05%", `  budgets: [{name: prod, environments: [prod], fleetShare: "05%"}]`, "spec.budgets[0].fleetShare: Invalid value"},
@@ -141,9 +162,18 @@ spec:
 		{"an exemption without createdBy", `  budgetExemptions:
   - {name: x, namespace: payments, pipeline: checkout, environment: prod, reason: r, expiresAt: "2026-10-15T12:00:00Z"}`,
 			"spec.budgetExemptions[0].createdBy: Required value"},
+		{"an exemption without a namespace", `  budgetExemptions:
+  - {name: x, pipeline: checkout, environment: prod, reason: r, expiresAt: "2026-10-15T12:00:00Z", createdBy: bob}`,
+			"spec.budgetExemptions[0].namespace: Required value"},
+		{"an exemption without a pipeline", `  budgetExemptions:
+  - {name: x, namespace: payments, environment: prod, reason: r, expiresAt: "2026-10-15T12:00:00Z", createdBy: bob}`,
+			"spec.budgetExemptions[0].pipeline: Required value"},
 		{"an exemption without an environment", `  budgetExemptions:
   - {name: x, namespace: payments, pipeline: checkout, reason: r, expiresAt: "2026-10-15T12:00:00Z", createdBy: bob}`,
 			"spec.budgetExemptions[0].environment: Required value"},
+		{"an exemption stamped agent without its agent and sponsor", `  budgetExemptions:
+  - {name: x, namespace: payments, pipeline: checkout, environment: prod, reason: r, expiresAt: "2026-10-15T12:00:00Z",
+     createdBy: bob, actor: {kind: agent, principal: bob}}`, "actor.agent and actor.sponsor are set exactly when actor.kind is agent"},
 		{"an exemption reason over 256 characters", `  budgetExemptions:
   - {name: x, namespace: payments, pipeline: checkout, environment: prod, reason: "` + strings.Repeat("r", 257) + `",
      expiresAt: "2026-10-15T12:00:00Z", createdBy: bob}`, "spec.budgetExemptions[0].reason: Too long"},
@@ -190,6 +220,7 @@ spec:
 	})
 
 	// The ledger and the step's place: status subresources, within bounds.
+	// ledger is ledgers ledgers of grants grants each.
 	ledger := func(grants, ledgers int) map[string]v1alpha1.AgentUsage {
 		at := metav1.Now()
 		out := map[string]v1alpha1.AgentUsage{}
@@ -218,6 +249,8 @@ spec:
 		{"2,000 grants", 2000, 1, ""},
 		{"2,001 grants", 2001, 1, "status.usage.kardinal-0.grants: Too many: 2001: must have at most 2000 items"},
 		{"17 ledgers", 1, 17, "status.usage: Too many: 17: must have at most 16 items"},
+		{"3,000 grants between two ledgers", 1500, 2, ""},
+		{"3,002 grants between two ledgers", 1501, 2, "the ledgers hold at most 3000 grants between them"},
 	} {
 		t.Run("status.usage: "+tc.name, func(t *testing.T) {
 			obj := identity(t, `  budgets: [{name: prod, environments: [prod], versionsPerDay: 5, maxConcurrent: 2}]`)

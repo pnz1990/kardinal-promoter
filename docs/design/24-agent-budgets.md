@@ -33,7 +33,7 @@ fixed:
 | A4 | The agent shorthand compiles to `kardinal-agents-<ceiling>` templates (`pkg/graph/agents.go:22-31`) | Named `kardinal-agents` | Renamed | 7.2, 13 |
 | A5 | The controller has four field indexes: Bundles by Pipeline (`pkg/lifecycle/index.go:46`), PolicyGates, ChangeRequests by ticket, Pipelines | The spec read through indexes that do not exist | Listed as new indexes in W2, W3 and W5: PromotionSteps by `status.budget.agent`; Bundles by `spec.actor.agent` and by UID; AgentIdentities with an unavailable grant | 5.2, 7.3, 10, 20 |
 | A6 | The index reconciler patches each AgentIdentity's `status.conditions` (Ready) with a JSON merge patch, which replaces the whole list (`writeStatuses`, `pkg/reconciler/agentidentity/reconciler.go:57-90`) | 7.3 said the budget reconciler writes "status.conditions entries of its own type", but 4.2 puts them under `usage` | Budget conditions live only in `status.usage.<ledger>.conditions`; the budget reconciler never writes `status.conditions` | 4.2, 7.3 |
-| A7 | One AgentIdentity can carry several ledgers (separate installations) | Each entry was capped at 2,000 grants, with no bound across entries; four ledgers could approach etcd's 1.5 MiB | At most 3,000 grants per AgentIdentity across ledgers (about 600 KB); the ledger that would pass it is `LedgerFull` | 14 |
+| A7 | One AgentIdentity can carry several ledgers (separate installations) | Each entry was capped at 2,000 grants, with no bound across entries; four ledgers could approach etcd's 1.5 MiB | At most 3,000 grants per AgentIdentity across ledgers (about 600 KB); the ledger that would pass it is `LedgerFull`. The schema holds the same line against any writer (W1): at most 16 ledgers, and 3,000 grants between them | 14, 15.2 |
 | A8 | v0.14's compact index (#2372): one string per entry, a 1 MiB bound, `IndexFull` refuses every checked write; supported up to 7,000 AgentIdentities | Thin: how budgets meet the index and its bound | New 14.1. Budgets add no bytes to the index, never write a `blocked` entry, and read the AgentIdentity, not the index | 14.1 |
 | A9 | Supported registry size: 4,000 AgentIdentities (v0.13), 7,000 with #2372 | "2,000 AgentIdentities (the actors scale target)" | The scale case runs the release gate's 7,500 | 14, 19 |
 | A10 | — | Thin: no stated default, and no release-wide switch | Off by default, at two levels: a release switch `actors.budgets.enabled: false`, and per agent (no `spec.budgets`, no effect) | 17.4 |
@@ -158,6 +158,7 @@ spec:
       reason: "hotfix for INC-4211"
       expiresAt: "2026-10-15T12:00:00Z"
       createdBy: bob@example.com   # verified by admission
+      actor: {kind: human, principal: bob@example.com}   # the actor stamp, as on freeze exemptions; an agent's is never honoured (11.3)
 ```
 
 **Matching.** A rule matches a PromotionStep when its namespace matches `namespaces` and its
@@ -269,6 +270,7 @@ type AgentBudgetExemption struct {
 	Reason                                 string
 	ExpiresAt                              metav1.Time
 	CreatedBy                              string
+	Actor                                  *Actor `json:"actor,omitempty"` // verified by <release>-actor (11.3)
 }
 
 // AgentIdentitySpec gains:
@@ -312,7 +314,8 @@ type AgentUsage struct {
 }
 
 // AgentIdentityStatus gains:
-//   Usage map[string]AgentUsage `json:"usage,omitempty"` // key: the ledger name (15.2)
+//   Usage map[string]AgentUsage `json:"usage,omitempty"` // key: the ledger name (15.2);
+//   at most 16 ledgers, and 3,000 grants between them (14)
 
 // PromotionStepStatus gains:
 //   Budget *PromotionStepBudget `json:"budget,omitempty"`
@@ -771,6 +774,7 @@ environment names, but no namespace, Pipeline or Bundle names (15.1).
 | A step is deleted and recreated | It finds its grant by Bundle and environment | No double charge, no refund |
 | A Bundle or its steps are deleted or retired | Version and fleet grants stay until their window ends; `maxConcurrent` is freed; `maxUnavailable` clears only when the environment moves on | No refund within a window |
 | The ledger reaches 2,000 entries, or the AgentIdentity 3,000 across ledgers (A7) | `LedgerFull` condition on that ledger; new requests wait; existing grants keep working | Fail closed; the schema bound (4.1) makes this a misconfiguration signal |
+| A 17th installation tries to keep a ledger on the agent (15.2) | The API server refuses its status write; its steps for the agent hold; a Warning event and `kardinal doctor` say why | Fail closed; the other 16 ledgers are untouched |
 | Budgets are turned off for a release with budgets set (17.4) | Nothing is held or granted; the ledger stays as it was; `kardinal doctor` names the AgentIdentities with budgets | An operator's decision, made visible; turning it on again seeds the ledger (17.2) |
 | The agent index is full or not built | Checked writes are refused by the actor policies, budgets or not; the budget reconciler and the step hold read the AgentIdentity, not the index, and carry on | Budgets never depend on the index (14.1) |
 | The AgentIdentity is deleted | Its steps that have not started hold; started ones run | 17-actors §3 requires suspension first; the `kardinal-agents-<ceiling>` gates also hold such versions |
@@ -791,8 +795,15 @@ some window or state needs, which the schema bounds by the sum of all limits (1,
 plus exempt grants, under a hard cap of 2,000 entries: about 400 KB. One AgentIdentity can carry
 the ledgers of several installations (15.2), so the reconciler also caps the grants across all of
 its ledgers at 3,000 (about 600 KB, well under etcd's 1.5 MiB with the spec): the ledger whose
-grant would pass it is `LedgerFull`, and its requests wait (A7). Typical agents hold tens of
-entries.
+grant would pass it is `LedgerFull`, and its requests wait (A7). The schema holds the same line
+against any writer, a buggy one included: `status.usage` has at most 16 ledgers (15.2), and a CEL
+rule refuses more than 3,000 grants between them (W1). Typical agents hold tens of entries.
+
+These sizes assume short rule names and patterns. The schema's per-field bounds alone allow more:
+a grant naming 16 rules of 63 characters is about 1.2 KB, and each ledger copies its rules'
+patterns, up to 128 per rule. A status write past the API server's limit is refused, so the
+ledger cannot grant and the agent's steps hold (fail closed). W2 therefore also marks a ledger
+`LedgerFull` before the AgentIdentity's JSON would pass 1 MiB.
 
 **Who receives each write.** Every kardinal controller replica's cache (AgentIdentities are
 already cached for the AgentIndex, 17-actors §5.4); the step reconciler's handler (it wakes only
@@ -891,6 +902,16 @@ budgets with that in mind. Options considered: one global ledger (impossible wit
 cluster-wide visibility for every installation), one installation designated as the counter (an
 installation that cannot see the namespaces it counts), per installation (chosen), with shards of
 one installation sharing one.
+
+**At most 16 ledgers.** `status.usage` holds at most 16 entries (W1, `MaxProperties`). With the
+3,000-grant bound across them (14), this keeps one AgentIdentity under etcd's 1.5 MiB. Sixteen
+is far more installations than one agent should span, since each counts the agent separately and
+gives it a budget of its own. A 17th installation's status write is refused by the API server,
+so it cannot record a grant and its steps for that agent hold (fail closed, as a missing ledger
+does), with `waiting for agent fixer's budget to be evaluated`. Its reconciler reports the refused
+write as a Warning event on the AgentIdentity (it cannot write a condition there), and
+`kardinal doctor` reports the missing ledger (15.2). The fix is to remove a stale installation's
+ledger, or to use one ledger for installations that are shards of one.
 
 ## 16. What this does not protect against
 

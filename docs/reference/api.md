@@ -48,16 +48,26 @@ AgentIdentity registers an AI agent: the principals that are the agent, the pers
 |---|---|---|---|
 | `spec` | object | yes | AgentIdentitySpec registers an agent (docs/actors.md). |
 | `spec.autonomy` | string |  | Autonomy is the agent's ceiling: auto, approve (a person approves its promotions) or deny. A Pipeline environment can only tighten it. One of: `auto`, `approve`, `deny`. Default: `approve`. |
-| `spec.budgetExemptions` | []object |  | BudgetExemptions are break-glass exceptions to the budgets, added with kardinal override --budget by someone the cluster lets exempt the agent, never of the agent's own party. |
+| `spec.budgetExemptions` | []object |  | BudgetExemptions are break-glass exceptions to the budgets. Kept, not enforced yet. Planned: added with kardinal override --budget (W7, #2438) by someone the cluster lets exempt the agent, never of the agent's own party and never an agent (W6, #2437; W2, #2433). |
+| `spec.budgetExemptions[].actor` | object |  | Actor is who made the exception, stamped as on freeze exemptions. Planned: the chart's actor admission policy verifies it from the requester's username and groups (W6, #2437), and an exemption whose actor is an agent is never honoured (W2, #2433): break-glass is for people (docs/design/24-agent-budgets.md section 11.3). |
+| `spec.budgetExemptions[].actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
+| `spec.budgetExemptions[].actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
+| `spec.budgetExemptions[].actor.asserted.client` | string |  | Client is the tool that wrote the record (for example kardinal/0.12.0). |
+| `spec.budgetExemptions[].actor.asserted.model` | string |  | Model is the AI model the client says it runs. |
+| `spec.budgetExemptions[].actor.asserted.session` | string |  | Session is the client's session or run identifier. |
+| `spec.budgetExemptions[].actor.kind` | string | yes | Kind is human, agent, bot or controller (docs/actors.md). One of: `human`, `agent`, `bot`, `controller`. |
+| `spec.budgetExemptions[].actor.principal` | string | yes | Principal is the username the API server authenticated. |
+| `spec.budgetExemptions[].actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
+| `spec.budgetExemptions[].actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `spec.budgetExemptions[].bundle` | string |  | Bundle, when set, limits the exemption to that version. |
-| `spec.budgetExemptions[].createdBy` | string | yes | CreatedBy is who made the exception, as admission verified it. |
+| `spec.budgetExemptions[].createdBy` | string | yes | CreatedBy is who made the exception. Planned (W6, #2437): admission verifies it is the requester's username. |
 | `spec.budgetExemptions[].environment` | string | yes | Environment is the environment, or the fleet environment, let through. |
-| `spec.budgetExemptions[].expiresAt` | string (date-time) | yes | ExpiresAt ends the exemption. The controller also ends it 24 hours after it first sees it. |
+| `spec.budgetExemptions[].expiresAt` | string (date-time) | yes | ExpiresAt ends the exemption. Planned (W2, #2433): the controller also ends it 24 hours after it first sees it. |
 | `spec.budgetExemptions[].name` | string | yes | Name identifies the exemption (a DNS label), unique in the list. |
 | `spec.budgetExemptions[].namespace` | string | yes | Namespace and Pipeline are the Pipeline let through. |
 | `spec.budgetExemptions[].pipeline` | string | yes |  |
 | `spec.budgetExemptions[].reason` | string | yes | Reason says why (recorded in the BudgetExempted audit record). |
-| `spec.budgets` | []object |  | Budgets limit how much the agent promotes before a person looks: versions a day, promotions at once, fleet targets an hour, failures left in place, and a share of a fleet. Every rule that matches a step applies; a step beyond a limit waits, it does not fail. Enforced only where the release turns budgets on (actors.budgets.enabled); see docs/design/24-agent-budgets.md. The four counted limits of all rules sum to at most 1,500, which bounds the ledger in status.usage. |
+| `spec.budgets` | []object |  | Budgets limit how much the agent promotes before a person looks: versions a day, promotions at once, fleet targets an hour, failures left in place, and a share of a fleet. Every rule that matches a step applies. The four counted limits of all rules sum to at most 1,500, which bounds the ledger in status.usage. Kept, not enforced yet: enforcement is W2 (#2433) and W3 (#2434), where a step beyond a limit waits rather than fails, behind a release switch that is off by default (W6, #2437). See docs/design/24-agent-budgets.md. |
 | `spec.budgets[].environments` | []string | yes | Environments the rule applies to: exact names, or a prefix ending in "*". A fleet target matches through its own name or its fleet's. |
 | `spec.budgets[].fleetShare` | string |  | FleetShare (L5) is the share of one fleet's targets one version of the agent may have under way or failed at once, "1%" to "100%", rounded up and at least one target. It applies to fleet targets only. |
 | `spec.budgets[].fleetTargetsPerHour` | integer (int32) |  | FleetTargetsPerHour (L3) is how many fleet targets the agent may start promoting in any hour. Plain environments do not count. |
@@ -94,7 +104,7 @@ AgentIdentity registers an AI agent: the principals that are the agent, the pers
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the generation the status describes. |
 | `status.ready` | boolean |  | Ready is true when the registration is valid and takes effect. |
 | `status.reason` | string |  | Reason says why the AgentIdentity is not ready. |
-| `status.usage` | map[string]object |  | Usage is the agent's budget ledgers, one per installation, keyed by the ledger name (--agent-budget-ledger, by default the release name). Each is written by its installation's budget reconciler only. An agent without budgets has none. |
+| `status.usage` | map[string]object |  | Usage is the agent's budget ledgers, one per installation that sees the agent, keyed by the ledger name. Planned (W2, #2433): each is written by its installation's budget reconciler only, keyed by --agent-budget-ledger (by default the release name); nothing writes them yet. An agent without budgets has none. At most 16 ledgers, holding at most 3,000 grants between them (each at most 2,000): the cap keeps one AgentIdentity under etcd's object size limit (docs/design/24-agent-budgets.md section 14). Sixteen is more installations than one agent should span, each counting the agent separately (section 15.2); a 17th installation's status write is refused, so it cannot grant, and its agent steps hold (fail closed) until a ledger is removed. |
 
 ## AgentIndex
 
@@ -1690,7 +1700,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.bakeFirstStartedAt` | string (date-time) |  | BakeFirstStartedAt is when the first bake window of this step began: the first healthy check with env.bake configured. It is never reset. With bake.policy reset-on-alarm, the step must complete one full window by BakeFirstStartedAt + bake.minutes + health.timeout, so a release that keeps flapping ends. |
 | `status.bakeResets` | integer |  | BakeResets is the number of times the bake timer was reset due to a health alarm during the current bake window. |
 | `status.bakeStartedAt` | string (date-time) |  | BakeStartedAt is when the contiguous-healthy soak window began. Set on the first successful health check when env.bake is configured. Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm). |
-| `status.budget` | object |  | Budget is the step's place against its agent's budgets (AgentIdentity spec.budgets): Waiting while the ledger has no room, then Granted. Absent for a step no budget applies to. |
+| `status.budget` | object |  | Budget is the step's place against its agent's budgets (AgentIdentity spec.budgets): Waiting while the ledger has no room, then Granted. Absent for a step no budget applies to. Planned (W3, #2434): nothing writes it yet. |
 | `status.budget.agent` | string | yes | Agent is the AgentIdentity whose budgets hold the step. |
 | `status.budget.exemption` | string |  | Exemption is the exemption the grant used, if any. |
 | `status.budget.rules` | []string |  | Rules are the budget rules that match the step. |
