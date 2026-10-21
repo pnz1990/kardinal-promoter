@@ -141,7 +141,7 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep -i "forbidden\|p
 
 The Helm chart installs a ClusterRole with all required permissions. If you customized RBAC or installed in a restricted namespace, re-apply the Helm chart:
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system --reset-then-reuse-values
 ```
 
