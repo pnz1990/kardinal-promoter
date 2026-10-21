@@ -69,11 +69,18 @@ func TestQuickstartLocal_FromNothing(t *testing.T) {
 		require.True(t, apierrors.IsNotFound(e.Client.Get(ctx, types.NamespacedName{Name: ns}, &n)), "namespace %s exists before the quickstart", ns)
 	}
 
-	// A failure from here on logs what the demo saw (#2083).
+	// A failure from here on logs what the demo saw (#2083), then removes
+	// what the quickstart created, so that the next iteration of a count-N
+	// run starts from nothing again instead of failing on this one's
+	// leftovers.
 	t.Cleanup(func() {
-		if t.Failed() {
-			quickstartLocalDiagnostics(t, e)
+		if !t.Failed() {
+			return
 		}
+		quickstartLocalDiagnostics(t, e)
+		e.ShellEnvFor(t, 15*time.Minute, nil, framework.Fill(t, framework.PageBlock(t, page, "kardinal quickstart --local --delete"),
+			"--local --delete", "--local --delete --yes"))
+		waitQuickstartLocalGone(t, e, app)
 	})
 
 	// ── 3. Run the quickstart ───────────────────────────────────────────
@@ -158,6 +165,14 @@ func TestQuickstartLocal_FromNothing(t *testing.T) {
 	} {
 		assert.Contains(t, r.Output, want)
 	}
+	waitQuickstartLocalGone(t, e, app)
+}
+
+// waitQuickstartLocalGone waits until everything quickstart --local created
+// is deleted: its namespaces (app's included), the kardinal, kro and Argo CD
+// CRDs, and the demo's ConfigMaps.
+func waitQuickstartLocalGone(t *testing.T, e *framework.Env, app string) {
+	t.Helper()
 	gone := []string{"kardinal-git", "kro-system", "argocd", "kardinal-system", app + "-test", app + "-uat", app + "-prod"}
 	framework.Eventually(t, 5*time.Minute, "everything the quickstart created deleted", func(ctx context.Context) (bool, string) {
 		var left []string

@@ -9,12 +9,30 @@
 # times). Dex is scaled to zero: tests use Applications, not SSO.
 # Idempotent.
 #
+# argocd.sh pull-only pulls the release's images into the kind node and
+# installs nothing (the quickstart-local suite: kardinal quickstart --local
+# installs Argo CD itself, from the same release).
+#
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
 set -euo pipefail
 # shellcheck source=hack/e2e/lib.sh
 source "$(dirname "$0")/../lib.sh"
 target_cluster
+
+MANIFEST="$E2E_OUT/argocd-$ARGOCD_RELEASE.yaml"
+[ -s "$MANIFEST" ] || curl -fsSL --retry 5 -o "$MANIFEST" \
+  "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_RELEASE/manifests/install.yaml"
+if [ "${1:-}" = pull-only ]; then
+  # Every image, Dex's too: the quickstart runs it. The node keeps them for
+  # the install (Redis from public.ecr.aws answers 429 "Data limit exceeded"
+  # to CI runners: #2083), and no namespace or ConfigMap is made, so the
+  # cluster is still empty when the test starts.
+  mapfile -t images < <(awk '$1 == "image:" {print $2}' "$MANIFEST" | sort -u)
+  pull_images "${images[@]}"
+  log "Argo CD $ARGOCD_RELEASE images pulled into the node (nothing installed)"
+  exit 0
+fi
 
 NS=argocd
 "${KUBECTL[@]}" create namespace "$NS" --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
@@ -31,9 +49,6 @@ apply_cm() {
     --field-manager=kardinal-e2e -f - >/dev/null
 }
 apply_cm "${cm[@]}"
-MANIFEST="$E2E_OUT/argocd-$ARGOCD_RELEASE.yaml"
-[ -s "$MANIFEST" ] || curl -fsSL --retry 5 -o "$MANIFEST" \
-  "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_RELEASE/manifests/install.yaml"
 # Redis comes from public.ecr.aws, which rate-limits CI runners (Dex is scaled
 # to zero below).
 mapfile -t images < <(awk '$1 == "image:" && $2 !~ /dex/ {print $2}' "$MANIFEST" | sort -u)
