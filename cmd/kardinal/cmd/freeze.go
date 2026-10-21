@@ -259,6 +259,44 @@ func overrideFreezeFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, bund
 	return nil
 }
 
+// overrideBudgetFn lets pipeline's env (or bundle there) through its agent's
+// budget: an exemption on the agent's AgentIdentity, as the caller, stamped
+// as freeze exemptions are (docs/design/24-agent-budgets.md section 11.3).
+func overrideBudgetFn(w io.Writer, c sigs_client.Client, ns, pipeline, env, bundle, reason string,
+	d time.Duration, now time.Time) error {
+	ctx := context.Background()
+	id, err := callerIdentity(ctx, c)
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
+	stamp, err := stampOf(ctx, c, id, actor.Where{Namespace: ns, Pipeline: pipeline, Environment: env})
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
+	if stamp != nil && stamp.Kind == v1alpha1.ActorAgent {
+		return fmt.Errorf("override: you are agent %s: an agent's budget exemption never counts (break-glass is for "+
+			"people); ask %s or another person to run kardinal override --budget", stamp.Agent, stamp.Sponsor)
+	}
+	agent, name, err := lifecycle.ExemptFromBudget(ctx, c, lifecycle.BudgetExemptRequest{Namespace: ns, Pipeline: pipeline,
+		Environment: env, Bundle: bundle, Reason: reason, ExpiresIn: d, CreatedBy: id.Username, Actor: stamp, Now: now})
+	if err != nil {
+		return fmt.Errorf("override: %w", err)
+	}
+	if d == 0 {
+		d = lifecycle.DefaultBudgetExemption
+	}
+	what := pipeline + " in " + env
+	if bundle != "" {
+		what = bundle + " of " + what
+	}
+	_, err = fmt.Fprintf(w, "Exemption %s added to agent %s's budget: %s goes on until %s (at most a day from when the controller sees it).\nReason: %s\nCreated by: %s\n",
+		name, agent, what, now.Add(d).UTC().Truncate(time.Second).Format(time.RFC3339), reason, id.Username)
+	if err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
+}
+
 // freezeReference is the detail of freeze for its reference page.
 const freezeReference = `A freeze is a cluster-scoped ChangeWindow of type blackout with spec.freeze,
 named kardinal-freeze-<agents|everyone>[-<namespace>]. While it is active,

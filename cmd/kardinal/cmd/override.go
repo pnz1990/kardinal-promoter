@@ -40,7 +40,7 @@ func newOverrideCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "override <pipeline> [<env>] (--gate <gate> | --freeze) --reason <text>",
+		Use:   "override <pipeline> [<env>] (--gate <gate> | --freeze | --budget) --reason <text>",
 		Short: "Force-pass a PolicyGate with a mandatory audit record",
 		Long: `Make --gate pass for the in-progress versions of <pipeline> (in <env>, or every
 environment), until --expires-in (default 1h). The override is recorded in the
@@ -53,7 +53,10 @@ the Bundle waits. A single gate instance name is accepted too.`,
   kardinal override my-app --env prod --gate change-freeze --reason "approved by CAB" --expires-in 4h
 
   # let one pipeline through an active freeze (kardinal freeze)
-  kardinal override my-app prod --freeze --reason "hotfix for INC-4211"`,
+  kardinal override my-app prod --freeze --reason "hotfix for INC-4211"
+
+  # let an agent's version through its budget (kardinal budget)
+  kardinal override my-app prod --budget --reason "hotfix for INC-4211" --bundle my-app-7f3c2a`,
 		Args: pipelineArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pipeline, env, err := envArgs(cmd, args, stage)
@@ -67,6 +70,25 @@ the Bundle waits. A single gate instance name is accepted too.`,
 			}
 			gateName, _ := cmd.Flags().GetString("gate")
 			freeze, _ := cmd.Flags().GetBool("freeze")
+			budget, _ := cmd.Flags().GetBool("budget")
+			if budget {
+				if gateName != "" || freeze {
+					return fmt.Errorf("--budget lets an agent's version through its budget; use --gate or --freeze separately")
+				}
+				if env == "" {
+					return fmt.Errorf("--budget needs the environment: kardinal override %s <env> --budget --reason <why>", pipeline)
+				}
+				c, ns, err := buildClient()
+				if err != nil {
+					return fmt.Errorf("override: %w", err)
+				}
+				bundle, _ := cmd.Flags().GetString("bundle")
+				if err := confirm(cmd, fmt.Sprintf("Let %s in %s through its agent's budget for %s?",
+					pipeline, env, durationText(expiresIn))); err != nil {
+					return err
+				}
+				return overrideBudgetFn(cmd.OutOrStdout(), c, ns, pipeline, env, bundle, reason, expiresIn, time.Now())
+			}
 			if freeze {
 				if gateName != "" {
 					return fmt.Errorf("--freeze lets the pipeline through a freeze; override a gate separately with --gate")
@@ -110,7 +132,8 @@ the Bundle waits. A single gate instance name is accepted too.`,
 	cmd.Flags().Var(durationValue{&expiresIn}, "expires-in", "How long the override is active (30m, 4h, 2d)")
 	cmd.Flags().String("gate", "", "PolicyGate name to override")
 	cmd.Flags().Bool("freeze", false, "Let the pipeline through the active freezes instead (an exemption on each freeze, audited when used)")
-	cmd.Flags().String("bundle", "", "With --freeze: only this version")
+	cmd.Flags().Bool("budget", false, "Let an agent's version through its budget instead (an exemption on the agent's AgentIdentity, audited when used)")
+	cmd.Flags().String("bundle", "", "With --freeze or --budget: only this version")
 	_ = cmd.MarkFlagRequired("reason")
 
 	addYesFlag(cmd)

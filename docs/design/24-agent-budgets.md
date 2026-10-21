@@ -756,6 +756,20 @@ later states), so a hold cannot time out into a failure.
   (`BudgetExhausted`, `BudgetAvailable`), once per transition.
 - The UI agent page (v0.14 analytics by actor) shows the same numbers.
 
+**As built (W7).** The Pipeline projects the hold as `status.environments[].budgetHeldBy` (the
+agent), from its newest Bundle's Pending step whose `status.budget` is Waiting, so `kardinal
+status` shows "Held by agent fixer's budget" and `kardinal why` answers "prod waits for agent
+fixer's budget." with the step's message, `Next: kardinal budget fixer` and `Or: kardinal
+override ... --budget`. `kardinal budget` prints every ledger of the agent (or `--ledger`'s) and
+lists the waiting steps only when the caller may list PromotionSteps in every namespace (it says
+so otherwise). `kardinal doctor` checks the controller Deployment's flags: with budgets off it
+names the AgentIdentities whose budgets are kept but not enforced; with them on it fails on a
+budgeted agent with no entry in this release's ledger (no writer: a shard naming a ledger whose
+release does not run the reconciler) and warns on one behind its spec. The budget reconciler
+emits `BudgetExhausted` and `BudgetAvailable` (Normal) when a rule runs out of room or has room
+again. The UI's agent page (analytics by actor) is not built yet; the stage drawer shows the
+held step's message.
+
 ### 11.3 Human override: exemptions
 
 | | Mechanism | For | Against |

@@ -1405,6 +1405,12 @@ type PipelineEnvironmentStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=253
 	FrozenBy string `json:"frozenBy,omitempty"`
+	// BudgetHeldBy is the agent whose budget holds the newest Bundle's step
+	// here: its PromotionStep's status.budget is Waiting
+	// (docs/design/24-agent-budgets.md section 11.2).
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	BudgetHeldBy string `json:"budgetHeldBy,omitempty"`
 }
 
 // FleetStatus is the resolved membership of one selector fleet.

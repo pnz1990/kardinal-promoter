@@ -11,7 +11,7 @@ AuditEvent; it applies to the gate instances that exist now, so run it while
 the Bundle waits. A single gate instance name is accepted too.
 
 ```
-kardinal override <pipeline> [<env>] (--gate <gate> | --freeze) --reason <text> [flags]
+kardinal override <pipeline> [<env>] (--gate <gate> | --freeze | --budget) --reason <text> [flags]
 ```
 
 ### Examples
@@ -24,12 +24,16 @@ kardinal override <pipeline> [<env>] (--gate <gate> | --freeze) --reason <text> 
 
   # let one pipeline through an active freeze (kardinal freeze)
   kardinal override my-app prod --freeze --reason "hotfix for INC-4211"
+
+  # let an agent's version through its budget (kardinal budget)
+  kardinal override my-app prod --budget --reason "hotfix for INC-4211" --bundle my-app-7f3c2a
 ```
 
 ### Options
 
 ```
-      --bundle string         With --freeze: only this version
+      --budget                Let an agent's version through its budget instead (an exemption on the agent's AgentIdentity, audited when used)
+      --bundle string         With --freeze or --budget: only this version
   -e, --env string            Environment the override applies to (or give it after the pipeline; default: every environment)
       --expires-in duration   How long the override is active (30m, 4h, 2d) (default 1h)
       --freeze                Let the pipeline through the active freezes instead (an exemption on each freeze, audited when used)
@@ -45,7 +49,7 @@ kardinal override <pipeline> [<env>] (--gate <gate> | --freeze) --reason <text> 
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: budget, create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

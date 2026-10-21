@@ -148,6 +148,11 @@ func ProjectEnvironments(p *kardinalv1alpha1.Pipeline, bundles []kardinalv1alpha
 		if cur != nil && cur.Status.FrozenBy != nil && (e.State == "Pending" || e.State == "Promoting") {
 			e.FrozenBy = cur.Status.FrozenBy.Name
 		}
+		// An agent's budget holds the step before it starts (status.budget
+		// Waiting, docs/design/24-agent-budgets.md section 7.2).
+		if cur != nil && cur.Status.Budget != nil && cur.Status.Budget.State == "Waiting" && e.State == "Pending" {
+			e.BudgetHeldBy = cur.Status.Budget.Agent
+		}
 		if curBundle != "" && curBundle != e.Bundle {
 			e.IncomingBundle = curBundle
 			e.IncomingVersion = version(curBundle)
@@ -311,6 +316,8 @@ func Summarize(p *kardinalv1alpha1.Pipeline, ready metav1.Condition, envs []kard
 			st = display.Frozen(e.State, e.FrozenBy)
 		case e.Held:
 			st = display.Held(e.State)
+		case e.BudgetHeldBy != "":
+			st = display.HeldByBudget(e.State, e.BudgetHeldBy)
 		case len(e.BlockedBy) > 0:
 			st = display.HeldByGate(e.State, strings.Join(e.BlockedBy, ", "))
 		}

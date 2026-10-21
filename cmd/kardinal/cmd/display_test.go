@@ -64,14 +64,17 @@ func assertNoRawStates(t *testing.T, out string) {
 func TestHeldEnvironments(t *testing.T) {
 	t.Parallel()
 	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
-	assert.Equal(t, "Held by rollback", envCellLabel(heldCell("Waiting", true, nil, "")))
-	assert.Equal(t, "Held by gate a, b", envCellLabel(heldCell("Pending", false, []string{"a", "b"}, "")))
-	assert.Equal(t, "Live", envCellLabel(heldCell("Verified", true, []string{"a"}, "")), "only a waiting cell is held")
+	assert.Equal(t, "Held by rollback", envCellLabel(heldCell("Waiting", true, nil, "", "")))
+	assert.Equal(t, "Held by gate a, b", envCellLabel(heldCell("Pending", false, []string{"a", "b"}, "", "")))
+	assert.Equal(t, "Live", envCellLabel(heldCell("Verified", true, []string{"a"}, "", "")), "only a waiting cell is held")
+	assert.Equal(t, "Held by agent fixer's budget", envCellLabel(heldCell("Pending", false, nil, "", "fixer")))
+	assert.Equal(t, "Held by rollback", envCellLabel(heldCell("Pending", true, nil, "", "fixer")), "a rollback hold first")
+	assert.Equal(t, "Live", envCellLabel(heldCell("Verified", false, nil, "", "fixer")))
 	// #1974: a freeze holds a waiting or a promoting step, before the rest.
-	assert.Equal(t, "Frozen by release-freeze", envCellLabel(heldCell("Pending", true, []string{"a"}, "release-freeze")))
-	assert.Equal(t, "Frozen by release-freeze", envCellLabel(heldCell("Promoting", false, nil, "release-freeze")))
-	assert.Equal(t, "Live", envCellLabel(heldCell("Verified", false, nil, "release-freeze")), "a step that moved on is not frozen")
-	assert.Equal(t, "Not reached", envCellLabel(heldCell("Waiting", false, nil, "")))
+	assert.Equal(t, "Frozen by release-freeze", envCellLabel(heldCell("Pending", true, []string{"a"}, "release-freeze", "")))
+	assert.Equal(t, "Frozen by release-freeze", envCellLabel(heldCell("Promoting", false, nil, "release-freeze", "")))
+	assert.Equal(t, "Live", envCellLabel(heldCell("Verified", false, nil, "release-freeze", "")), "a step that moved on is not frozen")
+	assert.Equal(t, "Not reached", envCellLabel(heldCell("Waiting", false, nil, "", "")))
 
 	t.Run("get pipelines: rollback hold", func(t *testing.T) {
 		p := policyPipeline("demo", "test", "prod")

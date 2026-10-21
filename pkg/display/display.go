@@ -173,6 +173,13 @@ func Frozen(stepState, window string) State {
 	return State{Value: stepState, Label: "Frozen by " + window, Glyph: "❄", ASCII: "*", Tone: ToneFrozen}
 }
 
+// HeldByBudget is an environment whose agent's step waits for its budget's
+// grant (docs/design/24-agent-budgets.md section 7.2): "Held by agent
+// <agent>'s budget", ToneBlocked. Value stays the step state.
+func HeldByBudget(stepState, agent string) State {
+	return State{Value: stepState, Label: "Held by agent " + agent + "'s budget", Glyph: "⏸", ASCII: "||", Tone: ToneBlocked}
+}
+
 // Table returns every known state of every kind: what the UI API serves at
 // /api/v1/ui/display-states. The maps are copies.
 func Table() map[Kind]map[string]State {

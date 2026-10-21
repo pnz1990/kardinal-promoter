@@ -527,6 +527,8 @@ func envState(e v1alpha1.PipelineEnvironmentStatus) display.State {
 		return display.Frozen(e.State, e.FrozenBy)
 	case e.Held:
 		return display.Held(e.State)
+	case e.BudgetHeldBy != "":
+		return display.HeldByBudget(e.State, e.BudgetHeldBy)
 	case len(e.BlockedBy) > 0:
 		return display.HeldByGate(e.State, strings.Join(e.BlockedBy, ", "))
 	}

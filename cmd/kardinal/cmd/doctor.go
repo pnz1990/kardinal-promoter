@@ -130,6 +130,9 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 	if r, shown := checkReceiptGrowth(ctx, client, ns, controllerNS); shown {
 		results = append(results, r)
 	}
+	if r, shown := checkAgentBudgets(ctx, client, controllerNS); shown {
+		results = append(results, r)
+	}
 	results = append(results, checkPolicyNamespaces(ctx, client, ns, controllerVersion(ctx, client, controllerNS),
 		readControllerRollout(ctx, client, controllerNS, time.Now())))
 	if pipeline != "" {

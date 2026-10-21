@@ -143,6 +143,10 @@ type outcome struct {
 	full string
 	// granted are this evaluation's new grants.
 	granted []v1alpha1.AgentBudgetGrant
+	// exhausted and available are the rules that ran out of room, and the
+	// ones that have room again, since the last evaluation: one event each
+	// (section 11.2).
+	exhausted, available []v1alpha1.AgentBudgetRuleUsage
 	// requeue is when to evaluate again; 0 for no time-based requeue.
 	requeue time.Duration
 }
@@ -481,6 +485,7 @@ func evaluate(id *v1alpha1.AgentIdentity, old *v1alpha1.AgentUsage, f facts, now
 	}
 	setIgnoredCondition(&usage.Conditions, id, exemptions, now)
 	out.ignored = ignored
+	out.exhausted, out.available = transitions(old, usage)
 	next, when := nextEvaluation(usage, l, now)
 	usage.EvaluatedAt = ptrTime(now)
 	usage.NextEvaluationAt = next
@@ -568,6 +573,25 @@ func (l *ledger) rate(rule string, limit, used int, window time.Duration, counts
 		c.FreesAt = ptrTime(oldest.Add(window))
 	}
 	return c
+}
+
+// transitions are the rules of u that ran out of room since old, and the
+// ones that have room again.
+func transitions(old, u *v1alpha1.AgentUsage) (exhausted, available []v1alpha1.AgentBudgetRuleUsage) {
+	was := map[string]bool{}
+	for _, r := range old.Rules {
+		was[r.Name] = len(r.Exhausted) > 0
+	}
+	for _, r := range u.Rules {
+		before, known := was[r.Name]
+		switch now := len(r.Exhausted) > 0; {
+		case now && !before:
+			exhausted = append(exhausted, r)
+		case !now && before && known:
+			available = append(available, r)
+		}
+	}
+	return exhausted, available
 }
 
 // nextEvaluation is when a count next drops for a rule that holds a request,

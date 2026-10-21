@@ -539,3 +539,23 @@ func TestIdempotent(t *testing.T) {
 	assert.True(t, unchanged(first.usage, second.usage), "only the evaluation times moved")
 	assert.False(t, unchanged(nil, second.usage))
 }
+
+// TestTransitions: a rule that runs out of room, and one that has room
+// again, since the last evaluation: one event each (section 11.2).
+// Covers BUDGET-LEDGER-02.
+func TestTransitions(t *testing.T) {
+	r := rule("prod", "prod")
+	r.MaxConcurrent = 1
+	first := evaluate(agent(r), nil, facts{requests: []request{ask("a", "prod", t0)}}, t0)
+	require.Len(t, first.exhausted, 1, "the grant used its one place")
+	assert.Equal(t, "prod", first.exhausted[0].Name)
+	assert.Empty(t, first.available)
+
+	same := evaluate(agent(r), first.usage, facts{grants: map[grantKey]grantState{{"a", "prod"}: running()}}, t0)
+	assert.Empty(t, same.exhausted, "still exhausted: no second event")
+	assert.Empty(t, same.available)
+
+	freed := evaluate(agent(r), same.usage, facts{grants: map[grantKey]grantState{{"a", "prod"}: done("Verified")}}, t0)
+	assert.Empty(t, freed.exhausted)
+	require.Len(t, freed.available, 1, "room again")
+}

@@ -24,6 +24,10 @@ func TestStepStateChanged(t *testing.T) {
 		}
 		return s
 	}
+	waiting := func(s *kardinalv1alpha1.PromotionStep, state string) *kardinalv1alpha1.PromotionStep {
+		s.Status.Budget = &kardinalv1alpha1.PromotionStepBudget{Agent: "fixer", State: state}
+		return s
+	}
 	frozen := func(s *kardinalv1alpha1.PromotionStep, name string) *kardinalv1alpha1.PromotionStep {
 		s.Status.FrozenBy = &kardinalv1alpha1.StepFreeze{Name: name}
 		return s
@@ -43,6 +47,9 @@ func TestStepStateChanged(t *testing.T) {
 		{"the freeze is cleared", frozen(step("Pending", "", "", 0), "release-freeze"), step("Pending", "", "", 0), true},
 		{"another freeze holds it", frozen(step("Pending", "", "", 0), "a"), frozen(step("Pending", "", "", 0), "b"), true},
 		{"the same freeze, a new message", frozen(step("Pending", "x", "", 0), "a"), frozen(step("Pending", "y", "", 0), "a"), false},
+		// The Pipeline projects status.budget Waiting (budgetHeldBy).
+		{"a budget holds it", step("Pending", "", "", 0), waiting(step("Pending", "", "", 0), "Waiting"), true},
+		{"the budget grants it", waiting(step("Pending", "", "", 0), "Waiting"), waiting(step("Pending", "", "", 0), "Granted"), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

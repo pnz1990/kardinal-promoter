@@ -377,6 +377,17 @@ func whyEnvironment(p *v1alpha1.Pipeline, e v1alpha1.PipelineEnvironmentStatus, 
 		return whyAnswer{sentence: fmt.Sprintf("%s is held by gate %s.", e.Name, strings.Join(e.BlockedBy, ", ")),
 			lines: []whyLine{version, {"Next", fmt.Sprintf("kardinal why %s %s -o wide%s", p.Name, e.Name, nsArg(p.Namespace))}}}
 	}
+	if e.BudgetHeldBy != "" {
+		a := whyAnswer{sentence: fmt.Sprintf("%s waits for agent %s's budget.", e.Name, e.BudgetHeldBy), lines: []whyLine{version}}
+		if msg := stepMessage(steps, e.Name, incoming); msg != "" {
+			a.lines = append(a.lines, whyLine{"Why", msg})
+			a.quoted = append(a.quoted, "Why")
+		}
+		a.lines = append(a.lines, whyLine{"Next", "kardinal budget " + e.BudgetHeldBy},
+			whyLine{"Or", fmt.Sprintf("kardinal override %s %s --budget --reason <why>%s, by someone who may exempt the agent",
+				p.Name, e.Name, nsArg(p.Namespace))})
+		return a
+	}
 	state := display.Step(e.State)
 	switch {
 	case e.State == "WaitingForMerge":
@@ -690,7 +701,9 @@ Opens when it opens and how often it is rechecked ("by itself in about
 2m36s" for a soak gate; "by itself at Thursday 04:25 UTC, in about 18m" for
 a gate that only reads a ChangeWindow); Next: kardinal approve; for a gate that opens by
 itself, wait, with kardinal override only as Or; else kardinal override); its PR waits to be merged (PR and its URL); the version
-failed (Why the step's message; Next: kardinal logs, or roll back); it is
+failed (Why the step's message; Next: kardinal logs, or roll back); an
+agent's budget holds it (Why the step's message, which names the exhausted
+limits; Next: kardinal budget <agent>; Or: kardinal override --budget); it is
 promoting; it waits for an upstream environment; it has no version yet; a
 newer version is on its way, still upstream ("prod runs 1.4.0; 1.5.0 is on
 its way (live in test)."); or nothing is waiting ("prod runs 1.5.0 and

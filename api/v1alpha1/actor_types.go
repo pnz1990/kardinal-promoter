@@ -220,8 +220,8 @@ type AgentIdentitySpec struct {
 
 	// BudgetExemptions are break-glass exceptions to the budgets, added by
 	// someone the cluster lets exempt the agent (the exempt verb), never of
-	// the agent's own party. One made by an agent, or without an actor
-	// stamp, never counts. Planned: kardinal override --budget (W7, #2438).
+	// the agent's own party (kardinal override --budget adds one). One made
+	// by an agent, or without an actor stamp, never counts.
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=map
 	// +listMapKey=name

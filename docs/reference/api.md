@@ -48,7 +48,7 @@ AgentIdentity registers an AI agent: the principals that are the agent, the pers
 |---|---|---|---|
 | `spec` | object | yes | AgentIdentitySpec registers an agent (docs/actors.md). |
 | `spec.autonomy` | string |  | Autonomy is the agent's ceiling: auto, approve (a person approves its promotions) or deny. A Pipeline environment can only tighten it. One of: `auto`, `approve`, `deny`. Default: `approve`. |
-| `spec.budgetExemptions` | []object |  | BudgetExemptions are break-glass exceptions to the budgets, added by someone the cluster lets exempt the agent (the exempt verb), never of the agent's own party. One made by an agent, or without an actor stamp, never counts. Planned: kardinal override --budget (W7, #2438). |
+| `spec.budgetExemptions` | []object |  | BudgetExemptions are break-glass exceptions to the budgets, added by someone the cluster lets exempt the agent (the exempt verb), never of the agent's own party (kardinal override --budget adds one). One made by an agent, or without an actor stamp, never counts. |
 | `spec.budgetExemptions[].actor` | object |  | Actor is who made the exception, stamped as on freeze exemptions. An exemption whose actor is an agent, or that has none, is never honoured: break-glass is for people (docs/design/24-agent-budgets.md section 11.3). The chart's actor admission policies verify it from the requester's username and groups, and the controller counts a stamped exemption only while that check is installed (--agent-budget-exemption-policies). |
 | `spec.budgetExemptions[].actor.agent` | string |  | Agent is the AgentIdentity name, when kind is agent. |
 | `spec.budgetExemptions[].actor.asserted` | object |  | Asserted holds what the client says about itself. It is recorded as written and never used for a security decision. |
@@ -1249,6 +1249,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.environmentSummary` | string |  | EnvironmentSummary is Environments as one line, environment=version ("test=1.5.0 uat=1.5.0 prod=1.4.0"; "-" where nothing runs yet), for the wide printer column. Display only. |
 | `status.environments` | []object |  | Environments is, per environment in spec order (a fleet environment expands to its targets), what runs there and where the newest version stands. Written by the PipelineReconciler from the Bundles, PromotionSteps and gate instances of the Pipeline. It is a display projection: no controller decision reads it. |
 | `status.environments[].blockedBy` | []string |  | BlockedBy names the gates that hold the newest Bundle back in the environment, sorted. |
+| `status.environments[].budgetHeldBy` | string |  | BudgetHeldBy is the agent whose budget holds the newest Bundle's step here: its PromotionStep's status.budget is Waiting (docs/design/24-agent-budgets.md section 11.2). |
 | `status.environments[].bundle` | string |  | Bundle is the Bundle whose change runs in the environment: the newest one whose change landed there. Empty when none has. |
 | `status.environments[].frozenBy` | string |  | FrozenBy is the freeze (ChangeWindow name) that holds the newest Bundle's step here: its PromotionStep's status.frozenBy. |
 | `status.environments[].held` | boolean |  | Held is true when a rollback hold (spec.holds) keeps the environment on Bundle, so the newest Bundle waits. |

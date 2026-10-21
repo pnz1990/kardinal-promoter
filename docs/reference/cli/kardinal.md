@@ -117,13 +117,14 @@ names the new Bundle.
   -h, --help                help for kardinal
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: budget, create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO
 
 * [kardinal approve](kardinal-approve.md)	 - Approve (or reject) the version waiting for an environment's approval gates
 * [kardinal audit](kardinal-audit.md)	 - Audit log commands: view and summarize promotion events
+* [kardinal budget](kardinal-budget.md)	 - Show an agent's budgets: what it has used, what waits, and the exemptions
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
 * [kardinal dashboard](kardinal-dashboard.md)	 - Open the kardinal UI dashboard in a browser

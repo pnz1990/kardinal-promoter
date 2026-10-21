@@ -476,6 +476,32 @@ func TestProjectEnvironments_Frozen(t *testing.T) {
 	assert.Contains(t, sum, "frozen by release-freeze in uat")
 }
 
+// TestProjectEnvironments_BudgetHeld: a Pending step an agent's budget holds
+// (its status.budget Waiting) projects budgetHeldBy, and the summary says
+// so; a granted or a started step does not
+// (docs/design/24-agent-budgets.md section 11.2).
+// Covers BUDGET-CLI-01.
+func TestProjectEnvironments_BudgetHeld(t *testing.T) {
+	p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}})
+	bundles := []kardinalv1alpha1.Bundle{envBundle("b1", "1.4.0", "Promoting", envT0)}
+	budget := func(s kardinalv1alpha1.PromotionStep, state string) kardinalv1alpha1.PromotionStep {
+		s.Status.Budget = &kardinalv1alpha1.PromotionStepBudget{Agent: "fixer", State: state}
+		return s
+	}
+	steps := []kardinalv1alpha1.PromotionStep{
+		budget(projStep("b1", "test", "Promoting", envT0, time.Time{}), "Granted"),
+		budget(projStep("b1", "uat", "Pending", envT0, time.Time{}), "Granted"),
+		budget(projStep("b1", "prod", "Pending", envT0, time.Time{}), "Waiting"),
+	}
+	envs := pipeline.ProjectEnvironments(p, bundles, steps, nil, nil, envT0.Add(time.Hour))
+	require.Len(t, envs, 3)
+	assert.Empty(t, envs[0].BudgetHeldBy)
+	assert.Empty(t, envs[1].BudgetHeldBy, "granted: about to start")
+	assert.Equal(t, "fixer", envs[2].BudgetHeldBy)
+	sum := pipeline.Summarize(p, metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue}, envs)
+	assert.Contains(t, sum, "held by agent fixer's budget in prod")
+}
+
 // TestPipelineReconciler_ReceiptCounts (#1951 N6): with receipts enabled,
 // status.environments[].receipts counts each environment's
 // PromotionReceipts and their size (status.bytes); an environment without

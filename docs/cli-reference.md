@@ -14,6 +14,7 @@
 | [`kardinal audit evidence-pack`](reference/cli/kardinal-audit-evidence-pack.md) | Write the records of a period, with a manifest of hashes and the control mapping, as one tar.gz |
 | [`kardinal audit export`](reference/cli/kardinal-audit-export.md) | Write AuditEvents as JSON lines or OCSF API Activity events, for a SIEM |
 | [`kardinal audit summary`](reference/cli/kardinal-audit-summary.md) | Aggregate promotion metrics from AuditEvent records |
+| [`kardinal budget`](reference/cli/kardinal-budget.md) | Show an agent's budgets: what it has used, what waits, and the exemptions |
 | [`kardinal completion`](reference/cli/kardinal-completion.md) | Generate shell completion scripts |
 | [`kardinal create`](reference/cli/kardinal-create.md) | Create kardinal resources |
 | [`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) | Create a Bundle to trigger promotion through a Pipeline |

@@ -664,8 +664,17 @@ var stepStateChanged = predicate.Funcs{
 		}
 		return oldS.Status.State != newS.Status.State ||
 			oldS.Status.Outputs["noChanges"] != newS.Status.Outputs["noChanges"] ||
-			frozenName(oldS) != frozenName(newS)
+			frozenName(oldS) != frozenName(newS) || budgetWaiting(oldS) != budgetWaiting(newS)
 	},
+}
+
+// budgetWaiting is the agent whose budget holds s (status.budget Waiting), or
+// "".
+func budgetWaiting(s *kardinalv1alpha1.PromotionStep) string {
+	if s.Status.Budget == nil || s.Status.Budget.State != "Waiting" {
+		return ""
+	}
+	return s.Status.Budget.Agent
 }
 
 // frozenName is the name of the freeze that holds s (status.frozenBy), or "".

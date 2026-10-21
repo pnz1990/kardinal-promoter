@@ -190,6 +190,7 @@ nav:
         - kardinal audit evidence-pack: reference/cli/kardinal-audit-evidence-pack.md
         - kardinal audit export: reference/cli/kardinal-audit-export.md
         - kardinal audit summary: reference/cli/kardinal-audit-summary.md
+      - kardinal budget: reference/cli/kardinal-budget.md
       - kardinal completion: reference/cli/kardinal-completion.md
       - kardinal create:
         - kardinal create: reference/cli/kardinal-create.md

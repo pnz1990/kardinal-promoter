@@ -54,6 +54,11 @@ const (
 	// ReasonLedgerWriteRefused: the API server refused the ledger's write
 	// (for example a 17th ledger), so this installation cannot grant.
 	ReasonLedgerWriteRefused = "BudgetLedgerWriteRefused"
+	// ReasonExhausted: a rule has no room left; the agent's next steps under
+	// it wait.
+	ReasonExhausted = "BudgetExhausted"
+	// ReasonAvailable: a rule has room again.
+	ReasonAvailable = "BudgetAvailable"
 )
 
 // conflictRetries is how many times a write refused with Conflict is
@@ -173,6 +178,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		for _, e := range out.ignored {
 			kubeevent.Emit(r.Recorder, &id, corev1.EventTypeWarning, ReasonExemptionIgnored, "Grant", ignoredNote(e))
+		}
+		for _, ru := range out.exhausted {
+			kubeevent.Emit(r.Recorder, &id, corev1.EventTypeNormal, ReasonExhausted, "Grant",
+				fmt.Sprintf("ledger %s: rule %s of agent %s has no room left (%s): its next steps under it wait",
+					r.Ledger, ru.Name, id.Name, strings.Join(ru.Exhausted, ", ")))
+		}
+		for _, ru := range out.available {
+			kubeevent.Emit(r.Recorder, &id, corev1.EventTypeNormal, ReasonAvailable, "Grant",
+				fmt.Sprintf("ledger %s: rule %s of agent %s has room again", r.Ledger, ru.Name, id.Name))
 		}
 		if out.full != "" {
 			kubeevent.Emit(r.Recorder, &id, corev1.EventTypeWarning, ReasonLedgerFull, "Grant",

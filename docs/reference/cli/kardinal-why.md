@@ -33,7 +33,9 @@ Opens when it opens and how often it is rechecked ("by itself in about
 2m36s" for a soak gate; "by itself at Thursday 04:25 UTC, in about 18m" for
 a gate that only reads a ChangeWindow); Next: kardinal approve; for a gate that opens by
 itself, wait, with kardinal override only as Or; else kardinal override); its PR waits to be merged (PR and its URL); the version
-failed (Why the step's message; Next: kardinal logs, or roll back); it is
+failed (Why the step's message; Next: kardinal logs, or roll back); an
+agent's budget holds it (Why the step's message, which names the exhausted
+limits; Next: kardinal budget <agent>; Or: kardinal override --budget); it is
 promoting; it waits for an upstream environment; it has no version yet; a
 newer version is on its way, still upstream ("prod runs 1.4.0; 1.5.0 is on
 its way (live in test)."); or nothing is waiting ("prod runs 1.5.0 and
@@ -78,7 +80,7 @@ kardinal why <pipeline> [<env>] [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default: $KUBECONFIG, else ~/.kube/config)
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
+  -o, --output string       Output format: table (default), json, yaml, wide (json and yaml: budget, create bundle, get auditevents, get bundles, get pipelines, get steps, get subscriptions, history, hold, inbox, promote, rollback, ship, status, unhold, verify-receipt, why; wide: get subscriptions, status, why)
 ```
 
 ### SEE ALSO

@@ -45,7 +45,7 @@ func setOf(words ...string) map[string]bool {
 
 // kardinalVerbs are the CLI's subcommands (TestQuickstartHints_Verbs keeps
 // the list equal to the root command's).
-var kardinalVerbs = setOf("approve", "audit", "completion", "create", "dashboard", "delete", "diff", "doctor", "explain",
+var kardinalVerbs = setOf("approve", "audit", "budget", "completion", "create", "dashboard", "delete", "diff", "doctor", "explain",
 	"freeze", "get", "help", "history", "hold", "inbox", "init", "logs", "mcp", "metrics", "override", "pause", "policy",
 	"promote", "quickstart", "refresh", "reject", "resume", "rollback", "ship", "status", "unfreeze", "unhold",
 	"validate", "verify", "verify-receipt", "version", "why")
