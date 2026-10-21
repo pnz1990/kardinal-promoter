@@ -249,9 +249,17 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		return r.reconcileTemplate(ctx, &gate)
 	}
 
+	// The Bundle's UID goes on, and into the names of, the gate's audit
+	// records (#2380): a Bundle created again under its name has gates of
+	// the same names, and gets records of its own.
+	bundleUID, err := r.bundleUID(ctx, gate.Namespace, bundleName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Every override is recorded and audited once (GateOverridden), whatever
 	// the Bundle's phase, before anything else reads it.
-	if err := r.recordOverrides(ctx, &gate); err != nil {
+	if err := r.recordOverrides(ctx, &gate, bundleUID); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -275,7 +283,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	if active, ok := findActiveOverride(&gate, gate.Labels[labelEnvironment], now, r.maxOverride()); ok {
 		overrideReason := active.reason()
 		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
-		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason, gate.Status.BundleVersion); patchErr != nil {
+		if patchErr := r.patchStatus(ctx, &gate, bundleUID, true, overrideReason, gate.Status.BundleVersion); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
 		// Re-evaluate just after the override ends (its expiresAt or the
@@ -290,7 +298,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	celCtx, bundleVersion, err := r.buildContext(ctx, &gate, bundleName)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to build CEL context, setting gate to blocked")
-		if patchErr := r.patchStatus(ctx, &gate, false,
+		if patchErr := r.patchStatus(ctx, &gate, bundleUID, false,
 			fmt.Sprintf("context error: %s", err), ""); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 		}
@@ -301,7 +309,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// the Bundle's Approval objects, against spec.approval (buildContext
 	// exposes the same count to the expression as approvals.*).
 	tally := tallyApprovals(&gate, authorFrom(celCtx))
-	if err := r.recordApprovals(ctx, &gate, tally); apierrors.IsConflict(err) {
+	if err := r.recordApprovals(ctx, &gate, tally, bundleUID); apierrors.IsConflict(err) {
 		return ctrl.Result{}, err // a stale read: Reconcile evaluates again (#1513)
 	} else if err != nil {
 		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
@@ -317,7 +325,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: %w", bundleName, err)
 		}
 		verdictTally = tallyVerdicts(&gate, &bundle, now)
-		if err := r.recordVerdicts(ctx, &gate, verdictTally); apierrors.IsConflict(err) {
+		if err := r.recordVerdicts(ctx, &gate, verdictTally, bundleUID); apierrors.IsConflict(err) {
 			return ctrl.Result{}, err // a stale read: Reconcile evaluates again
 		} else if err != nil {
 			log.Warn().Err(err).Msg("failed to record verdicts in status (non-fatal)")
@@ -389,7 +397,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 			log.Warn().Str("hold", h.Bundle).Str("reason", reason).Msg("policygate exempt for the held rollback")
 			// One Event per exempt episode, not per changed gate reason.
 			first := !gate.Status.Ready || !lifecycle.IsHoldExemption(gate.Status.Reason)
-			if patchErr := r.patchStatusWith(ctx, &gate, true, reason, bundleVersion, approvalReq); patchErr != nil {
+			if patchErr := r.patchStatusWith(ctx, &gate, bundleUID, true, reason, bundleVersion, approvalReq); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch gate status (hold exemption): %w", patchErr)
 			}
 			if r.Recorder != nil && first {
@@ -404,7 +412,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		// expression, not an error, so the reason does not lead with it.
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
 			Msg("CEL evaluation error, setting gate to blocked")
-		if patchErr := r.patchStatusWith(ctx, &gate, false, graph.WithVersion(reason, bundleVersion), bundleVersion, approvalReq); patchErr != nil {
+		if patchErr := r.patchStatusWith(ctx, &gate, bundleUID, false, graph.WithVersion(reason, bundleVersion), bundleVersion, approvalReq); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status on eval error: %w", patchErr)
 		}
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
@@ -425,7 +433,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		Str("expr", gate.Spec.Expression).
 		Msg("policygate evaluated")
 
-	if patchErr := r.patchStatusWith(ctx, &gate, pass, reason, bundleVersion, approvalReq); patchErr != nil {
+	if patchErr := r.patchStatusWith(ctx, &gate, bundleUID, pass, reason, bundleVersion, approvalReq); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
@@ -528,6 +536,20 @@ func (r *Reconciler) markGenerated(ctx context.Context, gate *kardinalv1alpha1.P
 		return false, fmt.Errorf("set spec.generated on policygate %s: %w", gate.Name, err)
 	}
 	return true, nil
+}
+
+// bundleUID is the UID of the gate's Bundle, "" when there is none (it was
+// deleted: its gate goes too).
+func (r *Reconciler) bundleUID(ctx context.Context, namespace, bundleName string) (string, error) {
+	var bundle kardinalv1alpha1.Bundle
+	err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: namespace}, &bundle)
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load bundle %s: %w", bundleName, err)
+	}
+	return string(bundle.UID), nil
 }
 
 // bundleSettled reports whether the gate's Bundle exists and is either
@@ -1162,13 +1184,13 @@ func (r *Reconciler) freshResultWanted(ctx context.Context, gate *kardinalv1alph
 // version (status.bundleVersion, the version evaluated). It writes nothing when
 // the result is unchanged and no step waits for a newer one
 // (unchangedResult).
-func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleUID string,
 	ready bool, reason, version string) error {
-	return r.patchStatusWith(ctx, gate, ready, reason, version, gate.Status.ApprovalRequired)
+	return r.patchStatusWith(ctx, gate, bundleUID, ready, reason, version, gate.Status.ApprovalRequired)
 }
 
 // patchStatusWith is patchStatus that also writes status.approvalRequired.
-func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleUID string,
 	ready bool, reason, version string, approvalRequired *bool) error {
 	if gate.Status.BundleVersion == version && equalBoolPtr(gate.Status.ApprovalRequired, approvalRequired) &&
 		r.unchangedResult(ctx, gate, ready, reason, r.now()) {
@@ -1226,7 +1248,7 @@ func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1
 		if !ready {
 			outcome = "Failure"
 		}
-		if e, ok := gateAuditEntry(gate, outcome, reason, now); ok {
+		if e, ok := gateAuditEntry(gate, bundleUID, outcome, reason, now); ok {
 			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
 		}
 	}

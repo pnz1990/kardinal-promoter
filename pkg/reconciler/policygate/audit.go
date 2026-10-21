@@ -45,7 +45,7 @@ const auditKind = "PolicyGate"
 // gets its own record (C04-gates-22); a fixed name per gate recorded only the
 // first one. The name is fixed when the entry is stored, so a retried create
 // finds the record by name.
-func gateAuditEntry(gate *kardinalv1alpha1.PolicyGate, outcome, reason string,
+func gateAuditEntry(gate *kardinalv1alpha1.PolicyGate, bundleUID, outcome, reason string,
 	at metav1.Time) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	if gate == nil {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
@@ -73,6 +73,7 @@ func gateAuditEntry(gate *kardinalv1alpha1.PolicyGate, outcome, reason string,
 
 	return audit.Entry(name, aeLabels, kardinalv1alpha1.AuditEventSpec{
 		BundleName:   bundleName,
+		BundleUID:    bundleUID,
 		PipelineName: pipelineName,
 		Environment:  envName,
 		Action:       action,

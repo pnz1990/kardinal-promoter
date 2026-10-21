@@ -571,6 +571,14 @@ type PolicyGateStatus struct {
 	// +optional
 	Verdicts []GateVerdictStatus `json:"verdicts,omitempty"`
 
+	// VerdictAppearances counts, for each Verdict that has been in verdicts,
+	// how many times it entered them. A Verdict that leaves and comes back
+	// (its AgentRun deleted and created again, a policy edit) is a new
+	// appearance, with VerdictRecorded and VerdictRevoked records of its own
+	// (#2380). Kept after the Verdict leaves.
+	// +optional
+	VerdictAppearances map[string]int32 `json:"verdictAppearances,omitempty"`
+
 	// ApprovalRequired is whether spec.approval held the gate at the last
 	// evaluation: false while approval.requiredWhen is false, true otherwise.
 	// Unset on a gate without a policy, and on one not yet evaluated.

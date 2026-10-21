@@ -156,7 +156,7 @@ func findActiveOverride(gate *kardinalv1alpha1.PolicyGate, envName string, now t
 //
 // Graph-first: the PolicyGate reconciler writes only its own status and the
 // append-only AuditEvent, from its own spec.
-func (r *Reconciler) recordOverrides(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error {
+func (r *Reconciler) recordOverrides(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleUID string) error {
 	now := r.now()
 	records := overrideRecords(gate)
 	verified := r.identityPolicyActive(ctx) &&
@@ -210,14 +210,14 @@ func (r *Reconciler) recordOverrides(ctx context.Context, gate *kardinalv1alpha1
 			return fmt.Errorf("record overrides: %w", err)
 		}
 	}
-	return r.auditRecordedOverrides(ctx, gate)
+	return r.auditRecordedOverrides(ctx, gate, bundleUID)
 }
 
 // auditRecordedOverrides stores the GateOverridden record of every
 // recorded, unaudited override still in spec.overrides in the gate's audit
 // outbox (#1552), in the same optimistic-locked patch that marks the
 // override audited, then writes the outbox.
-func (r *Reconciler) auditRecordedOverrides(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error {
+func (r *Reconciler) auditRecordedOverrides(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleUID string) error {
 	records := overrideRecords(gate)
 	audited := map[string]bool{}
 	var entries []kardinalv1alpha1.PendingAuditEvent
@@ -228,7 +228,7 @@ func (r *Reconciler) auditRecordedOverrides(ctx context.Context, gate *kardinalv
 		if !ok || rec.Audited || audited[key] {
 			continue
 		}
-		if e, ok := r.overrideAuditEntry(gate, o, rec); ok {
+		if e, ok := r.overrideAuditEntry(gate, o, rec, bundleUID); ok {
 			entries = append(entries, e)
 		}
 		audited[key] = true
@@ -274,7 +274,7 @@ func stampVerifiedSince(gate *kardinalv1alpha1.PolicyGate, now time.Time) {
 // timestamp is the record's firstSeen, not the createdAt the writer
 // supplied, and it names the capped end.
 func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
-	o *kardinalv1alpha1.PolicyGateOverride, rec kardinalv1alpha1.OverrideRecord) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	o *kardinalv1alpha1.PolicyGateOverride, rec kardinalv1alpha1.OverrideRecord, bundleUID string) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
 	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false // nothing to attribute the record to
@@ -308,7 +308,10 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 		msg = fmt.Sprintf("override of gate %s by %s not honoured: overrides by agents are not honoured: %s",
 			gate.Name, by, o.Reason)
 	}
-	suffix := "-override-" + rec.Key
+	// The record's key, and the Bundle's UID (#2380): a Bundle created again
+	// under its name, with the same overrides, gets records of its own.
+	sum := sha256.Sum256([]byte(rec.Key + "\x00" + bundleUID))
+	suffix := "-override-" + hex.EncodeToString(sum[:])[:12]
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
 		base = base[:limit]
@@ -316,6 +319,7 @@ func (r *Reconciler) overrideAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	return audit.Entry(sanitizeGateName(base+suffix), gateAuditLabels(labels, AuditActionGateOverridden),
 		kardinalv1alpha1.AuditEventSpec{
 			BundleName:   labels[labelBundle],
+			BundleUID:    bundleUID,
 			PipelineName: labels[labelPipeline],
 			Environment:  labels[labelEnvironment],
 			Action:       AuditActionGateOverridden,

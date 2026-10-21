@@ -5,6 +5,8 @@ package policygate_test
 
 import (
 	"context"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -188,4 +191,111 @@ func TestPolicyGateReconciler_VerdictAudit(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
 	assert.False(t, cur.Status.Ready)
 	assert.Empty(t, cur.Status.Verdicts)
+}
+
+// verdictTrail is the gate's Verdict* AuditEvents in the order of the trail
+// (lifecycle.CompareAuditEvents), as "action uid" with their names.
+func verdictTrail(t *testing.T, c client.Client) (trail, names []string) {
+	t.Helper()
+	var list kardinalv1alpha1.AuditEventList
+	require.NoError(t, c.List(context.Background(), &list, client.InNamespace("default")))
+	items := list.Items
+	sort.Slice(items, func(a, b int) bool { return lifecycle.CompareAuditEvents(&items[a], &items[b]) < 0 })
+	for _, e := range items {
+		if strings.HasPrefix(e.Spec.Action, "Verdict") {
+			trail = append(trail, e.Spec.Action+" "+e.Spec.BundleUID)
+			names = append(names, e.Name)
+		}
+	}
+	return trail, names
+}
+
+// TestPolicyGateReconciler_VerdictReentry (#2380): a Verdict that leaves a
+// gate's verdicts and comes back (its AgentRun deleted and created again)
+// is recorded again, and revoked again when it leaves again: the trail
+// shows the state, not only the first appearance. Each record has a name of
+// its own (an appearance of the Verdict, status.verdictAppearances), and a
+// second reconcile of one state writes nothing new.
+func TestPolicyGateReconciler_VerdictReentry(t *testing.T) {
+	gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
+	gate.Labels["kardinal.io/pipeline"] = "nginx-demo"
+	gate.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 1,
+		AllowedAgents: []string{"qa"}}
+	verdict := agentVerdict("r1", "qa", "bob", "pass", 1, 1, 0)
+	gate.Spec.Verdicts = []kardinalv1alpha1.GateVerdict{verdict}
+	bundle := makeBundle("nginx-demo-v1", "default")
+	bundle.UID = "uid"
+	bundle.Status.Phase = "Promoting"
+	bundle.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).WithStatusSubresource(gate, bundle).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	now := verifyNow
+	r.NowFn = func() time.Time { return now }
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "verify", Namespace: "default"}}
+	step := func(verdicts []kardinalv1alpha1.GateVerdict) {
+		t.Helper()
+		now = now.Add(time.Minute)
+		var cur kardinalv1alpha1.PolicyGate
+		require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
+		cur.Spec.Verdicts = verdicts
+		require.NoError(t, c.Update(context.Background(), &cur))
+		for range 2 { // twice: idempotent
+			_, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+		}
+	}
+	step([]kardinalv1alpha1.GateVerdict{verdict})
+	step(nil)
+	step([]kardinalv1alpha1.GateVerdict{verdict})
+	step(nil)
+	trail, names := verdictTrail(t, c)
+	assert.Equal(t, []string{"VerdictRecorded uid", "VerdictRevoked uid", "VerdictRecorded uid", "VerdictRevoked uid"}, trail)
+	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(names))), 4, "four names: %v", names)
+	var cur kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
+	assert.Equal(t, map[string]int32{"r1": 2}, cur.Status.VerdictAppearances, "kept after it left")
+
+	// It comes back a third time: recorded, and the gate counts it.
+	step([]kardinalv1alpha1.GateVerdict{verdict})
+	trail, _ = verdictTrail(t, c)
+	assert.Equal(t, "VerdictRecorded uid", trail[len(trail)-1], "the trail ends on the state: recorded")
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
+	assert.True(t, cur.Status.Ready, cur.Status.Reason)
+}
+
+// TestPolicyGateReconciler_VerdictRecordsPerBundle (#2380, QA-5 on #2377): a
+// Bundle deleted and created again under its name has a gate and a Verdict
+// of the same names; its VerdictRecorded is a record of its own, beside the
+// earlier Bundle's, and names its UID.
+func TestPolicyGateReconciler_VerdictRecordsPerBundle(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme()).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}, &kardinalv1alpha1.Bundle{}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return verifyNow }
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "verify", Namespace: "default"}}
+	for _, uid := range []string{"uid-a", "uid-b"} {
+		gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
+		gate.Labels["kardinal.io/pipeline"] = "nginx-demo"
+		gate.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 1,
+			AllowedAgents: []string{"qa"}}
+		v := agentVerdict("r1", "qa", "bob", "pass", 1, 1, 0)
+		v.BundleUID = uid
+		gate.Spec.Verdicts = []kardinalv1alpha1.GateVerdict{v}
+		bundle := makeBundle("nginx-demo-v1", "default")
+		bundle.UID = types.UID(uid)
+		bundle.Status.Phase = "Promoting"
+		bundle.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
+		require.NoError(t, c.Create(context.Background(), bundle))
+		require.NoError(t, c.Create(context.Background(), gate))
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		// The Bundle is deleted, and its gate with it; its AuditEvents stay.
+		require.NoError(t, c.Delete(context.Background(), gate))
+		require.NoError(t, c.Delete(context.Background(), bundle))
+	}
+	trail, names := verdictTrail(t, c)
+	assert.ElementsMatch(t, []string{"VerdictRecorded uid-a", "VerdictRecorded uid-b"}, trail)
+	assert.NotEqual(t, names[0], names[1])
 }

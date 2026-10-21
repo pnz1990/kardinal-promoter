@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -71,7 +72,14 @@ func untilDeadline(t lifecycle.VerdictTally, now time.Time) time.Duration {
 // outbox, in the same patch, for each verdict that appeared or left. The
 // patch carries the resourceVersion the gate was read at, as
 // recordApprovals's does, so a stale reconcile audits nothing twice.
-func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, t lifecycle.VerdictTally) error {
+//
+// Each time a verdict enters status.verdicts is an appearance of its own
+// (status.verdictAppearances counts them, and keeps the count after it
+// leaves): a verdict that leaves and comes back is recorded again, and its
+// second leave revoked again (#2380). The appearance and the Bundle's UID
+// name the records, so each name is written once.
+func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, t lifecycle.VerdictTally,
+	bundleUID string) error {
 	records := t.Records
 	if len(records) == 0 {
 		records = nil
@@ -79,15 +87,19 @@ func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.
 	if equality.Semantic.DeepEqual(records, gate.Status.Verdicts) {
 		return nil
 	}
-	old, oldPending := gate.Status.Verdicts, gate.Status.PendingAuditEvents
+	old, oldPending, oldAppearances := gate.Status.Verdicts, gate.Status.PendingAuditEvents, gate.Status.VerdictAppearances
 	patch := client.MergeFromWithOptions(gate.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	gate.Status.Verdicts = records
+	appearances := maps.Clone(oldAppearances)
+	if appearances == nil {
+		appearances = map[string]int32{}
+	}
 	byName := map[string]kardinalv1alpha1.GateVerdict{}
 	for _, v := range gate.Spec.Verdicts {
 		byName[v.Name] = v
 	}
 	enqueue := func(rec kardinalv1alpha1.GateVerdictStatus, action string) {
-		if e, ok := r.verdictAuditEntry(gate, rec, byName[rec.Name].Actor, action); ok {
+		if e, ok := r.verdictAuditEntry(gate, rec, byName[rec.Name].Actor, action, bundleUID, appearances[rec.Name]); ok {
 			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
 		}
 	}
@@ -101,6 +113,7 @@ func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.
 	}
 	for _, rec := range records {
 		if !seen(old, rec.Name) {
+			appearances[rec.Name]++
 			enqueue(rec, auditActionVerdictRecorded)
 			observability.VerdictsTotal.WithLabelValues(t.Policy.Check, rec.Result, verifierKind(byName[rec.Name])).Inc()
 		}
@@ -110,8 +123,11 @@ func (r *Reconciler) recordVerdicts(ctx context.Context, gate *kardinalv1alpha1.
 			enqueue(o, auditActionVerdictRevoked)
 		}
 	}
+	if len(appearances) > 0 {
+		gate.Status.VerdictAppearances = appearances
+	}
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
-		gate.Status.Verdicts, gate.Status.PendingAuditEvents = old, oldPending
+		gate.Status.Verdicts, gate.Status.PendingAuditEvents, gate.Status.VerdictAppearances = old, oldPending, oldAppearances
 		return fmt.Errorf("record verdicts: %w", err)
 	}
 	_ = r.flushAudit(ctx, gate)
@@ -124,16 +140,19 @@ func verifierKind(v kardinalv1alpha1.GateVerdict) string {
 }
 
 // verdictAuditEntry is the outbox entry recording that rec appeared in or
-// left the gate's verdicts, and false for a gate a Graph did not create. The
-// name is derived from the gate, the action and the Verdict's name, so a
-// retried write is the same record.
+// left the gate's verdicts (its appearance-th time in them), and false for a
+// gate a Graph did not create. The name is derived from the gate, the
+// action, the Verdict's name, the Bundle's UID and the appearance: a retried
+// write of one transition is the same record, and every transition of the
+// Bundle's, and of a Bundle created again under its name, has a name of its
+// own (#2380).
 func (r *Reconciler) verdictAuditEntry(gate *kardinalv1alpha1.PolicyGate, rec kardinalv1alpha1.GateVerdictStatus,
-	stamp *kardinalv1alpha1.Actor, action string) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	stamp *kardinalv1alpha1.Actor, action, bundleUID string, appearance int32) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
 	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
-	sum := sha256.Sum256([]byte(action + "\x00" + rec.Name))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", action, rec.Name, bundleUID, appearance)))
 	suffix := "-verdict-" + hex.EncodeToString(sum[:])[:12]
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
@@ -149,7 +168,7 @@ func (r *Reconciler) verdictAuditEntry(gate *kardinalv1alpha1.PolicyGate, rec ka
 		msg += ": " + rec.Summary
 	}
 	spec := kardinalv1alpha1.AuditEventSpec{
-		BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
+		BundleName: labels[labelBundle], BundleUID: bundleUID, PipelineName: labels[labelPipeline],
 		Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: msg,
 	}
 	if stamp != nil {

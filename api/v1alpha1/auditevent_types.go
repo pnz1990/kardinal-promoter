@@ -22,6 +22,14 @@ type AuditEventSpec struct {
 	// +optional
 	BundleName string `json:"bundleName,omitempty"`
 
+	// BundleUID is the UID of that Bundle, on the records of its gates
+	// (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked,
+	// VerdictRecorded, VerdictRevoked): a Bundle deleted and created again
+	// under its name is another Bundle, with records of its own. Absent on
+	// other records, and on records written before v0.14.
+	// +optional
+	BundleUID string `json:"bundleUID,omitempty"`
+
 	// PipelineName is the name of the Pipeline the Bundle is promoting through.
 	// +kubebuilder:validation:MinLength=1
 	// +optional
