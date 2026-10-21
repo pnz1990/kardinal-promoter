@@ -331,6 +331,7 @@ func TestSameContentAsHead_ServerStalls(t *testing.T) {
 	defer cancel()
 	took, err = check(ctx)
 	require.Error(t, err, "the caller's sooner deadline")
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "the caller's deadline, as a context error")
 	assert.NotContains(t, err.Error(), "within 2s", "the caller's deadline ended it, not the peek's")
 	assert.Less(t, took, 2*time.Second)
 }

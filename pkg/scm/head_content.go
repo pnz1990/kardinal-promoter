@@ -100,7 +100,10 @@ func (c *GoGitClient) SameContentAsHead(ctx context.Context, dir, remote, branch
 	switch {
 	case errors.Is(err, errHeadTooLarge):
 		return false, nil
-	case err != nil && ctx.Err() == nil && errors.Is(peekCtx.Err(), context.DeadlineExceeded):
+	case err != nil && ctx.Err() != nil:
+		// The caller's context ended: say so as a context error.
+		return false, fmt.Errorf("git fetch %s %s: %w", remote, branch, ctx.Err())
+	case err != nil && errors.Is(peekCtx.Err(), context.DeadlineExceeded):
 		// Retried as any fetch error is: a slow server is not someone
 		// else's head.
 		return false, fmt.Errorf("git fetch %s %s: the server did not send the head's commit within %s", remote, branch, headPeekTimeout)
