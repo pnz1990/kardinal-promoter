@@ -36,31 +36,6 @@ import (
 // attestImages are the three images of each TestScale_Attestations version.
 var attestImages = []string{scale.ImageRepo, scale.ImageRepo + "-sidecar", scale.ImageRepo + "-init"}
 
-// leaderMetrics is the controller leader's own /metrics page.
-func leaderMetrics(t *testing.T, e *framework.Env) framework.Metrics {
-	t.Helper()
-	ctx := context.Background()
-	pod, err := scale.Leader(ctx, e)
-	require.NoError(t, err)
-	var p corev1.Pod
-	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: framework.ControllerNamespace, Name: pod}, &p))
-	port := 0
-	for _, c := range p.Spec.Containers {
-		for _, cp := range c.Ports {
-			if cp.Name == "metrics" {
-				port = int(cp.ContainerPort)
-			}
-		}
-	}
-	require.NotZero(t, port, "the leader Pod has a metrics port")
-	raw, err := e.Kube.CoreV1().RESTClient().Get().
-		AbsPath("/api/v1/namespaces/" + framework.ControllerNamespace + "/pods/http:" + pod + ":" + strconv.Itoa(port) + "/proxy/metrics").DoRaw(ctx)
-	require.NoError(t, err)
-	m, err := framework.ParseMetrics(string(raw))
-	require.NoError(t, err)
-	return m
-}
-
 // histogramQuantile is the q quantile of histogram name{labels} between two
 // scrapes: the upper bound of the bucket it falls in (+Inf as math.Inf).
 func histogramQuantile(before, after framework.Metrics, name string, labels map[string]string, q float64) (float64, float64) {
@@ -292,7 +267,7 @@ func TestScale_Attestations(t *testing.T) {
 		waitPipelineValid(t, e, ns, p)
 	}
 
-	before, start := leaderMetrics(t, e), time.Now()
+	before, start := scale.LeaderMetrics(t, e), time.Now()
 	registry := followRegistry(t, e, start)
 	spacing := r.P.AttestWithin / time.Duration(n)
 	for i, p := range pipelines {
@@ -308,7 +283,7 @@ func TestScale_Attestations(t *testing.T) {
 	}
 	require.True(t, r.Fleet.WaitSettled(t, r.P.Settle), "every version settles")
 	r.Note("attestSettleSeconds", int(time.Since(start).Seconds()))
-	after := leaderMetrics(t, e)
+	after := scale.LeaderMetrics(t, e)
 	p95, reconciles := histogramQuantile(before, after, "controller_runtime_reconcile_time_seconds",
 		map[string]string{"controller": "imageverification"}, 0.95)
 	r.Note("attestIVReconcileP95Seconds", p95)
@@ -335,10 +310,10 @@ func TestScale_Attestations(t *testing.T) {
 
 	// Quiet: nothing changes, so the gates are not evaluated again (their
 	// recheck is hourly).
-	quiet := leaderMetrics(t, e)
+	quiet := scale.LeaderMetrics(t, e)
 	require.Positive(t, quiet.Sum("kardinal_gate_evaluations_total", nil), "the leader reports kardinal_gate_evaluations_total")
 	time.Sleep(2 * time.Minute)
-	end := leaderMetrics(t, e)
+	end := scale.LeaderMetrics(t, e)
 	evals := end.Sum("kardinal_gate_evaluations_total", nil) - quiet.Sum("kardinal_gate_evaluations_total", nil)
 	r.Note("attestQuietGateEvaluations", int(evals))
 	assert.LessOrEqual(t, evals, float64(n)/20+2, "gate evaluations in a quiet two minutes over %d Verified versions", n)
