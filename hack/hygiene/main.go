@@ -70,7 +70,10 @@ var (
 	goToolchain = regexp.MustCompile(`(?m)^toolchain go(\S+)\s*$`)
 	goDirective = regexp.MustCompile(`(?m)^go (\S+)\s*$`)
 	// golangImage is a reference to the golang image: its tag and digest.
-	golangImage = regexp.MustCompile(`^(?:docker\.io/(?:library/)?)?golang(?::([^@]+))?(@sha256:[0-9a-f]{64})?$`)
+	// golang or library/golang, bare or under any of Docker Hub's hosts
+	// (docker.io, index.docker.io, registry-1.docker.io; a host in any
+	// case), so no spelling of a floating tag escapes the check.
+	golangImage = regexp.MustCompile(`^(?:(?i:docker\.io|index\.docker\.io|registry-1\.docker\.io)/)?(?:library/)?golang(?::([^@]+))?(@sha256:[0-9a-f]{64})?$`)
 )
 
 // repo is the tracked files of the repository and the text of each text file.
