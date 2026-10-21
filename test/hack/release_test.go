@@ -1436,7 +1436,8 @@ func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 // $V<X>_CHART:$V<X>_CHART_VERSION@$V<X>_CHART_DIGEST, which helm refuses
 // when the registry holds other contents under the version), as its
 // controller image and CLI are: V<X>_CHART_DIGEST in hack/e2e/versions.env
-// is a sha256 digest, and no component installs its chart by version alone.
+// is a sha256 digest, no component installs its chart by version alone, and
+// the pinned reference is the only use of $V<X>_CHART.
 func TestUpgradeComponentsPinTheirChartByDigest(t *testing.T) {
 	root := repoRoot(t)
 	env, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "versions.env"))
@@ -1462,6 +1463,10 @@ func TestUpgradeComponentsPinTheirChartByDigest(t *testing.T) {
 			assert.True(t, strings.Contains(string(src), ref), "%s installs its chart pinned by digest: %s", filepath.Base(c), ref)
 			byVersion := fmt.Sprintf(`--version "$%s_CHART_VERSION"`, v)
 			assert.False(t, strings.Contains(string(src), byVersion), "%s installs its chart by digest, not by version alone (%s)", filepath.Base(c), byVersion)
+			// The pinned reference is the chart's only use: a second install
+			// with no version would take whatever chart is latest.
+			uses := regexp.MustCompile(`\$\{?`+v+`_CHART([^_A-Za-z0-9]|$)`).FindAllString(string(src), -1)
+			assert.Len(t, uses, 1, "%s uses $%s_CHART once, in the pinned reference: %q", filepath.Base(c), v, uses)
 		})
 	}
 }
