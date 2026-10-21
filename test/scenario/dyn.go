@@ -37,6 +37,11 @@ func (d *dynClient) Resource(gvr schema.GroupVersionResource) dynamic.Namespacea
 }
 
 type dynResource struct {
+	// ResourceInterface is nil: a method of client-go's interface the
+	// scenario does not use, and this type does not define, comes from it
+	// and panics if called. So the type keeps compiling when client-go adds
+	// one (DeleteWithResult in v0.38, #1819).
+	dynamic.ResourceInterface
 	d   *dynClient
 	gvr schema.GroupVersionResource
 	ns  string
