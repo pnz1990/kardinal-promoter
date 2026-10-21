@@ -31,6 +31,7 @@ import (
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -295,6 +296,27 @@ func pipelineEnvNames(pipe *v1alpha1.Pipeline) []string {
 	return graph.EnvironmentNames(pipe)
 }
 
+// keptPolicyGates are the PolicyGate templates of namespaces, refused for
+// new versions, that version b, in flight, keeps as its Graph has them, as
+// the controller re-renders it (#2286): only the Graph holds them.
+func keptPolicyGates(ctx context.Context, c sigs_client.Client, b *v1alpha1.Bundle, namespaces []string) ([]v1alpha1.PolicyGate, error) {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(graph.GraphGVK)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: b.Namespace, Name: b.Status.GraphRef}, u); err != nil {
+		return nil, fmt.Errorf("version %s keeps the gates of %s it started with, which only its Graph %s holds: %w",
+			b.Name, strings.Join(namespaces, ", "), b.Status.GraphRef, err)
+	}
+	g, err := graph.FromUnstructured(u)
+	if err != nil {
+		return nil, fmt.Errorf("read Graph %s: %w", b.Status.GraphRef, err)
+	}
+	kept, _, err := graph.FrozenTemplates(g, namespaces)
+	if err != nil {
+		return nil, fmt.Errorf("the gates of %s in Graph %s: %w", strings.Join(namespaces, ", "), b.Status.GraphRef, err)
+	}
+	return kept, nil
+}
+
 // simulatedBundle is the Bundle simulate evaluates gates for: an image Bundle
 // of pipe with no images, provenance or intent.
 func simulatedBundle(pipe *v1alpha1.Pipeline, created time.Time) *v1alpha1.Bundle {
@@ -546,10 +568,13 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		return nil, fmt.Errorf("collect policy gates: %w", err)
 	}
 	// A new version of a Pipeline naming a namespace that has not agreed
-	// waits in the controller (#2286): without its gates, and blocked. A
-	// version already promoting kept them.
+	// waits in the controller (#2286), and so does every new version while
+	// the Pipeline's generation is not checked yet: blocked, and without
+	// those namespaces' gates (CollectGates does not read them). A version
+	// already promoting keeps theirs as its Graph has them.
 	var refusedMsg string
-	refused := translator.RefusedPolicyNamespaces(pipe, opts.PolicyNamespaces)
+	agreed := translator.PolicyNamespacesAgreed(pipe, opts.PolicyNamespaces)
+	inFlight := false
 	bundle := simulatedBundle(pipe, simTime)
 	if opts.Version != "" {
 		name, err := resolveBundleRef(ctx, c, ns, pipe.Name, opts.Version)
@@ -564,19 +589,20 @@ func policySimulate(ctx context.Context, c sigs_client.Client, ns string, opts s
 		bundle.ResourceVersion = ""
 		// The gates it would meet in env, whatever its own intent says.
 		bundle.Spec.Intent = nil
-		if real.Status.GraphRef != "" {
-			refused = nil
+		inFlight = real.Status.GraphRef != ""
+		if unread := translator.UnreadPolicyNamespaces(pipe, opts.PolicyNamespaces); inFlight && len(unread) > 0 {
+			kept, err := keptPolicyGates(ctx, c, &real, unread)
+			if err != nil {
+				return nil, err
+			}
+			templates = append(slices.Clone(templates), kept...)
+			slices.SortFunc(templates, func(a, b v1alpha1.PolicyGate) int {
+				return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+			})
 		}
 	}
-	if len(refused) > 0 {
-		refusedMsg = (&translator.PolicyNamespacesError{NotShared: refused}).Error()
-		kept := templates[:0:0]
-		for _, g := range templates {
-			if !slices.Contains(refused, g.Namespace) {
-				kept = append(kept, g)
-			}
-		}
-		templates = kept
+	if agreed != nil && !inFlight {
+		refusedMsg = agreed.Error()
 	}
 	indexName, err := simulatedActor(ctx, c, bundle, opts.AsAgent, opts.AsHuman)
 	if err != nil {

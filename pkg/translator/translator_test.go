@@ -220,7 +220,10 @@ func TestCollectGates_MultipleNamespaces(t *testing.T) {
 // TestCollectGates_PipelineSpecPolicyNamespaces verifies that
 // pipeline.spec.policyNamespaces adds namespaces to the controller's org
 // policy namespaces and never replaces them, so a Pipeline cannot drop a
-// mandatory org gate (C01-graph-02, C08-api-config-03, E2E-22).
+// mandatory org gate (C01-graph-02, C08-api-config-03, E2E-22). A namespace
+// that must agree is read only once the Pipeline reconciler says it has,
+// for the Pipeline's generation (#2286).
+// Covers GATE-POLNS-07.
 func TestCollectGates_PipelineSpecPolicyNamespaces(t *testing.T) {
 	orgGate := &kardinalv1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploys", Namespace: "platform-policies"},
@@ -235,10 +238,12 @@ func TestCollectGates_PipelineSpecPolicyNamespaces(t *testing.T) {
 		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "true"},
 	}
 	tests := []struct {
-		name     string
-		policyNS []string
-		spec     []string
-		want     []string
+		name      string
+		policyNS  []string
+		spec      []string
+		unchecked bool     // status.policyNamespaces is for an earlier generation
+		notShared []string // status.policyNamespaces.notShared
+		want      []string
 	}{
 		{name: "spec adds a namespace", policyNS: []string{"platform-policies"}, spec: []string{"custom-policies"},
 			want: []string{"custom-policies/custom-gate", "platform-policies/no-weekend-deploys", "team-a/team-gate"}},
@@ -251,6 +256,15 @@ func TestCollectGates_PipelineSpecPolicyNamespaces(t *testing.T) {
 			want: []string{"custom-policies/custom-gate", "platform-policies/no-weekend-deploys", "team-a/team-gate"}},
 		{name: "no spec", policyNS: []string{"platform-policies"},
 			want: []string{"platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		// #2286: a namespace that must agree is read only once the Pipeline
+		// reconciler says it has, for the Pipeline's generation.
+		{name: "spec namespace refused", policyNS: []string{"platform-policies"}, spec: []string{"custom-policies"},
+			notShared: []string{"custom-policies"}, want: []string{"platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		{name: "generation not checked yet", policyNS: []string{"platform-policies"}, spec: []string{"custom-policies"},
+			unchecked: true, want: []string{"platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		{name: "generation not checked yet, nothing to agree", policyNS: []string{"platform-policies"},
+			spec: []string{"platform-policies", "team-a"}, unchecked: true,
+			want: []string{"platform-policies/no-weekend-deploys", "team-a/team-gate"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -258,8 +272,13 @@ func TestCollectGates_PipelineSpecPolicyNamespaces(t *testing.T) {
 				WithObjects(orgGate.DeepCopy(), customGate.DeepCopy(), teamGate.DeepCopy()).Build()
 			tr := New(nil, nil, c, tt.policyNS, zerolog.Nop())
 			pipeline := &kardinalv1alpha1.Pipeline{
-				ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "team-a"},
+				ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "team-a", Generation: 2},
 				Spec:       kardinalv1alpha1.PipelineSpec{PolicyNamespaces: tt.spec},
+				Status: kardinalv1alpha1.PipelineStatus{PolicyNamespaces: &kardinalv1alpha1.PipelinePolicyNamespaces{
+					ObservedGeneration: 2, NotShared: tt.notShared}},
+			}
+			if tt.unchecked {
+				pipeline.Status.PolicyNamespaces.ObservedGeneration = 1
 			}
 			gates, err := tr.collectGates(context.Background(), pipeline)
 			require.NoError(t, err)

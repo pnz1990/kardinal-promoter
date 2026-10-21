@@ -5,6 +5,7 @@ package translator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -109,19 +110,31 @@ func (t *Translator) Translate(ctx context.Context,
 	}
 
 	// A new version of a Pipeline whose spec.policyNamespaces names a
-	// namespace that has not agreed to share its gates waits (#2286). A
-	// version already promoting (it has a Graph) keeps reading them.
-	if bundle.Status.GraphRef == "" {
-		if err := policyNamespacesAgreed(pipeline, t.policyNS); err != nil {
-			return "", fmt.Errorf("translator.Translate: %w", err)
-		}
+	// namespace that has not agreed to share its gates waits (#2286); every
+	// version waits while the Pipeline's generation is not checked yet.
+	var pnsErr *PolicyNamespacesError
+	if err := PolicyNamespacesAgreed(pipeline, t.policyNS); errors.As(err, &pnsErr) &&
+		(bundle.Status.GraphRef == "" || pnsErr.Unchecked) {
+		return "", fmt.Errorf("translator.Translate: %w", err)
 	}
 
 	// Collect PolicyGates from the org policy namespaces, the Pipeline's
-	// spec.policyNamespaces, and the Pipeline namespace.
+	// spec.policyNamespaces, and the Pipeline namespace; never from a
+	// namespace refused.
 	gates, err := t.collectGates(ctx, pipeline)
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: collect gates: %w", err)
+	}
+	// A version already promoting keeps the gates of a refused namespace
+	// it started with, from its own Graph: none is dropped, and that
+	// namespace is not read again (#2286).
+	frozen, frozenDigests, err := t.frozenGates(ctx, pipeline, bundle)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
+	if len(frozen) > 0 {
+		gates = append(gates, frozen...)
+		sortGates(gates)
 	}
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
@@ -171,6 +184,7 @@ func (t *Translator) Translate(ctx context.Context,
 		Pipeline:         pipeline,
 		Bundle:           bundle,
 		PolicyGates:      gates,
+		FrozenDigests:    frozenDigests,
 		PolicyNamespaces: t.policyNS,
 		ScmProvider:      providerID,
 		Analyses:         analyses,
@@ -315,6 +329,12 @@ func (t *Translator) collectGates(ctx context.Context,
 
 	var namespaces []string
 	scanned := map[string]bool{}
+	// A namespace of spec.policyNamespaces that has not agreed to share its
+	// gates is never read, nor one that must agree before the Pipeline's
+	// generation is checked (#2286).
+	for _, ns := range UnreadPolicyNamespaces(pipeline, t.policyNS) {
+		scanned[ns] = true
+	}
 	for _, list := range [][]string{t.policyNS, pipeline.Spec.PolicyNamespaces, {pipeline.Namespace}} {
 		for _, ns := range list {
 			if ns != "" && !scanned[ns] {
@@ -346,13 +366,19 @@ func (t *Translator) collectGates(ctx context.Context,
 	// The cached List comes back in map order. Sort so the rendered Graph is
 	// identical between translations and a no-op Pipeline change does not
 	// produce a spurious Graph update.
+	sortGates(gates)
+	return gates, nil
+}
+
+// sortGates sorts gates by namespace and name, so the rendered Graph is the
+// same between translations.
+func sortGates(gates []kardinalv1alpha1.PolicyGate) {
 	sort.Slice(gates, func(i, j int) bool {
 		if gates[i].Namespace != gates[j].Namespace {
 			return gates[i].Namespace < gates[j].Namespace
 		}
 		return gates[i].Name < gates[j].Name
 	})
-	return gates, nil
 }
 
 // CollectGates returns the PolicyGate templates Translate passes to the Graph

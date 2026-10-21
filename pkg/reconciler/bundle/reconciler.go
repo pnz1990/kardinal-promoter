@@ -145,6 +145,11 @@ const policyNamespacesRetry = time.Minute
 // PolicyGates (#2286), as on the Pipeline.
 const reasonPolicyNamespaceNotShared = "PolicyNamespaceNotShared"
 
+// reasonPolicyNamespacesUnchecked is the GraphSynced reason of a version in
+// flight whose Graph is not updated until the Pipeline reconciler has checked
+// spec.policyNamespaces for the Pipeline's generation (#2286).
+const reasonPolicyNamespacesUnchecked = "PolicyNamespacesUnchecked"
+
 // BundleTranslator is the interface the BundleReconciler uses to translate a
 // Bundle+Pipeline into a kro Graph. Abstracted as an interface for testability.
 type BundleTranslator interface {
@@ -507,6 +512,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 				b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
 			}
 		}
+		r.noteKeptGates(b, pipeline)
 		log.Info().Str("graph", name).Str("renderVersion", g.Labels[graph.LabelRenderVersion]).
 			Str("currentRenderVersion", graph.RenderLabel).Msg("graph rendered by an earlier controller — re-translated in place")
 		return nil
@@ -675,12 +681,43 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	b.Status.PipelineSpecHash = currentHash
 	b.Status.PolicyGatesHash = builtGatesHash
 	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
+	r.noteKeptGates(b, pipeline)
 	if stamps != nil {
+		// A refused namespace's templates are kept as the Graph had them,
+		// and not read: no change to record for them (#2286).
+		stamps = withoutNamespaces(stamps, translator.RefusedPolicyNamespaces(pipeline, r.PolicyNamespaces))
 		if e, ok := gateChangeEntry(b, pipeline, stamps, gates, r.now()); ok {
 			b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
 		}
 	}
 	return nil
+}
+
+// noteKeptGates says, in a Warning Event, that b, a version in flight just
+// re-rendered, keeps the gates of the namespaces of its Pipeline's
+// spec.policyNamespaces that are refused, as its Graph had them (#2286).
+func (r *Reconciler) noteKeptGates(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) {
+	refused := translator.RefusedPolicyNamespaces(pipeline, r.PolicyNamespaces)
+	if len(refused) == 0 || b.Status.GraphRef == "" {
+		return
+	}
+	r.event(b, corev1.EventTypeWarning, reasonPolicyNamespaceNotShared, fmt.Sprintf(
+		"this version keeps the gates of %[1]s it started with; the next version waits until %[1]s agrees to share its PolicyGates",
+		strings.Join(refused, ", ")))
+}
+
+// withoutNamespaces is stamps without the templates of namespaces.
+func withoutNamespaces(stamps map[string]graph.TemplateStamp, namespaces []string) map[string]graph.TemplateStamp {
+	if len(namespaces) == 0 {
+		return stamps
+	}
+	out := make(map[string]graph.TemplateStamp, len(stamps))
+	for key, st := range stamps {
+		if ns, _, _ := strings.Cut(key, "/"); !slices.Contains(namespaces, ns) {
+			out[key] = st
+		}
+	}
+	return out
 }
 
 // graphStamps is graph.TemplateStamps of b's Graph, or nil when it cannot be
@@ -1372,8 +1409,13 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// verification (#1311): Translate reads it from b's status. The patch
 	// below starts from before that decision, so it writes it.
 	beforeEvidence := b.DeepCopy()
-	if err := r.decideUpstreamEvidence(ctx, log, b, &pipeline); err != nil {
-		return ctrl.Result{}, err
+	// The decision reads the gates, which are not all read while a namespace
+	// of spec.policyNamespaces has not agreed (Translate refuses the version
+	// then, below): it is made once the version can be translated (#2286).
+	if b.Status.GraphRef != "" || translator.PolicyNamespacesAgreed(&pipeline, r.PolicyNamespaces) == nil {
+		if err := r.decideUpstreamEvidence(ctx, log, b, &pipeline); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	// The gates are hashed before Translate reads them (builtGatesHash).
 	gatesHash := r.gatesHashFor(ctx, log, &pipeline)
@@ -1750,6 +1792,10 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	var after []func()
 	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
 	graphDeleted := errors.Is(syncErr, errGraphDeletedAfterFailure)
+	// A version in flight is not re-rendered while the Pipeline's generation
+	// is not checked for spec.policyNamespaces (#2286): its Graph stays as it
+	// is until the Pipeline reconciler has checked it, which wakes it.
+	policyWait := translator.IsPolicyNamespacesError(syncErr)
 	switch {
 	case graphDeleted:
 		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "GraphDeleted", syncErr.Error()) {
@@ -1771,6 +1817,18 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 					observability.BundlesTotal.WithLabelValues(phaseFailed).Inc()
 				}
 			})
+		}
+	case policyWait:
+		// Unchecked: seconds after a Pipeline change. Otherwise a version in
+		// flight whose Graph is gone waits for the namespace to agree: one
+		// Warning Event says what unblocks it.
+		reason := reasonPolicyNamespaceNotShared
+		if e := (*translator.PolicyNamespacesError)(nil); errors.As(syncErr, &e) && e.Unchecked {
+			reason = reasonPolicyNamespacesUnchecked
+		}
+		msg := "waiting: " + syncErr.Error()
+		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, reason, msg) && reason == reasonPolicyNamespaceNotShared {
+			after = append(after, func() { r.event(b, corev1.EventTypeWarning, reasonPolicyNamespaceNotShared, msg) })
 		}
 	case syncErr != nil:
 		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "UpdateFailed", syncErr.Error()) {
@@ -1920,7 +1978,11 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	result := soakRequeue(b)
-	if syncErr != nil && !invalidBuild && !graphDeleted {
+	switch {
+	case policyWait:
+		log.Info().Err(syncErr).Msg("graph not updated until spec.policyNamespaces is checked")
+		result = ctrl.Result{RequeueAfter: policyNamespacesRetry}
+	case syncErr != nil && !invalidBuild && !graphDeleted:
 		log.Error().Err(syncErr).Msg("graph sync failed — requeuing")
 		result = ctrl.Result{RequeueAfter: requeueSlow}
 	}
