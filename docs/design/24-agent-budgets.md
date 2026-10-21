@@ -33,7 +33,7 @@ fixed:
 | A4 | The agent shorthand compiles to `kardinal-agents-<ceiling>` templates (`pkg/graph/agents.go:22-31`) | Named `kardinal-agents` | Renamed | 7.2, 13 |
 | A5 | The controller has four field indexes: Bundles by Pipeline (`pkg/lifecycle/index.go:46`), PolicyGates, ChangeRequests by ticket, Pipelines | The spec read through indexes that do not exist | Listed as new indexes in W2, W3 and W5: PromotionSteps by `status.budget.agent`; Bundles by `spec.actor.agent` and by UID; AgentIdentities with an unavailable grant | 5.2, 7.3, 10, 20 |
 | A6 | The index reconciler patches each AgentIdentity's `status.conditions` (Ready) with a JSON merge patch, which replaces the whole list (`writeStatuses`, `pkg/reconciler/agentidentity/reconciler.go:57-90`) | 7.3 said the budget reconciler writes "status.conditions entries of its own type", but 4.2 puts them under `usage` | Budget conditions live only in `status.usage.<ledger>.conditions`; the budget reconciler never writes `status.conditions` | 4.2, 7.3 |
-| A7 | One AgentIdentity can carry several ledgers (separate installations) | Each entry was capped at 2,000 grants, with no bound across entries; four ledgers could approach etcd's 1.5 MiB | At most 3,000 grants per AgentIdentity across ledgers (about 600 KB); the ledger that would pass it is `LedgerFull` | 14 |
+| A7 | One AgentIdentity can carry several ledgers (separate installations) | Each entry was capped at 2,000 grants, with no bound across entries; four ledgers could approach etcd's 1.5 MiB | At most 3,000 grants per AgentIdentity across ledgers (about 600 KB); the ledger that would pass it is `LedgerFull`. The schema holds the same line against any writer (W1): at most 16 ledgers, and 3,000 grants between them | 14, 15.2 |
 | A8 | v0.14's compact index (#2372): one string per entry, a 1 MiB bound, `IndexFull` refuses every checked write; supported up to 7,000 AgentIdentities | Thin: how budgets meet the index and its bound | New 14.1. Budgets add no bytes to the index, never write a `blocked` entry, and read the AgentIdentity, not the index | 14.1 |
 | A9 | Supported registry size: 4,000 AgentIdentities (v0.13), 7,000 with #2372 | "2,000 AgentIdentities (the actors scale target)" | The scale case runs the release gate's 7,500 | 14, 19 |
 | A10 | — | Thin: no stated default, and no release-wide switch | Off by default, at two levels: a release switch `actors.budgets.enabled: false`, and per agent (no `spec.budgets`, no effect) | 17.4 |
@@ -158,6 +158,7 @@ spec:
       reason: "hotfix for INC-4211"
       expiresAt: "2026-10-15T12:00:00Z"
       createdBy: bob@example.com   # verified by admission
+      actor: {kind: human, principal: bob@example.com}   # the actor stamp, as on freeze exemptions; an agent's is never honoured (11.3)
 ```
 
 **Matching.** A rule matches a PromotionStep when its namespace matches `namespaces` and its
@@ -230,8 +231,9 @@ status:
           unavailable: false
           exemption: ""             # the exemption it used, if any
           seeded: false             # recorded from a step that started before the ledger existed (17.2)
-      exemptions:                   # the exemptions in effect, as this reconciler decided
+      exemptions:                   # the spec's exemptions as this reconciler saw them (11.3)
         - {name: inc-4211, firstSeenAt: "2026-10-15T09:00:04Z", expiresAt: "2026-10-15T12:00:00Z"}
+        - {name: by-bot, firstSeenAt: "2026-10-15T09:30:00Z", expiresAt: "2026-10-15T09:30:00Z", ignored: MadeByAgent}
       conditions: [...]             # Current; LedgerFull (only here: never in status.conditions, A6)
 ```
 
@@ -269,6 +271,7 @@ type AgentBudgetExemption struct {
 	Reason                                 string
 	ExpiresAt                              metav1.Time
 	CreatedBy                              string
+	Actor                                  *Actor `json:"actor,omitempty"` // verified by <release>-actor (11.3)
 }
 
 // AgentIdentitySpec gains:
@@ -312,7 +315,8 @@ type AgentUsage struct {
 }
 
 // AgentIdentityStatus gains:
-//   Usage map[string]AgentUsage `json:"usage,omitempty"` // key: the ledger name (15.2)
+//   Usage map[string]AgentUsage `json:"usage,omitempty"` // key: the ledger name (15.2);
+//   at most 16 ledgers, and 3,000 grants between them (14)
 
 // PromotionStepStatus gains:
 //   Budget *PromotionStepBudget `json:"budget,omitempty"`
@@ -476,6 +480,27 @@ write.
 of this ledger and enqueues only the steps of new grants (found by the Bundle UID and
 environment labels). A grant wakes one step; a status write that grants nothing wakes none.
 
+**As built (W3, `pkg/reconciler/promotionstep/budget.go`).** The order of the checks differs
+from the list above in three places, each toward fewer held steps and never toward an unbudgeted
+start:
+
+- The grant is looked up first (step 5 before 2-4): a grant is never revoked, so a step that has
+  one goes on whatever the spec or the ledger's generation says now.
+- Whether a rule applies (step 4) is decided from the spec, with the reconciler's `Matching`,
+  not from `usage.rules`: a rule just added holds the step before the ledger has caught up (it
+  waits on step 3), and a step no rule of the spec matches passes even while the ledger is
+  behind.
+- A step held on step 3 also writes `status.budget` (Waiting), so the reconciler sees the
+  request at once; a waiting step that no rule matches any more (budgets removed or narrowed)
+  clears it before it goes on.
+
+Waking as built: the handler lists the agent's steps through the `status.budget.agent` index
+(registered once, `agentbudget.IndexStepsByBudgetAgent`, shared with the budget reconciler) and
+enqueues the Pending ones of the grants the write added, found by the `kardinal.io/bundle-uid`
+label or, for a step of a non-compact Graph, its Bundle's UID; and every waiting step of the agent
+when the ledger caught up with the spec, or the spec changed. A step held because its agent is
+not registered has no `status.budget`, and re-checks on the one-minute fallback.
+
 ### 7.3 The reconciler side: granting
 
 A new controller, `pkg/reconciler/agentbudget`, reconciles AgentIdentities (one work-queue key
@@ -521,6 +546,33 @@ grant (a new cache index on AgentIdentities with any `unavailable: true` grant, 
 Pipeline names, C12, so the mapping enqueues those few agents and their reconcile resolves the
 Bundle UIDs); its own requeue, and a resync every 5 minutes while seeded grants are unsettled
 (17.2), because a seeded step has no `status.budget` and so sends no event the mapping sees.
+
+**As built (W2, `pkg/reconciler/agentbudget`).** The decision is one function, `evaluate`, over
+the ledger read and the facts gathered from the cache; it reads no clock and no object, and is
+tested on its own. Details the steps above leave open:
+
+- A grant's `settled` is recomputed at each evaluation from its step: a step recreated by the
+  Graph (a retry) is under way again and counts in `maxConcurrent` again; its grant is found by
+  Bundle and environment, so it is not charged a second version.
+- After a spec change, each grant's `rules` are re-derived from its Bundle's namespace and its
+  environment or fleet; a grant whose Bundle is gone keeps the rules that are still defined.
+- A settled, available grant is dropped once it is older than every window it counts in: 24 h
+  for a version grant under a `versionsPerDay` rule, 1 h for a fleet target under a
+  `fleetTargetsPerHour` rule, at once otherwise.
+- A Conflict is recomputed from an uncached read up to three times, then returned (the work queue
+  retries with backoff). Any other refused write, such as a 17th ledger (15.2), is a Warning
+  event `BudgetLedgerWriteRefused` on the AgentIdentity.
+- `LedgerFull` (reason `GrantCap`, `AgentGrantCap` or `ObjectSize`) is set, with one Warning
+  event `BudgetLedgerFull`, when 2,000 grants, 3,000 across the agent's ledgers, or 1 MiB of
+  AgentIdentity JSON would be passed; this evaluation's grants are dropped newest first until the
+  object fits.
+- Events go to the AgentIdentity, so only when the controller watches every namespace (an Event
+  on a cluster-scoped object is written in `default`); in namespace mode the ledger's conditions
+  and the log say the same.
+- Triggers as built: AgentIdentity generation changes (not the ledger's own writes); a step with
+  `status.budget` created, deleted, or changing `state` or `status.budget`; a Pipeline whose
+  `status.environments` changed, mapped through the index of agents holding an unavailable grant
+  in this ledger; and the reconciler's own requeue.
 
 ### 7.4 What this does not hold
 
@@ -700,8 +752,21 @@ later states), so a hold cannot time out into a failure.
 - `kardinal override <pipeline> <env> --budget --reason <why> [--bundle <name>] [--expires-in 1h]`
   adds an exemption to the AgentIdentity of the Bundle's agent, as the caller.
 - The budget reconciler treats an exemption as in effect from when it first sees it until
-  `min(expiresAt, firstSeenAt + 24h)` (admission has no clock, so the cap is applied here), and
-  writes the ones in effect to `status.usage.<ledger>.exemptions`.
+  `min(expiresAt, firstSeenAt + 24h)` (admission has no clock, so the cap is applied here). It
+  lists every spec exemption in `status.usage.<ledger>.exemptions` with that `expiresAt`, and keeps
+  an expired one listed until it is removed from the spec, so the cap never restarts.
+- **An exemption an agent made never counts** (break-glass is for people, as for freeze
+  exemptions, `pkg/reconciler/changewindow/freeze.go` `exemptionByAgent`). The author is the
+  exemption's `actor` stamp, not `createdBy`: `createdBy` holds a username only, and an agent can
+  be a Group subject, which only the requester's groups reveal (`pkg/actor/actor.go` `Derive`).
+  The stamp is what `<release>-actor` derives from `request.userInfo`, username and groups,
+  against the agent index (12). An exemption stamped `kind: agent` is listed with
+  `ignored: MadeByAgent`, and one with no stamp with `ignored: Unverified` (W6 requires a stamp on
+  every new exemption, so an unstamped one was never verified). Neither grants anything. The
+  ledger's `ExemptionIgnored` condition names each, and the reconciler emits one Warning event
+  (`BudgetExemptionIgnored`) per exemption on the AgentIdentity, not repeated on re-runs. While
+  the agent index is not Ready, what admission accepts and stamps follows #2451 (index
+  readiness never refuses a person); the reconciler reads the stamp it is given.
 - An exempt grant needs no room but is counted, so the record stays honest and later requests
   see the true usage.
 - The step that proceeds on an exempt grant writes one `BudgetExempted` AuditEvent through its
@@ -728,6 +793,12 @@ of `agentidentities`. Kubernetes 1.35 is the floor, so `authorizer` is available
   Cluster admins (`*` verbs) pass; the chart's `<release>-admin` ClusterRole gains `manage`.
 - Each new exemption requires `check('exempt')` on the same object, and
   `createdBy == request.userInfo.username`.
+- Each new exemption carries an `actor` stamp, checked by `<release>-actor` as freeze exemptions'
+  are (W6): the stamp must say what `request.userInfo`, username and groups, is against the agent
+  index, and an agent's is refused (`chart/kardinal-promoter/templates/actor-admission.yaml:140`,
+  "break-glass is for people"). The budget reconciler ignores an exemption stamped as an agent's
+  or not stamped (11.3), so the controller's own writes, which `<release>-actor` exempts, are held
+  to the same rule. Behaviour while the index is not Ready is #2451's.
 - The creator may not be of the agent's party (17-actors §10.3): not the sponsor, not a User
   subject, not a ServiceAccount subject's username, and not in a Group subject:
 
@@ -771,6 +842,7 @@ environment names, but no namespace, Pipeline or Bundle names (15.1).
 | A step is deleted and recreated | It finds its grant by Bundle and environment | No double charge, no refund |
 | A Bundle or its steps are deleted or retired | Version and fleet grants stay until their window ends; `maxConcurrent` is freed; `maxUnavailable` clears only when the environment moves on | No refund within a window |
 | The ledger reaches 2,000 entries, or the AgentIdentity 3,000 across ledgers (A7) | `LedgerFull` condition on that ledger; new requests wait; existing grants keep working | Fail closed; the schema bound (4.1) makes this a misconfiguration signal |
+| A 17th installation tries to keep a ledger on the agent (15.2) | The API server refuses its status write; its steps for the agent hold; a Warning event and `kardinal doctor` say why | Fail closed; the other 16 ledgers are untouched |
 | Budgets are turned off for a release with budgets set (17.4) | Nothing is held or granted; the ledger stays as it was; `kardinal doctor` names the AgentIdentities with budgets | An operator's decision, made visible; turning it on again seeds the ledger (17.2) |
 | The agent index is full or not built | Checked writes are refused by the actor policies, budgets or not; the budget reconciler and the step hold read the AgentIdentity, not the index, and carry on | Budgets never depend on the index (14.1) |
 | The AgentIdentity is deleted | Its steps that have not started hold; started ones run | 17-actors §3 requires suspension first; the `kardinal-agents-<ceiling>` gates also hold such versions |
@@ -791,8 +863,15 @@ some window or state needs, which the schema bounds by the sum of all limits (1,
 plus exempt grants, under a hard cap of 2,000 entries: about 400 KB. One AgentIdentity can carry
 the ledgers of several installations (15.2), so the reconciler also caps the grants across all of
 its ledgers at 3,000 (about 600 KB, well under etcd's 1.5 MiB with the spec): the ledger whose
-grant would pass it is `LedgerFull`, and its requests wait (A7). Typical agents hold tens of
-entries.
+grant would pass it is `LedgerFull`, and its requests wait (A7). The schema holds the same line
+against any writer, a buggy one included: `status.usage` has at most 16 ledgers (15.2), and a CEL
+rule refuses more than 3,000 grants between them (W1). Typical agents hold tens of entries.
+
+These sizes assume short rule names and patterns. The schema's per-field bounds alone allow more:
+a grant naming 16 rules of 63 characters is about 1.2 KB, and each ledger copies its rules'
+patterns, up to 128 per rule. A status write past the API server's limit is refused, so the
+ledger cannot grant and the agent's steps hold (fail closed). W2 therefore also marks a ledger
+`LedgerFull` before the AgentIdentity's JSON would pass 1 MiB.
 
 **Who receives each write.** Every kardinal controller replica's cache (AgentIdentities are
 already cached for the AgentIndex, 17-actors §5.4); the step reconciler's handler (it wakes only
@@ -869,7 +948,9 @@ ledger by release and ran the budget reconciler in the default shard only: a non
 steps would then read an entry nobody writes, and wait forever (A1).
 
 **One ledger per installation.** `status.usage` is keyed by the **ledger name**,
-`--agent-budget-ledger` (chart `actors.budgets.ledger`), which defaults to the release name.
+`--agent-budget-ledger` (chart `actors.budgets.ledger`), which defaults to the release name: in
+the controller, its `--agent-index`, which the chart sets to the release's full name
+(`agentbudget.Ledger`).
 Every shard of one sharded installation sets it to the default shard's release name. The budget
 reconciler runs only in the controller that owns cluster-scoped kinds
 (`Gate.OwnsClusterScoped`, `pkg/shard/shard.go:242`) and whose release name is the ledger, so
@@ -891,6 +972,16 @@ budgets with that in mind. Options considered: one global ledger (impossible wit
 cluster-wide visibility for every installation), one installation designated as the counter (an
 installation that cannot see the namespaces it counts), per installation (chosen), with shards of
 one installation sharing one.
+
+**At most 16 ledgers.** `status.usage` holds at most 16 entries (W1, `MaxProperties`). With the
+3,000-grant bound across them (14), this keeps one AgentIdentity under etcd's 1.5 MiB. Sixteen
+is far more installations than one agent should span, since each counts the agent separately and
+gives it a budget of its own. A 17th installation's status write is refused by the API server,
+so it cannot record a grant and its steps for that agent hold (fail closed, as a missing ledger
+does), with `waiting for agent fixer's budget to be evaluated`. Its reconciler reports the refused
+write as a Warning event on the AgentIdentity (it cannot write a condition there), and
+`kardinal doctor` reports the missing ledger (15.2). The fix is to remove a stale installation's
+ledger, or to use one ledger for installations that are shards of one.
 
 ## 16. What this does not protect against
 
@@ -919,9 +1010,13 @@ one installation sharing one.
 
 When an entry has no ledger yet (an upgrade, or a budget just added), the reconciler records a
 grant with `seeded: true` for each step of the agent's Bundles that already started in a rule's
-environments (state past Pending, `status.startedAt` inside the window, or not settled). So a
-budget added at noon counts the morning's promotions that still have steps; ones already retired
-are not counted. The docs say so.
+environments (state past Pending, started inside the window, or not settled). A PromotionStep
+has no `status.startedAt` (as built), so a seeded grant's `grantedAt` is the earliest
+`status.steps[].startedAt`, else `status.stateTransitionTime`, else the step's creation. Seeding
+runs when the ledger is new and after every spec change (a rule just added counts what it
+matches), and skips a Bundle and environment the ledger already holds. So a budget added at noon
+counts the morning's promotions that still have steps; ones already retired are not counted. The
+docs say so.
 
 ### 17.3 Later
 

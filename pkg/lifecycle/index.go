@@ -63,3 +63,28 @@ func ListPipelineBundles(ctx context.Context, c client.Reader, ns, pipeline stri
 	}
 	return list.Items, nil
 }
+
+// onceKey identifies one field index on one indexer.
+type onceKey struct {
+	indexer client.FieldIndexer
+	kind    string
+	field   string
+}
+
+var indexed sync.Map // onceKey -> *indexOnce
+
+// IndexOnce registers field on obj's kind with indexer once; later calls for
+// the same indexer, kind and field return the first call's result. A manager
+// refuses a second index of the same name, and several reconcilers read
+// some indexes (the agent budget indexes: the budget reconciler, the step
+// hold and the gates' budget.* context).
+func IndexOnce(ctx context.Context, indexer client.FieldIndexer, obj client.Object, field string, fn client.IndexerFunc) error {
+	v, _ := indexed.LoadOrStore(onceKey{indexer, fmt.Sprintf("%T", obj), field}, &indexOnce{})
+	o := v.(*indexOnce)
+	o.once.Do(func() {
+		if err := indexer.IndexField(ctx, obj, field, fn); err != nil {
+			o.err = fmt.Errorf("index %T by %s: %w", obj, field, err)
+		}
+	})
+	return o.err
+}
