@@ -835,7 +835,7 @@ func (k *Kro) apply(ctx context.Context, g *graph.Graph, raw *unstructured.Unstr
 	gp, err := k.compile(g)
 	if err != nil {
 		k.hardError(g, err)
-		return 0, k.setStatus(ctx, raw, false, "InvalidGraph", err.Error(), false)
+		return 0, k.setStatus(ctx, raw, false, "InvalidGraph", err.Error(), false, nil)
 	}
 	order, _ := topoOrder(g, gp.deps)
 	gk := g.Namespace + "/" + g.Name
@@ -967,10 +967,31 @@ func (k *Kro) apply(ctx context.Context, g *graph.Graph, raw *unstructured.Unstr
 		delete(k.failing, gk)
 	}
 	k.mu.Unlock()
+	managed := managedResources(next)
 	if hard != "" {
-		return changes, k.setStatus(ctx, raw, true, "Compiled", hard, false)
+		return changes, k.setStatus(ctx, raw, true, "Compiled", hard, false, managed)
 	}
-	return changes, k.setStatus(ctx, raw, true, "Compiled", notReady, notReady == "")
+	return changes, k.setStatus(ctx, raw, true, "Compiled", notReady, notReady == "", managed)
+}
+
+// managedResources is status.managedResources as kro writes it for the
+// objects a Graph's template nodes applied (by node), in a fixed order. kro
+// fills each entry's uid in once it created the object; this emulation
+// leaves it empty, as kro's entry is before the create, which the PolicyGate
+// reconciler reads as the Graph's object of that name (#2380).
+func managedResources(applied map[string]map[objKey]bool) []interface{} {
+	var out []interface{}
+	for id, objs := range applied {
+		for key := range objs {
+			out = append(out, map[string]interface{}{"nodeID": id, "apiVersion": key.apiVersion, "kind": key.kind,
+				"namespace": key.namespace, "name": key.name})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i].(map[string]interface{}), out[j].(map[string]interface{})
+		return fmt.Sprint(a["nodeID"], a["kind"], a["namespace"], a["name"]) < fmt.Sprint(b["nodeID"], b["kind"], b["namespace"], b["name"])
+	})
+	return out
 }
 
 // ready evaluates n's readyWhen for the Graph's Ready condition: "" when
@@ -1304,9 +1325,11 @@ func (k *Kro) patch(ctx context.Context, obj *unstructured.Unstructured) (int, e
 	return 1, nil
 }
 
-// setStatus writes the Graph conditions kro writes: Accepted, then
-// ResourcesConverged and Ready.
-func (k *Kro) setStatus(ctx context.Context, raw *unstructured.Unstructured, accepted bool, reason, msg string, ready bool) error {
+// setStatus writes the Graph conditions kro writes (Accepted, then
+// ResourcesConverged and Ready) and, for a compiled Graph, the objects it
+// applied (status.managedResources).
+func (k *Kro) setStatus(ctx context.Context, raw *unstructured.Unstructured, accepted bool, reason, msg string, ready bool,
+	managed []interface{}) error {
 	cond := func(t string, ok bool, r, m string) map[string]interface{} {
 		s := "False"
 		if ok {
@@ -1330,12 +1353,18 @@ func (k *Kro) setStatus(ctx context.Context, raw *unstructured.Unstructured, acc
 		}
 	}
 	old, _, _ := unstructured.NestedSlice(raw.Object, "status", "conditions")
-	if reflect.DeepEqual(old, conds) {
+	oldManaged, _, _ := unstructured.NestedSlice(raw.Object, "status", "managedResources")
+	if reflect.DeepEqual(old, conds) && (!accepted || reflect.DeepEqual(oldManaged, managed)) {
 		return nil
 	}
 	u := raw.DeepCopy()
 	if err := unstructured.SetNestedSlice(u.Object, conds, "status", "conditions"); err != nil {
 		return fmt.Errorf("set graph status: %w", err)
+	}
+	if accepted {
+		if err := unstructured.SetNestedSlice(u.Object, managed, "status", "managedResources"); err != nil {
+			return fmt.Errorf("set graph managedResources: %w", err)
+		}
 	}
 	if err := k.c.Status().Update(ctx, u); err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("update graph status: %w", err)

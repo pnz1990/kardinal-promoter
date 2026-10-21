@@ -410,12 +410,18 @@ records hash the Bundle's UID too, and no gate record is written without one.
 
 The gate reads its Bundle by name, once per reconcile, and takes the UID from that read (the
 tally of verdicts uses the same read). A Bundle has no finalizer, so deleting it (or `kubectl
-replace --force`) frees the name at once while its gates are still being deleted: a gate whose
-`creationTimestamp` is before the Bundle's is an earlier Bundle's, and evaluates and records
-nothing (QA-5 on #2395). Both times come from the API server's clock, so they compare without
-skew, but in whole seconds: an earlier Bundle's gate created in the second the later Bundle was
-created in is not told apart. A gate whose Bundle is gone fails closed (`context error`) and
-writes no record.
+replace --force`) frees the name at once while its gates are still being deleted, and a Bundle
+of the same name can exist while an earlier one's gate is reconciled. So a gate kro applied
+(label `kro.run/node-id`) is evaluated only while it is its Bundle's: the Graph the Bundle's
+`status.graphRef` names, controlled by the Bundle's UID, lists the gate in
+`status.managedResources` (by UID, or by name in an entry kro recorded before it created the
+object). The answer is kept in the gate's `status.bundleUID`, so the Graph is read once per gate.
+Otherwise the gate writes no record and no evaluation, sets condition `InBundleGraph=False`
+(`GraphPending`: the Bundle has no Graph of its own yet; `NotListed`: the Graph does not list the
+gate, an earlier Bundle's), logs why, and is looked at again in 10 seconds (QA-5 on #2395). No
+clock is compared: creation times can come from different API servers, and a gate restored
+before its Bundle and adopted by the Bundle's Graph is the Bundle's. A gate whose Bundle is gone
+fails closed (`context error`) and writes no record.
 
 ### 6.6 CEL: `verdicts.*`
 

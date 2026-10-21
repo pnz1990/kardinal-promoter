@@ -571,6 +571,15 @@ type PolicyGateStatus struct {
 	// +optional
 	Verdicts []GateVerdictStatus `json:"verdicts,omitempty"`
 
+	// BundleUID is the UID of the Bundle whose current Graph (its
+	// status.graphRef) lists this gate instance in status.managedResources,
+	// written once the reconciler has checked it (#2380). A gate instance is
+	// evaluated, and writes audit records naming that UID, only while it is
+	// its Bundle's: an earlier Bundle's gate, still being deleted when a
+	// Bundle of its name is created again, is not (condition InBundleGraph).
+	// +optional
+	BundleUID string `json:"bundleUID,omitempty"`
+
 	// VerdictAppearances counts, for each Verdict that has been in verdicts,
 	// how many times it entered them. A Verdict that leaves and comes back
 	// (its AgentRun deleted and created again, a policy edit) is a new

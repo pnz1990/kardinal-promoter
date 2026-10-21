@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
@@ -253,20 +254,31 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// the gate's audit records (#2380): a Bundle created again under its
 	// name has gates of the same names, and gets records of its own. A
 	// Bundle has no finalizer, so a delete (or replace --force) frees its
-	// name at once, while its gates are still being deleted: a gate older
-	// than the Bundle of its name is an earlier Bundle's, and evaluates and
-	// records nothing. Both creation times are the API server's, so they
-	// compare without skew. With no Bundle at all, the gate fails closed as
-	// before, but writes no record (it has no UID to name).
+	// name at once, while its gates are still being deleted: a gate is
+	// evaluated only while its Bundle's current Graph lists it
+	// (inBundleGraph); an earlier Bundle's gate records nothing, says why
+	// (condition InBundleGraph) and is looked at again shortly. With no
+	// Bundle at all, the gate fails closed as before, but writes no record
+	// (it has no UID to name).
 	bundle, err := r.gateBundle(ctx, &gate, bundleName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	bundleUID := ""
 	if bundle != nil {
-		if !gate.CreationTimestamp.IsZero() && bundle.CreationTimestamp.After(gate.CreationTimestamp.Time) {
-			log.Debug().Str("bundle", bundleName).Msg("gate is an earlier Bundle's (created before this one): not evaluated")
+		member, reason, why, err := r.inBundleGraph(ctx, &gate, bundle)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !member && settled(bundle) {
+			// A settled Bundle's gates are not evaluated anyway, and its
+			// retired Graph (deleted) lists none: nothing to say.
 			return ctrl.Result{}, nil
+		}
+		if !member {
+			log.Info().Str("bundle", bundleName).Str("bundleUID", string(bundle.UID)).Str("reason", why).
+				Msg("gate not evaluated: its Bundle's current Graph does not list it")
+			return ctrl.Result{RequeueAfter: graphMemberRecheck}, r.setInBundleGraph(ctx, &gate, metav1.ConditionFalse, reason, why)
 		}
 		bundleUID = string(bundle.UID)
 		// Every override is recorded and audited once (GateOverridden),
@@ -576,6 +588,12 @@ func (r *Reconciler) bundleSettled(ctx context.Context, namespace, bundleName st
 	if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: namespace}, &bundle); err != nil {
 		return false
 	}
+	return settled(&bundle)
+}
+
+// settled reports whether bundle is Superseded or Rejected, or Verified
+// with its GraphReady condition True (bundleSettled).
+func settled(bundle *kardinalv1alpha1.Bundle) bool {
 	switch bundle.Status.Phase {
 	case "Superseded", "Rejected":
 		return true
@@ -1670,4 +1688,95 @@ func (r *Reconciler) holdExemption(ctx context.Context, gate *kardinalv1alpha1.P
 		return nil, why
 	}
 	return h, ""
+}
+
+// The InBundleGraph condition (#2380): whether the gate instance is its
+// Bundle's, which the gate is evaluated only while it is.
+const (
+	conditionInBundleGraph = "InBundleGraph"
+	// reasonListed: the Bundle's current Graph lists the gate.
+	reasonListed = "Listed"
+	// reasonGraphPending: the Bundle has no Graph of its own yet (none, or
+	// the name's Graph is still an earlier Bundle's).
+	reasonGraphPending = "GraphPending"
+	// reasonNotListed: the Bundle's Graph does not list the gate: it is an
+	// earlier Bundle's, still being deleted.
+	reasonNotListed = "NotListed"
+	// graphMemberRecheck is how soon a gate that is not (yet) its Bundle's
+	// is looked at again: a new Graph is created, and an earlier Bundle's
+	// gate deleted, within seconds.
+	graphMemberRecheck = 10 * time.Second
+)
+
+// inBundleGraph reports whether gate is bundle's: kro applied it from the
+// Graph bundle's status.graphRef names, which bundle controls, and that
+// Graph's status.managedResources lists it (by UID, or by name before kro
+// fills the UID in, as it records an object before it creates it). The
+// answer is kept in status.bundleUID, so the Graph, a large object, is read
+// once per gate. A gate without kro's node-id label was not applied by a
+// Graph (admission lets only kro and the controller create gate instances)
+// and has no Graph to be in. When the gate is not bundle's, reason and why
+// say so.
+func (r *Reconciler) inBundleGraph(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	bundle *kardinalv1alpha1.Bundle) (member bool, reason, why string, err error) {
+	uid := string(bundle.UID)
+	if gate.Labels[graph.LabelKRONodeID] == "" || gate.Status.BundleUID == uid {
+		return true, "", "", nil
+	}
+	ref := bundle.Status.GraphRef
+	if ref == "" {
+		return false, reasonGraphPending, fmt.Sprintf("Bundle %s (UID %s) has no Graph yet", bundle.Name, uid), nil
+	}
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(graph.GraphGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: bundle.Namespace, Name: ref}, g); apierrors.IsNotFound(err) {
+		return false, reasonGraphPending, fmt.Sprintf("Graph %s of Bundle %s (UID %s) does not exist yet", ref, bundle.Name, uid), nil
+	} else if err != nil {
+		return false, "", "", fmt.Errorf("get graph %s: %w", ref, err)
+	}
+	if owner := metav1.GetControllerOf(g); owner == nil || string(owner.UID) != uid {
+		return false, reasonGraphPending, fmt.Sprintf("Graph %s is not yet Bundle %s's (UID %s)", ref, bundle.Name, uid), nil
+	}
+	managed, _, err := unstructured.NestedSlice(g.Object, "status", "managedResources")
+	if err != nil {
+		return false, "", "", fmt.Errorf("read graph %s status.managedResources: %w", ref, err)
+	}
+	for _, m := range managed {
+		e, _ := m.(map[string]interface{})
+		str := func(k string) string { s, _ := e[k].(string); return s }
+		if str("kind") == "PolicyGate" && str("namespace") == gate.Namespace && str("name") == gate.Name &&
+			(str("uid") == string(gate.UID) || str("uid") == "") {
+			patch := client.MergeFrom(gate.DeepCopy())
+			gate.Status.BundleUID = uid
+			setInBundleGraphCondition(gate, metav1.ConditionTrue, reasonListed,
+				fmt.Sprintf("Graph %s of Bundle %s (UID %s) lists this gate", ref, bundle.Name, uid), r.now())
+			if err := r.Status().Patch(ctx, gate, patch); err != nil {
+				return false, "", "", fmt.Errorf("record bundle graph membership: %w", err)
+			}
+			return true, "", "", nil
+		}
+	}
+	return false, reasonNotListed, fmt.Sprintf("Graph %s of Bundle %s (UID %s) does not list this gate: it is an earlier Bundle's",
+		ref, bundle.Name, uid), nil
+}
+
+// setInBundleGraph writes the InBundleGraph condition when it changes.
+func (r *Reconciler) setInBundleGraph(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	status metav1.ConditionStatus, reason, msg string) error {
+	if c := meta.FindStatusCondition(gate.Status.Conditions, conditionInBundleGraph); c != nil &&
+		c.Status == status && c.Reason == reason && c.Message == msg {
+		return nil
+	}
+	patch := client.MergeFrom(gate.DeepCopy())
+	setInBundleGraphCondition(gate, status, reason, msg, r.now())
+	if err := r.Status().Patch(ctx, gate, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("set %s condition: %w", conditionInBundleGraph, err)
+	}
+	return nil
+}
+
+// setInBundleGraphCondition sets the InBundleGraph condition on gate, in memory.
+func setInBundleGraphCondition(gate *kardinalv1alpha1.PolicyGate, status metav1.ConditionStatus, reason, msg string, now time.Time) {
+	meta.SetStatusCondition(&gate.Status.Conditions, metav1.Condition{Type: conditionInBundleGraph, Status: status,
+		Reason: reason, Message: msg, ObservedGeneration: gate.Generation, LastTransitionTime: metav1.NewTime(now)})
 }

@@ -13,13 +13,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
@@ -300,17 +304,172 @@ func TestPolicyGateReconciler_VerdictRecordsPerBundle(t *testing.T) {
 	assert.NotEqual(t, names[0], names[1])
 }
 
-// TestPolicyGateReconciler_EarlierBundlesGate (QA-5 on #2395): a Bundle has
-// no finalizer, so deleting it frees its name while its gates are still
-// being deleted, and a Bundle created again under the name can exist while
-// an earlier one's gate is reconciled. Such a gate is older than the Bundle
-// of its name: it evaluates and records nothing, so nothing names the new
-// Bundle's UID for the earlier Bundle's gate.
+// graphOf is Bundle b's kro Graph, controlled by b, whose
+// status.managedResources lists gates (name and UID; an empty UID is an
+// entry kro recorded before it created the object). It sets b's graphRef.
+func graphOf(b *kardinalv1alpha1.Bundle, owner types.UID, gates ...[2]string) *unstructured.Unstructured {
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(graph.GraphGVK)
+	g.SetNamespace(b.Namespace)
+	g.SetName("graph-" + b.Name)
+	ctl := true
+	g.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: kardinalv1alpha1.GroupVersion.String(), Kind: "Bundle",
+		Name: b.Name, UID: owner, Controller: &ctl}})
+	var managed []interface{}
+	for _, gate := range gates {
+		managed = append(managed, map[string]interface{}{"nodeID": "PolicyGates", "apiVersion": "kardinal.io/v1alpha1",
+			"kind": "PolicyGate", "namespace": b.Namespace, "name": gate[0], "uid": gate[1]})
+	}
+	_ = unstructured.SetNestedSlice(g.Object, managed, "status", "managedResources")
+	b.Status.GraphRef = g.GetName()
+	return g
+}
+
+// TestPolicyGateReconciler_InBundleGraph (#2380, QA-5 on #2395): a Bundle
+// has no finalizer, so deleting it frees its name while its gates are still
+// being deleted, and a Bundle of the same name can exist while an earlier
+// one's gate is reconciled. A gate kro applied is evaluated only while its
+// Bundle's current Graph (status.graphRef, controlled by the Bundle) lists
+// it, whatever the two creation times say (several API servers, a
+// restore). An earlier Bundle's gate writes no record, says why on its
+// InBundleGraph condition, and is looked at again in seconds; the answer is
+// kept in status.bundleUID, so the Graph is read once.
+func TestPolicyGateReconciler_InBundleGraph(t *testing.T) {
+	created := metav1.NewTime(verifyNow.Add(-time.Hour))
+	cases := []struct {
+		name        string
+		gateCreated time.Duration // after the Bundle
+		graph       func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured
+		cached      bool
+		evaluated   bool
+		reason, why string
+		graphReads  int
+	}{
+		{name: "listed in its Bundle's Graph", gateCreated: time.Second,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
+			}, evaluated: true, reason: "Listed", graphReads: 1},
+		{name: "created in the second its Bundle was", gateCreated: 0,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
+			}, evaluated: true, reason: "Listed", graphReads: 1},
+		{name: "older than its Bundle, adopted by its Graph (a restore, a clock ahead)", gateCreated: -time.Hour,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
+			}, evaluated: true, reason: "Listed", graphReads: 1},
+		{name: "recorded by kro before it had a UID", gateCreated: time.Second,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", ""})
+			}, evaluated: true, reason: "Listed", graphReads: 1},
+		{name: "checked before: the Graph is not read again", gateCreated: time.Second, cached: true,
+			evaluated: true},
+		{name: "an earlier Bundle's gate: the Graph lists another of its name", gateCreated: time.Second,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", "another-uid"})
+			}, reason: "NotListed", why: "does not list this gate: it is an earlier Bundle's", graphReads: 2},
+		{name: "the Graph lists another kind of the gate's name", gateCreated: time.Second,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				g := graphOf(b, b.UID)
+				_ = unstructured.SetNestedSlice(g.Object, []interface{}{map[string]interface{}{"nodeID": "PRStatuses",
+					"apiVersion": "kardinal.io/v1alpha1", "kind": "PRStatus", "namespace": "default", "name": "verify", "uid": "gate-uid"}},
+					"status", "managedResources")
+				return g
+			}, reason: "NotListed", why: "does not list this gate", graphReads: 2},
+		{name: "no Graph yet", gateCreated: time.Second,
+			reason: "GraphPending", why: "has no Graph yet"},
+		{name: "the Graph of the name is still an earlier Bundle's", gateCreated: time.Second,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, "uid-earlier", [2]string{"verify", "gate-uid"})
+			}, reason: "GraphPending", why: "is not yet Bundle", graphReads: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := makeBundle("nginx-demo-v1", "default")
+			bundle.UID, bundle.CreationTimestamp = "uid-b", created
+			bundle.Status.Phase = "Promoting"
+			bundle.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
+			gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
+			gate.UID = "gate-uid"
+			gate.Labels["kro.run/node-id"] = "PolicyGates"
+			gate.CreationTimestamp = metav1.NewTime(created.Add(tc.gateCreated))
+			if tc.cached {
+				gate.Status.BundleUID = "uid-b"
+			}
+			objs := []client.Object{gate}
+			if tc.graph != nil {
+				objs = append(objs, tc.graph(bundle))
+			}
+			objs = append(objs, bundle)
+			reads := 0
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(objs...).
+				WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}, &kardinalv1alpha1.Bundle{}).
+				WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey,
+					obj client.Object, opts ...client.GetOption) error {
+					if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == graph.GraphGVK {
+						reads++
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				}}).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			r.NowFn = func() time.Time { return verifyNow }
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "verify", Namespace: "default"}}
+			var versions []string
+			for range 2 { // twice: the Graph is read once, the skip writes once
+				res, err := r.Reconcile(context.Background(), req)
+				require.NoError(t, err)
+				if !tc.evaluated {
+					assert.Equal(t, 10*time.Second, res.RequeueAfter, "looked at again shortly")
+				}
+				var g kardinalv1alpha1.PolicyGate
+				require.NoError(t, c.Get(context.Background(), req.NamespacedName, &g))
+				versions = append(versions, g.ResourceVersion)
+			}
+			if !tc.evaluated {
+				assert.Equal(t, versions[0], versions[1], "the condition is written once, not at every look")
+			}
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			var events kardinalv1alpha1.AuditEventList
+			require.NoError(t, c.List(context.Background(), &events, client.InNamespace("default")))
+			assert.Equal(t, tc.graphReads, reads, "Graph reads")
+			cond := meta.FindStatusCondition(got.Status.Conditions, "InBundleGraph")
+			if tc.evaluated {
+				assert.NotNil(t, got.Status.LastEvaluatedAt, "evaluated")
+				assert.Equal(t, "uid-b", got.Status.BundleUID)
+				assert.NotEmpty(t, events.Items, "it records")
+				for _, e := range events.Items {
+					assert.Equal(t, "uid-b", e.Spec.BundleUID, e.Name)
+				}
+				if tc.reason != "" {
+					require.NotNil(t, cond)
+					assert.Equal(t, metav1.ConditionTrue, cond.Status)
+					assert.Equal(t, tc.reason, cond.Reason)
+				}
+				return
+			}
+			assert.Nil(t, got.Status.LastEvaluatedAt, "not evaluated")
+			assert.Empty(t, events.Items, "no record names the Bundle for a gate not its own")
+			assert.Empty(t, got.Status.BundleUID)
+			require.NotNil(t, cond, "the gate says why")
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, tc.reason, cond.Reason)
+			assert.Contains(t, cond.Message, tc.why)
+		})
+	}
+}
+
+// TestPolicyGateReconciler_EarlierBundlesGate (QA-5 on #2395): the probe.
+// Bundle uid-a's gate records; the Bundle is deleted and created again
+// (uid-b) under its name while the gate is still there; the gate, uid-a's,
+// writes nothing that names uid-b.
 func TestPolicyGateReconciler_EarlierBundlesGate(t *testing.T) {
 	created := metav1.NewTime(verifyNow.Add(-time.Hour))
 	gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
 	gate.Labels["kardinal.io/pipeline"] = "nginx-demo"
-	gate.CreationTimestamp = metav1.NewTime(created.Add(time.Second)) // after its Bundle
+	gate.Labels["kro.run/node-id"] = "PolicyGates"
+	gate.UID = "gate-a"
+	gate.CreationTimestamp = metav1.NewTime(created.Add(time.Second))
 	gate.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Environment: "uat", Required: 1,
 		AllowedAgents: []string{"qa"}}
 	v := agentVerdict("r1", "qa", "bob", "pass", 1, 1, 0)
@@ -320,7 +479,8 @@ func TestPolicyGateReconciler_EarlierBundlesGate(t *testing.T) {
 	earlier.UID, earlier.CreationTimestamp = "uid-a", created
 	earlier.Status.Phase = "Promoting"
 	earlier.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
-	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, earlier).
+	earlierGraph := graphOf(earlier, earlier.UID, [2]string{"verify", "gate-a"})
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, earlier, earlierGraph).
 		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}, &kardinalv1alpha1.Bundle{}).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
@@ -332,23 +492,17 @@ func TestPolicyGateReconciler_EarlierBundlesGate(t *testing.T) {
 	require.Equal(t, []string{"VerdictRecorded uid-a"}, before)
 
 	// The Bundle is deleted and created again under its name; the earlier
-	// one's gate is still there.
+	// one's gate (and Graph, being deleted) are still there.
 	require.NoError(t, c.Delete(context.Background(), earlier))
 	again := makeBundle("nginx-demo-v1", "default")
 	again.UID, again.CreationTimestamp = "uid-b", metav1.NewTime(created.Add(10*time.Second))
 	again.Status.Phase = "Promoting"
 	again.Annotations = map[string]string{"kardinal.io/created-by": "alice"}
 	require.NoError(t, c.Create(context.Background(), again))
-	var b kardinalv1alpha1.Bundle
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &b))
-	require.True(t, b.CreationTimestamp.After(gate.CreationTimestamp.Time), "the fixture: the Bundle is newer than the gate")
-	var old kardinalv1alpha1.PolicyGate
-	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &old))
 	for range 2 {
 		_, err = r.Reconcile(context.Background(), req)
 		require.NoError(t, err)
 	}
-
 	var list kardinalv1alpha1.AuditEventList
 	require.NoError(t, c.List(context.Background(), &list, client.InNamespace("default")))
 	for _, e := range list.Items {
@@ -356,5 +510,34 @@ func TestPolicyGateReconciler_EarlierBundlesGate(t *testing.T) {
 	}
 	var cur kardinalv1alpha1.PolicyGate
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
-	assert.Equal(t, old.ResourceVersion, cur.ResourceVersion, "the earlier Bundle's gate is not evaluated: nothing is written")
+	cond := meta.FindStatusCondition(cur.Status.Conditions, "InBundleGraph")
+	require.NotNil(t, cond)
+	assert.Equal(t, "GraphPending", cond.Reason, cond.Message)
+}
+
+// TestPolicyGateReconciler_SettledBundleRetiredGraph: a settled Bundle's
+// gates are not evaluated, and its retired Graph (deleted) lists none: such
+// a gate, still being deleted, gets no InBundleGraph condition, no requeue
+// and no write.
+func TestPolicyGateReconciler_SettledBundleRetiredGraph(t *testing.T) {
+	bundle := makeBundle("nginx-demo-v1", "default")
+	bundle.Status.Phase = "Superseded"
+	bundle.Status.GraphRef = "graph-nginx-demo-v1" // retired: the Graph is gone
+	gate := makeGateInstance("verify", "default", "nginx-demo-v1", "true", "5m")
+	gate.UID = "gate-uid"
+	gate.Labels["kro.run/node-id"] = "PolicyGates"
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}, &kardinalv1alpha1.Bundle{}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "verify", Namespace: "default"}}
+	var before kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &before))
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Zero(t, res.RequeueAfter)
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Equal(t, before.ResourceVersion, got.ResourceVersion, "nothing written")
+	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InBundleGraph"))
 }
