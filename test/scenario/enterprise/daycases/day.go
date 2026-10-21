@@ -68,7 +68,13 @@ var (
 	banned  = scenario.Identity{Username: scenario.SAUser("banned"), Groups: sa}
 	triage  = scenario.ActorIdentities["agent-group"]
 	parked  = scenario.ActorIdentities["suspended"]
+	// shipper (autonomy auto) ships in team-a under shipperRule.
+	shipper = scenario.Identity{Username: scenario.SAUser("shipper"), Groups: sa}
 )
+
+// shipperRule is the shipper's budget: two versions a day into prod, one
+// at a time (docs/design/24-agent-budgets.md).
+var shipperRule = v1alpha1.AgentBudgetRule{Name: "prod", Environments: []string{"prod"}, VersionsPerDay: 2, MaxConcurrent: 1}
 
 // agents are the registry: name, subject principal, sponsor.
 var agents = map[string]struct{ principal, sponsor string }{
@@ -77,6 +83,7 @@ var agents = map[string]struct{ principal, sponsor string }{
 	"banned":         {banned.Username, scenario.Sponsor},
 	"triage":         {triage.Username, scenario.Sponsor},
 	"parked":         {parked.Username, scenario.Sponsor},
+	"shipper":        {shipper.Username, scenario.Sponsor},
 	scenario.QAAgent: {scenario.SAUser(scenario.QAAgent), scenario.QASponsor},
 }
 
@@ -89,6 +96,8 @@ func registry() []client.Object {
 	}
 	qa := id(scenario.QAAgent, scenario.SASubject(scenario.QAAgent), []string{TeamA}, v1alpha1.AutonomyAuto, false)
 	qa.Spec.Sponsor.User = scenario.QASponsor
+	ship := id("shipper", scenario.SASubject("shipper"), []string{TeamA}, v1alpha1.AutonomyAuto, false)
+	ship.Spec.Budgets = []v1alpha1.AgentBudgetRule{shipperRule}
 	return []client.Object{
 		id("fixer", scenario.SASubject("fixer"), []string{TeamA, TeamC}, v1alpha1.AutonomyAuto, false),
 		id("careful", scenario.SASubject("careful"), []string{TeamA}, v1alpha1.AutonomyApprove, false),
@@ -96,6 +105,7 @@ func registry() []client.Object {
 		id("triage", v1alpha1.AgentSubject{Kind: "Group", Name: triage.Groups[0]}, []string{"team-*"}, v1alpha1.AutonomyAuto, false),
 		id("parked", scenario.SASubject("parked"), []string{TeamA}, v1alpha1.AutonomyAuto, true),
 		qa,
+		ship,
 	}
 }
 
@@ -160,7 +170,9 @@ func NewDay(t *testing.T, seed int64) *Day {
 	t.Helper()
 	w := scenario.NewWorld(t, scenario.Options{SCM: scenario.SCMGitHub, PolicyNamespaces: []string{scenario.PolicyNS}, Actors: true,
 		// As the controller runs: an object is reconciled when a watch wakes it.
-		Watch: true})
+		Watch: true,
+		// The shipper's budget (shipperRule) is the day's only one.
+		Budgets: true})
 	d := &Day{World: w, t: t, plans: map[string]*scenario.Plan{}, rng: rand.New(rand.NewSource(seed)), //nolint:gosec // a seeded interleaving
 		approve: map[string]bool{}, verdicts: map[string]scenario.AgentResult{}, seen: map[string]obs{},
 		errSeen: map[string]int{}, handVerified: map[string]bool{}}
@@ -581,6 +593,8 @@ func (d *Day) CheckInvariants() {
 				"%s names no actor and does not say why", what)
 		case e.Spec.Action == "FreezeExempted":
 			require.Contains(t, e.Spec.Message, " by ", "%s does not name who made the exemption", what)
+		case e.Spec.Action == "BudgetExempted":
+			require.Contains(t, e.Spec.Message, " made by ", "%s does not name who made the exemption", what)
 		case e.Spec.Action == "PRMerged":
 			require.Contains(t, e.Spec.Message, " by reviewer", "%s does not name the merger", what)
 		case strings.HasPrefix(e.Spec.Action, "Promotion") || strings.HasPrefix(e.Spec.Action, "Rollback"):

@@ -81,9 +81,13 @@ func userOf(ctx context.Context) user.Info {
 // startAPIServer serves the chart's identity and actor policies through
 // the API server's ValidatingAdmissionPolicy plugin. The API server
 // outlives a controller restart (Restart).
-func (w *World) startAPIServer() {
+func (w *World) startAPIServer(budgets bool) {
 	w.T.Helper()
-	c, err := RenderChart()
+	values := map[string]any{}
+	if budgets {
+		values["actors"] = map[string]any{"budgets": map[string]any{"enabled": true}}
+	}
+	c, err := RenderChartWith(values)
 	if err != nil {
 		w.T.Fatal(err)
 	}

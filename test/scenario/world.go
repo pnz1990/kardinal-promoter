@@ -47,6 +47,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	abrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentbudget"
 	airec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentidentity"
 	arrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 	bundlerec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -160,6 +161,14 @@ type Options struct {
 	NoAdmission bool
 	// MaxIndexBytes bounds the agent index (0: actor.MaxIndexBytes).
 	MaxIndexBytes int
+	// Budgets, with Actors, turns agent budgets on as the chart's
+	// actors.budgets.enabled does (--agent-budgets,
+	// docs/design/24-agent-budgets.md): the budget reconciler writes the
+	// release's ledger, a step of an agent's version holds for its grant,
+	// gates read budget.*, the translator folds the budgets into fleet
+	// pacing, and the chart's budget admission policies are installed (a
+	// stamped exemption counts while admission serves them).
+	Budgets bool
 }
 
 // World is one kardinal controller and the cluster, git host and GitOps
@@ -207,6 +216,11 @@ type World struct {
 	indexPaused atomic.Bool
 	agentRuns   *arrec.Reconciler
 	templates   *strec.Reconciler
+	// budgets is the agent budget reconciler (Options.Budgets).
+	budgets *abrec.Reconciler
+	// prev is the last write of each object the watch predicates compare
+	// a write with (watchKeys).
+	prev prevWrites
 	// agentRefusals are agents' Verdicts admission refused.
 	agentRefusals []AgentVerdictRefusal
 	store         client.WithWatch
@@ -247,10 +261,11 @@ type World struct {
 	rounds     int
 	watch      bool
 	policyNS   map[string]bool
-	// keyWrites counts writes per watch key (emitKeys).
-	keyWrites map[string]int64
-	cache     *readCache
-	seen      map[string]reconcileState
+	// keyWrites counts writes per watch key (emitKeys), kindWrites per kind.
+	keyWrites  map[string]int64
+	kindWrites map[string]int64
+	cache      *readCache
+	seen       map[string]reconcileState
 	// verified records, per namespace/environment, the image tag of the
 	// Bundle most recently seen Verified there, and the steps seen.
 	verified     map[string]string
@@ -268,7 +283,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 	mapper := restMapper(s)
 	w := &World{T: t, Scheme: s, Dir: dir, reconciles: map[string]int{}, perObject: map[string]int{}, errors: map[string]int{}, lastErrors: map[string]string{},
 		verified: map[string]string{}, seenVerified: map[string]bool{},
-		watch: opts.Watch, policyNS: map[string]bool{}, keyWrites: map[string]int64{}, seen: map[string]reconcileState{}, mapper: mapper}
+		watch: opts.Watch, policyNS: map[string]bool{}, keyWrites: map[string]int64{}, kindWrites: map[string]int64{}, seen: map[string]reconcileState{}, mapper: mapper}
 	for _, ns := range opts.PolicyNamespaces {
 		w.policyNS[ns] = true
 	}
@@ -281,7 +296,8 @@ func NewWorld(t testing.TB, opts Options) *World {
 	if w.clock.IsZero() {
 		w.clock = time.Date(2026, 10, 14, 10, 0, 0, 0, time.UTC) // a Wednesday
 	}
-	countWrite := func(o client.Object, created bool) {
+	countWrite := func(o client.Object, op admission.Operation) {
+		created := op != admission.Update
 		w.effect("write " + objKind(o) + " " + o.GetNamespace() + "/" + o.GetName())
 		switch objKind(o) {
 		case "AgentIndex":
@@ -290,7 +306,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 			w.graphWrites.Add(1)
 		}
 		w.writes.Add(1)
-		w.noteWrite(o)
+		w.noteWrite(o, op)
 		if w.cache != nil {
 			w.cache.invalidate(objKind(o), o.GetNamespace(), o.GetName(), created)
 		}
@@ -331,6 +347,12 @@ func NewWorld(t testing.TB, opts Options) *World {
 			}
 			return nil
 		}).
+		// The agent budget indexes (agentbudget.SetupWithManager, and the
+		// step and gate reconcilers' with budgets on).
+		WithIndex(&v1alpha1.PromotionStep{}, abrec.IndexStepBudgetAgent, abrec.StepBudgetAgent).
+		WithIndex(&v1alpha1.Bundle{}, abrec.IndexBundleUID, abrec.BundleUID).
+		WithIndex(&v1alpha1.Bundle{}, abrec.IndexBundleAgent, abrec.BundleAgent).
+		WithIndex(&v1alpha1.AgentIdentity{}, abrec.IndexUnavailableLedgers, abrec.UnavailableLedgers).
 		WithInterceptorFuncs(interceptor.Funcs{
 			// The API server sets a UID, the creation time and generation
 			// 1 on create and moves the generation when the spec changes;
@@ -342,7 +364,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				defer func() {
 					if err == nil {
-						countWrite(o, true)
+						countWrite(o, admission.Create)
 					}
 				}()
 				if o.GetUID() == "" {
@@ -372,7 +394,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				defer func() {
 					if err == nil {
-						countWrite(o, false)
+						countWrite(o, admission.Update)
 					}
 				}()
 				if gerr := bumpGeneration(ctx, c, o, nil); gerr != nil {
@@ -400,7 +422,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				defer func() {
 					if err == nil {
-						countWrite(o, false)
+						countWrite(o, admission.Update)
 					} else {
 						refusedPatch(o)
 					}
@@ -439,7 +461,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				defer func() {
 					if err == nil {
-						countWrite(o, true)
+						countWrite(o, admission.Delete)
 					}
 				}()
 				old, gerr := w.stored(ctx, c, o)
@@ -460,7 +482,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				defer func() {
 					if err == nil {
-						countWrite(o, false)
+						countWrite(o, admission.Update)
 					}
 				}()
 				old, gerr := w.stored(ctx, c, o)
@@ -481,7 +503,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 				}
 				defer func() {
 					if err == nil {
-						countWrite(o, false)
+						countWrite(o, admission.Update)
 					} else {
 						refusedPatch(o)
 					}
@@ -529,11 +551,14 @@ func NewWorld(t testing.TB, opts Options) *World {
 	w.Metrics = &FakeMetrics{values: map[string]float64{}}
 
 	w.GitOps = &GitOps{w: w}
+	if opts.Budgets && !opts.Actors {
+		t.Fatal("scenario: Options.Budgets needs Options.Actors (the agent registry)")
+	}
 	w.mgr = managerConfig{scmKind: kind, compactAbove: opts.CompactAbove, policyNS: opts.PolicyNamespaces,
-		actors: opts.Actors, maxIndexBytes: opts.MaxIndexBytes, dyn: dyn}
+		actors: opts.Actors, maxIndexBytes: opts.MaxIndexBytes, budgets: opts.Budgets, dyn: dyn}
 	if opts.Actors {
 		if !opts.NoAdmission {
-			w.startAPIServer()
+			w.startAPIServer(opts.Budgets)
 		}
 		// The API server's own EndpointSlice: an AgentRun's NetworkPolicy
 		// allows egress to it.
@@ -554,6 +579,7 @@ type managerConfig struct {
 	policyNS      []string
 	actors        bool
 	maxIndexBytes int
+	budgets       bool
 	dyn           *dynClient
 }
 
@@ -579,7 +605,7 @@ func (w *World) startManager() {
 	}
 	compactAbove := builder.CompactAbove
 	rc, c, dyn := w.Client, w.store, m.dyn
-	tr := translator.New(graph.NewGraphClient(dyn, logger), builder, rc, m.policyNS, logger)
+	tr := translator.New(graph.NewGraphClient(dyn, logger), builder, rc, m.policyNS, logger).WithAgentBudgets(m.budgets)
 	now := w.Now
 	// A restarted controller's Pod starts with an empty working directory.
 	work := filepath.Join(w.Dir, "work")
@@ -620,6 +646,9 @@ func (w *World) startManager() {
 		w.agentRuns = &arrec.Reconciler{Client: rc, APIReader: c, WriterClusterRole: Release + "-agentrun-writer",
 			ReaderClusterRole: Release + "-agentrun-reader", ControllerNamespace: ReleaseNamespace, NowFn: now}
 		w.templates = &strec.Reconciler{Client: rc}
+	}
+	if m.budgets {
+		w.startBudgets()
 	}
 }
 
@@ -703,7 +732,7 @@ func (w *World) kinds() []reconcileKind {
 			{"AgentRun", &v1alpha1.AgentRunList{}, w.agentRuns.Reconcile},
 		}
 	}
-	return append(registry, []reconcileKind{
+	registry = append(registry, []reconcileKind{
 		{"Pipeline", &v1alpha1.PipelineList{}, w.pipelines.Reconcile},
 		{"ChangeWindow", &v1alpha1.ChangeWindowList{}, w.windows.Reconcile},
 		{"MetricCheck", &v1alpha1.MetricCheckList{}, w.metrics.Reconcile},
@@ -711,6 +740,13 @@ func (w *World) kinds() []reconcileKind {
 		{"Kro", nil, nil},
 		{"PolicyGate", &v1alpha1.PolicyGateList{}, w.gates.Reconcile},
 		{"PromotionStep", &v1alpha1.PromotionStepList{}, w.steps.Reconcile},
+	}...)
+	if w.budgets != nil {
+		// After the steps: a step that asks in a round is granted in it,
+		// and goes on in the next.
+		registry = append(registry, reconcileKind{KindAgentBudget, &v1alpha1.AgentIdentityList{}, w.budgets.Reconcile})
+	}
+	return append(registry, []reconcileKind{
 		{"PRStatus", &v1alpha1.PRStatusList{}, w.prs.Reconcile},
 		{"RenderRun", &v1alpha1.RenderRunList{}, w.renders.Reconcile},
 		{"RollbackPolicy", &v1alpha1.RollbackPolicyList{}, w.rollbacks.Reconcile},
@@ -779,7 +815,7 @@ func (w *World) Round() int64 {
 func (w *World) reconcileObject(k reconcileKind, o client.Object) {
 	key := types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
 	skey := k.name + "/" + key.String()
-	if !w.wakes(skey, o) {
+	if !w.wakes(k.name, skey, o) {
 		return
 	}
 	// A reconcile that wrote and asks to run again at once runs
@@ -802,8 +838,10 @@ func (w *World) reconcileObject(k reconcileKind, o client.Object) {
 			w.lastErrors[k.name] = err.Error()
 		}
 		w.mu.Unlock()
-		w.reconciled(skey, o, res, err)
-		if err != nil || w.writes.Load() == before || res.RequeueAfter > 0 {
+		w.reconciled(k.name, skey, o, res, err)
+		// The budget reconciler's own ledger writes do not wake it: its
+		// watch of AgentIdentities passes generation changes.
+		if err != nil || w.writes.Load() == before || res.RequeueAfter > 0 || k.name == KindAgentBudget {
 			break
 		}
 	}
@@ -882,7 +920,11 @@ func objKind(o client.Object) string {
 	return kindOf(o)
 }
 
-func listenKeys(o client.Object) []string {
+// listenKeys are the keys o listens to as an object of reconciler kind.
+func listenKeys(kind string, o client.Object) []string {
+	if kind == KindAgentBudget {
+		return budgetListenKeys(o)
+	}
 	ns, l := o.GetNamespace(), o.GetLabels()
 	b, p := l["kardinal.io/bundle"], l["kardinal.io/pipeline"]
 	switch objKind(o) {
@@ -891,12 +933,13 @@ func listenKeys(o client.Object) []string {
 		return []string{"B:" + ns + "/" + o.GetName(), "PB:" + ns + "/" + pl, "S:" + ns + "/" + o.GetName(),
 			"G:" + ns + "/" + o.GetName(), "P:" + ns + "/" + pl, "GT:" + ns, "GT:*"}
 	case "PromotionStep":
-		return []string{"B:" + ns + "/" + b, "GI:" + ns + "/" + b, "PR:" + ns + "/" + b, "P:" + ns + "/" + p}
+		return append([]string{"B:" + ns + "/" + b, "GI:" + ns + "/" + b, "PR:" + ns + "/" + b, "P:" + ns + "/" + p},
+			stepBudgetListenKeys(o)...)
 	case "PolicyGate":
 		if b == "" {
 			return nil
 		}
-		return []string{"S:" + ns + "/" + b, "P:" + ns + "/" + p, "IN:*"}
+		return append([]string{"S:" + ns + "/" + b, "P:" + ns + "/" + p, "IN:*"}, gateBudgetListenKeys(o, ns, b)...)
 	case "Pipeline":
 		return []string{"PB:" + ns + "/" + o.GetName(), "SP:" + ns + "/" + o.GetName(), "GIP:" + ns + "/" + o.GetName(),
 			"GT:" + ns, "GT:*"}
@@ -923,21 +966,33 @@ func pipelineOfBundle(o client.Object) string {
 	return ""
 }
 
-// noteWrite counts a write of o under the keys it emits.
-func (w *World) noteWrite(o client.Object) {
-	keys := emitKeys(o, w.policyNS)
+// noteWrite counts a write of o, by its kind and under the keys it emits.
+func (w *World) noteWrite(o client.Object, op admission.Operation) {
+	keys := w.watchKeys(o, op)
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.kindWrites[objKind(o)]++
 	for _, k := range keys {
 		w.keyWrites[k]++
 	}
 }
 
+// WritesByKind counts the writes so far by kind.
+func (w *World) WritesByKind() map[string]int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]int64, len(w.kindWrites))
+	for k, v := range w.kindWrites {
+		out[k] = v
+	}
+	return out
+}
+
 // heard is the sum of the write counts of the keys o listens to. Callers
 // hold w.mu.
-func (w *World) heard(o client.Object) int64 {
+func (w *World) heard(kind string, o client.Object) int64 {
 	var n int64
-	for _, k := range listenKeys(o) {
+	for _, k := range listenKeys(kind, o) {
 		n += w.keyWrites[k]
 	}
 	return n
@@ -945,34 +1000,34 @@ func (w *World) heard(o client.Object) int64 {
 
 // wakes reports whether a watch would reconcile o (as skey) now: it is
 // new, it changed, it heard a write, or its requeue time came.
-func (w *World) wakes(skey string, o client.Object) bool {
+func (w *World) wakes(kind, skey string, o client.Object) bool {
 	if !w.watch {
 		return true
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	st, ok := w.seen[skey]
-	if !ok || !st.reconciled || st.rv != o.GetResourceVersion() || st.heard != w.heard(o) {
+	if !ok || !st.reconciled || st.rv != watchVersion(kind, o) || st.heard != w.heard(kind, o) {
 		return true
 	}
 	return st.hasDue && !w.Now().Before(st.due)
 }
 
 // reconciled records a reconcile of skey for wakes.
-func (w *World) reconciled(skey string, o client.Object, res ctrl.Result, err error) {
+func (w *World) reconciled(kind, skey string, o client.Object, res ctrl.Result, err error) {
 	if !w.watch {
 		return
 	}
 	cur := o.DeepCopyObject().(client.Object)
 	rv := ""
 	if gerr := w.Client.Get(w.Ctx, client.ObjectKeyFromObject(o), cur); gerr == nil {
-		rv = cur.GetResourceVersion()
+		rv = watchVersion(kind, cur)
 		o = cur
 	}
 	now := w.Now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	st := reconcileState{rv: rv, heard: w.heard(o), reconciled: true}
+	st := reconcileState{rv: rv, heard: w.heard(kind, o), reconciled: true}
 	//nolint:staticcheck // Requeue is what the reconcilers still return
 	switch {
 	case err != nil, res.Requeue:

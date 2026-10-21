@@ -21,3 +21,12 @@ func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
 // hack/ci/perf-baseline.txt.
 // Covers SCEN-AGENT-SCALE-01.
 func TestEnterprise_AgentScale(t *testing.T) { agentcases.RunScale(t) }
+
+// TestEnterprise_AgentBudgetsAtScale is every active agent budgeted, with
+// budgets on, through two bursts (agentcases.RunBudgetScale; 5,000
+// AgentIdentities and 50 agents in full, 7,500 once #2372 lands): each
+// burst converges, at most 3
+// usage writes per promotion on average, every ledger within its bounds,
+// and no agent index reconcile caused by a usage write.
+// Covers SCEN-AGENT-BUDGET-03.
+func TestEnterprise_AgentBudgetsAtScale(t *testing.T) { agentcases.RunBudgetScale(t) }

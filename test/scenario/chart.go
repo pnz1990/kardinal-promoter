@@ -44,11 +44,16 @@ type Chart struct {
 // RenderChart renders the chart in process (helm.sh/helm/v4, the engine helm
 // template uses) as Release in ReleaseNamespace with its default values.
 func RenderChart() (Chart, error) {
+	return RenderChartWith(map[string]any{})
+}
+
+// RenderChartWith is RenderChart with values over the defaults.
+func RenderChartWith(values map[string]any) (Chart, error) {
 	chrt, err := loader.Load(filepath.Join(RepoRoot(), "chart", "kardinal-promoter"))
 	if err != nil {
 		return Chart{}, fmt.Errorf("load chart: %w", err)
 	}
-	vals, err := chartutil.ToRenderValues(chrt, map[string]any{}, common.ReleaseOptions{Name: Release, Namespace: ReleaseNamespace,
+	vals, err := chartutil.ToRenderValues(chrt, values, common.ReleaseOptions{Name: Release, Namespace: ReleaseNamespace,
 		IsInstall: true}, common.DefaultCapabilities)
 	if err != nil {
 		return Chart{}, fmt.Errorf("chart values: %w", err)

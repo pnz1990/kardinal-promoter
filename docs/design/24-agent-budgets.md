@@ -1198,8 +1198,22 @@ on purpose (drop the optimistic lock) and show the test fails, then passes once 
 |----|--------|---------|
 | SCEN-AGENT-BUDGET-01 | `agents/load` (CI's scenario-enterprise job at full size) | In a burst, an agent with `maxConcurrent: 1` and `versionsPerDay: 3` on prod: its prod steps beyond the limits are **held** (Pending, the budget message), never refused or failed, while the other agents' versions converge within the burst's round budget, unaffected; at every round its unsettled grants are at most 1 and its grants in the window at most 3 |
 | SCEN-AGENT-BUDGET-02 | `agents/load` | The held versions proceed when the window rolls over (the scenario's fake clock) and when a granted one settles; a superseded held version leaves the queue without a grant |
-| SCEN-AGENT-BUDGET-03 | `agents/scale` (full, in the release gate: 7,500 AgentIdentities) | 50 agents with budgets through two bursts: at most 3 usage writes per promotion on average, ledgers within their bounds, and **no agent index reconcile caused by a usage write** (the scenario's per-kind reconcile counts) |
+| SCEN-AGENT-BUDGET-03 | `agents/scale` (full, in the release gate: 5,000 AgentIdentities until #2372's compact index entries merge, then 7,500) | 50 agents with budgets through two bursts: at most 3 usage writes per promotion on average, ledgers within their bounds, and **no agent index reconcile caused by a usage write** (the scenario's per-kind reconcile counts) |
 | SCEN-DAY-BUDGET-01 | `daycases` (the in-process day) | The day's shipper agent exhausts its prod budget mid-day; people and other agents ship meanwhile; an exemption lets one version through and records `BudgetExempted` |
+
+As built (W9): the scenario World runs budgets with `Options.Budgets` (the budget reconciler on the
+release's ledger, the step hold, `budget.*`, the fold, and the chart rendered with
+`actors.budgets.enabled`), and models each budget watch from what a write changed: the budget
+reconciler hears its agents' steps (`stepBudgetChanged`) and, while it holds an unavailable grant, the
+Pipelines; a step hears the write that grants it and, while it waits, its ledger becoming current; a
+gate that reads `budget.*` hears its agent's ledger; and the agent index rebuilds only when
+`agentidentity.IdentityChanged` (W0) passes. SCEN-AGENT-BUDGET-01 and -02 are one run
+(`agentcases.RunBudgets`), with the burster on Pipelines of its own. SCEN-AGENT-BUDGET-03
+(`agentcases.RunBudgetScale`) runs 5,000 AgentIdentities in full, under the 1 MiB index bound that
+today's object format fills at about 5,200; the 7,500-identity size depends on #2372's compact entries,
+and runs once W9 is rebased onto it (the bound is never raised in process: a size no real cluster can
+have proves less than it seems). It measured 2.0 usage writes per promotion. SCEN-DAY-BUDGET-01's shipper is an agent of its own in the day's registry, so its
+budget holds no other episode's versions when the day's episodes interleave.
 
 **Live e2e** (rows to add to `test/e2e/coverage.tsv` with the implementation; suite `core`,
 COUNT=2, unless the row names another):
@@ -1219,12 +1233,12 @@ COUNT=2, unless the row names another):
 | BUDGET-11 | suite `upgrade-agents` (#2372): an upgrade from v0.13 with agent versions in flight changes nothing (budgets off); turning budgets on with a budget set seeds the ledger and holds only steps that have not started |
 | BUDGET-12 | `fleetShare` holds an agent's fleet targets beyond the share; the fold keeps the steps created at most the share |
 | BUDGET-13 | suite `shard`: an agent's versions in the default shard's and the second shard's namespaces share one ledger (`--agent-budget-ledger`): `maxConcurrent: 1` lets exactly one of two start, across the shards |
-| BUDGET-14 | budgets off (the chart default): an AgentIdentity with budgets is admitted with the off warning, and nothing is held |
+| BUDGET-14 | suite `upgrade-agents`, before BUDGET-11 turns budgets on: budgets off (the chart default): an AgentIdentity with budgets is admitted with the off warning, and nothing is held (core runs with budgets on, so it is checked where they are still off; no second release in core) |
 
 **Scale** (suite `scale`, under LOADLOCK): 2,000 AgentIdentities with budgets, 50 agents each
 promoting into 20 namespaces; assert status size, writes per promotion (at most 3 on average),
 grant latency (p99 under 2 s), and that no AgentIndex rebuild follows a usage-only write. The
-7,500-identity case is the in-process SCEN-AGENT-BUDGET-03.
+7,500-identity case is the in-process SCEN-AGENT-BUDGET-03, once #2372 merges (5,000 before it).
 
 **Soak** (#2403, `TestSoak_EnterpriseDay`, suite `soak`; its design is the issue's first comment).
 Budgets on for the soak's release. team-a's shipper agent gets a prod rule with

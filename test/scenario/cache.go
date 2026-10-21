@@ -19,6 +19,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	abrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentbudget"
 )
 
 // readCache serves the reconcilers' typed reads of kardinal objects from
@@ -49,6 +50,10 @@ func newReadCache(c client.Client) *readCache {
 				}
 				return nil
 			},
+			"PromotionStep/" + abrec.IndexStepBudgetAgent:    abrec.StepBudgetAgent,
+			"Bundle/" + abrec.IndexBundleUID:                 abrec.BundleUID,
+			"Bundle/" + abrec.IndexBundleAgent:               abrec.BundleAgent,
+			"AgentIdentity/" + abrec.IndexUnavailableLedgers: abrec.UnavailableLedgers,
 		}}
 }
 

@@ -179,8 +179,8 @@ const Parts = 5
 // approve, and agent autonomy. 2: verification passes, fails and times out
 // (the clock jumps), and the agent index outage, which refuses agents'
 // Verdicts. 3: a pause, and a canary rollback on the fleet. 4: an
-// agents-only freeze, and a hold. 5: stop-the-line with a capped exemption.
-// PRs are reviewed and merged all day.
+// agents-only freeze, and a hold. 5: stop-the-line with a capped exemption,
+// and the shipper agent's budget. PRs are reviewed and merged all day.
 func (d *Day) Episodes(part int) []*Episode {
 	switch part {
 	case 1:
@@ -192,7 +192,7 @@ func (d *Day) Episodes(part int) []*Episode {
 	case 4:
 		return []*Episode{d.freezeAgents(), d.hold()}
 	case 5:
-		return []*Episode{d.stopTheLine()}
+		return []*Episode{d.stopTheLine(), d.budget()}
 	}
 	d.t.Fatalf("no part %d of the day", part)
 	return nil
@@ -476,6 +476,68 @@ func (d *Day) stopTheLine() *Episode {
 		act("lifted", func() { d.unfreeze(ic, f) }),
 		until("app is Verified", func() bool { return d.phase(ns, app.Name) == "Verified" }),
 	}}
+}
+
+// budget: the shipper agent ships its day's two prod versions (shipperRule);
+// its third is held in prod, Pending with the budget message, while a
+// person and another agent ship in the tenant's other Pipeline. A release
+// manager's exemption of that version lets it through and records
+// BudgetExempted naming them; the shipper's next version is held again
+// (SCEN-DAY-BUDGET-01).
+func (d *Day) budget() *Episode {
+	ns, p := TeamA, Web
+	var s1, s2, s3, s4, mine, theirs *v1alpha1.Bundle
+	shipAndApprove := func(id scenario.Identity, pipeline, tag string) *v1alpha1.Bundle {
+		b := d.ship(id, ns, pipeline, tag)
+		d.approve[b.Name] = true
+		return b
+	}
+	return &Episode{Name: "agent budget", Uses: []string{key(ns, p), key(ns, scenario.PipelineName)}, Steps: []Step{
+		act("the shipper ships", func() { s1 = shipAndApprove(shipper, p, "5.1.0") }),
+		until("Verified", func() bool { return d.phase(ns, s1.Name) == "Verified" }),
+		act("the shipper ships again", func() { s2 = shipAndApprove(shipper, p, "5.2.0") }),
+		until("Verified", func() bool { return d.phase(ns, s2.Name) == "Verified" }),
+		act("the shipper ships a third", func() { s3 = shipAndApprove(shipper, p, "5.3.0") }),
+		until("its prod step is held", func() bool { return d.budgetHeld(ns, s3.Name) }),
+		act("a person ships meanwhile", func() { mine = shipAndApprove(dev, scenario.PipelineName, "5.0.1") }),
+		until("Verified", func() bool { return d.phase(ns, mine.Name) == "Verified" }),
+		act("another agent ships meanwhile", func() { theirs = shipAndApprove(fixer, scenario.PipelineName, "5.0.2") }),
+		until("Verified", func() bool { return d.phase(ns, theirs.Name) == "Verified" }),
+		check("the shipper's third version is still held, not failed", func() {
+			assert.True(d.t, d.budgetHeld(ns, s3.Name), "%s is held in prod", s3.Name)
+			assert.Equal(d.t, "Promoting", d.phase(ns, s3.Name))
+			assert.False(d.t, d.verifiedIn(ns, s3.Name, "prod"))
+		}),
+		act("a release manager exempts that version", func() {
+			_, _, err := lifecycle.ExemptFromBudget(d.CtxOf(rm), d.Client, lifecycle.BudgetExemptRequest{Namespace: ns, Pipeline: p,
+				Environment: "prod", Bundle: s3.Name, Reason: "day: hotfix", CreatedBy: rm.Username, Actor: d.stamp(rm, ns, p, "prod"),
+				Now: d.Now()})
+			require.NoError(d.t, err)
+		}),
+		until("Verified", func() bool { return d.phase(ns, s3.Name) == "Verified" }),
+		check("BudgetExempted names who let it through", func() {
+			n := 0
+			for _, e := range d.events(ns, "BudgetExempted") {
+				if e.Spec.BundleName == s3.Name {
+					n++
+					assert.Contains(d.t, e.Spec.Message, "made by "+rm.Username)
+					assert.Equal(d.t, "prod", e.Spec.Environment)
+				}
+			}
+			assert.Equal(d.t, 1, n, "one BudgetExempted AuditEvent")
+		}),
+		act("the shipper ships a fourth", func() { s4 = shipAndApprove(shipper, p, "5.4.0") }),
+		until("it is held: the exemption was that version's", func() bool { return d.budgetHeld(ns, s4.Name) }),
+		act("a release manager rejects it", func() { d.reject(rm, ns, s4, "over its budget today") }),
+		until("Rejected", func() bool { return d.phase(ns, s4.Name) == "Rejected" }),
+	}}
+}
+
+// budgetHeld reports whether bundle's prod step waits for its agent's
+// budget, with the budget message.
+func (d *Day) budgetHeld(ns, bundle string) bool {
+	s, ok := d.Steps(ns, bundle)["prod"]
+	return ok && lifecycle.WaitsForBudget(&s) && strings.Contains(s.Status.Message, "budget")
 }
 
 // pause: a paused Pipeline starts nothing; the group-registered agent's

@@ -15,5 +15,5 @@ import (
 func TestMain(m *testing.M) { scenario.MainWithRenderJobs(m) }
 
 // TestEnterprise_DayTimeline5 is part 5 of the day's episodes (daycases.Episodes), one after another.
-// Covers SCEN-DAY-01.
+// Covers SCEN-DAY-01, SCEN-DAY-BUDGET-01.
 func TestEnterprise_DayTimeline5(t *testing.T) { daycases.Timeline(t, 5) }

@@ -96,18 +96,25 @@ func Tenant(t *testing.T, w *scenario.World, ns string, pipelines int, review bo
 	w.MustApply(&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "staging-soak",
 		Labels: map[string]string{"kardinal.io/scope": "team", "kardinal.io/applies-to": "prod"}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "upstream.staging.soakMinutes >= 1"}})
+	for j := 1; j <= pipelines; j++ {
+		AddPipeline(t, w, ns, PipelineName(j), review)
+	}
+}
+
+// AddPipeline creates Pipeline name of team ns, dev, staging and prod, with
+// a repository of its own, as Tenant creates each of the team's.
+func AddPipeline(t *testing.T, w *scenario.World, ns, name string, review bool) {
+	t.Helper()
 	approval := "auto"
 	if review {
 		approval = "pr-review"
 	}
-	for j := 1; j <= pipelines; j++ {
-		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: PipelineName(j)},
-			Spec: v1alpha1.PipelineSpec{
-				Git:          v1alpha1.PipelineGit{URL: repoURL(ns, PipelineName(j)), Branch: "main", SecretRef: &v1alpha1.SecretRef{Name: scenario.GitSecret}},
-				Environments: []v1alpha1.EnvironmentSpec{env(ns, "dev", approval), env(ns, "staging", approval), env(ns, "prod", approval)}}}
-		require.NoError(t, w.Git.CreateRepo(p.Spec.Git.URL, "main", scenario.RepoFiles(p, scenario.BaseTag)))
-		w.MustApply(p)
-	}
+	p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Spec: v1alpha1.PipelineSpec{
+			Git:          v1alpha1.PipelineGit{URL: repoURL(ns, name), Branch: "main", SecretRef: &v1alpha1.SecretRef{Name: scenario.GitSecret}},
+			Environments: []v1alpha1.EnvironmentSpec{env(ns, "dev", approval), env(ns, "staging", approval), env(ns, "prod", approval)}}}
+	require.NoError(t, w.Git.CreateRepo(p.Spec.Git.URL, "main", scenario.RepoFiles(p, scenario.BaseTag)))
+	w.MustApply(p)
 }
 
 // checkIsolation: every object a Pipeline's promotions made is in the
