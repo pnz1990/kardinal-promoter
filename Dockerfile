@@ -21,7 +21,9 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go builder ───────────────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
+# The Go of go.mod's toolchain line, by digest (hack/hygiene checks it): the
+# image builds with the Go the release binaries and govulncheck use.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder
 
 ARG TARGETOS
 ARG TARGETARCH

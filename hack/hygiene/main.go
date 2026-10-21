@@ -23,6 +23,10 @@
 //   - test packages that can reach the ambient kubeconfig without the
 //     kubetest guard, and kube config loaders that run before any guard
 //     can (kubeguard.go).
+//   - a Dockerfile stage FROM a golang image other than go.mod's toolchain
+//     pinned by digest: the images release.yml ships would build with
+//     another Go than the release binaries, and than the one govulncheck
+//     checks (#2385).
 //
 // hack/hygiene/allow.txt lists the intentional exceptions, each with its
 // reason; an entry that no longer matches anything is reported too, so the
@@ -62,6 +66,11 @@ var (
 	script = regexp.MustCompile(`^(hack|scripts)/.*\.(sh|mjs|mts|js|py)$`)
 	// binary is a file whose text is not searched for references.
 	binary = regexp.MustCompile(`(?i)\.(png|webp|jpe?g|gif|ico|woff2?|ttf|otf|gz|tgz)$`)
+	// goToolchain and goDirective are go.mod's toolchain and go lines.
+	goToolchain = regexp.MustCompile(`(?m)^toolchain go(\S+)\s*$`)
+	goDirective = regexp.MustCompile(`(?m)^go (\S+)\s*$`)
+	// golangImage is a reference to the golang image: its tag and digest.
+	golangImage = regexp.MustCompile(`^(?:docker\.io/(?:library/)?)?golang(?::([^@]+))?(@sha256:[0-9a-f]{64})?$`)
 )
 
 // repo is the tracked files of the repository and the text of each text file.
@@ -143,8 +152,60 @@ func buildOutput(r *repo) []string {
 
 // fileFindings is every file check's findings.
 func fileFindings(root string, r *repo) []string {
-	return append(append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...),
-		bulkyFiles(root, r)...)
+	return append(append(append(append(append(orphanPages(r), orphanAssets(r)...), orphanScripts(r)...), buildOutput(r)...),
+		bulkyFiles(root, r)...), goImages(r)...)
+}
+
+// goImages reports every Dockerfile stage (Dockerfile, *.Dockerfile) FROM
+// a golang image whose Go is not go.mod's toolchain (its go line when it
+// has none), or that is not pinned by digest. The images would otherwise
+// build with another Go than the binaries release.yml builds from go.mod,
+// and than the one govulncheck checks: a floating golang:1.27-alpine kept
+// the images patched against GO-2026-6809 only because its tag had moved
+// (#2385). Dependabot's update of the image fails it until go.mod's
+// toolchain moves in the same change.
+func goImages(r *repo) []string {
+	m := goToolchain.FindStringSubmatch(r.text["go.mod"])
+	if m == nil {
+		m = goDirective.FindStringSubmatch(r.text["go.mod"])
+	}
+	if m == nil {
+		return nil
+	}
+	want := m[1]
+	var out []string
+	for _, f := range r.files {
+		if b := path.Base(f); b != "Dockerfile" && !strings.HasSuffix(b, ".Dockerfile") {
+			continue
+		}
+		for n, l := range strings.Split(r.text[f], "\n") {
+			fields := strings.Fields(l)
+			if len(fields) < 2 || !strings.EqualFold(fields[0], "FROM") {
+				continue
+			}
+			img := ""
+			for _, w := range fields[1:] {
+				if !strings.HasPrefix(w, "--") {
+					img = w
+					break
+				}
+			}
+			g := golangImage.FindStringSubmatch(img)
+			if g == nil {
+				continue
+			}
+			version, variant, _ := strings.Cut(g[1], "-")
+			if version == want && g[2] != "" {
+				continue
+			}
+			if variant != "" {
+				variant = "-" + variant
+			}
+			out = append(out, fmt.Sprintf("file %s: line %d builds FROM %s, not go.mod's toolchain go%s pinned by digest: "+
+				"use golang:%s%s@sha256:<its digest>, and move go.mod's toolchain line and the image together", f, n+1, img, want, want, variant))
+		}
+	}
+	return out
 }
 
 // maxFileSize is the largest tracked file that needs no allowlist entry.
