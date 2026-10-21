@@ -457,6 +457,13 @@ func TestEnvironmentMove_Sequences(t *testing.T) {
 			assert.Equal(t, tc.says, got.String())
 		})
 	}
+	// A newer record that is itself a merge, back where it started (on, then
+	// off), keeps the older net move: off, then (on, off) ends off (QA-2's
+	// right fold on #2347).
+	right := takeOff.then(putOn.then(takeOff))
+	assert.Nil(t, right.added)
+	assert.Equal(t, []string{"prod"}, right.removed)
+	assert.Equal(t, "no longer in prod", right.String())
 }
 
 // QA-2 on #2347: three unwritten records of one version merged as the
