@@ -65,43 +65,55 @@ func logLines(t *testing.T, buf *bytes.Buffer) map[string][]string {
 	return out
 }
 
-// TestAuditGraph_MissingGraphIsNothingToCompare (#2461): a Bundle with no
-// Graph under its name, a version a v0.8.1 controller started included, has
-// no gate copies to compare: auditGraph returns nil and logs at debug. A
+// TestAuditGraph_MissingGraphIsNothingToCompare (#2461): before this
+// reconcile writes the Graph, a Bundle with no Graph under its name has no
+// gate copies to compare: auditGraph returns nil and logs at debug. That is a
+// version a v0.8.1 controller started, whose graphRef names a Graph in
+// experimental.kro.run. After the write (wrote), NotFound means the Graph was
+// deleted mid-reconcile, so the gate change goes unrecorded and it warns. A
 // read that fails for any other reason (Forbidden, a timeout, a reader that
-// cannot read Graphs) still warns, since a gate change then goes unrecorded.
+// cannot read Graphs) warns either way.
 func TestAuditGraph_MissingGraphIsNothingToCompare(t *testing.T) {
 	t.Parallel()
 	ns := "team"
 	current := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v2", Namespace: ns},
 		Spec: kardinalv1alpha1.BundleSpec{Pipeline: "app"}, Status: kardinalv1alpha1.BundleStatus{GraphRef: "app-v2-graph"}}
-	// A version a v0.8.1 controller started: no graphRef, so its name is
-	// computed, and no Graph exists under it.
+	// A version a v0.8.1 controller started: its graphRef names the Graph it
+	// rendered in experimental.kro.run, and kro.run has none of that name.
 	legacy := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "e2e-testupgrade-fromv081-wztpt", Namespace: ns},
-		Spec: kardinalv1alpha1.BundleSpec{Pipeline: "e2e-testupgrade-fromv081"}}
+		Spec:   kardinalv1alpha1.BundleSpec{Pipeline: "e2e-testupgrade-fromv081"},
+		Status: kardinalv1alpha1.BundleStatus{GraphRef: "e2e-testupgrade-fromv081-e2e-testupgrade-fromv081--tpt"}}
+	// No graphRef: the name is computed.
+	unnamed := &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v3", Namespace: ns},
+		Spec: kardinalv1alpha1.BundleSpec{Pipeline: "app"}}
 	found := &graph.Graph{}
 	found.Name = "app-v2-graph"
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Group: "kro.run", Resource: "graphs"}, "app-v2-graph", nil)
 	for _, tc := range []struct {
 		name    string
 		checker GraphChecker
 		b       *kardinalv1alpha1.Bundle
+		wrote   bool
 		want    *graph.Graph
 		level   string // the level of the one line logged; "" for none
 	}{
-		{"the Graph is read", &fakeGraphs{graphs: map[string]*graph.Graph{"app-v2-graph": found}}, current, found, ""},
-		{"NotFound: nothing to compare", &fakeGraphs{}, current, nil, "debug"},
-		{"a v0.8.1-era Bundle with no Graph", &fakeGraphs{}, legacy, nil, "debug"},
-		{"Forbidden still warns", &fakeGraphs{err: apierrors.NewForbidden(schema.GroupResource{Group: "kro.run", Resource: "graphs"},
-			"app-v2-graph", nil)}, current, nil, "warn"},
-		{"a timeout still warns", &fakeGraphs{err: apierrors.NewTimeoutError("get graphs", 1)}, current, nil, "warn"},
-		{"a context deadline still warns", &fakeGraphs{err: context.DeadlineExceeded}, current, nil, "warn"},
-		{"a reader that cannot read Graphs still warns", existsOnly{}, current, nil, "warn"},
+		{"the Graph is read", &fakeGraphs{graphs: map[string]*graph.Graph{"app-v2-graph": found}}, current, false, found, ""},
+		{"the Graph is read after the write", &fakeGraphs{graphs: map[string]*graph.Graph{"app-v2-graph": found}}, current, true, found, ""},
+		{"NotFound before the write: nothing to compare", &fakeGraphs{}, current, false, nil, "debug"},
+		{"a v0.8.1-era Bundle with no Graph in kro.run", &fakeGraphs{}, legacy, false, nil, "debug"},
+		{"a Bundle with no graphRef and no Graph", &fakeGraphs{}, unnamed, false, nil, "debug"},
+		{"NotFound after the write: deleted mid-reconcile, warns", &fakeGraphs{}, current, true, nil, "warn"},
+		{"Forbidden still warns", &fakeGraphs{err: forbidden}, current, false, nil, "warn"},
+		{"Forbidden after the write still warns", &fakeGraphs{err: forbidden}, current, true, nil, "warn"},
+		{"a timeout still warns", &fakeGraphs{err: apierrors.NewTimeoutError("get graphs", 1)}, current, false, nil, "warn"},
+		{"a context deadline still warns", &fakeGraphs{err: context.DeadlineExceeded}, current, false, nil, "warn"},
+		{"a reader that cannot read Graphs still warns", existsOnly{}, current, false, nil, "warn"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			log := zerolog.New(&buf).Level(zerolog.DebugLevel)
 			r := &Reconciler{GraphChecker: tc.checker}
-			got := r.auditGraph(context.Background(), log, tc.b)
+			got := r.auditGraph(context.Background(), log, tc.b, tc.wrote)
 			assert.Same(t, tc.want, got)
 			lines := logLines(t, &buf)
 			if tc.level == "" {
@@ -119,8 +131,14 @@ func TestAuditGraph_MissingGraphIsNothingToCompare(t *testing.T) {
 			}
 		})
 	}
-	// The legacy Bundle's Graph is looked up under its computed name.
-	f := &fakeGraphs{}
-	(&Reconciler{GraphChecker: f}).auditGraph(context.Background(), zerolog.Nop(), legacy)
-	assert.Equal(t, []string{graph.GraphNameFrom(legacy.Spec.Pipeline, legacy.Name)}, f.asked)
+	// The Graph is looked up under graphRef, else under the computed name.
+	for _, b := range []*kardinalv1alpha1.Bundle{legacy, unnamed} {
+		f := &fakeGraphs{}
+		(&Reconciler{GraphChecker: f}).auditGraph(context.Background(), zerolog.Nop(), b, false)
+		want := b.Status.GraphRef
+		if want == "" {
+			want = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
+		}
+		assert.Equal(t, []string{want}, f.asked, b.Name)
+	}
 }

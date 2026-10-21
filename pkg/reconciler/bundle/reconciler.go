@@ -489,7 +489,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		// reaches it only now: the change is recorded, as one under a
 		// version in flight is (#2144).
 		if gatesRead {
-			if rendered := r.auditGraph(ctx, log, b); rendered != nil {
+			if rendered := r.auditGraph(ctx, log, b, true); rendered != nil {
 				after := snapshotGates(rendered)
 				if e, ok := upgradeGateChangeEntry(b, before.rules, after.rules, before.stamps, after.stamps,
 					before.envs, after.envs, gates, r.now()); ok {
@@ -664,7 +664,7 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	// first reconcile after the upgrade re-renders it here, not in syncGraph.
 	var before *gateSnapshot
 	if gatesRead && b.Status.Phase == phasePromoting {
-		if g := r.auditGraph(ctx, log, b); g != nil {
+		if g := r.auditGraph(ctx, log, b, false); g != nil {
 			if s := snapshotGates(g); gatesChanged || s.stale {
 				before = &s
 			}
@@ -682,7 +682,7 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
 	if before != nil {
 		var after *gateSnapshot
-		if g := r.auditGraph(ctx, log, b); g != nil {
+		if g := r.auditGraph(ctx, log, b, true); g != nil {
 			s := snapshotGates(g)
 			after = &s
 		}
@@ -721,13 +721,18 @@ func snapshotGates(g *graph.Graph) gateSnapshot {
 		stale: g.Labels[graph.LabelRenderVersion] != graph.RenderLabel}
 }
 
-// auditGraph is b's Graph, read for its gate copies, or nil. No Graph under
-// its name (NotFound: a version a v0.8.1 controller started, or one whose
-// Graph is retired) has no gate copies, so there is nothing to compare, and
-// that is logged at debug (#2461). Any other failure to read it (Forbidden, a
-// timeout, a GraphChecker that cannot read Graphs) means a gate change is not
-// recorded, and a warning says so.
-func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle) *graph.Graph {
+// auditGraph is b's Graph, read for its gate copies, or nil. wrote says this
+// reconcile has just written the Graph (translate).
+//
+// Before a write, no Graph under its name (NotFound) has no gate copies, so
+// there is nothing to compare, and that is logged at debug (#2461): a version
+// a v0.8.1 controller started names a Graph in experimental.kro.run, and none
+// exists in kro.run under that name until syncGraph recreates it. After a
+// write, NotFound means the Graph was deleted mid-reconcile, so the gate
+// change goes unrecorded (for good, for a Graph another release rendered), and
+// a warning says so. So does any other failure to read it (Forbidden, a
+// timeout, a GraphChecker that cannot read Graphs), written or not.
+func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle, wrote bool) *graph.Graph {
 	if r.GraphChecker == nil {
 		return nil
 	}
@@ -740,7 +745,7 @@ func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kard
 	switch {
 	case err == nil && g != nil:
 		return g
-	case err == nil && !exists:
+	case err == nil && !exists && !wrote:
 		log.Debug().Str("graph", name).Msg("no Graph to read gate copies from: no gate change to compare")
 		return nil
 	default:
