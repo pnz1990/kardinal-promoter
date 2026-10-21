@@ -60,6 +60,13 @@ func IsPolicyNamespacesError(err error) bool {
 // While the generation is not checked yet (Unchecked), no version is
 // translated, not even one in flight: which namespaces' gates it may read,
 // and which it keeps from its Graph, is not known yet.
+//
+// The consent is only as strong as status.policyNamespaces is the
+// controller's: until the <release>-status-writers admission policy (#2446)
+// refuses other writers of pipelines/status, a namespace admin of the
+// Pipeline's namespace can write notShared: [] there (the admin role's
+// resources ["*"] covers status) and have another team's gates read (QA-2
+// on #2373). Shipping this refusal depends on #2446.
 func PolicyNamespacesAgreed(pipeline *kardinalv1alpha1.Pipeline, orgNS []string) error {
 	var needs []string
 	for _, ns := range pipeline.Spec.PolicyNamespaces {
@@ -133,7 +140,10 @@ func mustAgree(pipeline *kardinalv1alpha1.Pipeline, ns string, orgNS []string) b
 // the templates of those namespaces rebuilt from bundle's own Graph, and their
 // digests (graph.FrozenTemplates): the version keeps the gates it started
 // with. A Graph that cannot be read refuses the translation: rebuilt without
-// those gates, the version would skip them.
+// those gates, the version would skip them. "In flight" and which Graph are
+// bundle's status.graphRef, which only the controller may write once the
+// <release>-status-writers admission policy (#2446) covers bundles/status;
+// until then a namespace admin can set it (QA-2 on #2381).
 func (t *Translator) frozenGates(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline,
 	bundle *kardinalv1alpha1.Bundle) ([]kardinalv1alpha1.PolicyGate, map[string]string, error) {
 	refused := RefusedPolicyNamespaces(pipeline, t.policyNS)

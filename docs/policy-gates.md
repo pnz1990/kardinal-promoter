@@ -352,6 +352,12 @@ keeps verifying the environment it verified before.
 A namespace that does not exist is named like one that is not labelled; the controller log tells
 them apart.
 
+The refusal trusts what the controller records: the Pipeline's `status.policyNamespaces` (which
+namespaces agreed) and a Bundle's `status.graphRef` (whether a version is in flight). It relies on
+the admission policy that lets only the controller write kardinal status (#2446). Without it, a
+namespace admin, whose role covers every status subresource, could write `notShared: []` and have
+another team's gates read.
+
 The controller reads the named Namespaces again every 5 minutes (Namespaces are not watched), so a
 label added or removed later takes effect within that time; any change to the Pipeline makes it
 read them at once. Until then the last result stands both ways. A namespace that just agreed is
