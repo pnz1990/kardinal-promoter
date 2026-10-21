@@ -48,17 +48,19 @@ func (i *handlerAdded) AddEventHandlerWithOptions(h toolscache.ResourceEventHand
 // SetupWithManager registers (docs/design/24-agent-budgets.md W0): a label,
 // an annotation or another writer's status field reaches no index rebuild,
 // and a spec change, a create and a delete do. TestIdentityChanged covers the
-// predicate; this covers that the watch carries it. Without it every
-// AgentIdentity write rebuilt the whole index: at v0.14's 7,000 identities,
-// once per budget usage write.
+// predicate; this covers that the watch carries it, and that the AgentIndex
+// watch still rebuilds on an index resync and an index delete. Without the
+// predicate every AgentIdentity write rebuilt the whole index: at v0.14's
+// 7,000 identities, once per budget usage write.
 // Covers ACTOR-INDEX-06.
 func TestIndexWatchCarriesIdentityChanged(t *testing.T) {
 	sch := scheme(t)
 	gv := v1alpha1.GroupVersion
 	identities := &handlerAdded{FakeInformer: controllertest.NewFakeInformer(controllertest.Synced), added: make(chan struct{})}
+	indexes := &handlerAdded{FakeInformer: controllertest.NewFakeInformer(controllertest.Synced), added: make(chan struct{})}
 	informers := &informertest.FakeInformers{Scheme: sch, InformersByGVK: map[schema.GroupVersionKind]toolscache.SharedIndexInformer{
 		gv.WithKind("AgentIdentity"): identities,
-		gv.WithKind("AgentIndex"):    controllertest.NewFakeInformer(controllertest.Synced),
+		gv.WithKind("AgentIndex"):    indexes,
 	}}
 	fixer := id("fixer", 0, "alice", sa("ci", "fixer"))
 	var builds atomic.Int32 // each build lists the AgentIdentities
@@ -88,10 +90,12 @@ func TestIndexWatchCarriesIdentityChanged(t *testing.T) {
 		cancel()
 		assert.NoError(t, <-stopped)
 	})
-	select {
-	case <-identities.added:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the AgentIdentity watch did not start")
+	for kind, i := range map[string]*handlerAdded{"AgentIdentity": identities, "AgentIndex": indexes} {
+		select {
+		case <-i.added:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the %s watch did not start", kind)
+		}
 	}
 	// The start-up build, and the reconcile its status write may wake, end.
 	settle := func() int32 {
@@ -131,4 +135,15 @@ func TestIndexWatchCarriesIdentityChanged(t *testing.T) {
 	before = settle()
 	identities.Delete(cur)
 	require.Eventually(t, func() bool { return builds.Load() > before }, 10*time.Second, 50*time.Millisecond, "a delete rebuilds the index")
+
+	// The index's own watch: with identity resyncs filtered, it is the only
+	// rebuild that needs no identity event. A resync (the cache's SyncPeriod)
+	// puts back a stale or tampered index, and a deleted index is rebuilt.
+	idx := &v1alpha1.AgentIndex{ObjectMeta: metav1.ObjectMeta{Name: "k", ResourceVersion: "20"}}
+	before = settle()
+	indexes.Update(idx, idx)
+	require.Eventually(t, func() bool { return builds.Load() > before }, 10*time.Second, 50*time.Millisecond, "an index resync rebuilds the index")
+	before = settle()
+	indexes.Delete(idx)
+	require.Eventually(t, func() bool { return builds.Load() > before }, 10*time.Second, 50*time.Millisecond, "an index delete rebuilds the index")
 }
