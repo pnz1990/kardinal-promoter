@@ -32,12 +32,13 @@ import (
 
 // TestActorIndexNotReadyOnAPIServer (#2451): on a real kube-apiserver with
 // the chart's policies, in each state the AgentIndex is not Ready (never
-// built: no status; IndexFull; a later release's CompactFormat), a person
-// is never refused a stop-the-line write: their version, freeze, freeze
-// exemption and CLI pause are admitted, stamped unverified as kardinal
-// writes them, and refused only stamped human (it cannot be verified); a
-// raw Approval must carry the unverified stamp, and its refusal gives the
-// fix. A ServiceAccount's
+// built: no status; IndexFull; a later release's CompactFormat), stopping
+// is always allowed and going needs verification: a person's version,
+// freeze, freeze exemption, gate override and CLI pause are admitted,
+// stamped unverified as kardinal writes them, and refused stamped human (it
+// cannot be verified); what lets a version go (a version, an Approval, a
+// gate override, a freeze exemption) must carry the unverified stamp, and
+// its refusal gives the fix. A ServiceAccount's
 // version, freeze exemption and stamped pause are refused, with the state's
 // message.
 // Covers ACTOR-INDEX-06.
@@ -129,8 +130,11 @@ func TestActorIndexNotReadyOnAPIServer(t *testing.T) {
 		}, 30*time.Second, 500*time.Millisecond, "%s: a ServiceAccount's version is refused", state.name)
 
 		require.NoError(t, as("alice").Create(ctx, bundle(unverified("alice"))), "%s: a person's version", state.name)
-		require.NoError(t, as("alice").Create(ctx, bundle(nil)), "%s: a person's unstamped version", state.name)
-		err := as("alice").Create(ctx, bundle(&v1alpha1.Actor{Kind: "human", Principal: "alice"}))
+		err := as("alice").Create(ctx, bundle(nil))
+		require.Error(t, err, "%s: a person's unstamped version (going needs verification)", state.name)
+		require.Contains(t, err.Error(), "a version needs the unverified actor stamp now. Use kardinal ship, create bundle or "+
+			"rollback, or the UI, which set it, or set spec.actor: {kind: unverified, principal: alice} yourself")
+		err = as("alice").Create(ctx, bundle(&v1alpha1.Actor{Kind: "human", Principal: "alice"}))
 		require.Error(t, err, "%s: a person's version stamped human", state.name)
 		require.Contains(t, err.Error(), "actor must be {kind: unverified, principal: alice}")
 
@@ -162,6 +166,31 @@ func TestActorIndexNotReadyOnAPIServer(t *testing.T) {
 		require.Contains(t, err.Error(), "an Approval needs the unverified actor stamp now. Use kardinal approve or the UI, which set it, "+
 			"or set spec.actor: {kind: unverified, principal: alice} yourself")
 		require.NoError(t, as("alice").Create(ctx, approval("stamped", unverified("alice"))), "%s: a person's stamped Approval", state.name)
+
+		// So must a raw gate override or freeze exemption (a grant: it is
+		// recorded but not honoured until the index is Ready).
+		err = exempt(as("bob"), "bob", nil)
+		require.Error(t, err, "%s: a person's unstamped freeze exemption", state.name)
+		require.Contains(t, err.Error(), "a freeze exemption needs the unverified actor stamp now. Use kardinal override --freeze "+
+			"or the UI, which set it, or set the exemption's actor: {kind: unverified, principal: bob} yourself")
+		g := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("g-%d", i), Namespace: "team-a",
+			Labels: map[string]string{"kardinal.io/bundle": "b1", "kardinal.io/pipeline": "checkout", "kardinal.io/environment": "test"}},
+			Spec: v1alpha1.PolicyGateSpec{Expression: "true"}}
+		require.NoError(t, controller.Create(ctx, g), "%s: the controller's gate", state.name)
+		override := func(a *v1alpha1.Actor) error {
+			var cur v1alpha1.PolicyGate
+			require.NoError(t, admin.Get(ctx, client.ObjectKeyFromObject(g), &cur))
+			cur.Spec.Overrides = append(cur.Spec.Overrides, v1alpha1.PolicyGateOverride{Reason: "incident", CreatedBy: "alice",
+				ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour)), Actor: a})
+			cur.Labels["kardinal.io/override-check"] = "true" // as kardinal override writes it
+			return as("alice").Update(ctx, &cur)
+		}
+		err = override(nil)
+		require.Error(t, err, "%s: a person's unstamped override", state.name)
+		require.Contains(t, err.Error(), "a gate override needs the unverified actor stamp now. Use kardinal override or the UI, "+
+			"which set it, or set the override's actor: {kind: unverified, principal: alice} yourself. An unverified "+
+			"override or exemption is recorded but not honoured: break-glass waits until the index is Ready")
+		require.NoError(t, override(unverified("alice")), "%s: a person's stamped override", state.name)
 
 		require.NoError(t, pause(as("alice"), "alice", unverified("alice")), "%s: a person's CLI pause", state.name)
 		err = pause(as(ci), ci, &v1alpha1.Actor{Kind: "bot", Principal: ci})

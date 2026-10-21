@@ -444,7 +444,9 @@ func TestActorsOnAPIServer(t *testing.T) {
 		require.Error(t, err, "24 an index without status denies a ServiceAccount: %s", name)
 		require.Contains(t, err.Error(), "agent index is not ready", name)
 	}
-	require.NoError(t, as("alice").Create(ctx, bundle("payments-a", "checkout", nil)), "24 a person, no stamp")
+	err = as("alice").Create(ctx, bundle("payments-a", "checkout", nil))
+	require.Error(t, err, "24 a person, no stamp: going needs verification")
+	require.Contains(t, err.Error(), "a version needs the unverified actor stamp now")
 	require.NoError(t, as("alice").Create(ctx, bundle("payments-a", "checkout",
 		&v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "alice"})), "24 a person, stamped unverified")
 	err = as("alice").Create(ctx, bundle("payments-a", "checkout", &v1alpha1.Actor{Kind: "human", Principal: "alice"}))
@@ -576,7 +578,8 @@ func helmInstallOrder(docs []renderedDoc) []renderedDoc {
 // has built the index, the actor policy admits what it does not check, kro's
 // gate instances and the controller's own versions, and refuses only what it
 // checks from a ServiceAccount, with "agent index is not ready"; a person's
-// version is admitted, unstamped or stamped unverified (#2451). The API server would otherwise
+// version is admitted stamped unverified, as kardinal writes it, and refused
+// unstamped with the fix (#2451). The API server would otherwise
 // refuse every write the policy matches ("no params found") while the index
 // is missing, the controller's and kro's included. Once the controller has
 // built the index, people pass again; nobody but the controller may delete
@@ -636,12 +639,17 @@ func TestActorIndexAvailabilityOnAPIServer(t *testing.T) {
 			Spec: v1alpha1.BundleSpec{Pipeline: "checkout", Type: "image"}}
 	}
 	// The policies load: a ServiceAccount's version waits for the index; a
-	// person's does not (#2451).
+	// person's does not, stamped unverified (#2451).
 	require.Eventually(t, func() bool {
 		err := as("system:serviceaccount:team-a:ci").Create(ctx, bundle())
 		return err != nil && strings.Contains(err.Error(), "agent index is not ready")
 	}, 30*time.Second, 500*time.Millisecond, "a ServiceAccount's checked write waits for the index")
-	require.NoError(t, as("alice").Create(ctx, bundle()), "a person's version, before the index is built")
+	err = as("alice").Create(ctx, bundle())
+	require.Error(t, err, "a person's unstamped version, before the index is built: going needs verification")
+	require.Contains(t, err.Error(), "a version needs the unverified actor stamp now")
+	stamped := bundle()
+	stamped.Spec.Actor = &v1alpha1.Actor{Kind: v1alpha1.ActorUnverified, Principal: "alice"}
+	require.NoError(t, as("alice").Create(ctx, stamped), "a person's version stamped unverified, before the index is built")
 	g := gate()
 	require.NoError(t, kro.Create(ctx, g), "kro creates a gate instance before the index is built")
 	g.Spec.Message = "re-applied"

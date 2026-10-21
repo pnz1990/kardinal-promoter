@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 // actorContext is the actor CEL variable: the Bundle's actor stamp
@@ -21,14 +22,26 @@ import (
 // present. Only the verified fields are in it: the asserted ones (model,
 // session, client) are text the client writes, and no such text reaches a
 // gate (the untrusted-input guarantee, GATE-UNTRUSTED-01).
+//
+// An unverified author (written while the AgentIndex was not Ready, #2451)
+// counts as an agent for every restriction: kind is agent, with no agent
+// or sponsor (agent.registered is false), unverified is true, and verified
+// is false, so actor.kind != "agent" gates (the agent gates among them) and
+// actor.verified gates hold it.
 func actorContext(stamp *kardinalv1alpha1.Actor, author kardinalv1alpha1.Actor) map[string]interface{} {
+	unverified := author.Kind == kardinalv1alpha1.ActorUnverified
+	kind := author.Kind
+	if unverified {
+		kind = kardinalv1alpha1.ActorAgent
+	}
 	return map[string]interface{}{
-		"kind":      author.Kind,
-		"principal": author.Principal,
-		"agent":     author.Agent,
-		"sponsor":   author.Sponsor,
-		"via":       author.Via,
-		"verified":  stamp != nil,
+		"kind":       kind,
+		"principal":  author.Principal,
+		"agent":      author.Agent,
+		"sponsor":    author.Sponsor,
+		"via":        author.Via,
+		"verified":   stamp != nil && !unverified,
+		"unverified": unverified,
 	}
 }
 
@@ -37,7 +50,11 @@ func actorContext(stamp *kardinalv1alpha1.Actor, author kardinalv1alpha1.Actor) 
 func authorFrom(celCtx map[string]interface{}) kardinalv1alpha1.Actor {
 	m, _ := celCtx["actor"].(map[string]interface{})
 	str := func(k string) string { v, _ := m[k].(string); return v }
-	return kardinalv1alpha1.Actor{Kind: str("kind"), Principal: str("principal"), Agent: str("agent"),
+	kind := str("kind")
+	if u, _ := m["unverified"].(bool); u {
+		kind = kardinalv1alpha1.ActorUnverified
+	}
+	return kardinalv1alpha1.Actor{Kind: kind, Principal: str("principal"), Agent: str("agent"),
 		Sponsor: str("sponsor"), Via: str("via")}
 }
 
@@ -144,4 +161,27 @@ func equalBoolPtr(a, b *bool) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+// reverify is author, an unverified stamp, as this release's AgentIndex
+// names its writer once it is Ready (actor.Reverify, #2451): an agent's,
+// with its sponsor, for the one-party rule and the agent context. Any other
+// author is returned as it is, unread. While the index is missing or not
+// Ready the author stays unverified; a read error fails the gate closed.
+func (r *Reconciler) reverify(ctx context.Context, author kardinalv1alpha1.Actor) (kardinalv1alpha1.Actor, error) {
+	if author.Kind != kardinalv1alpha1.ActorUnverified || r.AgentIndexName == "" {
+		return author, nil
+	}
+	var idx kardinalv1alpha1.AgentIndex
+	if err := r.Get(ctx, client.ObjectKey{Name: r.AgentIndexName}, &idx); err != nil {
+		if apierrors.IsNotFound(err) {
+			return author, nil
+		}
+		return author, fmt.Errorf("get AgentIndex %s: %w", r.AgentIndexName, err)
+	}
+	st, ok := actor.Readable(&idx.Status)
+	if !ok {
+		return author, nil
+	}
+	return actor.Reverify(author, st), nil
 }

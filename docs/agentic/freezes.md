@@ -36,7 +36,7 @@ names the freeze for each environment it holds, and `kardinal get pipelines` and
 
 | Freeze | Holds |
 |---|---|
-| `--agents` | Versions whose actor stamp says kind `agent` ([Actors](../actors.md)) |
+| `--agents` | Versions whose actor stamp says kind `agent`, or `unverified` (written while the agent index wasn't Ready: [Actors](../actors.md#while-the-index-isnt-ready)) |
 | `--everyone` | Every version |
 
 `--cluster` (the default) covers every namespace; `-n <namespace>` covers one. `--for` ends the
@@ -64,8 +64,10 @@ An exemption counts for at most a day from when the controller first sees it, wh
 `--expires-in` says, as gate overrides are capped (Helm `controller.freezeExemptionMaxMinutes`,
 `--freeze-exemption-max-minutes`; `status.exemptionRecords` shows each exemption's end).
 Break-glass is for people: the `<release>-actor` admission policy refuses an exemption from an
-agent, and the controller never honours one stamped as an agent's (the freeze's
-`ExemptionIgnored` condition says so).
+agent, and the controller never honours one stamped as an agent's, or as `unverified` (written
+while the agent index wasn't Ready: break-glass then waits for the index,
+[Actors](../actors.md#while-the-index-isnt-ready)). The freeze's `ExemptionIgnored` condition
+says which and why.
 
 ## Who froze, and who lifted it
 

@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
 )
@@ -33,13 +34,16 @@ import (
 const indexFullIdentities = 5
 
 // TestAudit_IndexFullNeverRefusesAPerson (#2451): on a cluster whose agent
-// index is full (IndexFull), a person is never refused a stop-the-line
-// write: kardinal create bundle, kardinal freeze and kardinal pause go
-// through, stamped unverified. A raw Approval must carry the unverified
-// stamp (refused unstamped, with the fix in the message), and a
-// ServiceAccount's version is refused saying the index is full. Once the
-// AgentIdentities are removed the index is Ready again, and a person is
-// stamped human. Not parallel: the index is the release's, read by every
+// index is full (IndexFull), stopping is always allowed and going needs
+// verification. A person is never refused: kardinal create bundle,
+// kardinal freeze and kardinal pause go through, stamped unverified. The
+// unverified version counts as an agent's: its kardinal-agents-auto gate
+// holds it and says why, and the person's override then is recorded but not
+// honoured. A raw version or Approval must carry the unverified stamp
+// (refused unstamped, with the fix in the message), and a ServiceAccount's
+// version is refused saying the index is full. Once the AgentIdentities are
+// removed the index is Ready again: a person's override opens the held
+// gate, and a person is stamped human. Not parallel: the index is the release's, read by every
 // test's actor checks, so it runs before Go releases the parallel tests, and
 // its cleanup waits for the index to be Ready again.
 //
@@ -134,6 +138,20 @@ func TestAudit_IndexFullNeverRefusesAPerson(t *testing.T) {
 	cli.Must(ns, "resume", pipelineName)
 	cli.Must(ns, "unfreeze", "--everyone")
 
+	// Going needs verification: the unverified version is held like an
+	// agent's, and a break-glass override waits for the index.
+	e.WaitGateReady(t, ns, b.Name, "test", "kardinal-agents-auto", false, graph.UnverifiedAgentGateMessage, 2*gateTimeout)
+	cli.Must(ns, "override", pipelineName, "test", "--gate", "kardinal-agents-auto", "--reason", "during IndexFull")
+	e.WaitGate(t, ns, b.Name, "test", "kardinal-agents-auto", gateTimeout, "an unverified override not honoured",
+		func(g *v1alpha1.PolicyGate) bool {
+			c := meta.FindStatusCondition(g.Status.Conditions, "OverrideIgnored")
+			return !g.Status.Ready && c != nil && c.Status == metav1.ConditionTrue &&
+				strings.Contains(c.Message, "(unverified): written while kardinal's agent index was not Ready")
+		})
+	err = e.Client.Create(ctx, actorBundle(ns, nil))
+	require.Error(t, err, "a raw unstamped version while the index is full")
+	assert.Contains(t, err.Error(), "a version needs the unverified actor stamp now")
+
 	// A raw Approval must carry the unverified stamp: it decides a gate.
 	ssr, err := e.Kube.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -156,9 +174,12 @@ func TestAudit_IndexFullNeverRefusesAPerson(t *testing.T) {
 	assert.Contains(t, err.Error(), "agent index is full (IndexFull")
 	assert.Contains(t, err.Error(), "remove AgentIdentities or subjects")
 
-	// Room again: a person is human.
+	// Room again: a person's override opens the held gate, and a person is
+	// human.
 	removeAll()
 	indexReady(metav1.ConditionTrue, "")
+	cli.Must(ns, "override", pipelineName, "test", "--gate", "kardinal-agents-auto", "--reason", "index Ready again")
+	e.WaitGateReady(t, ns, b.Name, "test", "kardinal-agents-auto", true, "OVERRIDDEN", gateTimeout)
 	framework.Eventually(t, time.Minute, "a person is stamped human again", func(context.Context) (bool, string) {
 		r := cli.Run(ns, "create", "bundle", pipelineName, "--image", fixtures.Image+":"+fixtures.V1)
 		if r.Code != 0 {

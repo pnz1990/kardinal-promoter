@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 )
 
 // The per-environment agent shorthand (Pipeline environments[].agents,
@@ -66,9 +67,16 @@ func agentGateTemplate(ceiling, ns string) kardinalv1alpha1.PolicyGate {
 	return g
 }
 
-// agentAuthored reports whether an agent created b (its actor stamp).
+// UnverifiedAgentGateMessage is the agent gates' message on a version
+// stamped unverified (#2451): why it is held, and the ways on.
+const UnverifiedAgentGateMessage = "the version was written while kardinal's agent index was not Ready, so it counts " +
+	"as an agent's: ship it again once the index is Ready, or a person overrides this gate"
+
+// agentAuthored reports whether an agent created b (its actor stamp), or
+// someone the AgentIndex could not tell from one (unverified, #2451): its
+// Graph gets the agent gates, which hold it unless the agent is registered.
 func agentAuthored(b *kardinalv1alpha1.Bundle) bool {
-	return b != nil && b.Spec.Actor != nil && b.Spec.Actor.Kind == kardinalv1alpha1.ActorAgent
+	return b != nil && b.Spec.Actor != nil && actor.AgentLike(*b.Spec.Actor)
 }
 
 // addAgentGates appends the agent-autonomy gate of each environment in envs
@@ -98,6 +106,9 @@ func addAgentGates(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 		t, ok := templates[ceiling]
 		if !ok {
 			t = agentGateTemplate(ceiling, pipeline.Namespace)
+			if bundle.Spec.Actor.Kind == kardinalv1alpha1.ActorUnverified {
+				t.Spec.Message = UnverifiedAgentGateMessage
+			}
 			templates[ceiling] = t
 		}
 		gatesByEnv[env] = append(gatesByEnv[env], t)

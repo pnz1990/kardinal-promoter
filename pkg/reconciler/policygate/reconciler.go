@@ -316,7 +316,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &bundle); err != nil {
 			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: %w", bundleName, err)
 		}
-		verdictTally = tallyVerdicts(&gate, &bundle, now)
+		verdictTally = tallyVerdicts(&gate, &bundle, authorFrom(celCtx), now)
 		if err := r.recordVerdicts(ctx, &gate, verdictTally); apierrors.IsConflict(err) {
 			return ctrl.Result{}, err // a stale read: Reconcile evaluates again
 		} else if err != nil {
@@ -683,7 +683,10 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
-	author := lifecycle.BundleAuthor(&bundle)
+	author, err := r.reverify(ctx, lifecycle.BundleAuthor(&bundle))
+	if err != nil {
+		return nil, version, fmt.Errorf("actor: %w", err)
+	}
 	agentCtx, err := r.buildAgentContext(ctx, gate, author)
 	if err != nil {
 		return nil, version, fmt.Errorf("agent: %w", err)
@@ -727,7 +730,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"changewindow":   cwCtx,
 		"changeRequests": crCtx,
 		"approvals":      tally.context(tally.Met()),
-		"verdicts":       tallyVerdicts(gate, &bundle, now).Context(),
+		"verdicts":       tallyVerdicts(gate, &bundle, author, now).Context(),
 	}, version, nil
 }
 

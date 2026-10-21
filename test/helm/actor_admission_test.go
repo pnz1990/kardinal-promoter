@@ -311,10 +311,11 @@ func notReadyIndexes(t *testing.T) map[string]struct {
 // index's readiness never refuses a person. <release>-actor and
 // -actor-overrides refuse a ServiceAccount's writes they check, with the
 // state's message (a full index says what to do, not to retry: QA-3 on
-// #2384). A person is never refused a stop-the-line write: their version,
-// freeze, exemption and gate override are admitted unstamped or stamped
-// {kind: unverified}; a raw Approval or Verdict must carry the unverified
-// stamp, and the refusal says how to get it. A human or agent stamp (the
+// #2384). Stopping is always allowed and going needs verification: a
+// person's freeze is admitted unstamped or stamped {kind: unverified}; what
+// lets a version go (a version, an Approval, a Verdict, a gate override, a
+// freeze exemption) must carry the unverified stamp, and the refusal says
+// how to get it and what it will do. A human or agent stamp (the
 // compact index's guard among them) is refused, since it cannot be
 // verified. The controller is exempt. A Ready index derives the kind again:
 // human, and unverified is refused.
@@ -349,7 +350,7 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 		deny string // "": admitted; "index": the state's message
 	}{
 		{"a person's unstamped version", actorVAP, actorReq{resource: "bundles", namespace: "x", user: "alice", groups: authed,
-			object: bundleObj(t, "x", "checkout", nil)}, ""},
+			object: bundleObj(t, "x", "checkout", nil)}, "stamp:version"},
 		{"a person's version stamped unverified", actorVAP, actorReq{resource: "bundles", namespace: "x", user: "alice",
 			groups: authed, object: bundleObj(t, "x", "checkout", unverified("alice"))}, ""},
 		{"a person's version stamped human", actorVAP, actorReq{resource: "bundles", namespace: "x", user: "alice",
@@ -378,6 +379,14 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 			groups: authed, object: override(unverified("alice"))}, ""},
 		{"a person's gate override stamped human", overridesVAP, actorReq{resource: "policygates", namespace: "payments-eu",
 			user: "alice", groups: authed, object: override(human("alice"))}, mustUnverified},
+		// Every grant must carry the unverified stamp, and never counts from
+		// it: a gate override and a freeze exemption too.
+		{"a person's unstamped gate override", overridesVAP, actorReq{resource: "policygates", namespace: "payments-eu",
+			user: "alice", groups: authed, object: override(nil)}, "stamp:override"},
+		{"a person's unstamped freeze exemption", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
+			old: freeze(unverified("alice")), object: freeze(unverified("alice"), exemption(nil))}, "stamp:exemption"},
+		{"a person's unstamped freeze", actorVAP, actorReq{resource: "changewindows", user: "alice", groups: authed,
+			object: freeze(nil)}, ""},
 		{"a ServiceAccount's unstamped version", actorVAP, actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA,
 			groups: authed, object: bundleObj(t, "payments-eu", "checkout", nil)}, "index"},
 		{"a ServiceAccount's version stamped bot", actorVAP, actorReq{resource: "bundles", namespace: "payments-eu", user: fixerSA,
@@ -407,6 +416,18 @@ func TestActorAdmission_IndexNotReady(t *testing.T) {
 						"unverified actor stamp now. Use kardinal approve or the UI, which set it, or set spec.actor: "+
 						"{kind: unverified, principal: alice} yourself. An unverified decision does not count toward a gate: "+
 						"decide again once the index is Ready (kubectl get agentindex)", got)
+				case "stamp:version":
+					assert.Equal(t, "kardinal's agent index is not Ready, so it cannot tell you from an agent: a version needs the "+
+						"unverified actor stamp now. Use kardinal ship, create bundle or rollback, or the UI, which set it, or set "+
+						"spec.actor: {kind: unverified, principal: alice} yourself. An unverified version is held like an agent's: "+
+						"ship it again once the index is Ready (kubectl get agentindex)", got)
+				case "stamp:override":
+					assert.Contains(t, got, "a gate override needs the unverified actor stamp now. Use kardinal override or the UI, "+
+						"which set it, or set the override's actor: {kind: unverified, principal: alice} yourself. An unverified "+
+						"override or exemption is recorded but not honoured: break-glass waits until the index is Ready")
+				case "stamp:exemption":
+					assert.Contains(t, got, "a freeze exemption needs the unverified actor stamp now. Use kardinal override --freeze "+
+						"or the UI, which set it, or set the exemption's actor: {kind: unverified, principal: alice} yourself.")
 				case "stamp:verdict":
 					assert.Contains(t, got, "a Verdict needs the unverified actor stamp now. Use kardinal verify, which set it, "+
 						"or set spec.actor: {kind: unverified, principal: alice} yourself.")

@@ -94,6 +94,35 @@ func TestBuilder_AgentGates(t *testing.T) {
 	assert.Empty(t, res.GateInstances, "a person's version has no agent gates")
 }
 
+// TestBuilder_AgentGatesUnverified (#2451): a version stamped unverified
+// (written while the AgentIndex was not Ready) counts as an agent's for
+// every restriction, so its Graph gets the agent gates of every environment,
+// the deny gate included.
+// Covers ACTOR-INDEX-06.
+func TestBuilder_AgentGatesUnverified(t *testing.T) {
+	p := makeLinearPipeline("app", "test", "prod")
+	p.Spec.Environments[1].Agents = kardinalv1alpha1.AutonomyDeny
+	b := makeBundle("app-v1", "app")
+	b.Spec.Actor = &kardinalv1alpha1.Actor{Kind: kardinalv1alpha1.ActorUnverified, Principal: "bob"}
+	res, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: b})
+	require.NoError(t, err)
+	byEnv := map[string]string{}
+	for _, inst := range res.GateInstances {
+		byEnv[inst.Labels["kardinal.io/environment"]] = inst.Labels["kardinal.io/gate-template"]
+	}
+	assert.Equal(t, map[string]string{"test": "kardinal-agents-auto", "prod": "kardinal-agents-deny"}, byEnv)
+	specs := gateSpecs(t, res.Graph, map[string]interface{}{graph.ApprovalsNodeID: []interface{}{}})
+	for _, k := range []string{"kardinal-agents-auto/test", "kardinal-agents-deny/prod"} {
+		require.NotNil(t, specs[k], k)
+		assert.Equal(t, graph.UnverifiedAgentGateMessage, specs[k]["message"], "the message says why and the ways on: %s", k)
+	}
+	res, err = graph.NewBuilder().Build(graph.BuildInput{Pipeline: p, Bundle: agentBundle()})
+	require.NoError(t, err)
+	specs = gateSpecs(t, res.Graph, map[string]interface{}{graph.ApprovalsNodeID: []interface{}{}})
+	assert.Equal(t, "the version's agent is not registered, suspended, or its AgentIdentity autonomy is deny",
+		specs["kardinal-agents-auto/test"]["message"], "an agent's version keeps the agent message")
+}
+
 // TestBuilder_AgentGatesReservedName: a user template named like the agent
 // gates fails an agent version's build, and only an agent version's.
 func TestBuilder_AgentGatesReservedName(t *testing.T) {

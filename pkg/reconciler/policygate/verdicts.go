@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -27,12 +26,6 @@ const (
 	auditActionVerdictRecorded = "VerdictRecorded"
 	auditActionVerdictRevoked  = "VerdictRevoked"
 )
-
-// bundleAuthor is the version's author for the one-party rule: the Bundle's
-// actor stamp, or the read-side unknown actor with its verified creator.
-func bundleAuthor(bundle *kardinalv1alpha1.Bundle) kardinalv1alpha1.Actor {
-	return actor.OrUnknown(bundle.Spec.Actor, bundle.Annotations[lifecycle.AnnotationCreatedBy])
-}
 
 // healthCheckedAt is when bundle passed its health check in env, or nil.
 func healthCheckedAt(bundle *kardinalv1alpha1.Bundle, env string) *time.Time {
@@ -46,15 +39,17 @@ func healthCheckedAt(bundle *kardinalv1alpha1.Bundle, env string) *time.Time {
 }
 
 // tallyVerdicts counts gate's spec.verdicts (lifecycle.TallyVerdicts) for
-// bundle: its author, and the deadline from the verified environment's
-// health check time, both read from the Bundle's own fields.
-func tallyVerdicts(gate *kardinalv1alpha1.PolicyGate, bundle *kardinalv1alpha1.Bundle, now time.Time) lifecycle.VerdictTally {
+// bundle by author (lifecycle.BundleAuthor, reverified: #2451), with the
+// deadline from the verified environment's health check time, read from the
+// Bundle's own fields.
+func tallyVerdicts(gate *kardinalv1alpha1.PolicyGate, bundle *kardinalv1alpha1.Bundle, author kardinalv1alpha1.Actor,
+	now time.Time) lifecycle.VerdictTally {
 	p := lifecycle.VerifyPolicyOf(gate)
 	var deadline *time.Time
 	if p != nil {
 		deadline = lifecycle.VerifyDeadline(p, healthCheckedAt(bundle, p.Environment))
 	}
-	return lifecycle.TallyVerdicts(gate, bundleAuthor(bundle), string(bundle.UID), deadline, now)
+	return lifecycle.TallyVerdicts(gate, author, string(bundle.UID), deadline, now)
 }
 
 // untilDeadline is how long until a waiting verify gate's deadline, so the

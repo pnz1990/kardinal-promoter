@@ -405,12 +405,13 @@ client) is not in the context: it is text the client writes, and no such text re
 
 | Field | Type | Example | When populated |
 |---|---|---|---|
-| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, `unverified` (a person while the agent index was not Ready: neither `human` nor `agent`, [Actors](../actors.md#how-the-actor-is-verified)), or `unknown` without a stamp |
+| `actor.kind` | string | `"agent"` | Always: `human`, `agent`, `bot`, `controller`, or `unknown` without a stamp. A version stamped `unverified` (written while the agent index wasn't Ready) reads as `agent`, with no agent or sponsor, so `actor.kind != "agent"` gates and the agent gates hold it ([Actors](../actors.md#while-the-index-isnt-ready)); once the index is Ready and names its writer as an agent by user, it reads as that agent |
 | `actor.principal` | string | `"system:serviceaccount:ci:fixer"` | The authenticated username; without a stamp `kardinal.io/created-by`; else `""` |
 | `actor.agent` | string | `"fixer"` | The AgentIdentity name when the kind is `agent`; else `""` |
 | `actor.sponsor` | string | `"alice@example.com"` | The agent's sponsor when the version was created, when the kind is `agent`; else `""` |
 | `actor.via` | string | `"ui"` | `ui` or `api` when the controller wrote the version for its caller, `subscription` or `auto-rollback` for its own; else `""` |
-| `actor.verified` | bool | `true` | Always; `true` when the version has a stamp |
+| `actor.verified` | bool | `true` | Always; `true` when the version has a stamp, but `false` while `actor.unverified` is `true` |
+| `actor.unverified` | bool | `false` | Always; `true` when the version was stamped `unverified` and the agent index doesn't name its writer as an agent |
 
 ```cel
 # Only stamped versions (refuse v0.11 clients and hand-written Bundles)

@@ -137,25 +137,45 @@ variables:
       variables.gate && 'kardinal.io/environment' in variables.labels ? variables.labels['kardinal.io/environment'] : ''
   - name: check
     expression: "!variables.controller && size(variables.stamps) > 0"
+  # The stamps of what this request adds that lets a version go, which
+  # going needs verification for (#2451): a version, an Approval, a Verdict,
+  # new gate overrides, new freeze exemptions. A freeze and its lift are not
+  # among them (a lift, like a resume, is not restricted for agents either).
+  - name: goStamps
+    expression: >-
+      variables.freeze ? variables.exemptionStamps :
+      variables.gate || request.resource.resource in ['bundles', 'approvals', 'verdicts'] ? variables.stamps : []
 validations:
   - expression: "!variables.check || variables.indexReady || !variables.sa"
     messageExpression: >-
       {{ include "kardinal-promoter.indexNotReadyMessage" . }}
     reason: Forbidden
-  # While the index is not Ready a person is never refused a stop-the-line
-  # write (a version, a freeze or its exemption, a gate override); a raw
-  # Approval or Verdict must carry the unverified stamp (#2451): it decides a
-  # gate, and unstamped it would read as a person's, from an agent the index
+  # While the index is not Ready, stopping is always allowed and going needs
+  # verification (#2451): a person is never refused a stop-the-line write;
+  # what lets a version go (a version, an Approval, a Verdict, a gate
+  # override, a freeze exemption) must carry the unverified stamp, which
+  # counts as an agent's for every restriction and as nobody's for every
+  # grant. Unstamped, it would read as a person's, from an agent the index
   # names by User or Group too.
   - expression: >-
-      !variables.check || variables.indexReady || variables.sa ||
-      !(request.resource.resource in ['approvals', 'verdicts']) || variables.stamps.all(s, s != null)
+      !variables.check || variables.indexReady || variables.sa || variables.goStamps.all(s, s != null)
     messageExpression: >-
       "kardinal's agent index is not Ready, so it cannot tell you from an agent: " +
-      (request.resource.resource == 'approvals' ? 'an Approval' : 'a Verdict') + " needs the unverified actor stamp now. Use " +
-      (request.resource.resource == 'approvals' ? 'kardinal approve or the UI' : 'kardinal verify') +
-      ", which set it, or set spec.actor: {kind: unverified, principal: " + request.userInfo.username + "} yourself." +
-      " An unverified decision does not count toward a gate: decide again once the index is Ready (kubectl get agentindex)"
+      {'bundles': 'a version', 'approvals': 'an Approval', 'verdicts': 'a Verdict', 'policygates': 'a gate override',
+       'changewindows': 'a freeze exemption'}[request.resource.resource] +
+      " needs the unverified actor stamp now. Use " +
+      {'bundles': 'kardinal ship, create bundle or rollback, or the UI', 'approvals': 'kardinal approve or the UI', 'verdicts': 'kardinal verify',
+       'policygates': 'kardinal override or the UI',
+       'changewindows': 'kardinal override --freeze or the UI'}[request.resource.resource] +
+      ", which set it, or set " +
+      {'bundles': 'spec.actor', 'approvals': 'spec.actor', 'verdicts': 'spec.actor', 'policygates': 'the override\'s actor',
+       'changewindows': 'the exemption\'s actor'}[request.resource.resource] +
+      ": {kind: unverified, principal: " + request.userInfo.username + "} yourself. " +
+      (request.resource.resource == 'bundles'
+        ? "An unverified version is held like an agent's: ship it again once the index is Ready (kubectl get agentindex)"
+        : request.resource.resource in ['approvals', 'verdicts']
+        ? "An unverified decision does not count toward a gate: decide again once the index is Ready (kubectl get agentindex)"
+        : "An unverified override or exemption is recorded but not honoured: break-glass waits until the index is Ready (kubectl get agentindex)")
     reason: Forbidden
   - expression: "!variables.check || variables.matches.all(m, m.agent == variables.entry.agent)"
     messageExpression: >-

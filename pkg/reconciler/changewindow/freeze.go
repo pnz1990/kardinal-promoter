@@ -60,10 +60,12 @@ func ExemptionKey(e *kardinalv1alpha1.FreezeExemption) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// exemptionByAgent reports whether an agent made e: such an exemption never
-// counts (docs/design/18-actor-policy.md section 6).
+// exemptionByAgent reports whether an agent made e, or someone the
+// AgentIndex could not tell from one (unverified, #2451): such an exemption
+// never counts (docs/design/18-actor-policy.md section 6: break-glass is
+// for people, and needs verification).
 func exemptionByAgent(e *kardinalv1alpha1.FreezeExemption) bool {
-	return e.Actor != nil && e.Actor.Kind == kardinalv1alpha1.ActorAgent
+	return e.Actor != nil && actor.AgentLike(*e.Actor)
 }
 
 // FreezeSelects reports whether active freeze spec f selects target t by
@@ -79,7 +81,8 @@ func FreezeSelects(f *kardinalv1alpha1.ChangeWindowFreeze, t FreezeTarget) bool 
 	case kardinalv1alpha1.FreezeEveryone:
 		return true
 	case kardinalv1alpha1.FreezeAgents:
-		return t.Author.Kind == kardinalv1alpha1.ActorAgent
+		// An unverified version counts as an agent's (#2451).
+		return actor.AgentLike(t.Author)
 	}
 	return true // an unknown selector holds: a freeze must fail closed
 }

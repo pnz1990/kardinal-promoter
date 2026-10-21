@@ -225,3 +225,30 @@ func SubjectKey(s v1alpha1.AgentSubject) string {
 	}
 	return s.Name
 }
+
+// AgentLike reports whether a counts as an agent for a restriction: an
+// agent, or an actor written while the AgentIndex was not Ready
+// (unverified, #2451), which may be one. While the index is not Ready,
+// stopping is always allowed and going needs verification: unverified
+// counts as an agent for every restriction (an agents-only freeze, the
+// agent gates, an override or exemption never honoured) and as nobody for
+// every grant (Approvals, Verdicts).
+func AgentLike(a v1alpha1.Actor) bool {
+	return a.Kind == v1alpha1.ActorAgent || a.Kind == v1alpha1.ActorUnverified
+}
+
+// Reverify is unverified stamp a as a Ready index idx names its writer
+// (#2451): that agent's, with its agent and sponsor, when the index names
+// the principal as one, so the one-party rule sees the sponsor; else a. The
+// stamp records no groups, so an agent registered by group stays
+// unverified. Any other stamp, or no index, is a as it is.
+func Reverify(a v1alpha1.Actor, idx *v1alpha1.AgentIndexStatus) v1alpha1.Actor {
+	if a.Kind != v1alpha1.ActorUnverified || idx == nil {
+		return a
+	}
+	e, ok := idx.Users[a.Principal]
+	if !ok {
+		return a
+	}
+	return v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: a.Principal, Agent: e.Agent, Sponsor: e.Sponsor, Via: a.Via}
+}
