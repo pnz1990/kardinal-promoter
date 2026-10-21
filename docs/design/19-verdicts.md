@@ -414,14 +414,24 @@ replace --force`) frees the name at once while its gates are still being deleted
 of the same name can exist while an earlier one's gate is reconciled. So a gate kro applied
 (label `kro.run/node-id`) is evaluated only while it is its Bundle's: the Graph the Bundle's
 `status.graphRef` names, controlled by the Bundle's UID, lists the gate in
-`status.managedResources` (by UID, or by name in an entry kro recorded before it created the
-object). The answer is kept in the gate's `status.bundleUID`, so the Graph is read once per gate.
-Otherwise the gate writes no record and no evaluation, sets condition `InBundleGraph=False`
-(`GraphPending`: the Bundle has no Graph of its own yet; `NotListed`: the Graph does not list the
-gate, an earlier Bundle's), logs why, and is looked at again in 10 seconds (QA-5 on #2395). No
-clock is compared: creation times can come from different API servers, and a gate restored
-before its Bundle and adopted by the Bundle's Graph is the Bundle's. A gate whose Bundle is gone
-fails closed (`context error`) and writes no record.
+`status.managedResources` by the gate's UID. The answer is kept in the gate's `status.bundleUID`,
+so the Graph is read once per gate, and a gate's Bundle is fixed for its life: a gate whose
+`status.bundleUID` names another Bundle is never this one's. kro records an object before it
+creates it and fills its UID in after; a gate matching such an entry by name is evaluated but not
+kept (the next look checks the UID), and only when it is not being deleted and was not created
+before the Graph (an earlier Bundle's gate always was). No other clock is compared: creation
+times can come from different API servers, and a gate restored before its Bundle and adopted by
+the Bundle's Graph, with no `status.bundleUID`, is the Bundle's.
+
+A gate that is not its Bundle's writes no record and no evaluation, sets condition
+`InBundleGraph=False` (`GraphPending`: the Bundle has no Graph of its own yet; `NotListed`: the
+Graph does not list the gate, or the gate was an earlier Bundle's), logs why, and is looked at
+again in 10 seconds (QA-5 on #2395). An earlier Bundle's gate that kro adopts (G17) is refused,
+not counted: its verdicts, overrides and ready flag are the earlier Bundle's. The new Bundle's
+step then waits on it until it is deleted (the condition says to delete it, and kro then creates
+the new Bundle's), which fails closed, as an audit trail needs. What remains: a gate from before
+v0.14 (no `status.bundleUID`) left behind and adopted by kro, by its UID, is taken as the new
+Bundle's. A gate whose Bundle is gone fails closed (`context error`) and writes no record.
 
 ### 6.6 CEL: `verdicts.*`
 

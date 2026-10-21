@@ -338,31 +338,55 @@ func TestPolicyGateReconciler_InBundleGraph(t *testing.T) {
 	created := metav1.NewTime(verifyNow.Add(-time.Hour))
 	cases := []struct {
 		name        string
-		gateCreated time.Duration // after the Bundle
+		gateCreated time.Duration // after the Bundle (the Graph is created a second after it)
 		graph       func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured
 		cached      bool
-		evaluated   bool
-		reason, why string
-		graphReads  int
+		// earlier: the gate is an earlier Bundle's (uid-a), as it was:
+		// status.bundleUID, ready, a recorded verdict. deleting: it is being
+		// deleted. (A gate from before v0.14 has no status.bundleUID.)
+		earlier, deleting bool
+		evaluated, kept   bool
+		reason, why       string
+		graphReads        int // over two reconciles: once when kept, each time when not
 	}{
 		{name: "listed in its Bundle's Graph", gateCreated: time.Second,
 			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
 				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
-			}, evaluated: true, reason: "Listed", graphReads: 1},
+			}, evaluated: true, kept: true, reason: "Listed", graphReads: 1},
 		{name: "created in the second its Bundle was", gateCreated: 0,
 			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
 				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
-			}, evaluated: true, reason: "Listed", graphReads: 1},
+			}, evaluated: true, kept: true, reason: "Listed", graphReads: 1},
 		{name: "older than its Bundle, adopted by its Graph (a restore, a clock ahead)", gateCreated: -time.Hour,
 			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
 				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
-			}, evaluated: true, reason: "Listed", graphReads: 1},
-		{name: "recorded by kro before it had a UID", gateCreated: time.Second,
+			}, evaluated: true, kept: true, reason: "Listed", graphReads: 1},
+		{name: "recorded by kro before it had a UID: evaluated, not kept", gateCreated: 2 * time.Second,
 			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
 				return graphOf(b, b.UID, [2]string{"verify", ""})
-			}, evaluated: true, reason: "Listed", graphReads: 1},
+			}, evaluated: true, graphReads: 2},
 		{name: "checked before: the Graph is not read again", gateCreated: time.Second, cached: true,
-			evaluated: true},
+			evaluated: true, kept: true},
+		// QA-5 on #2395: an earlier Bundle's gate, left behind, never becomes
+		// the new Bundle's: its Bundle is fixed for its life, and its state
+		// (verdicts, ready, overrides) is the earlier Bundle's.
+		{name: "an earlier Bundle's gate mid-teardown, the Graph's entry of its name without a UID",
+			gateCreated: -time.Hour, earlier: true, deleting: true,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", ""})
+			}, reason: "NotListed", why: "this gate was Bundle nginx-demo-v1's (UID uid-a)"},
+		{name: "an earlier Bundle's gate adopted by the new Graph (G17)", gateCreated: -time.Hour, earlier: true,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", "gate-uid"})
+			}, reason: "NotListed", why: "delete it, and kro creates the new Bundle's"},
+		{name: "a gate from before v0.14 mid-teardown, the entry without a UID", gateCreated: 2 * time.Second, deleting: true,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", ""})
+			}, reason: "NotListed", why: "does not list this gate", graphReads: 2},
+		{name: "a gate from before v0.14 created before the Graph, the entry without a UID", gateCreated: -time.Hour,
+			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
+				return graphOf(b, b.UID, [2]string{"verify", ""})
+			}, reason: "NotListed", why: "does not list this gate", graphReads: 2},
 		{name: "an earlier Bundle's gate: the Graph lists another of its name", gateCreated: time.Second,
 			graph: func(b *kardinalv1alpha1.Bundle) *unstructured.Unstructured {
 				return graphOf(b, b.UID, [2]string{"verify", "another-uid"})
@@ -395,9 +419,22 @@ func TestPolicyGateReconciler_InBundleGraph(t *testing.T) {
 			if tc.cached {
 				gate.Status.BundleUID = "uid-b"
 			}
+			if tc.earlier {
+				seen := metav1.NewTime(created.Add(tc.gateCreated))
+				gate.Status.BundleUID = "uid-a"
+				gate.Status.Ready, gate.Status.LastEvaluatedAt = true, &seen
+				gate.Status.Verdicts = []kardinalv1alpha1.GateVerdictStatus{{Name: "r1", Result: "pass", Counted: true}}
+				gate.Status.VerdictAppearances = map[string]int32{"r1": 1}
+			}
+			if tc.deleting {
+				gate.Finalizers = []string{"foregroundDeletion"}
+				gate.DeletionTimestamp = &metav1.Time{Time: verifyNow.Add(-time.Minute)}
+			}
 			objs := []client.Object{gate}
 			if tc.graph != nil {
-				objs = append(objs, tc.graph(bundle))
+				g := tc.graph(bundle)
+				g.SetCreationTimestamp(metav1.NewTime(created.Add(time.Second)))
+				objs = append(objs, g)
 			}
 			objs = append(objs, bundle)
 			reads := 0
@@ -436,11 +473,16 @@ func TestPolicyGateReconciler_InBundleGraph(t *testing.T) {
 			cond := meta.FindStatusCondition(got.Status.Conditions, "InBundleGraph")
 			if tc.evaluated {
 				assert.NotNil(t, got.Status.LastEvaluatedAt, "evaluated")
-				assert.Equal(t, "uid-b", got.Status.BundleUID)
 				assert.NotEmpty(t, events.Items, "it records")
 				for _, e := range events.Items {
 					assert.Equal(t, "uid-b", e.Spec.BundleUID, e.Name)
 				}
+				if !tc.kept {
+					assert.Empty(t, got.Status.BundleUID, "a match without the gate's UID is not kept")
+					assert.Nil(t, cond)
+					return
+				}
+				assert.Equal(t, "uid-b", got.Status.BundleUID)
 				if tc.reason != "" {
 					require.NotNil(t, cond)
 					assert.Equal(t, metav1.ConditionTrue, cond.Status)
@@ -448,9 +490,14 @@ func TestPolicyGateReconciler_InBundleGraph(t *testing.T) {
 				}
 				return
 			}
-			assert.Nil(t, got.Status.LastEvaluatedAt, "not evaluated")
+			if tc.earlier {
+				assert.Equal(t, gate.Status.LastEvaluatedAt.Unix(), got.Status.LastEvaluatedAt.Unix(), "not evaluated")
+				assert.Equal(t, "uid-a", got.Status.BundleUID, "its Bundle is fixed for its life")
+			} else {
+				assert.Nil(t, got.Status.LastEvaluatedAt, "not evaluated")
+				assert.Empty(t, got.Status.BundleUID)
+			}
 			assert.Empty(t, events.Items, "no record names the Bundle for a gate not its own")
-			assert.Empty(t, got.Status.BundleUID)
 			require.NotNil(t, cond, "the gate says why")
 			assert.Equal(t, metav1.ConditionFalse, cond.Status)
 			assert.Equal(t, tc.reason, cond.Reason)
@@ -512,7 +559,9 @@ func TestPolicyGateReconciler_EarlierBundlesGate(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &cur))
 	cond := meta.FindStatusCondition(cur.Status.Conditions, "InBundleGraph")
 	require.NotNil(t, cond)
-	assert.Equal(t, "GraphPending", cond.Reason, cond.Message)
+	assert.Equal(t, "NotListed", cond.Reason, cond.Message)
+	assert.Contains(t, cond.Message, "this gate was Bundle nginx-demo-v1's (UID uid-a)", "its Bundle is fixed for its life")
+	assert.Equal(t, "uid-a", cur.Status.BundleUID)
 }
 
 // TestPolicyGateReconciler_SettledBundleRetiredGraph: a settled Bundle's

@@ -1710,18 +1710,30 @@ const (
 
 // inBundleGraph reports whether gate is bundle's: kro applied it from the
 // Graph bundle's status.graphRef names, which bundle controls, and that
-// Graph's status.managedResources lists it (by UID, or by name before kro
-// fills the UID in, as it records an object before it creates it). The
-// answer is kept in status.bundleUID, so the Graph, a large object, is read
-// once per gate. A gate without kro's node-id label was not applied by a
-// Graph (admission lets only kro and the controller create gate instances)
-// and has no Graph to be in. When the gate is not bundle's, reason and why
-// say so.
+// Graph's status.managedResources lists it by its UID. The answer is kept in
+// status.bundleUID, so the Graph, a large object, is read once per gate, and
+// a gate's Bundle is fixed for its life: a gate whose status.bundleUID names
+// another Bundle (one deleted, whose name a new Bundle has) is never this
+// one's, also when kro adopts it (G17), since its state (verdicts, overrides,
+// ready) is the earlier Bundle's.
+//
+// kro records an object in managedResources before it creates it and fills
+// its UID in after. A gate matching such a UID-less entry by name is
+// evaluated, not kept (the next look checks the UID), and only when it is
+// not being deleted and was not created before the Graph (an earlier
+// Bundle's gate always was). A gate without kro's node-id label was not
+// applied by a Graph (admission lets only kro and the controller create
+// gate instances) and has no Graph to be in. When the gate is not bundle's,
+// reason and why say so.
 func (r *Reconciler) inBundleGraph(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
 	bundle *kardinalv1alpha1.Bundle) (member bool, reason, why string, err error) {
 	uid := string(bundle.UID)
 	if gate.Labels[graph.LabelKRONodeID] == "" || gate.Status.BundleUID == uid {
 		return true, "", "", nil
+	}
+	if gate.Status.BundleUID != "" {
+		return false, reasonNotListed, fmt.Sprintf("this gate was Bundle %s's (UID %s), not this Bundle %s's (UID %s): "+
+			"delete it, and kro creates the new Bundle's", bundle.Name, gate.Status.BundleUID, bundle.Name, uid), nil
 	}
 	ref := bundle.Status.GraphRef
 	if ref == "" {
@@ -1741,20 +1753,31 @@ func (r *Reconciler) inBundleGraph(ctx context.Context, gate *kardinalv1alpha1.P
 	if err != nil {
 		return false, "", "", fmt.Errorf("read graph %s status.managedResources: %w", ref, err)
 	}
+	byName := false
 	for _, m := range managed {
 		e, _ := m.(map[string]interface{})
 		str := func(k string) string { s, _ := e[k].(string); return s }
-		if str("kind") == "PolicyGate" && str("namespace") == gate.Namespace && str("name") == gate.Name &&
-			(str("uid") == string(gate.UID) || str("uid") == "") {
-			patch := client.MergeFrom(gate.DeepCopy())
-			gate.Status.BundleUID = uid
-			setInBundleGraphCondition(gate, metav1.ConditionTrue, reasonListed,
-				fmt.Sprintf("Graph %s of Bundle %s (UID %s) lists this gate", ref, bundle.Name, uid), r.now())
-			if err := r.Status().Patch(ctx, gate, patch); err != nil {
-				return false, "", "", fmt.Errorf("record bundle graph membership: %w", err)
-			}
-			return true, "", "", nil
+		if str("kind") != "PolicyGate" || str("namespace") != gate.Namespace || str("name") != gate.Name {
+			continue
 		}
+		if str("uid") == "" {
+			byName = true
+			continue
+		}
+		if str("uid") != string(gate.UID) {
+			continue
+		}
+		patch := client.MergeFrom(gate.DeepCopy())
+		gate.Status.BundleUID = uid
+		setInBundleGraphCondition(gate, metav1.ConditionTrue, reasonListed,
+			fmt.Sprintf("Graph %s of Bundle %s (UID %s) lists this gate", ref, bundle.Name, uid), r.now())
+		if err := r.Status().Patch(ctx, gate, patch); err != nil {
+			return false, "", "", fmt.Errorf("record bundle graph membership: %w", err)
+		}
+		return true, "", "", nil
+	}
+	if graphCreated := g.GetCreationTimestamp(); byName && gate.DeletionTimestamp == nil && !gate.CreationTimestamp.Before(&graphCreated) {
+		return true, "", "", nil // the Graph's object of this name, before kro filled its UID in: look again
 	}
 	return false, reasonNotListed, fmt.Sprintf("Graph %s of Bundle %s (UID %s) does not list this gate: it is an earlier Bundle's",
 		ref, bundle.Name, uid), nil
