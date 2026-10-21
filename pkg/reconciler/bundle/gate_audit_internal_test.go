@@ -425,3 +425,63 @@ func TestCoalesceGateChanges_EnvironmentMove(t *testing.T) {
 	assert.Contains(t, byName, "window")
 	assert.Contains(t, m.Spec.Message, "platform-policies/prod-freeze moved (generation 2): moved and back in prod")
 }
+
+// QA-2 on #2347: three or more merged moves keep the net state. Each step
+// is folded in order: an environment that ends where it started is moved
+// and back (in both lists), one that ends off is no longer in (removed
+// only), one that ends on is now also in (added only).
+//
+// Covers GATE-EDIT-04.
+func TestEnvironmentMove_Sequences(t *testing.T) {
+	on, off := []string{"prod", "uat"}, []string{"uat"}
+	takeOff := environmentDiff(on, off)
+	putOn := environmentDiff(off, on)
+	for _, tc := range []struct {
+		name           string
+		steps          []environmentMove
+		added, removed []string
+		says           string
+	}{
+		{"off prod, back on", []environmentMove{takeOff, putOn}, []string{"prod"}, []string{"prod"}, "moved and back in prod"},
+		{"off prod, back on, off again", []environmentMove{takeOff, putOn, takeOff}, nil, []string{"prod"}, "no longer in prod"},
+		{"onto prod, off, onto again", []environmentMove{putOn, takeOff, putOn}, []string{"prod"}, nil, "now also in prod"},
+		{"off, on, off, on", []environmentMove{takeOff, putOn, takeOff, putOn}, []string{"prod"}, []string{"prod"}, "moved and back in prod"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.steps[0]
+			for _, s := range tc.steps[1:] {
+				got = got.then(s)
+			}
+			assert.Equal(t, tc.added, got.added)
+			assert.Equal(t, tc.removed, got.removed)
+			assert.Equal(t, tc.says, got.String())
+		})
+	}
+}
+
+// QA-2 on #2347: three unwritten records of one version merged as the
+// outbox merges them, oldest first: prod-freeze off prod, back on, off again
+// is recorded as no longer in prod, not as moved and back.
+//
+// Covers GATE-EDIT-04.
+func TestCoalesceGateChanges_ThreeMoves(t *testing.T) {
+	p, b := gateAuditFixture()
+	freeze := gateAuditGate("prod-freeze", "uat", "!schedule.isWeekend", 2)
+	stamps := map[string]graph.TemplateStamp{"platform-policies/prod-freeze": {Digest: graph.TemplateDigest(freeze), Generation: 2}}
+	key := "platform-policies/prod-freeze"
+	on, off := []string{"prod", "uat"}, []string{"uat"}
+	gates := []kardinalv1alpha1.PolicyGate{freeze}
+	record := func(before, after []string, at int64) kardinalv1alpha1.PendingAuditEvent {
+		e, ok := gateChangeEntry(b, p, stamps, map[string][]string{key: before}, map[string][]string{key: after}, gates, time.Unix(at, 0))
+		require.True(t, ok)
+		return e
+	}
+	m, ok := coalesceGateChanges(record(on, off, 600), record(off, on, 1200))
+	require.True(t, ok)
+	m, ok = coalesceGateChanges(m, record(on, off, 1800))
+	require.True(t, ok)
+	require.Len(t, m.Spec.Gates, 1)
+	assert.Empty(t, m.Spec.Gates[0].EnvironmentsAdded, "prod-freeze ends off prod")
+	assert.Equal(t, []string{"prod"}, m.Spec.Gates[0].EnvironmentsRemoved)
+	assert.Contains(t, m.Spec.Message, "platform-policies/prod-freeze moved (generation 2): no longer in prod")
+}

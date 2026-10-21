@@ -416,30 +416,49 @@ func (m environmentMove) none() bool {
 	return len(m.added) == 0 && len(m.removed) == 0 && m.omitted == 0
 }
 
-// then is m followed by next, as a merge of two records sees them: every
-// environment either added goes into added, and every one either removed
-// into removed. An environment in both moved there and back (or back and
-// there): kept, so a merge never erases a window in which a gate was off an
-// environment of the version, as an edit and an edit back are kept with
-// the generations (QA-2 on #2347). Counts of omitted names add up, an upper
-// bound.
+// then is m followed by next, as a merge of two records sees them, each
+// environment folded in order (QA-2 on #2347). An environment either
+// record moved ends net added (in environmentsAdded only), net removed (in
+// environmentsRemoved only), or back where it started (in both, said as
+// moved and back): so a merge never erases a window in which a gate was off
+// an environment of the version, and never misstates where it ends. Off
+// prod, on, off again is "no longer in prod"; on, off, on again is "now also
+// in prod"; off and on again is "moved and back in prod". Counts of omitted
+// names add up, an upper bound.
 func (m environmentMove) then(next environmentMove) environmentMove {
-	union := func(a, b []string) []string {
-		in := map[string]bool{}
-		for _, e := range append(append([]string(nil), a...), b...) {
-			in[e] = true
+	const added, removed, back = 1, 2, 3
+	states := func(mv environmentMove) map[string]int {
+		st := map[string]int{}
+		for _, e := range mv.added {
+			st[e] |= added
 		}
-		out := make([]string, 0, len(in))
-		for e := range in {
-			out = append(out, e)
+		for _, e := range mv.removed {
+			st[e] |= removed
 		}
-		sort.Strings(out)
-		if len(out) == 0 {
-			return nil
-		}
-		return out
+		return st
 	}
-	return environmentMove{added: union(m.added, next.added), removed: union(m.removed, next.removed), omitted: m.omitted + next.omitted}
+	out := states(m)
+	for e, n := range states(next) {
+		switch p, had := out[e]; {
+		case !had || p == back:
+			out[e] = n
+		case n == back:
+		case p != n:
+			out[e] = back
+		}
+	}
+	res := environmentMove{omitted: m.omitted + next.omitted}
+	for e, st := range out {
+		if st&added != 0 {
+			res.added = append(res.added, e)
+		}
+		if st&removed != 0 {
+			res.removed = append(res.removed, e)
+		}
+	}
+	sort.Strings(res.added)
+	sort.Strings(res.removed)
+	return res
 }
 
 // set writes m to gc, the first MaxAuditGateEnvironments names of each list.

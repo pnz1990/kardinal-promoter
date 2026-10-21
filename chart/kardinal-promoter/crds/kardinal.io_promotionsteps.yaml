@@ -1471,9 +1471,10 @@ spec:
                                 description: |-
                                   EnvironmentsAdded are environments of the version the template's gate
                                   copies now apply to and did not before (a kardinal.io/applies-to edit
-                                  moves a gate without changing its rule): the first 5 in name order. In
-                                  a record merged from several, an environment in both
-                                  environmentsAdded and environmentsRemoved moved and back.
+                                  moves a gate without changing its rule): the first 5 in name order. A
+                                  record merged from several gives the net move: an environment in
+                                  environmentsAdded only ends on, one in environmentsRemoved only ends
+                                  off, and one in both moved and ended where it started.
                                 items:
                                   maxLength: 63
                                   type: string
