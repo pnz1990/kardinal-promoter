@@ -131,6 +131,12 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 			ProxyOptions: proxyOpts,
 		})
 		if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			// go-git reports a fetch the context ended as text: wrap the
+			// context's error, so a canceled rebase is errors.Is
+			// context.Canceled however far the fetch got.
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("git fetch %s %s: %w", remote, branch, cerr)
+			}
 			return fmt.Errorf("git fetch %s %s: %s", remote, branch, gitErrorText(err))
 		}
 		return nil
