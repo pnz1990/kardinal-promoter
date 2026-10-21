@@ -701,6 +701,36 @@ Each attempt runs at most once:
   An AgentRun that starts with `recorded` set does not run its Job; it is Succeeded with
   "verdict already recorded". This is the HookRun `spec.recorded` pattern, with the Verdict as
   the record, and keeps the decision on CRD fields the Graph renders.
+- The re-created AgentRun names an agent again only when two sources agree (#2345): the agent
+  and sponsor its StepTemplate's AgentIdentity names now (which must still be allowed to verify
+  the run, 8.4), and every record kardinal wrote of the run's Verdict that names its writer. Those
+  are the VerdictRecorded AuditEvent (written when the Verdict entered a gate's verdicts, with
+  the actor the first run named, `spec.actor.principal` `kr-<run>`) and the verdict named after
+  the run in the Bundle's receipts. There must be at least one. Names repeat (a Bundle deleted
+  and created again under its name has runs, Verdicts, gates and so records of the same names,
+  and the earlier Bundle's records stay), so a receipt counts only when its statement names this
+  Bundle's UID, and an AuditEvent, which names no UID, only when it is dated after the second
+  this Bundle was created in (this Bundle's own record comes only after its run has run, so it
+  never falls in that second). Both times are whole seconds from two clocks, the record's
+  `spec.timestamp` from the controller's and `creationTimestamp` from the API server's: until
+  gate AuditEvents name the Bundle's UID (#2380), an earlier Bundle's record dated within the
+  controller clock's lead over the API server's, before this Bundle was created, can still
+  count. Then the run names that agent, that sponsor and `kr-<run>`, and the
+  Verdict counts and traces as before (6.2): the run-bound
+  Verdict counts only through an AgentRun that names an allowed agent, and the evidence pack
+  traces it through that AgentRun. Otherwise, because the template's agent or the sponsor
+  changed since the run or no record is left (the first run was deleted before a gate recorded
+  its Verdict, retention removed the records, or the Bundle was created again under an earlier
+  one's name, whose AuditEvent holds the name its own would take, #2380), the run names none
+  and says "agent changed since the run, or unknown". The Verdict stops counting, failing
+  closed: a Verdict one agent's run wrote is never counted as another's.
+- Why these sources: a run-bound Verdict has no actor stamp of its own (the run's Pod writes it,
+  and `spec.run` names only the run), so once the first AgentRun is gone the AgentIdentity is
+  the only source of an agent, and only kardinal's records say which agent the run was. Only
+  the controller creates an AuditEvent with `spec.actor` or a receipt, and neither's spec
+  changes (their labels can, so the spec is matched, not the labels). Not re-creating the
+  AgentRun instead (refusing it once a Verdict is bound) would leave the Verdict with no run to
+  count through, which is the failure itself.
 
 ## 9. Retries and flakiness
 

@@ -218,7 +218,7 @@ metadata:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["kardinal.io"]
-  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "verdicts", "promotionreceipts", "changerequests"]
+  resources: ["auditevents", "approvals", "policygates", "bundles", "pipelines", "verdicts", "agentruns", "promotionreceipts", "changerequests"]
   verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

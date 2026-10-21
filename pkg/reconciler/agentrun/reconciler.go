@@ -52,6 +52,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/actor"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/hookrun"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
@@ -75,6 +76,10 @@ const (
 	// under test, which the AgentRun cannot own (another namespace): the
 	// run's UID, to find and delete it.
 	LabelAgentRunUID = "kardinal.io/agentrun-uid"
+	// auditActionVerdictRecorded is the AuditEvent action the policy gate
+	// writes when a Verdict enters a gate's verdicts.
+	auditActionVerdictRecorded = "VerdictRecorded"
+
 	// RunServiceAccountPrefix starts the name of a run's own ServiceAccount:
 	// kr-<AgentRun name>. The verdicts admission policy keys on it.
 	RunServiceAccountPrefix = "kr-"
@@ -220,8 +225,7 @@ func (r *Reconciler) genuine(ctx context.Context, run *v1alpha1.AgentRun) (*v1al
 // start decides whether the run runs at all, and records its start.
 func (r *Reconciler) start(ctx context.Context, log zerolog.Logger, base, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) (ctrl.Result, error) {
 	if run.Spec.Recorded != "" {
-		r.finish(run, v1alpha1.AgentRunSucceeded, "verdict already recorded ("+run.Spec.Recorded+"); not run again")
-		return ctrl.Result{}, r.patch(ctx, base, run)
+		return r.recorded(ctx, log, base, run, bundle)
 	}
 	if halted(bundle) {
 		r.finish(run, v1alpha1.AgentRunSkipped, "not run: Bundle "+bundle.Name+" is "+haltReason(bundle))
@@ -290,29 +294,20 @@ func (r *Reconciler) bounds(ctx context.Context, run *v1alpha1.AgentRun) (*v1alp
 	if r.ControllerNamespace != "" && (run.Namespace == r.ControllerNamespace || run.Spec.TargetNamespace == r.ControllerNamespace) {
 		return nil, nil, 0, "AgentRuns may not run in, or test, the controller's namespace " + r.ControllerNamespace, nil
 	}
-	var tmpl v1alpha1.StepTemplate
-	if err := r.Get(ctx, types.NamespacedName{Name: run.Spec.Template}, &tmpl); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil, 0, "StepTemplate " + run.Spec.Template + " does not exist", nil
-		}
-		return nil, nil, 0, "", fmt.Errorf("get steptemplate %s: %w", run.Spec.Template, err)
+	tmpl, refused, err := r.template(ctx, run)
+	if tmpl == nil {
+		return nil, nil, 0, refused, err
 	}
-	if why := TemplateProblem(&tmpl, r.RequireDigest); why != "" {
+	if why := TemplateProblem(tmpl, r.RequireDigest); why != "" {
 		return nil, nil, 0, "StepTemplate " + tmpl.Name + ": " + why, nil
 	}
-	timeout, err := templateTimeout(&tmpl)
+	timeout, err := templateTimeout(tmpl)
 	if err != nil {
 		return nil, nil, 0, err.Error(), nil
 	}
-	var agent v1alpha1.AgentIdentity
-	if err := r.Get(ctx, types.NamespacedName{Name: tmpl.Spec.Agent}, &agent); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil, 0, "agent " + tmpl.Spec.Agent + " (StepTemplate " + tmpl.Name + ") is not registered (no AgentIdentity)", nil
-		}
-		return nil, nil, 0, "", fmt.Errorf("get agentidentity %s: %w", tmpl.Spec.Agent, err)
-	}
-	if why := agentProblem(&agent, run); why != "" {
-		return nil, nil, 0, "agent " + agent.Name + " " + why, nil
+	agent, refused, err := r.agentOf(ctx, tmpl, run)
+	if agent == nil {
+		return nil, nil, 0, refused, err
 	}
 	for _, s := range tmpl.Spec.SecretEnv {
 		var sec corev1.Secret
@@ -328,7 +323,145 @@ func (r *Reconciler) bounds(ctx context.Context, run *v1alpha1.AgentRun) (*v1alp
 				s.Secret, LabelStepTemplateSecret, tmpl.Name), nil
 		}
 	}
-	return &tmpl, &agent, timeout, "", nil
+	return tmpl, agent, timeout, "", nil
+}
+
+// template is run's StepTemplate, or why there is none.
+func (r *Reconciler) template(ctx context.Context, run *v1alpha1.AgentRun) (*v1alpha1.StepTemplate, string, error) {
+	var tmpl v1alpha1.StepTemplate
+	if err := r.Get(ctx, types.NamespacedName{Name: run.Spec.Template}, &tmpl); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, "StepTemplate " + run.Spec.Template + " does not exist", nil
+		}
+		return nil, "", fmt.Errorf("get steptemplate %s: %w", run.Spec.Template, err)
+	}
+	return &tmpl, "", nil
+}
+
+// agentOf is the AgentIdentity tmpl names, when it may verify run, or why
+// not.
+func (r *Reconciler) agentOf(ctx context.Context, tmpl *v1alpha1.StepTemplate, run *v1alpha1.AgentRun) (*v1alpha1.AgentIdentity, string, error) {
+	var agent v1alpha1.AgentIdentity
+	if err := r.Get(ctx, types.NamespacedName{Name: tmpl.Spec.Agent}, &agent); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, "agent " + tmpl.Spec.Agent + " (StepTemplate " + tmpl.Name + ") is not registered (no AgentIdentity)", nil
+		}
+		return nil, "", fmt.Errorf("get agentidentity %s: %w", tmpl.Spec.Agent, err)
+	}
+	if why := agentProblem(&agent, run); why != "" {
+		return nil, "agent " + agent.Name + " " + why, nil
+	}
+	return &agent, "", nil
+}
+
+// recorded finishes a run whose Verdict exists (spec.recorded: kro created
+// it again after it was deleted) without running it (#2345). It names the
+// agent and sponsor its StepTemplate names, as a run that starts does, and
+// its ServiceAccount, only when that agent may still verify the run and
+// every record kardinal wrote of the run's Verdict (recordedActors) names
+// that same agent and sponsor, and there is one: the Graph counts a
+// run-bound Verdict only when its run names an allowed agent, and the
+// evidence pack traces the Verdict through it. Otherwise (the template's
+// agent or the sponsor changed since the run, or no record is left) it
+// names none and says why, and the Verdict does not count: a Verdict one
+// agent's run wrote is never counted as another's.
+func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) (ctrl.Result, error) {
+	msg := "verdict already recorded (" + run.Spec.Recorded + "); not run again"
+	tmpl, refused, err := r.template(ctx, run)
+	var agent *v1alpha1.AgentIdentity
+	if tmpl != nil {
+		agent, refused, err = r.agentOf(ctx, tmpl, run)
+	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if agent != nil {
+		want := v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: graph.RunServiceAccountUser(run.Namespace, run.Name),
+			Agent: agent.Name, Sponsor: agent.Spec.Sponsor.User}
+		actors, verifiers, err := r.recordedActors(ctx, run, bundle)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		agrees := len(actors)+len(verifiers) > 0
+		for _, a := range actors {
+			agrees = agrees && a.Kind == want.Kind && a.Agent == want.Agent && a.Sponsor == want.Sponsor
+		}
+		for _, v := range verifiers {
+			agrees = agrees && v == actor.Describe(want)
+		}
+		if !agrees {
+			agent, refused = nil, fmt.Sprintf("agent changed since the run, or unknown: no record of its Verdict names %s "+
+				"(%d VerdictRecorded AuditEvents, %d receipts name the run)", actor.Describe(want), len(actors), len(verifiers))
+		}
+	}
+	if agent == nil {
+		msg += "; it names no agent: " + refused
+		log.Warn().Str("reason", refused).Msg("re-created AgentRun names no agent; its Verdict does not count")
+	} else {
+		run.Status.Agent = agent.Name
+		run.Status.Sponsor = agent.Spec.Sponsor.User
+		run.Status.ServiceAccount = RunServiceAccountPrefix + run.Name
+	}
+	r.finish(run, v1alpha1.AgentRunSucceeded, msg)
+	return ctrl.Result{}, r.patch(ctx, base, run)
+}
+
+// recordedActors are what the records kardinal wrote of run's Verdict say
+// its writer was, read from the API server: the actor of each
+// VerdictRecorded AuditEvent of the run's Bundle whose principal is the
+// run's ServiceAccount (the policy gate writes one when the Verdict enters
+// a gate's verdicts, with the actor the first run named), and the verifier
+// of the verdict named after the run in each receipt of the Bundle (signed,
+// written when an environment was promoted). Only the controller writes
+// either, and neither changes after it is written.
+//
+// Names repeat: a Bundle deleted and created again under its name has runs,
+// Verdicts and gates of the same names, and the records of the earlier one
+// stay. So a receipt counts only when it names this Bundle's UID, and an
+// AuditEvent (which names no UID) only when it is dated after the second
+// this Bundle was created in: both times are whole seconds, the record's
+// from the controller's clock and the creation's from the API server's, and
+// this Bundle's own record comes only after its run has run. An earlier
+// Bundle's record dated within the controller clock's lead over the API
+// server's can still pass, until gate AuditEvents name the Bundle's UID
+// (#2380).
+func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) ([]v1alpha1.Actor, []string, error) {
+	principal := graph.RunServiceAccountUser(run.Namespace, run.Name)
+	var events v1alpha1.AuditEventList
+	if err := r.reader().List(ctx, &events, client.InNamespace(run.Namespace), client.MatchingLabels{
+		"kardinal.io/bundle": run.Spec.BundleName, "kardinal.io/action": auditActionVerdictRecorded}); err != nil {
+		return nil, nil, fmt.Errorf("list VerdictRecorded AuditEvents of bundle %s: %w", run.Spec.BundleName, err)
+	}
+	var actors []v1alpha1.Actor
+	for _, ev := range events.Items {
+		if a := ev.Spec.Actor; a != nil && a.Principal == principal && ev.Spec.BundleName == run.Spec.BundleName &&
+			ev.Spec.Action == auditActionVerdictRecorded && ev.Spec.Timestamp.After(bundle.CreationTimestamp.Time) {
+			actors = append(actors, *a)
+		}
+	}
+	// Receipts are optional (receipts.enabled): without them the controller
+	// may not read any, and there is none to read.
+	var receipts v1alpha1.PromotionReceiptList
+	err := r.reader().List(ctx, &receipts, client.InNamespace(run.Namespace),
+		client.MatchingLabels{"kardinal.io/bundle": run.Spec.BundleName})
+	if err != nil && !apierrors.IsForbidden(err) && !meta.IsNoMatchError(err) {
+		return nil, nil, fmt.Errorf("list receipts of bundle %s: %w", run.Spec.BundleName, err)
+	}
+	var verifiers []string
+	for _, rc := range receipts.Items {
+		st, err := receipt.Parse([]byte(rc.Spec.Statement))
+		if err != nil || st.Predicate.Kardinal.Version.BundleUID != run.Spec.BundleUID {
+			continue // a statement it cannot read, or an earlier Bundle's, names no one
+		}
+		for _, g := range st.Predicate.Kardinal.Gates {
+			for _, v := range g.Verdicts {
+				if v.Name == run.Name {
+					verifiers = append(verifiers, v.Verifier)
+				}
+			}
+		}
+	}
+	return actors, verifiers, nil
 }
 
 // agentProblem is why agent may not verify run, or "": it must be ready,

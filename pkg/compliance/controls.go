@@ -144,8 +144,9 @@ func tested(element string) Evidence {
 	return Evidence{
 		Element: element,
 		Record: "the health check and bake of each environment (a PromotionStep reaches `Verified` only after them), " +
-			"MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires",
-		Kinds:   []string{"PolicyGate", "Verdict", "Pipeline"},
+			"MetricChecks, upstream soak gates, and `Verdict`s from the verifiers a gate requires, each from an in-cluster " +
+			"verifier with the AgentRun that wrote it",
+		Kinds:   []string{"PolicyGate", "Verdict", "AgentRun", "Pipeline"},
 		Actions: []string{"PromotionSucceeded", "PromotionFailed", "RollbackStarted", "VerdictRecorded", "VerdictRevoked"},
 		Status:  Shipped,
 	}
@@ -412,9 +413,10 @@ func aiAct() Framework {
 			Requirement: "People are told when they interact with AI, and AI-generated content is marked in a machine-readable way.",
 			Evidence: []Evidence{{
 				Element: "Agent-made changes are marked",
-				Record:  "the actor stamp marks each version and decision an agent made (`spec.actor.kind: agent`), shown in the PR evidence and the UI",
-				Kinds:   []string{"Bundle", "Approval", "Verdict"},
-				Status:  Shipped,
+				Record: "the actor stamp marks each version and decision an agent made (`spec.actor.kind: agent`), shown in the PR evidence and the UI; " +
+					"a Verdict an in-cluster verifier wrote names its AgentRun (`spec.run`), whose status names the agent and its sponsor",
+				Kinds:  []string{"Bundle", "Approval", "Verdict", "AgentRun"},
+				Status: Shipped,
 			}, {
 				Element: "Agent-made commits are attributed",
 				Record:  "keyless signed commits that name the agent",
