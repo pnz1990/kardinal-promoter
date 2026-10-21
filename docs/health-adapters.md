@@ -330,7 +330,7 @@ health:
 
 !!! warning "Tested against fakes in v0.13.0"
     EKS credentials are tested against fake STS and EKS APIs, not against a real EKS cluster or
-    AWS account. A real-cloud validation is planned for v0.13.1. Try them on a test cluster before
+    AWS account. A real-cloud validation is planned for v0.13.1 (#2460). Try them on a test cluster before
     you rely on them.
 
 With `kubeconfigSecretRef.eks`, the controller authenticates to an EKS cluster with its own AWS

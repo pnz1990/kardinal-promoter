@@ -200,10 +200,10 @@ what can change for you, and its v0.13.0 section every change since v0.12.0:
     only its agents") ([How verdicts count](agentic/verify-with-agents.md#how-verdicts-count)).
 
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
-fields to AgentIdentities, Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals
-and ImageVerifications; Pipelines and RenderRuns accept quoted keys in YAML paths only once the
-new CRDs are applied. Helm never upgrades CRDs, and Helm owns the fields of the CRDs the v0.12.0
-chart installed, so `--force-conflicts` is required:
+fields to AgentIdentities, AgentIndexes, Bundles, Pipelines, PolicyGates, PromotionSteps,
+AuditEvents, Approvals and ImageVerifications; Pipelines and RenderRuns accept quoted keys in YAML
+paths only once the new CRDs are applied. Helm never upgrades CRDs, and Helm owns the fields of the
+CRDs the v0.12.0 chart installed, so `--force-conflicts` is required:
 
 ```bash
 helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 | kubectl apply --server-side --force-conflicts -f -
