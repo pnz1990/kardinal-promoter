@@ -963,6 +963,16 @@ spec:
                   - user
                   type: object
                 type: array
+              bundleUID:
+                description: |-
+                  BundleUID is the UID of the Bundle whose current Graph (its
+                  status.graphRef) lists this gate instance, by its UID, in
+                  status.managedResources, written once the reconciler has checked it
+                  (#2380). A gate's Bundle is fixed for its life. A gate instance is
+                  evaluated, and writes audit records naming that UID, only while it is
+                  its Bundle's: an earlier Bundle's gate, still there when a Bundle of
+                  its name is created again, is not (condition InBundleGraph).
+                type: string
               bundleVersion:
                 description: |-
                   BundleVersion is the version of the Bundle a gate instance was last
@@ -1286,6 +1296,14 @@ spec:
                             promoted.
                           minLength: 1
                           type: string
+                        bundleUID:
+                          description: |-
+                            BundleUID is the UID of that Bundle, on the records of its gates
+                            (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked,
+                            VerdictRecorded, VerdictRevoked): a Bundle deleted and created again
+                            under its name is another Bundle, with records of its own. Absent on
+                            other records, and on records written before v0.14.
+                          type: string
                         environment:
                           description: Environment is the environment name where the
                             event occurred.
@@ -1472,6 +1490,17 @@ spec:
                   approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion
                   for the version.
                 type: string
+              verdictAppearances:
+                additionalProperties:
+                  format: int32
+                  type: integer
+                description: |-
+                  VerdictAppearances counts, for each Verdict that has been in verdicts,
+                  how many times it entered them. A Verdict that leaves and comes back
+                  (its AgentRun deleted and created again, a policy edit) is a new
+                  appearance, with VerdictRecorded and VerdictRevoked records of its own
+                  (#2380). Kept after the Verdict leaves.
+                type: object
               verdicts:
                 description: |-
                   Verdicts records each verdict in spec.verdicts and whether the gate

@@ -16,7 +16,8 @@ with kardinal audit export.
 
 The period is the versions (Bundles) created in [--since, --until) and the
 AuditEvents timestamped in it. A version brings its Approvals, gate instances,
-Verdicts, receipts and change request tickets. The Pipelines, gate and change request
+Verdicts, the AgentRuns that wrote them, receipts and change request tickets.
+The Pipelines, gate and change request
 templates, ChangeWindows, AgentIdentities and admission policies are the ones
 in force at export.
 
@@ -31,6 +32,9 @@ in force at export.
     approvals.ndjson             their Approvals
     policygates.ndjson           their gate instances (overrides, results)
     verdicts.ndjson              their Verdicts
+    agentruns.ndjson             the AgentRuns those Verdicts name
+                                 (spec.run): each names the agent and its
+                                 sponsor (status.agent, status.sponsor)
     receipts.ndjson              their PromotionReceipts, statement and
                                  Sigstore bundle as signed (verify one
                                  with kardinal verify-receipt --file)

@@ -407,10 +407,21 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 	}); err != nil {
 		return nil, err
 	}
+	// runs are the AgentRuns the period's Verdicts name (spec.run): a Verdict
+	// an in-cluster verifier wrote has no actor stamp, and its AgentRun names
+	// the agent and its sponsor (#2295).
+	runs := map[bundleKey]bool{}
 	if err := p.kind(ctx, c, "Verdict", &v1alpha1.VerdictList{}, nsOpts, func(o runtime.Object) bool {
 		v := o.(*v1alpha1.Verdict)
-		return ofBundle(v.Namespace, v.Spec.Bundle) && envOK(v.Spec.Environment)
+		keep := ofBundle(v.Namespace, v.Spec.Bundle) && envOK(v.Spec.Environment)
+		if keep && v.Spec.Run != nil {
+			runs[bundleKey{v.Namespace, v.Spec.Run.Name}] = true
+		}
+		return keep
 	}); err != nil {
+		return nil, err
+	}
+	if err := p.agentRuns(ctx, c, nsOpts, runs); err != nil {
 		return nil, err
 	}
 	if err := p.kind(ctx, c, "PromotionReceipt", &v1alpha1.PromotionReceiptList{}, nsOpts, func(o runtime.Object) bool {
@@ -458,6 +469,36 @@ func collectEvidence(ctx context.Context, c sigs_client.Client, opts evidencePac
 		return nil, err
 	}
 	return p, p.controls()
+}
+
+// agentRuns writes the AgentRuns the period's Verdicts name, and warns of
+// those the cluster no longer holds.
+func (p *evidence) agentRuns(ctx context.Context, c sigs_client.Reader, nsOpts []sigs_client.ListOption, runs map[bundleKey]bool) error {
+	found := map[bundleKey]bool{}
+	readable := true
+	if err := p.kind(ctx, c, "AgentRun", &v1alpha1.AgentRunList{}, nsOpts, func(o runtime.Object) bool {
+		r := o.(*v1alpha1.AgentRun)
+		k := bundleKey{r.Namespace, r.Name}
+		found[k] = runs[k]
+		return runs[k]
+	}); err != nil {
+		return err
+	}
+	for _, kind := range append(p.manifest.Coverage.Missing, p.manifest.Coverage.Forbidden...) {
+		readable = readable && kind != "AgentRun"
+	}
+	gone := 0
+	for k := range runs {
+		if !found[k] {
+			gone++
+		}
+	}
+	if readable && gone > 0 {
+		p.manifest.Coverage.Warnings = append(p.manifest.Coverage.Warnings, fmt.Sprintf(
+			"%d Verdicts name an AgentRun the cluster no longer holds: their agent is named by the gate instance's "+
+				"spec.verdicts[].actor, the VerdictRecorded AuditEvent and the version's receipt", gone))
+	}
+	return nil
 }
 
 // auditEvents writes the period's AuditEvents twice, as kardinal audit
@@ -870,7 +911,8 @@ with kardinal audit export.
 
 The period is the versions (Bundles) created in [--since, --until) and the
 AuditEvents timestamped in it. A version brings its Approvals, gate instances,
-Verdicts, receipts and change request tickets. The Pipelines, gate and change request
+Verdicts, the AgentRuns that wrote them, receipts and change request tickets.
+The Pipelines, gate and change request
 templates, ChangeWindows, AgentIdentities and admission policies are the ones
 in force at export.
 
@@ -885,6 +927,9 @@ in force at export.
     approvals.ndjson             their Approvals
     policygates.ndjson           their gate instances (overrides, results)
     verdicts.ndjson              their Verdicts
+    agentruns.ndjson             the AgentRuns those Verdicts name
+                                 (spec.run): each names the agent and its
+                                 sponsor (status.agent, status.sponsor)
     receipts.ndjson              their PromotionReceipts, statement and
                                  Sigstore bundle as signed (verify one
                                  with kardinal verify-receipt --file)

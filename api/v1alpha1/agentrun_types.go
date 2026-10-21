@@ -103,7 +103,10 @@ type AgentRunStatus struct {
 
 	// Agent and Sponsor are the agent the run verifies for (its
 	// StepTemplate's AgentIdentity) and that agent's sponsor, when the run
-	// started. The Graph names them as the actor of the run's Verdict.
+	// started. A run created again after its Verdict (spec.recorded) names
+	// them only when kardinal's records of the Verdict (its VerdictRecorded
+	// AuditEvent, a receipt) name the same agent and sponsor, and else none.
+	// The Graph names them as the actor of the run's Verdict.
 	// +optional
 	Agent string `json:"agent,omitempty"`
 	// +optional

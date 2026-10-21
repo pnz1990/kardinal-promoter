@@ -4286,6 +4286,13 @@ func (in *PolicyGateStatus) DeepCopyInto(out *PolicyGateStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.VerdictAppearances != nil {
+		in, out := &in.VerdictAppearances, &out.VerdictAppearances
+		*out = make(map[string]int32, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.ApprovalRequired != nil {
 		in, out := &in.ApprovalRequired, &out.ApprovalRequired
 		*out = new(bool)

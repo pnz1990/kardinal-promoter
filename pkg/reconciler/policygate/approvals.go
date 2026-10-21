@@ -106,7 +106,7 @@ func (t approvalTally) met() string {
 // changed. firstSeenAt is kept for a decision already recorded (same user and
 // decision) and set to now for a new one. Graph-first: the gate's own status,
 // from its own spec.
-func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, t approvalTally) error {
+func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, t approvalTally, bundleUID string) error {
 	now := metav1.NewTime(r.now())
 	records := make([]kardinalv1alpha1.GateApprovalStatus, len(t.Records))
 	for i, rec := range t.Records {
@@ -138,7 +138,7 @@ func (r *Reconciler) recordApprovals(ctx context.Context, gate *kardinalv1alpha1
 	// deleted to revoke it). The records go in the audit outbox in the same
 	// patch (#1552).
 	enqueue := func(rec kardinalv1alpha1.GateApprovalStatus, action string) {
-		if e, ok := r.approvalAuditEntry(gate, rec, action); ok {
+		if e, ok := r.approvalAuditEntry(gate, rec, action, bundleUID); ok {
 			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
 		}
 	}
@@ -185,11 +185,13 @@ func sameDecision(a, b kardinalv1alpha1.GateApprovalStatus) bool {
 // approvalAuditEntry is the outbox entry recording that rec appeared in
 // (ApprovalRecorded) or left (ApprovalRevoked) the gate's approvals, and
 // false for a gate a Graph did not create. The name is derived from the gate,
-// the action, the user, the decision and when the gate first saw it.
+// the action, the user, the decision, when the gate first saw it and the
+// Bundle's UID (#2380: a Bundle created again under its name gets records of
+// its own).
 func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
-	rec kardinalv1alpha1.GateApprovalStatus, action string) (kardinalv1alpha1.PendingAuditEvent, bool) {
+	rec kardinalv1alpha1.GateApprovalStatus, action, bundleUID string) (kardinalv1alpha1.PendingAuditEvent, bool) {
 	labels := gate.GetLabels()
-	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" {
+	if labels[labelPipeline] == "" || labels[labelBundle] == "" || labels[labelEnvironment] == "" || bundleUID == "" {
 		return kardinalv1alpha1.PendingAuditEvent{}, false
 	}
 	seen := ""
@@ -198,7 +200,8 @@ func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 	}
 	// The fields are part of the decision: an Approval replaced with other
 	// fields within the same second is another record.
-	sum := sha256.Sum256([]byte(action + "\x00" + rec.User + "\x00" + rec.Decision + "\x00" + seen + fieldsKey(rec.Fields)))
+	sum := sha256.Sum256([]byte(action + "\x00" + rec.User + "\x00" + rec.Decision + "\x00" + seen + fieldsKey(rec.Fields) +
+		"\x00" + bundleUID))
 	suffix := "-approval-" + hex.EncodeToString(sum[:])[:12]
 	base := gate.Name
 	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
@@ -217,7 +220,7 @@ func (r *Reconciler) approvalAuditEntry(gate *kardinalv1alpha1.PolicyGate,
 		msg += "; fields: " + s
 	}
 	return audit.Entry(sanitizeGateName(base+suffix), gateAuditLabels(labels, action), kardinalv1alpha1.AuditEventSpec{
-		BundleName: labels[labelBundle], PipelineName: labels[labelPipeline],
+		BundleName: labels[labelBundle], BundleUID: bundleUID, PipelineName: labels[labelPipeline],
 		Environment: labels[labelEnvironment], Action: action, Outcome: "Success", Message: msg, Actor: rec.Actor,
 		Fields: wholeFields(gate, rec),
 	}, metav1.NewTime(r.now())), true

@@ -16,6 +16,10 @@ var PackFiles = map[string]string{
 	"ChangeWindow":  "changewindows.ndjson",
 	"AgentIdentity": "agentidentities.ndjson",
 	"Verdict":       "verdicts.ndjson",
+	// AgentRun: the runs the pack's Verdicts name (spec.run). A Verdict an
+	// in-cluster verifier wrote has no actor stamp; its AgentRun's status
+	// names the agent and the sponsor.
+	"AgentRun": "agentruns.ndjson",
 	// PromotionReceipt: each receipt of the period's versions with its
 	// signed envelope (status.bundle), which kardinal verify-receipt --file
 	// checks offline.

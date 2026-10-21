@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **A verify gate's audit trail shows what it counts now** (#2380). A Verdict that left a gate's verdicts and came back (its AgentRun deleted and created again, or a policy edit) was recorded as revoked and never again as recorded, because the second `VerdictRecorded` AuditEvent had the first one's name. Each appearance is now a record of its own (the gate's `status.verdictAppearances` counts them), so the trail ends on the current state. A version deleted and created again under its name, whose gates and Verdicts have the same names, now gets gate records (verdicts, approvals, overrides) of its own instead of losing them to the earlier version's. Every gate record (`GateEvaluated`, `GateOverridden`, `ApprovalRecorded`, `ApprovalRevoked`, `VerdictRecorded`, `VerdictRevoked`) names the version's UID in the new `spec.bundleUID`, so a re-created AgentRun matches its Verdict's record on the UID ([Trace a Verdict to its agent](compliance.md#trace-a-verdict-to-its-agent)).

@@ -122,7 +122,7 @@ AgentRun is one attempt of an in-cluster verifier (a StepTemplate's agent image)
 | `spec.template` | string | yes | Template is the StepTemplate the run runs. |
 | `spec.version` | string |  | Version is the Bundle's version. |
 | `status` | object |  | AgentRunStatus is the observed state of an AgentRun. |
-| `status.agent` | string |  | Agent and Sponsor are the agent the run verifies for (its StepTemplate's AgentIdentity) and that agent's sponsor, when the run started. The Graph names them as the actor of the run's Verdict. |
+| `status.agent` | string |  | Agent and Sponsor are the agent the run verifies for (its StepTemplate's AgentIdentity) and that agent's sponsor, when the run started. A run created again after its Verdict (spec.recorded) names them only when kardinal's records of the Verdict (its VerdictRecorded AuditEvent, a receipt) name the same agent and sponsor, and else none. The Graph names them as the actor of the run's Verdict. |
 | `status.conditions` | []object |  | Conditions: Bounded. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
@@ -189,6 +189,7 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | `spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
+| `spec.bundleUID` | string |  | BundleUID is the UID of that Bundle, on the records of its gates (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked, VerdictRecorded, VerdictRevoked): a Bundle deleted and created again under its name is another Bundle, with records of its own. Absent on other records, and on records written before v0.14. |
 | `spec.environment` | string |  | Environment is the environment name where the event occurred. |
 | `spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `spec.gates` | []object |  | Gates are the PolicyGate template changes a GateChanged event records: one event per version and rebuild, listing at most MaxAuditGateChanges changes in template order. |
@@ -307,6 +308,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.bundleUID` | string |  | BundleUID is the UID of that Bundle, on the records of its gates (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked, VerdictRecorded, VerdictRevoked): a Bundle deleted and created again under its name is another Bundle, with records of its own. Absent on other records, and on records written before v0.14. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
 | `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.gates` | []object |  | Gates are the PolicyGate template changes a GateChanged event records: one event per version and rebuild, listing at most MaxAuditGateChanges changes in template order. |
@@ -448,6 +450,7 @@ ChangeRequest is a change request a promotion waits for (docs/design/23-change-r
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.bundleUID` | string |  | BundleUID is the UID of that Bundle, on the records of its gates (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked, VerdictRecorded, VerdictRevoked): a Bundle deleted and created again under its name is another Bundle, with records of its own. Absent on other records, and on records written before v0.14. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
 | `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.gates` | []object |  | Gates are the PolicyGate template changes a GateChanged event records: one event per version and rebuild, listing at most MaxAuditGateChanges changes in template order. |
@@ -1329,6 +1332,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.bundleUID` | string |  | BundleUID is the UID of that Bundle, on the records of its gates (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked, VerdictRecorded, VerdictRevoked): a Bundle deleted and created again under its name is another Bundle, with records of its own. Absent on other records, and on records written before v0.14. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
 | `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.gates` | []object |  | Gates are the PolicyGate template changes a GateChanged event records: one event per version and rebuild, listing at most MaxAuditGateChanges changes in template order. |
@@ -1485,6 +1489,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.approvals[].firstSeenAt` | string (date-time) |  | FirstSeenAt is when the gate first saw the decision. |
 | `status.approvals[].reason` | string |  | Reason says why a decision does not count. |
 | `status.approvals[].user` | string | yes | User is the approver. |
+| `status.bundleUID` | string |  | BundleUID is the UID of the Bundle whose current Graph (its status.graphRef) lists this gate instance, by its UID, in status.managedResources, written once the reconciler has checked it (#2380). A gate's Bundle is fixed for its life. A gate instance is evaluated, and writes audit records naming that UID, only while it is its Bundle's: an earlier Bundle's gate, still there when a Bundle of its name is created again, is not (condition InBundleGraph). |
 | `status.bundleVersion` | string |  | BundleVersion is the version of the Bundle a gate instance was last evaluated for (bundle.version in its expression). Empty on a template and when the Bundle could not be read. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
@@ -1517,6 +1522,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.bundleUID` | string |  | BundleUID is the UID of that Bundle, on the records of its gates (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked, VerdictRecorded, VerdictRevoked): a Bundle deleted and created again under its name is another Bundle, with records of its own. Absent on other records, and on records written before v0.14. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
 | `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.gates` | []object |  | Gates are the PolicyGate template changes a GateChanged event records: one event per version and rebuild, listing at most MaxAuditGateChanges changes in template order. |
@@ -1541,6 +1547,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `status.pendingAuditEvents[].spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
 | `status.ready` | boolean | yes | Ready indicates whether the gate is currently allowing promotion. The kro Graph gates downstream nodes on status.ready == true. Default: `false`. |
 | `status.reason` | string |  | Reason explains the current ready state in a sentence: the gate's message when its expression blocks, what the expression evaluated to, and the version it was evaluated for, for example "waiting for approvals: 0 of 1 (version 1.5.0)". It is for people; read BundleVersion for the version. |
+| `status.verdictAppearances` | map[string]integer (int32) |  | VerdictAppearances counts, for each Verdict that has been in verdicts, how many times it entered them. A Verdict that leaves and comes back (its AgentRun deleted and created again, a policy edit) is a new appearance, with VerdictRecorded and VerdictRevoked records of its own (#2380). Kept after the Verdict leaves. |
 | `status.verdicts` | []object |  | Verdicts records each verdict in spec.verdicts and whether the gate counted it (spec.verify), for kardinal explain, the PR evidence and the UI. |
 | `status.verdicts[].attempt` | integer |  |  |
 | `status.verdicts[].counted` | boolean | yes | Counted reports whether the verdict is a vote. |
@@ -1828,6 +1835,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.pendingAuditEvents[].spec.actor.sponsor` | string |  | Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when the record was written, when kind is agent. |
 | `status.pendingAuditEvents[].spec.actor.via` | string |  | Via says how the controller came to write the record: ui and api for a caller it authenticated, subscription and auto-rollback for its own Bundles. Only the controller may set it. One of: `ui`, `api`, `subscription`, `auto-rollback`. |
 | `status.pendingAuditEvents[].spec.bundleName` | string |  | BundleName is the name of the Bundle being promoted. |
+| `status.pendingAuditEvents[].spec.bundleUID` | string |  | BundleUID is the UID of that Bundle, on the records of its gates (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked, VerdictRecorded, VerdictRevoked): a Bundle deleted and created again under its name is another Bundle, with records of its own. Absent on other records, and on records written before v0.14. |
 | `status.pendingAuditEvents[].spec.environment` | string |  | Environment is the environment name where the event occurred. |
 | `status.pendingAuditEvents[].spec.fields` | map[string]string |  | Fields are an ApprovalRecorded or ApprovalRevoked decision's structured values (Approval spec.fields) the gate declares, whole. |
 | `status.pendingAuditEvents[].spec.gates` | []object |  | Gates are the PolicyGate template changes a GateChanged event records: one event per version and rebuild, listing at most MaxAuditGateChanges changes in template order. |

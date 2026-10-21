@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
@@ -249,10 +250,42 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		return r.reconcileTemplate(ctx, &gate)
 	}
 
-	// Every override is recorded and audited once (GateOverridden), whatever
-	// the Bundle's phase, before anything else reads it.
-	if err := r.recordOverrides(ctx, &gate); err != nil {
+	// The gate's Bundle, read once. Its UID goes on, and into the names of,
+	// the gate's audit records (#2380): a Bundle created again under its
+	// name has gates of the same names, and gets records of its own. A
+	// Bundle has no finalizer, so a delete (or replace --force) frees its
+	// name at once, while its gates are still being deleted: a gate is
+	// evaluated only while its Bundle's current Graph lists it
+	// (inBundleGraph); an earlier Bundle's gate records nothing, says why
+	// (condition InBundleGraph) and is looked at again shortly. With no
+	// Bundle at all, the gate fails closed as before, but writes no record
+	// (it has no UID to name).
+	bundle, err := r.gateBundle(ctx, &gate, bundleName)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	bundleUID := ""
+	if bundle != nil {
+		member, reason, why, err := r.inBundleGraph(ctx, &gate, bundle)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !member && settled(bundle) {
+			// A settled Bundle's gates are not evaluated anyway, and its
+			// retired Graph (deleted) lists none: nothing to say.
+			return ctrl.Result{}, nil
+		}
+		if !member {
+			log.Info().Str("bundle", bundleName).Str("bundleUID", string(bundle.UID)).Str("reason", why).
+				Msg("gate not evaluated: its Bundle's current Graph does not list it")
+			return ctrl.Result{RequeueAfter: graphMemberRecheck}, r.setInBundleGraph(ctx, &gate, metav1.ConditionFalse, reason, why)
+		}
+		bundleUID = string(bundle.UID)
+		// Every override is recorded and audited once (GateOverridden),
+		// whatever the Bundle's phase, before anything else reads it.
+		if err := r.recordOverrides(ctx, &gate, bundleUID); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// A settled Bundle never promotes again, so its gate instances are left
@@ -275,7 +308,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	if active, ok := findActiveOverride(&gate, gate.Labels[labelEnvironment], now, r.maxOverride()); ok {
 		overrideReason := active.reason()
 		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
-		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason, gate.Status.BundleVersion); patchErr != nil {
+		if patchErr := r.patchStatus(ctx, &gate, bundleUID, true, overrideReason, gate.Status.BundleVersion); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
 		// Re-evaluate just after the override ends (its expiresAt or the
@@ -290,7 +323,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	celCtx, bundleVersion, err := r.buildContext(ctx, &gate, bundleName)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to build CEL context, setting gate to blocked")
-		if patchErr := r.patchStatus(ctx, &gate, false,
+		if patchErr := r.patchStatus(ctx, &gate, bundleUID, false,
 			fmt.Sprintf("context error: %s", err), ""); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 		}
@@ -301,7 +334,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// the Bundle's Approval objects, against spec.approval (buildContext
 	// exposes the same count to the expression as approvals.*).
 	tally := tallyApprovals(&gate, authorFrom(celCtx))
-	if err := r.recordApprovals(ctx, &gate, tally); apierrors.IsConflict(err) {
+	if err := r.recordApprovals(ctx, &gate, tally, bundleUID); apierrors.IsConflict(err) {
 		return ctrl.Result{}, err // a stale read: Reconcile evaluates again (#1513)
 	} else if err != nil {
 		log.Warn().Err(err).Msg("failed to record approvals in status (non-fatal)")
@@ -312,12 +345,13 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 	// (buildContext exposes the same count to the expression as verdicts.*).
 	var verdictTally lifecycle.VerdictTally
 	if gate.Spec.Verify != nil {
-		var bundle kardinalv1alpha1.Bundle
-		if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &bundle); err != nil {
-			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: %w", bundleName, err)
+		// The Bundle read whose UID names the verdict records: they name
+		// the UID they were tallied against.
+		if bundle == nil {
+			return ctrl.Result{}, fmt.Errorf("load bundle %s for verify: not found", bundleName)
 		}
-		verdictTally = tallyVerdicts(&gate, &bundle, now)
-		if err := r.recordVerdicts(ctx, &gate, verdictTally); apierrors.IsConflict(err) {
+		verdictTally = tallyVerdicts(&gate, bundle, now)
+		if err := r.recordVerdicts(ctx, &gate, verdictTally, bundleUID); apierrors.IsConflict(err) {
 			return ctrl.Result{}, err // a stale read: Reconcile evaluates again
 		} else if err != nil {
 			log.Warn().Err(err).Msg("failed to record verdicts in status (non-fatal)")
@@ -389,7 +423,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 			log.Warn().Str("hold", h.Bundle).Str("reason", reason).Msg("policygate exempt for the held rollback")
 			// One Event per exempt episode, not per changed gate reason.
 			first := !gate.Status.Ready || !lifecycle.IsHoldExemption(gate.Status.Reason)
-			if patchErr := r.patchStatusWith(ctx, &gate, true, reason, bundleVersion, approvalReq); patchErr != nil {
+			if patchErr := r.patchStatusWith(ctx, &gate, bundleUID, true, reason, bundleVersion, approvalReq); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch gate status (hold exemption): %w", patchErr)
 			}
 			if r.Recorder != nil && first {
@@ -404,7 +438,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		// expression, not an error, so the reason does not lead with it.
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
 			Msg("CEL evaluation error, setting gate to blocked")
-		if patchErr := r.patchStatusWith(ctx, &gate, false, graph.WithVersion(reason, bundleVersion), bundleVersion, approvalReq); patchErr != nil {
+		if patchErr := r.patchStatusWith(ctx, &gate, bundleUID, false, graph.WithVersion(reason, bundleVersion), bundleVersion, approvalReq); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status on eval error: %w", patchErr)
 		}
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
@@ -425,7 +459,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		Str("expr", gate.Spec.Expression).
 		Msg("policygate evaluated")
 
-	if patchErr := r.patchStatusWith(ctx, &gate, pass, reason, bundleVersion, approvalReq); patchErr != nil {
+	if patchErr := r.patchStatusWith(ctx, &gate, bundleUID, pass, reason, bundleVersion, approvalReq); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
@@ -530,6 +564,20 @@ func (r *Reconciler) markGenerated(ctx context.Context, gate *kardinalv1alpha1.P
 	return true, nil
 }
 
+// gateBundle is the gate's Bundle, nil when there is none (it was deleted:
+// its gate goes too).
+func (r *Reconciler) gateBundle(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleName string) (*kardinalv1alpha1.Bundle, error) {
+	var bundle kardinalv1alpha1.Bundle
+	err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: gate.Namespace}, &bundle)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load bundle %s: %w", bundleName, err)
+	}
+	return &bundle, nil
+}
+
 // bundleSettled reports whether the gate's Bundle exists and is either
 // Superseded or Rejected (both final), or Verified with its GraphReady condition True. The Bundle
 // reconciler keeps a Verified Bundle's GraphReady up to date until it is True
@@ -540,6 +588,12 @@ func (r *Reconciler) bundleSettled(ctx context.Context, namespace, bundleName st
 	if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: namespace}, &bundle); err != nil {
 		return false
 	}
+	return settled(&bundle)
+}
+
+// settled reports whether bundle is Superseded or Rejected, or Verified
+// with its GraphReady condition True (bundleSettled).
+func settled(bundle *kardinalv1alpha1.Bundle) bool {
 	switch bundle.Status.Phase {
 	case "Superseded", "Rejected":
 		return true
@@ -1162,13 +1216,13 @@ func (r *Reconciler) freshResultWanted(ctx context.Context, gate *kardinalv1alph
 // version (status.bundleVersion, the version evaluated). It writes nothing when
 // the result is unchanged and no step waits for a newer one
 // (unchangedResult).
-func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleUID string,
 	ready bool, reason, version string) error {
-	return r.patchStatusWith(ctx, gate, ready, reason, version, gate.Status.ApprovalRequired)
+	return r.patchStatusWith(ctx, gate, bundleUID, ready, reason, version, gate.Status.ApprovalRequired)
 }
 
 // patchStatusWith is patchStatus that also writes status.approvalRequired.
-func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1.PolicyGate, bundleUID string,
 	ready bool, reason, version string, approvalRequired *bool) error {
 	if gate.Status.BundleVersion == version && equalBoolPtr(gate.Status.ApprovalRequired, approvalRequired) &&
 		r.unchangedResult(ctx, gate, ready, reason, r.now()) {
@@ -1226,7 +1280,7 @@ func (r *Reconciler) patchStatusWith(ctx context.Context, gate *kardinalv1alpha1
 		if !ready {
 			outcome = "Failure"
 		}
-		if e, ok := gateAuditEntry(gate, outcome, reason, now); ok {
+		if e, ok := gateAuditEntry(gate, bundleUID, outcome, reason, now); ok {
 			gate.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, gate.Status.PendingAuditEvents, e)
 		}
 	}
@@ -1634,4 +1688,118 @@ func (r *Reconciler) holdExemption(ctx context.Context, gate *kardinalv1alpha1.P
 		return nil, why
 	}
 	return h, ""
+}
+
+// The InBundleGraph condition (#2380): whether the gate instance is its
+// Bundle's, which the gate is evaluated only while it is.
+const (
+	conditionInBundleGraph = "InBundleGraph"
+	// reasonListed: the Bundle's current Graph lists the gate.
+	reasonListed = "Listed"
+	// reasonGraphPending: the Bundle has no Graph of its own yet (none, or
+	// the name's Graph is still an earlier Bundle's).
+	reasonGraphPending = "GraphPending"
+	// reasonNotListed: the Bundle's Graph does not list the gate: it is an
+	// earlier Bundle's, still being deleted.
+	reasonNotListed = "NotListed"
+	// graphMemberRecheck is how soon a gate that is not (yet) its Bundle's
+	// is looked at again: a new Graph is created, and an earlier Bundle's
+	// gate deleted, within seconds.
+	graphMemberRecheck = 10 * time.Second
+)
+
+// inBundleGraph reports whether gate is bundle's: kro applied it from the
+// Graph bundle's status.graphRef names, which bundle controls, and that
+// Graph's status.managedResources lists it by its UID. The answer is kept in
+// status.bundleUID, so the Graph, a large object, is read once per gate, and
+// a gate's Bundle is fixed for its life: a gate whose status.bundleUID names
+// another Bundle (one deleted, whose name a new Bundle has) is never this
+// one's, also when kro adopts it (G17), since its state (verdicts, overrides,
+// ready) is the earlier Bundle's.
+//
+// kro records an object in managedResources before it creates it and fills
+// its UID in after. A gate matching such a UID-less entry by name is
+// evaluated, not kept (the next look checks the UID), and only when it is
+// not being deleted and was not created before the Graph (an earlier
+// Bundle's gate always was). A gate without kro's node-id label was not
+// applied by a Graph (admission lets only kro and the controller create
+// gate instances) and has no Graph to be in. When the gate is not bundle's,
+// reason and why say so.
+func (r *Reconciler) inBundleGraph(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	bundle *kardinalv1alpha1.Bundle) (member bool, reason, why string, err error) {
+	uid := string(bundle.UID)
+	if gate.Labels[graph.LabelKRONodeID] == "" || gate.Status.BundleUID == uid {
+		return true, "", "", nil
+	}
+	if gate.Status.BundleUID != "" {
+		return false, reasonNotListed, fmt.Sprintf("this gate was Bundle %s's (UID %s), not this Bundle %s's (UID %s): "+
+			"delete it, and kro creates the new Bundle's", bundle.Name, gate.Status.BundleUID, bundle.Name, uid), nil
+	}
+	ref := bundle.Status.GraphRef
+	if ref == "" {
+		return false, reasonGraphPending, fmt.Sprintf("Bundle %s (UID %s) has no Graph yet", bundle.Name, uid), nil
+	}
+	g := &unstructured.Unstructured{}
+	g.SetGroupVersionKind(graph.GraphGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: bundle.Namespace, Name: ref}, g); apierrors.IsNotFound(err) {
+		return false, reasonGraphPending, fmt.Sprintf("Graph %s of Bundle %s (UID %s) does not exist yet", ref, bundle.Name, uid), nil
+	} else if err != nil {
+		return false, "", "", fmt.Errorf("get graph %s: %w", ref, err)
+	}
+	if owner := metav1.GetControllerOf(g); owner == nil || string(owner.UID) != uid {
+		return false, reasonGraphPending, fmt.Sprintf("Graph %s is not yet Bundle %s's (UID %s)", ref, bundle.Name, uid), nil
+	}
+	managed, _, err := unstructured.NestedSlice(g.Object, "status", "managedResources")
+	if err != nil {
+		return false, "", "", fmt.Errorf("read graph %s status.managedResources: %w", ref, err)
+	}
+	byName := false
+	for _, m := range managed {
+		e, _ := m.(map[string]interface{})
+		str := func(k string) string { s, _ := e[k].(string); return s }
+		if str("kind") != "PolicyGate" || str("namespace") != gate.Namespace || str("name") != gate.Name {
+			continue
+		}
+		if str("uid") == "" {
+			byName = true
+			continue
+		}
+		if str("uid") != string(gate.UID) {
+			continue
+		}
+		patch := client.MergeFrom(gate.DeepCopy())
+		gate.Status.BundleUID = uid
+		setInBundleGraphCondition(gate, metav1.ConditionTrue, reasonListed,
+			fmt.Sprintf("Graph %s of Bundle %s (UID %s) lists this gate", ref, bundle.Name, uid), r.now())
+		if err := r.Status().Patch(ctx, gate, patch); err != nil {
+			return false, "", "", fmt.Errorf("record bundle graph membership: %w", err)
+		}
+		return true, "", "", nil
+	}
+	if graphCreated := g.GetCreationTimestamp(); byName && gate.DeletionTimestamp == nil && !gate.CreationTimestamp.Before(&graphCreated) {
+		return true, "", "", nil // the Graph's object of this name, before kro filled its UID in: look again
+	}
+	return false, reasonNotListed, fmt.Sprintf("Graph %s of Bundle %s (UID %s) does not list this gate: it is an earlier Bundle's",
+		ref, bundle.Name, uid), nil
+}
+
+// setInBundleGraph writes the InBundleGraph condition when it changes.
+func (r *Reconciler) setInBundleGraph(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	status metav1.ConditionStatus, reason, msg string) error {
+	if c := meta.FindStatusCondition(gate.Status.Conditions, conditionInBundleGraph); c != nil &&
+		c.Status == status && c.Reason == reason && c.Message == msg {
+		return nil
+	}
+	patch := client.MergeFrom(gate.DeepCopy())
+	setInBundleGraphCondition(gate, status, reason, msg, r.now())
+	if err := r.Status().Patch(ctx, gate, patch); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("set %s condition: %w", conditionInBundleGraph, err)
+	}
+	return nil
+}
+
+// setInBundleGraphCondition sets the InBundleGraph condition on gate, in memory.
+func setInBundleGraphCondition(gate *kardinalv1alpha1.PolicyGate, status metav1.ConditionStatus, reason, msg string, now time.Time) {
+	meta.SetStatusCondition(&gate.Status.Conditions, metav1.Condition{Type: conditionInBundleGraph, Status: status,
+		Reason: reason, Message: msg, ObservedGeneration: gate.Generation, LastTransitionTime: metav1.NewTime(now)})
 }

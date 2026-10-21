@@ -227,6 +227,14 @@ spec:
                 description: BundleName is the name of the Bundle being promoted.
                 minLength: 1
                 type: string
+              bundleUID:
+                description: |-
+                  BundleUID is the UID of that Bundle, on the records of its gates
+                  (GateEvaluated, GateOverridden, ApprovalRecorded, ApprovalRevoked,
+                  VerdictRecorded, VerdictRevoked): a Bundle deleted and created again
+                  under its name is another Bundle, with records of its own. Absent on
+                  other records, and on records written before v0.14.
+                type: string
               environment:
                 description: Environment is the environment name where the event occurred.
                 minLength: 1

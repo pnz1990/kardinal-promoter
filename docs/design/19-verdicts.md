@@ -399,7 +399,44 @@ repeats. The version ends the reason, as for every gate (`graph.WithVersion`).
 
 Each Verdict that appears in, or leaves, a gate's `spec.verdicts` writes an AuditEvent
 (`VerdictRecorded`, `VerdictRevoked`) through the gate's audit outbox, as approvals do
-(`recordApprovals`), with `actor` set to the Verdict's stamp (17-actors §7).
+(`recordApprovals`), with `actor` set to the Verdict's stamp (17-actors §7) and `bundleUID` the
+Bundle's. Each time a Verdict enters is an appearance of its own (#2380):
+`status.verdictAppearances` counts them, and keeps the count after the Verdict leaves, and the
+record's name hashes the action, the Verdict's name, the Bundle's UID and the appearance. So a
+Verdict that leaves and comes back is recorded again (the trail ends on the state), a retried
+write of one transition is one record, and a Bundle deleted and created again under its name,
+whose gates and Verdicts have the same names, gets records of its own. Approval and override
+records hash the Bundle's UID too, and no gate record is written without one.
+
+The gate reads its Bundle by name, once per reconcile, and takes the UID from that read (the
+tally of verdicts uses the same read). A Bundle has no finalizer, so deleting it (or `kubectl
+replace --force`) frees the name at once while its gates are still being deleted, and a Bundle
+of the same name can exist while an earlier one's gate is reconciled. So a gate kro applied
+(label `kro.run/node-id`) is evaluated only while it is its Bundle's: the Graph the Bundle's
+`status.graphRef` names, controlled by the Bundle's UID, lists the gate in
+`status.managedResources` by the gate's UID. The answer is kept in the gate's `status.bundleUID`,
+so the Graph is read once per gate, and a gate's Bundle is fixed for its life: a gate whose
+`status.bundleUID` names another Bundle is never this one's. kro records an object before it
+creates it and fills its UID in after; a gate matching such an entry by name is evaluated but not
+kept (the next look checks the UID), and only when it is not being deleted and was not created
+before the Graph (an earlier Bundle's gate always was). That is the only clock comparison, and
+it decides nothing for good: under skew between API servers it costs at most a recheck, until
+kro fills the UID in. Membership itself compares no clock, so a gate restored before its Bundle
+and adopted by the Bundle's Graph, with no `status.bundleUID`, is the Bundle's.
+
+A gate that is not its Bundle's writes no record and no evaluation, sets condition
+`InBundleGraph=False` (`GraphPending`: the Bundle has no Graph of its own yet; `NotListed`: the
+Graph does not list the gate, or the gate was an earlier Bundle's), logs why, and is looked at
+again in 10 seconds (QA-5 on #2395). An earlier Bundle's gate that kro adopts (G17) is refused,
+not counted: its verdicts, overrides and ready flag are the earlier Bundle's. The new Bundle's
+step then waits on it until it is deleted (the condition says to delete it, and kro then creates
+the new Bundle's), which fails closed, as an audit trail needs. kro itself never adopts another
+Graph's object: its template field manager is tied to the Graph's UID
+(`kro-graphengine.tmpl.<digest>`), and it refuses an object another Graph's manager owns. What
+remains: a gate with no kro template manager in its `managedFields` and no `status.bundleUID`,
+such as one a restore re-created with its managed fields reset, that the new Bundle's Graph
+adopts by its UID is taken as the new Bundle's. A gate whose Bundle is gone fails closed
+(`context error`) and writes no record.
 
 ### 6.6 CEL: `verdicts.*`
 
@@ -701,6 +738,39 @@ Each attempt runs at most once:
   An AgentRun that starts with `recorded` set does not run its Job; it is Succeeded with
   "verdict already recorded". This is the HookRun `spec.recorded` pattern, with the Verdict as
   the record, and keeps the decision on CRD fields the Graph renders.
+- The re-created AgentRun names an agent again only when two sources agree (#2345): the agent
+  and sponsor its StepTemplate's AgentIdentity names now (which must still be allowed to verify
+  the run, 8.4), and every record kardinal wrote of the run's Verdict that names its writer. Those
+  are the VerdictRecorded AuditEvent (written when the Verdict entered a gate's verdicts, with
+  the actor the first run named, `spec.actor.principal` `kr-<run>`) and the verdict named after
+  the run in the Bundle's receipts. There must be at least one. Names repeat (a Bundle deleted
+  and created again under its name has runs, Verdicts, gates and so records of the same names,
+  and the earlier Bundle's records stay), so a receipt counts only when its statement names this
+  Bundle's UID, and an AuditEvent only when its `spec.bundleUID` is this Bundle's (#2380; an
+  AuditEvent's spec never changes). `spec.bundleUID` is the controller's only on a record with
+  `spec.actor`, which only the controller may create (`<release>-audit-actor`): anyone who may
+  create AuditEvents can write one without an actor, with any UID. The lookup reads only records
+  whose actor is the run's ServiceAccount, so it reads only the controller's. An AuditEvent written before
+  v0.14 names no UID: it counts only when it is dated after the second this Bundle was created in
+  (this Bundle's own record comes only after its run has run, so it never falls in that second).
+  Both times are whole seconds from two clocks, `spec.timestamp` from the controller's and
+  `creationTimestamp` from the API server's, so an earlier Bundle's such record dated within the
+  controller clock's lead over the API server's, before this Bundle was created, can still count.
+  Then the run names that agent, that sponsor and `kr-<run>`, and the
+  Verdict counts and traces as before (6.2): the run-bound
+  Verdict counts only through an AgentRun that names an allowed agent, and the evidence pack
+  traces it through that AgentRun. Otherwise, because the template's agent or the sponsor
+  changed since the run or no record is left (the first run was deleted before a gate recorded
+  its Verdict, or retention removed the records), the run names none
+  and says "agent changed since the run, or unknown". The Verdict stops counting, failing
+  closed: a Verdict one agent's run wrote is never counted as another's.
+- Why these sources: a run-bound Verdict has no actor stamp of its own (the run's Pod writes it,
+  and `spec.run` names only the run), so once the first AgentRun is gone the AgentIdentity is
+  the only source of an agent, and only kardinal's records say which agent the run was. Only
+  the controller creates an AuditEvent with `spec.actor` or a receipt, and neither's spec
+  changes (their labels can, so the spec is matched, not the labels). Not re-creating the
+  AgentRun instead (refusing it once a Verdict is bound) would leave the Verdict with no run to
+  count through, which is the failure itself.
 
 ## 9. Retries and flakiness
 
