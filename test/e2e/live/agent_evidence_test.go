@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -399,6 +400,159 @@ func TestAgentEvidence_Journey(t *testing.T) {
 		"the verdict was written by the run's own ServiceAccount")
 	assert.Contains(t, verifiedOut, fmt.Sprintf("  verdicts by: agent %s for %s\n", rstatus["agent"], rstatus["sponsor"]),
 		"the offline receipt names the agent and sponsor the pack's AgentRun names")
+}
+
+// TestAgentEvidence_RecreatedRun (#2345): V's AgentRun is deleted after its
+// Verdict was recorded, while prod still waits on a person's approval, and
+// kro creates it again, with spec.recorded (it does not run again). The run
+// created again names V and its sponsor, as the first did and as the
+// Verdict's VerdictRecorded AuditEvent says, so V's Verdict still counts:
+// the verify gate passes on it again, as V's, and stays passed. When V's
+// StepTemplate names another agent (W) instead, the run created again names
+// none, and the Verdict stops counting: V's run's Verdict is never counted
+// as W's. With V back, it counts again; prod promotes with it counted in
+// its receipt, and the evidence pack traces the Verdict to V through the
+// run created again.
+//
+// Covers AGENT-EVIDENCE-06.
+func TestAgentEvidence_RecreatedRun(t *testing.T) {
+	e := framework.New(t)
+	c := e.CLI(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "uat", "prod")
+	const sponsor = "bob@example.com"
+	verifier := registerAgent(t, e, a.ns, "qa", sponsor, nil)
+	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{verifier},
+		Run: &v1alpha1.GateVerifyRun{Template: verifier, Count: 1, Namespace: a.ns}}))
+	people := framework.Gate(a.ns, "people", "prod", "true", recheck)
+	people.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1}
+	e.CreateGate(t, people)
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "uat", "Verified", promoteTimeout)
+	first := waitRuns(t, e, a.ns, bundle, 1)[0]
+	require.Equal(t, verifier, first.Status.Agent)
+	e.WaitGateReady(t, a.ns, bundle, "prod", journeyVerify, true, "verified: 1 of 1", gateTimeout)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "people", false, "", gateTimeout)
+
+	// Mid-gate, the run is deleted as kro deletes one (only kardinal may:
+	// the graph-objects admission policy), as when a Graph is applied again
+	// without it.
+	cfg := rest.CopyConfig(e.Config)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: framework.ServiceAccountUser(a.ns, "kardinal-graph")}
+	asKro, err := client.New(cfg, client.Options{Scheme: e.Client.Scheme()})
+	require.NoError(t, err)
+	recreate := func(prev v1alpha1.AgentRun) v1alpha1.AgentRun {
+		t.Helper()
+		require.NoError(t, asKro.Delete(ctx, &prev))
+		var again v1alpha1.AgentRun
+		framework.Eventually(t, agentRunTimeout, "kro creates "+prev.Name+" again, and it finishes", func(ctx context.Context) (bool, string) {
+			if err := e.Client.Get(ctx, client.ObjectKeyFromObject(&prev), &again); err != nil {
+				return false, err.Error()
+			}
+			return again.UID != prev.UID && again.Status.Phase != "",
+				fmt.Sprintf("uid %s (before %s), phase %q: %s", again.UID, prev.UID, again.Status.Phase, again.Status.Message)
+		})
+		return again
+	}
+	again := recreate(first)
+	assert.Equal(t, v1alpha1.AgentRunSucceeded, again.Status.Phase)
+	assert.Equal(t, "pass", again.Spec.Recorded, "the Graph renders its Verdict's result")
+	assert.Contains(t, again.Status.Message, "verdict already recorded (pass); not run again")
+	assert.Equal(t, verifier, again.Status.Agent, "the run created again names V")
+	assert.Equal(t, sponsor, again.Status.Sponsor, "and V's sponsor")
+	assert.Equal(t, "kr-"+first.Name, again.Status.ServiceAccount, "and the ServiceAccount that wrote the Verdict")
+	assert.Empty(t, again.Status.JobName, "it does not run again")
+
+	// V's Verdict counts again, as V's, and keeps counting while prod waits
+	// on the approval.
+	counted := func(ctx context.Context) (bool, string) {
+		g, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", journeyVerify)
+		if err != nil || !ok {
+			return false, fmt.Sprintf("gate instance: found=%v %v", ok, err)
+		}
+		v := g.Status.Verdicts
+		return g.Status.Ready && len(v) == 1 && v[0].Counted && v[0].Verifier == "agent "+verifier+" for "+sponsor,
+			fmt.Sprintf("ready=%v (%s), verdicts %+v", g.Status.Ready, g.Status.Reason, v)
+	}
+	framework.Eventually(t, gateTimeout, "the verify gate passes on V's Verdict, through the run created again", counted)
+	framework.Consistently(t, 30*time.Second, "the verify gate keeps passing on V's Verdict", counted)
+
+	// V's StepTemplate names agent W now (also allowed): the run created
+	// again names no agent, since the Verdict's record names V, and the
+	// Verdict stops counting rather than count as W's.
+	other := registerAgent(t, e, a.ns, "qa2", sponsor, nil)
+	pointAt := func(agent string) {
+		t.Helper()
+		var tmpl v1alpha1.StepTemplate
+		require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Name: verifier}, &tmpl))
+		tmpl.Spec.Agent = agent
+		require.NoError(t, e.Client.Update(ctx, &tmpl))
+	}
+	var gate v1alpha1.PolicyGate
+	require.NoError(t, e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: journeyVerify}, &gate))
+	gate.Spec.Verify.AllowedAgents = append(gate.Spec.Verify.AllowedAgents, other)
+	require.NoError(t, e.Client.Update(ctx, &gate))
+	pointAt(other)
+	changed := recreate(again)
+	assert.Equal(t, v1alpha1.AgentRunSucceeded, changed.Status.Phase)
+	assert.Contains(t, changed.Status.Message, "it names no agent: agent changed since the run, or unknown")
+	assert.Empty(t, changed.Status.Agent, "neither V, whose run it is not, nor W, whose Verdict it is not")
+	assert.Empty(t, changed.Status.Sponsor)
+	e.WaitGateReady(t, a.ns, bundle, "prod", journeyVerify, false, "0 of 1", gateTimeout)
+
+	// V again: the run created again names V, as the record does.
+	pointAt(verifier)
+	again = recreate(changed)
+	assert.Equal(t, verifier, again.Status.Agent)
+	assert.Equal(t, sponsor, again.Status.Sponsor)
+	framework.Eventually(t, gateTimeout, "the verify gate passes on V's Verdict again", counted)
+
+	// prod promotes on it.
+	r := c.Exec(framework.CLIOptions{Kubeconfig: userKubeconfig(t, e, a.ns, "carol@example.com")}, c.Args(a.ns, "approve", bundle, "--env", "prod")...)
+	require.Zero(t, r.Code, r.Output())
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	rc := promotionReceipt(t, e, a.ns, bundle, "prod", v1alpha1.ReceiptStored)
+	st, err := receipt.Parse(signedPayload(t, rc.Status.Bundle))
+	require.NoError(t, err)
+	var verdicts []receipt.Verdict
+	for _, g := range st.Predicate.Kardinal.Gates {
+		if strings.HasSuffix(g.Template, "/"+journeyVerify) {
+			verdicts = g.Verdicts
+		}
+	}
+	require.Len(t, verdicts, 1, "prod's receipt records V's verdict")
+	assert.True(t, verdicts[0].Counted, verdicts[0].Reason)
+	assert.Equal(t, "agent "+verifier+" for "+sponsor, verdicts[0].Verifier)
+
+	// The pack traces the Verdict to V through the run created again.
+	pack := filepath.Join(t.TempDir(), "pack.tar.gz")
+	r = c.Exec(framework.CLIOptions{Kubeconfig: auditorKubeconfig(t, e, "", "auditor-"+a.ns+"@example.com")},
+		c.Args(a.ns, "audit", "evidence-pack", "--since", "1h", "-o", pack)...)
+	require.Zero(t, r.Code, r.Output())
+	dir, _ := packOf(t, pack)
+	var vspec map[string]interface{}
+	for _, v := range ndjson(t, dir, "verdicts.ndjson") {
+		if md := v["metadata"].(map[string]interface{}); md["namespace"] == a.ns && md["name"] == first.Name {
+			vspec = v["spec"].(map[string]interface{})
+		}
+	}
+	require.NotNil(t, vspec, "the pack holds V's Verdict")
+	run, _ := vspec["run"].(map[string]interface{})
+	require.NotNil(t, run, "bound to its run")
+	var packed map[string]interface{}
+	for _, ar := range ndjson(t, dir, "agentruns.ndjson") {
+		if md := ar["metadata"].(map[string]interface{}); md["namespace"] == a.ns && md["name"] == run["name"] {
+			packed = ar
+		}
+	}
+	require.NotNil(t, packed, "agentruns.ndjson holds the run V's Verdict names (%v)", run["name"])
+	assert.Equal(t, string(again.UID), packed["metadata"].(map[string]interface{})["uid"], "the run created again")
+	pst := packed["status"].(map[string]interface{})
+	assert.Equal(t, verifier, pst["agent"], "the pack's run names V")
+	assert.Equal(t, sponsor, pst["sponsor"], "and V's sponsor")
+	assert.Equal(t, framework.ServiceAccountUser(a.ns, fmt.Sprint(pst["serviceAccount"])), vspec["by"],
+		"the Verdict was written by the run's own ServiceAccount")
 }
 
 // warningsOf are the coverage warnings of a pack's manifest.

@@ -120,7 +120,7 @@ AgentRun is one attempt of an in-cluster verifier (a StepTemplate's agent image)
 | `spec.template` | string | yes | Template is the StepTemplate the run runs. |
 | `spec.version` | string |  | Version is the Bundle's version. |
 | `status` | object |  | AgentRunStatus is the observed state of an AgentRun. |
-| `status.agent` | string |  | Agent and Sponsor are the agent the run verifies for (its StepTemplate's AgentIdentity) and that agent's sponsor, when the run started. The Graph names them as the actor of the run's Verdict. |
+| `status.agent` | string |  | Agent and Sponsor are the agent the run verifies for (its StepTemplate's AgentIdentity) and that agent's sponsor, when the run started. A run created again after its Verdict (spec.recorded) names them only when kardinal's records of the Verdict (its VerdictRecorded AuditEvent, a receipt) name the same agent and sponsor, and else none. The Graph names them as the actor of the run's Verdict. |
 | `status.conditions` | []object |  | Conditions: Bounded. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
 | `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |

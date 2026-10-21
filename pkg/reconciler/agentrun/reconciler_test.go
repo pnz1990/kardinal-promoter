@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/receipt"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/agentrun"
 )
 
@@ -51,6 +52,9 @@ type fixture struct {
 	extra    []client.Object
 	notKro   bool
 	recorded string
+	// noReceipts: the controller may not list receipts (receipts.enabled
+	// is false: no RBAC for them).
+	noReceipts bool
 }
 
 func newFixture() *fixture {
@@ -99,6 +103,11 @@ func (f *fixture) build(t *testing.T) (*agentrun.Reconciler, client.Client, ctrl
 				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids)))
 			}
 			return cl.Create(ctx, obj, opts...)
+		}, List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, receipts := list.(*v1alpha1.PromotionReceiptList); receipts && f.noReceipts {
+				return apierrors.NewForbidden(v1alpha1.GroupVersion.WithResource("promotionreceipts").GroupResource(), "", fmt.Errorf("no RBAC"))
+			}
+			return cl.List(ctx, list, opts...)
 		}}).Build()
 	r := &agentrun.Reconciler{Client: c, WriterClusterRole: "kardinal-agentrun-writer", ReaderClusterRole: "kardinal-agentrun-reader",
 		ControllerNamespace: "kardinal-system", NowFn: func() time.Time { return runNow }}
@@ -305,6 +314,122 @@ func TestAgentRun_NotRunAgain(t *testing.T) {
 	r, c, req = f.build(t)
 	got = reconcileUntil(t, r, c, req, 2)
 	assert.Empty(t, got.Status.Phase, "not applied by kro: never run")
+}
+
+// TestAgentRun_RecreatedNamesItsAgent (#2345): an AgentRun kro creates again
+// after its Verdict was recorded (spec.recorded) does not run. It names the
+// agent and sponsor its StepTemplate names, with the run's ServiceAccount,
+// only when a record kardinal wrote of the run's Verdict (the
+// VerdictRecorded AuditEvent, a receipt) names the same agent and sponsor,
+// and every such record does: the Graph counts its Verdict only when it
+// names an allowed agent, and the evidence pack traces the Verdict through
+// it. When the template's agent or the sponsor changed since the run, no
+// record is left, or the agent may not verify the run now, it names none,
+// so the Verdict does not count, and says why. A second reconcile writes
+// nothing.
+func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
+	const name = "app-app-v1-uat-explore-r1-a1"
+	principal := "system:serviceaccount:payments:kr-" + name
+	event := func(n, agent, sponsor, who string) client.Object {
+		return &v1alpha1.AuditEvent{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "payments", Labels: map[string]string{
+			"kardinal.io/bundle": "app-v1", "kardinal.io/action": "VerdictRecorded"}},
+			Spec: v1alpha1.AuditEventSpec{Timestamp: metav1.NewTime(runNow), BundleName: "app-v1", PipelineName: "app",
+				Environment: "prod", Action: "VerdictRecorded", Outcome: "Success",
+				Actor: &v1alpha1.Actor{Kind: v1alpha1.ActorAgent, Principal: who, Agent: agent, Sponsor: sponsor}}}
+	}
+	recorded := func(agent, sponsor string) client.Object {
+		return event("prod-explore-qa-verdict-1", agent, sponsor, principal)
+	}
+	signed := func(verifier string) client.Object {
+		st, err := json.Marshal(receipt.Statement{Type: receipt.StatementType, PredicateType: receipt.PredicateVSA,
+			Predicate: receipt.Predicate{Kardinal: receipt.Record{Gates: []receipt.Gate{{Template: "payments/explore-qa",
+				Verdicts: []receipt.Verdict{{Name: name, Verifier: verifier, Result: "pass", Counted: true}}}}}}})
+		require.NoError(t, err)
+		return &v1alpha1.PromotionReceipt{ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod", Namespace: "payments",
+			Labels: map[string]string{"kardinal.io/bundle": "app-v1"}}, Spec: v1alpha1.PromotionReceiptSpec{Statement: string(st)}}
+	}
+	other := func(f *fixture) { // the template now names agent qa2, registered and ready, of the same sponsor
+		f.tmpl.Spec.Agent = "qa2"
+		qa2 := f.agent.DeepCopy()
+		qa2.Name = "qa2"
+		f.extra = append(f.extra, qa2)
+	}
+	const changed = "it names no agent: agent changed since the run, or unknown"
+	cases := []struct {
+		name                string
+		records             []client.Object
+		change              func(f *fixture)
+		agent, sponsor, why string
+	}{
+		{name: "its AuditEvent names its agent", records: []client.Object{recorded("qa", "bob")}, agent: "qa", sponsor: "bob"},
+		{name: "its receipt names its agent", records: []client.Object{signed("agent qa for bob")}, agent: "qa", sponsor: "bob"},
+		{name: "both name its agent", records: []client.Object{recorded("qa", "bob"), signed("agent qa for bob")}, agent: "qa", sponsor: "bob"},
+		{name: "its AuditEvent, with receipts off", records: []client.Object{recorded("qa", "bob")},
+			change: func(f *fixture) { f.noReceipts = true }, agent: "qa", sponsor: "bob"},
+		{name: "the template's agent changed since the run", records: []client.Object{recorded("qa", "bob")}, change: other,
+			why: changed + ": no record of its Verdict names agent qa2 for bob (1 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		{name: "the agent's sponsor changed since the run", records: []client.Object{recorded("qa", "bob")},
+			change: func(f *fixture) { f.agent.Spec.Sponsor.User = "carol" }, why: changed},
+		{name: "a receipt names another agent", records: []client.Object{recorded("qa", "bob"), signed("agent qa2 for carol")},
+			why: changed + ": no record of its Verdict names agent qa for bob (1 VerdictRecorded AuditEvents, 1 receipts name the run)"},
+		{name: "no record of the Verdict", why: changed},
+		{name: "only another run's AuditEvent", records: []client.Object{event("other", "qa", "bob", principal+"-x")}, why: changed},
+		// Labels can be changed after an AuditEvent is written; its spec
+		// cannot.
+		{name: "another Bundle's AuditEvent, labelled as this one's", change: func(f *fixture) {
+			ev := event("other-bundle", "qa", "bob", principal).(*v1alpha1.AuditEvent)
+			ev.Spec.BundleName = "app-v0"
+			f.extra = append(f.extra, ev)
+		}, why: changed},
+		{name: "a VerdictRevoked AuditEvent, labelled VerdictRecorded", change: func(f *fixture) {
+			ev := event("revoked", "qa", "bob", principal).(*v1alpha1.AuditEvent)
+			ev.Spec.Action = "VerdictRevoked"
+			f.extra = append(f.extra, ev)
+		}, why: changed},
+		{name: "a suspended agent", records: []client.Object{recorded("qa", "bob")},
+			change: func(f *fixture) { f.agent.Spec.Suspended = true }, why: "it names no agent: agent qa is suspended"},
+		{name: "an agent out of scope", records: []client.Object{recorded("qa", "bob")},
+			change: func(f *fixture) { f.agent.Spec.Scope.Namespaces = []string{"other"} },
+			why:    "it names no agent: agent qa may not act in namespace payments"},
+		{name: "no AgentIdentity", records: []client.Object{recorded("qa", "bob")}, change: func(f *fixture) { f.agent.Name = "someone-else" },
+			why: "it names no agent: agent qa (StepTemplate qa) is not registered"},
+		{name: "no StepTemplate", records: []client.Object{recorded("qa", "bob")}, change: func(f *fixture) { f.tmpl.Name = "other" },
+			why: "it names no agent: StepTemplate qa does not exist"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture()
+			f.recorded = "pass"
+			f.extra = append(f.extra, tc.records...)
+			if tc.change != nil {
+				tc.change(f)
+			}
+			r, c, req := f.build(t)
+			got := reconcileUntil(t, r, c, req, 1)
+			assert.Equal(t, v1alpha1.AgentRunSucceeded, got.Status.Phase)
+			assert.Contains(t, got.Status.Message, "verdict already recorded (pass); not run again")
+			assert.Equal(t, tc.agent, got.Status.Agent)
+			assert.Equal(t, tc.sponsor, got.Status.Sponsor)
+			if tc.why == "" {
+				assert.Equal(t, "kr-"+got.Name, got.Status.ServiceAccount, "the ServiceAccount that wrote the Verdict")
+				assert.NotContains(t, got.Status.Message, "names no agent")
+			} else {
+				assert.Contains(t, got.Status.Message, tc.why)
+				assert.Empty(t, got.Status.ServiceAccount)
+			}
+			assert.Empty(t, got.Status.JobName, "not run again: no Job")
+			assert.Empty(t, got.Finalizers, "and no access to hold")
+			var jobs batchv1.JobList
+			require.NoError(t, c.List(context.Background(), &jobs))
+			assert.Empty(t, jobs.Items)
+			var sas corev1.ServiceAccountList
+			require.NoError(t, c.List(context.Background(), &sas))
+			assert.Empty(t, sas.Items, "no ServiceAccount is created for it")
+
+			again := reconcileUntil(t, r, c, req, 1)
+			assert.Equal(t, got.ResourceVersion, again.ResourceVersion, "idempotent")
+		})
+	}
 }
 
 // TestAgentRun_Deadline: a Job past its deadline is deleted and the run
