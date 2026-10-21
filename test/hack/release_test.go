@@ -1464,3 +1464,44 @@ func TestReleaseUpgradeSuiteForPreviousRelease(t *testing.T) {
 		}
 	}
 }
+
+// TestUpgradeComponentsPinTheirChartByDigest: every upgrade suite installs
+// the release it upgrades from with the chart pinned by digest
+// (hack/e2e/components/kardinal-v<X>.sh installs
+// $V<X>_CHART:$V<X>_CHART_VERSION@$V<X>_CHART_DIGEST, which helm refuses
+// when the registry holds other contents under the version), as its
+// controller image and CLI are: V<X>_CHART_DIGEST in hack/e2e/versions.env
+// is a sha256 digest, no component installs its chart by version alone, and
+// the pinned reference is the only use of $V<X>_CHART.
+func TestUpgradeComponentsPinTheirChartByDigest(t *testing.T) {
+	root := repoRoot(t)
+	env, err := os.ReadFile(filepath.Join(root, "hack", "e2e", "versions.env"))
+	require.NoError(t, err)
+	pins := map[string]string{}
+	for _, l := range strings.Split(string(env), "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(l), "="); ok {
+			pins[k] = v
+		}
+	}
+	components, err := filepath.Glob(filepath.Join(root, "hack", "e2e", "components", "kardinal-v*.sh"))
+	require.NoError(t, err)
+	require.NotEmpty(t, components, "hack/e2e/components has the upgrade suites' kardinal-v<X>.sh")
+	for _, c := range components {
+		x := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(c), "kardinal-v"), ".sh")
+		v := "V" + x
+		t.Run(filepath.Base(c), func(t *testing.T) {
+			assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, pins[v+"_CHART_DIGEST"],
+				"versions.env %s_CHART_DIGEST is the chart's OCI manifest digest", v)
+			src, err := os.ReadFile(c)
+			require.NoError(t, err)
+			ref := fmt.Sprintf(`upgrade --install "$KARDINAL_RELEASE" "$%[1]s_CHART:$%[1]s_CHART_VERSION@$%[1]s_CHART_DIGEST"`, v)
+			assert.True(t, strings.Contains(string(src), ref), "%s installs its chart pinned by digest: %s", filepath.Base(c), ref)
+			byVersion := fmt.Sprintf(`--version "$%s_CHART_VERSION"`, v)
+			assert.False(t, strings.Contains(string(src), byVersion), "%s installs its chart by digest, not by version alone (%s)", filepath.Base(c), byVersion)
+			// The pinned reference is the chart's only use: a second install
+			// with no version would take whatever chart is latest.
+			uses := regexp.MustCompile(`\$\{?`+v+`_CHART([^_A-Za-z0-9]|$)`).FindAllString(string(src), -1)
+			assert.Len(t, uses, 1, "%s uses $%s_CHART once, in the pinned reference: %q", filepath.Base(c), v, uses)
+		})
+	}
+}

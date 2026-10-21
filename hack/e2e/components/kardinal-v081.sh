@@ -57,7 +57,7 @@ done
 # Client-side, as a v0.8.1 user applied them from config/crd/bases.
 "${KUBECTL[@]}" apply -f "$CRDS" >/dev/null
 
-"${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$V081_CHART" --version "$V081_CHART_VERSION" \
+"${HELM[@]}" upgrade --install "$KARDINAL_RELEASE" "$V081_CHART:$V081_CHART_VERSION@$V081_CHART_DIGEST" \
   -n "$KARDINAL_NS" --create-namespace \
   --set github.secretRef.name=git-token \
   --set validatingAdmissionPolicy.enabled=false >/dev/null
