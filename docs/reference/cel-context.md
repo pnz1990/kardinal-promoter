@@ -328,7 +328,7 @@ The decisions `kardinal approve` recorded for the gate instance's Bundle and env
 | `approvals.users` | list | `["alice@example.com"]` | Always; the users whose approval counts, sorted |
 | `approvals.rejected` | bool | `false` | Always; `true` when a counted user rejected |
 | `approvals.met` | bool | `false` | Always; `true` when the gate has no policy, its policy is met, or `approval.requiredWhen` is false now |
-| `approvals.fields.<name>` | list of strings | `["CHG0031337"]` | (new in v0.13.0, unreleased) For each field the gate declares in `approval.fields`: the values the counted approvals gave, in the order of `approvals.users` (empty when none did). A name the gate does not declare is an evaluation error, so the gate fails closed ([Approval fields](../approvals.md#approval-fields)) |
+| `approvals.fields.<name>` | list of strings | `["CHG0031337"]` | (new in v0.13.0) For each field the gate declares in `approval.fields`: the values the counted approvals gave, in the order of `approvals.users` (empty when none did). A name the gate does not declare is an evaluation error, so the gate fails closed ([Approval fields](../approvals.md#approval-fields)) |
 
 Decisions count per party: a person, or an agent together with its sponsor, is one vote, and
 `approvals.count` and `approvals.users` count and list parties. An agent's approval counts only on
@@ -341,7 +341,7 @@ expression: 'approvals.count >= 2 && !approvals.rejected && !schedule.isWeekend'
 
 ## `changeRequests.*`
 
-New in v0.13.0 (unreleased): v0.12.0 has no `changeRequests`.
+New in v0.13.0: v0.12.0 has no `changeRequests`.
 
 One entry per per-promotion `ChangeRequest` template (`spec.perPromotion: true`) in the gate's
 metrics namespace, keyed by the template's name. The value is the instance the Graph made from it
@@ -448,7 +448,7 @@ actor.kind != "agent" || agent.autonomy == "auto"
 
 ## `attestations.*`
 
-New in v0.13.0 (unreleased): v0.12.0 has no `attestations`.
+New in v0.13.0: v0.12.0 has no `attestations`.
 
 What the version's ImageVerification verified ([Attestations](../image-verification.md#attestations)):
 its `status.attestations`, read when the expression names `attestations`. With several images, each
@@ -510,7 +510,7 @@ expression: 'attestations.tests.images.all(i, has(i.predicate) && json.unmarshal
 
 ## `commit.*`
 
-New in v0.13.0 (unreleased): v0.12.0 has no `commit`.
+New in v0.13.0: v0.12.0 has no `commit`.
 
 The config commit's signature as the version's ImageVerification verified it
 ([Signed commits](../image-verification.md#signed-commits)): its `status.commit`, read when the

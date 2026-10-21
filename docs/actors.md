@@ -190,7 +190,7 @@ RBAC: give its ServiceAccount the chart's roles as for anyone else
 
 ### Signing identities
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.x has no `spec.signingIdentities`: a signature never names an agent.
 
 The actor stamp verifies who **created** a version. The commit it promotes, and the provenance of

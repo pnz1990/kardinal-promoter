@@ -1,6 +1,6 @@
 # Map kardinal's records to compliance controls
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier have no `kardinal audit evidence-pack`, auditor roles, promotion receipts
     or change requests; the other records this page names exist there too. The
     [changelog](changelog.md) lists every change since v0.12.0.

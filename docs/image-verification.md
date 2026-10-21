@@ -59,7 +59,7 @@ with `status.reason: SecretNotReferenceable` until the label is added or the tim
 | `authorities[].keyless.trustedRootRef` | public good | `{name, key}`: a Secret with a Sigstore `trusted_root.json`, for a private Sigstore. Without it the controller fetches the public-good trusted root through TUF (from `tuf-repo-cdn.sigstore.dev`) on first use and again once a day; a failed refresh keeps the previous root and is retried after 5 minutes. Each TUF request times out after 20s; a request answered 5xx or 429, or that fails in transport, is tried up to 3 times, a 404 ends it at once, and a whole fetch of the root takes at most 2 minutes. |
 | `commits.requireSigned` | `false` | A config or mixed version's `configRef.commitSHA` must be signed with a signature the SCM verified (GitHub, GitLab, Forgejo and Gitea report it; Bitbucket and Azure DevOps do not, and such a version fails). See [Signed commits](#signed-commits). |
 | `commits.allowedSigners[]` | any person | Also require the signer to be one of these SCM logins or emails. Platform signatures (`web-flow`, `gitlab-system`, `forgejo-instance`) are accepted only when listed. |
-| `commits.authorities[]` | | (new in v0.13.0, unreleased) Names of keyless `authorities`: kardinal verifies the commit's gitsign (Sigstore) signature itself against them, instead of asking the SCM. GPG and SSH signatures are then refused, and `allowedSigners` does not apply. GitHub, Forgejo and Gitea only. See [Commit signatures with gitsign](#commit-signatures-with-gitsign). |
+| `commits.authorities[]` | | (new in v0.13.0) Names of keyless `authorities`: kardinal verifies the commit's gitsign (Sigstore) signature itself against them, instead of asking the SCM. GPG and SSH signatures are then refused, and `allowedSigners` does not apply. GitHub, Forgejo and Gitea only. See [Commit signatures with gitsign](#commit-signatures-with-gitsign). |
 | `signatureRepository` | next to the image | Where the signatures are, when they are not next to the images (cosign's `COSIGN_REPOSITORY`). |
 | `registrySecretRef.name` | anonymous | A `kubernetes.io/dockerconfigjson` Secret in the Pipeline namespace for private registries. |
 | `insecureRegistries[]` | | Registry hosts read over plain HTTP. Every other registry is HTTPS only. |
@@ -132,7 +132,7 @@ was verified is the one deployed. The kustomize and Helm strategies write the di
 
 ## Attestations
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier verify signatures and signed commits only. The [changelog](changelog.md) lists every change since v0.12.0.
 
 A signature says who signed an image. Attestations say how it was built and what is in it: SLSA
@@ -353,7 +353,7 @@ gets such a commit, so pair it with branch protection that requires reviews.
 
 ### Commit signatures with gitsign
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.x accepts only signatures the SCM verified (`commits.requireSigned`). It has no
     `commits.authorities`, no `commit.*` in gates and no signer-to-agent mapping.
 

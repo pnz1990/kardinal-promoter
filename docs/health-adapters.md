@@ -325,7 +325,7 @@ health:
 
 ### Remote clusters on EKS
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier reach a remote cluster only with credentials in the kubeconfig Secret. The [changelog](changelog.md) lists every change since v0.12.0.
 
 With `kubeconfigSecretRef.eks`, the controller authenticates to an EKS cluster with its own AWS

@@ -135,13 +135,13 @@ kardinal version
 # Graph:      kro v0.10.0-rc.0
 ```
 
-Keep the CLI and the controller on the same minor version. From v0.13.0 (unreleased), when they are a minor version apart,
+Keep the CLI and the controller on the same minor version. From v0.13.0, when they are a minor version apart,
 each command that talks to the cluster prints one `warning: kardinal CLI ... talks to controller ...`
 line on stderr, with the command that upgrades the older one ([`kardinal version`](reference/cli/kardinal-version.md)).
 
 ### Defaults for a repository
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier take the pipeline as an argument only. The [changelog](changelog.md) lists every change since v0.12.0.
 
 Inside an application's repository you need not repeat its pipeline and namespace. Put them in a
@@ -218,7 +218,7 @@ release name that does not contain `kardinal-promoter`, the Service is named
 
 ### Under a path prefix on a shared host
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier serve the UI at `/ui/` and its API at `/api/v1/ui/` only. The [changelog](changelog.md) lists every v0.13.0 change.
 
 When one host routes several tools by path, set `ui.basePath` (`--ui-base-path`), for example
