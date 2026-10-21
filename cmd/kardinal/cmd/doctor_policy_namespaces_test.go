@@ -184,6 +184,10 @@ func TestDoctor_PolicyNamespacesUpgradeInProgress(t *testing.T) {
 			"upgrade in progress: the leader still runs v0.12.3, the Deployment runs latest"},
 		"a later release rolled out long ago": {"v0.12.0", "v0.13.0", false, doctorWarn,
 			"controller v0.12.0 does not check spec.policyNamespaces consent (the Deployment runs v0.13.0)"},
+		"a stuck rollout of a later release": {"v0.12.3", "v0.13.0", false, doctorWarn,
+			"controller v0.12.3 does not check spec.policyNamespaces consent (the Deployment runs v0.13.0; rollout stuck: ProgressDeadlineExceeded)"},
+		"a stuck restart of the leader's release": {"v0.12.3", "v0.12.3", false, doctorWarn,
+			"controller v0.12.3 does not check spec.policyNamespaces consent (rollout stuck: ProgressDeadlineExceeded)"},
 		"the leader's own release, rolling (a restart)": {"v0.12.0", "v0.12.0", true, doctorWarn,
 			"controller v0.12.0 does not check spec.policyNamespaces consent"},
 		"the same release, no v":       {"v0.12.0", "0.12.0", true, doctorWarn, "does not check"},
@@ -195,7 +199,11 @@ func TestDoctor_PolicyNamespacesUpgradeInProgress(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			c := fake.NewClientBuilder().WithScheme(rootScheme).Build()
-			r := checkPolicyNamespaces(context.Background(), c, "team-b", tc.leader, controllerRollout{version: tc.deployed, rolling: tc.rolling})
+			dep := controllerRollout{version: tc.deployed, rolling: tc.rolling}
+			if strings.Contains(name, "stuck") {
+				dep.stuck = "ProgressDeadlineExceeded"
+			}
+			r := checkPolicyNamespaces(context.Background(), c, "team-b", tc.leader, dep)
 			assert.Equal(t, tc.icon, r.icon, r.detail)
 			assert.Contains(t, r.detail, tc.detail)
 			assert.Equal(t, tc.icon == doctorInfo, r.noted)
@@ -203,6 +211,9 @@ func TestDoctor_PolicyNamespacesUpgradeInProgress(t *testing.T) {
 			assert.False(t, r.failed)
 			if tc.icon == doctorWarn && (tc.deployed == "" || releaseVersion(tc.deployed) == releaseVersion(tc.leader)) {
 				assert.NotContains(t, r.detail, "the Deployment runs", "only a Deployment that differs is named")
+			}
+			if !strings.Contains(name, "stuck") {
+				assert.NotContains(t, r.detail, "rollout stuck")
 			}
 			if tc.icon == doctorInfo {
 				assert.Equal(t, "The new controller takes over a few seconds after its Pod is Ready. Run kardinal doctor again "+
@@ -212,25 +223,85 @@ func TestDoctor_PolicyNamespacesUpgradeInProgress(t *testing.T) {
 	}
 }
 
+// rolloutDeployment is a settled controller Deployment of image at now:
+// its generation observed, one replica updated and available, Progressing
+// last updated an hour before.
+func rolloutDeployment(image string, now time.Time) *appsv1.Deployment {
+	replicas := int32(1)
+	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter", Namespace: "kardinal-system", Generation: 4,
+		Labels: map[string]string{"app.kubernetes.io/name": "kardinal-promoter"}},
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "controller", Image: image}}}}},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 4, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1,
+			AvailableReplicas: 1, Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentProgressing,
+				Status: corev1.ConditionTrue, Reason: "NewReplicaSetAvailable", LastUpdateTime: metav1.NewTime(now.Add(-time.Hour))}}}}
+}
+
+// stuckRollout is QA-5's first probe: a rollout of v0.13.0 whose new Pod
+// crash-loops, Progressing=False ProgressDeadlineExceeded an hour ago, one
+// of two replicas updated, one unavailable.
+func stuckRollout(now time.Time) *appsv1.Deployment {
+	d := rolloutDeployment("ghcr.io/pnz1990/kardinal-promoter/controller:v0.13.0", now)
+	*d.Spec.Replicas = 2
+	d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.AvailableReplicas, d.Status.UnavailableReplicas = 2, 1, 1, 1
+	d.Status.Conditions[0] = appsv1.DeploymentCondition{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse,
+		Reason: "ProgressDeadlineExceeded", LastUpdateTime: metav1.NewTime(now.Add(-time.Hour))}
+	return d
+}
+
+// pendingReplica is QA-5's second probe: latest, no rollout for 30 days,
+// one replica Pending.
+func pendingReplica(now time.Time) *appsv1.Deployment {
+	d := rolloutDeployment("mirror.example/kardinal-promoter/controller:latest", now)
+	*d.Spec.Replicas = 2
+	d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.UnavailableReplicas = 2, 2, 1
+	d.Status.Conditions[0].LastUpdateTime = metav1.NewTime(now.Add(-30 * 24 * time.Hour))
+	return d
+}
+
+// TestDoctor_PolicyNamespacesStuckRollout: QA-5's two probes on #2397, from
+// the Deployment to the check, against a v0.12.3 leader: a stuck rollout of
+// v0.13.0 and a mirror's latest short of a replica are the WARN, naming the
+// Deployment's version and, when stuck, the reason, never an INFO forever.
+//
+// Covers GATE-POLNS-04.
+func TestDoctor_PolicyNamespacesStuckRollout(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		dep    *appsv1.Deployment
+		detail string
+	}{
+		"a stuck v0.13.0 rollout": {stuckRollout(now),
+			"controller v0.12.3 does not check spec.policyNamespaces consent (the Deployment runs v0.13.0; rollout stuck: ProgressDeadlineExceeded)"},
+		"latest with a Pending replica": {pendingReplica(now),
+			"controller v0.12.3 does not check spec.policyNamespaces consent (the Deployment runs latest)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := fake.NewClientBuilder().WithScheme(rootScheme).WithObjects(tc.dep).Build()
+			r := checkPolicyNamespaces(context.Background(), c, "team-b", "v0.12.3", readControllerRollout(context.Background(), c, "kardinal-system", now))
+			assert.Equal(t, doctorWarn, r.icon, r.detail)
+			assert.Equal(t, tc.detail, r.detail)
+			assert.False(t, r.noted)
+		})
+	}
+}
+
 // TestDoctor_ControllerRollout: what doctor reads of the controller
 // Deployment. The version is its controller container's image tag, or, for
 // an image by digest, its app.kubernetes.io/version label. It is rolling
-// out while its generation is not observed, a replica is not updated or not
-// available, or a Pod of an older template remains, and for rolloutGrace
-// after its Progressing condition last changed; a Deployment that finished
-// long ago is not, and no Deployment reads as nothing.
+// out while its generation is not observed yet, or while its Progressing
+// condition is True and was last updated within rolloutGrace (a rollout
+// moves it on every step and at completion). A stuck rollout
+// (Progressing=False, its reason kept) and a Deployment short of a replica
+// long after its last rollout are not (QA-5 on #2397); no Deployment reads
+// as nothing.
 func TestDoctor_ControllerRollout(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	dep := func(image string, edit ...func(*appsv1.Deployment)) *appsv1.Deployment {
-		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kardinal-promoter", Namespace: "kardinal-system", Generation: 4,
-			Labels: map[string]string{"app.kubernetes.io/name": "kardinal-promoter"}},
-			Spec: appsv1.DeploymentSpec{Replicas: new(int32), Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{Name: "controller", Image: image}}}}},
-			Status: appsv1.DeploymentStatus{ObservedGeneration: 4, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1,
-				AvailableReplicas: 1, Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentProgressing,
-					Status: corev1.ConditionTrue, Reason: "NewReplicaSetAvailable", LastUpdateTime: metav1.NewTime(now.Add(-time.Hour))}}}}
-		*d.Spec.Replicas = 1
+		d := rolloutDeployment(image, now)
 		for _, f := range edit {
 			f(d)
 		}
@@ -254,14 +325,10 @@ func TestDoctor_ControllerRollout(t *testing.T) {
 		"a generation not observed yet": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
 			d.Generation = 5
 		})}, controllerRollout{version: "latest", rolling: true}},
-		"a replica not updated yet": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
-			*d.Spec.Replicas = 2 // one of two updated, no old Pod
-		})}, controllerRollout{version: "latest", rolling: true}},
-		"an old Pod remains": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
-			d.Status.Replicas = 2
-		})}, controllerRollout{version: "latest", rolling: true}},
-		"a replica unavailable": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
-			d.Status.UnavailableReplicas = 1
+		"mid-rollout, progressed a minute ago": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
+			*d.Spec.Replicas = 2
+			d.Status.Conditions[0].Reason = "ReplicaSetUpdated"
+			d.Status.Conditions[0].LastUpdateTime = metav1.NewTime(now.Add(-time.Minute))
 		})}, controllerRollout{version: "latest", rolling: true}},
 		"finished a minute ago": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
 			d.Status.Conditions[0].LastUpdateTime = metav1.NewTime(now.Add(-time.Minute))
@@ -269,6 +336,13 @@ func TestDoctor_ControllerRollout(t *testing.T) {
 		"finished just past the grace": {[]sigs_client.Object{dep("kp/controller:latest", func(d *appsv1.Deployment) {
 			d.Status.Conditions[0].LastUpdateTime = metav1.NewTime(now.Add(-rolloutGrace - time.Second))
 		})}, controllerRollout{version: "latest"}},
+		// QA-5's probes on #2397: neither is rolling, however long it lasts.
+		"a stuck v0.13.0 rollout":       {[]sigs_client.Object{stuckRollout(now)}, controllerRollout{version: "v0.13.0", stuck: "ProgressDeadlineExceeded"}},
+		"latest with a Pending replica": {[]sigs_client.Object{pendingReplica(now)}, controllerRollout{version: "latest"}},
+		"stuck a minute ago": {[]sigs_client.Object{dep("kp/controller:v0.13.0", func(d *appsv1.Deployment) {
+			d.Status.Conditions[0] = appsv1.DeploymentCondition{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse,
+				Reason: "ProgressDeadlineExceeded", LastUpdateTime: metav1.NewTime(now.Add(-time.Minute))}
+		})}, controllerRollout{version: "v0.13.0", stuck: "ProgressDeadlineExceeded"}},
 		"no Deployment": {nil, controllerRollout{}},
 	} {
 		t.Run(name, func(t *testing.T) {

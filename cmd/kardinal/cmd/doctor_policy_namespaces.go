@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/mod/semver"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -79,8 +80,15 @@ func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, c
 		}
 		r.icon, r.warned = doctorWarn, true
 		r.detail = fmt.Sprintf("controller %s does not check spec.policyNamespaces consent", controller)
+		var notes []string
 		if dep.version != "" && releaseVersion(dep.version) != ver {
-			r.detail += fmt.Sprintf(" (the Deployment runs %s)", dep.version)
+			notes = append(notes, "the Deployment runs "+dep.version)
+		}
+		if dep.stuck != "" {
+			notes = append(notes, "rollout stuck: "+dep.stuck)
+		}
+		if len(notes) > 0 {
+			r.detail += " (" + strings.Join(notes, "; ") + ")"
 		}
 		r.hint = fmt.Sprintf("Upgrade to %s first and run kardinal doctor again before %s, which refuses a namespace "+
 			"that has not agreed to share its PolicyGates", policyNamespacesWarnVersion, policyNamespacesRefuseVersion)
@@ -174,11 +182,13 @@ func rolloutTo(leader, deployed string) string {
 const rolloutGrace = 5 * time.Minute
 
 // controllerRollout is what doctor reads of the kardinal-promoter
-// Deployment: the version it runs (deployedVersion) and whether it is
-// rolling out or finished within rolloutGrace (deploymentRolling).
+// Deployment: the version it runs (deployedVersion), whether it is rolling
+// out or finished within rolloutGrace (deploymentRolling), and, when its
+// rollout stalled (Progressing=False), the reason.
 type controllerRollout struct {
 	version string
 	rolling bool
+	stuck   string
 }
 
 // readControllerRollout reads the kardinal-promoter Deployment in
@@ -191,7 +201,13 @@ func readControllerRollout(ctx context.Context, client sigs_client.Reader, contr
 		return controllerRollout{}
 	}
 	dep := &deps.Items[0]
-	return controllerRollout{version: deployedVersion(dep), rolling: deploymentRolling(dep, now)}
+	r := controllerRollout{version: deployedVersion(dep), rolling: deploymentRolling(dep, now)}
+	for _, c := range dep.Status.Conditions {
+		if c.Type == appsv1.DeploymentProgressing && c.Status == corev1.ConditionFalse {
+			r.stuck = c.Reason
+		}
+	}
+	return r
 }
 
 // deployedVersion is the version dep runs: its controller container's image
@@ -219,21 +235,20 @@ func deployedVersion(dep *appsv1.Deployment) string {
 }
 
 // deploymentRolling reports whether dep is rolling out at now, or finished
-// within rolloutGrace: its controller has not observed its generation, not
-// every replica is updated and available, Pods of an older template remain,
-// or its Progressing condition was last updated within rolloutGrace.
+// within rolloutGrace: its controller has not observed its generation yet,
+// or its Progressing condition is True and was last updated within
+// rolloutGrace (QA-5 on #2397). The deployment controller moves that time on
+// every step of a rollout and once more when it completes, and leaves it
+// after; a rollout that stalls turns the condition False
+// (ProgressDeadlineExceeded). So a stuck rollout, or a Deployment short of a
+// replica long after its last rollout, is not rolling: the WARN stands.
 func deploymentRolling(dep *appsv1.Deployment, now time.Time) bool {
-	want := int32(1)
-	if dep.Spec.Replicas != nil {
-		want = *dep.Spec.Replicas
-	}
-	st := dep.Status
-	if dep.Generation != st.ObservedGeneration || st.UpdatedReplicas < want || st.Replicas > st.UpdatedReplicas ||
-		st.UnavailableReplicas > 0 {
+	if dep.Generation != dep.Status.ObservedGeneration {
 		return true
 	}
-	for _, c := range st.Conditions {
-		if c.Type == appsv1.DeploymentProgressing && now.Sub(c.LastUpdateTime.Time) < rolloutGrace {
+	for _, c := range dep.Status.Conditions {
+		if c.Type == appsv1.DeploymentProgressing && c.Status == corev1.ConditionTrue &&
+			now.Sub(c.LastUpdateTime.Time) < rolloutGrace {
 			return true
 		}
 	}

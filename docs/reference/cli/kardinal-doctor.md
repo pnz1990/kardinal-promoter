@@ -48,7 +48,9 @@ the controller Deployment is rolling out (or finished in the last 5 minutes)
 a later release than that version, or a build that is not a release, the
 check is an INFO (upgrade in progress) instead. Run it again once kardinal
 version shows the new controller. Outside a rollout it is the WARN, naming
-what the Deployment runs when that differs. A Pipeline that names
+what the Deployment runs when that differs; a rollout that stalled
+(Progressing=False, such as ProgressDeadlineExceeded) is not in progress,
+and the WARN says "rollout stuck" with the reason. A Pipeline that names
 spec.policyNamespaces but that the controller has not checked for its
 current generation (no PolicyNamespacesShared condition of that generation:
 not reconciled yet after an upgrade, whatever its Ready says) is "not

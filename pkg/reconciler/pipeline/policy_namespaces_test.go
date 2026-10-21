@@ -280,6 +280,29 @@ func TestPipelineReconciler_PolicyNamespacesUnreadable(t *testing.T) {
 		assert.Zero(t, policyNamespaceEvents(f.rec), "the failed reads and the recovery warn nothing new")
 	})
 
+	// QA-5 on #2397: a False condition naming namespaces the spec no longer
+	// lists is not kept when the namespace that replaced them cannot be read:
+	// nothing is known for the new spec, so there is no condition (doctor:
+	// not checked yet), not a stale False.
+	t.Run("a stale False for namespaces no longer in the spec", func(t *testing.T) {
+		f := newPolicyNamespaceFixture(t, []string{"team-b"}, policyNamespace("team-b", ""), policyNamespace("team-c", ""))
+		first, _ := f.reconcile()
+		require.NotNil(t, first)
+		require.Equal(t, metav1.ConditionFalse, first.Status)
+		var p kardinalv1alpha1.Pipeline
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		p.Spec.PolicyNamespaces = []string{"team-c"}
+		p.Generation++ // the fake client does not
+		require.NoError(t, f.c.Update(context.Background(), &p))
+		f.failing["team-c"] = forbidden
+		cond, _ := f.reconcile()
+		assert.Nil(t, cond, "team-b is gone and team-c is not known")
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		assert.False(t, pipeline.PolicyNamespacesChecked(&p))
+		flagged, _ := pipeline.NotSharedPolicyNamespaces(&p)
+		assert.False(t, flagged, "team-b is not reported")
+	})
+
 	t.Run("a namespace never read is named once read", func(t *testing.T) {
 		f := newPolicyNamespaceFixture(t, []string{"team-b", "team-c"}, policyNamespace("team-b", ""), policyNamespace("team-c", ""))
 		f.failing["team-c"] = forbidden
