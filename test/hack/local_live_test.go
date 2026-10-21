@@ -372,7 +372,7 @@ exec "$@"
 			require.NoError(t, os.WriteFile(filepath.Join(old, f), b, 0o644))
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(old, "hack", "e2e", "local-live.sh"), []byte("#!/usr/bin/env bash\necho old >>\"$FAKE/old\"\n"), 0o755))
-		for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "older"}} {
+		for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-qm", "older"}} {
 			git := exec.Command("git", args...)
 			git.Dir = old
 			out, err := git.CombinedOutput()
@@ -421,7 +421,7 @@ exec "$@"
 				require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755))
 				require.NoError(t, os.WriteFile(filepath.Join(dir, f), b, 0o644))
 			}
-			for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "older"}} {
+			for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-qm", "older"}} {
 				git := exec.Command("git", args...)
 				git.Dir = dir
 				out, err := git.CombinedOutput()
@@ -496,7 +496,7 @@ exec "$@"
 				}
 				require.NoError(t, os.WriteFile(filepath.Join(co, "hack", "e2e", "local-live.sh"),
 					[]byte("#!/usr/bin/env bash\n"+tc.own+"echo own >>\"$FAKE/own\"\n"), 0o755))
-				for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "co"}} {
+				for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-qm", "co"}} {
 					git := exec.Command("git", args...)
 					git.Dir = co
 					out, err := git.CombinedOutput()
@@ -1474,7 +1474,7 @@ func checkoutWith(t *testing.T, script string) string {
 	}
 	path := filepath.Join(co, "hack", "e2e", "local-live.sh")
 	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
-	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "co"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-qm", "co"}} {
 		git := exec.Command("git", args...)
 		git.Dir = co
 		out, err := git.CombinedOutput()
