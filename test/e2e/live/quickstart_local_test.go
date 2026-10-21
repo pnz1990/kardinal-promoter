@@ -69,6 +69,13 @@ func TestQuickstartLocal_FromNothing(t *testing.T) {
 		require.True(t, apierrors.IsNotFound(e.Client.Get(ctx, types.NamespacedName{Name: ns}, &n)), "namespace %s exists before the quickstart", ns)
 	}
 
+	// A failure from here on logs what the demo saw (#2083).
+	t.Cleanup(func() {
+		if t.Failed() {
+			quickstartLocalDiagnostics(t, e)
+		}
+	})
+
 	// ── 3. Run the quickstart ───────────────────────────────────────────
 	block := framework.Fill(t, framework.PageBlockAt(t, page, "kardinal quickstart --local", 0), "kardinal quickstart --local", checkout)
 	r := e.ShellEnvFor(t, 30*time.Minute, nil, block)
@@ -179,4 +186,35 @@ func TestQuickstartLocal_FromNothing(t *testing.T) {
 		}
 		return len(left) == 0, strings.Join(left, ", ")
 	})
+}
+
+// quickstartLocalDiagScript reads, without changing anything, what a failed
+// quickstart --local left: the steps' messages, kardinal why, the Argo CD
+// Applications' sync and health, the pods and events of the demo's
+// namespaces, and the logs of Argo CD and the controller. Each command runs
+// even when one before it fails.
+const quickstartLocalDiagScript = `set +e
+kubectl version
+kubectl get promotionsteps -A -o custom-columns=NAME:.metadata.name,STATE:.status.state,MESSAGE:.status.message
+kardinal why demo
+kubectl get applications.argoproj.io -A -o wide
+kubectl -n argocd get applications.argoproj.io -o yaml | grep -A40 '^  status:' | head -200
+kubectl get pods -A -o wide
+for ns in kardinal-test-app-test kardinal-test-app-uat kardinal-test-app-prod; do
+  kubectl -n "$ns" describe pods | tail -60
+  kubectl -n "$ns" get events --sort-by=.lastTimestamp | tail -40
+done
+kubectl -n argocd logs deploy/argocd-repo-server --tail=60
+kubectl -n argocd logs statefulset/argocd-application-controller --tail=80
+kubectl -n kardinal-system logs deploy/kardinal-promoter --tail=200 | grep -iE 'health|error|kardinal-test-app' | tail -60
+kubectl -n kardinal-git get pods,svc -o wide
+true`
+
+// quickstartLocalDiagnostics logs quickstartLocalDiagScript's output for a
+// failed run. The test has no git server of the suite's, so the framework's
+// namespace diagnostics collect nothing for it, and a run that failed in
+// test's health check (#2083, 1.35) left nothing to read.
+func quickstartLocalDiagnostics(t *testing.T, e *framework.Env) {
+	t.Helper()
+	e.ShellEnvFor(t, 3*time.Minute, nil, quickstartLocalDiagScript)
 }
