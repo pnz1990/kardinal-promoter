@@ -53,8 +53,9 @@ admit a stamp only when it says exactly what the requester is:
 - only kardinal's controller sets `via`.
 
 Until the controller has built the index (`kubectl get agentindex` shows its Ready
-condition), the policies refuse every version, Approval and override they check, people's
-included, with "kardinal's agent index is not ready yet", and the UI API and the Bundle API
+condition), the policies refuse every version, Approval and override they check, and every
+stamped pause, hold release or rejection, people's included, with "kardinal's agent index is
+not ready yet", and the UI API and the Bundle API
 answer 503: the registry fails closed. That lasts a few seconds after an install or an upgrade;
 the controller reports ready only once the index is. Writes the policies do not check go on
 meanwhile: kro's gate instances, and the versions kardinal creates itself (automatic rollbacks,
@@ -95,6 +96,11 @@ v0.12. An agent that is suspended, or out of its scope, is refused. `kardinal` s
 for you: `create bundle`, `ship`, `promote`, `rollback`, `approve` and `override` read your
 identity and the agent index, and refuse an agent out of its scope before writing anything.
 The UI and the Bundle API stamp for the caller they authenticated, with the same rules.
+`kardinal` and the controller also read the index in the compact format that v0.14 writes
+(#2071), so this release's CLI keeps stamping agents correctly against a cluster upgraded to
+v0.14. This release's policies never read that format: against a compact index (after a
+rollback from v0.14, until this release's controller has rebuilt the index) they refuse every
+write they check with "kardinal's agent index is in the compact format of a newer release".
 
 A refusal says what to write:
 

@@ -70,10 +70,27 @@ spec:
                   also when it is over the bound and written empty.
                 format: int64
                 type: integer
+              compactGroups:
+                additionalProperties:
+                  type: string
+                description: CompactGroups is Groups in the compact format.
+                type: object
+              compactUsers:
+                additionalProperties:
+                  type: string
+                description: |-
+                  CompactUsers is Users in the compact format of a later release
+                  (#2071): each entry one string. This release never writes it; its CLI
+                  and controller read it while Ready's reason is CompactFormat
+                  (pkg/actor Readable), so they keep working against a newer release's
+                  index.
+                type: object
               conditions:
                 description: |-
                   Conditions: Ready (False, reason IndexFull, when the entries are over
-                  MaxBytes); NearFull (True from 80% of MaxBytes).
+                  MaxBytes; False, reason CompactFormat, when a later release wrote the
+                  index in the compact format); CompactReady (in the compact format);
+                  NearFull (True from 80% of MaxBytes).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

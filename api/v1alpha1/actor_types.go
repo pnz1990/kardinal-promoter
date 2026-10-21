@@ -312,6 +312,18 @@ type AgentIndexStatus struct {
 	// +optional
 	Groups map[string]AgentIndexEntry `json:"groups,omitempty"`
 
+	// CompactUsers is Users in the compact format of a later release
+	// (#2071): each entry one string. This release never writes it; its CLI
+	// and controller read it while Ready's reason is CompactFormat
+	// (pkg/actor Readable), so they keep working against a newer release's
+	// index.
+	// +optional
+	CompactUsers map[string]string `json:"compactUsers,omitempty"`
+
+	// CompactGroups is Groups in the compact format.
+	// +optional
+	CompactGroups map[string]string `json:"compactGroups,omitempty"`
+
 	// Bytes is the size of the index's entries as its bound counts them
 	// (each entry's JSON, its key and 4 bytes, blocked entries included),
 	// also when it is over the bound and written empty.
@@ -324,7 +336,9 @@ type AgentIndexStatus struct {
 	MaxBytes int64 `json:"maxBytes,omitempty"`
 
 	// Conditions: Ready (False, reason IndexFull, when the entries are over
-	// MaxBytes); NearFull (True from 80% of MaxBytes).
+	// MaxBytes; False, reason CompactFormat, when a later release wrote the
+	// index in the compact format); CompactReady (in the compact format);
+	// NearFull (True from 80% of MaxBytes).
 	// +optional
 	// +listType=map
 	// +listMapKey=type
