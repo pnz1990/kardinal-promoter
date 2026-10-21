@@ -41,6 +41,10 @@ type HeadContentComparer interface {
 // read further (#2095 QA). A var, so a test can lower it.
 var maxHeadPeek int64 = 64 << 20
 
+// drainBound is the least peekCommit reads after it cancels the fetch, to
+// reach the transport through go-git's buffers above it (#2364).
+const drainBound = 1 << 20
+
 // errHeadTooLarge is a remote head that cannot be read within maxHeadPeek.
 var errHeadTooLarge = errors.New("the head's pack is larger than kardinal reads to compare it")
 
@@ -132,9 +136,16 @@ func peekCommit(ctx context.Context, url string, am transport.AuthMethod, proxy 
 	}
 	// The scan stops once it has the commit or passes the bound, while
 	// the server may still be sending: cancelling the fetch's context makes
-	// the next read fail, and go-git then kills the transport (the local
-	// upload-pack process, the HTTP request, the ssh session) instead of
-	// waiting for a server blocked on its writes.
+	// the transport's next read fail, and go-git then kills the transport
+	// (the local upload-pack process, the HTTP request, the ssh session)
+	// instead of waiting for a server blocked on its writes. Read until a
+	// read fails: two buffers above the transport (go-git's response and
+	// its peek) may still hold packets of the pack, and a read they serve
+	// does not reach it. One read, as before, could be served there; then
+	// nothing killed a local upload-pack and Close waited for it for ever
+	// (#2364). The reads have a bound of their own, drainBound at least:
+	// the buffers hold a few KiB, and a bound below them (a small limit)
+	// would stop before the transport again.
 	fetchCtx, cancel := context.WithCancel(ctx)
 	resp, err := sess.UploadPack(fetchCtx, req)
 	if err != nil {
@@ -143,7 +154,14 @@ func peekCommit(ctx context.Context, url string, am transport.AuthMethod, proxy 
 	}
 	defer func() {
 		cancel()
-		_, _ = resp.Read(make([]byte, 1))
+		buf := make([]byte, 32<<10)
+		for read, bound := int64(0), max(limit, drainBound); read <= bound; {
+			n, err := resp.Read(buf)
+			if err != nil {
+				break
+			}
+			read += int64(n)
+		}
 		_ = resp.Close()
 	}()
 	var pack io.Reader = resp

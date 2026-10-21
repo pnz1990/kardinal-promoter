@@ -4,18 +4,22 @@
 package scm
 
 import (
+	"bufio"
 	"bytes"
 	"compress/zlib"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
@@ -130,6 +134,140 @@ func TestSameContentAsHead_Bounded(t *testing.T) {
 		require.NoError(t, err, "the step refuses the head as someone else's (PRBranchForeignCommit)")
 		assert.False(t, same)
 	})
+}
+
+// envUploadPackProxy, set to the real git-upload-pack, makes the test
+// binary an upload-pack in front of it (uploadPackProxy).
+const envUploadPackProxy = "KARDINAL_TEST_UPLOAD_PACK_PROXY"
+
+func init() {
+	if real := os.Getenv(envUploadPackProxy); real != "" {
+		os.Exit(uploadPackProxy(real, os.Args[len(os.Args)-1]))
+	}
+}
+
+// uploadPackProxy runs the real upload-pack for repo and forwards what it
+// says, but re-cuts the pack (sideband band 1) into 200-byte packets sent
+// 64 KiB at a time, and where the pack ends keeps sending band-1 packets
+// for ever: a server still writing, as a big pack is, when the client has
+// what it wants, with the packets after the commit already in the
+// client's buffers when it stops reading.
+func uploadPackProxy(real, repo string) int {
+	cmd := exec.Command(real, repo)
+	cmd.Stdin = os.Stdin
+	out, err := cmd.StdoutPipe()
+	if err != nil || cmd.Start() != nil {
+		return 1
+	}
+	r, w := bufio.NewReader(out), bufio.NewWriterSize(os.Stdout, 64<<10)
+	pkt := func(payload []byte) error {
+		if _, err := fmt.Fprintf(w, "%04x", len(payload)+4); err != nil {
+			return err
+		}
+		_, err := w.Write(payload)
+		return err
+	}
+	inPack := false
+	for {
+		var size [4]byte
+		if _, err := io.ReadFull(r, size[:]); err != nil {
+			break
+		}
+		n, err := strconv.ParseUint(string(size[:]), 16, 16)
+		if err != nil {
+			return 1
+		}
+		if n < 4 {
+			if inPack {
+				break // the pack's end: keep sending instead
+			}
+			_, _ = w.Write(size[:])
+			_ = w.Flush()
+			continue
+		}
+		payload := make([]byte, n-4)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return 1
+		}
+		if payload[0] != 1 {
+			_ = pkt(payload)
+			if !inPack {
+				_ = w.Flush()
+			}
+			continue
+		}
+		inPack = true
+		for data := payload[1:]; len(data) > 0; {
+			k := min(len(data), 200)
+			_ = pkt(append([]byte{1}, data[:k]...))
+			data = data[k:]
+		}
+	}
+	filler := append([]byte{1}, make([]byte, 200)...)
+	for pkt(filler) == nil {
+	}
+	return 0
+}
+
+// TestSameContentAsHead_ServerKeepsWriting (#2364): the server is still
+// writing when the scan has the commit, and the packets after it are
+// already in the client's buffers (uploadPackProxy, in front of the real
+// upload-pack). The check returns at once: it reads until the cancelled
+// transport fails, which kills the local upload-pack. Reading one byte, as
+// it did, was served from those buffers, nothing killed the upload-pack,
+// and Close waited for it forever: TestSameContentAsHead_Bounded timed out
+// pkg/scm's CI shard whenever a loaded runner let the pack's next packets
+// arrive with the commit's.
+//
+// Covers GIT-PUSH-FOREIGN-05.
+func TestSameContentAsHead_ServerKeepsWriting(t *testing.T) {
+	real, err := exec.LookPath("git-upload-pack")
+	if err != nil {
+		out, gerr := exec.Command("git", "--exec-path").Output()
+		require.NoError(t, gerr)
+		real = filepath.Join(strings.TrimSpace(string(out)), "git-upload-pack")
+	}
+	self, err := os.Executable()
+	require.NoError(t, err)
+	_, ours, head := bigHeadRemote(t, 1<<10, false, false, true)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git-upload-pack"), []byte(
+		"#!/bin/sh\n"+envUploadPackProxy+"='"+real+"' exec '"+self+"' -test.run='^$' \"$@\"\n"), 0o700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	c := NewGoGitClient()
+	for _, tc := range []struct {
+		name string
+		peek int64 // maxHeadPeek
+		same bool
+	}{
+		{name: "the check's bound", peek: maxHeadPeek, same: true},
+		// QA-2 on #2374: a peek bound below go-git's buffers must not bound
+		// the reads that reach the transport (past it the head is refused).
+		{name: "a 64-byte bound", peek: 64, same: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func(old int64) { maxHeadPeek = old }(maxHeadPeek)
+			maxHeadPeek = tc.peek
+			for i := range 10 {
+				type result struct {
+					same bool
+					err  error
+				}
+				done := make(chan result, 1)
+				go func() {
+					same, err := c.SameContentAsHead(context.Background(), ours, "origin", "kardinal/b/prod", TokenAuth(""), head)
+					done <- result{same, err}
+				}()
+				select {
+				case r := <-done:
+					require.NoError(t, r.err, "try %d", i)
+					assert.Equal(t, tc.same, r.same, "try %d", i)
+				case <-time.After(30 * time.Second):
+					t.Fatalf("try %d: the check did not return in 30s: it waits on an upload-pack still writing", i)
+				}
+			}
+		})
+	}
 }
 
 // packObjectHeader is a packfile object header: type typ, inflated size.
