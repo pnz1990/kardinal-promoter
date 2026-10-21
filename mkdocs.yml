@@ -250,6 +250,7 @@ nav:
     - Glossary: reference/glossary.md
   - Project:
     - Roadmap: roadmap.md
+    - API stability: api-stability.md
     - Changelog: changelog.md
     - Design notes:
       - kardinal UI: design/06-kardinal-ui.md

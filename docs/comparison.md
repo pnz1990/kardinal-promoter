@@ -306,7 +306,8 @@ If your constraint is that every promotion artefact must be a git commit with no
 Kubernetes-side state, kardinal is not the right model.
 
 **You need a larger community and commercial support today.**
-kardinal-promoter is pre-1.0 and in active development, on kro's alpha Graph API. Kargo has a
+kardinal-promoter is pre-1.0 and in active development, on kro's alpha Graph API
+([API stability](api-stability.md) says what is stable today and what 1.0 needs). Kargo has a
 longer production track record and commercial backing from Akuity. If your organisation requires vendor
 support or a larger existing community before adopting, that is a legitimate constraint.
 
