@@ -1,7 +1,8 @@
 # Design: one write for the environments that are ready together on one branch (#2366)
 
-> Status: **Proposed (2026-10-21)**, for review. Nothing here is built. v0.14 work, behind the
-> `v0.14-hold` label.
+> Status: **Accepted (2026-10-21)**: the coordinator, as the owner's delegate, accepted §3-8 and
+> decided the two open calls (§6, §9; Decisions below). The implementation is v0.14 work, opt-in
+> and compact shape first, behind the `v0.14-hold` label.
 > Created: 2026-10-21
 > Depends on: [10-graph-first-architecture.md](10-graph-first-architecture.md),
 > [16-graph-capability-ledger.md](16-graph-capability-ledger.md) (G8, G11, G14) and
@@ -9,6 +10,19 @@
 > Verified against: this repository at `main` (`0a19a24d1`). Source references are `path:line`
 > in that tree. The measurements are #2366's run of `TestCompact_Shape300` (e2e-live run
 > 39528603407, Kubernetes 1.37, #2389's counters).
+
+## Decisions (2026-10-21)
+
+1. **The branch turn is the same G8 exception, not a wider one.** One in-memory turn per
+   repository branch, which a BranchWrite now takes as well as a step; the batch's state lives
+   in BranchWrite's status. The ledger's G8 row "Branch turns for auto pushes" records "also
+   used by BranchWrite" when it lands. A test restarts the controller in the middle of a round
+   and shows it recovers from status and the `Kardinal-Write` trailer alone, with no in-memory
+   state (§4.3).
+2. **No clone cache for now.** A per-repository cache is new state outside the CRDs. First
+   measure why a depth-1 clone grows across waves (blob size, or the fetch negotiation, are
+   candidates). A cache gets its own design and G8 row for review only if it is the only fix
+   (§9).
 
 ---
 
@@ -250,7 +264,7 @@ covers fleets too, whose pacing decides which steps exist and so which ask.
 | A Watch node, or an Owned node whose reconciler writes its status | BranchWrite is an owned node; its reconciler writes only `BranchWrite.status` |
 | No cross-CRD status mutation | The step writes its `status.writeRequestedAt`; the BranchWrite writes its status; the Graph mirrors one to the other's spec (like `spec.live.gates`, `mirror.go:25-71`) |
 | No decision on fields outside its own CRD | `await-write` reads `spec.live.write`; the BranchWrite reads its `spec.requested` |
-| No in-memory state between reconciles | The working tree lives in one reconcile. `inFlight` and the trailer cover a crash. The branch turn is the existing G8 exception (`16-…:431`), which "times requeues only"; a BranchWrite taking it changes that row's holder list and needs the same owner approval |
+| No in-memory state between reconciles | The working tree lives in one reconcile. `inFlight` and the trailer cover a crash. The branch turn is the existing G8 exception (`16-…:431`), which "times requeues only": the same exception, also used by BranchWrite (Decision 1) |
 | `time.Now()` only in a status write | `requestedAt` and `pushIntent` are written to status |
 | No subprocess, no external HTTP in a hot path | go-git, as `git-clone` and `git-push` today |
 
@@ -299,6 +313,9 @@ Constraints of kro, and how the design meets each:
   The one handoff still includes the Graph walk above.
 
 ## 9. Separate item: a cheaper clone
+
+> **Decided: no cache for now (Decision 2).** The measurement below comes first; options A and B
+> stay here as the record of what a cache would be, for a design of its own if it is the only fix.
 
 This is independent of §3-8. It helps every writer: unbatched steps today, and the BranchWrite's
 one clone per round.
