@@ -1466,8 +1466,8 @@ are no longer dependencies.
 | 6 | Scoring (incl. `binaryFileLines`, `requireVerifiedSource`), history, percentile, `Bundle.status.risk` mirror | m | 2, 4 |
 | 7 | `risk.*` in the gate context, hold semantics, watch, `policy simulate --risk-*` | m | 6 |
 | 8 | Evidence: PR body row, `kardinal why`, UI stage drawer | s | 6 |
-| 9 | Spec 28's DeploymentLog (its §5.4-5.6, reconciler and `historyLimit` guard), plus `riskTier` on entries | m (spec 28's) | 2; lands before row 10 |
-| 10 | Track-record reconciler: `AgentIdentity.spec/status.trackRecord`, the DeploymentLog field index and watch, the IndexReconciler predicate, `agent.*` additions and their gate watch | m | 9 |
+| 9 | Spec 28's DeploymentLog (its §5.4-5.6 and §19 rows 1 and 3: the CRD, the reconciler, the `historyLimit` guard, the controller-only admission) | m (spec 28's) | 2; lands before row 10 |
+| 10 | Track-record reconciler: `AgentIdentity.spec/status.trackRecord`, the DeploymentLog field index and watch, the IndexReconciler predicate, `agent.*` additions and their gate watch; `riskTier` on log entries | m | 9; `riskTier` and `byTier` need 6 |
 | 11 | Fleet `waves` and `wavePreset`: schema, builder (waves, bake, edges), compact grouping, `status.environments[].fleetWave`, CLI | l | none |
 | 12 | `verify.requiredWhen` for the verify gate (8.2) | s | none |
 | 13 | `<release>-risk-owners` admission policy and its helm tests (§11, §14.1) | s | 3; its DeploymentLog DELETE rule needs 9 |
