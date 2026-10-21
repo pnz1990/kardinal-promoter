@@ -41,6 +41,12 @@ type renderCorpusPin struct {
 	Graphs        map[string]string `json:"graphs"`
 }
 
+// batchedPipeline is p with spec.git.writes: batched.
+func batchedPipeline(p *kardinalv1alpha1.Pipeline) *kardinalv1alpha1.Pipeline {
+	p.Spec.Git.Writes = kardinalv1alpha1.WritesBatched
+	return p
+}
+
 // renderCorpus are builder inputs as installed Pipelines, Bundles and gates
 // have them: every gate collection (plain, skip permission, approval with
 // and without a policy, approval readers, verify with and without a policy,
@@ -103,6 +109,7 @@ func renderCorpus() map[string]graph.BuildInput {
 		"hooks, compact":               {Pipeline: compact(hooked()), Bundle: uidBundle},
 		"analyses":                     {Pipeline: analysisPipeline(analysisRefs...), Bundle: analysisBundle, Analyses: analyses},
 		"analyses, compact":            {Pipeline: compact(analysisPipeline(analysisRefs...)), Bundle: analysisBundle, Analyses: analyses},
+		"batched writes":               {Pipeline: batchedPipeline(linear("test", "uat", "prod")), Bundle: uidBundle},
 		"render":                       {Pipeline: renderPipeline(), Bundle: uidBundle},
 		"render, compact":              {Pipeline: compact(renderPipeline()), Bundle: uidBundle},
 		"agent verifier runs":          {Pipeline: linear("test", "uat", "prod"), Bundle: bundle, PolicyGates: gates(agentRuns)},

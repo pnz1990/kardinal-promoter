@@ -8,6 +8,7 @@
     "analyses, compact": "sha256:18ab26c96a76c2e79aa2a0e8361aff567e92be83ab51782f05ab55deaf320eb9",
     "approval gates": "sha256:756c673d5e67e5c22dbeb1a3364dde0ab8b72111edc15e1882873f2663b89ae6",
     "approval readers": "sha256:a7d7c74c4dbfaced24ae9e66e3cb1aa2df6969b9bf8cf042aa0004b7e6a71e68",
+    "batched writes": "sha256:2f0580c15a8acf227b0853f1ef6e49388d62dcfc028976360e83c3fbad4e35d5",
     "change requests": "sha256:f30b59d84217fd0a5a12f73ff9fe6075aad0a2a79cbf427c67281c5900daf669",
     "change requests, compact": "sha256:686e2cf32dffbd245386c4ce57db9db0f49be8f1fb1f9c9c9565009cfeecdb0b",
     "compact": "sha256:8484583b548693c61239f3ce74c9106fd73aace225aa03ce49236dd2f1b2127a",

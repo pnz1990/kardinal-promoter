@@ -30,7 +30,7 @@ func noTurnJitter(t *testing.T) {
 func TestBranchQueue_FIFO(t *testing.T) {
 	noTurnJitter(t)
 	var woken []string
-	q := branchQueue{wake: func(step string) { woken = append(woken, step) }}
+	q := BranchQueue{wake: func(step string) { woken = append(woken, step) }}
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
 	release, _, ok := q.tryTurn("repo#main", "ns/a", now)
@@ -68,7 +68,7 @@ func TestBranchQueue_FIFO(t *testing.T) {
 // is dropped.
 func TestBranchQueue_GoneWaitersAndBounds(t *testing.T) {
 	noTurnJitter(t)
-	var q branchQueue
+	var q BranchQueue
 	now := time.Now()
 	release, _, _ := q.tryTurn("k", "holder", now)
 	var wait time.Duration
@@ -83,7 +83,7 @@ func TestBranchQueue_GoneWaitersAndBounds(t *testing.T) {
 	_, _, ok := q.tryTurn("k", "ns/w01", later)
 	assert.True(t, ok, "the gone head is dropped; the next live waiter takes the turn")
 
-	var q2 branchQueue
+	var q2 BranchQueue
 	rel, _, _ := q2.tryTurn("k", "a", now)
 	rel(now)
 	assert.Empty(t, q2.branches, "nothing kept for an idle branch")
@@ -104,7 +104,7 @@ func TestBasePushBranch(t *testing.T) {
 
 // waiting returns the keys of the steps waiting for branch key, oldest
 // first. For tests.
-func (q *branchQueue) waiting(key string) []string {
+func (q *BranchQueue) waiting(key string) []string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	b := q.branches[key]

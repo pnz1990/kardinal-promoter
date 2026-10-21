@@ -92,6 +92,13 @@ type PromotionStepSpec struct {
 	// +optional
 	ImageVerification string `json:"imageVerification,omitempty"`
 
+	// Write names the Bundle's BranchWrite that writes this environment's
+	// change (spec.git.writes: batched): the step runs await-write instead
+	// of cloning, committing and pushing itself. Empty: the step writes its
+	// change. Set by the Graph.
+	// +optional
+	Write string `json:"write,omitempty"`
+
 	// Live holds results the Graph mirrors onto the step while it runs, each
 	// part with its own patch node (its own field manager), not the step's
 	// template, so they keep updating after the step's own template stopped
@@ -147,6 +154,21 @@ type PromotionStepLive struct {
 	// ImageVerification is the Bundle's ImageVerification result.
 	// +optional
 	ImageVerification *LiveImageVerification `json:"imageVerification,omitempty"`
+
+	// Writes is the BranchWrite's result for the step's environment
+	// (spec.write), at most one.
+	// +optional
+	Writes []LiveBranchWrite `json:"writes,omitempty"`
+}
+
+// LiveBranchWrite is a BranchWrite's answer to a step's latest request.
+type LiveBranchWrite struct {
+	// Name is the BranchWrite's name.
+	Name string `json:"name"`
+	// Result is the BranchWrite's status.environments entry for the step's
+	// environment.
+	// +optional
+	Result *BranchWriteResult `json:"result,omitempty"`
 }
 
 // LiveRenderRun is the result of the RenderRun of a layout: branch
@@ -473,6 +495,12 @@ type PromotionStepStatus struct {
 	// poll; a failed refresh never fails the step).
 	// +optional
 	RefreshMessage string `json:"refreshMessage,omitempty"`
+
+	// WriteRequest is the number of the step's latest request to have its
+	// environment written by its BranchWrite (spec.write), counted from 1:
+	// await-write asks once, and again on each retry after a failed write.
+	// +optional
+	WriteRequest int64 `json:"writeRequest,omitempty"`
 
 	// RenderRequestedAt is when the step reached its render step (layout:
 	// branch). Set once; the Graph creates the environment's RenderRun once

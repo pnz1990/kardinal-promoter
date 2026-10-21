@@ -150,9 +150,11 @@ type Reconciler struct {
 	// ControllerUser is the controller's own username: the principal of the
 	// Bundles it creates on its own (docs/actors.md). Empty: kardinal-controller.
 	ControllerUser string
-	// pushTurns gives auto promotions writing one branch their turn one at a
-	// time (#1578).
-	pushTurns branchQueue
+	// Turns gives auto promotions writing one branch their turn one at a
+	// time (#1578); the BranchWrite reconciler shares it. Nil: the
+	// reconciler uses one of its own (ownTurns).
+	Turns    *BranchQueue
+	ownTurns BranchQueue
 
 	// Workers is how many objects are reconciled at once (--promotionstep-workers);
 	// 0 is the manager's default. One object is never reconciled twice at
@@ -1003,7 +1005,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := stepSequence(pipeline, env, bundle)
+	seq := stepSequence(ps, pipeline, env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -1110,7 +1112,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// by hand or it started before status.steps existed. Record the list
 		// and run it from the next reconcile: the finalizer sync at the end of
 		// this one then adds kardinal.io/close-pr before open-pr can run.
-		ps.Status.Steps = initStepStatuses(stepSequence(pipeline, env, bundle))
+		ps.Status.Steps = initStepStatuses(stepSequence(ps, pipeline, env, bundle))
 		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 			if apierrors.IsNotFound(err) {
 				return ctrl.Result{}, nil
@@ -1159,7 +1161,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// back at once and is requeued at low priority, so other steps, in
 	// other namespaces too, go first (#1577).
 	if key, ok := basePushBranch(seq, prevIdx, state.Git.URL, state.Git.Branch); ok {
-		release, wait, got := r.pushTurns.tryTurn(key, client.ObjectKeyFromObject(ps).String(), r.now())
+		release, wait, got := r.turns().tryTurn(key, client.ObjectKeyFromObject(ps).String(), r.now())
 		if !got {
 			return r.waitForBranchTurn(ctx, base, ps, state.Git.Branch, wait)
 		}
@@ -1199,6 +1201,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		// The Graph creates the environment's RenderRun once this is set.
 		now := metav1.NewTime(r.now())
 		ps.Status.RenderRequestedAt = &now
+	}
+	if state.Outputs[steps.OutputWriteRequest] == "new" {
+		requestWrite(ps, r.now())
 	}
 	if nextIdx > prevIdx {
 		// Progress resets the retry budget.
@@ -1359,7 +1364,9 @@ func (r *Reconciler) stepState(ctx context.Context, log zerolog.Logger, ps *v1al
 	}
 	if ps.Spec.Live != nil {
 		state.LiveRenders = ps.Spec.Live.Renders
+		state.LiveWrites = ps.Spec.Live.Writes
 	}
+	state.Write, state.StepUID, state.WriteRequest = ps.Spec.Write, string(ps.UID), ps.Status.WriteRequest
 	r.setRollbackState(ctx, log, state, bundle)
 	return state
 }
@@ -2706,15 +2713,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 // still comes.
 func (r *Reconciler) turnWakeups() <-chan event.GenericEvent {
 	ch := make(chan event.GenericEvent, 256)
-	r.pushTurns.mu.Lock()
-	r.pushTurns.wake = func(step string) {
+	q := r.turns()
+	q.mu.Lock()
+	q.wake = func(step string) {
 		ns, name, _ := strings.Cut(step, "/")
 		select {
 		case ch <- event.GenericEvent{Object: &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}}:
 		default:
 		}
 	}
-	r.pushTurns.mu.Unlock()
+	q.mu.Unlock()
 	return ch
 }
 
@@ -3085,9 +3093,13 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 	return ss
 }
 
-// stepSequence is the step list a step of env runs for bundle, recorded in
-// status.steps when the step starts.
-func stepSequence(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+// stepSequence is the step list ps, a step of env, runs for bundle, recorded
+// in status.steps when the step starts. A step the Graph gave a BranchWrite
+// (spec.write, spec.git.writes: batched) waits for it to write its change.
+func stepSequence(ps *v1alpha1.PromotionStep, pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	if ps.Spec.Write != "" {
+		return steps.AwaitWriteSequence()
+	}
 	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, effectiveLayout(pipeline, env))
 }
 

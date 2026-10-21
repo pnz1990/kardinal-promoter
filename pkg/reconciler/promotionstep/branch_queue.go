@@ -20,7 +20,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
-// branchQueue gives the auto promotions of this controller that push to one
+// BranchQueue gives the auto promotions of this controller that push to one
 // branch of one repository their turn one at a time, oldest first (#1578).
 // Each of N environments writing one branch used to clone, commit and race
 // the others for the push: the losers rebased up to 6 times and then started
@@ -46,12 +46,22 @@ import (
 // lives in it, and a restarted controller starts with an empty queue
 // (docs/design/16-graph-capability-ledger.md, G8). The zero value is ready
 // to use.
-type branchQueue struct {
+//
+// The BranchWrite reconciler takes the same turns (spec.git.writes: batched,
+// docs/design/30-batched-branch-writes.md): one BranchQueue is shared by the
+// two, and a BranchWrite's holder and waiter keys start with writeTurnPrefix.
+type BranchQueue struct {
 	mu       sync.Mutex
 	branches map[string]*branchTurn
 	// wake, when set, reconciles the waiting step key (namespace/name) now.
 	wake func(step string)
+	// wakeWrite, when set, reconciles the waiting BranchWrite key
+	// (namespace/name, without writeTurnPrefix) now.
+	wakeWrite func(key string)
 }
+
+// writeTurnPrefix starts the BranchQueue keys of BranchWrites.
+const writeTurnPrefix = "branchwrite:"
 
 // branchTurn is one branch's holder and waiters.
 type branchTurn struct {
@@ -88,7 +98,7 @@ var turnJitter = func(d time.Duration) time.Duration {
 // Otherwise it returns how long step should wait before it asks again: its
 // place among the waiters, oldest first, times the average turn, at least
 // minTurnWait and at most maxTurnWait.
-func (q *branchQueue) tryTurn(key, step string, now time.Time) (release func(time.Time), wait time.Duration, ok bool) {
+func (q *BranchQueue) tryTurn(key, step string, now time.Time) (release func(time.Time), wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.branches == nil {
@@ -140,7 +150,7 @@ func (b *branchTurn) headLocked() (string, waiter) {
 
 // sweepLocked forgets the waiters that did not ask again in time, and the
 // branches nobody holds or waits for.
-func (q *branchQueue) sweepLocked(now time.Time) {
+func (q *BranchQueue) sweepLocked(now time.Time) {
 	for key, b := range q.branches {
 		for k, w := range b.waiters {
 			if now.After(w.due.Add(waiterGrace)) {
@@ -155,7 +165,7 @@ func (q *branchQueue) sweepLocked(now time.Time) {
 
 // release ends step's turn of branch key at at, folds its length into the
 // branch's average turn, and wakes the oldest waiter.
-func (q *branchQueue) release(key, step string, at time.Time) {
+func (q *BranchQueue) release(key, step string, at time.Time) {
 	q.mu.Lock()
 	b := q.branches[key]
 	if b == nil || b.holder != step {
@@ -171,6 +181,9 @@ func (q *branchQueue) release(key, step string, at time.Time) {
 		delete(q.branches, key)
 	}
 	wake := q.wake
+	if strings.HasPrefix(head, writeTurnPrefix) {
+		wake, head = q.wakeWrite, strings.TrimPrefix(head, writeTurnPrefix)
+	}
 	q.mu.Unlock()
 	if head != "" && wake != nil {
 		wake(head)
@@ -203,6 +216,14 @@ func normalizeRepoURL(u string) string {
 	u = strings.ToLower(strings.TrimSpace(u))
 	u = strings.TrimSuffix(u, "/")
 	return strings.TrimSuffix(u, ".git")
+}
+
+// turns is the BranchQueue r gives turns from: the shared one, or its own.
+func (r *Reconciler) turns() *BranchQueue {
+	if r.Turns != nil {
+		return r.Turns
+	}
+	return &r.ownTurns
 }
 
 // waitingForTurnMessage is status.message of a step waiting for its branch.

@@ -111,7 +111,8 @@ const compactHealthDeployment = "compact-health"
 // Verified with the new version in git, every gate instance exists and the
 // Graph is Ready only at the end.
 //
-// It is the compact suite's only test (#2349): it takes 15 to 30 minutes on a
+// It and TestCompact_Shape300Batched are the compact suite's tests (#2349,
+// #2366): this one takes 15 to 30 minutes on a
 // GitHub-hosted runner, nearly all of it in the waves' steps (ten writers
 // pushing one branch of a repo that grows by ten commits a wave; the Graph
 // reaches the next wave within seconds, logWaveTimes), and in the core suite
@@ -121,10 +122,31 @@ const compactHealthDeployment = "compact-health"
 //
 // Covers GRAPH-COMPACT-02.
 func TestCompact_Shape300(t *testing.T) {
+	shape300(t, false)
+}
+
+// TestCompact_Shape300Batched is TestCompact_Shape300 with spec.git.writes:
+// batched (#2366): each wave's ten environments are written by the Bundle's
+// BranchWrite in rounds (one clone, one commit per environment, one push)
+// instead of ten turns of their own. Every environment is still Verified on
+// its own commit, and the wave log says how many rounds wrote each wave, and
+// the controller's clones and pushes per round.
+//
+// Covers GRAPH-COMPACT-09.
+func TestCompact_Shape300Batched(t *testing.T) {
+	shape300(t, true)
+}
+
+// shape300 promotes a Bundle through 30 waves of 10 environments, with
+// batched writes or not.
+func shape300(t *testing.T, batched bool) {
 	e := framework.New(t)
 	ctx := context.Background()
 	const waves, perWave = 30, 10
 	a, p := wavePipeline(t, e, waves, perWave, func(string) string { return "true" })
+	if batched {
+		p.Spec.Git.Writes = v1alpha1.WritesBatched
+	}
 	ns, envs := a.ns, a.envs
 	// The controller's git counters before and after: what the waves spent
 	// on clones, pushes and rebases (#2366). The compact suite runs this
@@ -137,7 +159,11 @@ func TestCompact_Shape300(t *testing.T) {
 	e.WaitStepState(t, ns, pipelineName, bundle, envs[perWave], "Verified", 10*time.Minute)
 	g := bundleGraph(t, e, ns, bundle)
 	name := g.GetName()
-	assert.ElementsMatch(t, compactNodeIDs, graphNodeIDs(g), "compact Graph nodes")
+	wantNodes := compactNodeIDs
+	if batched {
+		wantNodes = append(append([]string(nil), compactNodeIDs...), graph.NodeBranchWrites, "refBranchWrites")
+	}
+	assert.ElementsMatch(t, wantNodes, graphNodeIDs(g), "compact Graph nodes")
 	st, _, _ := graphCondition(g, "Ready")
 	assert.NotEqual(t, "True", st, "the Graph is not Ready mid-way")
 
@@ -149,8 +175,12 @@ func TestCompact_Shape300(t *testing.T) {
 		assert.Equal(t, "Verified", s.Status.State, s.Name)
 	}
 	logWaveTimes(t, steps.Items, perWave)
+	rounds := 0
+	if batched {
+		rounds = logRounds(t, e, ns, bundle, steps.Items, perWave)
+	}
 	if after, err := e.ControllerMetrics(ctx); beforeErr == nil && err == nil {
-		logGitSpend(t, before, after)
+		logGitSpend(t, before, after, rounds)
 	} else {
 		t.Logf("git spend not measured: controller metrics: before %v, after %v", beforeErr, err)
 	}
@@ -253,7 +283,7 @@ func logWaveTimes(t *testing.T, steps []v1alpha1.PromotionStep, perWave int) {
 // kardinal_git_operation_duration_seconds): how many of each, by result, and
 // the seconds spent in each, so a run's git time splits into fresh-clone
 // restarts against rebases and pushes (#2366).
-func logGitSpend(t *testing.T, before, after framework.Metrics) {
+func logGitSpend(t *testing.T, before, after framework.Metrics, rounds int) {
 	t.Helper()
 	delta := func(name string, labels map[string]string) float64 {
 		return after.Sum(name, labels) - before.Sum(name, labels)
@@ -274,7 +304,59 @@ func logGitSpend(t *testing.T, before, after framework.Metrics) {
 		}
 		lines = append(lines, fmt.Sprintf("%-6s %5.0f in %7.1fs (mean %.2fs): %s", op, n, secs, mean, strings.Join(results, ", ")))
 	}
+	if rounds > 0 {
+		clones := delta("kardinal_git_operation_duration_seconds_count", map[string]string{"operation": "clone"})
+		pushes := delta("kardinal_git_operation_duration_seconds_count", map[string]string{"operation": "push"})
+		lines = append(lines, fmt.Sprintf("per round (%d BranchWrite rounds): %.2f clones, %.2f pushes", rounds,
+			clones/float64(rounds), pushes/float64(rounds)))
+	}
 	t.Logf("git spend (#2366, controller metrics):\n%s", strings.Join(lines, "\n"))
+}
+
+// logRounds logs how the Bundle's BranchWrite wrote a batched wavePipeline
+// (#2366): its rounds, how many environments each wrote, and how many rounds
+// each wave took; every step's commit is its environment's own (the
+// BranchWrite's result). It returns the number of rounds.
+func logRounds(t *testing.T, e *framework.Env, ns, bundle string, steps []v1alpha1.PromotionStep, perWave int) int {
+	t.Helper()
+	var list v1alpha1.BranchWriteList
+	require.NoError(t, e.Client.List(context.Background(), &list, client.InNamespace(ns), client.MatchingLabels{"kardinal.io/bundle": bundle}))
+	require.Len(t, list.Items, 1, "one BranchWrite for the Bundle's branch")
+	bw := list.Items[0]
+	members := map[int64]int{}
+	commits := map[string]bool{}
+	for env, res := range bw.Status.Environments {
+		members[res.Round]++
+		assert.NotEmpty(t, res.CommitSHA, "%s: written", env)
+		assert.False(t, commits[res.CommitSHA], "%s: its own commit", env)
+		commits[res.CommitSHA] = true
+	}
+	for _, s := range steps {
+		res := bw.Status.Environments[s.Spec.Environment]
+		assert.Equal(t, res.CommitSHA, s.Status.Outputs["commitSHA"], "%s: the step's commit is its write", s.Name)
+	}
+	waveRounds := map[int]map[int64]bool{}
+	for _, s := range steps {
+		var w, r int
+		if _, err := fmt.Sscanf(s.Spec.Environment, "w%02d-r%d", &w, &r); err != nil {
+			continue
+		}
+		if waveRounds[w] == nil {
+			waveRounds[w] = map[int64]bool{}
+		}
+		waveRounds[w][bw.Status.Environments[s.Spec.Environment].Round] = true
+	}
+	var sizes []string
+	for r := int64(1); r <= bw.Status.Round; r++ {
+		sizes = append(sizes, strconv.Itoa(members[r]))
+	}
+	var perWaveRounds []string
+	for w := 1; waveRounds[w] != nil; w++ {
+		perWaveRounds = append(perWaveRounds, strconv.Itoa(len(waveRounds[w])))
+	}
+	t.Logf("BranchWrite %s (#2366): %d rounds for %d environments (%d a wave); environments per round: %s; rounds per wave: %s",
+		bw.Name, bw.Status.Round, len(bw.Status.Environments), perWave, strings.Join(sizes, " "), strings.Join(perWaveRounds, " "))
+	return int(bw.Status.Round)
 }
 
 // wavePipeline sets up a Pipeline of waves × perWave environments

@@ -405,6 +405,44 @@ force-pushes the base branch, so no writer's commit is lost:
 kubectl get pipelines -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.status.conditions[?(@.type=="PathConflict")].message}{"\n"}{end}'
 ```
 
+### Batched writes (`spec.git.writes: batched`)
+
+By default (`spec.git.writes: perEnvironment`) every `approval: auto` environment's step
+clones, commits and pushes its own change, and the steps that write one branch take turns, one
+at a time. A wave of ten environments on one branch is then ten turns in a row: ten clones and
+ten pushes. With `batched`, the environments of a Bundle that are ready together are written in
+one **round** of the Bundle's `BranchWrite`: one clone, then one commit per environment (its
+usual `[kardinal] Promote <bundle> to <env>` commit, so each environment keeps its own commit,
+receipt and revert), then one push.
+
+```yaml
+spec:
+  git:
+    url: https://github.com/org/gitops.git
+    writes: batched
+```
+
+- Each batched step runs `await-write, health-check`: `await-write` asks the BranchWrite to write
+  its environment (`status.writeRequest`) and takes the answer the Graph mirrors onto it
+  (`spec.live.writes`): its commit (`status.outputs.commitSHA`, `writtenBy: <branchwrite>/<round>`),
+  or that the environment already had the version (`noChanges`). The health check then waits for
+  that commit, as usual.
+- Whoever asks between two rounds is written together. An environment whose gate is not ready
+  has no step yet and asks later, in a later round; at worst, one round per environment, which is
+  today's cost.
+- One environment whose update fails (its path is gone) gets the error and retries on its own
+  budget; the others are written. A push the branch moved under (another writer) writes the round
+  again on the new head. A superseded or rejected Bundle's round writes nothing, and a newer
+  Bundle that already pushed to an environment cancels that environment's write, as the push
+  guard does for a step.
+- Batching applies to directory-layout `approval: auto` environments of image Bundles updated by
+  kustomize, helm or yaml, without a fleet; every other environment writes its own change. A
+  batched Pipeline's Graph uses the compact shape.
+- `kubectl get branchwrites` shows each Bundle's BranchWrite and its rounds; its
+  `status.environments` holds each environment's latest answer.
+
+See [the design](design/30-batched-branch-writes.md).
+
 ## Promotion Steps
 
 Every environment runs a fixed step sequence. The controller picks it from the version type,

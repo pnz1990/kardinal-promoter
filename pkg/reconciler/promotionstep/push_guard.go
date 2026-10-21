@@ -242,7 +242,7 @@ func stepsLanded(ps *v1alpha1.PromotionStep) time.Time {
 // pushCompleted reports whether s completed git-push.
 func pushCompleted(s *v1alpha1.PromotionStep) bool {
 	for _, st := range s.Status.Steps {
-		if st.Name == "git-push" && st.State == v1alpha1.StepExecutionCompleted {
+		if (st.Name == "git-push" || st.Name == steps.AwaitWriteStepName) && st.State == v1alpha1.StepExecutionCompleted {
 			return true
 		}
 	}

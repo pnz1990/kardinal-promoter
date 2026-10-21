@@ -863,6 +863,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			compactSteps = append(compactSteps, compactStep{env: envName,
 				stepType:          stepTypeOf(pipeline, findEnvSpec(pipeline, envName), bundle),
 				render:            render,
+				write:             compactWriteName(pipeline, bundle, findEnvSpec(pipeline, envName)),
 				name:              stepName,
 				prStatus:          prName,
 				upstreams:         rawUpstreams,
@@ -940,6 +941,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			}
 		}
 		nodes = append(nodes, compactRenderNodes(pipeline, bundle, renders)...)
+		nodes = append(nodes, compactWriteNodes(pipeline, bundle, compactSteps)...)
 	}
 
 	return nodes, gates.instances, upstreamEnvs, nil

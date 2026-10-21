@@ -43,7 +43,7 @@ var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version:
 var (
 	primaryKinds   = []string{"Pipeline", "Bundle", "PolicyGate", "PromotionStep"}
 	secondaryKinds = []string{"Subscription", "NotificationHook", "MetricCheck", "ChangeWindow",
-		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "Approval", "ImageVerification", "RenderRun", "ScmProvider", "ClusterScmProvider",
+		"ScheduleClock", "RollbackPolicy", "AuditEvent", "PRStatus", "HookRun", "Approval", "ImageVerification", "RenderRun", "BranchWrite", "ScmProvider", "ClusterScmProvider",
 		"AgentIdentity", "AgentIndex", "Verdict", "AgentRun", "StepTemplate", "PromotionReceipt", "ChangeRequest"}
 )
 

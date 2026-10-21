@@ -1,0 +1,261 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: branchwrites.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    categories:
+    - kardinal-all
+    kind: BranchWrite
+    listKind: BranchWriteList
+    plural: branchwrites
+    singular: branchwrite
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.pipelineName
+      name: Pipeline
+      type: string
+    - jsonPath: .spec.bundleName
+      name: Bundle
+      type: string
+    - jsonPath: .spec.branch
+      name: Branch
+      type: string
+    - jsonPath: .status.round
+      name: Round
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          BranchWrite writes the changes of a Bundle's environments that push to one
+          repository branch (spec.git.writes: batched): every round takes the
+          branch's turn, clones once, commits each requested environment's change
+          with that environment's own commit, and pushes once. Created by the
+          Bundle's kro Graph, which renders the requests from the steps and mirrors
+          the results back onto each step's spec.live.writes; reconciled by the
+          BranchWrite reconciler, which writes only its status
+          (docs/design/30-batched-branch-writes.md).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              BranchWriteSpec is the desired state of a BranchWrite. The Graph writes
+              it: Environments when it is built, Requested whenever a step asks.
+            properties:
+              branch:
+                description: Branch is the branch the environments' changes are pushed
+                  to.
+                minLength: 1
+                type: string
+              bundleName:
+                description: BundleName is the Bundle whose version is written.
+                minLength: 1
+                type: string
+              environments:
+                description: |-
+                  Environments are the environments this BranchWrite writes, in the
+                  order a round commits them.
+                items:
+                  description: BranchWriteEnvironment is one environment a BranchWrite
+                    writes.
+                  properties:
+                    name:
+                      description: Name is the environment's name in the Pipeline.
+                      minLength: 1
+                      type: string
+                    step:
+                      description: Step is the name of the environment's PromotionStep
+                        for the Bundle.
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  - step
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              pipelineName:
+                description: PipelineName is the Pipeline whose environments are written.
+                minLength: 1
+                type: string
+              requested:
+                description: |-
+                  Requested are the steps that asked to have their environment written
+                  (status.writeRequest of each), rendered by the Graph from the steps.
+                items:
+                  description: |-
+                    BranchWriteRequest is a PromotionStep's request to have its environment
+                    written: the step, its UID, and the number of its request
+                    (status.writeRequest of the step).
+                  properties:
+                    request:
+                      description: |-
+                        Request is the number of the step's request. A retry of the step asks
+                        again with the next number, and is written in a new round.
+                      format: int64
+                      minimum: 1
+                      type: integer
+                    step:
+                      description: Step is the PromotionStep's name.
+                      minLength: 1
+                      type: string
+                    uid:
+                      description: |-
+                        UID is the PromotionStep's UID: a request of a step deleted and made
+                        again is another step's.
+                      type: string
+                  required:
+                  - request
+                  - step
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - step
+                x-kubernetes-list-type: map
+              url:
+                description: URL is the repository (the Pipeline's spec.git.url).
+                minLength: 1
+                type: string
+            required:
+            - branch
+            - bundleName
+            - environments
+            - pipelineName
+            - url
+            type: object
+          status:
+            description: BranchWriteStatus is the observed state of a BranchWrite.
+            properties:
+              environments:
+                additionalProperties:
+                  description: BranchWriteResult is the answer to one environment's
+                    latest request.
+                  properties:
+                    cancelled:
+                      description: |-
+                        Cancelled is true when the round did not write it because the Bundle
+                        was superseded, rejected or deleted (Error says which), or a newer
+                        Bundle had already pushed to the environment (NewerBundle).
+                      type: boolean
+                    commitSHA:
+                      description: |-
+                        CommitSHA is the environment's commit on the branch: its own commit,
+                        or the branch head the round started from when the environment
+                        already had the Bundle's version (NoChanges).
+                      type: string
+                    error:
+                      description: |-
+                        Error says why the environment was not written; the step retries on
+                        its own budget.
+                      type: string
+                    newerBundle:
+                      description: |-
+                        NewerBundle is the Bundle that had already pushed to the environment,
+                        when that cancelled the write.
+                      type: string
+                    noChanges:
+                      description: NoChanges is true when the environment needed no
+                        change.
+                      type: boolean
+                    request:
+                      format: int64
+                      type: integer
+                    round:
+                      description: Round is the round that wrote it.
+                      format: int64
+                      type: integer
+                    step:
+                      description: Step, UID and Request are the request answered.
+                      type: string
+                    uid:
+                      type: string
+                  required:
+                  - request
+                  - round
+                  - step
+                  type: object
+                description: Environments are the results, by environment name.
+                type: object
+              inFlight:
+                description: |-
+                  InFlight is the round being written, set before its git work and
+                  cleared once its results are recorded.
+                properties:
+                  members:
+                    description: Members are the requests the round writes.
+                    items:
+                      description: BranchWriteMember is one environment of a round.
+                      properties:
+                        environment:
+                          description: Environment is the environment's name.
+                          type: string
+                        request:
+                          format: int64
+                          type: integer
+                        step:
+                          description: Step, UID and Request are the request the round
+                            answers.
+                          type: string
+                        uid:
+                          type: string
+                      required:
+                      - environment
+                      - request
+                      - step
+                      type: object
+                    type: array
+                  pushIntent:
+                    description: |-
+                      PushIntent is when the round was about to push. A round found in
+                      flight with it set may have pushed: the reconciler looks for its
+                      commits (their Kardinal-Write trailer) on the branch before it writes
+                      the round again.
+                    format: date-time
+                    type: string
+                  round:
+                    description: Round is the round's number.
+                    format: int64
+                    type: integer
+                required:
+                - round
+                type: object
+              message:
+                description: Message says what the last round did, or why it waits.
+                type: string
+              round:
+                description: Round is the number of the last round started.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
