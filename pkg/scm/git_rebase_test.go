@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
@@ -171,6 +174,10 @@ func TestGoGitClient_RebaseOnRemote_NotMoved(t *testing.T) {
 //
 // Covers SCM-GIT-REBASE-INFLIGHT-01.
 func TestGoGitClient_RebaseOnRemote_UpdateInFlight(t *testing.T) {
+	// The other writer's push lands at 300ms; a slow runner can take longer
+	// than the 2s default to apply it (a push delayed to 2.1s failed). The
+	// wait only has to outlast the push; the cancellation below ends it.
+	scm.SetNotMovedWaitForTest(t, 30*time.Second)
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n", "README.md": "r\n"})
@@ -214,6 +221,83 @@ func TestGoGitClient_RebaseOnRemote_UpdateInFlight(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "the wait ends with the context")
 }
 
+// TestGoGitClient_RebaseOnRemote_CanceledFetch: a context that ends during
+// a fetch, not only during the wait between fetches, is the rebase's error
+// (errors.Is context.Canceled): go-git reports it as text. Here it ended
+// before the first fetch. TestGoGitClient_RebaseOnRemote_UpdateInFlight's
+// cancel landed in a fetch on CI's race build once (release/v0.12, #2387).
+func TestGoGitClient_RebaseOnRemote_CanceledFetch(t *testing.T) {
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n"})
+	work := filepath.Join(t.TempDir(), "w")
+	require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
+	writeFiles(t, work, map[string]string{"environments/a/kustomization.yaml": "a: 2\n"})
+	require.NoError(t, c.CommitAll(ctx, work, "promote a", "kardinal", "k@example.com"))
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := c.RebaseOnRemote(canceled, work, "origin", "main", scm.GitAuth{})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestGoGitClient_RebaseOnRemote_CanceledDuringFetch: a context that ends
+// while a fetch is in flight is the rebase's error (errors.Is
+// context.Canceled), never ErrRebaseBaseMissing: the remote is an HTTP
+// server that answers no request, so each fetch is still waiting when the
+// context ends. Both of RebaseOnRemote's fetches: the remote head's
+// (git_rebase.go's fetch, whose go-git error was text: the UpdateInFlight
+// failures on #2387 and #2391) and the missing base's (QA-2 on #2387).
+func TestGoGitClient_RebaseOnRemote_CanceledDuringFetch(t *testing.T) {
+	for _, baseMissing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("baseMissing=%v", baseMissing), func(t *testing.T) {
+			ctx := context.Background()
+			c := scm.NewGoGitClient()
+			reached := make(chan struct{}, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				select {
+				case reached <- struct{}{}:
+				default:
+				}
+				<-r.Context().Done()
+			}))
+			t.Cleanup(srv.Close)
+			remote := seedBareRemote(t, map[string]string{"README.md": "r\n"})
+			work := filepath.Join(t.TempDir(), "w")
+			require.NoError(t, c.Clone(ctx, "file://"+remote, "main", work, scm.GitAuth{}))
+			writeFiles(t, work, map[string]string{"README.md": "w\n"})
+			require.NoError(t, c.CommitAll(ctx, work, "promote", "kardinal", "k@example.com"))
+			repo, err := gogit.PlainOpen(work)
+			require.NoError(t, err)
+			if baseMissing {
+				head, err := repo.Head()
+				require.NoError(t, err)
+				cur, err := repo.CommitObject(head.Hash())
+				require.NoError(t, err)
+				orphan := &object.Commit{Author: cur.Author, Committer: cur.Committer, Message: "promote", TreeHash: cur.TreeHash,
+					ParentHashes: []plumbing.Hash{plumbing.NewHash("1111111111111111111111111111111111111111")}}
+				obj := repo.Storer.NewEncodedObject()
+				require.NoError(t, orphan.Encode(obj))
+				h, err := repo.Storer.SetEncodedObject(obj)
+				require.NoError(t, err)
+				require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(head.Name(), h)))
+			}
+			require.NoError(t, repo.DeleteRemote("origin"))
+			_, err = repo.CreateRemote(&gitconfig.RemoteConfig{Name: "origin", URLs: []string{srv.URL + "/repo.git"}})
+			require.NoError(t, err)
+
+			canceled, cancel := context.WithCancel(ctx)
+			defer cancel()
+			go func() {
+				<-reached
+				cancel()
+			}()
+			_, err = c.RebaseOnRemote(canceled, work, "origin", "main", scm.GitAuth{})
+			require.ErrorIs(t, err, context.Canceled)
+			assert.NotErrorIs(t, err, scm.ErrRebaseBaseMissing)
+		})
+	}
+}
+
 // TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock (#2351): the race
 // TestGoGitClient_ConcurrentWritersLoseNothing lost once, made certain. The
 // remote's refs/heads/main.lock stands for another writer's update in
@@ -226,6 +310,9 @@ func TestGoGitClient_RebaseOnRemote_UpdateInFlight(t *testing.T) {
 //
 // Covers SCM-GIT-REBASE-INFLIGHT-01.
 func TestGoGitClient_PushRefusedWhileAnUpdateHoldsTheLock(t *testing.T) {
+	// The other update lands at 300ms; the wait only has to outlast it on a
+	// slow runner (as in TestGoGitClient_RebaseOnRemote_UpdateInFlight).
+	scm.SetNotMovedWaitForTest(t, 30*time.Second)
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 	remote := seedBareRemote(t, map[string]string{"environments/a/kustomization.yaml": "a: 1\n", "environments/b/kustomization.yaml": "b: 1\n"})
@@ -354,6 +441,15 @@ func TestGoGitClient_RebaseOnRemote_BaseMissing(t *testing.T) {
 	_, err = c.RebaseOnRemote(ctx, work, "origin", "main", scm.GitAuth{})
 	require.ErrorIs(t, err, scm.ErrRebaseBaseMissing)
 	assert.Contains(t, err.Error(), "1111111111111111111111111111111111111111")
+
+	// A context that ends during the base's fetch is the cancellation, not
+	// a missing base: git-push redoes the change from a fresh clone on
+	// ErrRebaseBaseMissing (QA-2's probe on #2387).
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = c.RebaseOnRemote(canceled, work, "origin", "main", scm.GitAuth{})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, scm.ErrRebaseBaseMissing)
 }
 
 // TestGoGitClient_RebaseOnRemote_BaseFetched (#1606): a HEAD made on an

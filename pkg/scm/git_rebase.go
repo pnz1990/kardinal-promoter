@@ -131,6 +131,12 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 			ProxyOptions: proxyOpts,
 		})
 		if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+			// go-git reports a fetch the context ended as text: wrap the
+			// context's error, so a canceled rebase is errors.Is
+			// context.Canceled however far the fetch got.
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("git fetch %s %s: %w", remote, branch, cerr)
+			}
 			return fmt.Errorf("git fetch %s %s: %s", remote, branch, gitErrorText(err))
 		}
 		return nil
@@ -141,6 +147,12 @@ func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch st
 		// The base is an earlier head of the branch: fetch the branch's
 		// recent history once, deep enough for the writers since (#1606).
 		if ferr := fetch(rebaseBaseDepth); ferr != nil {
+			// A context that ended is the error (fetch wraps it), not a
+			// missing base: git-push would redo the change from a fresh
+			// clone instead of returning the cancellation.
+			if ctx.Err() != nil {
+				return nil, ferr
+			}
 			return nil, fmt.Errorf("rebase: commit %s, parent of HEAD %s (%v): %w",
 				local.ParentHashes[0], local.Hash, ferr, ErrRebaseBaseMissing)
 		}
