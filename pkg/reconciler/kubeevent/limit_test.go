@@ -146,8 +146,9 @@ func TestLimited_RepeatsPayTokens(t *testing.T) {
 	// The clock does not move, so exactly each bucket's burst gets through.
 	assert.EqualValues(t, 5+5, broadcast.n.Load(), "each bucket's burst reaches the broadcaster, the repeats included")
 	sink.settle(t)
-	require.Eventually(t, func() bool { return sink.writes.Load() == 5+5 }, 30*time.Second, time.Millisecond,
-		"each is one write, none merged into a series")
+	// At least: an overshoot fails at once, on the Equal below.
+	require.Eventually(t, func() bool { return sink.writes.Load() >= 5+5 }, 30*time.Second, time.Millisecond)
+	assert.EqualValues(t, 5+5, sink.writes.Load(), "each is one write, none merged into a series")
 	assert.LessOrEqual(t, sink.peak.Load(), int64(5+5))
 }
 
@@ -162,6 +163,43 @@ type counting struct {
 func (c *counting) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
 	c.n.Add(1)
 	c.EventRecorder.Eventf(regarding, related, eventtype, reason, action, note, args...)
+}
+
+// TestLimited_Refill (QA-3 on #2402): on a clock the test steps, once a
+// bucket's burst is spent, exactly QPS more Events pass per second the clock
+// moves, a long wait refills at most the burst, and the clock is the
+// limiter's, not the wall's. The other tests freeze the clock, so a limiter
+// refilling 100 times too fast, or by the wall clock, passed them.
+//
+// Covers PERF-EVENTS-01.
+func TestLimited_Refill(t *testing.T) {
+	var clock atomic.Int64 // seconds after frozen()
+	now := func() time.Time { return frozen().Add(time.Duration(clock.Load()) * time.Second) }
+	next := &countingRecorder{}
+	rec := kubeevent.LimitedAt(next, "test-refill", kubeevent.Limit{QPS: 2, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 3}, now)
+	emit := func(n int) (normal, warning int64) {
+		n0, w0 := next.normal.Load(), next.warning.Load()
+		for i := 0; i < n; i++ {
+			rec.Eventf(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns"}}, nil, corev1.EventTypeNormal, "R", "A", "n %d", i)
+			rec.Eventf(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns"}}, nil, corev1.EventTypeWarning, "W", "A", "w %d", i)
+		}
+		return next.normal.Load() - n0, next.warning.Load() - w0
+	}
+	normal, warning := emit(50)
+	assert.EqualValues(t, 5, normal, "the Normal burst")
+	assert.EqualValues(t, 3, warning, "the Warning burst")
+	normal, warning = emit(50)
+	assert.Zero(t, normal+warning, "nothing more while the clock stands still, however long the wall clock runs")
+	for step := 1; step <= 3; step++ {
+		clock.Add(1)
+		normal, warning = emit(50)
+		assert.EqualValues(t, 2, normal, "second %d: exactly the Normal QPS", step)
+		assert.EqualValues(t, 1, warning, "second %d: exactly the Warning QPS", step)
+	}
+	clock.Add(60)
+	normal, warning = emit(50)
+	assert.EqualValues(t, 5, normal, "a minute refills the Normal burst, no more")
+	assert.EqualValues(t, 3, warning, "and the Warning burst")
 }
 
 // TestLimitValidate: main refuses a negative or non-finite rate and a burst
