@@ -179,6 +179,7 @@ pattern of its tests.
 | `evidence-airgap` | Forgejo, Argo CD, the in-cluster registry, key-signed receipts (as the receipts suite), and `components/airgap.sh`'s NetworkPolicy: the controller namespace connects to the cluster and the API server only (names still resolve through CoreDNS). Image signatures, keyless attestations from a private Sigstore, receipts and the evidence pack are verified with no egress, and `verify-receipt` runs in a network namespace with only a loopback | `TestAirgap_*` |
 | `evidence-tenancy` | Forgejo, Argo CD, the in-cluster registry, the fake ticketing API and a second shard (`components/shard.sh`). Team A's namespace is the main release's and team B's is shard b's; each shard signs receipts with its own key and pushes referrers only under its team's registry prefix (`e2e/team-a`, `e2e/team-b`). Each team's auditor, receipts, change requests, credentials and webhook tokens stay in its namespace | `TestTenancy_*` |
 | `scale` | Forgejo behind Toxiproxy, Prometheus Operator and Prometheus, two controller replicas built with `-race` | `TestScale_*` (see [Scale suite](#scale-suite)) |
+| `soak` | Forgejo, Prometheus Operator and Prometheus, Argo CD, the in-cluster registry, the fake ticketing API and the test agent; two controller replicas built without `-race`, signing receipts with a static key | `TestSoak_EnterpriseDay` (see [Soak suite](#soak-suite)): an hour of three teams' promotions with their invariants checked every three minutes; it upgrades its release, so a cluster serves one run. Runs weekly and in the release gate's soak set, not nightly |
 
 `TestSCM_*` tests use only `Env.Git`, so they run against every git server;
 a test that needs one provider is named after it and checks `Env.Git.Kind()`
@@ -301,6 +302,87 @@ lists it as a known bug (`xfail`) instead of a failure. When it passes,
 its coverage rows `covered` (they are `known-bug` until then).
 `test/e2e/proof` fails a known bug whose issue is closed; it asks the
 GitHub API when `GITHUB_TOKEN` is set, as in CI.
+
+## Soak suite
+
+The `soak` suite's `TestSoak_EnterpriseDay` (#2403) runs the features of a
+multi-tenant install together under steady load for a day's hour
+(`KARDINAL_E2E_SOAK_DURATION`, default `60m`), on one cluster:
+
+```bash
+KIND_CLUSTER=kp-soak KARDINAL_E2E_BUILD=host KARDINAL_E2E_NODE_MEMORY=16g make e2e-up SUITE=soak
+KIND_CLUSTER=kp-soak make test-e2e-live SUITE=soak                             # an hour
+KIND_CLUSTER=kp-soak KARDINAL_E2E_SOAK_DURATION=10m make test-e2e-live SUITE=soak  # a short day
+```
+
+The estate, all in one release with two replicas:
+
+- team a: three Pipelines, an agent's Pipeline (an `auto` AgentIdentity
+  ships a version a minute) and a Pipeline of the team's registry image by
+  digest. A verify gate on prod counts two runs of the test agent, an allowed
+  verifier; a ServiceNow change request and a person's approval naming its
+  ticket gate prod too;
+- team b: four Pipelines and its registry image's, with PR review on prod
+  (a reviewer bot merges), a Jira change request, and the org's gates read
+  through `policyNamespaces` from a namespace that consents;
+- team c: a fleet of 31 environments in the compact Graph shape, two
+  Pipelines, and a podinfo release (Argo CD) whose test environment rolls
+  back by itself.
+
+Each team pushes with its own Forgejo user's token, a collaborator on its
+repos only. CI creates about 4 Bundles a minute (`KARDINAL_E2E_SOAK_RATE`),
+people, the agent and the registry images about 2 more, and the fleet
+rolls out every sixth of the day. A change board answers the fake ticketing
+API's changes after 15 seconds and rejects one in ten until the last sixth of
+the day; each rejected version gets a fix-forward version a minute later.
+
+The day's episodes, each at its share of the day, while the load runs:
+the warm-up (every Pipeline fills its `historyLimit` of 10; the memory
+baselines start here), an agents-only freeze, a person's and a suspended
+agent's verdicts, a stop-the-line freeze, the upgrade (until v0.13.0 is
+tagged, a helm upgrade of this build that turns `perNamespace: required`
+on with each team's prefix; then the upgrade from the latest tag), a team
+shipping another team's image, an automatic rollback, the leader killed
+with no grace period, and a namespace consenting to share its gates.
+
+Every three minutes (`KARDINAL_E2E_SOAK_CHECK`) a checker
+(`test/e2e/framework/soak`) runs the invariants over what changed since:
+tenant isolation (receipts, AuditEvents, Verdicts and change requests name
+only their team's Pipelines; referrers only under the team's prefix; no gate
+of a namespace that has not consented; SubjectAccessReviews of another
+team's namespace; another team's token never pushes), receipts (every
+Verified step's receipt Stored within four minutes, never signed again, a
+sample verified with `kardinal verify-receipt` from the cluster and the
+registry), verdicts (only the allowed agent's run-bound Verdicts count), the
+audit trail (every Verified step has its `PromotionSucceeded` record naming
+its actor), the reconcile-error ratio (under 1% over every ten minutes, 5%
+over ten minutes that hold the upgrade or the leader kill, and 1% again
+right after them; Prometheus unreachable three passes in a row, or more
+passes unjudged than judged, fails), no panic, race or restart, progress,
+the load's own creates, the leader's heap (under twice its baseline), and
+that what an episode left in flight resumed: each step it held, by UID,
+Verified or Superseded within ten minutes, never Failed and never made
+again (kro updates a step in place; the podinfo release, which the rollback
+episode fails on purpose, aside). The receipts and audit checks read the
+steps of superseded versions too, which are retired a minute after
+(`status.retiredSteps`); the report counts the steps each judged, and a day
+on which either judged none fails. A check that cannot read the cluster
+runs again three times before that is a violation of its own.
+The first violation ends the soak: the checker dumps the estate (each
+namespace's objects, every controller Pod's `/metrics`, the violation with
+the object that broke it in `soak-violation.json`; the controller logs are
+streamed next to them) and the test fails naming the invariant, its time and
+the object.
+
+Once the load stops and the estate settles, the last pass runs over the
+whole day; the leader's heap after its collections must end within 1.2x of
+its warm baseline (+8 MiB) with a slope under 1 MiB per ten minutes, and its
+RSS within 1.2x (+64 MiB), for each leader that led a quarter of the day;
+the scale invariants run over each team; each team's auditor exports an
+evidence pack; and the registry holds exactly one referrer per receipt of
+each team's image, naming the team's namespace. `soak-report.json`, in the
+test's diagnostics, has the day's numbers, the episodes' times and the
+memory samples.
 
 ## Coverage
 

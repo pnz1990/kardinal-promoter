@@ -14,7 +14,8 @@
 #
 #   minor  one suite on a Kubernetes minor matrix.txt does not run it on: a
 #          pair (suite, minor) of the suites that run on one minor only
-#          (every suite but core, the upgrade suites, scale, github, whose
+#          (every suite but core, the upgrade suites, scale, the hour-long
+#          soak, which runs weekly, github, whose
 #          token is for one job, multi-cluster, whose spoke boots the
 #          kind-config image, and a suite matrix.txt pins to its minors) and
 #          the KIND_NODE_1_* minors of hack/tool-versions.env they don't run
@@ -71,7 +72,7 @@ done <"$E2E_DIR/matrix.txt"
 
 pairs=()
 for suite in $(printf '%s\n' "${!runs_on[@]}" | sort); do
-  case "$suite" in core | scale | github | multi-cluster | upgrade*) continue ;; esac
+  case "$suite" in core | scale | soak | github | multi-cluster | upgrade*) continue ;; esac
   [ -z "${pinned[$suite]:-}" ] || continue
   for m in "${minors[@]}"; do
     [[ "${runs_on[$suite]}" == *" $m "* ]] || pairs+=("$suite $m")

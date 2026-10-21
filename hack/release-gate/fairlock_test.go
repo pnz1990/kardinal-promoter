@@ -683,11 +683,14 @@ func TestCountingLock_ExclusiveHoldsAlone(t *testing.T) {
 }
 
 // TestPlan_ScaleStepsHoldTheLockAlone (#2244 QA, item 5): the scale suite's
-// steps take the counting lock exclusively; other heavy steps share it.
+// steps and the enterprise-day soak (#2403) take the counting lock
+// exclusively; other heavy steps share it.
 func TestPlan_ScaleStepsHoldTheLockAlone(t *testing.T) {
 	scale := 0
-	for _, st := range Plan(fakeRepo(), Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, Floor: 35, Newest: 37}) {
-		if strings.HasPrefix(st.ID, "scale-") {
+	r := fakeRepo()
+	r.Matrix = append(r.Matrix, MatrixLine{"soak", "1.37", "-"})
+	for _, st := range Plan(r, Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full", "soak"}, Floor: 35, Newest: 37}) {
+		if strings.HasPrefix(st.ID, "scale-") || st.ID == "soak-enterprise-day" {
 			scale++
 			assert.True(t, st.Exclusive && st.Heavy, "%s holds the heavy-load lock alone", st.ID)
 		} else {

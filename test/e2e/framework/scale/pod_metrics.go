@@ -19,6 +19,16 @@ import (
 // PodMetrics is controller Pod pod's own /metrics page, read through the API
 // server's Pod proxy on the Pod's metrics port.
 func PodMetrics(ctx context.Context, e *framework.Env, pod string) (framework.Metrics, error) {
+	raw, err := PodMetricsText(ctx, e, pod)
+	if err != nil {
+		return nil, err
+	}
+	return framework.ParseMetrics(string(raw))
+}
+
+// PodMetricsText is controller Pod pod's /metrics page as it serves it (the
+// enterprise-day soak's dump keeps it).
+func PodMetricsText(ctx context.Context, e *framework.Env, pod string) ([]byte, error) {
 	var p corev1.Pod
 	if err := e.Client.Get(ctx, client.ObjectKey{Namespace: framework.ControllerNamespace, Name: pod}, &p); err != nil {
 		return nil, fmt.Errorf("get controller Pod %s: %w", pod, err)
@@ -39,7 +49,7 @@ func PodMetrics(ctx context.Context, e *framework.Env, pod string) (framework.Me
 	if err != nil {
 		return nil, fmt.Errorf("metrics of %s: %w", pod, err)
 	}
-	return framework.ParseMetrics(string(raw))
+	return raw, nil
 }
 
 // LeaderMetrics is the controller leader's own /metrics page.

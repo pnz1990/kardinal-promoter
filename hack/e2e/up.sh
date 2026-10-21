@@ -82,6 +82,14 @@
 #           default 1 here): the TestScale_ topology, load, race and chaos
 #           tests and their invariants (test/e2e/framework/scale); sizes
 #           come from KARDINAL_E2E_SCALE_PROFILE at test time (ci, full, soak)
+#   soak    the enterprise-day soak (#2403): Forgejo, Prometheus, Argo CD, an
+#           OCI registry, the fake ticketing API and the test agent, and two
+#           controller replicas built without -race signing receipts with a
+#           static key: TestSoak_EnterpriseDay runs three teams' promotions,
+#           agents, change requests, freezes, an upgrade, a leader kill and an
+#           automatic rollback for KARDINAL_E2E_SOAK_DURATION (default 60m)
+#           while it checks its invariants; it upgrades the release, so the
+#           cluster serves one run
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -245,6 +253,23 @@ case "$SUITE" in
     # keeps Superseded Bundles' Graphs for an hour for the other suites, and
     # with that kro holds every Graph of a run and is OOMKilled at its 2 GiB
     # default. The invariants read retired steps from status.retiredSteps.
+    HELM_ARGS='--set serviceMonitor.enabled=true --set replicaCount=2 --set logLevel=info
+      --set graph.retire.superseded=1m
+      --set resources.limits.cpu=4 --set resources.limits.memory=4Gi --set resources.requests.cpu=500m --set resources.requests.memory=512Mi' ;;
+  # The enterprise-day soak (#2403, test/e2e/README.md#soak-suite): the
+  # scale suite's release (two replicas, its ServiceMonitor, info logs,
+  # Graphs retired after a minute) without -race, so its memory is measured
+  # as in production, plus key-signed receipts pushed to each image's own
+  # repository under e2e/ (each team's prefix, e2e/team-a/ and so on, is
+  # set mid-soak with perNamespace: required), the fake ticketing API for
+  # its change requests, the test agent for its verifiers and Argo CD for
+  # the podinfo release whose rollout fails. Prometheus runs before
+  # kardinal.sh, so the ServiceMonitor's CRD exists.
+  soak) COMPONENTS=("giteafamily.sh forgejo" prometheus.sh argocd.sh registry.sh ticketapi.sh test-agent.sh)
+    RUN='^TestSoak_'
+    export KARDINAL_E2E_RECEIPTS=1 KARDINAL_E2E_RECEIPTS_OCI_ALLOWED=e2e/
+    export KARDINAL_E2E_ARGOCD_EXCLUDE_KARDINAL=1
+    export KARDINAL_E2E_KRO_MEMORY=${KARDINAL_E2E_KRO_MEMORY:-3Gi}
     HELM_ARGS='--set serviceMonitor.enabled=true --set replicaCount=2 --set logLevel=info
       --set graph.retire.superseded=1m
       --set resources.limits.cpu=4 --set resources.limits.memory=4Gi --set resources.requests.cpu=500m --set resources.requests.memory=512Mi' ;;

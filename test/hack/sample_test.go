@@ -112,7 +112,7 @@ func TestNightlySample(t *testing.T) {
 		require.Len(t, jobs, 2, day)
 		minor, flake := jobs[0], jobs[1]
 		assert.False(t, on[minor.suite][minor.k8s], "%s: matrix.txt already runs %s on %s", day, minor.suite, minor.k8s)
-		assert.NotContains(t, []string{"core", "scale", "github", "multi-cluster"}, minor.suite, day)
+		assert.NotContains(t, []string{"core", "scale", "soak", "github", "multi-cluster"}, minor.suite, day)
 		assert.NotEqual(t, "receipts-keyless", minor.suite, "%s: matrix.txt pins receipts-keyless to its minor", day)
 		assert.False(t, strings.HasPrefix(minor.suite, "upgrade"), day)
 		assert.Equal(t, "-", minor.shard, day)
