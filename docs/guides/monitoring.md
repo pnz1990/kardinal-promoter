@@ -154,7 +154,7 @@ max by (namespace) (kardinal_agent_index_bytes) / max by (namespace) (kardinal_a
 
 ### Health ref cleanup after an upgrade
 
-New in v0.13.0 (unreleased). After an upgrade from a release with Graph health ref nodes (v0.12.0 and earlier), the leader removes those nodes from
+New in v0.13.0. After an upgrade from a release with Graph health ref nodes (v0.12.0 and earlier), the leader removes those nodes from
 existing Graphs and deletes the reader RoleBindings of earlier releases
 ([RBAC requirements](security.md#rbac-requirements)). It skips what it cannot clean and retries,
 waiting 10 seconds and doubling up to 5 minutes, until nothing is left.
@@ -278,7 +278,7 @@ prometheusRule:
 Install or upgrade:
 
 ```bash
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --set prometheusRule.enabled=true \
   --set 'prometheusRule.additionalLabels.release=kube-prometheus-stack'
 ```
@@ -380,7 +380,7 @@ grafanaDashboard:
 Install or upgrade:
 
 ```bash
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --set grafanaDashboard.enabled=true \
   --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 ```

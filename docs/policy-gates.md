@@ -44,7 +44,7 @@ After 5 minutes the gate passes and prod promotes (in the quickstart's `demo`, p
 
 ## When a new or edited gate takes effect
 
-!!! info "Changed in v0.13.0 (unreleased)"
+!!! info "Changed in v0.13.0"
     In v0.12.0 and earlier, a version in flight keeps the gates it started with: a new or edited
     gate applies only to versions created after it, and gate copies carry no
     `kardinal.io/gate-template-*` annotations and write no `GateChanged` record. An upgrade from
@@ -199,7 +199,7 @@ spec:
 
 ### Org-level gates
 
-Created in the `platform-policies` namespace (configurable via `--policy-namespaces` controller flag). Org gates are mandatory: they are injected into every Pipeline that targets the matching environment. Teams cannot remove them. A gate in an org policy namespace is an org gate without the `kardinal.io/scope` label: `kardinal policy list` and its instances show `SCOPE org` (from v0.13.0, unreleased; v0.12.0 shows such a gate as `team` while it acts as an org gate). The label `kardinal.io/scope: org` makes a gate in another namespace an org gate too. `kardinal policy list` reads the org policy namespaces from its own `--policy-namespaces` flag: pass the controller's value when it is not the default.
+Created in the `platform-policies` namespace (configurable via `--policy-namespaces` controller flag). Org gates are mandatory: they are injected into every Pipeline that targets the matching environment. Teams cannot remove them. A gate in an org policy namespace is an org gate without the `kardinal.io/scope` label: `kardinal policy list` and its instances show `SCOPE org` (from v0.13.0; v0.12.0 shows such a gate as `team` while it acts as an org gate). The label `kardinal.io/scope: org` makes a gate in another namespace an org gate too. `kardinal policy list` reads the org policy namespaces from its own `--policy-namespaces` flag: pass the controller's value when it is not the default.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -258,7 +258,7 @@ Every matching gate from all three is added to the Graph. `spec.policyNamespaces
 
 ### Sharing gates with other namespaces
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.x and earlier read every namespace `spec.policyNamespaces` names, without its consent
     and without a condition or Event.
 
@@ -398,7 +398,7 @@ expression: actor.kind == "controller" && actor.via == "auto-rollback"
 !!! warning "Never trust a version's labels or annotations for who made it"
     Whoever creates a Bundle writes its labels and annotations, `kardinal.io/rollback` and
     `kardinal.io/rollback-from` included, and no admission rule checks what they say when the
-    Bundle is created. (From v0.13.0, unreleased: on a Bundle the controller created, only the controller may change those
+    Bundle is created. (From v0.13.0: on a Bundle the controller created, only the controller may change those
     two and `kardinal.io/pipeline` afterwards: [Rollback](rollback.md#what-happens-in-git).) A gate
     such as `"kardinal.io/rollback" in bundle.labels` lets through any version that says it is a
     rollback.

@@ -4,8 +4,8 @@ Each incident below beat a guardrail that lived inside the agent or the agent's 
 an agent more credentials than its task needed. This page maps each one to the kardinal control
 that stops the same failure for changes that go through kardinal, and says whether that control
 is **shipped** or **planned** (on the [roadmap](../roadmap.md)). A control marked "shipped in
-v0.12.0" is new in v0.12.0; one marked "merged, ships in v0.13.0" is on main and not released yet;
-the others shipped in v0.11.0 or earlier.
+v0.12.0" is new in v0.12.0, and one marked "shipped in v0.13.0" is new in v0.13.0; the others
+shipped in v0.11.0 or earlier.
 
 kardinal governs promotions: a version reaching an environment through Git and the cluster. It
 cannot stop an agent that holds other credentials, such as a cloud API token, a database
@@ -111,7 +111,7 @@ and uploaded what they found to public repositories.
 |---|---|
 | An agent's kubeconfig carries a ServiceAccount token bound to the agent's own Roles, not the person's credentials, so what leaks is what that identity may do | Shipped in v0.12.0: [A least-privilege identity](connect-an-agent.md#a-least-privilege-identity) |
 | A version is promoted only with signed, digest-pinned images when `spec.imageVerification` is set, so a malicious build without the signature does not ship | Shipped: [Verify image signatures](../image-verification.md) |
-| With `spec.imageVerification.attestations`, a version is promoted only with verified SLSA provenance from the builders you trust, at the build level you require, and a gate can require a signed vulnerability scan without critical findings (`attestations.*`) | Merged, ships in v0.13.0: [Attestations](../image-verification.md#attestations) |
+| With `spec.imageVerification.attestations`, a version is promoted only with verified SLSA provenance from the builders you trust, at the build level you require, and a gate can require a signed vulnerability scan without critical findings (`attestations.*`) | Shipped in v0.13.0: [Attestations](../image-verification.md#attestations) |
 
 ### A malicious issue leaks private repositories through an MCP server (Invariant Labs, May 2025)
 
@@ -148,5 +148,5 @@ The controls marked planned arrive in the releases the [roadmap](../roadmap.md) 
 per-agent budgets ([v0.14](../roadmap.md#v014-adaptive)).
 
 Signed promotion receipts, a signed record of each promotion with its actor, gates, approvals and
-verdicts that anyone can check offline, are merged and ship in v0.13.0:
+verdicts that anyone can check offline, shipped in v0.13.0:
 [Signed promotion receipts](../receipts.md).

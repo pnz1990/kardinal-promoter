@@ -1,6 +1,6 @@
 # Change Requests
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier do not have ChangeRequests. The [changelog](changelog.md) lists every change since v0.12.0.
 
 Many teams may not change production without an approved change request: a ticket in ServiceNow

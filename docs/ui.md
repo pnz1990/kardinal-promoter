@@ -70,7 +70,7 @@ pipelines as a sortable table.
 While a [freeze](agentic/freezes.md#in-the-ui) holds promotions, every view starts with its banner:
 whom it holds, where, who froze, since and until when, and why, with **Unfreeze** or the
 `kardinal unfreeze` command. A station the freeze holds, on the map and on the fleet board, is
-marked frozen and says "Frozen by <freeze>" (new in v0.13.0, unreleased: v0.12.0 shows the banner
+marked frozen and says "Frozen by <freeze>" (new in v0.13.0: v0.12.0 shows the banner
 only).
 
 ### Who shipped a version

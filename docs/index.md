@@ -44,9 +44,18 @@ kardinal checks the Deployment `my-app` in the namespace `<name>`.
     ---
 
     Give Claude Code, Codex or Cursor a local MCP server with its own least-privilege identity:
-    read-only by default, with a policy pre-flight. New in v0.12.0.
+    read-only by default, with a policy pre-flight.
 
     [:octicons-arrow-right-24: Connect an agent](agentic/connect-an-agent.md)
+
+-   :material-file-certificate-outline:{ .lg .middle } **Evidence an auditor can check**
+
+    ---
+
+    A signed receipt for each promotion, gates on verified attestations and approved change
+    tickets, and a period's records in one archive. New in v0.13.0.
+
+    [:octicons-arrow-right-24: Signed promotion receipts](receipts.md)
 
 -   :material-shield-check:{ .lg .middle } **Gates you can read**
 

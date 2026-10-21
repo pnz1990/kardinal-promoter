@@ -68,7 +68,7 @@ jobs:
 
       - name: Create Bundle
         id: bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.3
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.13.0
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -86,7 +86,7 @@ jobs:
 
 ```yaml
       - name: Create Bundle
-        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.12.3
+        uses: pnz1990/kardinal-promoter/.github/actions/create-bundle@v0.13.0
         env:
           KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
@@ -333,7 +333,7 @@ kubectl create secret generic kardinal-ci-token \
   --namespace=kardinal-system \
   --from-literal=token=$(openssl rand -hex 32)
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   -n kardinal-system --reset-then-reuse-values \
   --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```
@@ -429,7 +429,7 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 The PR body and the UI link `ciRunURL`, and a [promotion receipt](receipts.md) signs it, so it is
 checked when a version is created. It must be empty or an absolute `http://` or `https://` URL
 with a host, without user info (an `@` anywhere before the first `/` after `://`), without spaces
-or control characters, and without a credential query or fragment parameter (from v0.13.0, unreleased:
+or control characters, and without a credential query or fragment parameter (from v0.13.0:
 v0.12.0 does not check parameters). A parameter is a
 credential when its name is normalized (percent-decoded, a trailing array index such as `[]` or
 `[0]` removed, lower-cased, `-` and `_` removed) and then either:

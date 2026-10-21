@@ -110,7 +110,7 @@ How it works:
 
 ## Approval fields
 
-!!! info "New in v0.13.0 (unreleased)"
+!!! info "New in v0.13.0"
     v0.12.0 and earlier have no `approval.fields`, and `kardinal approve` takes no `--field`. The [changelog](changelog.md) lists every change since v0.12.0.
 
 A change process often asks more of an approval than "approve": a change ticket, an

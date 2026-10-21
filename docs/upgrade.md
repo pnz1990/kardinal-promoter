@@ -1,12 +1,9 @@
 # Upgrade
 
-**Upgrading from v0.12.0, v0.12.1 or v0.12.2** to v0.12.3: v0.12.3 changes no CRD, value or
-admission policy, so apply the CRDs and upgrade the chart in place with the commands below
-(`--version 0.12.3`), and the CLI with it. The [changelog](changelog.md)'s v0.12.3, v0.12.2 and
-v0.12.1 sections list the fixes. On its first start v0.12.3 re-translates the Graph of each
-promoting version once, which changes nothing for a Graph that was working (#2271).
-**From v0.12.x** to the next release: follow [Upgrading from v0.12.0](#upgrading-from-v0120).
-**From v0.11.0** to v0.12.3: follow [Upgrading from v0.11.0](#upgrading-from-v0110).
+**Upgrading from v0.12.0, v0.12.1, v0.12.2 or v0.12.3** to v0.13.0: follow
+[Upgrading from v0.12.0](#upgrading-from-v0120).
+**From v0.11.0:** follow [Upgrading from v0.11.0](#upgrading-from-v0110), and read step 1 of
+[Upgrading from v0.12.0](#upgrading-from-v0120) too: the v0.13.0 changes it lists apply to you as well.
 **From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
@@ -21,7 +18,7 @@ kubectl version | grep Server
 Helm does not update CRDs on upgrade. Apply the new chart's CRDs first:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   | kubectl apply --server-side --force-conflicts -f -
 ```
 
@@ -33,7 +30,7 @@ after the install anyway.
 Then upgrade the release:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system \
   --reset-then-reuse-values
 ```
@@ -65,18 +62,13 @@ Graph needs could be pruned until its next translation binds it again. Before yo
 after a downgrade, remove the marker, so the controller reads those Graphs in full:
 `kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
 
-**From v0.13.0** (not released yet). A controller older than v0.13.0 puts a health ref node in
+**From v0.13.0.** A controller older than v0.13.0 puts a health ref node in
 each Graph it builds, read through the `<fullname>-graph-reader` ClusterRole, which the v0.13.0
 chart no longer ships. Downgrade the chart along with the controller (`helm rollback`), so the
 ClusterRole is back. When you upgrade again, the controller removes those nodes and their reader
 RoleBindings at startup.
 
 ## Upgrading from v0.12.0
-
-!!! note "v0.13.0 is not released yet"
-    These steps take a v0.12.0 installation to the next release, v0.13.0, once it is released:
-    `<version>` in the commands is that release's chart version. Until then v0.12.3 is the latest
-    release, and there is nothing to upgrade to.
 
 The same steps take a v0.12.1, v0.12.2 or v0.12.3 installation: none of them changes a CRD, value
 or admission policy.
@@ -105,9 +97,8 @@ may name an IAM role until you allow it in `health.eks.allowedRoleARNs` or
 
 v0.13.0 targets the same kro as v0.12.0 (`v0.10.0-rc.0`), so kro is not upgraded.
 
-**1. Read the upgrade notes.** The changelog's [Unreleased](changelog.md#unreleased) section
-lists every change since v0.12.0. Its "Before you upgrade" entries are the ones that can change
-something for you:
+**1. Read the upgrade notes.** The changelog's [From v0.12.x](changelog.md#from-v012x) lists
+what can change for you, and its v0.13.0 section every change since v0.12.0:
 
 - **`graph.readerNamespaces` is removed.** Setting it fails the upgrade
   (`graph.readerNamespaces was removed (#1283)`). With `--reset-then-reuse-values` a value you
@@ -209,20 +200,20 @@ something for you:
     only its agents") ([How verdicts count](agentic/verify-with-agents.md#how-verdicts-count)).
 
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
-fields to AgentIdentities, Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals
-and ImageVerifications; Pipelines and RenderRuns accept quoted keys in YAML paths only once the
-new CRDs are applied. Helm never upgrades CRDs, and Helm owns the fields of the CRDs the v0.12.0
-chart installed, so `--force-conflicts` is required:
+fields to AgentIdentities, AgentIndexes, Bundles, Pipelines, PolicyGates, PromotionSteps,
+AuditEvents, Approvals and ImageVerifications; Pipelines and RenderRuns accept quoted keys in YAML
+paths only once the new CRDs are applied. Helm never upgrades CRDs, and Helm owns the fields of the
+CRDs the v0.12.0 chart installed, so `--force-conflicts` is required:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
 new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -299,14 +290,14 @@ what can change for you, and its v0.12.0 section every change since v0.11.0:
 v0.11.0 chart installed, so `--force-conflicts` is required:
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
 new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -389,14 +380,14 @@ owns their fields: `--force-conflicts` is required, or the apply stops with
 `conflict with "helm" ... .spec.versions`.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **6. Upgrade the chart.** Use `--reset-then-reuse-values`, which keeps the values you set and
 takes every new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -475,7 +466,7 @@ The v0.9.0 chart installed them, so Helm owns their fields: `--force-conflicts` 
 the apply stops with `conflict with "helm" ... .spec.versions`.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **6. Upgrade kro.** Run this from a checkout of kardinal-promoter at this release; it installs
@@ -489,7 +480,7 @@ KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
 takes every new default from the new chart.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -641,13 +632,13 @@ On Kubernetes older than 1.35 the script exits 1 and installs nothing (see [Kube
 **7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 18 by hand; this adds the CRDs v0.8.1 did not have. Apply them before the new controller starts. `--force-conflicts` takes over fields another field manager (Helm, or an earlier `kubectl apply`) set.
 
 ```bash
-helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 | kubectl apply --server-side --force-conflicts -f -
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 | kubectl apply --server-side --force-conflicts -f -
 ```
 
 **8. Upgrade the chart.** Use `--reset-then-reuse-values`, not `--reuse-values`. With `--reuse-values`, the v0.8.1 `krocodile` default is carried over and fails the new schema.
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.12.3 \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.13.0 \
   --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
 ```
 
@@ -769,7 +760,7 @@ Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and
 - **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
 - **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
 - **SCM token scope.** v0.8.1 had no `scm.allowedRepositories`, so after the upgrade any Pipeline without its own `git.secretRef` can still have the controller's SCM token open PRs in any repository the token can write, and the controller warns at startup. Set `scm.allowedRepositories` to the repositories your Pipelines use (see [The shared SCM token](guides/security.md#the-shared-scm-token-and-scmallowedrepositories)).
-- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. To v0.12.0, whose chart still ships the reader ClusterRole: in cluster mode its sweep deletes them once no Graph reads through them, and a binding that a Graph made by v0.8.1 still reads through stays until that Graph's Bundle is replaced. From v0.13.0 (not released yet), whose chart ships no reader ClusterRole: they grant nothing, but the controller cannot find them to delete them. In both cases, list them, and delete the ones you do not want, as [RBAC requirements](guides/security.md#rbac-requirements) shows.
+- **Graph reader bindings.** v0.8.1 bound the reader role in every namespace a health `ref` named, and did not record those bindings. To v0.12.0, whose chart still ships the reader ClusterRole: in cluster mode its sweep deletes them once no Graph reads through them, and a binding that a Graph made by v0.8.1 still reads through stays until that Graph's Bundle is replaced. From v0.13.0, whose chart ships no reader ClusterRole: they grant nothing, but the controller cannot find them to delete them. In both cases, list them, and delete the ones you do not want, as [RBAC requirements](guides/security.md#rbac-requirements) shows.
 
 - **Notes in the [changelog](changelog.md) that don't apply to v0.8.1:**
     - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
