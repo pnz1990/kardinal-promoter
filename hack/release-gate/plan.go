@@ -367,8 +367,14 @@ func (r *Repo) nodeImage(suite string, minor int) string {
 }
 
 // clusterWeight is how much of the cluster budget a suite's job takes:
-// gitlab needs about 7 GB, multi-cluster boots two clusters, scale a 24 GB node.
-var clusterWeight = map[string]int{"gitlab": 2, "multi-cluster": 2, "scale": 2}
+// gitlab needs about 7 GB, multi-cluster boots two clusters, scale a 24 GB
+// node, the soak a 16 GB one.
+var clusterWeight = map[string]int{"gitlab": 2, "multi-cluster": 2, "scale": 2, "soak": 2}
+
+// ownSteps are the matrix.txt suites the gate runs in steps of their own,
+// in the scale and soak area (scaleSteps), not on the floor and the newest
+// minor as every other suite.
+var ownSteps = map[string]bool{"scale": true, "soak": true}
 
 func isUpgrade(suite string) bool { return suite == "upgrade" || strings.HasPrefix(suite, "upgrade-") }
 
@@ -456,13 +462,14 @@ func (r *Repo) pinnedOff(suite string, minor int) string {
 	return fmt.Sprintf("hack/e2e/matrix.txt runs %s on %s only: %s", suite, strings.Join(on, ", "), reason)
 }
 
-// suiteShards lists the live suites of matrix.txt but scale, in order, with
-// the shards each runs in ("-" for the whole suite).
+// suiteShards lists the live suites of matrix.txt but scale and the soak
+// (ownSteps), in order, with the shards each runs in ("-" for the whole
+// suite).
 func suiteShards(r *Repo) ([]string, map[string][]string) {
 	var suites []string
 	shards := map[string][]string{}
 	for _, l := range r.Matrix {
-		if l.Suite == "scale" {
+		if ownSteps[l.Suite] {
 			continue
 		}
 		if _, ok := shards[l.Suite]; !ok {
@@ -480,7 +487,7 @@ func suiteShards(r *Repo) ([]string, map[string][]string) {
 }
 
 // ciSteps are the e2e-live.yml jobs the gate dispatches: every suite but
-// scale on the floor and the newest minor (e2e-live.yml's minors input,
+// scale and the soak on the floor and the newest minor (e2e-live.yml's minors input,
 // hack/e2e/all.sh MINORS), with its matrix.txt shards. A pinned suite's
 // other minor is a pinned step: all.sh MINORS runs no job for it.
 func ciSteps(r *Repo, o Options) []Step {
@@ -631,10 +638,40 @@ func scaleSteps(r *Repo, o Options) []Step {
 		st.Script, st.Cleanup = script, deleteClusters(cluster)
 		steps = append(steps, st)
 		if p == "soak" {
-			steps = append(steps, receiptBurstStep(r))
+			steps = append(steps, receiptBurstStep(r), soakStep(r))
 		}
 	}
 	return steps
+}
+
+// soakMinutes is how long the gate's enterprise-day soak soaks: the
+// default of TestSoak_EnterpriseDay, the soak set's one run of it.
+const soakMinutes = 60
+
+// soakStep runs the soak suite (#2403, test/e2e/README.md#soak-suite) once
+// for soakMinutes on its matrix.txt minor, holding the heavy-load lock
+// alone (the host drained, as for the scale suite): its memory and
+// reconcile-error checks count only on a quiet host.
+func soakStep(r *Repo) Step {
+	st := Step{
+		ID: "soak-enterprise-day", Area: areaScale, Title: fmt.Sprintf("enterprise-day soak, %d minutes", soakMinutes),
+		Clusters: clusterWeight["soak"], Heavy: true, Exclusive: true, Tests: "e2e/test.json", MinTests: 1,
+	}
+	minor := ""
+	for _, l := range r.Matrix {
+		if l.Suite == "soak" {
+			minor = l.Minor
+			break
+		}
+	}
+	if minor == "" {
+		st.Missing = "no soak suite in hack/e2e/matrix.txt"
+		return st
+	}
+	cluster := "kp-rg-soak"
+	env := []string{"KARDINAL_E2E_NODE_MEMORY=16g", fmt.Sprintf("KARDINAL_E2E_SOAK_DURATION=%dm", soakMinutes), "KARDINAL_E2E_TIMEOUT=3h"}
+	st.Script, st.Cleanup = liveScript("soak", cluster, minor, 1, env), deleteClusters(cluster)
+	return st
 }
 
 // Receipt burst at full size (#2062): the soak set's one run of

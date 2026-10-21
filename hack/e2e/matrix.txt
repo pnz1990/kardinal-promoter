@@ -24,6 +24,11 @@
 #   hack/tool-versions.env, one of them the oldest or the newest; core cannot
 #   be pinned, and an upgrade suite cannot be pinned off the oldest. The
 #   release gate refuses any other pin before it runs.
+# The enterprise-day soak (#2403, test/e2e/README.md#soak-suite): an hour
+# of a heavy host. hack/e2e/all.sh and e2e-live.yml run it only when SUITES
+# names it or SOAK=1 (the weekly CI run), and the release gate in its soak
+# set (hack/release-gate -scale soak), never nightly or per pull request.
+soak              1.37        -      heavy
 # The scale suite's ci profile (test/e2e/README.md#scale-suite): its
 # controller is built with -race on the runner, whatever KARDINAL_E2E_BUILD.
 scale             1.37        -      heavy

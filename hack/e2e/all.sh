@@ -26,6 +26,8 @@
 #   SAMPLE      a date (YYYY-MM-DD, or today): add that night's sample jobs
 #               (hack/e2e/sample.sh), as the scheduled e2e-live.yml runs do
 #   SAMPLE_ONLY set with SAMPLE to run the sample jobs alone
+#   SOAK        1: also run the soak suite (the weekly CI run). It runs
+#               only when SUITES names it or SOAK=1: an hour of a heavy host
 #   COUNT       go test -count (default 1; the upgrade jobs always 1: the
 #               test upgrades its cluster; the scale job always 1). RUN is ignored: every job runs
 #               its whole suite (for some tests, use make test-e2e-live RUN=)
@@ -120,6 +122,17 @@ elif [ -n "${SAMPLE_ONLY:-}" ]; then
   die "SAMPLE_ONLY needs SAMPLE"
 fi
 
+# The soak suite (#2403) holds a heavy host for an hour and a half: only
+# when SUITES names it, or SOAK=1 (the weekly CI run).
+if [ "${SOAK:-}" != 1 ] && ! [[ " ${SUITES:-} " == *" soak "* ]]; then
+  kept=()
+  for j in "${matrix[@]}"; do
+    read -r _ suite _ <<<"$j"
+    [ "$suite" = soak ] || kept+=("$j")
+  done
+  matrix=("${kept[@]}")
+fi
+
 if [ "$MODE" = -matrix ]; then
   # SUITES (the e2e-live.yml dispatch input) keeps only those suites' jobs.
   read -ra only <<<"${SUITES:-}"
@@ -209,9 +222,10 @@ run_job() {
     unset RUN
     [ "$suite" = github ] || unset KARDINAL_E2E_GITHUB_TOKEN_FILE DEMO_GITHUB_TOKEN
     export KIND_CLUSTER="$PREFIX-$id" KIND_K8S="$k8s" SHARD="$shard" COUNT="$count"
-    # run.sh refuses COUNT above 1 for the upgrade suite; the scale suite's
-    # load and chaos tests are long, and repeat nothing a second run adds.
-    case $suite in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121 | upgrade-v0123 | scale) COUNT=1 ;; esac
+    # run.sh refuses COUNT above 1 for the upgrade suites and the soak, which
+    # upgrades its release; the scale suite's load and chaos tests are long,
+    # and repeat nothing a second run adds.
+    case $suite in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121 | upgrade-v0123 | scale | soak) COUNT=1 ;; esac
     export E2E_OUT="$OUT/$id" KUBECONFIG="$OUT/$id/kubeconfig"
     mkdir -p "$E2E_OUT"
     bash "$E2E_DIR/up.sh" "$suite" && bash "$E2E_DIR/run.sh" "$suite"

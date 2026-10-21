@@ -610,12 +610,13 @@ func TestDependabotCoversEveryManifest(t *testing.T) {
 
 // TestE2EMatrixMinors: hack/e2e/all.sh -matrix with MINORS runs every
 // suite, with its matrix.txt shards, on exactly those minors, as the release
-// gate dispatches e2e-live.yml (its minors input).
+// gate dispatches e2e-live.yml (its minors input); the soak only when SUITES
+// names it or SOAK=1, as the weekly run sets.
 func TestE2EMatrixMinors(t *testing.T) {
 	root := repoRoot(t)
 	cmd := exec.Command("bash", "hack/e2e/all.sh", "-matrix")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "MINORS=1.35 1.37", "SUITES=", "SAMPLE=", "SAMPLE_ONLY=")
+	cmd.Env = append(os.Environ(), "MINORS=1.35 1.37", "SUITES=", "SAMPLE=", "SAMPLE_ONLY=", "SOAK=")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	var m struct {
@@ -655,7 +656,21 @@ func TestE2EMatrixMinors(t *testing.T) {
 	}
 	require.NotEmpty(t, shards, "matrix.txt's jobs")
 	require.Contains(t, pinnedTo, "receipts-keyless", "matrix.txt pins receipts-keyless to 1.35 (Knative)")
+	// The soak (#2403) runs only when SUITES names it or SOAK=1 (weekly).
+	require.Contains(t, shards, "soak")
+	assert.NotContains(t, got, "soak", "the soak runs only when SUITES names it or SOAK=1")
+	for _, env := range [][]string{{"SOAK=1", "SUITES="}, {"SOAK=", "SUITES=soak"}} {
+		cmd := exec.Command("bash", "hack/e2e/all.sh", "-matrix")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), append([]string{"MINORS=1.35 1.37", "SAMPLE=", "SAMPLE_ONLY="}, env...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		assert.Contains(t, string(out), `"suite":"soak","k8s":"1.37"`, "%v: the soak on the newest minor", env)
+	}
 	for suite, want := range shards {
+		if suite == "soak" {
+			continue
+		}
 		require.Contains(t, got, suite)
 		minors := []string{"1.35", "1.37"}
 		if pins := pinnedTo[suite]; pins != nil {

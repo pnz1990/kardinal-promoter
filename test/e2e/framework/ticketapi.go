@@ -122,9 +122,15 @@ func (e *Env) SetFakeSnowTicket(t *testing.T, number string, change map[string]i
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := e.ticketControl(ctx, "PUT", change, nil, "servicenow", number); err != nil {
+	if err := e.UpdateFakeSnowTicket(ctx, number, change); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// UpdateFakeSnowTicket is SetFakeSnowTicket returning its error, for a
+// goroutine that may not fail the test (the soak's change board).
+func (e *Env) UpdateFakeSnowTicket(ctx context.Context, number string, change map[string]interface{}) error {
+	return e.ticketControl(ctx, "PUT", change, nil, "servicenow", number)
 }
 
 // AddFakeSnowTicket adds a change_request someone else opened (no
@@ -192,7 +198,12 @@ func (e *Env) SetFakeJiraIssue(t *testing.T, key string, change map[string]inter
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := e.ticketControl(ctx, "PUT", change, nil, "jira", key); err != nil {
+	if err := e.UpdateFakeJiraIssue(ctx, key, change); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// UpdateFakeJiraIssue is SetFakeJiraIssue returning its error.
+func (e *Env) UpdateFakeJiraIssue(ctx context.Context, key string, change map[string]interface{}) error {
+	return e.ticketControl(ctx, "PUT", change, nil, "jira", key)
 }

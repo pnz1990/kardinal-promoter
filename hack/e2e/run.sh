@@ -9,15 +9,16 @@
 #
 # Env:
 #   COUNT         go test -count (default 1; the weekly flake job uses more;
-#                 the upgrade suite runs once)
+#                 the upgrade suites and the soak run once)
 #   RUN           go test -run pattern (default: the suite's, from up.sh)
 #   SHARD         i/n runs the ith of n parts of the matching tests, split by
 #                 their durations in hack/e2e/durations.txt so the parts
 #                 take about as long (CI splits the core suite across jobs
 #                 this way)
 #   KIND_CLUSTER  cluster name (default kardinal-e2e-SUITE)
-#   KARDINAL_E2E_TIMEOUT   go test -timeout (default 90m per repetition; the
-#                 scale suite's full and soak profiles need more, e.g. 4h)
+#   KARDINAL_E2E_TIMEOUT   go test -timeout (default 90m per repetition, 3h
+#                 for the soak suite; the scale suite's full and soak profiles
+#                 need more, e.g. 4h)
 #   KARDINAL_E2E_PARALLEL  go test -parallel (default GOMAXPROCS; the scale
 #                 suite's default is 4, a CI runner's vCPUs)
 #
@@ -41,8 +42,9 @@ cd "$REPO_ROOT"
 go build -o "$E2E_OUT/bin/report" ./test/e2e/report
 RUN=${RUN:-$KARDINAL_E2E_RUN}
 COUNT=${COUNT:-1}
-# The upgrade test upgrades the cluster's v0.8.1 release, so it runs once.
-case $SUITE in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121 | upgrade-v0123) [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the upgrade suite's cluster serves one run; use COUNT=1" ;; esac
+# The upgrade test upgrades the cluster's v0.8.1 release, so it runs once;
+# so does the soak, which upgrades its release mid-run.
+case $SUITE in upgrade | upgrade-v090 | upgrade-v0100 | upgrade-v0110 | upgrade-v0120 | upgrade-v0121 | upgrade-v0123 | soak) [ "$COUNT" = 1 ] || die "COUNT=$COUNT: the $SUITE suite's cluster serves one run; use COUNT=1" ;; esac
 # shard_tests I N DURATIONS reads test names on stdin and prints part I of
 # N. Serial tests are dealt out first, longest first, to the part with the
 # least serial time; then the parallel ones, longest first, to the part
@@ -84,13 +86,16 @@ if [ -n "${SHARD:-}" ]; then
   RUN="^($(IFS='|'; echo "${mine[*]}"))\$"
   echo "shard $SHARD: ${#mine[@]} of ${#tests[@]} tests"
 fi
-# 90 minutes per repetition unless KARDINAL_E2E_TIMEOUT says.
+# 90 minutes per repetition unless KARDINAL_E2E_TIMEOUT says; the soak's
+# hour (KARDINAL_E2E_SOAK_DURATION, up to two) with its set-up and settle, 3h.
+TIMEOUT=${KARDINAL_E2E_TIMEOUT:-$((90 * COUNT))m}
+[ "$SUITE" != soak ] || TIMEOUT=${KARDINAL_E2E_TIMEOUT:-3h}
 PARALLEL=${KARDINAL_E2E_PARALLEL:-}
 [ -n "$PARALLEL" ] || [ "$SUITE" != scale ] || PARALLEL=4
 # report decides: go test also fails the package for an expected failure
 # (scale.KnownBug), which report does not count as one.
 set +o pipefail
-go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "${KARDINAL_E2E_TIMEOUT:-$((90 * COUNT))m}" \
+go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "$TIMEOUT" \
   ${PARALLEL:+-parallel "$PARALLEL"} -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"
 exit "${PIPESTATUS[2]}"

@@ -133,7 +133,7 @@ func TestPlanOfThisRepo(t *testing.T) {
 	assert.Len(t, ids, len(steps))
 	assert.Empty(t, ids["chart-envtest"].Missing, "hack/tool-versions.env's envtest minors are the floor and the newest")
 	for _, l := range r.Matrix {
-		if l.Suite == "scale" {
+		if ownSteps[l.Suite] {
 			continue
 		}
 		for _, m := range opts.Minors() {
@@ -1693,6 +1693,37 @@ func TestPlanReceiptBurst(t *testing.T) {
 	assert.Contains(t, burst.Cleanup, "kp-rg-receipts-burst")
 	assert.NotContains(t, byID(Plan(r, Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full"},
 		ImageBuild: "host", Floor: 35, Newest: 37})), "receipts-burst-full", "only in the soak set")
+}
+
+// TestPlanSoak (#2403): the soak set runs the enterprise-day soak once, for
+// an hour on the soak suite's minor, holding the heavy-load lock alone; the
+// soak suite gets no step on the floor and the newest minor as the other
+// suites do, and without the soak profile there is no soak step at all.
+func TestPlanSoak(t *testing.T) {
+	r := fakeRepo()
+	assert.Contains(t, byID(Plan(r, fakeOptions()))["soak-enterprise-day"].Missing, "no soak suite in hack/e2e/matrix.txt")
+	r.Matrix = append(r.Matrix, MatrixLine{"soak", "1.37", "-"})
+	ids := byID(Plan(r, fakeOptions()))
+	soak := ids["soak-enterprise-day"]
+	assert.Empty(t, soak.Missing)
+	assert.True(t, soak.Heavy && soak.Exclusive, "a quiet host: the soak's memory and error checks count only there")
+	assert.Equal(t, 2, soak.Clusters)
+	for _, want := range []string{"export KARDINAL_E2E_SOAK_DURATION=60m", "export KARDINAL_E2E_TIMEOUT=3h",
+		"export KARDINAL_E2E_NODE_MEMORY=16g", "KIND_K8S=1.37 COUNT=1", "bash hack/e2e/up.sh soak", "bash hack/e2e/run.sh soak"} {
+		assert.Contains(t, soak.Script, want)
+	}
+	assert.NotContains(t, soak.Script, "export RUN=", "the suite's own tests")
+	assert.Contains(t, soak.Cleanup, "kp-rg-soak")
+	for id := range ids {
+		assert.False(t, strings.HasPrefix(id, "e2e-soak-") || strings.HasPrefix(id, "ci-soak-"), "%s: the soak runs in the soak set only", id)
+	}
+	live := fakeOptions()
+	live.LiveCI = true
+	for id := range byID(Plan(r, live)) {
+		assert.False(t, strings.HasPrefix(id, "ci-soak-"), "%s: the gate never dispatches the soak to CI", id)
+	}
+	assert.NotContains(t, byID(Plan(r, Options{Count: 2, FuzzTime: "1m", ScaleProfiles: []string{"full"},
+		ImageBuild: "host", Floor: 35, Newest: 37})), "soak-enterprise-day", "only in the soak set")
 }
 
 // TestReleaseTokenProblem (#2282 QA): -priority release needs
