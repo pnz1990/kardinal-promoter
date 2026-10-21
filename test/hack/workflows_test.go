@@ -680,3 +680,49 @@ func TestE2EMatrixMinors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, string(out), "MINORS: 1.x is not a Kubernetes minor")
 }
+
+// TestE2ELiveGateRunsKeepTheirRun: a release gate's dispatch
+// (hack/release-gate -live ci, the gate input) has a concurrency group of
+// its own, keyed on the gate, and is never cancelled, so no other dispatch on
+// its branch, running or queued, can cancel or hold up the gate's run (QA-3
+// on #2370). Any other dispatch is one per branch and replaces the branch's
+// older run, except on main. Dispatches on main and release/* take 16
+// runners, the others 4.
+func TestE2ELiveGateRunsKeepTheirRun(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "e2e-live.yml"))
+	require.NoError(t, err)
+	var wf struct {
+		RunName string `json:"run-name"`
+		On      struct {
+			Dispatch struct {
+				Inputs map[string]struct {
+					Required bool   `json:"required"`
+					Default  string `json:"default"`
+				} `json:"inputs"`
+			} `json:"workflow_dispatch"`
+		} `json:"true"` // sigs.k8s.io/yaml reads the key on as YAML 1.1's true
+		Concurrency struct {
+			Group  string `json:"group"`
+			Cancel string `json:"cancel-in-progress"`
+		} `json:"concurrency"`
+		Jobs map[string]struct {
+			Strategy struct {
+				MaxParallel string `json:"max-parallel"`
+			} `json:"strategy"`
+		} `json:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	gate, ok := wf.On.Dispatch.Inputs["gate"]
+	require.True(t, ok, "e2e-live.yml takes the gate input")
+	assert.False(t, gate.Required)
+	assert.Empty(t, gate.Default, "a dispatch without it is not a gate's")
+	assert.Equal(t, "e2e-live-${{ github.event_name == 'schedule' && 'schedule' || inputs.gate && format('gate-{0}', inputs.gate) || github.ref_name }}",
+		wf.Concurrency.Group, "scheduled runs share a group, a gate's run has its own, other dispatches one per branch")
+	assert.Equal(t, "${{ github.event_name == 'workflow_dispatch' && !inputs.gate && github.ref_name != 'main' }}", wf.Concurrency.Cancel,
+		"a gate's run is never cancelled; another dispatch replaces its branch's older run, except on main")
+	assert.Contains(t, wf.RunName, "inputs.gate && format(", "a gate's run is named after its key (hack/release-gate checks the format)")
+	suite, ok := wf.Jobs["suite"]
+	require.True(t, ok, "e2e-live.yml has the suite job")
+	assert.Equal(t, "${{ (github.event_name == 'workflow_dispatch' && github.ref_name != 'main' && !startsWith(github.ref_name, 'release/')) && 4 || 16 }}",
+		suite.Strategy.MaxParallel, "main and release/* take 16 runners")
+}

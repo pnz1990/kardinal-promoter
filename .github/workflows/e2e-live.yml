@@ -53,6 +53,15 @@ on:
         description: 'environments of the core suite TestHealth_ArgoCDWaveOnSharedBranch (argocd health, one shared branch); 150 is the #1575 acceptance case'
         required: false
         default: '30'
+      gate:
+        description: 'set by hack/release-gate -live ci only: the gate''s key (its commit and inputs). The run gets a concurrency group of its own and the key in its name, by which the gate finds it'
+        required: false
+        default: ''
+
+# A release gate's run is named after its key, so the gate finds the run it
+# dispatched, or one still going from an earlier attempt, by name
+# (hack/release-gate/ci.go gateTitle).
+run-name: "${{ inputs.gate && format('E2E live: release gate {0}', inputs.gate) || 'E2E live' }}"
 
 permissions:
   contents: read
@@ -60,10 +69,13 @@ permissions:
 # One scheduled run at a time: a nightly run that outlives its night is not
 # overlapped by the next one. A dispatched run is one per branch: a newer
 # dispatch on the same branch replaces the older one, so one branch never holds
-# several matrices of runners.
+# several matrices of runners (on main it waits instead). A release gate's
+# run (the gate input) has a group of its own, keyed on the gate, and is never
+# cancelled: no other dispatch on its branch, running or queued, can cancel
+# or hold it up.
 concurrency:
-  group: e2e-live-${{ github.event_name == 'schedule' && 'schedule' || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != 'main' }}
+  group: e2e-live-${{ github.event_name == 'schedule' && 'schedule' || inputs.gate && format('gate-{0}', inputs.gate) || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && !inputs.gate && github.ref_name != 'main' }}
 
 # bash (not the default `bash -e`) so every step runs with -eo pipefail.
 defaults:

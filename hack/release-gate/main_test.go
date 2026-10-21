@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 )
 
 func fakeRepo() *Repo {
@@ -1319,6 +1321,13 @@ type fakeCI struct {
 	artifact            bool // the job's attempt-1 artifact exists
 	runDone             bool // the last view saw the run completed
 	limited             int  // views to answer with GitHub's rate-limit error
+	dispatched          bool // run 9 exists: the gate dispatched it
+}
+
+// gateRunTitle is the name e2e-live.yml gives the run of a gate on sha with
+// these inputs.
+func gateRunTitle(sha string, suites []string, minors string, count int) string {
+	return fmt.Sprintf(gateTitle, (&ciRunner{sha: sha, suites: suites, minors: minors, count: count}).key())
 }
 
 func (f *fakeCI) reply(call string) ([]byte, error) {
@@ -1327,11 +1336,17 @@ func (f *fakeCI) reply(call string) ([]byte, error) {
 	switch {
 	case strings.HasPrefix(call, "api repos/o/r/commits/br"):
 		return []byte("abc\n"), nil
-	case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br -f suites=core gitlab -f count=2 -f minors=1.35 1.37"):
+	case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br -f suites=core gitlab -f count=2 -f minors=1.35 1.37 -f gate="):
+		f.dispatched = true
 		return nil, nil
 	case strings.HasPrefix(call, "run list"):
 		now := time.Now().UTC().Format(time.RFC3339)
-		return []byte(`[{"databaseId":7,"headSha":"other","createdAt":"` + now + `"},{"databaseId":9,"headSha":"abc","createdAt":"` + now + `"}]`), nil
+		runs := `[{"databaseId":7,"headSha":"other","createdAt":"` + now + `","displayTitle":"E2E live","status":"in_progress"}`
+		if f.dispatched {
+			runs += `,{"databaseId":9,"headSha":"abc","createdAt":"` + now + `","displayTitle":"` +
+				gateRunTitle("abc", []string{"core", "gitlab"}, "1.35 1.37", 2) + `","status":"queued"}`
+		}
+		return []byte(runs + "]"), nil
 	case call == "api rate_limit --jq .resources.core.reset":
 		f.resetAsked.Add(1)
 		return []byte(fmt.Sprint(time.Now().Add(time.Second).Unix())), nil
@@ -1658,6 +1673,199 @@ func TestCIRunner_OnePollForAllSteps(t *testing.T) {
 	calls := f.called("run view 9 --repo o/r --json status,attempt,jobs")
 	assert.Less(t, calls, 20, "one shared look per poll interval: %d calls for %d steps over 5 looks", calls, steps)
 	assert.Positive(t, resets.Load(), "the rate limit's reset was read to wait for it")
+}
+
+// TestCIRunner_DispatchOnce: GitHub's rate limit refusing the dispatch is
+// waited out (in the v0.12.0 gate every call of the account hit it). Any
+// other dispatch error may hide a run GitHub started: the gate adopts that
+// run if it appears, else the error is every CI step's, from one dispatch.
+// A run of this gate still going (its commit and inputs, by name) is
+// adopted instead of dispatching a second one; a finished one, a run of
+// other inputs and an ad-hoc dispatch are not (QA-3 on #2370).
+func TestCIRunner_DispatchOnce(t *testing.T) {
+	const steps = 8
+	title := gateRunTitle("abc", []string{"core"}, "1.37", 1)
+	old := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	for _, tt := range []struct {
+		name     string
+		existing string   // runs on the branch before the gate dispatches
+		refuse   []string // the dispatch's errors, in order, then success
+		takenBy  bool     // GitHub starts the run despite the dispatch's error
+		wantErr  string
+		calls    int   // dispatch calls
+		wantRun  int64 // the run the steps wait for
+	}{
+		{name: "rate limits", refuse: []string{
+			"HTTP 403: API rate limit exceeded for user ID 1.",
+			"HTTP 403: You have exceeded a secondary rate limit",
+			"HTTP 429: Too Many Requests",
+		}, calls: 4, wantRun: 9},
+		{name: "a 5xx GitHub did not act on", refuse: []string{"HTTP 502: Bad Gateway"}, wantErr: "dispatch e2e-live.yml: HTTP 502: Bad Gateway", calls: 1},
+		{name: "a 5xx after GitHub started the run", refuse: []string{"HTTP 502: Bad Gateway"}, takenBy: true, calls: 1, wantRun: 9},
+		{name: "refused", refuse: []string{"HTTP 422: Workflow does not have 'workflow_dispatch' trigger"},
+			wantErr: "dispatch e2e-live.yml: HTTP 422", calls: 1},
+		{name: "this gate's run still going", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` + title + `","status":"in_progress"}`,
+			calls: 0, wantRun: 5},
+		{name: "this gate's run queued", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` + title + `","status":"queued"}`,
+			calls: 0, wantRun: 5},
+		{name: "this gate's run finished", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` + title + `","status":"completed"}`,
+			calls: 1, wantRun: 9},
+		{name: "a run of other inputs", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` +
+			gateRunTitle("abc", []string{"core", "gitlab"}, "1.37", 1) + `","status":"in_progress"}`, calls: 1, wantRun: 9},
+		{name: "a run of another count", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` +
+			gateRunTitle("abc", []string{"core"}, "1.37", 3) + `","status":"in_progress"}`, calls: 1, wantRun: 9},
+		{name: "a run of other minors", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` +
+			gateRunTitle("abc", []string{"core"}, "1.35 1.37", 1) + `","status":"in_progress"}`, calls: 1, wantRun: 9},
+		{name: "an ad-hoc dispatch of the commit", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"E2E live","status":"in_progress"}`,
+			calls: 1, wantRun: 9},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			refuse := tt.refuse
+			dispatched := false
+			reply := func(call string) ([]byte, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case call == "api repos/o/r/commits/br --jq .sha":
+					return []byte("abc\n"), nil
+				case call == "api rate_limit --jq .resources.core.reset":
+					return []byte(fmt.Sprint(time.Now().Add(time.Second).Unix())), nil
+				case strings.HasPrefix(call, "workflow run e2e-live.yml --repo o/r --ref br -f suites=core -f count=1 -f minors=1.37 -f gate="):
+					if len(refuse) > 0 {
+						msg := refuse[0]
+						refuse = refuse[1:]
+						dispatched = dispatched || tt.takenBy
+						return nil, errors.New(msg)
+					}
+					dispatched = true
+					return nil, nil
+				case strings.HasPrefix(call, "run list"):
+					runs := []string{`{"databaseId":7,"headSha":"other","createdAt":"` + old + `","displayTitle":"E2E live","status":"in_progress"}`}
+					if tt.existing != "" {
+						runs = append(runs, tt.existing)
+					}
+					if dispatched {
+						now := time.Now().UTC().Format(time.RFC3339)
+						runs = append(runs, `{"databaseId":9,"headSha":"abc","createdAt":"`+now+`","displayTitle":"`+title+`","status":"queued"}`)
+					}
+					return []byte("[" + strings.Join(runs, ",") + "]"), nil
+				case call == "run view 5 --repo o/r --json status,attempt,jobs", call == "run view 9 --repo o/r --json status,attempt,jobs":
+					id := strings.Fields(call)[2]
+					var jobs []string
+					for i := 0; i < steps; i++ {
+						jobs = append(jobs, fmt.Sprintf(`{"databaseId":%d,"name":"core %d/%d on Kubernetes 1.37","status":"completed","conclusion":"cancelled","url":"https://x/%s/job/%d"}`,
+							100+i, i+1, steps, id, 100+i))
+					}
+					return []byte(`{"status":"completed","attempt":1,"jobs":[` + strings.Join(jobs, ",") + `]}`), nil
+				}
+				return nil, fmt.Errorf("no %s", call) // logs and images: not needed here
+			}
+			f := &fakeGH{reply: reply}
+			out := t.TempDir()
+			c := &ciRunner{gh: f.gh, repo: "o/r", ref: "br", sha: "abc", out: out, count: 1, suites: []string{"core"}, minors: "1.37",
+				poll: time.Millisecond, jobWait: time.Minute, adoptWait: 20 * time.Millisecond, log: func(string, ...any) {},
+				wait: func(context.Context, time.Duration) error { return nil }}
+			var wg sync.WaitGroup
+			errs := make([]error, steps)
+			for i := 0; i < steps; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					st := Step{ID: fmt.Sprintf("ci-core-%d", i), CIJob: &ciJob{ID: fmt.Sprintf("core-137-%dof%d", i+1, steps), Suite: "core",
+						Minor: "1.37", Shard: fmt.Sprintf("%d/%d", i+1, steps)}}
+					dir := filepath.Join(out, st.ID)
+					require.NoError(t, os.MkdirAll(dir, 0o755))
+					errs[i] = c.Run(context.Background(), st, dir)
+				}(i)
+			}
+			wg.Wait()
+			assert.Equal(t, tt.calls, f.called("workflow run"), "dispatch calls for %d CI steps", steps)
+			for i, err := range errs {
+				require.Error(t, err, "step %d", i)
+				if tt.wantErr != "" {
+					assert.Contains(t, err.Error(), tt.wantErr, "step %d", i)
+					continue
+				}
+				assert.Contains(t, err.Error(), fmt.Sprintf("CI job https://x/%d/job/%d: cancelled", tt.wantRun, 100+i), "the steps wait for run %d", tt.wantRun)
+			}
+			if tt.wantErr == "" {
+				data, err := os.ReadFile(filepath.Join(out, "ci-run.json"))
+				require.NoError(t, err)
+				assert.Contains(t, string(data), fmt.Sprintf(`"id": %d`, tt.wantRun), "a later gate waits for the same run")
+			}
+		})
+	}
+}
+
+// TestGateTitleIsE2ELiveRunName: the gate finds its run by the name
+// e2e-live.yml gives a run dispatched with the gate input, so the two
+// formats are one.
+func TestGateTitleIsE2ELiveRunName(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "e2e-live.yml"))
+	require.NoError(t, err)
+	var wf struct {
+		RunName string `json:"run-name"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	m := regexp.MustCompile(`inputs\.gate && format\('([^']*)', inputs\.gate\)`).FindStringSubmatch(wf.RunName)
+	require.NotNil(t, m, "run-name names a gate's run with format('...', inputs.gate): %q", wf.RunName)
+	assert.Equal(t, gateTitle, strings.ReplaceAll(m[1], "{0}", "%s"))
+	key := (&ciRunner{sha: "0123456789abcdef", suites: []string{"core"}, minors: "1.35 1.37", count: 2}).key()
+	assert.Regexp(t, `^0123456789ab-[0-9a-f]{8}$`, key, "the commit and a hash of the inputs")
+	for _, other := range []*ciRunner{
+		{sha: "0123456789abcdef", suites: []string{"core", "ui"}, minors: "1.35 1.37", count: 2},
+		{sha: "0123456789abcdef", suites: []string{"core"}, minors: "1.37", count: 2},
+		{sha: "0123456789abcdef", suites: []string{"core"}, minors: "1.35 1.37", count: 1},
+	} {
+		assert.NotEqual(t, key, other.key(), "other inputs are another gate's run")
+	}
+}
+
+// TestCIRunner_Backoff: a primary rate limit is waited out until GitHub's
+// reset (gh api rate_limit), plus 5 s, at most an hour; a reset that is past
+// or unreadable falls back to the 1-minute exponential, as does a secondary
+// limit; any other transient error backs off from 15 s.
+func TestCIRunner_Backoff(t *testing.T) {
+	const primary = "HTTP 403: API rate limit exceeded for user ID 1."
+	for _, tt := range []struct {
+		name    string
+		err     string
+		attempt int
+		reset   string // gh api rate_limit's answer; "" fails the call
+		want    time.Duration
+	}{
+		{"primary, reset in 10 min", primary, 1, "+10m", 10*time.Minute + 5*time.Second},
+		{"primary, reset in 10 min, later attempt", primary, 5, "+10m", 10*time.Minute + 5*time.Second},
+		{"primary, reset in 3 h", primary, 1, "+3h", time.Hour},
+		{"primary, reset past", primary, 1, "-1m", time.Minute},
+		{"primary, reset past, third attempt", primary, 3, "-1m", 4 * time.Minute},
+		{"primary, rate_limit unreadable", primary, 2, "", 2 * time.Minute},
+		{"primary, rate_limit not a number", primary, 1, "soon", time.Minute},
+		{"secondary", "HTTP 403: You have exceeded a secondary rate limit", 1, "+10m", time.Minute},
+		{"secondary, fourth attempt", "HTTP 403: You have exceeded a secondary rate limit", 4, "+10m", 8 * time.Minute},
+		{"a 429", "HTTP 429: Too Many Requests", 1, "+10m", 15 * time.Second},
+		{"a 502, tenth attempt", "HTTP 502: Bad Gateway", 10, "+10m", 16 * time.Minute},
+		{"a long run of failures stops at an hour", "HTTP 403: You have exceeded a secondary rate limit", 9, "+10m", time.Hour},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeGH{reply: func(call string) ([]byte, error) {
+				require.Equal(t, "api rate_limit --jq .resources.core.reset", call)
+				switch tt.reset {
+				case "":
+					return nil, errors.New("HTTP 502: Bad Gateway")
+				case "soon":
+					return []byte("soon\n"), nil
+				}
+				d, err := time.ParseDuration(tt.reset)
+				require.NoError(t, err)
+				return []byte(fmt.Sprintf("%d\n", time.Now().Add(d).Unix())), nil
+			}}
+			c := &ciRunner{gh: f.gh}
+			got := c.backoff(context.Background(), errors.New(tt.err), tt.attempt)
+			assert.InDelta(t, tt.want.Seconds(), got.Seconds(), 2, "got %s, want %s", got, tt.want)
+		})
+	}
 }
 
 func TestTransient(t *testing.T) {

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -70,10 +71,14 @@ type ciRunner struct {
 	poll   time.Duration
 	// jobWait is how long a job the run does not list is waited for.
 	jobWait time.Duration
-	log     func(format string, args ...any)
+	// adoptWait is how long a run is looked for after a dispatch that
+	// failed with anything but a rate limit: GitHub may have started it.
+	adoptWait time.Duration
+	log       func(format string, args ...any)
 
 	mu         sync.Mutex
 	run        *ciRun
+	runErr     error // why ensureRun failed: kept, so the gate dispatches once, not once per CI step
 	imagesDone bool
 
 	// The shared look at the run (view): one gh call per poll interval for
@@ -90,20 +95,45 @@ type ciRunner struct {
 const workflow = "e2e-live.yml"
 
 // ensureRun dispatches e2e-live.yml once for the gate's commit and returns
-// the run.
+// the run. Its error is every CI step's: a later step does not dispatch
+// again, since a second dispatch after one that GitHub took would start a
+// second run.
 func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.run != nil {
-		return c.run, nil
+	if c.run != nil || c.runErr != nil {
+		return c.run, c.runErr
 	}
+	r, err := c.findOrDispatch(ctx)
+	c.run, c.runErr = r, err
+	return r, err
+}
+
+// gateTitle is the name e2e-live.yml gives a run dispatched with the gate
+// input (its run-name): the gate finds its run by it.
+const gateTitle = "E2E live: release gate %s"
+
+// key is the gate's key, its commit and the run's inputs: a run dispatched
+// with it is this gate's, whichever attempt dispatched it. e2e-live.yml
+// gives such a run a concurrency group of its own.
+func (c *ciRunner) key() string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", strings.Join(c.suites, " "), c.minors, c.count)))
+	return fmt.Sprintf("%.12s-%x", c.sha, sum[:4])
+}
+
+// findOrDispatch returns the gate's run: the one ci-run.json saved, else
+// one of this gate's runs still going (an earlier attempt whose dispatch
+// answer was lost, or whose results directory is gone), else a new
+// dispatch's. A dispatch that fails with anything but a rate limit may
+// still have started a run: it is looked for, for adoptWait, before the
+// error stands.
+func (c *ciRunner) findOrDispatch(ctx context.Context) (*ciRun, error) {
 	path := filepath.Join(c.out, "ci-run.json")
 	suites := strings.Join(c.suites, " ")
 	if data, err := os.ReadFile(path); err == nil {
 		var r ciRun
 		if json.Unmarshal(data, &r) == nil && r.SHA == c.sha && r.Suites == suites && r.Minors == c.minors && r.Count == c.count && r.ID != 0 {
-			c.run = &r
-			return c.run, nil
+			return &r, nil
 		}
 	}
 	head, err := c.call(ctx, "api", fmt.Sprintf("repos/%s/commits/%s", c.repo, c.ref), "--jq", ".sha")
@@ -113,44 +143,84 @@ func (c *ciRunner) ensureRun(ctx context.Context) (*ciRun, error) {
 	if got := strings.TrimSpace(string(head)); got != c.sha {
 		return nil, fmt.Errorf("branch %s on GitHub is at %.12s, not the gate's commit %.12s: push it, or pass -ref", c.ref, got, c.sha)
 	}
-	since := time.Now().UTC().Add(-time.Minute)
-	if _, err := c.gh(ctx, "workflow", "run", workflow, "--repo", c.repo, "--ref", c.ref,
-		"-f", "suites="+suites, "-f", fmt.Sprintf("count=%d", c.count), "-f", "minors="+c.minors); err != nil {
-		return nil, fmt.Errorf("dispatch %s: %w", workflow, err)
+	key := c.key()
+	save := func(id int64) (*ciRun, error) {
+		run := &ciRun{ID: id, SHA: c.sha, Ref: c.ref, Suites: suites, Minors: c.minors, Count: c.count}
+		data, _ := json.MarshalIndent(run, "", "  ")
+		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+			return nil, fmt.Errorf("save the run: %w", err)
+		}
+		c.log("CI run https://github.com/%s/actions/runs/%d", c.repo, id)
+		return run, nil
 	}
-	c.log("dispatched %s on %s (suites: %s)", workflow, c.ref, suites)
-	for {
-		out, err := c.call(ctx, "run", "list", "--repo", c.repo, "--workflow", workflow, "--branch", c.ref,
-			"--event", "workflow_dispatch", "--limit", "10", "--json", "databaseId,headSha,createdAt")
-		if err != nil {
-			return nil, fmt.Errorf("list %s runs: %w", workflow, err)
-		}
-		var runs []struct {
-			DatabaseID int64     `json:"databaseId"`
-			HeadSha    string    `json:"headSha"`
-			CreatedAt  time.Time `json:"createdAt"`
-		}
-		if err := json.Unmarshal(out, &runs); err != nil {
-			return nil, fmt.Errorf("parse runs: %w", err)
-		}
-		sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
-		for _, r := range runs {
-			if r.HeadSha == c.sha && !r.CreatedAt.Before(since) {
-				c.run = &ciRun{ID: r.DatabaseID, SHA: c.sha, Ref: c.ref, Suites: suites, Minors: c.minors, Count: c.count}
-				data, _ := json.MarshalIndent(c.run, "", "  ")
-				if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-					return nil, fmt.Errorf("save the run: %w", err)
+	if id, status, err := c.findRun(ctx, key, time.Time{}, true); err != nil {
+		return nil, err
+	} else if id != 0 {
+		c.log("adopting this gate's CI run %d, still %s, instead of dispatching again", id, status)
+		return save(id)
+	}
+	since := time.Now().UTC().Add(-time.Minute)
+	if err := c.dispatch(ctx, "workflow", "run", workflow, "--repo", c.repo, "--ref", c.ref,
+		"-f", "suites="+suites, "-f", fmt.Sprintf("count=%d", c.count), "-f", "minors="+c.minors, "-f", "gate="+key); err != nil {
+		if !rateLimited(err) {
+			// GitHub may have taken the dispatch and lost the answer.
+			for deadline := time.Now().Add(c.adoptWait); ; {
+				if id, _, ferr := c.findRun(ctx, key, since, false); ferr == nil && id != 0 {
+					c.log("dispatch %s: %v; GitHub started the run anyway", workflow, err)
+					return save(id)
 				}
-				c.log("CI run https://github.com/%s/actions/runs/%d", c.repo, r.DatabaseID)
-				return c.run, nil
+				if !time.Now().Before(deadline) {
+					break
+				}
+				if werr := sleep(ctx, c.poll); werr != nil {
+					return nil, werr
+				}
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(c.poll):
+		return nil, fmt.Errorf("dispatch %s: %w", workflow, err)
+	}
+	c.log("dispatched %s on %s (suites: %s; gate %s)", workflow, c.ref, suites, key)
+	for {
+		id, _, err := c.findRun(ctx, key, since, false)
+		if err != nil {
+			return nil, err
+		}
+		if id != 0 {
+			return save(id)
+		}
+		if err := sleep(ctx, c.poll); err != nil {
+			return nil, err
 		}
 	}
+}
+
+// findRun returns the newest e2e-live run on the gate's branch that is this
+// gate's (its commit, and its name from key) and was created at or after
+// since; with going, only one not yet completed. 0 is none.
+func (c *ciRunner) findRun(ctx context.Context, key string, since time.Time, going bool) (int64, string, error) {
+	out, err := c.call(ctx, "run", "list", "--repo", c.repo, "--workflow", workflow, "--branch", c.ref,
+		"--event", "workflow_dispatch", "--limit", "20", "--json", "databaseId,headSha,createdAt,displayTitle,status")
+	if err != nil {
+		return 0, "", fmt.Errorf("list %s runs: %w", workflow, err)
+	}
+	var runs []struct {
+		DatabaseID   int64     `json:"databaseId"`
+		HeadSha      string    `json:"headSha"`
+		CreatedAt    time.Time `json:"createdAt"`
+		DisplayTitle string    `json:"displayTitle"`
+		Status       string    `json:"status"`
+	}
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return 0, "", fmt.Errorf("parse runs: %w", err)
+	}
+	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
+	title := fmt.Sprintf(gateTitle, key)
+	for _, r := range runs {
+		if r.HeadSha == c.sha && r.DisplayTitle == title && !r.CreatedAt.Before(since) && (!going || r.Status != "completed") {
+			return r.DatabaseID, r.Status, nil
+		}
+	}
+	return 0, "", nil
 }
 
 type ghJob struct {
@@ -232,6 +302,31 @@ func (c *ciRunner) call(ctx context.Context, args ...string) ([]byte, error) {
 
 // callAttempts bounds the retries of a call that is not a poll.
 const callAttempts = 8
+
+// dispatch is the workflow dispatch, retried only while GitHub's rate limit
+// refuses it: a refused request dispatched nothing. Any other error is
+// returned at once: after a 5xx or a dropped connection GitHub may have taken
+// the dispatch, and dispatching again would start a second run.
+func (c *ciRunner) dispatch(ctx context.Context, args ...string) error {
+	for attempt := 1; ; attempt++ {
+		_, err := c.gh(ctx, args...)
+		if err == nil || !rateLimited(err) || attempt >= callAttempts {
+			return err
+		}
+		d := c.backoff(ctx, err, attempt)
+		c.log("dispatch %s: %v; retrying in %s", workflow, err, d)
+		if werr := c.sleepFor(ctx, d); werr != nil {
+			return werr
+		}
+	}
+}
+
+// rateLimited says whether GitHub refused a request for a primary or
+// secondary rate limit.
+func rateLimited(err error) bool {
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "rate limit") || strings.Contains(m, "http 429")
+}
 
 // transient says whether a gh error is worth retrying: GitHub's primary and
 // secondary rate limits (403, 429), its 5xx, and dropped connections.
