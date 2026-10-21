@@ -234,12 +234,13 @@ BranchWrite writes the changes of a Bundle's environments that push to one repos
 | `status` | object |  | BranchWriteStatus is the observed state of a BranchWrite. |
 | `status.environments` | map[string]object |  | Environments are the results, by environment name. |
 | `status.inFlight` | object |  | InFlight is the round being written, set before its git work and cleared once its results are recorded. |
+| `status.inFlight.commits` | map[string]string |  | Commits are the commits the round was about to push, by environment, recorded with PushIntent before every push. A round found in flight is reconciled from the branch with exactly these: only a commit reachable from the branch head counts as written. |
 | `status.inFlight.members` | []object |  | Members are the requests the round writes. |
 | `status.inFlight.members[].environment` | string | yes | Environment is the environment's name. |
 | `status.inFlight.members[].request` | integer (int64) | yes |  |
 | `status.inFlight.members[].step` | string | yes | Step, UID and Request are the request the round answers. |
 | `status.inFlight.members[].uid` | string |  |  |
-| `status.inFlight.pushIntent` | string (date-time) |  | PushIntent is when the round was about to push. A round found in flight with it set may have pushed: the reconciler looks for its commits (their Kardinal-Write trailer) on the branch before it writes the round again. |
+| `status.inFlight.pushIntent` | string (date-time) |  | PushIntent is when the round was about to push. A round found in flight with it set may have pushed: the reconciler looks for its Commits on the branch before it writes the round again. |
 | `status.inFlight.round` | integer (int64) | yes | Round is the round's number. |
 | `status.message` | string |  | Message says what the last round did, or why it waits. |
 | `status.round` | integer (int64) |  | Round is the number of the last round started. |

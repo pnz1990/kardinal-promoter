@@ -120,10 +120,16 @@ type BranchWriteRound struct {
 
 	// PushIntent is when the round was about to push. A round found in
 	// flight with it set may have pushed: the reconciler looks for its
-	// commits (their Kardinal-Write trailer) on the branch before it writes
-	// the round again.
+	// Commits on the branch before it writes the round again.
 	// +optional
 	PushIntent *metav1.Time `json:"pushIntent,omitempty"`
+
+	// Commits are the commits the round was about to push, by environment,
+	// recorded with PushIntent before every push. A round found in flight
+	// is reconciled from the branch with exactly these: only a commit
+	// reachable from the branch head counts as written.
+	// +optional
+	Commits map[string]string `json:"commits,omitempty"`
 }
 
 // BranchWriteResult is the answer to one environment's latest request.

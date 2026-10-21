@@ -17,8 +17,11 @@
    repository branch, which a BranchWrite now takes as well as a step; the batch's state lives
    in BranchWrite's status. The ledger's G8 row "Branch turns for auto pushes" records "also
    used by BranchWrite" when it lands. A test restarts the controller in the middle of a round
-   and shows it recovers from status and the `Kardinal-Write` trailer alone, with no in-memory
-   state (§4.3).
+   and shows it recovers from status and the branch alone, with no in-memory state (§4.3): the
+   round records the SHA of each member's commit with its push intent, and only those count.
+   (The first draft keyed recovery on the `Kardinal-Write` trailer; QA-3's review of #2405 showed
+   any commit with the right message and trailer would then count, so the trailer is now only
+   for people reading the branch.)
 2. **No clone cache for now.** A per-repository cache is new state outside the CRDs. First
    measure why a depth-1 clone grows across waves (blob size, or the fetch negotiation, are
    candidates). A cache gets its own design and G8 row for review only if it is the only fix
@@ -163,9 +166,16 @@ written yet:
 2. **Freeze the members.** It writes `status.inFlight = {round: n+1, members}` before any git
    work. `members` is `spec.requested` at that moment, at most `maxRoundMembers` (50, a bound on
    one reconcile's work). A request that arrives later goes into the next round.
-3. **Check the Bundle.** It runs the push guard once, since one BranchWrite is one Bundle. A
-   Superseded or Rejected Bundle ends the round with every member marked `cancelled`, which is
-   what each step's guard does today (`push_guard.go`).
+3. **Check the members.** Before it freezes them, and again right before the push, it checks
+   each member as its step checks itself before its next git step, and as the push guard does
+   (`push_guard.go`). A Superseded or Rejected Bundle, a step that is gone or was made again, or
+   a newer Bundle already pushed to the environment, answers the member `cancelled`. A pause,
+   a freeze (a ChangeWindow) or a hold of the member's environment leaves it unanswered and out
+   of the round: it is not pushed, stays pending, and the BranchWrite looks again at
+   `requeuePaused`, as the step does; a read that fails holds it (fail closed). A member dropped
+   at the second check is not pushed: the round is written again without it, from a fresh
+   clone, and the others are pushed. Two members that write one path (a `PathConflict`) are
+   not in one round: the second waits for the next, on the branch with the first one's change.
 4. **Clone once, then commit per member.** It makes one clone (depth 1, as `git-clone`). For
    each member in `spec.environments` order, it runs the member's update (the same
    `kustomize-set-image` / `helm-set-image` / `yaml-update` code, on the member's path) and
@@ -174,7 +184,11 @@ written yet:
    - A member whose update fails gets `error` and no commit; the others go on.
    - A member with nothing to change gets `noChanges: true` and the clone's head, as
      `recordPushedCommit` does today (#1669).
-5. **Push once.** It records `pushIntent`, then pushes the branch without force.
+5. **Push once.** It records `pushIntent` and `commits` (each member's commit SHA) in
+   `status.inFlight`, then pushes the branch without force. A push that returns an error other
+   than a refusal may have landed: it reads the branch and records the commits of `commits` it
+   finds there; if it cannot read the branch, the round stays in flight and the next reconcile
+   does it.
    - **On a non-fast-forward** (another writer: a person, CI, another shard), it fetches the new
      head and re-runs the members' updates on it. These updates are deterministic (set this
      image on this path), so redoing them is the rebase. It re-commits and pushes, up to
@@ -186,10 +200,17 @@ written yet:
    round, commitSHA | noChanges | error}`, and clears `inFlight`.
 
 **After a crash.** A crash after the push but before step 6 leaves `inFlight` with
-`pushIntent`. The next reconcile fetches the branch's recent history (the 200 commits a rebase
-already fetches, `git_rebase.go:64-68`). If it finds commits with the round's trailer, it
-records them; otherwise it runs the round again. The commit message plus its trailer is the
-idempotency key, as the message is for a retried push today.
+`pushIntent` and `commits`. The next reconcile fetches the branch's recent history (the 200
+commits a rebase already fetches, `git_rebase.go:64-68`) and records each member whose recorded
+SHA is on it; the others stay pending, and the next round writes them again or finds them
+unchanged. The SHAs are the idempotency key: a commit someone else made with the same message
+and trailer is not one of them.
+
+**Status writes.** Every write of `BranchWrite.status` is a merge patch of the status
+subresource, not locked on the object's `resourceVersion`: the Graph rewrites
+`spec.requested` whenever a step asks, and a lock on the whole object would make the round's
+status writes conflict with it. The reconciler is the status's only writer, and it reads the
+BranchWrite from the API server, not the cache.
 
 **What it cannot do:** the clone is the reconcile's only working tree. Nothing of it crosses a
 reconcile, which is G8's rule for git work (`16-…:425`). Everything a later reconcile needs is
@@ -264,7 +285,7 @@ covers fleets too, whose pacing decides which steps exist and so which ask.
 | A Watch node, or an Owned node whose reconciler writes its status | BranchWrite is an owned node; its reconciler writes only `BranchWrite.status` |
 | No cross-CRD status mutation | The step writes its `status.writeRequestedAt`; the BranchWrite writes its status; the Graph mirrors one to the other's spec (like `spec.live.gates`, `mirror.go:25-71`) |
 | No decision on fields outside its own CRD | `await-write` reads `spec.live.write`; the BranchWrite reads its `spec.requested` |
-| No in-memory state between reconciles | The working tree lives in one reconcile. `inFlight` and the trailer cover a crash. The branch turn is the existing G8 exception (`16-…:431`), which "times requeues only": the same exception, also used by BranchWrite (Decision 1) |
+| No in-memory state between reconciles | The working tree lives in one reconcile. `inFlight` (its members, push intent and commit SHAs) covers a crash. The branch turn is the existing G8 exception (`16-…:431`), which "times requeues only": the same exception, also used by BranchWrite (Decision 1) |
 | `time.Now()` only in a status write | `requestedAt` and `pushIntent` are written to status |
 | No subprocess, no external HTTP in a hot path | go-git, as `git-clone` and `git-push` today |
 

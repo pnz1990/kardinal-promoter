@@ -435,6 +435,10 @@ spec:
   again on the new head. A superseded or rejected Bundle's round writes nothing, and a newer
   Bundle that already pushed to an environment cancels that environment's write, as the push
   guard does for a step.
+- A pause, a freeze or an environment hold stops a batched write as it stops a step: the round
+  checks each environment when it starts and again right before its push, and a held environment
+  is not pushed. It is written once the hold ends.
+- Two batched environments on one path are written in two rounds, one after the other.
 - Batching applies to directory-layout `approval: auto` environments of image Bundles updated by
   kustomize, helm or yaml, without a fleet; every other environment writes its own change. A
   batched Pipeline's Graph uses the compact shape.

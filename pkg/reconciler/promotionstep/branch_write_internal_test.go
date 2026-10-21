@@ -227,8 +227,9 @@ func TestBranchWrite_OneRound(t *testing.T) {
 // controller that stops after the round pushed, before it recorded the
 // results, leaves the round in flight in status with its push intent. A new
 // reconciler, with no memory of the round (a fresh branch queue), finds the
-// round's commits on the branch by their trailer and records them; nothing is
-// pushed twice. One that stops before its push intent writes the round again.
+// commits the round recorded with its push intent on the branch and records
+// them; nothing is pushed twice. One that stops before its push intent
+// writes the round again.
 //
 // Covers GRAPH-COMPACT-10.
 func TestBranchWrite_RestartMidRound(t *testing.T) {
@@ -264,6 +265,9 @@ func TestBranchWrite_RestartMidRound(t *testing.T) {
 			require.NotNil(t, in, "the round is left in flight")
 			assert.EqualValues(t, 1, in.Round)
 			assert.Len(t, in.Members, 2)
+			if tc.stopAfterPush {
+				assert.Len(t, in.Commits, 2, "the commits it was about to push")
+			}
 			pushedBefore := len(h.remoteLog())
 
 			stop.Store(false)
@@ -340,9 +344,12 @@ func TestBranchWrite_MemberFails(t *testing.T) {
 		}
 	}
 	c := h.client(interceptor.Funcs{})
-	_, err := h.reconcile(h.reconciler(c, scm.NewGoGitClient()))
+	git := &countingGit{GitClient: scm.NewGoGitClient()}
+	_, err := h.reconcile(h.reconciler(c, git))
 	require.NoError(t, err)
 	bw := h.get(c)
+	assert.EqualValues(t, 2, git.clones.Load(), "the round starts over from a fresh clone without test")
+	assert.EqualValues(t, 1, git.pushes.Load())
 	assert.NotEmpty(t, bw.Status.Environments["test"].Error, "test's update failed")
 	assert.Empty(t, bw.Status.Environments["test"].CommitSHA)
 	assert.NotEmpty(t, bw.Status.Environments["uat"].CommitSHA, "uat is written")
@@ -406,23 +413,35 @@ func TestBranchWrite_WaitsForTheBranchTurn(t *testing.T) {
 	assert.NotEmpty(t, h.get(c).Status.Environments["test"].CommitSHA)
 }
 
-// countingGit counts clones and pushes, and runs beforeFirstPush once.
+// countingGit counts clones and pushes, runs afterFirstClone once after the
+// first clone and beforeFirstPush once before the first push, and lets
+// afterPush (given the push's error) and historyErr change what git says.
 type countingGit struct {
 	scm.GitClient
 	clones, pushes  atomic.Int64
+	afterFirstClone func()
 	beforeFirstPush func()
+	afterPush       func(err error) error
+	historyErr      error
 }
 
 func (g *countingGit) Clone(ctx context.Context, url, branch, dir string, auth scm.GitAuth) error {
-	g.clones.Add(1)
-	return g.GitClient.Clone(ctx, url, branch, dir, auth)
+	err := g.GitClient.Clone(ctx, url, branch, dir, auth)
+	if g.clones.Add(1) == 1 && g.afterFirstClone != nil {
+		g.afterFirstClone()
+	}
+	return err
 }
 
 func (g *countingGit) Push(ctx context.Context, dir, remote, branch string, auth scm.GitAuth, force bool) error {
 	if g.pushes.Add(1) == 1 && g.beforeFirstPush != nil {
 		g.beforeFirstPush()
 	}
-	return g.GitClient.Push(ctx, dir, remote, branch, auth, force)
+	err := g.GitClient.Push(ctx, dir, remote, branch, auth, force)
+	if g.afterPush != nil {
+		return g.afterPush(err)
+	}
+	return err
 }
 
 func (g *countingGit) HeadCommit(ctx context.Context, dir string) (string, error) {
@@ -430,6 +449,9 @@ func (g *countingGit) HeadCommit(ctx context.Context, dir string) (string, error
 }
 
 func (g *countingGit) CloneOrInit(ctx context.Context, url, branch, dir string, auth scm.GitAuth, depth int) (bool, error) {
+	if g.historyErr != nil {
+		return false, g.historyErr
+	}
 	return g.GitClient.(scm.BranchCloner).CloneOrInit(ctx, url, branch, dir, auth, depth)
 }
 
