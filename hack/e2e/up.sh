@@ -189,6 +189,7 @@ case "$SUITE" in
   upgrade-v0121) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0121.sh test-agent.sh) RUN='^TestUpgradeV0121_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   upgrade-v0123) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0123.sh test-agent.sh) RUN='^TestUpgradeV0123_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   upgrade-v0124) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0124.sh test-agent.sh) RUN='^TestUpgradeV0124_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
