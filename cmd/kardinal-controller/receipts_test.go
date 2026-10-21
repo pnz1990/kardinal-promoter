@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,47 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	receiptrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionreceipt"
 )
+
+// TestReceiptOCINamespaceFlags (#2285): the per-namespace flags reach the
+// OCI sink; a bad mode or a bad map entry is refused when the flags are
+// parsed, so the controller does not start, rather than refusing receipts
+// one by one. Off and the annotation read are the defaults.
+//
+// Covers RECEIPT-OCI-06.
+func TestReceiptOCINamespaceFlags(t *testing.T) {
+	parse := func(args ...string) (*receiptFlags, error) {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		f := bindReceiptFlags(fs)
+		return f, fs.Parse(args)
+	}
+	f, err := parse("--receipt-oci")
+	require.NoError(t, err)
+	sink := f.ociSink("kardinal-system", nil)
+	assert.Equal(t, receiptrecon.PerNamespaceOff, sink.PerNamespace)
+	assert.True(t, sink.NamespaceAnnotation)
+	assert.Empty(t, sink.NamespaceRepositories)
+
+	f, err = parse("--receipt-oci", "--receipt-oci-per-namespace=required", "--receipt-oci-namespace-annotation=false",
+		"--receipt-oci-namespace-repositories=team-a=ghcr.io/team-a/;team-b=ghcr.io/team-b/,docker.io/team-b")
+	require.NoError(t, err)
+	sink = f.ociSink("kardinal-system", nil)
+	assert.Equal(t, receiptrecon.PerNamespaceRequired, sink.PerNamespace)
+	assert.False(t, sink.NamespaceAnnotation)
+	assert.Equal(t, map[string][]string{"team-a": {"ghcr.io/team-a/"}, "team-b": {"ghcr.io/team-b/", "docker.io/team-b"}}, sink.NamespaceRepositories)
+
+	for _, args := range [][]string{
+		{"--receipt-oci-per-namespace=strict"},
+		{"--receipt-oci-namespace-repositories=team-a=ghcr.io/team-a/../b"},
+		{"--receipt-oci-namespace-repositories=team-a"},
+	} {
+		_, err := parse(args...)
+		assert.Error(t, err, "%v", args)
+	}
+}
 
 // TestReceiptFlags: a configuration that cannot sign stops the controller
 // at start, naming the flag: the public-good Rekor without

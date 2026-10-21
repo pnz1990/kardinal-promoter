@@ -128,6 +128,17 @@ spec:
             {{- with .sinks.oci.allowedRepositories }}
             - --receipt-oci-allowed-repositories={{ join "," . }}
             {{- end }}
+            {{- with .sinks.oci.perNamespace }}
+            {{- if ne (toString .) "off" }}
+            - --receipt-oci-per-namespace={{ . }}
+            {{- end }}
+            {{- end }}
+            {{- with .sinks.oci.namespaceRepositories }}
+            - --receipt-oci-namespace-repositories={{ range $ns, $repos := . }}{{ $ns }}={{ join "," $repos }};{{ end }}
+            {{- end }}
+            {{- if eq (toString (dig "namespaceAnnotation" true .sinks.oci)) "false" }}
+            - --receipt-oci-namespace-annotation=false
+            {{- end }}
             {{- if .sinks.oci.insecure }}
             - --receipt-oci-insecure=true
             {{- end }}

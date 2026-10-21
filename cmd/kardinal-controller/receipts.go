@@ -59,14 +59,19 @@ type receiptFlags struct {
 	ociSecret   string
 	ociRepo     string
 	ociAllowed  []string
-	oci         bool
-	ociInsecure bool
-	clusterID   string
-	maxAge      time.Duration
+	// ociPerNamespace, ociNamespaces and ociNamespaceAnnotation bound a
+	// receipt's referrers to its namespace's repositories too (#2285).
+	ociPerNamespace        string
+	ociNamespaces          map[string][]string
+	ociNamespaceAnnotation bool
+	oci                    bool
+	ociInsecure            bool
+	clusterID              string
+	maxAge                 time.Duration
 }
 
 func bindReceiptFlags(fs *flag.FlagSet) *receiptFlags {
-	f := &receiptFlags{}
+	f := &receiptFlags{ociPerNamespace: receiptrecon.PerNamespaceOff}
 	fs.BoolVar(&f.enabled, "receipts", false,
 		"Create a signed PromotionReceipt for every promotion that reaches Verified (docs/receipts.md). Chart value: receipts.enabled.")
 	fs.StringVar(&f.mode, "receipt-signing-mode", v1alpha1.ReceiptSigningKeyless,
@@ -100,6 +105,32 @@ func bindReceiptFlags(fs *flag.FlagSet) *receiptFlags {
 			}
 			return nil
 		})
+	fs.Func("receipt-oci-per-namespace",
+		"Whether a receipt's namespace bounds the repositories --receipt-oci pushes its referrers to, within "+
+			"--receipt-oci-allowed-repositories: off (default: that list alone, as in v0.13), narrow (a namespace with "+
+			"repositories is held to them) or required (a namespace without any gets no referrer). Its repositories are "+
+			"--receipt-oci-namespace-repositories' and, with --receipt-oci-namespace-annotation, its Namespace's "+
+			receiptrecon.AnnotationOCIRepositories+" annotation.", func(v string) error {
+			if err := receiptrecon.ValidatePerNamespace(v); err != nil {
+				return err
+			}
+			f.ociPerNamespace = v
+			return nil
+		})
+	fs.Func("receipt-oci-namespace-repositories",
+		"Per namespace, the repositories (or path prefixes, ghcr.io/team-a/) its receipts' referrers may go to, for "+
+			"--receipt-oci-per-namespace: namespace=repository,repository;namespace=repository. A bad entry stops the controller.",
+		func(v string) error {
+			m, err := receiptrecon.ParseNamespaceRepositories(v)
+			if err != nil {
+				return err
+			}
+			f.ociNamespaces = m
+			return nil
+		})
+	fs.BoolVar(&f.ociNamespaceAnnotation, "receipt-oci-namespace-annotation", true,
+		"For --receipt-oci-per-namespace, also read a Namespace's "+receiptrecon.AnnotationOCIRepositories+
+			" annotation (comma-separated repositories). Set it false where tenants may edit their Namespace.")
 	fs.BoolVar(&f.ociInsecure, "receipt-oci-insecure", false, "Push receipt referrers over plain HTTP (an in-cluster registry).")
 	fs.DurationVar(&f.maxAge, "receipt-retention-max-age", 0,
 		"Delete PromotionReceipts created longer ago than this; 0 (the default) keeps every receipt, which is evidence.")
@@ -162,6 +193,7 @@ func (f *receiptFlags) ociSink(ns string, transport http.RoundTripper) *receiptr
 	}
 	sink := &receiptrecon.OCISink{Registry: receipt.Registry{Transport: transport, Insecure: f.ociInsecure}, SecretNamespace: ns}
 	sink.SecretName, sink.Repository, sink.AllowedRepositories = f.ociSecret, f.ociRepo, f.ociAllowed
+	sink.PerNamespace, sink.NamespaceRepositories, sink.NamespaceAnnotation = f.ociPerNamespace, f.ociNamespaces, f.ociNamespaceAnnotation
 	return sink
 }
 

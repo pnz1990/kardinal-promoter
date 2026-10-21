@@ -361,15 +361,19 @@ func TestReconcile_OCIAllowedRepositories(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got, "nothing written to a repository outside the allowlist")
 
-	assert.True(t, (&OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}).allowed("ghcr.io/acme/app"))
-	assert.False(t, (&OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}).allowed("ghcr.io/acme-evil/app"), "a path prefix, not a string prefix")
-	assert.True(t, (&OCISink{Repository: "ghcr.io/acme/receipts", AllowedRepositories: []string{"x/"}}).allowed("anything"),
+	allowed := func(o OCISink, repo string) bool {
+		ok, _ := (&ociScope{sink: &o}).allowed(repo)
+		return ok
+	}
+	assert.True(t, allowed(OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}, "ghcr.io/acme/app"))
+	assert.False(t, allowed(OCISink{AllowedRepositories: []string{"ghcr.io/acme"}}, "ghcr.io/acme-evil/app"), "a path prefix, not a string prefix")
+	assert.True(t, allowed(OCISink{Repository: "ghcr.io/acme/receipts", AllowedRepositories: []string{"x/"}}, "anything"),
 		"a fixed repository is the admin's own")
 
 	// QA-3 B1: the repository is parsed as a registry would see it, and a
 	// path a registry or proxy could normalise into another repository is
 	// refused.
-	sink := &OCISink{AllowedRepositories: []string{"allowed.example.com/team-a"}}
+	sink := OCISink{AllowedRepositories: []string{"allowed.example.com/team-a"}}
 	for repo, want := range map[string]bool{
 		"allowed.example.com/team-a/app":              true,
 		"allowed.example.com/team-a":                  true,
@@ -386,12 +390,12 @@ func TestReconcile_OCIAllowedRepositories(t *testing.T) {
 		"allowed.example.com/team-b/x":                false,
 		"team-a/app":                                  false, // docker.io
 	} {
-		assert.Equal(t, want, sink.allowed(repo), repo)
+		assert.Equal(t, want, allowed(sink, repo), repo)
 	}
-	hub := &OCISink{AllowedRepositories: []string{"docker.io/acme"}}
-	assert.True(t, hub.allowed("acme/app"), "docker.io/acme and acme are one repository")
-	assert.True(t, hub.allowed("index.docker.io/acme/app"))
-	assert.False(t, hub.allowed("acme-evil/app"))
+	hub := OCISink{AllowedRepositories: []string{"docker.io/acme"}}
+	assert.True(t, allowed(hub, "acme/app"), "docker.io/acme and acme are one repository")
+	assert.True(t, allowed(hub, "index.docker.io/acme/app"))
+	assert.False(t, allowed(hub, "acme-evil/app"))
 }
 
 // findingSCM is a commentSCM that can search its PR's comments.

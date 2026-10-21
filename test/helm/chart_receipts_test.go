@@ -96,6 +96,46 @@ func TestChartReceipts(t *testing.T) {
 	assert.False(t, ns.allowed(releaseNS, "kardinal-promoter", releaseNS, "kardinal.io", "promotionreceipts", "delete", ""))
 }
 
+// TestChartReceiptsOCIPerNamespace (#2285): receipts.sinks.oci.perNamespace,
+// namespaceRepositories and namespaceAnnotation reach the controller's
+// flags; the defaults (off, no map, the annotation read) render none, so an
+// upgrade changes nothing until an operator opts in, and so does a release
+// reused from a chart without them. The schema refuses another mode, a
+// namespace that is not a name and an entry with a separator in it.
+//
+// Covers RECEIPT-OCI-06.
+func TestChartReceiptsOCIPerNamespace(t *testing.T) {
+	t.Parallel()
+	base := []string{"--set", "receipts.enabled=true", "--set", "receipts.signing.mode=key",
+		"--set", "receipts.signing.key.secretRef.name=receipt-key", "--set", "receipts.sinks.oci.enabled=true"}
+	off := argValues(controllerContainer(t, render(t, "kardinal-promoter", base...)))
+	for _, flag := range []string{"receipt-oci-per-namespace", "receipt-oci-namespace-repositories", "receipt-oci-namespace-annotation"} {
+		assert.NotContains(t, off, flag)
+	}
+	reused := argValues(controllerContainer(t, render(t, "kardinal-promoter", append(base,
+		"--set", "receipts.sinks.oci.perNamespace=null", "--set", "receipts.sinks.oci.namespaceRepositories=null",
+		"--set", "receipts.sinks.oci.namespaceAnnotation=null")...)))
+	assert.NotContains(t, reused, "receipt-oci-per-namespace")
+	assert.NotContains(t, reused, "receipt-oci-namespace-annotation")
+
+	on := argValues(controllerContainer(t, render(t, "kardinal-promoter", append(base,
+		"--set", "receipts.sinks.oci.perNamespace=required", "--set", "receipts.sinks.oci.namespaceAnnotation=false",
+		"--set", "receipts.sinks.oci.namespaceRepositories.team-b={ghcr.io/team-b/}",
+		"--set", "receipts.sinks.oci.namespaceRepositories.team-a={ghcr.io/team-a/,docker.io/team-a}")...)))
+	assert.Equal(t, "required", on["receipt-oci-per-namespace"])
+	assert.Equal(t, "team-a=ghcr.io/team-a/,docker.io/team-a;team-b=ghcr.io/team-b/;", on["receipt-oci-namespace-repositories"])
+	assert.Equal(t, "false", on["receipt-oci-namespace-annotation"])
+
+	for name, set := range map[string]string{
+		"another mode":          "receipts.sinks.oci.perNamespace=strict",
+		"a namespace not named": "receipts.sinks.oci.namespaceRepositories.Team_A={ghcr.io/a/}",
+		"a separator":           "receipts.sinks.oci.namespaceRepositories.team-a={ghcr.io/a/;team-b=ghcr.io/}",
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", append(base, "--set", set)...)
+		assert.Error(t, err, "%s: %s", name, out)
+	}
+}
+
 // TestChartReceiptsRekorV2NeedsTSA (QA-2 #2120): keyless signing with Rekor
 // v2 and no timestamp authority is refused by the values schema: a Rekor
 // v2 entry does not prove the signing time, so the receipt could never

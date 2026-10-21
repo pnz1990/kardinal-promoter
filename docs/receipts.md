@@ -255,11 +255,68 @@ one entry per image. Receipts already Stored are not pushed again.
 Both values are the controller's, not a namespace's. If one tenant's Bundle names an image in
 a repository the list allows for another tenant, the referrer is pushed there: a write into
 the other tenant's repository. `verify-receipt` pins the namespace, so it does not take that
-referrer as the other tenant's receipt. Where tenants must not write into each other's
-repositories, run one release per tenant, each with its own list
+referrer as the other tenant's receipt. Bound each namespace's own pushes as well, as described
+below, or run one release per tenant, each with its own list
 ([One install per team namespace](guides/security.md#stronger-isolation-one-install-per-team-namespace)).
 Shards with a list each separate the pushes too, but shards are not a trust boundary
-([Sharding](sharding.md#what-sharding-does-not-split)). A per-namespace list is planned (#2285).
+([Sharding](sharding.md#what-sharding-does-not-split)).
+
+#### Per namespace
+
+!!! info "New in v0.14.0 (unreleased)"
+    The default, `perNamespace: "off"`, keeps v0.13's behaviour: the controller-wide list alone.
+    Nothing changes until you set it.
+
+`receipts.sinks.oci.perNamespace` (`--receipt-oci-per-namespace`) holds a receipt's referrers to
+the repositories of the receipt's namespace too. A namespace's repositories (registries, or
+registries and path prefixes, matched as above) come from two places, together:
+
+- `receipts.sinks.oci.namespaceRepositories` (`--receipt-oci-namespace-repositories`), the
+  release's map: `{team-a: [ghcr.io/team-a/], team-b: [ghcr.io/team-b/, docker.io/team-b]}`. A bad
+  entry stops the controller at start;
+- the Namespace's annotation `kardinal.io/receipt-oci-repositories`
+  (`kubectl annotate namespace team-a kardinal.io/receipt-oci-repositories=ghcr.io/team-a/`), unless
+  `receipts.sinks.oci.namespaceAnnotation` is `false`. It is as strong as the right to edit that
+  Namespace: Kubernetes' stock `admin` and `edit` roles do not grant it, but platforms that let
+  tenants edit their Namespace's metadata (a self-service ClusterRole, Capsule, the Hierarchical
+  Namespace Controller) hand it to the tenant. On those, set `namespaceAnnotation: false` and use
+  the map.
+
+| `perNamespace` | A namespace with repositories | A namespace without |
+|---|---|---|
+| `off` (default) | `allowedRepositories` alone, as in v0.13 | `allowedRepositories` alone |
+| `narrow` | `allowedRepositories` and its repositories | `allowedRepositories` alone |
+| `required` | `allowedRepositories` and its repositories | no referrer |
+
+`allowedRepositories` stays the outer bound: a namespace narrows it and never widens it. With
+`receipts.sinks.oci.repository` set, every referrer goes to that one repository and the
+namespace is not consulted. An image a namespace may not push gets no referrer, as above: the
+receipt is signed and kept, its `Stored` condition is `False` with reason `RepositoryNotAllowed`,
+and the message names the image, the namespace and the list that refused it. It fails closed:
+
+- a Namespace the controller cannot read pushes nothing, and is tried again with backoff
+  (`Stored` `False`, reason `NamespaceUnreadable`);
+- an annotation with an entry that does not parse pushes nothing for that namespace until it is
+  fixed, and the condition names the entry;
+- removing a namespace's repositories later leaves the referrers already pushed; only later
+  receipts are held to the new list.
+
+A multi-tenant install sets `perNamespace: "required"`, lists every team in
+`namespaceRepositories` and sets `namespaceAnnotation: false`:
+
+```yaml
+receipts:
+  sinks:
+    oci:
+      enabled: true
+      secretRef: {name: receipt-push}
+      allowedRepositories: [ghcr.io/acme/]
+      perNamespace: "required"
+      namespaceAnnotation: false
+      namespaceRepositories:
+        team-a: [ghcr.io/acme/team-a/]
+        team-b: [ghcr.io/acme/team-b/]
+```
 
 ImageVerification skips receipt referrers before it counts an image's signatures, so an image
 promoted to many environments does not crowd out its own signature
