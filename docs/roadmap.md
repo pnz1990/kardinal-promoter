@@ -63,6 +63,10 @@ Plans change with feedback; the [changelog](changelog.md) says what shipped.
 ### Also planned
 
 - Move to kro v0.10.0 once it is released (kardinal targets v0.10.0-rc.0).
+- 1.0, once its criteria hold: a stable API version, settled core kinds, kro's Graph out of
+  alpha, deprecation warnings, the upgrade matrix, a support window and reviews.
+  [API stability](api-stability.md#10-criteria) says where each one stands today, along with the
+  deprecation policy and the upgrade guarantees.
 
 ---
 

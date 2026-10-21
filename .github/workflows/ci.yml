@@ -244,6 +244,14 @@ jobs:
           # tag, and fails in CI without it (#2359).
           fetch-depth: ${{ startsWith(github.base_ref, 'release/') && '0' || '1' }}
           fetch-tags: ${{ startsWith(github.base_ref, 'release/') }}
+      - name: Fetch the release tags
+        # test/hack's API guard (TestReleasedCRDFieldsKept, #1996) compares
+        # the CRDs with the newest release's, and fails in CI without the
+        # tags. A pull request to a release branch has them already; a
+        # shallow fetch there would cut the history the render-label guard
+        # reads.
+        if: ${{ !startsWith(github.base_ref, 'release/') }}
+        run: git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
@@ -314,6 +322,14 @@ jobs:
           # history and the tags on a pull request to a release branch.
           fetch-depth: ${{ startsWith(github.base_ref, 'release/') && '0' || '1' }}
           fetch-tags: ${{ startsWith(github.base_ref, 'release/') }}
+      - name: Fetch the release tags
+        # test/hack's API guard (TestReleasedCRDFieldsKept, #1996) compares
+        # the CRDs with the newest release's, and fails in CI without the
+        # tags. A pull request to a release branch has them already; a
+        # shallow fetch there would cut the history the render-label guard
+        # reads.
+        if: ${{ !startsWith(github.base_ref, 'release/') }}
+        run: git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod

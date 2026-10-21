@@ -7,6 +7,9 @@
 **From v0.10.0:** follow [Upgrading from v0.10.0](#upgrading-from-v0100). **From v0.9.0:**
 follow [Upgrading from v0.9.0](#upgrading-from-v090).
 
+[API stability](api-stability.md) covers which upgrades a suite tests, the deprecation policy
+(how long a deprecated field keeps working) and what a controller rollback does.
+
 **Requires Kubernetes 1.35 or later.** Check the cluster before you upgrade, and upgrade
 Kubernetes first on an older one: the chart's `kubeVersion` refuses it, and `hack/install-kro.sh`
 exits 1 there.
