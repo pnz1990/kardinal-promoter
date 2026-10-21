@@ -361,12 +361,13 @@ right after them; Prometheus unreachable three passes in a row, or more
 passes unjudged than judged, fails), no panic, race or restart, progress,
 the load's own creates, the leader's heap (under twice its baseline), and
 that what an episode left in flight resumed: each step it held, by UID,
-Verified or Superseded within ten minutes, never Failed (the podinfo
-release, which the rollback episode fails on purpose, aside). The receipts
-and audit checks read the steps of superseded versions too, which are
-retired a minute after (`status.retiredSteps`), and the report counts the
-steps each judged. A check that cannot read the cluster runs again three
-times before that is a violation of its own.
+Verified or Superseded within ten minutes, never Failed and never made
+again (kro updates a step in place; the podinfo release, which the rollback
+episode fails on purpose, aside). The receipts and audit checks read the
+steps of superseded versions too, which are retired a minute after
+(`status.retiredSteps`); the report counts the steps each judged, and a day
+on which either judged none fails. A check that cannot read the cluster
+runs again three times before that is a violation of its own.
 The first violation ends the soak: the checker dumps the estate (each
 namespace's objects, every controller Pod's `/metrics`, the violation with
 the object that broke it in `soak-violation.json`; the controller logs are

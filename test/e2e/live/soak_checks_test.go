@@ -366,6 +366,9 @@ func (s *soakDay) checkReceipts(ctx context.Context, since time.Time) error {
 			return err
 		}
 	}
+	if s.final {
+		return s.judgedNone("receipts")
+	}
 	return nil
 }
 
@@ -399,6 +402,18 @@ func (s *soakDay) stepsOf(ctx context.Context, ns string) ([]v1alpha1.PromotionS
 		}
 	}
 	return steps, retired, bl.Items, nil
+}
+
+// judgedNone is the violation of a day on which invariant judged no step,
+// live or retired, while the load ran: it would pass blind. Checked on the
+// last pass.
+func (s *soakDay) judgedNone(invariant string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.judged[invariant+".live"]+s.judged[invariant+".retired"] == 0 {
+		return violation("the %s invariant judged no Verified step over the whole day", invariant)
+	}
+	return nil
 }
 
 // judge counts a step an invariant judged, live or retired, for the report:
@@ -514,6 +529,9 @@ func (s *soakDay) checkAudit(ctx context.Context, since time.Time) error {
 			}
 		}
 		s.note("auditEvents."+tn.name, len(evs.Items))
+	}
+	if s.final {
+		return s.judgedNone("audit-trail")
 	}
 	return nil
 }

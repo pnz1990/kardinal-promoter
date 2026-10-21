@@ -458,9 +458,14 @@ func (s *soakDay) finished(what string, f soakFlight) func(ctx context.Context) 
 			switch err := s.e.Client.Get(ctx, st.key, &ps); {
 			case err == nil && ps.UID == st.uid:
 				state, msg = ps.Status.State, ps.Status.Message
-			case err != nil && !apierrors.IsNotFound(err):
+			case err == nil:
+				// kro updates a step in place, also on a re-render: one made
+				// again redid its clone, commit and push. A restart, not a
+				// resumption.
+				return objectErr(&ps, "step %s, in flight at %s, was made again (uid %s, now %s)", st.key, what, st.uid, ps.UID)
+			case !apierrors.IsNotFound(err):
 				return err
-			default: // retired into the Bundle (or made again: not the step in flight)
+			default: // retired into the Bundle
 				for _, r := range b.Status.RetiredSteps {
 					if r.Name == st.key.Name {
 						state, msg = r.State, r.Message
