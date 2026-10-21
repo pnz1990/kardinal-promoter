@@ -107,8 +107,8 @@ func TestCITestShards(t *testing.T) {
 	}
 	assert.Equal(t, "github.event_name == 'push' && github.ref == 'refs/heads/main'", wf.Jobs["go-cache"].If)
 
-	assert.Equal(t, "ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}", wf.Concurrency.Group,
-		"each main run is its own group, so no main run is cancelled or replaced while queued")
+	assert.Equal(t, "ci-${{ github.ref }}", wf.Concurrency.Group,
+		"main's queue holds one run: a merge replaces the queued run of the merge before it, never the running one")
 	assert.Equal(t, "${{ github.ref != 'refs/heads/main' }}", wf.Concurrency.Cancel)
 }
 
