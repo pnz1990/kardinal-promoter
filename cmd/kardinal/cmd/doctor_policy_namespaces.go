@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/mod/semver"
 	appsv1 "k8s.io/api/apps/v1"
@@ -50,19 +51,26 @@ const policyNamespacesHint = "Label each namespace kardinal.io/policy-shareable=
 // nothing there (WARN). The Pipelines of every namespace, or of ns when the
 // user may not list them cluster-wide; then a clean result is a WARN too
 // (only ns was checked). The result is the condition as the controller last
-// wrote it: it reads the named Namespaces again every 5 minutes.
+// wrote it: it reads the named Namespaces again every 5 minutes. A Pipeline
+// whose spec.policyNamespaces the controller has not checked for its current
+// generation (PolicyNamespacesChecked: not reconciled yet after an upgrade
+// or a spec change) is "not checked yet": an INFO when it is all there is,
+// listed beside the affected ones otherwise; never a PASS.
 //
-// controller is the version the leader recorded (kardinal-version), deployed
-// the one the controller Deployment runs (deployedVersion). Right after an
-// upgrade the new Pod is Ready before it holds the Lease, and only the
-// leader records its version (#2383): an old leader's version while the
-// Deployment rolls out another (rolloutTo) is an upgrade in progress (INFO,
-// run doctor again), not a controller that does not check.
-func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, controller, deployed string) doctorResult {
+// controller is the version the leader recorded (kardinal-version), dep
+// what doctor read of the controller Deployment (readControllerRollout).
+// Right after an upgrade the new Pod is Ready before it holds the Lease,
+// and only the leader records its version (#2383): an old leader's version
+// while the Deployment is rolling out another (rolloutTo), or finished doing
+// so within rolloutGrace, is an upgrade in progress (INFO, run doctor
+// again), not a controller that does not check. Outside that window it is
+// the WARN, naming what the Deployment runs when that differs.
+func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, controller string, dep controllerRollout) doctorResult {
 	r := doctorResult{label: "Policy namespaces shared"}
 	ver := releaseVersion(controller)
 	if ver != "" && !atLeast(ver, policyNamespacesWarnVersion) {
-		if to := rolloutTo(ver, deployed); to != "" {
+		to := rolloutTo(ver, dep.version)
+		if to != "" && dep.rolling {
 			r.icon, r.noted = doctorInfo, true
 			r.detail = fmt.Sprintf("upgrade in progress: the leader still runs %s, the Deployment runs %s", controller, to)
 			r.hint = fmt.Sprintf("The new controller takes over a few seconds after its Pod is Ready. Run kardinal doctor "+
@@ -71,6 +79,9 @@ func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, c
 		}
 		r.icon, r.warned = doctorWarn, true
 		r.detail = fmt.Sprintf("controller %s does not check spec.policyNamespaces consent", controller)
+		if dep.version != "" && releaseVersion(dep.version) != ver {
+			r.detail += fmt.Sprintf(" (the Deployment runs %s)", dep.version)
+		}
 		r.hint = fmt.Sprintf("Upgrade to %s first and run kardinal doctor again before %s, which refuses a namespace "+
 			"that has not agreed to share its PolicyGates", policyNamespacesWarnVersion, policyNamespacesRefuseVersion)
 		return r
@@ -85,7 +96,7 @@ func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, c
 			return r
 		}
 	}
-	var affected []string
+	var affected, unchecked []string
 	for i := range list.Items {
 		p := &list.Items[i]
 		if flagged, names := pipelinerec.NotSharedPolicyNamespaces(p); flagged {
@@ -94,9 +105,25 @@ func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, c
 				entry += " (" + strings.Join(names, ", ") + ")"
 			}
 			affected = append(affected, entry)
+		} else if !pipelinerec.PolicyNamespacesChecked(p) {
+			unchecked = append(unchecked, p.Namespace+"/"+p.Name)
 		}
 	}
 	sort.Strings(affected)
+	sort.Strings(unchecked)
+	notChecked := ""
+	if len(unchecked) > 0 {
+		notChecked = fmt.Sprintf("; not checked yet: %s", strings.Join(unchecked, ", "))
+	}
+	if len(affected) == 0 && len(unchecked) > 0 {
+		// Not yet reconciled by this controller (just after an upgrade, or a
+		// spec change): its Ready may be left over (#2383).
+		r.icon, r.noted = doctorInfo, true
+		r.detail = fmt.Sprintf("not checked yet: %s (%s): the controller has not checked their current spec.policyNamespaces",
+			strings.Join(unchecked, ", "), scope)
+		r.hint = "Run kardinal doctor again in a minute: the controller checks a Pipeline's spec.policyNamespaces when it reconciles it"
+		return r
+	}
 	if len(affected) == 0 {
 		r.detail = fmt.Sprintf("every spec.policyNamespaces entry agreed (%d Pipelines, %s, as the controller last checked)",
 			len(list.Items), scope)
@@ -113,20 +140,20 @@ func checkPolicyNamespaces(ctx context.Context, client sigs_client.Reader, ns, c
 	refuses := ver != "" && atLeast(ver, policyNamespacesRefuseVersion)
 	if refuses {
 		r.icon, r.failed = doctorFail, true
-		r.detail = fmt.Sprintf("refused, their new versions wait: %s (%s)", strings.Join(affected, "; "), scope)
+		r.detail = fmt.Sprintf("refused, their new versions wait: %s (%s)%s", strings.Join(affected, "; "), scope, notChecked)
 	} else {
 		r.icon, r.warned = doctorWarn, true
-		r.detail = fmt.Sprintf("%s refuses them: %s (%s)", policyNamespacesRefuseVersion, strings.Join(affected, "; "), scope)
+		r.detail = fmt.Sprintf("%s refuses them: %s (%s)%s", policyNamespacesRefuseVersion, strings.Join(affected, "; "), scope, notChecked)
 	}
 	r.hint = policyNamespacesHint
 	return r
 }
 
-// rolloutTo is what the controller Deployment rolls out (deployed) when it
-// is not leader's version, a release, so the leader is about to be replaced:
-// a later release, or a build that is not a release (a dev or test build).
-// It is "" when the Deployment runs leader's release or an earlier one (the
-// leader is what runs), or when what it runs is unknown.
+// rolloutTo is what the controller Deployment runs (deployed) when it is
+// not leader's version, a release, so a rollout of it replaces the leader:
+// a later release, or a build that is not a release (a dev or test build, a
+// mirror's tag). It is "" when the Deployment runs leader's release or an
+// earlier one, or when what it runs is unknown.
 func rolloutTo(leader, deployed string) string {
 	if deployed == "" {
 		return ""
@@ -140,18 +167,37 @@ func rolloutTo(leader, deployed string) string {
 	return deployed
 }
 
-// deployedVersion is the version the kardinal-promoter Deployment in
-// controllerNS runs: its controller container's image tag, or, for an
-// image by digest, the Deployment's app.kubernetes.io/version label (the
-// chart's appVersion). It is "" when there is no such Deployment, it cannot
-// be read, or it names neither.
-func deployedVersion(ctx context.Context, client sigs_client.Reader, controllerNS string) string {
+// rolloutGrace is how long after the controller Deployment last progressed
+// (its Progressing condition's lastUpdateTime) doctor still takes an old
+// leader's version for an upgrade in progress: the new Pod takes over the
+// Lease seconds after it is Ready (#2383).
+const rolloutGrace = 5 * time.Minute
+
+// controllerRollout is what doctor reads of the kardinal-promoter
+// Deployment: the version it runs (deployedVersion) and whether it is
+// rolling out or finished within rolloutGrace (deploymentRolling).
+type controllerRollout struct {
+	version string
+	rolling bool
+}
+
+// readControllerRollout reads the kardinal-promoter Deployment in
+// controllerNS at now; the zero value when there is none or it cannot be
+// read.
+func readControllerRollout(ctx context.Context, client sigs_client.Reader, controllerNS string, now time.Time) controllerRollout {
 	var deps appsv1.DeploymentList
 	if err := client.List(ctx, &deps, sigs_client.InNamespace(controllerNS),
 		sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"}); err != nil || len(deps.Items) == 0 {
-		return ""
+		return controllerRollout{}
 	}
-	dep := deps.Items[0]
+	dep := &deps.Items[0]
+	return controllerRollout{version: deployedVersion(dep), rolling: deploymentRolling(dep, now)}
+}
+
+// deployedVersion is the version dep runs: its controller container's image
+// tag, or, for an image by digest, its app.kubernetes.io/version label (the
+// chart's appVersion); "" when it names neither.
+func deployedVersion(dep *appsv1.Deployment) string {
 	containers := dep.Spec.Template.Spec.Containers
 	if len(containers) == 0 {
 		return ""
@@ -170,4 +216,26 @@ func deployedVersion(ctx context.Context, client sigs_client.Reader, controllerN
 		return name[i+1:]
 	}
 	return ""
+}
+
+// deploymentRolling reports whether dep is rolling out at now, or finished
+// within rolloutGrace: its controller has not observed its generation, not
+// every replica is updated and available, Pods of an older template remain,
+// or its Progressing condition was last updated within rolloutGrace.
+func deploymentRolling(dep *appsv1.Deployment, now time.Time) bool {
+	want := int32(1)
+	if dep.Spec.Replicas != nil {
+		want = *dep.Spec.Replicas
+	}
+	st := dep.Status
+	if dep.Generation != st.ObservedGeneration || st.UpdatedReplicas < want || st.Replicas > st.UpdatedReplicas ||
+		st.UnavailableReplicas > 0 {
+		return true
+	}
+	for _, c := range st.Conditions {
+		if c.Type == appsv1.DeploymentProgressing && now.Sub(c.LastUpdateTime.Time) < rolloutGrace {
+			return true
+		}
+	}
+	return false
 }

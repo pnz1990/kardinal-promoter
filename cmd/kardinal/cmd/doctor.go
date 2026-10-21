@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
@@ -130,7 +131,7 @@ func runDoctor(w io.Writer, pipeline, controllerNS string) error {
 		results = append(results, r)
 	}
 	results = append(results, checkPolicyNamespaces(ctx, client, ns, controllerVersion(ctx, client, controllerNS),
-		deployedVersion(ctx, client, controllerNS)))
+		readControllerRollout(ctx, client, controllerNS, time.Now())))
 	if pipeline != "" {
 		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))
 		var p v1alpha1.Pipeline
@@ -579,9 +580,16 @@ before upgrading to v0.14. Against a controller older than v0.13, which does
 not check, it is a WARN saying so: upgrade to v0.13 and run it again. Right
 after such an upgrade the new controller's Pod is Ready a few seconds before
 it takes over, and only the controller in charge records its version: while
-the controller Deployment runs a later release than that version, or a build
-that is not a release, the check is an INFO (upgrade in progress) instead.
-Run it again once kardinal version shows the new controller. It
+the controller Deployment is rolling out (or finished in the last 5 minutes)
+a later release than that version, or a build that is not a release, the
+check is an INFO (upgrade in progress) instead. Run it again once kardinal
+version shows the new controller. Outside a rollout it is the WARN, naming
+what the Deployment runs when that differs. A Pipeline that names
+spec.policyNamespaces but that the controller has not checked for its
+current generation (no PolicyNamespacesShared condition of that generation:
+not reconciled yet after an upgrade, whatever its Ready says) is "not
+checked yet", an INFO when nothing else is found: run doctor again in a
+minute. It
 reads the condition as the controller last wrote it (the controller reads
 the named Namespaces again every 5 minutes), in every namespace or, when you
 may not list Pipelines cluster-wide, in the current one: a clean result

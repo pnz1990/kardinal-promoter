@@ -52,7 +52,9 @@ func policyNamespaceEvents(rec *events.FakeRecorder) int {
 // entry needs its namespace's consent. The Pipeline's own namespace, an org
 // policy namespace (the default platform-policies, or --policy-namespaces),
 // a namespace labelled kardinal.io/policy-shareable=true and one listed in
-// --policy-shareable-namespaces need nothing. Any other namespace, one
+// --policy-shareable-namespaces need nothing: the condition is True (Shared),
+// for the generation, so doctor can tell the Pipeline was checked (#2383),
+// and absent without spec.policyNamespaces. Any other namespace, one
 // labelled otherwise ("True" too) and one that does not exist set
 // PolicyNamespacesShared=False (NotShared) naming each (sorted, once, a
 // missing one like the others), with one Warning Event. Ready is unchanged:
@@ -110,8 +112,16 @@ func TestPipelineReconciler_PolicyNamespacesShared(t *testing.T) {
 			cond := meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared")
 			// What kardinal doctor reads from the condition (#2286).
 			flagged, names := pipeline.NotSharedPolicyNamespaces(&got)
+			assert.True(t, pipeline.PolicyNamespacesChecked(&got), "checked for its generation")
 			if tt.want == "" {
-				assert.Nil(t, cond)
+				if len(tt.namespaces) == 0 {
+					assert.Nil(t, cond, "no spec.policyNamespaces: no condition")
+				} else {
+					require.NotNil(t, cond, "a checked Pipeline says so (#2383)")
+					assert.Equal(t, metav1.ConditionTrue, cond.Status)
+					assert.Equal(t, "Shared", cond.Reason)
+					assert.Equal(t, got.Generation, cond.ObservedGeneration)
+				}
 				assert.Zero(t, policyNamespaceEvents(rec))
 				assert.False(t, flagged)
 				assert.Empty(t, names)
@@ -192,7 +202,7 @@ func (f *policyNamespaceFixture) setLabel(name, shareable string) {
 }
 
 // TestPipelineReconciler_PolicyNamespacesLabelRemoved: the recheck reads the
-// Namespace again. A labelled namespace leaves no condition and a recheck
+// Namespace again. A labelled namespace leaves a True condition and a recheck
 // within 5 minutes; once the label is removed, that recheck sets the
 // condition and warns.
 //
@@ -200,7 +210,8 @@ func (f *policyNamespaceFixture) setLabel(name, shareable string) {
 func TestPipelineReconciler_PolicyNamespacesLabelRemoved(t *testing.T) {
 	f := newPolicyNamespaceFixture(t, []string{"team-b"}, policyNamespace("team-b", "true"))
 	cond, after := f.reconcile()
-	assert.Nil(t, cond)
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
 	assert.Positive(t, after)
 	assert.LessOrEqual(t, after, 5*time.Minute, "the label is read again within one recheck")
 	f.setLabel("team-b", "")
@@ -213,8 +224,8 @@ func TestPipelineReconciler_PolicyNamespacesLabelRemoved(t *testing.T) {
 
 // TestPipelineReconciler_PolicyNamespacesUnreadable: a failed read (an API
 // error other than NotFound: a timeout, Forbidden) keeps the namespace's last
-// result. A labelled namespace whose reads fail every other time leaves no
-// condition, writes no status after the first reconcile and emits no Event;
+// result. A labelled namespace whose reads fail every other time keeps its
+// True condition, writes no status after the first reconcile and emits no Event;
 // a namespace that was not shared stays named, with reason
 // PolicyNamespaceUnreadable and the same message, and emits no new Event
 // when its read fails or recovers; a namespace never read before is named
@@ -228,8 +239,9 @@ func TestPipelineReconciler_PolicyNamespacesUnreadable(t *testing.T) {
 
 	t.Run("a labelled namespace does not flap", func(t *testing.T) {
 		f := newPolicyNamespaceFixture(t, []string{"team-b"}, policyNamespace("team-b", "true"))
-		cond, _ := f.reconcile()
-		require.Nil(t, cond)
+		first, _ := f.reconcile()
+		require.NotNil(t, first)
+		require.Equal(t, metav1.ConditionTrue, first.Status)
 		f.writes = 0
 		for i := range 6 {
 			if i%2 == 0 {
@@ -238,7 +250,7 @@ func TestPipelineReconciler_PolicyNamespacesUnreadable(t *testing.T) {
 				delete(f.failing, "team-b")
 			}
 			cond, after := f.reconcile()
-			assert.Nil(t, cond, "reconcile %d", i)
+			assert.Equal(t, first, cond, "reconcile %d: kept as it is", i)
 			if i%2 == 0 {
 				assert.Equal(t, time.Minute, after, "a failed read is retried within a minute")
 			}
@@ -287,8 +299,8 @@ func TestPipelineReconciler_PolicyNamespacesUnreadable(t *testing.T) {
 
 // TestPipelineReconciler_PolicyNamespacesSharedChanges: the condition
 // follows the namespaces. Another namespace not shared changes the message
-// and emits one more Event; labelling every namespace removes the condition
-// with no Event.
+// and emits one more Event; labelling every namespace makes it True with no
+// Event.
 //
 // Covers GATE-POLNS-02.
 func TestPipelineReconciler_PolicyNamespacesSharedChanges(t *testing.T) {
@@ -325,7 +337,10 @@ func TestPipelineReconciler_PolicyNamespacesSharedChanges(t *testing.T) {
 		ns.Labels = map[string]string{kardinalv1alpha1.LabelPolicyShareable: "true"}
 		require.NoError(t, c.Update(ctx, &ns))
 	}
-	assert.Nil(t, reconcile(), "both namespaces agreed")
+	cond = reconcile()
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status, "both namespaces agreed")
+	assert.Equal(t, "Shared", cond.Reason)
 	assert.Zero(t, policyNamespaceEvents(rec))
 }
 
@@ -343,6 +358,61 @@ func TestPipelineReconciler_PolicyNamespacesReader(t *testing.T) {
 	require.NoError(t, err)
 	var got kardinalv1alpha1.Pipeline
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(p), &got))
-	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared"),
-		"team-b is labelled where Reader reads it")
+	cond := meta.FindStatusCondition(got.Status.Conditions, "PolicyNamespacesShared")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status, "team-b is labelled where Reader reads it")
+}
+
+// TestPolicyNamespacesChecked (#2383): kardinal doctor asks whether the
+// controller has checked a Pipeline's spec.policyNamespaces for its current
+// generation. One without spec.policyNamespaces needs no check; one a
+// controller before v0.13 last reconciled has no condition (its Ready may
+// be left over); one whose condition is of an earlier generation is not
+// checked yet. A failed read after a spec change keeps the condition of the
+// earlier generation, so the Pipeline stays not checked until a read works.
+func TestPolicyNamespacesChecked(t *testing.T) {
+	cond := func(gen int64) []metav1.Condition {
+		return []metav1.Condition{{Type: "PolicyNamespacesShared", Status: metav1.ConditionTrue, Reason: "Shared", ObservedGeneration: gen}}
+	}
+	for name, tc := range map[string]struct {
+		namespaces []string
+		conditions []metav1.Condition
+		want       bool
+	}{
+		"no spec.policyNamespaces":              {nil, nil, true},
+		"only empty entries":                    {[]string{""}, nil, true},
+		"no condition (a v0.12 controller's)":   {[]string{"team-b"}, nil, false},
+		"a condition of an earlier generation":  {[]string{"team-b"}, cond(2), false},
+		"a condition of the current generation": {[]string{"team-b"}, cond(3), true},
+		"a False condition of the generation":   {[]string{"team-b"}, []metav1.Condition{{Type: "PolicyNamespacesShared", Status: metav1.ConditionFalse, ObservedGeneration: 3}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := &kardinalv1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Generation: 3},
+				Spec: kardinalv1alpha1.PipelineSpec{PolicyNamespaces: tc.namespaces}, Status: kardinalv1alpha1.PipelineStatus{Conditions: tc.conditions}}
+			assert.Equal(t, tc.want, pipeline.PolicyNamespacesChecked(p))
+		})
+	}
+
+	t.Run("a failed read after a spec change", func(t *testing.T) {
+		f := newPolicyNamespaceFixture(t, []string{"team-b"}, policyNamespace("team-b", "true"), policyNamespace("team-c", "true"))
+		first, _ := f.reconcile()
+		require.NotNil(t, first)
+		var p kardinalv1alpha1.Pipeline
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		require.True(t, pipeline.PolicyNamespacesChecked(&p))
+		p.Spec.PolicyNamespaces = append(p.Spec.PolicyNamespaces, "team-c")
+		p.Generation++ // the fake client does not
+		require.NoError(t, f.c.Update(context.Background(), &p))
+		f.failing["team-c"] = apierrors.NewTimeoutError("slow", 1)
+		cond, _ := f.reconcile()
+		assert.Equal(t, first, cond, "kept as it was")
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		assert.False(t, pipeline.PolicyNamespacesChecked(&p), "team-c is not known yet")
+		delete(f.failing, "team-c")
+		cond, _ = f.reconcile()
+		require.NotNil(t, cond)
+		require.NoError(t, f.c.Get(context.Background(), f.req.NamespacedName, &p))
+		assert.Equal(t, p.Generation, cond.ObservedGeneration)
+		assert.True(t, pipeline.PolicyNamespacesChecked(&p))
+	})
 }

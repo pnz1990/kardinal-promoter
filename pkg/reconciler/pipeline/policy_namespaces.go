@@ -30,17 +30,23 @@ import (
 // or by being listed in --policy-shareable-namespaces; the org policy
 // namespaces, which every Pipeline reads, and the Pipeline's own need
 // nothing. The gates are still read: the condition, and a Warning Event when
-// its list changes, say that a later release refuses them. The condition is
-// absent when every namespace listed agreed. It does not change Ready.
+// its list changes, say that a later release refuses them. It is True
+// (reason Shared) when every namespace listed agreed or needs nothing, so
+// kardinal doctor can tell a checked Pipeline from one this controller has
+// not reconciled yet (#2383), and absent without spec.policyNamespaces. It
+// does not change Ready.
 //
 // Reason NotShared: every namespace was read. Reason
 // PolicyNamespaceUnreadable: a namespace could not be read (an API error
 // other than NotFound); it keeps the result of its last read, so an API blip
 // neither raises nor clears the warning. The message names the same
 // namespaces either way and does not tell a namespace that does not exist
-// from one that is not labelled: the controller log does.
+// from one that is not labelled: the controller log does. A failed read of a
+// namespace the last read did not name keeps the stored condition as it is
+// (a True one, of the generation it checked), or none.
 const (
 	conditionPolicyNamespacesShared = "PolicyNamespacesShared"
+	reasonPolicyNamespaceShared     = "Shared"
 	reasonPolicyNamespaceNotShared  = "NotShared"
 	reasonPolicyNamespaceUnreadable = "PolicyNamespaceUnreadable"
 	eventPolicyNamespaceNotShared   = "PolicyNamespaceNotShared"
@@ -137,10 +143,11 @@ func lastNotShared(conditions []metav1.Condition) []string {
 }
 
 // policyNamespacesShared returns p's PolicyNamespacesShared condition (nil
-// when every namespace of spec.policyNamespaces agreed) and how soon to read
-// the namespaces again (0: none needs it). A namespace that could not be
-// read counts as its last read found it: named if the stored condition named
-// it.
+// without spec.policyNamespaces) and how soon to read the namespaces again
+// (0: none needs it). A namespace that could not be read counts as its last
+// read found it: named if the stored condition named it; else the stored
+// condition is kept as it is, if it is True (nil if not), since whether it
+// agrees now is not known.
 func (r *Reconciler) policyNamespacesShared(ctx context.Context, p *kardinalv1alpha1.Pipeline) (*metav1.Condition, time.Duration) {
 	chk := r.checkPolicyNamespaces(ctx, p)
 	recheck := time.Duration(0)
@@ -159,7 +166,21 @@ func (r *Reconciler) policyNamespacesShared(ctx context.Context, p *kardinalv1al
 		}
 	}
 	if len(ns) == 0 {
-		return nil, recheck
+		if !slices.ContainsFunc(p.Spec.PolicyNamespaces, func(n string) bool { return n != "" }) {
+			return nil, recheck
+		}
+		if len(chk.unreadable) > 0 {
+			if c := meta.FindStatusCondition(p.Status.Conditions, conditionPolicyNamespacesShared); c != nil &&
+				c.Status == metav1.ConditionTrue {
+				kept := *c
+				return &kept, recheck
+			}
+			return nil, recheck
+		}
+		return &metav1.Condition{Type: conditionPolicyNamespacesShared, Status: metav1.ConditionTrue,
+			Reason: reasonPolicyNamespaceShared, ObservedGeneration: p.Generation,
+			Message: "every namespace of spec.policyNamespaces agreed to share its PolicyGates, or needs nothing " +
+				"(the Pipeline's own and the org policy namespaces)"}, recheck
 	}
 	sort.Strings(ns)
 	return &metav1.Condition{Type: conditionPolicyNamespacesShared, Status: metav1.ConditionFalse,
@@ -174,9 +195,22 @@ func (r *Reconciler) policyNamespacesShared(ctx context.Context, p *kardinalv1al
 // Warning Event is emitted once for each list. Only a read changes the list,
 // so a failed read never emits it.
 func policyNamespacesNews(conditions []metav1.Condition, desired *metav1.Condition) bool {
-	if desired == nil {
+	if desired == nil || desired.Status != metav1.ConditionFalse {
 		return false
 	}
 	c := meta.FindStatusCondition(conditions, conditionPolicyNamespacesShared)
 	return c == nil || c.Message != desired.Message
+}
+
+// PolicyNamespacesChecked reports whether the controller has checked p's
+// spec.policyNamespaces for its current generation: p names none, or its
+// PolicyNamespacesShared condition is of that generation (#2383). A Pipeline
+// a controller before v0.13 last reconciled has no condition, whatever its
+// Ready says.
+func PolicyNamespacesChecked(p *kardinalv1alpha1.Pipeline) bool {
+	if !slices.ContainsFunc(p.Spec.PolicyNamespaces, func(n string) bool { return n != "" }) {
+		return true
+	}
+	c := meta.FindStatusCondition(p.Status.Conditions, conditionPolicyNamespacesShared)
+	return c != nil && c.ObservedGeneration == p.Generation
 }
