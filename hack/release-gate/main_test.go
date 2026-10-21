@@ -1712,6 +1712,10 @@ func TestCIRunner_DispatchOnce(t *testing.T) {
 			calls: 1, wantRun: 9},
 		{name: "a run of other inputs", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` +
 			gateRunTitle("abc", []string{"core", "gitlab"}, "1.37", 1) + `","status":"in_progress"}`, calls: 1, wantRun: 9},
+		{name: "a run of another count", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` +
+			gateRunTitle("abc", []string{"core"}, "1.37", 3) + `","status":"in_progress"}`, calls: 1, wantRun: 9},
+		{name: "a run of other minors", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"` +
+			gateRunTitle("abc", []string{"core"}, "1.35 1.37", 1) + `","status":"in_progress"}`, calls: 1, wantRun: 9},
 		{name: "an ad-hoc dispatch of the commit", existing: `{"databaseId":5,"headSha":"abc","createdAt":"` + old + `","displayTitle":"E2E live","status":"in_progress"}`,
 			calls: 1, wantRun: 9},
 	} {
