@@ -46,7 +46,14 @@ import (
 func TestReceipts_OCIPerNamespace(t *testing.T) {
 	e := framework.New(t)
 	ctx := context.Background()
-	host := framework.NewRegistry(t).Host()
+	reg := framework.NewRegistry(t)
+	host := reg.Host()
+	// The images, in the registry: a referrer pushed to an image's own
+	// repository needs its subject there.
+	digests := map[string]string{
+		host + "/e2e/team-a/app": reg.Copy(t, "6.15.0", "e2e/team-a/app", "v1"),
+		host + "/e2e/team-b/app": reg.Copy(t, "6.15.0", "e2e/team-b/app", "v1"),
+	}
 	nsA, nsB, nsC := e.Namespace(t), e.Namespace(t), e.Namespace(t)
 	var c corev1.Namespace
 	require.NoError(t, e.Client.Get(ctx, types.NamespacedName{Name: nsC}, &c))
@@ -89,7 +96,7 @@ func TestReceipts_OCIPerNamespace(t *testing.T) {
 		b := &v1alpha1.Bundle{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("per-ns-%02d", n), Namespace: ns, UID: types.UID(name)},
 			Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "app",
-				Images: []v1alpha1.ImageRef{{Repository: repo, Digest: fmt.Sprintf("sha256:%064x", n)}}},
+				Images: []v1alpha1.ImageRef{{Repository: repo, Digest: digests[repo]}}},
 		}
 		ps := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: ns},
 			Spec: v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: b.Name, Environment: "prod"}}
