@@ -709,8 +709,13 @@ Each attempt runs at most once:
   the run in the Bundle's receipts. There must be at least one. Names repeat (a Bundle deleted
   and created again under its name has runs, Verdicts, gates and so records of the same names,
   and the earlier Bundle's records stay), so a receipt counts only when its statement names this
-  Bundle's UID, and an AuditEvent, which names no UID, only when it is dated at or after this
-  Bundle was created. Then the run names that agent, that sponsor and `kr-<run>`, and the
+  Bundle's UID, and an AuditEvent, which names no UID, only when it is dated after the second
+  this Bundle was created in (this Bundle's own record comes only after its run has run, so it
+  never falls in that second). Both times are whole seconds from two clocks, the record's
+  `spec.timestamp` from the controller's and `creationTimestamp` from the API server's: until
+  gate AuditEvents name the Bundle's UID (#2380), an earlier Bundle's record dated within the
+  controller clock's lead over the API server's, before this Bundle was created, can still
+  count. Then the run names that agent, that sponsor and `kr-<run>`, and the
   Verdict counts and traces as before (6.2): the run-bound
   Verdict counts only through an AgentRun that names an allowed agent, and the evidence pack
   traces it through that AgentRun. Otherwise, because the template's agent or the sponsor

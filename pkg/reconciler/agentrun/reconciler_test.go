@@ -379,6 +379,19 @@ func TestAgentRun_RecreatedNamesItsAgent(t *testing.T) {
 			ev.Spec.Timestamp = metav1.NewTime(runNow.Add(-7 * 24 * time.Hour))
 			f.extra = append(f.extra, ev)
 		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		// The record's time and the Bundle's are whole seconds from two
+		// clocks: one in the second the Bundle was created in may be the
+		// earlier Bundle's, and is not counted; one a second later is.
+		{name: "an AuditEvent in the second the Bundle was created in", change: func(f *fixture) {
+			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.Timestamp = metav1.NewTime(f.bundle.CreationTimestamp.Add(900 * time.Millisecond))
+			f.extra = append(f.extra, ev)
+		}, why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
+		{name: "an AuditEvent a second after the Bundle was created", change: func(f *fixture) {
+			ev := recorded("qa", "bob").(*v1alpha1.AuditEvent)
+			ev.Spec.Timestamp = metav1.NewTime(f.bundle.CreationTimestamp.Add(time.Second))
+			f.extra = append(f.extra, ev)
+		}, agent: "qa", sponsor: "bob"},
 		{name: "an earlier Bundle's receipt, of the same names", records: []client.Object{receiptOf("uid-0", "agent qa for bob")},
 			why: changed + ": no record of its Verdict names agent qa for bob (0 VerdictRecorded AuditEvents, 0 receipts name the run)"},
 		{name: "this Bundle's receipt, next to an earlier one's that names another agent",

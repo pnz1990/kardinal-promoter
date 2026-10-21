@@ -418,8 +418,13 @@ func (r *Reconciler) recorded(ctx context.Context, log zerolog.Logger, base, run
 // Names repeat: a Bundle deleted and created again under its name has runs,
 // Verdicts and gates of the same names, and the records of the earlier one
 // stay. So a receipt counts only when it names this Bundle's UID, and an
-// AuditEvent (which names no UID) only when it is dated at or after this
-// Bundle was created.
+// AuditEvent (which names no UID) only when it is dated after the second
+// this Bundle was created in: both times are whole seconds, the record's
+// from the controller's clock and the creation's from the API server's, and
+// this Bundle's own record comes only after its run has run. An earlier
+// Bundle's record dated within the controller clock's lead over the API
+// server's can still pass, until gate AuditEvents name the Bundle's UID
+// (#2380).
 func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun, bundle *v1alpha1.Bundle) ([]v1alpha1.Actor, []string, error) {
 	principal := graph.RunServiceAccountUser(run.Namespace, run.Name)
 	var events v1alpha1.AuditEventList
@@ -430,7 +435,7 @@ func (r *Reconciler) recordedActors(ctx context.Context, run *v1alpha1.AgentRun,
 	var actors []v1alpha1.Actor
 	for _, ev := range events.Items {
 		if a := ev.Spec.Actor; a != nil && a.Principal == principal && ev.Spec.BundleName == run.Spec.BundleName &&
-			ev.Spec.Action == auditActionVerdictRecorded && !ev.Spec.Timestamp.Before(&bundle.CreationTimestamp) {
+			ev.Spec.Action == auditActionVerdictRecorded && ev.Spec.Timestamp.After(bundle.CreationTimestamp.Time) {
 			actors = append(actors, *a)
 		}
 	}
