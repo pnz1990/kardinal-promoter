@@ -1075,7 +1075,9 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 ---
 
 [Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.4...HEAD
-[v0.12.4]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.1...v0.12.4
+[v0.12.4]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.3...v0.12.4
+[v0.12.3]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.2...v0.12.3
+[v0.12.2]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.1...v0.12.2
 [v0.12.1]: https://github.com/pnz1990/kardinal-promoter/compare/v0.12.0...v0.12.1
 [v0.12.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.11.0...v0.12.0
 [v0.11.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.10.0...v0.11.0
