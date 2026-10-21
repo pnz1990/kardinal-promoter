@@ -252,6 +252,36 @@ spec:
                     An empty digest is a template that did not apply before (created) or no
                     longer does (deleted).
                   properties:
+                    environmentsAdded:
+                      description: |-
+                        EnvironmentsAdded are environments of the version the template's gate
+                        copies now apply to and did not before (a kardinal.io/applies-to edit
+                        moves a gate without changing its rule): the first 5 in name order. A
+                        record merged from several gives the net move: an environment in
+                        environmentsAdded only ends on, one in environmentsRemoved only ends
+                        off, and one in both moved and ended where it started.
+                      items:
+                        maxLength: 63
+                        type: string
+                      maxItems: 5
+                      type: array
+                    environmentsOmitted:
+                      description: |-
+                        EnvironmentsOmitted is one count, for environmentsAdded and
+                        environmentsRemoved together, of the environments past the first 5 of
+                        each. In a record merged from several it is an upper bound.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    environmentsRemoved:
+                      description: |-
+                        EnvironmentsRemoved are environments of the version the template's
+                        gate copies applied to and no longer do: the first 5 in name order.
+                      items:
+                        maxLength: 63
+                        type: string
+                      maxItems: 5
+                      type: array
                     manager:
                       description: |-
                         Manager is the field manager of the template's newest managedFields

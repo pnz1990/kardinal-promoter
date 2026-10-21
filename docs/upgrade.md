@@ -129,9 +129,9 @@ something for you:
   upstream environments ([Multi-Environment Rollback](rollback.md#multi-environment-rollback)).
 - **Gate changes reach the versions in flight.** At the upgrade, the controller renders the Graph
   of every version still promoting again, once, so its gates become copies of the current
-  templates. A gate created, edited or deleted under v0.12 after the version started (v0.12 left
-  those versions on the gates they started with) applies to it from then on, and a `GateChanged`
-  AuditEvent that says it happened on upgrade records it. Later changes reach the versions in
+  templates. A gate created, edited, deleted or moved to other environments under v0.12 after
+  the version started (v0.12 left those versions on the gates they started with) applies to it
+  from then on, and a `GateChanged` AuditEvent that says it happened on upgrade records it. Later changes reach the versions in
   flight at once, and are recorded the same way. If you relied on a version in flight keeping an
   old gate, use `kardinal pause` or `kardinal hold` instead
   ([When a new or edited gate takes effect](policy-gates.md#when-a-new-or-edited-gate-takes-effect)).

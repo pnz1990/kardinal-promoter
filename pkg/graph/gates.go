@@ -224,6 +224,12 @@ func (c *gateCollections) setVerify(name string, data map[string]interface{}) {
 // template with force and re-applies it on drift, so a template-owned
 // overrides list would revert every `kardinal override` patch on the live
 // instance. The CLI records overrides on the instances instead.
+//
+// TemplateRules compares the spec this returns across controller versions
+// (a re-render on upgrade records what changed under a version in flight):
+// a change to its keys or values for the same template would record a false
+// GateChanged for every promoting version at that upgrade. TestTemplateDataShape
+// pins them.
 func gateTemplateData(gate kardinalv1alpha1.PolicyGate, orgNS map[string]bool) map[string]interface{} {
 	// Propagate scope and applies-to from the gate template so that
 	// `kardinal policy list` can show the correct scope (org/team) and
@@ -717,6 +723,56 @@ func TemplateRules(g *Graph) map[string]string {
 			}
 			sort.Strings(vs)
 			out[key] = specs[i] + " verify " + strings.Join(vs, ",")
+		}
+	}
+	return out
+}
+
+// TemplateEnvironments returns, by "namespace/name" of each template, the
+// environments of g's version its gate instances are in, sorted: what a
+// kardinal.io/applies-to edit changes without changing the rule. It reads the
+// items of NodePolicyGateData as every controller since v0.12.0 writes them.
+func TemplateEnvironments(g *Graph) map[string][]string {
+	out := map[string][]string{}
+	if g == nil {
+		return out
+	}
+	for _, n := range g.Spec.Nodes {
+		if n.ID != NodePolicyGateData {
+			continue
+		}
+		templates, _ := n.Def["templates"].([]interface{})
+		keys := make([]string, len(templates))
+		envs := make([]map[string]bool, len(templates))
+		for i, raw := range templates {
+			t, _ := raw.(map[string]interface{})
+			name, _ := t["template"].(string)
+			ns, _ := t["templateNamespace"].(string)
+			keys[i] = ns + "/" + name
+			envs[i] = map[string]bool{}
+		}
+		for field, raw := range n.Def {
+			items, ok := raw.([]interface{})
+			if !ok || field == "templates" {
+				continue
+			}
+			for _, it := range items {
+				item, _ := it.(map[string]interface{})
+				idx, err := strconv.Atoi(fmt.Sprint(item["t"]))
+				env, _ := item["environment"].(string)
+				if err != nil || idx < 0 || idx >= len(templates) || env == "" {
+					continue
+				}
+				envs[idx][env] = true
+			}
+		}
+		for i, key := range keys {
+			list := make([]string, 0, len(envs[i]))
+			for e := range envs[i] {
+				list = append(list, e)
+			}
+			sort.Strings(list)
+			out[key] = list
 		}
 	}
 	return out

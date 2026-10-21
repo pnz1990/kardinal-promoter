@@ -57,7 +57,7 @@ func TestGateChangeEntry(t *testing.T) {
 	p, b := gateAuditFixture()
 	now := time.Unix(300, 0)
 	gates := []kardinalv1alpha1.PolicyGate{edited, reverted, unchanged, added, elsewhere}
-	e, ok := gateChangeEntry(b, p, before, gates, now)
+	e, ok := gateChangeEntry(b, p, before, nil, nil, gates, now)
 	require.True(t, ok)
 	assert.Equal(t, "GateChanged", e.Spec.Action)
 	assert.Equal(t, "app-v1", e.Spec.BundleName)
@@ -87,21 +87,21 @@ func TestGateChangeEntry(t *testing.T) {
 	assert.Contains(t, msg, "platform-policies/deleted was deleted (generation 7)")
 	assert.NotContains(t, msg, "and ", "four changes, all named")
 
-	again, ok := gateChangeEntry(b, p, before, gates, now.Add(time.Hour))
+	again, ok := gateChangeEntry(b, p, before, nil, nil, gates, now.Add(time.Hour))
 	require.True(t, ok)
 	assert.Equal(t, e.Name, again.Name, "the same changes have the same record name")
-	other, _ := gateChangeEntry(b, p, before, []kardinalv1alpha1.PolicyGate{edited, unchanged, added, elsewhere}, now)
+	other, _ := gateChangeEntry(b, p, before, nil, nil, []kardinalv1alpha1.PolicyGate{edited, unchanged, added, elsewhere}, now)
 	assert.NotEqual(t, e.Name, other.Name, "other changes, another record")
 
 	// One environment: the record names it.
-	one, ok := gateChangeEntry(b, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, now)
+	one, ok := gateChangeEntry(b, p, map[string]graph.TemplateStamp{}, nil, nil, []kardinalv1alpha1.PolicyGate{added}, now)
 	require.True(t, ok)
 	assert.Equal(t, "uat", one.Spec.Environment)
 	assert.Contains(t, one.Spec.Message, "1 PolicyGate template changed under version app-v1: ")
 
 	_, ok = gateChangeEntry(b, p, map[string]graph.TemplateStamp{
 		"platform-policies/unchanged": {Digest: graph.TemplateDigest(unchanged), Generation: 2},
-	}, []kardinalv1alpha1.PolicyGate{unchanged, elsewhere}, now)
+	}, nil, nil, []kardinalv1alpha1.PolicyGate{unchanged, elsewhere}, now)
 	assert.False(t, ok, "nothing changed, nothing recorded")
 }
 
@@ -119,7 +119,7 @@ func TestGateChangeEntry_BulkChangeIsOneRecord(t *testing.T) {
 		before["platform-policies/"+g.Name] = graph.TemplateStamp{Digest: graph.TemplateDigest(was), Generation: 1}
 		gates = append(gates, g)
 	}
-	e, ok := gateChangeEntry(b, p, before, gates, time.Unix(300, 0))
+	e, ok := gateChangeEntry(b, p, before, nil, nil, gates, time.Unix(300, 0))
 	require.True(t, ok)
 	assert.Len(t, e.Spec.Gates, kardinalv1alpha1.MaxAuditGateChanges)
 	assert.Equal(t, int32(40-kardinalv1alpha1.MaxAuditGateChanges), e.Spec.GatesOmitted)
@@ -157,11 +157,11 @@ func TestGateChangeEntry_UnstampedCopiesAreTheBaseline(t *testing.T) {
 		"platform-policies/other":   {},
 		"platform-policies/deleted": {},
 	}
-	_, ok := gateChangeEntry(b, p, before, []kardinalv1alpha1.PolicyGate{edited, other}, time.Unix(300, 0))
+	_, ok := gateChangeEntry(b, p, before, nil, nil, []kardinalv1alpha1.PolicyGate{edited, other}, time.Unix(300, 0))
 	assert.False(t, ok, "unstamped copies record nothing, edited, unchanged or deleted")
 
 	added := gateAuditGate("added", "prod", "true", 1)
-	e, ok := gateChangeEntry(b, p, before, []kardinalv1alpha1.PolicyGate{edited, other, added}, time.Unix(300, 0))
+	e, ok := gateChangeEntry(b, p, before, nil, nil, []kardinalv1alpha1.PolicyGate{edited, other, added}, time.Unix(300, 0))
 	require.True(t, ok)
 	require.Len(t, e.Spec.Gates, 1)
 	assert.Equal(t, "added", e.Spec.Gates[0].Template)
@@ -172,7 +172,7 @@ func TestGateChangeEntry_UnstampedCopiesAreTheBaseline(t *testing.T) {
 		"platform-policies/other":  {Digest: graph.TemplateDigest(other), Generation: 2},
 	}
 	again := gateAuditGate("edited", "prod", "false", 5)
-	e, ok = gateChangeEntry(b, p, stamped, []kardinalv1alpha1.PolicyGate{again, other}, time.Unix(400, 0))
+	e, ok = gateChangeEntry(b, p, stamped, nil, nil, []kardinalv1alpha1.PolicyGate{again, other}, time.Unix(400, 0))
 	require.True(t, ok)
 	require.Len(t, e.Spec.Gates, 1)
 	assert.Equal(t, graph.TemplateDigest(edited), e.Spec.Gates[0].OldDigest)
@@ -202,7 +202,7 @@ func TestGateChanged_FullOutboxMergesBeforeDropping(t *testing.T) {
 		hold := gateAuditGate("hold", "prod", fmt.Sprintf("x == %d", gen+1), gen+1)
 		other := gateAuditGate(fmt.Sprintf("other-%02d", gen), "prod", "true", 1)
 		before := map[string]graph.TemplateStamp{"platform-policies/hold": {Digest: digest(gen), Generation: gen}}
-		e, ok := gateChangeEntry(b, p, before, []kardinalv1alpha1.PolicyGate{hold, other}, time.Unix(300+gen, 0))
+		e, ok := gateChangeEntry(b, p, before, nil, nil, []kardinalv1alpha1.PolicyGate{hold, other}, time.Unix(300+gen, 0))
 		require.True(t, ok)
 		return e
 	}
@@ -241,11 +241,11 @@ func TestGateChanged_FullOutboxMergesBeforeDropping(t *testing.T) {
 func TestCoalesceGateChanges_SameVersionOnly(t *testing.T) {
 	p, b := gateAuditFixture()
 	added := gateAuditGate("added", "uat", "true", 1)
-	e1, ok := gateChangeEntry(b, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, time.Unix(300, 0))
+	e1, ok := gateChangeEntry(b, p, map[string]graph.TemplateStamp{}, nil, nil, []kardinalv1alpha1.PolicyGate{added}, time.Unix(300, 0))
 	require.True(t, ok)
 	other := *b
 	other.Name = "app-v2"
-	e2, ok := gateChangeEntry(&other, p, map[string]graph.TemplateStamp{}, []kardinalv1alpha1.PolicyGate{added}, time.Unix(301, 0))
+	e2, ok := gateChangeEntry(&other, p, map[string]graph.TemplateStamp{}, nil, nil, []kardinalv1alpha1.PolicyGate{added}, time.Unix(301, 0))
 	require.True(t, ok)
 	_, ok = coalesceGateChanges(e1, e2)
 	assert.False(t, ok)
@@ -253,7 +253,7 @@ func TestCoalesceGateChanges_SameVersionOnly(t *testing.T) {
 	// The same version: deleted, then added again, is one change from the
 	// deleted stamp to the new one.
 	gone := map[string]graph.TemplateStamp{"platform-policies/added": {Digest: "sha256:old", Generation: 3}}
-	d, ok := gateChangeEntry(b, p, gone, nil, time.Unix(302, 0))
+	d, ok := gateChangeEntry(b, p, gone, nil, nil, nil, time.Unix(302, 0))
 	require.True(t, ok)
 	m, ok := coalesceGateChanges(d, e1)
 	require.True(t, ok)
@@ -311,4 +311,184 @@ func TestCoalesceGateChanges_Properties(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, int32(3), three.Spec.MergedRecords, "a merged record counts what it replaced")
 	assert.Zero(t, record("prod", 0, change("alpha", 1)).Spec.MergedRecords, "a record as recorded has none")
+}
+
+// #2338: a kardinal.io/applies-to edit moves a gate without changing its
+// rule: a stamped copy with the same digest and generation whose
+// environments changed is recorded as moved, with the environments added
+// and removed; one that did not move is not recorded; an unstamped copy
+// (v0.12) stays the baseline; the move takes part in the record's name.
+//
+// Covers GATE-EDIT-04.
+func TestGateChangeEntry_EnvironmentMove(t *testing.T) {
+	p, b := gateAuditFixture()
+	p.Spec.Environments = append(p.Spec.Environments, kardinalv1alpha1.EnvironmentSpec{Name: "test"})
+	window := gateAuditGate("window", "test,prod", "true", 2)
+	stamp := map[string]graph.TemplateStamp{"platform-policies/window": {Digest: graph.TemplateDigest(window), Generation: 2}}
+	before := map[string][]string{"platform-policies/window": {"prod"}}
+	after := map[string][]string{"platform-policies/window": {"prod", "test"}}
+	gates := []kardinalv1alpha1.PolicyGate{window}
+
+	e, ok := gateChangeEntry(b, p, stamp, before, after, gates, time.Unix(400, 0))
+	require.True(t, ok, "a move is a change")
+	require.Len(t, e.Spec.Gates, 1)
+	gc := e.Spec.Gates[0]
+	assert.Equal(t, gc.OldDigest, gc.NewDigest)
+	assert.Equal(t, int64(2), gc.NewGeneration)
+	assert.Equal(t, []string{"test"}, gc.EnvironmentsAdded)
+	assert.Empty(t, gc.EnvironmentsRemoved)
+	assert.Contains(t, e.Spec.Message, "platform-policies/window moved (generation 2): now also in test")
+
+	_, ok = gateChangeEntry(b, p, stamp, before, before, gates, time.Unix(400, 0))
+	assert.False(t, ok, "no move, no change")
+	_, ok = gateChangeEntry(b, p, stamp, before, nil, gates, time.Unix(400, 0))
+	assert.False(t, ok, "the Graph after could not be read: the move is unknown")
+	_, ok = gateChangeEntry(b, p, map[string]graph.TemplateStamp{"platform-policies/window": {}}, before, after, gates, time.Unix(400, 0))
+	assert.False(t, ok, "an unstamped copy is the baseline")
+
+	back, ok := gateChangeEntry(b, p, stamp, after, before, gates, time.Unix(400, 0))
+	require.True(t, ok)
+	assert.Equal(t, []string{"test"}, back.Spec.Gates[0].EnvironmentsRemoved)
+	assert.NotEqual(t, e.Name, back.Name, "moving back is another record")
+}
+
+// #2338: environmentDiff, then and set: the names in each list are sorted,
+// a record keeps the first MaxAuditGateEnvironments of each and counts the
+// rest, and an environment added and then removed (or the reverse) stays in
+// both lists, said as moved and back (QA-2 on #2347).
+//
+// Covers GATE-EDIT-04.
+func TestEnvironmentMove(t *testing.T) {
+	m := environmentDiff([]string{"a", "b", "c"}, []string{"b", "c", "d", "e"})
+	assert.Equal(t, []string{"d", "e"}, m.added)
+	assert.Equal(t, []string{"a"}, m.removed)
+	assert.Equal(t, "now also in d, e; no longer in a", m.String())
+	assert.True(t, environmentDiff([]string{"a"}, []string{"a"}).none())
+
+	var many []string
+	for i := range 12 {
+		many = append(many, fmt.Sprintf("env-%02d", i))
+	}
+	var gc kardinalv1alpha1.AuditGateChange
+	environmentDiff(nil, many).set(&gc)
+	assert.Len(t, gc.EnvironmentsAdded, kardinalv1alpha1.MaxAuditGateEnvironments)
+	assert.Equal(t, int32(12-kardinalv1alpha1.MaxAuditGateEnvironments), gc.EnvironmentsOmitted)
+	assert.Equal(t, "env-00", gc.EnvironmentsAdded[0])
+
+	there := environmentDiff([]string{"prod"}, []string{"prod", "test"})
+	back := environmentDiff([]string{"prod", "test"}, []string{"prod"})
+	round := there.then(back)
+	assert.Equal(t, []string{"test"}, round.added, "added, then removed: kept")
+	assert.Equal(t, []string{"test"}, round.removed)
+	assert.Equal(t, "moved and back in test", round.String())
+	assert.Equal(t, round, back.then(there), "removed, then added: the same")
+	both := there.then(environmentDiff([]string{"prod", "test"}, []string{"prod", "test", "uat"}))
+	assert.Equal(t, []string{"test", "uat"}, both.added)
+	assert.Empty(t, both.removed)
+}
+
+// #2338, QA-2 on #2347: merged records keep every move, so a merge (the
+// outbox full during an AuditEvent write outage) cannot erase that a gate
+// was off an environment of the version for a while: prod-freeze taken off
+// prod by an applies-to edit and put back ten minutes later is one change
+// that says it moved and back, beside window's edit.
+//
+// Covers GATE-EDIT-04.
+func TestCoalesceGateChanges_EnvironmentMove(t *testing.T) {
+	p, b := gateAuditFixture()
+	freeze := gateAuditGate("prod-freeze", "uat,prod", "!schedule.isWeekend", 2)
+	window := gateAuditGate("window", "prod", "true", 2)
+	stamps := map[string]graph.TemplateStamp{
+		"platform-policies/prod-freeze": {Digest: graph.TemplateDigest(freeze), Generation: 2},
+		"platform-policies/window":      {Digest: "sha256:old", Generation: 1},
+	}
+	key := "platform-policies/prod-freeze"
+	on, off := []string{"prod", "uat"}, []string{"uat"}
+	gates := []kardinalv1alpha1.PolicyGate{freeze, window}
+	removed, ok := gateChangeEntry(b, p, stamps, map[string][]string{key: on}, map[string][]string{key: off}, gates, time.Unix(500, 0))
+	require.True(t, ok)
+	require.Len(t, removed.Spec.Gates, 2, "the move and window's edit")
+	stamps["platform-policies/window"] = graph.TemplateStamp{Digest: graph.TemplateDigest(window), Generation: 2}
+	back, ok := gateChangeEntry(b, p, stamps, map[string][]string{key: off}, map[string][]string{key: on}, gates, time.Unix(1100, 0))
+	require.True(t, ok)
+	require.Len(t, back.Spec.Gates, 1)
+
+	m, ok := coalesceGateChanges(removed, back)
+	require.True(t, ok)
+	byName := map[string]kardinalv1alpha1.AuditGateChange{}
+	for _, gc := range m.Spec.Gates {
+		byName[gc.Template] = gc
+	}
+	require.Contains(t, byName, "prod-freeze", "the move and the move back are kept")
+	assert.Equal(t, []string{"prod"}, byName["prod-freeze"].EnvironmentsAdded)
+	assert.Equal(t, []string{"prod"}, byName["prod-freeze"].EnvironmentsRemoved)
+	assert.Contains(t, byName, "window")
+	assert.Contains(t, m.Spec.Message, "platform-policies/prod-freeze moved (generation 2): moved and back in prod")
+}
+
+// QA-2 on #2347: three or more merged moves keep the net state. Each step
+// is folded in order: an environment that ends where it started is moved
+// and back (in both lists), one that ends off is no longer in (removed
+// only), one that ends on is now also in (added only).
+//
+// Covers GATE-EDIT-04.
+func TestEnvironmentMove_Sequences(t *testing.T) {
+	on, off := []string{"prod", "uat"}, []string{"uat"}
+	takeOff := environmentDiff(on, off)
+	putOn := environmentDiff(off, on)
+	for _, tc := range []struct {
+		name           string
+		steps          []environmentMove
+		added, removed []string
+		says           string
+	}{
+		{"off prod, back on", []environmentMove{takeOff, putOn}, []string{"prod"}, []string{"prod"}, "moved and back in prod"},
+		{"off prod, back on, off again", []environmentMove{takeOff, putOn, takeOff}, nil, []string{"prod"}, "no longer in prod"},
+		{"onto prod, off, onto again", []environmentMove{putOn, takeOff, putOn}, []string{"prod"}, nil, "now also in prod"},
+		{"off, on, off, on", []environmentMove{takeOff, putOn, takeOff, putOn}, []string{"prod"}, []string{"prod"}, "moved and back in prod"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.steps[0]
+			for _, s := range tc.steps[1:] {
+				got = got.then(s)
+			}
+			assert.Equal(t, tc.added, got.added)
+			assert.Equal(t, tc.removed, got.removed)
+			assert.Equal(t, tc.says, got.String())
+		})
+	}
+	// A newer record that is itself a merge, back where it started (on, then
+	// off), keeps the older net move: off, then (on, off) ends off (QA-2's
+	// right fold on #2347).
+	right := takeOff.then(putOn.then(takeOff))
+	assert.Nil(t, right.added)
+	assert.Equal(t, []string{"prod"}, right.removed)
+	assert.Equal(t, "no longer in prod", right.String())
+}
+
+// QA-2 on #2347: three unwritten records of one version merged as the
+// outbox merges them, oldest first: prod-freeze off prod, back on, off again
+// is recorded as no longer in prod, not as moved and back.
+//
+// Covers GATE-EDIT-04.
+func TestCoalesceGateChanges_ThreeMoves(t *testing.T) {
+	p, b := gateAuditFixture()
+	freeze := gateAuditGate("prod-freeze", "uat", "!schedule.isWeekend", 2)
+	stamps := map[string]graph.TemplateStamp{"platform-policies/prod-freeze": {Digest: graph.TemplateDigest(freeze), Generation: 2}}
+	key := "platform-policies/prod-freeze"
+	on, off := []string{"prod", "uat"}, []string{"uat"}
+	gates := []kardinalv1alpha1.PolicyGate{freeze}
+	record := func(before, after []string, at int64) kardinalv1alpha1.PendingAuditEvent {
+		e, ok := gateChangeEntry(b, p, stamps, map[string][]string{key: before}, map[string][]string{key: after}, gates, time.Unix(at, 0))
+		require.True(t, ok)
+		return e
+	}
+	m, ok := coalesceGateChanges(record(on, off, 600), record(off, on, 1200))
+	require.True(t, ok)
+	m, ok = coalesceGateChanges(m, record(on, off, 1800))
+	require.True(t, ok)
+	require.Len(t, m.Spec.Gates, 1)
+	assert.Empty(t, m.Spec.Gates[0].EnvironmentsAdded, "prod-freeze ends off prod")
+	assert.Equal(t, []string{"prod"}, m.Spec.Gates[0].EnvironmentsRemoved)
+	assert.Contains(t, m.Spec.Message, "platform-policies/prod-freeze moved (generation 2): no longer in prod")
 }

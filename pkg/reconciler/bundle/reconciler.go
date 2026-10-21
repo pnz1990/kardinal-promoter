@@ -477,7 +477,7 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		// under a rendering bug recovers on upgrade (#2271).
 		gatesHash := r.gatesHashFor(ctx, log, pipeline)
 		gates, gatesRead := r.currentGates(ctx, log, pipeline)
-		before, stamps := graph.TemplateRules(g), graph.TemplateStamps(g)
+		before := snapshotGates(g)
 		if _, tErr := r.translate(ctx, log, pipeline, b); tErr != nil {
 			if skipTranslate(tErr) {
 				return nil
@@ -489,11 +489,12 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		// reaches it only now: the change is recorded, as one under a
 		// version in flight is (#2144).
 		if gatesRead {
-			if rendered, _, err := r.readGraph(ctx, b.Namespace, name); err != nil || rendered == nil {
-				log.Warn().Err(err).Str("graph", name).Msg("cannot read the re-rendered Graph: a rule change on upgrade is not recorded as an AuditEvent")
-			} else if e, ok := upgradeGateChangeEntry(b, before, graph.TemplateRules(rendered), stamps,
-				graph.TemplateStamps(rendered), gates, r.now()); ok {
-				b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
+			if rendered := r.auditGraph(ctx, log, b); rendered != nil {
+				after := snapshotGates(rendered)
+				if e, ok := upgradeGateChangeEntry(b, before.rules, after.rules, before.stamps, after.stamps,
+					before.envs, after.envs, gates, r.now()); ok {
+					b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
+				}
 			}
 		}
 		log.Info().Str("graph", name).Str("renderVersion", g.Labels[graph.LabelRenderVersion]).
@@ -649,10 +650,17 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		builtGatesHash = translator.GatesHash(pipeline, gates)
 	}
 	// A gate change under a Promoting version is recorded (#2144): what its
-	// instances carried is read from the Graph before it is updated.
-	var stamps map[string]graph.TemplateStamp
-	if gatesChanged && gatesRead && b.Status.Phase == phasePromoting {
-		stamps = r.graphStamps(ctx, log, b)
+	// instances carried is read from the Graph before it is updated. So is
+	// what a Graph an earlier controller rendered gets now, whatever started
+	// the rebuild (#2338): a Pipeline edit that lands before the version's
+	// first reconcile after the upgrade re-renders it here, not in syncGraph.
+	var before *gateSnapshot
+	if gatesRead && b.Status.Phase == phasePromoting {
+		if g := r.auditGraph(ctx, log, b); g != nil {
+			if s := snapshotGates(g); gatesChanged || s.stale {
+				before = &s
+			}
+		}
 	}
 	if _, err := r.translate(ctx, log, pipeline, b); err != nil {
 		if !pipelineChanged && errors.Is(err, graph.ErrInvalid) &&
@@ -664,17 +672,50 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	b.Status.PipelineSpecHash = currentHash
 	b.Status.PolicyGatesHash = builtGatesHash
 	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
-	if stamps != nil {
-		if e, ok := gateChangeEntry(b, pipeline, stamps, gates, r.now()); ok {
+	if before != nil {
+		var after *gateSnapshot
+		if g := r.auditGraph(ctx, log, b); g != nil {
+			s := snapshotGates(g)
+			after = &s
+		}
+		var e kardinalv1alpha1.PendingAuditEvent
+		ok := false
+		switch {
+		case before.stale && after != nil:
+			e, ok = upgradeGateChangeEntry(b, before.rules, after.rules, before.stamps, after.stamps,
+				before.envs, after.envs, gates, r.now())
+		case before.stale:
+		case after != nil:
+			e, ok = gateChangeEntry(b, pipeline, before.stamps, before.envs, after.envs, gates, r.now())
+		default:
+			e, ok = gateChangeEntry(b, pipeline, before.stamps, before.envs, nil, gates, r.now())
+		}
+		if ok {
 			b.Status.PendingAuditEvents = audit.Enqueue(ctx, auditKind, b.Status.PendingAuditEvents, e)
 		}
 	}
 	return nil
 }
 
-// graphStamps is graph.TemplateStamps of b's Graph, or nil when it cannot be
-// read (the change is then not recorded, and a warning says so).
-func (r *Reconciler) graphStamps(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle) map[string]graph.TemplateStamp {
+// gateSnapshot is what a Graph's gate instances copy from their templates,
+// for the GateChanged records: the rules (graph.TemplateRules), stamps
+// (graph.TemplateStamps) and environments (graph.TemplateEnvironments), and
+// whether a controller of another graph.RenderVersion rendered it.
+type gateSnapshot struct {
+	rules  map[string]string
+	stamps map[string]graph.TemplateStamp
+	envs   map[string][]string
+	stale  bool
+}
+
+func snapshotGates(g *graph.Graph) gateSnapshot {
+	return gateSnapshot{rules: graph.TemplateRules(g), stamps: graph.TemplateStamps(g), envs: graph.TemplateEnvironments(g),
+		stale: g.Labels[graph.LabelRenderVersion] != graph.RenderLabel}
+}
+
+// auditGraph is b's Graph, read for its gate copies, or nil when it cannot be
+// read (a gate change is then not recorded, and a warning says so).
+func (r *Reconciler) auditGraph(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle) *graph.Graph {
 	if r.GraphChecker == nil {
 		return nil
 	}
@@ -684,10 +725,10 @@ func (r *Reconciler) graphStamps(ctx context.Context, log zerolog.Logger, b *kar
 	}
 	g, _, err := r.readGraph(ctx, b.Namespace, name)
 	if err != nil || g == nil {
-		log.Warn().Err(err).Str("graph", name).Msg("cannot read the Graph's gate stamps: the gate change is not recorded as an AuditEvent")
+		log.Warn().Err(err).Str("graph", name).Msg("cannot read the Graph's gate copies: a gate change is not recorded as an AuditEvent")
 		return nil
 	}
-	return graph.TemplateStamps(g)
+	return g
 }
 
 // errGatesNotApplied is the error of a re-translate for changed PolicyGate

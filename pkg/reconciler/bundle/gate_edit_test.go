@@ -747,3 +747,103 @@ func TestRenderVersion_V0123LabelRetranslatesOnce(t *testing.T) {
 	lcReconcile(t, g.r, "app-v1")
 	assert.Equal(t, updates+1, g.writes("app-v1", "update"), "once")
 }
+
+// #2338: relabelling a template's kardinal.io/applies-to onto another
+// environment of a version in flight changes no rule (the digest and
+// generation stay) but moves its gate: one GateChanged records the move.
+//
+// Covers GATE-EDIT-04.
+func TestGateEdit_AppliesToMoveRecorded(t *testing.T) {
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 2
+	g := newGateEditRig(t, gateEditPipeline(), window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	require.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+
+	g.editGate(t, "window", func(p *kardinalv1alpha1.PolicyGate) { p.Labels["kardinal.io/applies-to"] = "test,prod" })
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Gates, 1)
+	gc := got[0].Gates[0]
+	assert.Equal(t, "window", gc.Template)
+	assert.Equal(t, gc.OldDigest, gc.NewDigest, "the rule did not change")
+	assert.Equal(t, int64(2), gc.OldGeneration)
+	assert.Equal(t, int64(2), gc.NewGeneration)
+	assert.Equal(t, []string{"test"}, gc.EnvironmentsAdded)
+	assert.Contains(t, got[0].Message, "default/window moved (generation 2): now also in test")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
+
+// #2338: an applies-to edit made under v0.12 after the version started
+// reaches it at the upgrade: the copied rule is the same, the environments
+// are not, and the re-render records the move.
+//
+// Covers GATE-EDIT-04.
+func TestRenderVersion_UpgradeRecordsMove(t *testing.T) {
+	ctx := context.Background()
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 2
+	g := newGateEditRig(t, gateEditPipeline(), window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	g.renderOlder(t, "app-v1", "", func(tmpl map[string]interface{}) {
+		delete(tmpl, "digest")
+		delete(tmpl, "generation")
+		delete(tmpl, "uid")
+	})
+	b := lcGet(t, g.c, "app-v1")
+	b.Status.PolicyGatesHash = ""
+	require.NoError(t, g.c.Status().Update(ctx, &b))
+	g.editGate(t, "window", func(p *kardinalv1alpha1.PolicyGate) { p.Labels["kardinal.io/applies-to"] = "test,prod" })
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Gates, 1)
+	assert.Equal(t, []string{"test"}, got[0].Gates[0].EnvironmentsAdded)
+	assert.Contains(t, got[0].Message, "on upgrade")
+	assert.Contains(t, got[0].Message, "default/window moves (generation 2): now also in test")
+}
+
+// #2338: a Pipeline edit that lands before the version's first reconcile
+// after the upgrade re-translates it in the regular path, which writes the
+// current render version first: the comparison with what v0.12 copied runs
+// there, and the rule a template edited under v0.12 now has is recorded
+// once, as on upgrade.
+//
+// Covers GATE-EDIT-03.
+func TestRenderVersion_PipelineEditBeforeFirstReconcile(t *testing.T) {
+	ctx := context.Background()
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4
+	g := newGateEditRig(t, gateEditPipeline(), window, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	g.renderOlder(t, "app-v1", "", func(tmpl map[string]interface{}) {
+		delete(tmpl, "digest")
+		delete(tmpl, "generation")
+		delete(tmpl, "uid")
+		tmpl["spec"].(map[string]interface{})["expression"] = "false"
+	})
+	b := lcGet(t, g.c, "app-v1")
+	b.Status.PolicyGatesHash = ""
+	require.NoError(t, g.c.Status().Update(ctx, &b))
+	var p kardinalv1alpha1.Pipeline
+	require.NoError(t, g.c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "app"}, &p))
+	p.Spec.Environments[1].Bake = &kardinalv1alpha1.BakeConfig{Minutes: 1}
+	require.NoError(t, g.c.Update(ctx, &p))
+
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 1)
+	assert.Equal(t, []kardinalv1alpha1.AuditGateChange{
+		{Template: "window", Namespace: "default", NewDigest: graph.TemplateDigest(*window), NewGeneration: 4},
+	}, got[0].Gates)
+	assert.Contains(t, got[0].Message, "on upgrade")
+	assert.Contains(t, got[0].Message, "default/window takes its current rule (generation 4)")
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
