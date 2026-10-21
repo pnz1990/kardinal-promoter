@@ -77,66 +77,11 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	e := framework.New(t)
 	c := e.CLI(t)
 	ctx := context.Background()
-	a := newArgoApp(t, e, "test", "prod")
+	ea := newEvidenceApp(t, e)
+	a, author, authorName, authorUser, sponsor, verifier := ea.app, ea.author, ea.authorName, ea.authorUser, ea.sponsor, ea.verifier
 	pub := receiptPublicKey(t, e)
 	digest := fixtures.V2Digest
 	image := fixtures.Image + "@" + digest
-
-	// The image is signed by the release key and carries level-3 provenance
-	// and a scan whose critical finding the security key's VEX says does not
-	// apply (as TestStep_ImageVerificationAttestationsPassGate).
-	attested := &attestedApp{app: a, sigs: newSignatures(t, a.ns)}
-	var err error
-	attested.release, err = signtest.NewKey()
-	require.NoError(t, err)
-	attested.security, err = signtest.NewKey()
-	require.NoError(t, err)
-	relPEM, err := attested.release.PublicPEM()
-	require.NoError(t, err)
-	secPEM, err := attested.security.PublicPEM()
-	require.NoError(t, err)
-	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "security", Namespace: a.ns,
-		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{"cosign.pub": secPEM}}))
-	policy := keyPolicy(t, e, a.ns, attested.sigs, relPEM, "3m")
-	policy.Authorities = append(policy.Authorities, v1alpha1.SignatureAuthority{Name: "security",
-		Key: &v1alpha1.KeyAuthority{SecretRef: v1alpha1.SecretKeyName{Name: "security", Key: "cosign.pub"}}})
-	policy.Attestations = []v1alpha1.AttestationPolicy{
-		{Name: "provenance", PredicateType: iv.PredicateSLSAProvenance, Authorities: []string{"release"}, Required: true,
-			SLSA: &v1alpha1.SLSAPolicy{Builders: []v1alpha1.SLSABuilder{{ID: attestBuilderL3, Level: 3}}}},
-		{Name: "vulns", PredicateType: iv.PredicateCosignVuln, Authorities: []string{"release"}, Required: true,
-			VEX: &v1alpha1.VEXPolicy{Authorities: []string{"security"}}},
-	}
-	sig, err := attested.release.Bundle(fixtures.Image, digest)
-	require.NoError(t, err)
-	attested.sigs.pushBundle(t, digest, sig)
-	attested.attest(t, attested.release, iv.PredicateSLSAProvenance, attestProvenance(attestBuilderL3))
-	attested.attest(t, attested.release, iv.PredicateCosignVuln, attestScan())
-	attested.attest(t, attested.security, iv.PredicateOpenVEX, attestVEX())
-
-	// The agents: A writes the version, V verifies it.
-	sponsor := "sponsor-" + a.ns + "@example.com"
-	author := policyAgent(t, e, a.ns, "author", sponsor, v1alpha1.AutonomyAuto)
-	authorName, authorUser := a.ns+"-author", "system:serviceaccount:"+a.ns+":author"
-	verifier := registerAgent(t, e, a.ns, "qa", "bob@example.com", nil)
-
-	// prod's gates.
-	e.CreateGate(t, framework.Gate(a.ns, attestGate, "prod", "attestations.provenance.slsa.buildLevel >= 3 && "+
-		"attestations.provenance.slsa.sourceCommit == bundle.provenance.commitSHA && attestations.vulns.effective.critical == 0", ""))
-	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{verifier},
-		Run: &v1alpha1.GateVerifyRun{Template: verifier, Count: 1, Namespace: a.ns}}))
-	snowTemplate(t, e, a.ns)
-	cab := framework.Gate(a.ns, journeyCAB, "prod", `changeRequests["prod-change"].state == "approved" && `+
-		`approvals.fields.ticketID.exists(id, id == changeRequests["prod-change"].ticket)`, recheck)
-	// Agents may approve here, but never their own version: A's approval is
-	// recorded and does not count.
-	cab.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true, AllowAgents: true,
-		AllowedAgents: []string{authorName}, Fields: []v1alpha1.ApprovalField{
-			{Name: "ticketID", Required: true, Description: "ServiceNow change number"}}}
-	e.CreateGate(t, cab)
-	p := a.pipeline(map[string]string{"prod": "pr-review"})
-	p.Spec.ImageVerification = policy
-	a.apply(t, p)
-	waitPipelineValid(t, e, a.ns, pipelineName)
 
 	// 1. The agent opens the version.
 	r := author.Exec(framework.CLIOptions{}, author.Args(a.ns, "create", "bundle", pipelineName, "--image", image,
@@ -374,6 +319,83 @@ func TestAgentEvidence_Journey(t *testing.T) {
 	for act := range actions {
 		assert.True(t, cited[act], "controls.json: no shipped row cites the version's %s AuditEvent", act)
 	}
+}
+
+// evidenceApp is the journey's app (TestAgentEvidence_Journey): test, and
+// prod by PR, the version's image (fixtures.V2Digest) signed by the release
+// key with level-3 provenance from attestCommit and a scan whose critical
+// finding the security key's VEX says does not apply (as
+// TestStep_ImageVerificationAttestationsPassGate). Agent A (author, autonomy
+// auto, sponsor) writes versions and agent V (verifier, the test agent) runs
+// as an AgentRun to verify them. prod's gates: attestations (attestGate), V's
+// verdict (journeyVerify), and the change request approved and a person's
+// approval naming its ticket in ticketID (journeyCAB; agents may approve
+// there, but never their own version).
+type evidenceApp struct {
+	*app
+	author                          *framework.CLI
+	authorName, authorUser, sponsor string
+	verifier                        string
+}
+
+func newEvidenceApp(t *testing.T, e *framework.Env) *evidenceApp {
+	t.Helper()
+	ctx := context.Background()
+	digest := fixtures.V2Digest
+	a := newArgoApp(t, e, "test", "prod")
+	attested := &attestedApp{app: a, sigs: newSignatures(t, a.ns)}
+	var err error
+	attested.release, err = signtest.NewKey()
+	require.NoError(t, err)
+	attested.security, err = signtest.NewKey()
+	require.NoError(t, err)
+	relPEM, err := attested.release.PublicPEM()
+	require.NoError(t, err)
+	secPEM, err := attested.security.PublicPEM()
+	require.NoError(t, err)
+	require.NoError(t, e.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "security", Namespace: a.ns,
+		Labels: map[string]string{"kardinal.io/referenceable": "true"}}, Data: map[string][]byte{"cosign.pub": secPEM}}))
+	policy := keyPolicy(t, e, a.ns, attested.sigs, relPEM, "3m")
+	policy.Authorities = append(policy.Authorities, v1alpha1.SignatureAuthority{Name: "security",
+		Key: &v1alpha1.KeyAuthority{SecretRef: v1alpha1.SecretKeyName{Name: "security", Key: "cosign.pub"}}})
+	policy.Attestations = []v1alpha1.AttestationPolicy{
+		{Name: "provenance", PredicateType: iv.PredicateSLSAProvenance, Authorities: []string{"release"}, Required: true,
+			SLSA: &v1alpha1.SLSAPolicy{Builders: []v1alpha1.SLSABuilder{{ID: attestBuilderL3, Level: 3}}}},
+		{Name: "vulns", PredicateType: iv.PredicateCosignVuln, Authorities: []string{"release"}, Required: true,
+			VEX: &v1alpha1.VEXPolicy{Authorities: []string{"security"}}},
+	}
+	sig, err := attested.release.Bundle(fixtures.Image, digest)
+	require.NoError(t, err)
+	attested.sigs.pushBundle(t, digest, sig)
+	attested.attest(t, attested.release, iv.PredicateSLSAProvenance, attestProvenance(attestBuilderL3))
+	attested.attest(t, attested.release, iv.PredicateCosignVuln, attestScan())
+	attested.attest(t, attested.security, iv.PredicateOpenVEX, attestVEX())
+
+	// The agents: A writes the version, V verifies it.
+	ea := &evidenceApp{app: a, sponsor: "sponsor-" + a.ns + "@example.com",
+		authorName: a.ns + "-author", authorUser: "system:serviceaccount:" + a.ns + ":author"}
+	ea.author = policyAgent(t, e, a.ns, "author", ea.sponsor, v1alpha1.AutonomyAuto)
+	ea.verifier = registerAgent(t, e, a.ns, "qa", "bob@example.com", nil)
+
+	// prod's gates.
+	e.CreateGate(t, framework.Gate(a.ns, attestGate, "prod", "attestations.provenance.slsa.buildLevel >= 3 && "+
+		"attestations.provenance.slsa.sourceCommit == bundle.provenance.commitSHA && attestations.vulns.effective.critical == 0", ""))
+	e.CreateGate(t, verifyGate(a.ns, v1alpha1.GateVerifyPolicy{Required: 1, AllowedAgents: []string{ea.verifier},
+		Run: &v1alpha1.GateVerifyRun{Template: ea.verifier, Count: 1, Namespace: a.ns}}))
+	snowTemplate(t, e, a.ns)
+	cab := framework.Gate(a.ns, journeyCAB, "prod", `changeRequests["prod-change"].state == "approved" && `+
+		`approvals.fields.ticketID.exists(id, id == changeRequests["prod-change"].ticket)`, recheck)
+	// Agents may approve here, but never their own version: A's approval is
+	// recorded and does not count.
+	cab.Spec.Approval = &v1alpha1.GateApprovalPolicy{Required: 1, ExcludeAuthor: true, AllowAgents: true,
+		AllowedAgents: []string{ea.authorName}, Fields: []v1alpha1.ApprovalField{
+			{Name: "ticketID", Required: true, Description: "ServiceNow change number"}}}
+	e.CreateGate(t, cab)
+	p := a.pipeline(map[string]string{"prod": "pr-review"})
+	p.Spec.ImageVerification = policy
+	a.apply(t, p)
+	waitPipelineValid(t, e, a.ns, pipelineName)
+	return ea
 }
 
 // warningsOf are the coverage warnings of a pack's manifest.

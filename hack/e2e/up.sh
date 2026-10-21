@@ -48,6 +48,14 @@
 #   upgrade-v0123  the same from kardinal-promoter v0.12.3 as released
 #           (kardinal-v0123.sh), the latest v0.12 patch, which users upgrade
 #           from; one run per cluster too
+#   upgrade-v0130  Forgejo + Argo CD + an OCI registry + the fake ticket API
+#           + the test agent, and kro and kardinal-promoter v0.13.0 as
+#           released (kardinal-v0130.sh), receipts signed with a static key:
+#           the TestUpgradeV0130_ test builds an estate of v0.13's evidence
+#           in flight (receipts, attestations, a change request, approvals
+#           with fields, agents' versions, an overridden org gate, shared
+#           gates), follows "Upgrading from v0.13.0" and rolls back; one run
+#           per cluster too. Until v0.13.0 is released its test skips
 #   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
 #           blocks of the getting-started and how-to pages in order
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,
@@ -184,6 +192,13 @@ case "$SUITE" in
   upgrade-v0121) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0121.sh test-agent.sh) RUN='^TestUpgradeV0121_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   upgrade-v0123) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0123.sh test-agent.sh) RUN='^TestUpgradeV0123_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  # v0.13's evidence: receipts to the suite's registry, which also holds the
+  # images' signatures and attestations, a ServiceNow change request against
+  # the fake ticket API, and an agent verifier. kardinal-v0130.sh reads the
+  # registry and the ticket API's CA, so it runs after them.
+  upgrade-v0130) COMPONENTS=("giteafamily.sh forgejo" argocd.sh registry.sh ticketapi.sh test-agent.sh kardinal-v0130.sh)
+    RUN='^TestUpgradeV0130_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.
