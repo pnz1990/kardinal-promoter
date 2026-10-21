@@ -592,6 +592,38 @@ func TestDependabotCoversEveryManifest(t *testing.T) {
 	assert.Contains(t, k8sPatterns, "sigs.k8s.io/*", "sigs.k8s.io modules must be updated with k8s.io")
 }
 
+// TestDockerfilesBuildWithTheToolchain: every Go build stage of a tracked
+// Dockerfile uses go.mod's toolchain, golang:<version>-alpine pinned by
+// digest, so the Go that govulncheck audits (go.mod's) is the Go the images
+// ship, as it is for the release's binaries (setup-go reads go.mod). A
+// floating tag (golang:1.27-alpine) built v0.12.3's images with go1.27.3
+// while its binaries used go1.26.9 (GO-2026-6809).
+func TestDockerfilesBuildWithTheToolchain(t *testing.T) {
+	root := repoRoot(t)
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	require.NoError(t, err)
+	m := regexp.MustCompile(`(?m)^toolchain go(\S+)$`).FindSubmatch(mod)
+	require.NotNil(t, m, "go.mod names its toolchain")
+	want := regexp.MustCompile(`^golang:` + regexp.QuoteMeta(string(m[1])) + `-alpine@sha256:[0-9a-f]{64}$`)
+	out, err := exec.Command("git", "-C", root, "ls-files", "*Dockerfile").Output()
+	require.NoError(t, err)
+	from := regexp.MustCompile(`(?m)^FROM\s+(?:--platform=\S+\s+)?(\S+)`)
+	builds := map[string]int{}
+	for _, f := range strings.Fields(string(out)) {
+		src, err := os.ReadFile(filepath.Join(root, f))
+		require.NoError(t, err)
+		for _, s := range from.FindAllStringSubmatch(string(src), -1) {
+			if strings.HasPrefix(s[1], "golang:") || strings.HasPrefix(s[1], "golang@") {
+				builds[f]++
+				assert.Regexp(t, want, s[1], "%s builds with go.mod's toolchain go%s, pinned by digest", f, m[1])
+			}
+		}
+	}
+	for _, f := range []string{"Dockerfile", "render.Dockerfile"} {
+		assert.NotZero(t, builds[f], "%s has a Go build stage", f)
+	}
+}
+
 // TestE2EMatrixMinors: hack/e2e/all.sh -matrix with MINORS runs every
 // suite, with its matrix.txt shards, on exactly those minors, as the release
 // gate dispatches e2e-live.yml (its minors input).

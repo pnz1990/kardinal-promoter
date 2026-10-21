@@ -21,7 +21,11 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go builder ───────────────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
+# The Go that builds the image is go.mod's toolchain, pinned by digest
+# (TestDockerfilesBuildWithTheToolchain): the Go govulncheck audits is the Go
+# the images ship. A floating golang:1.27-alpine built v0.12.3's images with
+# go1.27.3 while its binaries were built with go1.26.9.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
