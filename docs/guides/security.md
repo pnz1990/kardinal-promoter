@@ -280,6 +280,10 @@ break glass (a platform on-call group, for example), give the team `<fullname>-p
 `<fullname>-viewer` instead, leave `aggregateToDefaultRoles` and `directWrites` off, and grant no
 `update` or `patch` on `policygates` in roles of your own.
 
+Until v0.13.1, whoever may write `policygates/status` in the namespace can also make an org gate's
+instance pass without an override, and without a record (#2446): see
+[Verified identity](#verified-identity).
+
 ### Multi-tenant isolation
 
 The namespace is kardinal's tenancy unit. There is no Project CRD.
@@ -1101,6 +1105,18 @@ writes, and kardinal's rollbacks read PromotionSteps as the record of what ran, 
 also steer which Verified version a rollback restores ([Rollback](../rollback.md#how-rollback-works)). kardinal's user roles (`<fullname>-viewer`, `-promoter` and `-approver`) grant neither `impersonate` nor `create` on Secrets. Give tenants kardinal's roles plus the stock `view` role,
 not `edit`, where promotions must not be forged. A namespace's `edit`/`admin` holders are its
 owners as far as kardinal can check (ledger G16 has the upstream ask that would close this).
+
+**Until v0.13.1, gate and MetricCheck status is not protected (#2446).** No admission policy yet
+checks writes to `policygates/status`, or to the status of a MetricCheck you write (the
+per-promotion instances are covered by `<fullname>-graph-objects`), and a step that waits on a gate
+reads the gate instance's `status.ready`. So whoever may update those status subresources in a
+namespace can make an org gate's instance there pass, or decide a MetricCheck's result, without an
+override and without a `GateOverridden` record: `<fullname>-admin` (its `resources: ["*"]` covers
+status subresources), the built-in `admin` with `rbac.userRoles.aggregateToDefaultRoles` (it then
+aggregates `<fullname>-admin-extra`) and cluster admins. An org gate's result in a team namespace
+is only as trustworthy as those people. Until v0.13.1, which lets only the controller write those
+statuses, don't bind `admin`, `edit` or `<fullname>-admin` in team namespaces to people who must
+not pass org gates (`edit` holders can act as kro there, above).
 
 **Impersonation is full trust.** Anyone allowed to impersonate (`impersonate` RBAC) passes every
 check here as whoever they impersonate, the Graph ServiceAccount and the controller included; a
