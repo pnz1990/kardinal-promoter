@@ -779,7 +779,7 @@ func (a *restoreCheck) callees(e ast.Expr, aliases map[types.Object][]target) []
 		}
 		fn, _ := a.info.Uses[x.Sel].(*types.Func)
 		if d := a.decls[fn]; d != nil {
-			return []target{target{decl: d, recv: recv}}
+			return []target{{decl: d, recv: recv}}
 		}
 		if fn != nil {
 			if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil && types.IsInterface(sig.Recv().Type()) {
@@ -796,7 +796,7 @@ func (a *restoreCheck) callees(e ast.Expr, aliases map[types.Object][]target) []
 			if t := a.initType[a.object(id)]; t != nil {
 				if m, _, _ := types.LookupFieldOrMethod(t, true, pkgOf(t), x.Sel.Name); m != nil {
 					if f, ok := m.(*types.Func); ok && a.decls[f] != nil {
-						return []target{target{decl: a.decls[f], recv: recv}}
+						return []target{{decl: a.decls[f], recv: recv}}
 					}
 				}
 			}
