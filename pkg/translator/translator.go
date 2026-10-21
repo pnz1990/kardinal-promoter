@@ -100,19 +100,53 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("bundle", bundle.Name).
 		Logger()
 	ctx = log.WithContext(ctx)
+	g, err := t.Render(ctx, pipeline, bundle)
+	if err != nil {
+		return "", err
+	}
+
+	// kro applies the Graph as spec.serviceAccountName; it must exist and be
+	// bound before kro's first reconcile or every apply is forbidden. A Graph
+	// reads nothing outside its own namespace (the health ref nodes and their
+	// reader RoleBindings are gone, #1283), so the applier binding is all it
+	// needs.
+	if err := t.identity.Ensure(ctx, g); err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
+
+	if err := t.graphClient.Create(ctx, g); err != nil {
+		return "", fmt.Errorf("translator.Translate: %w", err)
+	}
+
+	log.Info().
+		Str("graph", g.Name).
+		Int("nodes", len(g.Spec.Nodes)).
+		Msg("translation complete: graph applied")
+
+	return g.Name, nil
+}
+
+// Render builds the Graph Translate would apply for bundle, with the same
+// inputs and checks, and applies nothing: the Bundle reconciler records what
+// an upgrade's re-render changes before the Graph is written (#2443). Its
+// errors are Translate's.
+func (t *Translator) Render(ctx context.Context,
+	pipeline *kardinalv1alpha1.Pipeline,
+	bundle *kardinalv1alpha1.Bundle) (*graph.Graph, error) {
+	log := zerolog.Ctx(ctx)
 
 	// The controller's token Secret is never a Pipeline's git Secret: the
 	// Graph's RenderRuns would mount it in a render Job. Permanent until the
 	// Pipeline changes.
 	if err := t.controllerSecret.Refuses(pipeline); err != nil {
-		return "", graph.Invalid(fmt.Errorf("translator.Translate: %w", err))
+		return nil, graph.Invalid(fmt.Errorf("translator.Translate: %w", err))
 	}
 
 	// Collect PolicyGates from the org policy namespaces, the Pipeline's
 	// spec.policyNamespaces, and the Pipeline namespace.
 	gates, err := t.collectGates(ctx, pipeline)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: collect gates: %w", err)
+		return nil, fmt.Errorf("translator.Translate: collect gates: %w", err)
 	}
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
@@ -122,19 +156,19 @@ func (t *Translator) Translate(ctx context.Context,
 	// recorded and fails Build for an environment that verifies.
 	analyses, err := t.collectAnalyses(ctx, pipeline)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: collect analysis templates: %w", err)
+		return nil, fmt.Errorf("translator.Translate: collect analysis templates: %w", err)
 	}
 	// Per-promotion MetricChecks of the Pipeline namespace: the builder adds
 	// an instance for each one a gate reads.
 	metricChecks, err := t.collectMetricTemplates(ctx, pipeline.Namespace)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: collect metric checks: %w", err)
+		return nil, fmt.Errorf("translator.Translate: collect metric checks: %w", err)
 	}
 	// Per-promotion ChangeRequests of the Pipeline namespace: the builder adds
 	// an instance for each one a gate reads, in the environments it applies to.
 	changeRequests, err := t.collectChangeRequestTemplates(ctx, pipeline.Namespace)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: collect change requests: %w", err)
+		return nil, fmt.Errorf("translator.Translate: collect change requests: %w", err)
 	}
 
 	// Build validates the input (names, skip permissions, node IDs) and
@@ -151,12 +185,12 @@ func (t *Translator) Translate(ctx context.Context,
 	// until it is created or changed.
 	providerID, err := t.resolveProvider(ctx, pipeline)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
+		return nil, fmt.Errorf("translator.Translate: %w", err)
 	}
 
 	shape, err := t.existingShape(ctx, pipeline, bundle)
 	if err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
+		return nil, fmt.Errorf("translator.Translate: %w", err)
 	}
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:         pipeline,
@@ -170,7 +204,7 @@ func (t *Translator) Translate(ctx context.Context,
 		ChangeRequests:   changeRequests,
 	})
 	if err != nil {
-		return "", &BuildError{Err: fmt.Errorf("translator.Translate: %w", err), Gates: gates}
+		return nil, &BuildError{Err: fmt.Errorf("translator.Translate: %w", err), Gates: gates}
 	}
 
 	log.Debug().
@@ -179,34 +213,16 @@ func (t *Translator) Translate(ctx context.Context,
 		Msg("graph spec built")
 
 	if err := graph.ValidateNodeIDs(result.Graph.Spec.Nodes); err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
+		return nil, fmt.Errorf("translator.Translate: %w", err)
 	}
 	// A Graph is one etcd object (1.5 MiB). Refuse it here, with a reason on
 	// the Bundle, instead of letting the API server fail every write
 	// (ledger gap G10).
 	if err := graph.CheckSize(result.Graph); err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
+		return nil, fmt.Errorf("translator.Translate: %w", err)
 	}
 
-	// kro applies the Graph as spec.serviceAccountName; it must exist and be
-	// bound before kro's first reconcile or every apply is forbidden. A Graph
-	// reads nothing outside its own namespace (the health ref nodes and their
-	// reader RoleBindings are gone, #1283), so the applier binding is all it
-	// needs.
-	if err := t.identity.Ensure(ctx, result.Graph); err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
-	}
-
-	if err := t.graphClient.Create(ctx, result.Graph); err != nil {
-		return "", fmt.Errorf("translator.Translate: %w", err)
-	}
-
-	log.Info().
-		Str("graph", result.Graph.Name).
-		Int("nodes", len(result.Graph.Spec.Nodes)).
-		Msg("translation complete: graph applied")
-
-	return result.Graph.Name, nil
+	return result.Graph, nil
 }
 
 // existingShape returns the shape of the Bundle's Graph when it exists, so a

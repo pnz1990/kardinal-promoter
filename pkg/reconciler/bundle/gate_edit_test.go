@@ -5,13 +5,19 @@ package bundle_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,10 +26,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/audit"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
@@ -32,7 +42,9 @@ import (
 // gateEditRig is a Bundle reconciler with the real Translator and a fake
 // Graph API, so a test reads the gate data each Bundle's Graph was built with.
 type gateEditRig struct {
-	c   client.Client
+	c client.Client
+	// api is c without its interceptor funcs: what the API server holds.
+	api client.Client
 	dyn *dynfake.FakeDynamicClient
 	gc  *graph.GraphClient
 	r   *bundle.Reconciler
@@ -40,18 +52,25 @@ type gateEditRig struct {
 
 func newGateEditRig(t *testing.T, objs ...client.Object) *gateEditRig {
 	t.Helper()
-	c := indexedBuilder(newScheme()).
+	return newGateEditRigWith(t, interceptor.Funcs{}, objs...)
+}
+
+// newGateEditRigWith is newGateEditRig whose client calls funcs first.
+func newGateEditRigWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *gateEditRig {
+	t.Helper()
+	base := indexedBuilder(newScheme()).
 		WithIndex(&kardinalv1alpha1.PolicyGate{}, bundle.GateTemplateIndex, bundle.GateTemplateKey).
 		WithObjects(objs...).
 		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
 		Build()
+	c := interceptor.NewClient(base, funcs)
 	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{graph.GraphGVR: "GraphList"})
 	gc := graph.NewGraphClient(dyn, zerolog.Nop())
 	r := &bundle.Reconciler{Client: c, GraphChecker: gc,
 		Translator: translator.New(gc, graph.NewBuilder(), c, nil, zerolog.Nop())}
 	r.UseTemplateIndex()
-	return &gateEditRig{c: c, dyn: dyn, gc: gc, r: r}
+	return &gateEditRig{c: c, api: base, dyn: dyn, gc: gc, r: r}
 }
 
 // writes counts the Graph writes for Bundle b by verb: each Translate
@@ -669,6 +688,286 @@ func TestRenderVersion_UpgradeRecordsVerifyRuleChange(t *testing.T) {
 
 	lcReconcile(t, g.r, "app-v1")
 	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 1, "recorded once")
+}
+
+// #2443: an upgrade's re-render stores its audit records before it writes
+// the Graph with the current render label. While the Bundle's status write
+// that would store them conflicts, the Graph stays as the earlier controller
+// rendered it; once they are stored the next reconcile renders it again, and
+// each record (a template rule changed under the version, #2271, and a
+// verify gate of agents only, #2411) is written exactly once. Before #2443 a
+// conflict after the relabel lost them for good: the next reconcile found a
+// current Graph.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_RecordsBeforeRelabel(t *testing.T) {
+	ctx := context.Background()
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4
+	agents := gateTemplate("qa-only", "prod", false)
+	agents.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1, AllowedAgents: []string{"qa-explorer"}}
+	conflicts := 0
+	funcs := interceptor.Funcs{SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object,
+		patch client.Patch, opts ...client.SubResourcePatchOption) error {
+		if _, ok := obj.(*kardinalv1alpha1.Bundle); ok && sub == "status" && conflicts > 0 {
+			conflicts--
+			return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "bundles"}, obj.GetName(),
+				errors.New("the object has been modified"))
+		}
+		return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
+	}}
+	g := newGateEditRigWith(t, funcs, gateEditPipeline(), window, agents, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	// What a controller before render version 4 left, with window's rule
+	// from before an edit.
+	g.renderOlder(t, "app-v1", "3", func(tmpl map[string]interface{}) {
+		if tmpl["template"] == "window" {
+			tmpl["digest"], tmpl["generation"] = "sha256:old", "3"
+			tmpl["spec"].(map[string]interface{})["expression"] = "false"
+		}
+	})
+	label := func() string {
+		got, err := g.gc.Get(ctx, "default", graph.GraphNameFrom("app", "app-v1"))
+		require.NoError(t, err)
+		return got.Labels[graph.LabelRenderVersion]
+	}
+
+	// The status write that would store the records conflicts: nothing is
+	// recorded, and the Graph is not rendered again either.
+	conflicts = 1
+	res, err := g.r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"}})
+	require.NoError(t, err, "a Conflict is requeued")
+	require.Zero(t, conflicts, "the status write conflicted")
+	assert.Equal(t, time.Second, res.RequeueAfter)
+	assert.Equal(t, "3", label(), "not rendered again before its records are stored")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+
+	// Stored first, the Graph still the earlier controller's.
+	res = lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, "3", label())
+	assert.Equal(t, time.Second, res.RequeueAfter, "rendered again at once")
+	stored := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, stored, 2)
+
+	// Then rendered again; each record written once.
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label())
+	lcReconcile(t, g.r, "app-v1")
+	got := gateChangedSpecs(t, g.c, "app-v1")
+	require.Len(t, got, 2, "each record once, stored and written")
+	var messages []string
+	for _, e := range got {
+		messages = append(messages, e.Message)
+	}
+	assert.Contains(t, strings.Join(messages, "\n"), "default/window takes its current rule (generation 4)")
+	assert.Contains(t, strings.Join(messages, "\n"), "the controller's verify rule changed (v0.13)")
+	assert.Empty(t, lcGet(t, g.c, "app-v1").Status.PendingAuditEvents, "every record written")
+}
+
+// upgradeRig is a rig whose Bundle app-v1 is Promoting on a Graph an
+// earlier controller (render version 3) rendered, with window's rule from
+// before an edit and a verify gate of agents only: its re-render has two
+// records to make. funcs run first on every client call.
+func upgradeRig(t *testing.T, funcs interceptor.Funcs) (*gateEditRig, func() string) {
+	t.Helper()
+	window := gateTemplate("window", "prod", false)
+	window.Generation = 4
+	agents := gateTemplate("qa-only", "prod", false)
+	agents.Spec.Verify = &kardinalv1alpha1.GateVerifyPolicy{Check: "explore", Required: 1, AllowedAgents: []string{"qa-explorer"}}
+	g := newGateEditRigWith(t, funcs, gateEditPipeline(), window, agents, gateEditBundle("app-v1", "Available", time.Now().UTC().Add(-time.Hour)))
+	lcReconcile(t, g.r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, g.c, "app-v1").Status.Phase)
+	g.renderOlder(t, "app-v1", "3", func(tmpl map[string]interface{}) {
+		if tmpl["template"] == "window" {
+			tmpl["digest"], tmpl["generation"] = "sha256:old", "3"
+			tmpl["spec"].(map[string]interface{})["expression"] = "false"
+		}
+	})
+	return g, func() string {
+		got, err := g.gc.Get(context.Background(), "default", graph.GraphNameFrom("app", "app-v1"))
+		require.NoError(t, err)
+		return got.Labels[graph.LabelRenderVersion]
+	}
+}
+
+// auditEventCreate is an interceptor Create that answers an AuditEvent's
+// create with fail(dryRun) when it returns an error.
+func auditEventCreate(fail func(dryRun bool) error) func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+	return func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if _, ok := obj.(*kardinalv1alpha1.AuditEvent); ok {
+			o := &client.CreateOptions{}
+			o.ApplyOptions(opts)
+			if err := fail(len(o.DryRun) > 0); err != nil {
+				return err
+			}
+		}
+		return c.Create(ctx, obj, opts...)
+	}
+}
+
+// #2443 (QA-5): a record the API server would never accept (a dry-run
+// create refused as Invalid) is not waited for: it is dropped, with an
+// AuditRecordRefused Warning Event and
+// kardinal_audit_events_dropped_total{reason="refused"}, and the Graph is
+// rendered again at once, so the re-render (#2271's recovery) cannot loop on
+// it.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_RefusedRecordIsDropped(t *testing.T) {
+	refuse := true
+	g, label := upgradeRig(t, interceptor.Funcs{Create: auditEventCreate(func(dryRun bool) error {
+		if dryRun && refuse {
+			return apierrors.NewInvalid(schema.GroupKind{Group: "kardinal.io", Kind: "AuditEvent"}, "x", nil)
+		}
+		return nil
+	})})
+	rec := events.NewFakeRecorder(10)
+	g.r.Recorder = rec
+	dropped := testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused"))
+
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label(), "rendered again without the refused records")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"), "neither stored nor written")
+	assert.Equal(t, dropped+2, testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused")))
+	var warned []string
+	for len(rec.Events) > 0 {
+		warned = append(warned, <-rec.Events)
+	}
+	assert.Len(t, slices.DeleteFunc(warned, func(e string) bool { return !strings.Contains(e, "AuditRecordRefused") }), 2, "%v", warned)
+}
+
+// #2443 (QA-5): an error that may pass (the API server timed out the
+// dry-run create) keeps the Graph as the earlier controller left it, and the
+// reconcile backs off (30 s, as any Graph sync error) rather than looping
+// every second; once it passes the records are stored, then the Graph is
+// rendered again.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_TransientRecordErrorBacksOff(t *testing.T) {
+	timeout := true
+	g, label := upgradeRig(t, interceptor.Funcs{Create: auditEventCreate(func(dryRun bool) error {
+		if dryRun && timeout {
+			return apierrors.NewServerTimeout(schema.GroupResource{Group: "kardinal.io", Resource: "auditevents"}, "create", 1)
+		}
+		return nil
+	})})
+	res := lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "backs off, no 1 s loop")
+	assert.Equal(t, "3", label(), "kept until its records can be stored")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+
+	timeout = false
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, "3", label())
+	require.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "stored")
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label())
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "each once")
+}
+
+// #2443 (QA-5 on 379b454d0): a Forbidden dry run is no refusal for good:
+// an AuditEvent quota answers "exceeded quota" until retention frees room,
+// and audit.Flush keeps such an entry. The record is not dropped, the Graph
+// keeps its label and the reconcile backs off; once the quota has room the
+// records are stored, then the Graph is rendered again. A namespace being
+// deleted is dropped quietly, as Flush drops it: no refused count.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_QuotaIsNoRefusal(t *testing.T) {
+	full := true
+	g, label := upgradeRig(t, interceptor.Funcs{Create: auditEventCreate(func(dryRun bool) error {
+		if dryRun && full {
+			return apierrors.NewForbidden(schema.GroupResource{Group: "kardinal.io", Resource: "auditevents"}, "app-v1-gate-x",
+				errors.New("exceeded quota: audit, requested: count/auditevents.kardinal.io=1, used: count/auditevents.kardinal.io=100, limited: count/auditevents.kardinal.io=100"))
+		}
+		return nil
+	})})
+	dropped := testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused"))
+	res := lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "backs off")
+	assert.Equal(t, "3", label(), "kept until the quota has room")
+	assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+	assert.Equal(t, dropped, testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused")), "not dropped")
+
+	full = false
+	lcReconcile(t, g.r, "app-v1")
+	require.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "stored")
+	assert.Equal(t, "3", label())
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label())
+	assert.Len(t, gateChangedSpecs(t, g.c, "app-v1"), 2, "each once")
+
+	t.Run("a namespace being deleted", func(t *testing.T) {
+		g, label := upgradeRig(t, interceptor.Funcs{Create: auditEventCreate(func(dryRun bool) error {
+			if !dryRun {
+				return nil
+			}
+			return &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 403, Reason: metav1.StatusReasonForbidden,
+				Message: "unable to create new content in namespace default because it is being terminated",
+				Details: &metav1.StatusDetails{Causes: []metav1.StatusCause{{Type: corev1.NamespaceTerminatingCause}}}}}
+		})})
+		lcReconcile(t, g.r, "app-v1")
+		assert.Equal(t, graph.RenderLabel, label(), "nothing to wait for")
+		assert.Empty(t, gateChangedSpecs(t, g.c, "app-v1"))
+		assert.Equal(t, dropped, testutil.ToFloat64(audit.Dropped.WithLabelValues("Bundle", "refused")), "not counted as refused")
+	})
+}
+
+// #2443 (QA-5): a record stored in the Bundle's outbox counts as recorded,
+// whether or not its AuditEvent is written yet: the outbox writes it,
+// retrying. Here the controller's cache has not seen the status write that
+// stored the records (so this reconcile flushes nothing) and every
+// AuditEvent write fails; read as the API server holds it, the outbox has
+// them, and the Graph is rendered again all the same, the records still
+// waiting in the outbox.
+//
+// Covers GATE-EDIT-05.
+func TestRenderVersion_StoredRecordCountsAsRecorded(t *testing.T) {
+	stale, failWrites := false, false
+	g, label := upgradeRig(t, interceptor.Funcs{
+		Create: auditEventCreate(func(dryRun bool) error {
+			if !dryRun && failWrites {
+				return apierrors.NewInternalError(errors.New("etcd unavailable"))
+			}
+			return nil
+		}),
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := c.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			if b, ok := obj.(*kardinalv1alpha1.Bundle); ok && stale {
+				b.Status.PendingAuditEvents = nil // the cache has not seen them stored
+			}
+			return nil
+		},
+	})
+	g.r.APIReader = g.api
+	failWrites = true
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, "3", label())
+	stored := func() int {
+		var b kardinalv1alpha1.Bundle
+		require.NoError(t, g.api.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app-v1"}, &b))
+		n := 0
+		for _, e := range b.Status.PendingAuditEvents {
+			if e.Spec.Action == bundle.AuditActionGateChanged {
+				n++
+			}
+		}
+		return n
+	}
+	require.Equal(t, 2, stored(), "stored in the outbox, not written")
+
+	stale = true
+	lcReconcile(t, g.r, "app-v1")
+	assert.Equal(t, graph.RenderLabel, label(), "rendered again: the stored records count as recorded")
+	assert.Equal(t, 2, stored(), "the records still wait in the outbox, which writes them once the writes pass")
+	var evs kardinalv1alpha1.AuditEventList
+	require.NoError(t, g.api.List(context.Background(), &evs))
+	for _, ev := range evs.Items {
+		assert.NotEqual(t, bundle.AuditActionGateChanged, ev.Spec.Action, "no GateChanged written while the writes fail")
+	}
 }
 
 // renderOlder rewrites Bundle b's Graph to what an earlier controller left:
