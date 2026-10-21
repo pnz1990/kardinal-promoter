@@ -70,7 +70,6 @@ set -eu
   echo "BUILD=$KARDINAL_E2E_BUILD"
   echo "REUSE=${KARDINAL_E2E_REUSE:-}"
   echo "SHARD=$SHARD"
-  echo "AT=$(date +%s%N)"
   echo "HOME=$HOME"
   [ -e "$HOME/.kube/config" ] && echo "HOMEKUBE=yes"
   [ -d "$LOCK_UNDER_TEST" ] && echo "LOCKED=yes"
@@ -572,20 +571,29 @@ exec "$@"
 		for _, c := range cmds {
 			require.NoError(t, c.Wait())
 		}
+		require.Equal(t, 2, strings.Count(h.read("up"), "KIND_K8S="), "both clusters started: %s", h.read("up"))
+		// The starts as the script recorded and judged them (#2452): up.sh's
+		// own clock adds each run's scheduling after its start, which a
+		// loaded host makes differ by more than any slack.
+		b, err := os.ReadFile(filepath.Join(h.slots, ".test-starts"))
+		require.NoError(t, err)
 		var at []int64
-		for _, l := range strings.Split(h.read("up"), "\n") {
-			if v, ok := strings.CutPrefix(l, "AT="); ok {
-				n, err := strconv.ParseInt(v, 10, 64)
-				require.NoError(t, err)
-				at = append(at, n)
-			}
+		clusters := map[string]bool{}
+		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			cluster, ms, ok := strings.Cut(l, " ")
+			require.True(t, ok, "%q", l)
+			n, err := strconv.ParseInt(ms, 10, 64)
+			require.NoError(t, err, "%q", l)
+			clusters[cluster] = true
+			at = append(at, n)
 		}
-		require.Len(t, at, 2)
-		gap := time.Duration(at[1] - at[0])
+		require.Len(t, at, 2, "%s", b)
+		assert.Len(t, clusters, 2, "one start for each run's cluster: %s", b)
+		gap := time.Duration(at[1]-at[0]) * time.Millisecond
 		if gap < 0 {
 			gap = -gap
 		}
-		assert.GreaterOrEqual(t, gap, 1900*time.Millisecond, "starts 2s apart (up.sh runs a moment after its start is recorded)")
+		assert.GreaterOrEqual(t, gap, 2*time.Second, "the recorded starts are the spacing apart: %s", b)
 	})
 	t.Run("a slot whose owner is gone is reclaimed; a kept cluster's only when the cluster is gone", func(t *testing.T) {
 		t.Parallel() // each on a fake host of its own
