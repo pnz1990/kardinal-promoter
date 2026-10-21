@@ -382,6 +382,9 @@ func TestIdentityChanged(t *testing.T) {
 		{"status.reason", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Reason = "tampered" }), true},
 		{"status.observedGeneration", edit(func(a *v1alpha1.AgentIdentity) { a.Status.ObservedGeneration = 0 }), true},
 		{"the Ready condition", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].Status = metav1.ConditionFalse }), true},
+		{"the Ready condition's reason alone", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].Reason = "Tampered" }), true},
+		{"the Ready condition's message alone", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].Message = "tampered" }), true},
+		{"the Ready condition's observedGeneration alone", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].ObservedGeneration = 0 }), true},
 		{"the Ready condition removed", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions = nil }), true},
 		{"the Ready condition's transition time alone", edit(func(a *v1alpha1.AgentIdentity) {
 			a.Status.Conditions[0].LastTransitionTime = metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
