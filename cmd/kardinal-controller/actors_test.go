@@ -221,7 +221,9 @@ func TestAPIAudit(t *testing.T) {
 }
 
 // TestAgentIndexReady: the controller is ready only once its AgentIndex
-// exists (the actor policy fails closed without it).
+// exists and is built, in either format (the actor policy fails closed
+// without it).
+// Covers ACTOR-INDEX-04.
 func TestAgentIndexReady(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
 	check := agentIndexReady(c, "kardinal-promoter")
@@ -233,6 +235,16 @@ func TestAgentIndexReady(t *testing.T) {
 	idx.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Built"}}
 	require.NoError(t, c.Update(context.Background(), idx))
 	assert.NoError(t, check(req))
+
+	// A later release's compact index (#2071): built while CompactReady is
+	// True, whatever Ready says.
+	idx.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: actor.ReasonCompactFormat},
+		{Type: actor.ConditionCompactReady, Status: metav1.ConditionFalse, Reason: actor.ReasonIndexFull}}
+	require.NoError(t, c.Update(context.Background(), idx))
+	assert.Error(t, check(req), "a full compact index is not ready")
+	idx.Status.Conditions[1] = metav1.Condition{Type: actor.ConditionCompactReady, Status: metav1.ConditionTrue, Reason: "Built"}
+	require.NoError(t, c.Update(context.Background(), idx))
+	assert.NoError(t, check(req), "a built compact index is ready")
 }
 
 // TestUIAPI_ActorRefusals: a suspended agent is refused (403), and while the

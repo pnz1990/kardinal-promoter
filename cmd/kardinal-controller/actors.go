@@ -14,7 +14,6 @@ import (
 
 	"github.com/rs/zerolog"
 	authenticationv1 "k8s.io/api/authentication/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -275,7 +274,7 @@ func auditDone(r *http.Request, bundle, message string) {
 }
 
 // agentIndexReady is a ready check that passes once the AgentIndex name is
-// Ready (built by a leader).
+// built (by a leader), in either format (actor.Readable).
 func agentIndexReady(r client.Reader, name string) healthz.Checker {
 	return func(req *http.Request) error {
 		ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
@@ -284,7 +283,7 @@ func agentIndexReady(r client.Reader, name string) healthz.Checker {
 		if err := r.Get(ctx, client.ObjectKey{Name: name}, &idx); err != nil {
 			return fmt.Errorf("agent index %s: %w", name, err)
 		}
-		if !meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready") {
+		if _, built := actor.Readable(&idx.Status); !built {
 			return fmt.Errorf("agent index %s: %w", name, actor.ErrIndexNotReady)
 		}
 		return nil

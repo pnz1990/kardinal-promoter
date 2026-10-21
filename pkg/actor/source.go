@@ -25,8 +25,9 @@ type Source struct {
 	Name string
 }
 
-// Index returns the agent index. With Name set (the controller) a missing or
-// not Ready index is ErrIndexNotReady. Without (the CLI) no ready index is
+// Index returns the agent index's entries in the legacy shape, whatever
+// format is current (Readable). With Name set (the controller) a missing or
+// not built index is ErrIndexNotReady. Without (the CLI) no ready index is
 // nil: the CLI then writes no stamp, and the actor policy decides.
 func (s *Source) Index(ctx context.Context) (*v1alpha1.AgentIndexStatus, error) {
 	if s == nil || s.Reader == nil {
@@ -41,10 +42,11 @@ func (s *Source) Index(ctx context.Context) (*v1alpha1.AgentIndexStatus, error) 
 			}
 			return nil, fmt.Errorf("read agent index %s: %w", s.Name, err)
 		}
-		if !meta.IsStatusConditionTrue(idx.Status.Conditions, "Ready") {
+		st, ok := Readable(&idx.Status)
+		if !ok {
 			return nil, fmt.Errorf("agent index %s: %w", s.Name, ErrIndexNotReady)
 		}
-		return &idx.Status, nil
+		return st, nil
 	}
 	var list v1alpha1.AgentIndexList
 	if err := s.Reader.List(ctx, &list); err != nil {
@@ -55,8 +57,8 @@ func (s *Source) Index(ctx context.Context) (*v1alpha1.AgentIndexStatus, error) 
 	}
 	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
 	for i := range list.Items {
-		if meta.IsStatusConditionTrue(list.Items[i].Status.Conditions, "Ready") {
-			return &list.Items[i].Status, nil
+		if st, ok := Readable(&list.Items[i].Status); ok {
+			return st, nil
 		}
 	}
 	return nil, nil

@@ -513,8 +513,9 @@ func TestActorIndexOverflowOnAPIServer(t *testing.T) {
 	require.Eventually(t, func() bool {
 		err := alice.Create(ctx, &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{GenerateName: "b-", Namespace: "team-a"},
 			Spec: v1alpha1.BundleSpec{Pipeline: "p", Type: "image"}})
-		return err != nil && strings.Contains(err.Error(), "agent index is not ready")
-	}, 30*time.Second, 500*time.Millisecond, "a full index fails closed")
+		return err != nil && strings.Contains(err.Error(), "agent index is full (IndexFull") &&
+			strings.Contains(err.Error(), "remove AgentIdentities or subjects")
+	}, 30*time.Second, 500*time.Millisecond, "a full index fails closed, and says it is full")
 }
 
 // asController is a client of cfg acting as the release's controller, the

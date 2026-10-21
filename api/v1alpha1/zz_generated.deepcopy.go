@@ -246,6 +246,20 @@ func (in *AgentIndexStatus) DeepCopyInto(out *AgentIndexStatus) {
 			(*out)[key] = *val.DeepCopy()
 		}
 	}
+	if in.CompactUsers != nil {
+		in, out := &in.CompactUsers, &out.CompactUsers
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.CompactGroups != nil {
+		in, out := &in.CompactGroups, &out.CompactGroups
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))
