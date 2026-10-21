@@ -1460,6 +1460,7 @@ blocks above.
 | cel-go version drift | `resolvableWhen` depends on cel-go's `index out of bounds` text (Notes) | Compare cel-go versions on every kro upgrade |
 | Teardown identity | kro deletes as `status.appliedServiceAccount`; removing the applier RoleBinding while Graphs exist wedges the finalizer outside a Terminating namespace | Keep the binding until the namespace's last Graph is gone (current behavior) |
 | `graphcleanup` coupling | Depends on the `kro.run/graph-finalizer` name and the `status.managedResources` shape | Check both on every kro upgrade |
+| `setUnmanaged` NotFound on the finalizer patch (found 2026-10-21, v0.13.0 gate, CI run 39592983528) | When a Graph is deleted, `setUnmanaged` (`pkg/controller/graph/controller.go:672`, unchanged at `main` `8167d6a`) handles NotFound from its cached `Get` but not from its `Patch`. A second reconcile that reads the cache before it sees the finalizer removal patches a Graph the API server already deleted, and logs `ERROR ... set unmanaged: graphs.kro.run "<name>" not found`. It is harmless: the next reconcile returns on NotFound. But it fails the upgrade suites' kro-error check when a finished Bundle's Graph is retired during the window (bundle-retire, for example 60s after Superseded). It is a race: upgrade-v0124 hit it on 1.37 and not on 1.35 | Upstream issue drafted (`~/kro-upstream-drafts.md` §12: treat NotFound from the patch as done). Until it lands, the suites may allow that line only for a Graph the controller logged as retired |
 
 Checked and not hazards: [kro#1448](https://github.com/kubernetes-sigs/kro/pull/1448)
 (includeWhen data-pending, kardinal uses none), [kro#1459](https://github.com/kubernetes-sigs/kro/pull/1459)
@@ -1487,6 +1488,7 @@ Nothing has been posted to kro yet. Each item is drafted and waits for owner app
 | [kro#1464](https://github.com/kubernetes-sigs/kro/issues/1464) | The sibling-branch watch symptom, and `Forbidden` as a named soft condition | G5-b, hazard |
 | [kro#1445](https://github.com/kubernetes-sigs/kro/pull/1445) | Scope the docs to RGDs, or honor the policy in the shared teardown; note the field-manager conflict on detach | G7 |
 | [kro#1324](https://github.com/kubernetes-sigs/kro/issues/1324) | Same stall on the Graph controller; ask about a default above 1 for `graph-concurrent-reconciles` | Hazard |
+| New kro issue | `setUnmanaged` treats NotFound from the finalizer patch as done (Graph and GraphRevision), offering the PR | Hazard |
 | [KREP-018](https://github.com/kubernetes-sigs/kro/pull/1125) (optional) | Data point for Graph adopters | G2 |
 
 When an item is filed, link it from the gap above and from `docs/graph-coverage.md`, and
