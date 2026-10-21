@@ -1023,7 +1023,7 @@ func TestCLI_DoctorPolicyNamespaces(t *testing.T) {
 	other := e.Namespace(t) // another team's: not labelled
 	barePipeline(t, e, ns, pipelineName, func(p *v1alpha1.Pipeline) { p.Spec.PolicyNamespaces = []string{other} })
 	// PolicyNamespacesShared is False while a namespace has not agreed, and
-	// absent once every one has.
+	// True once every one has (#2383).
 	waitShared := func(what string, done func(c *metav1.Condition, generation int64) bool) {
 		t.Helper()
 		framework.Eventually(t, 2*time.Minute, what, func(ctx context.Context) (bool, string) {
@@ -1095,7 +1095,9 @@ func TestCLI_DoctorPolicyNamespaces(t *testing.T) {
 	}
 	p.Annotations["e2e.kardinal.io/recheck"] = "now"
 	require.NoError(t, e.Client.Update(ctx, &p))
-	waitShared("PolicyNamespacesShared gone", func(c *metav1.Condition, _ int64) bool { return c == nil })
+	waitShared("PolicyNamespacesShared=True", func(c *metav1.Condition, generation int64) bool {
+		return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration == generation
+	})
 
 	_, detail = policyRow(cli.Run("", "doctor"))
 	assert.NotContains(t, detail, ns+"/"+pipelineName, "no longer named once its namespace agreed")
