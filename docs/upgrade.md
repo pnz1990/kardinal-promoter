@@ -193,7 +193,7 @@ something for you:
   anyone the chart's approver or verifier role lets write a Verdict could pass it. From v0.13.0
   it counts only its agents. Run `kardinal doctor` with the v0.13.0 CLI before you upgrade: its
   "Verify gates of agents only" check (a WARN against v0.12) names those gates, and marks the
-  ones where a person's verdict counted for a version still kept. To keep counting those
+  ones where a person's verdict counted on a gate instance still kept. To keep counting those
   people, list them in `allowedUsers` or `allowedGroups` now (v0.12 has the fields):
 
     ```yaml
@@ -203,8 +203,10 @@ something for you:
     ```
 
     The new controller renders every promoting version's Graph again, once, so a version in flight
-    whose gate counted a person's pass waits again until an allowed verifier passes it
-    ([How verdicts count](agentic/verify-with-agents.md#how-verdicts-count)).
+    whose gate counted a person's pass waits again until an allowed verifier passes it. Its trail
+    says why: a `GateChanged` AuditEvent for each such gate ("the controller's verify rule changed
+    (v0.13)"), and `VerdictRevoked` for the person's verdict ("no longer counted: the gate counts
+    only its agents") ([How verdicts count](agentic/verify-with-agents.md#how-verdicts-count)).
 
 **2. Apply the new CRDs.** v0.13.0 adds the `changerequests` and `promotionreceipts` CRDs, and
 fields to AgentIdentities, Bundles, Pipelines, PolicyGates, PromotionSteps, AuditEvents, Approvals

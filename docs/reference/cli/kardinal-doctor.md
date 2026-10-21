@@ -67,8 +67,11 @@ The verify gates check lists the verify gates that list only agents
 three lists are one allowlist, so those gates count no person's verdict: it
 names them and passes. Against an older controller, which still counts
 every person's verdict on them, it is a WARN before the upgrade, naming the
-gates on which a person's verdict counted for a version still kept: list
-those people in allowedUsers or allowedGroups to keep counting them.
+gates on which a person's verdict counted on a gate instance still kept:
+list those people in allowedUsers or allowedGroups to keep counting them. It
+lists PolicyGates in every namespace or, when you may not, in the current
+one: a passing result there is a WARN, since the other namespaces were not
+checked.
 
 Use 'kardinal doctor' as the first troubleshooting step.
 

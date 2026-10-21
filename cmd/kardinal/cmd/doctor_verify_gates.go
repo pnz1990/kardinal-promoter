@@ -33,11 +33,11 @@ const verifyGatesHint = "To keep counting the people who verify through these ga
 // verifyAllowlistVersion they count no person's verdict. Against an older
 // controller, which still counts every person's verdict on them, it warns
 // before the upgrade and names the gates on which a person's verdict counted
-// for a version still kept (its gate instances' status.verdicts). From that
-// release (and with a dev build) it passes and names them, so an operator
-// sees which gates count agents only; an unknown controller warns. The
-// gates of every namespace, or of ns when the user may not list them
-// cluster-wide.
+// on a gate instance still kept (its status.verdicts). From that release
+// (and with a dev build) it passes and names them, so an operator sees which
+// gates count agents only; an unknown controller warns. The gates of every
+// namespace, or of ns when the user may not list them cluster-wide: then a
+// passing result is a WARN, since the other namespaces were not checked.
 func checkVerifyGates(ctx context.Context, client sigs_client.Reader, ns, controller string) doctorResult {
 	r := doctorResult{label: verifyGatesLabel, icon: doctorPass}
 	var list v1alpha1.PolicyGateList
@@ -74,22 +74,33 @@ func checkVerifyGates(ctx context.Context, client sigs_client.Reader, ns, contro
 		}
 	}
 	sort.Strings(agentsOnly)
+	// A namespaced user's result is not the cluster's: the templates are
+	// often in a platform namespace it cannot list.
+	partial := func(r doctorResult) doctorResult {
+		if scope == "all namespaces" || r.icon != doctorPass {
+			return r
+		}
+		r.icon, r.warned = doctorWarn, true
+		r.detail = "checked " + scope + " only: " + r.detail
+		r.hint = "Run kardinal doctor as a user who may list PolicyGates in every namespace to check them all"
+		return r
+	}
 	if len(agentsOnly) == 0 {
 		r.detail = fmt.Sprintf("no verify gate lists only agents (%s)", scope)
-		return r
+		return partial(r)
 	}
 	// A dev build is main's: one allowlist. An unknown controller may be
 	// older, so it warns as one.
 	ver := releaseVersion(controller)
 	if controller != "unknown" && (ver == "" || atLeast(ver, verifyAllowlistVersion)) {
 		r.detail = fmt.Sprintf("count no person's verdict: %s (%s)", strings.Join(agentsOnly, ", "), scope)
-		return r
+		return partial(r)
 	}
 	named := make([]string, len(agentsOnly))
 	for i, g := range agentsOnly {
 		named[i] = g
 		if n := people[g]; n > 0 {
-			named[i] = fmt.Sprintf("%s (a person's verdict counted on %d versions)", g, n)
+			named[i] = fmt.Sprintf("%s (a person's verdict counted on %d gate instances)", g, n)
 		}
 	}
 	r.icon, r.warned = doctorWarn, true

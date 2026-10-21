@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,8 @@ import (
 // person's verdict counted for a kept version, with what to do; from v0.13.0
 // (and with a dev build) it passes and names them. A gate that lists people
 // or groups, or nobody, is not named; neither is a gate instance. A user who
-// may not list PolicyGates cluster-wide gets the current namespace's.
+// may not list PolicyGates cluster-wide gets the current namespace's, and a
+// WARN where the cluster's would pass.
 //
 // Covers CLI-DOCTOR-04.
 func TestDoctor_VerifyGates(t *testing.T) {
@@ -69,13 +71,17 @@ func TestDoctor_VerifyGates(t *testing.T) {
 		detail     string
 	}{
 		"v0.12 warns before the upgrade": {estate, "v0.12.3", true, doctorWarn,
-			"v0.13.0 counts only their agents: platform/qa-only (a person's verdict counted on 2 versions), team-b/explore (all namespaces)"},
+			"v0.13.0 counts only their agents: platform/qa-only (a person's verdict counted on 2 gate instances), team-b/explore (all namespaces)"},
 		"an unknown controller warns": {estate, "unknown", true, doctorWarn, "v0.13.0 counts only their agents: platform/qa-only"},
 		"v0.13 names them":            {estate, "v0.13.0", true, doctorPass, "count no person's verdict: platform/qa-only, team-b/explore (all namespaces)"},
 		"a v0.13 release candidate":   {estate, "v0.13.0-rc.1", true, doctorPass, "count no person's verdict"},
 		"a dev build is main's":       {estate, "v0.14.0-dev", true, doctorPass, "count no person's verdict"},
 		"none lists only agents":      {clean, "v0.12.3", true, doctorPass, "no verify gate lists only agents (all namespaces)"},
 		"only the current namespace":  {estate, "v0.12.3", false, doctorWarn, "team-b/explore (namespace team-b)"},
+		"a namespace's pass is partial": {estate, "v0.13.0", false, doctorWarn,
+			"checked namespace team-b only: count no person's verdict: team-b/explore (namespace team-b)"},
+		"a clean namespace only is not a PASS": {clean, "v0.13.0", false, doctorWarn,
+			"checked namespace team-b only: no verify gate lists only agents (namespace team-b)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -98,6 +104,9 @@ func TestDoctor_VerifyGates(t *testing.T) {
 			assert.False(t, r.failed, "never a FAIL: the gates count their agents")
 			assert.Equal(t, tc.icon == doctorWarn, r.warned)
 			if tc.icon == doctorWarn {
+				assert.NotEmpty(t, r.hint)
+			}
+			if strings.Contains(tc.detail, "counts only their agents") {
 				assert.Contains(t, r.hint, "verify.allowedUsers")
 			}
 		})
