@@ -51,6 +51,9 @@
 #   upgrade-v0123  the same from kardinal-promoter v0.12.3 as released
 #           (kardinal-v0123.sh), following "Upgrading from v0.12.3", with no
 #           stuck version (v0.12.3 has the #2271 fix); one run per cluster too
+#   upgrade-v0124  the same from kardinal-promoter v0.12.4 as released
+#           (kardinal-v0124.sh), following "Upgrading from v0.12.4", with no
+#           stuck version; one run per cluster too
 #   docs-walkthrough  Forgejo + Argo CD: the TestDocs_ test runs the command
 #           blocks of the getting-started and how-to pages in order
 #           (quickstart, approvals, rollback, policy gates, pause and fleets,
@@ -161,6 +164,8 @@ case "$SUITE" in
   upgrade-v0122) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0122.sh test-agent.sh) RUN='^TestUpgradeV0122_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   upgrade-v0123) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0123.sh test-agent.sh) RUN='^TestUpgradeV0123_'
+    export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
+  upgrade-v0124) COMPONENTS=("giteafamily.sh forgejo" argocd.sh kardinal-v0124.sh test-agent.sh) RUN='^TestUpgradeV0124_'
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.

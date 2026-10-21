@@ -1,5 +1,6 @@
 # Upgrade
 
+**Upgrading from v0.12.4** to the next patch release: follow [Upgrading from v0.12.4](#upgrading-from-v0124).
 **Upgrading from v0.12.3** to v0.12.4: follow [Upgrading from v0.12.3](#upgrading-from-v0123).
 **Upgrading from v0.12.2** to v0.12.4: follow [Upgrading from v0.12.2](#upgrading-from-v0122).
 **Upgrading from v0.12.1** to v0.12.4: follow [Upgrading from v0.12.1](#upgrading-from-v0121).
@@ -62,6 +63,47 @@ name every namespace the Graph reads, and after you upgrade again a reader RoleB
 Graph needs could be pruned until its next translation binds it again. Before you upgrade again
 after a downgrade, remove the marker, so the controller reads those Graphs in full:
 `kubectl label graphs.kro.run -A --all kardinal.io/reader-labels-`.
+
+## Upgrading from v0.12.4
+
+!!! note "v0.12.5 is not released yet"
+    These steps take a v0.12.4 installation to the next patch release, v0.12.5, once it is
+    released: `<version>` in the commands is its chart version. Until then v0.12.4 is the latest
+    release, and there is nothing to upgrade to.
+
+The upgrade suite runs these steps as written (`TestUpgradeV0124_Estate`, on the oldest and newest
+supported Kubernetes minors) while versions are in flight, with the same checks as the upgrades
+from the earlier v0.12 patches: versions in flight, the gates that hold them, approvals,
+Verdicts, a running AgentRun, freezes, a rollback and an automatic rollback all carry over and
+finish.
+
+**1. Read the upgrade notes.** The [changelog](changelog.md)'s section for the release lists what
+it changes.
+
+**2. Apply the new CRDs.** Helm never upgrades CRDs, and Helm owns the fields of the CRDs the
+v0.12.4 chart installed, so `--force-conflicts` is required:
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> | kubectl apply --server-side --force-conflicts -f -
+```
+
+**3. Upgrade the chart.** `--reset-then-reuse-values` keeps the values you set and takes every
+new default from the new chart.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version> \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+**4. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get pipelines -A
+kubectl get bundles -A
+```
+
+`kardinal doctor` passes every check, and every Pipeline is Ready.
 
 ## Upgrading from v0.12.3
 
