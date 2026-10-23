@@ -32,41 +32,6 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/scale"
 )
 
-// leaderRSS is the controller leader's resident memory in MiB, from its
-// own /metrics.
-func leaderRSS(t *testing.T, e *framework.Env) float64 {
-	t.Helper()
-	return leaderMetrics(t, e).Sum("process_resident_memory_bytes", nil) / (1 << 20)
-}
-
-// leaderHeap is the controller leader's Go heap in use in MiB, read just
-// after its garbage collections (go_memstats_last_gc_time_seconds moved
-// since the reading before): the lowest such reading over at least 30
-// seconds, or after the first collection when they are rarer (the runtime
-// forces one at least every two minutes). Read at any other time the heap
-// in use also holds garbage not yet collected: sampled that way, two
-// quiet-host runs measured 1,204 and 2,818 bytes a receipt for the same
-// cache. Not RSS: the scale suite's controller is built with -race, whose
-// shadow memory RSS holds and never returns (test/e2e/README.md#scale-suite).
-func leaderHeap(t *testing.T, e *framework.Env) float64 {
-	t.Helper()
-	low, lastGC := 0.0, 0.0
-	start := time.Now()
-	for low == 0 || time.Since(start) < 30*time.Second {
-		require.Less(t, time.Since(start), 3*time.Minute, "the leader collects garbage within 3 minutes (go_memstats_last_gc_time_seconds)")
-		m := leaderMetrics(t, e)
-		gc, v := m.Sum("go_memstats_last_gc_time_seconds", nil), m.Sum("go_memstats_heap_inuse_bytes", nil)/(1<<20)
-		require.Positive(t, v, "the leader reports go_memstats_heap_inuse_bytes")
-		require.Positive(t, gc, "the leader reports go_memstats_last_gc_time_seconds")
-		if lastGC != 0 && gc != lastGC && (low == 0 || v < low) {
-			low = v
-		}
-		lastGC = gc
-		time.Sleep(time.Second)
-	}
-	return low
-}
-
 // storageBytes is the API server's view of its etcd database size.
 func storageBytes(t *testing.T, e *framework.Env) float64 {
 	t.Helper()
@@ -146,7 +111,7 @@ func TestScale_Receipts(t *testing.T) {
 	}
 
 	time.Sleep(30 * time.Second) // the new leader's caches settle
-	baseRSS, baseHeap, baseDB := leaderRSS(t, e), leaderHeap(t, e), storageBytes(t, e)
+	baseRSS, baseHeap, baseDB := scale.LeaderRSS(t, e), scale.LeaderHeap(t, e), storageBytes(t, e)
 	require.Positive(t, baseRSS, "the leader reports process_resident_memory_bytes")
 	r.Note("receiptsBaselineHeapMiB", int(baseHeap))
 	require.Positive(t, baseDB, "the API server reports its storage size")
@@ -173,7 +138,7 @@ func TestScale_Receipts(t *testing.T) {
 	drain := batch(0, n, n)
 	r.Note("receiptsDrainSeconds", int(drain.Seconds()))
 	r.Note("receiptsPerSecond", float64(n)/drain.Seconds())
-	rssN, heapN := leaderRSS(t, e), leaderHeap(t, e)
+	rssN, heapN := scale.LeaderRSS(t, e), scale.LeaderHeap(t, e)
 	r.Note("receiptsRSSMiB", int(rssN))
 	r.Note("receiptsHeapMiB", int(heapN))
 	// The slopes: each batch of n receipts may add at most
@@ -192,7 +157,7 @@ func TestScale_Receipts(t *testing.T) {
 	assert.LessOrEqual(t, slope1, float64(r.P.ReceiptBytesPerReceipt),
 		"leader heap per receipt between none and %d Stored receipts (ReceiptBytesPerReceipt), from its baseline %.1f MiB to %.1f MiB", n, baseHeap, heapN)
 	batch(n, n, 2*n)
-	rss2N, heap2N, db := leaderRSS(t, e), leaderHeap(t, e), storageBytes(t, e)
+	rss2N, heap2N, db := scale.LeaderRSS(t, e), scale.LeaderHeap(t, e), storageBytes(t, e)
 	slope := (heap2N - heapN) * (1 << 20) / float64(n)
 	r.Note("receiptsRSS2NMiB", int(rss2N))
 	r.Note("receiptsHeap2NMiB", int(heap2N))
