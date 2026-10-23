@@ -137,8 +137,12 @@ func TestSameContentAsHead_Bounded(t *testing.T) {
 }
 
 // envUploadPackProxy, set to the real git-upload-pack, makes the test
-// binary an upload-pack in front of it (uploadPackProxy).
-const envUploadPackProxy = "KARDINAL_TEST_UPLOAD_PACK_PROXY"
+// binary an upload-pack in front of it (uploadPackProxy);
+// envUploadPackStall, set too, makes it stall once the pack begins.
+const (
+	envUploadPackProxy = "KARDINAL_TEST_UPLOAD_PACK_PROXY"
+	envUploadPackStall = "KARDINAL_TEST_UPLOAD_PACK_STALL"
+)
 
 func init() {
 	if real := os.Getenv(envUploadPackProxy); real != "" {
@@ -153,6 +157,9 @@ func init() {
 // what it wants, with the packets after the commit already in the
 // client's buffers when it stops reading.
 func uploadPackProxy(real, repo string) int {
+	// A test that fails waiting on the proxy leaves it behind: it ends by
+	// itself, after any test's 30 s guard.
+	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
 	cmd := exec.Command(real, repo)
 	cmd.Stdin = os.Stdin
 	out, err := cmd.StdoutPipe()
@@ -197,6 +204,11 @@ func uploadPackProxy(real, repo string) int {
 			continue
 		}
 		inPack = true
+		if os.Getenv(envUploadPackStall) != "" {
+			// A server that stalls part-way through its response: nothing
+			// more is sent, and the stream stays open (until the watchdog).
+			select {}
+		}
 		for data := payload[1:]; len(data) > 0; {
 			k := min(len(data), 200)
 			_ = pkt(append([]byte{1}, data[:k]...))
@@ -268,6 +280,60 @@ func TestSameContentAsHead_ServerKeepsWriting(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSameContentAsHead_ServerStalls (#2375): the server stops sending
+// part-way through its response and keeps the stream open (uploadPackProxy
+// stalling where the pack begins). The peek has a deadline of its own,
+// headPeekTimeout, so the check returns with an error saying so, which the
+// step retries like any fetch error, instead of holding the worker until
+// the caller's context ends; a caller's sooner deadline wins.
+//
+// Covers GIT-PUSH-FOREIGN-06.
+func TestSameContentAsHead_ServerStalls(t *testing.T) {
+	real, err := exec.LookPath("git-upload-pack")
+	if err != nil {
+		out, gerr := exec.Command("git", "--exec-path").Output()
+		require.NoError(t, gerr)
+		real = filepath.Join(strings.TrimSpace(string(out)), "git-upload-pack")
+	}
+	self, err := os.Executable()
+	require.NoError(t, err)
+	_, ours, head := bigHeadRemote(t, 1<<10, false, false, true)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git-upload-pack"), []byte(
+		"#!/bin/sh\n"+envUploadPackStall+"=1 "+envUploadPackProxy+"='"+real+"' exec '"+self+"' -test.run='^$' \"$@\"\n"), 0o700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	defer func(old time.Duration) { headPeekTimeout = old }(headPeekTimeout)
+	headPeekTimeout = 2 * time.Second
+	c := NewGoGitClient()
+	check := func(ctx context.Context) (time.Duration, error) {
+		start := time.Now()
+		done := make(chan error, 1)
+		go func() {
+			_, err := c.SameContentAsHead(ctx, ours, "origin", "kardinal/b/prod", TokenAuth(""), head)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			return time.Since(start), err
+		case <-time.After(30 * time.Second):
+			t.Fatal("the check did not return in 30s: the peek has no deadline")
+			return 0, nil
+		}
+	}
+	took, err := check(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not send the head's commit within 2s")
+	assert.Less(t, took, 15*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	took, err = check(ctx)
+	require.Error(t, err, "the caller's sooner deadline")
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "the caller's deadline, as a context error")
+	assert.NotContains(t, err.Error(), "within 2s", "the caller's deadline ended it, not the peek's")
+	assert.Less(t, took, 2*time.Second)
 }
 
 // packObjectHeader is a packfile object header: type typ, inflated size.
