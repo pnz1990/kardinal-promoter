@@ -1052,7 +1052,7 @@ func main() {
 			Msg("promotion receipts enabled")
 	}
 
-	if err := (&psreconciler.Reconciler{
+	stepReconciler := &psreconciler.Reconciler{
 		ControllerUser:      controllerUser,
 		Workers:             *workers["promotionstep"],
 		Client:              mgr.GetClient(),
@@ -1074,8 +1074,19 @@ func main() {
 		GitHubAppTokens: &scm.AppTokenCache{APIURL: githubAPIURL(scmProviderType, scmAPIURL)},
 		SCMWaitTimeout:  scmWaitTimeout,
 		Receipts:        receipts,
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := stepReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
+	}
+	// The BranchWrite reconciler writes batched environments (spec.git.writes:
+	// batched) with the PromotionStep reconciler's git client and
+	// credentials, and takes the same branch turns.
+	if err := (&psreconciler.BranchWriteReconciler{
+		Client:  mgr.GetClient(),
+		Steps:   stepReconciler,
+		Workers: *workers["promotionstep"],
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up BranchWriteReconciler")
 	}
 
 	if _, err := hookrunrecon.ParsePodSecurityLevel(hookPodSecurityLevel); err != nil {

@@ -1468,6 +1468,21 @@ spec:
                     description: URL is the GitOps repository URL (HTTPS).
                     minLength: 1
                     type: string
+                  writes:
+                    default: perEnvironment
+                    description: |-
+                      Writes is how the approval: auto environments' changes reach the
+                      branch. perEnvironment (the default): each environment's step clones,
+                      commits and pushes its own, one at a time. batched: the environments
+                      of a Bundle that are ready together are written in one round of the
+                      Bundle's BranchWrite: one clone, one commit per environment, one push.
+                      Batched applies to directory-layout environments of image Bundles
+                      updated by kustomize, helm or yaml, without a fleet; it uses the
+                      compact Graph shape.
+                    enum:
+                    - perEnvironment
+                    - batched
+                    type: string
                 required:
                 - url
                 type: object

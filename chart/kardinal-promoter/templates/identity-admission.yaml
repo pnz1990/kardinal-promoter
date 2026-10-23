@@ -535,7 +535,7 @@ spec:
 ---
 {{- /* The kinds a promotion Graph (or the controller) makes and nobody else
 does: every object of them decides a promotion. */}}
-{{- $graphKinds := list "promotionsteps" "prstatuses" "hookruns" "renderruns" "imageverifications" "agentruns" }}
+{{- $graphKinds := list "promotionsteps" "prstatuses" "hookruns" "renderruns" "branchwrites" "imageverifications" "agentruns" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

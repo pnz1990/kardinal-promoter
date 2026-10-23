@@ -81,8 +81,11 @@ func ShapeOf(g *Graph) string {
 // environments, uses the compact shape. pinned, the shape of the Bundle's
 // existing Graph, wins over the threshold and the annotation. A Pipeline with
 // fleets is always compact: pacing the targets needs the steps in one
-// collection, so a Bundle pinned to the nodes shape cannot take a fleet.
+// collection, so a Bundle pinned to the nodes shape cannot take a fleet. So
+// is one with spec.git.writes: batched: its BranchWrite is a compact-shape
+// node (compact_write.go).
 func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pinned string, fleets bool) (bool, error) {
+	batched := pipeline.Spec.Git.Writes == kardinalv1alpha1.WritesBatched
 	switch pinned {
 	case GraphShapeCompact:
 		return true, nil
@@ -90,6 +93,10 @@ func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pi
 		if fleets {
 			return false, fmt.Errorf("build: this Bundle's Graph has the %q shape, which cannot promote a fleet environment; "+
 				"the fleet applies to new Bundles", GraphShapeNodes)
+		}
+		if batched {
+			return false, fmt.Errorf("build: this Bundle's Graph has the %q shape, which cannot batch writes (spec.git.writes: batched); "+
+				"batching applies to new Bundles", GraphShapeNodes)
 		}
 		return false, nil
 	case "":
@@ -104,9 +111,13 @@ func (b *Builder) compactShape(pipeline *kardinalv1alpha1.Pipeline, envs int, pi
 			return false, fmt.Errorf("build: Pipeline annotation %s=%q: a Pipeline with a fleet environment needs the %q shape",
 				AnnotationGraphShape, v, GraphShapeCompact)
 		}
+		if batched {
+			return false, fmt.Errorf("build: Pipeline annotation %s=%q: spec.git.writes: batched needs the %q shape",
+				AnnotationGraphShape, v, GraphShapeCompact)
+		}
 		return false, nil
 	case "":
-		return fleets || envs > b.CompactAbove, nil
+		return fleets || batched || envs > b.CompactAbove, nil
 	default:
 		return false, fmt.Errorf("build: Pipeline annotation %s=%q: use %q, %q or remove it",
 			AnnotationGraphShape, v, GraphShapeCompact, GraphShapeNodes)
@@ -211,6 +222,9 @@ type compactStep struct {
 	imageVerification string
 	// render is the environment's RenderRun (layout: branch), else nil.
 	render *compactRender
+	// write is the environment's BranchWrite (spec.git.writes: batched),
+	// else "".
+	write string
 }
 
 // stepsHaveFleets reports whether any of the built steps is a fleet target:
@@ -242,12 +256,13 @@ func stepsHaveFleets(steps []compactStep) bool {
 // otherwise ready as soon as they are.
 func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	steps []compactStep, gateCollections []string) []GraphNode {
-	var anyHooks, anyAnalyses, anyIV, anyRender bool
+	var anyHooks, anyAnalyses, anyIV, anyRender, anyWrite bool
 	for _, s := range steps {
 		anyHooks = anyHooks || len(s.extras.hookRuns) > 0
 		anyAnalyses = anyAnalyses || len(s.extras.analysisRuns) > 0
 		anyIV = anyIV || s.imageVerification != ""
 		anyRender = anyRender || s.render != nil
+		anyWrite = anyWrite || s.write != ""
 	}
 	entries := make([]interface{}, len(steps))
 	fleets := stepsHaveFleets(steps)
@@ -311,6 +326,11 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 				name = s.render.name
 			}
 			entries[i].(map[string]interface{})["renderRun"] = name
+		}
+		if anyWrite {
+			// Batched writes (compact_write.go): the BranchWrite that writes
+			// the step's change; "" for one that writes its own.
+			entries[i].(map[string]interface{})["write"] = s.write
 		}
 	}
 
@@ -385,10 +405,16 @@ func compactNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.
 	if anyIV {
 		stepSpec["imageVerification"] = step("imageVerification")
 	}
-	if anyHooks || anyAnalyses || anyIV || anyRender {
+	if anyWrite {
+		stepSpec["write"] = step("write")
+	}
+	if anyHooks || anyAnalyses || anyIV || anyRender || anyWrite {
 		stepSpec["live"] = compactLive(bundle, anyHooks, anyAnalyses, anyIV)
 		if anyRender {
 			stepSpec["live"].(map[string]interface{})["renders"] = compactLiveRenders(bundle)
+		}
+		if anyWrite {
+			stepSpec["live"].(map[string]interface{})["writes"] = compactLiveWrites(bundle)
 		}
 	}
 	nodes := []GraphNode{

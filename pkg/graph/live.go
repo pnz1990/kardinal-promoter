@@ -145,6 +145,7 @@ func readBackRefs(pipeline *kardinalv1alpha1.Pipeline, envs []string, bundle *ka
 			},
 		}}
 	}
+	writes := writesAny(pipeline, envs, bundle)
 	var out []GraphNode
 	if hooks || analyses || renders {
 		out = append(out, ref(refStepsNodeID, "kardinal.io/v1alpha1", "PromotionStep"))
@@ -157,6 +158,9 @@ func readBackRefs(pipeline *kardinalv1alpha1.Pipeline, envs []string, bundle *ka
 	}
 	if renders {
 		out = append(out, ref(refRenderRunsNodeID, "kardinal.io/v1alpha1", "RenderRun"))
+	}
+	if writes {
+		out = append(out, ref(refBranchWritesNodeID, "kardinal.io/v1alpha1", "BranchWrite"))
 	}
 	return out
 }

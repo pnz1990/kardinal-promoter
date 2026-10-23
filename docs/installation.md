@@ -502,6 +502,7 @@ kubectl delete crd --ignore-not-found \
   hookruns.kardinal.io \
   imageverifications.kardinal.io \
   renderruns.kardinal.io \
+  branchwrites.kardinal.io \
   scmproviders.kardinal.io \
   clusterscmproviders.kardinal.io \
   auditevents.kardinal.io \

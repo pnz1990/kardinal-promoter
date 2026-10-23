@@ -153,6 +153,19 @@ type PipelineGit struct {
 	// still use secretRef.
 	// +optional
 	ProviderRef *ScmProviderRef `json:"providerRef,omitempty"`
+
+	// Writes is how the approval: auto environments' changes reach the
+	// branch. perEnvironment (the default): each environment's step clones,
+	// commits and pushes its own, one at a time. batched: the environments
+	// of a Bundle that are ready together are written in one round of the
+	// Bundle's BranchWrite: one clone, one commit per environment, one push.
+	// Batched applies to directory-layout environments of image Bundles
+	// updated by kustomize, helm or yaml, without a fleet; it uses the
+	// compact Graph shape.
+	// +kubebuilder:validation:Enum=perEnvironment;batched
+	// +kubebuilder:default=perEnvironment
+	// +optional
+	Writes string `json:"writes,omitempty"`
 }
 
 // SecretRef is a reference to a Kubernetes Secret by name and optional namespace.

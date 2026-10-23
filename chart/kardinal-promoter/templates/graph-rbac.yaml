@@ -21,7 +21,7 @@ rules:
   # agentruns: verify gates' AgentRuns, and their refAgentRuns read-back);
   # promotionsteps also takes the hook, analysis and render mirror patch.
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "changerequests", "hookruns", "imageverifications", "renderruns", "agentruns"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "changerequests", "hookruns", "imageverifications", "renderruns", "branchwrites", "agentruns"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Graph refs: the Bundle, its Approvals (approval gates) and its Verdicts
   # (verify gates).
@@ -48,7 +48,7 @@ metadata:
     rbac.kro.run/aggregate-to-controller: "true"
 rules:
   - apiGroups: ["kardinal.io"]
-    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "changerequests", "bundles", "hookruns", "approvals", "imageverifications", "renderruns", "agentruns", "verdicts"]
+    resources: ["promotionsteps", "policygates", "prstatuses", "metricchecks", "changerequests", "bundles", "hookruns", "approvals", "imageverifications", "renderruns", "branchwrites", "agentruns", "verdicts"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["argoproj.io"]
     resources: ["analysisruns"]

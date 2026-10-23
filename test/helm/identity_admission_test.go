@@ -717,7 +717,7 @@ func TestIdentityAdmission_GraphObjects(t *testing.T) {
 	rules = append(rules[:1], rules[2:]...)
 	assert.ElementsMatch(t, []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update},
 		rules[0].Operations, "DELETE recreates, it forges nothing")
-	for _, k := range []string{"promotionsteps", "prstatuses", "hookruns", "renderruns", "imageverifications"} {
+	for _, k := range []string{"promotionsteps", "prstatuses", "hookruns", "renderruns", "branchwrites", "imageverifications"} {
 		assert.Contains(t, rules[0].Resources, k)
 		assert.Contains(t, rules[0].Resources, k+"/status", "status is checked too")
 	}

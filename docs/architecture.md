@@ -133,6 +133,7 @@ The controller manager runs these reconcilers:
 | `ImageVerificationReconciler` | `ImageVerification` | Checks the signatures of a Bundle's images (sigstore) and of a config Bundle's commit; writes the verdict to its status |
 | `ScmProviderReconciler` | `ScmProvider`, `ClusterScmProvider` | Checks the provider's settings and Secrets; writes its `Ready` condition ([SCM providers](scm-providers.md)) |
 | `RenderRunReconciler` | `RenderRun` | Runs a `layout: branch` environment's render in a sandboxed Job and records the rendered commit ([Rendered manifests](rendered-manifests.md)) |
+| `BranchWriteReconciler` | `BranchWrite` | Writes a Bundle's batched environments (`spec.git.writes: batched`) to their branch in rounds: one clone, one commit per environment, one push; records each environment's commit ([Batched writes](pipeline-reference.md#batched-writes-specgitwrites-batched)) |
 | Audit retention (`pkg/reconciler/auditretention`) | `AuditEvent` | Deletes records past `audit.retention` (on by default; `audit.retention.enabled: false` turns it off) |
 | Graph cleanup (`pkg/reconciler/graphcleanup`) | kro `Graph` | Lets a Graph in a terminating namespace go once kro can no longer tear it down; at startup, removes the health ref nodes and reader RoleBindings of earlier releases |
 
@@ -198,6 +199,7 @@ Built-in step implementations:
 | `git-clone` | Clones the GitOps repo into a work directory owned by this PromotionStep (one per namespace, Pipeline, Bundle and environment). For config Bundles it also checks out the `configRef` commit into a separate directory next to it |
 | `kustomize-set-image` | Edits the environment's `kustomization.yaml` `images:` list the way `kustomize edit set image` does (no binary needed) |
 | `render` | `layout: branch` only, in the controller: asks for the environment's RenderRun and waits for its result (the commit pushed, the DRY commit rendered). The render itself (`git-clone`, the image update, `render-manifests`, `git-commit`, `git-push`) runs in the RenderRun's sandboxed Job, never in the controller ([Rendered Manifests](rendered-manifests.md)) |
+| `await-write` | Batched environments only (`spec.git.writes: batched`), instead of `git-clone` to `git-push`: asks the Bundle's BranchWrite to write the environment and takes its commit ([Batched writes](pipeline-reference.md#batched-writes-specgitwrites-batched)) |
 | `render-manifests` | `layout: branch` only, in the render Job (`kardinal-render`; it refuses to run anywhere else): renders the environment path of the DRY checkout (kustomize, or Helm for a chart), checks the rendered branch for drift against `.kardinal/rendered.yaml`, and writes one file per object into the rendered branch checkout that `git-commit` commits |
 | `helm-set-image` | Updates `values.yaml` image tag for Helm-based repos |
 | `argocd-set-image` | Patches the Argo CD Application's image override directly, with no Git commit (`update.strategy: argocd`) |
@@ -410,6 +412,7 @@ All state is stored in Kubernetes CRDs:
 | `Approval` | One person's approval decision on one Bundle in one environment, created by `kardinal approve` |
 | `HookRun` | One run of a Pipeline hook's Job and its result ([Pipeline hooks](hooks.md)) |
 | `RenderRun` | One render of a `layout: branch` environment in a sandboxed Job ([Rendered manifests](rendered-manifests.md)) |
+| `BranchWrite` | The writes of a Bundle's batched environments to one branch, in rounds ([Batched writes](pipeline-reference.md#batched-writes-specgitwrites-batched)) |
 | `ImageVerification` | The signature check of a Bundle's images or config commit |
 | `ScmProvider`, `ClusterScmProvider` | SCM settings and credentials a Pipeline names with `spec.git.providerRef` ([SCM providers](scm-providers.md)) |
 

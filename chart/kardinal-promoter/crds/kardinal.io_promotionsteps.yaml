@@ -293,6 +293,69 @@ spec:
                       - name
                       type: object
                     type: array
+                  writes:
+                    description: |-
+                      Writes is the BranchWrite's result for the step's environment
+                      (spec.write), at most one.
+                    items:
+                      description: LiveBranchWrite is a BranchWrite's answer to a
+                        step's latest request.
+                      properties:
+                        name:
+                          description: Name is the BranchWrite's name.
+                          type: string
+                        result:
+                          description: |-
+                            Result is the BranchWrite's status.environments entry for the step's
+                            environment.
+                          properties:
+                            cancelled:
+                              description: |-
+                                Cancelled is true when the round did not write it because the Bundle
+                                was superseded, rejected or deleted (Error says which), or a newer
+                                Bundle had already pushed to the environment (NewerBundle).
+                              type: boolean
+                            commitSHA:
+                              description: |-
+                                CommitSHA is the environment's commit on the branch: its own commit,
+                                or the branch head the round started from when the environment
+                                already had the Bundle's version (NoChanges).
+                              type: string
+                            error:
+                              description: |-
+                                Error says why the environment was not written; the step retries on
+                                its own budget.
+                              type: string
+                            newerBundle:
+                              description: |-
+                                NewerBundle is the Bundle that had already pushed to the environment,
+                                when that cancelled the write.
+                              type: string
+                            noChanges:
+                              description: NoChanges is true when the environment
+                                needed no change.
+                              type: boolean
+                            request:
+                              format: int64
+                              type: integer
+                            round:
+                              description: Round is the round that wrote it.
+                              format: int64
+                              type: integer
+                            step:
+                              description: Step, UID and Request are the request answered.
+                              type: string
+                            uid:
+                              type: string
+                          required:
+                          - request
+                          - round
+                          - step
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    type: array
                 type: object
               pipelineName:
                 description: PipelineName is the Pipeline this step belongs to.
@@ -374,6 +437,13 @@ spec:
                 items:
                   type: string
                 type: array
+              write:
+                description: |-
+                  Write names the Bundle's BranchWrite that writes this environment's
+                  change (spec.git.writes: batched): the step runs await-write instead
+                  of cloning, committing and pushing itself. Empty: the step writes its
+                  change. Set by the Graph.
+                type: string
             required:
             - bundleName
             - environment
@@ -1867,6 +1937,13 @@ spec:
                   controller can re-use the same directory and resume in-flight git work.
                   The path is in CRD status, so crash recovery does not clone again.
                 type: string
+              writeRequest:
+                description: |-
+                  WriteRequest is the number of the step's latest request to have its
+                  environment written by its BranchWrite (spec.write), counted from 1:
+                  await-write asks once, and again on each retry after a failed write.
+                format: int64
+                type: integer
             type: object
         type: object
     served: true

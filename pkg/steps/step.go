@@ -217,6 +217,15 @@ type StepState struct {
 	// LiveRenders is the RenderRun of a layout: branch environment, as the
 	// Graph mirrors it onto the PromotionStep (spec.live.renders).
 	LiveRenders []v1alpha1.LiveRenderRun
+
+	// Write, StepUID, WriteRequest and LiveWrites are a batched
+	// environment's (PromotionStep spec.write): its BranchWrite, the step's
+	// UID, its latest request (status.writeRequest) and the BranchWrite's
+	// answer as the Graph mirrors it (spec.live.writes).
+	Write        string
+	StepUID      string
+	WriteRequest int64
+	LiveWrites   []v1alpha1.LiveBranchWrite
 }
 
 // OutputPRForeignHead (status.outputs.prForeignHead) records the head of an

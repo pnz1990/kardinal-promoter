@@ -22,6 +22,22 @@ const RenderStepName = "render"
 // environment's RenderRun.
 const OutputRenderRequested = "renderRequested"
 
+// AwaitWriteStepName is the step of a batched environment
+// (spec.git.writes: batched, PromotionStep spec.write) that waits for the
+// Bundle's BranchWrite to write its change, instead of git-clone, the update
+// step, git-commit and git-push.
+const AwaitWriteStepName = "await-write"
+
+// OutputWriteRequest is "new" when await-write asks for a write: the
+// reconciler then counts the request in status.writeRequest (and drops the
+// output), which the Graph lists on the BranchWrite.
+const OutputWriteRequest = "writeRequest"
+
+// AwaitWriteSequence is the step list of a batched environment.
+func AwaitWriteSequence() []string {
+	return []string{AwaitWriteStepName, "health-check"}
+}
+
 // OutputRenderPullRequest is "true" when the render step's list opens a PR:
 // the RenderRun then pushes to the promotion branch.
 const OutputRenderPullRequest = "renderPullRequest"

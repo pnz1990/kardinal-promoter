@@ -132,15 +132,20 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 		err = state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Auth(), force)
 	}
 	rebases := 0
+	var spent contention
 	if !force && errors.Is(err, scm.ErrNonFastForward) {
+		spent.refusals++
 		var restart string
 		var baseMissing bool
-		rebases, restart, baseMissing, err = rebaseAndPush(ctx, state, branch, err)
+		rebases, restart, baseMissing, err = rebaseAndPush(ctx, state, branch, err, &spent)
 		if baseMissing {
-			return baseMissingRestart(state, branch, restart)
+			res, err := baseMissingRestart(state, branch, restart)
+			res.Outputs = spent.into(state, res.Outputs, res.Status == parentsteps.StepRestart)
+			return res, err
 		}
 		if restart != "" {
-			return parentsteps.StepResult{Status: parentsteps.StepRestart, Message: restart}, nil
+			return parentsteps.StepResult{Status: parentsteps.StepRestart, Message: restart,
+				Outputs: spent.into(state, nil, true)}, nil
 		}
 	}
 	if errors.Is(err, parentsteps.ErrStalePush) {
@@ -183,8 +188,45 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
 		Message: msg,
-		Outputs: outputs,
+		Outputs: spent.into(state, outputs, false),
 	}, nil
+}
+
+// The git-push outputs that count what the step spent on other writers of
+// the base branch over its whole life, every fresh clone and reconcile
+// (#2366): its pushes refused as non-fast-forward, its rebases, and the
+// fresh clones it asked for (StepRestart). status.outputs.rebases counts
+// only the rebases of the push that landed.
+const (
+	OutputPushRefusals = "pushRefusals"
+	OutputRebasesTotal = "rebasesTotal"
+	OutputPushRestarts = "pushRestarts"
+)
+
+// contention is what one git-push run spent on other writers: its pushes
+// refused as non-fast-forward and its rebases.
+type contention struct{ refusals, rebases int }
+
+// into adds the run's contention, and a fresh clone when restart, to the
+// step's totals (state.Outputs) in outputs, which it returns (made when nil
+// and there is something to count).
+func (c contention) into(state *parentsteps.StepState, outputs map[string]string, restart bool) map[string]string {
+	add := func(key string, n int) {
+		if n == 0 {
+			return
+		}
+		if outputs == nil {
+			outputs = map[string]string{}
+		}
+		prev, _ := strconv.Atoi(state.Outputs[key])
+		outputs[key] = strconv.Itoa(prev + n)
+	}
+	add(OutputPushRefusals, c.refusals)
+	add(OutputRebasesTotal, c.rebases)
+	if restart {
+		add(OutputPushRestarts, 1)
+	}
+	return outputs
 }
 
 // prBranchLease reads the head of kardinal's PR branch before a force-push
@@ -401,7 +443,8 @@ const maxRebaseAttempts = 6
 // branch changed the same files, the client cannot rebase, the attempts ran
 // out, or, with baseMissing, the clone lacks the commit to rebase from), or
 // the push error.
-func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch string, refused error) (n int, restart string, baseMissing bool, err error) {
+func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch string, refused error,
+	spent *contention) (n int, restart string, baseMissing bool, err error) {
 	rb, ok := state.GitClient.(scm.Rebaser)
 	if !ok {
 		return 0, fmt.Sprintf("base branch %s moved while promoting; retrying from a fresh clone", branch), false, nil
@@ -437,6 +480,7 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 			}
 			return n, "", false, fmt.Errorf("rebase onto %s: %w", branch, err)
 		}
+		spent.rebases++
 		// The rebase moved this commit onto commits another writer pushed,
 		// a newer Bundle's among them perhaps: check again before pushing.
 		if state.BeforePush != nil {
@@ -451,6 +495,7 @@ func rebaseAndPush(ctx context.Context, state *parentsteps.StepState, branch str
 		if !errors.Is(err, scm.ErrNonFastForward) {
 			return n + 1, "", false, err
 		}
+		spent.refusals++
 		refused = err
 	}
 	return maxRebaseAttempts, fmt.Sprintf("base branch %s kept moving (%d rebases); retrying from a fresh clone",

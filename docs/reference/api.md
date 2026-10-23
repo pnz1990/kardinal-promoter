@@ -17,6 +17,7 @@ PolicyGate expression can use in [CEL Context](cel-context.md).
 | [AgentRun](#agentrun) | `agentruns.kardinal.io` | Namespaced | `ar` |
 | [Approval](#approval) | `approvals.kardinal.io` | Namespaced | `appr` |
 | [AuditEvent](#auditevent) | `auditevents.kardinal.io` | Namespaced | `ae`, `audit` |
+| [BranchWrite](#branchwrite) | `branchwrites.kardinal.io` | Namespaced |  |
 | [Bundle](#bundle) | `bundles.kardinal.io` | Namespaced | `bnd` |
 | [ChangeRequest](#changerequest) | `changerequests.kardinal.io` | Namespaced |  |
 | [ChangeWindow](#changewindow) | `changewindows.kardinal.io` | Cluster | `cw` |
@@ -211,6 +212,40 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 | `spec.request.method` | string | yes | Method is the HTTP method. |
 | `spec.request.route` | string | yes | Route is the API route pattern, for example /api/v1/ui/pipelines/{name}/pause. |
 | `spec.timestamp` | string (date-time) | yes | Timestamp is when the event occurred (RFC 3339 format). |
+
+## BranchWrite
+
+`kardinal.io/v1alpha1`
+
+BranchWrite writes the changes of a Bundle's environments that push to one repository branch (spec.git.writes: batched): every round takes the branch's turn, clones once, commits each requested environment's change with that environment's own commit, and pushes once. Created by the Bundle's kro Graph, which renders the requests from the steps and mirrors the results back onto each step's spec.live.writes; reconciled by the BranchWrite reconciler, which writes only its status (docs/design/30-batched-branch-writes.md).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec` | object |  | BranchWriteSpec is the desired state of a BranchWrite. The Graph writes it: Environments when it is built, Requested whenever a step asks. |
+| `spec.branch` | string | yes | Branch is the branch the environments' changes are pushed to. |
+| `spec.bundleName` | string | yes | BundleName is the Bundle whose version is written. |
+| `spec.environments` | []object | yes | Environments are the environments this BranchWrite writes, in the order a round commits them. |
+| `spec.environments[].name` | string | yes | Name is the environment's name in the Pipeline. |
+| `spec.environments[].step` | string | yes | Step is the name of the environment's PromotionStep for the Bundle. |
+| `spec.pipelineName` | string | yes | PipelineName is the Pipeline whose environments are written. |
+| `spec.requested` | []object |  | Requested are the steps that asked to have their environment written (status.writeRequest of each), rendered by the Graph from the steps. |
+| `spec.requested[].request` | integer (int64) | yes | Request is the number of the step's request. A retry of the step asks again with the next number, and is written in a new round. |
+| `spec.requested[].step` | string | yes | Step is the PromotionStep's name. |
+| `spec.requested[].uid` | string |  | UID is the PromotionStep's UID: a request of a step deleted and made again is another step's. |
+| `spec.url` | string | yes | URL is the repository (the Pipeline's spec.git.url). |
+| `status` | object |  | BranchWriteStatus is the observed state of a BranchWrite. |
+| `status.environments` | map[string]object |  | Environments are the results, by environment name. |
+| `status.inFlight` | object |  | InFlight is the round being written, set before its git work and cleared once its results are recorded. |
+| `status.inFlight.commits` | map[string]string |  | Commits are the commits the round was about to push, by environment, recorded with PushIntent before every push. A round found in flight is reconciled from the branch with exactly these: only a commit reachable from the branch head counts as written. |
+| `status.inFlight.members` | []object |  | Members are the requests the round writes. |
+| `status.inFlight.members[].environment` | string | yes | Environment is the environment's name. |
+| `status.inFlight.members[].request` | integer (int64) | yes |  |
+| `status.inFlight.members[].step` | string | yes | Step, UID and Request are the request the round answers. |
+| `status.inFlight.members[].uid` | string |  |  |
+| `status.inFlight.pushIntent` | string (date-time) |  | PushIntent is when the round was about to push. A round found in flight with it set may have pushed: the reconciler looks for its Commits on the branch before it writes the round again. |
+| `status.inFlight.round` | integer (int64) | yes | Round is the round's number. |
+| `status.message` | string |  | Message says what the last round did, or why it waits. |
+| `status.round` | integer (int64) |  | Round is the number of the last round started. |
 
 ## Bundle
 
@@ -1114,6 +1149,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
 | `spec.git.url` | string | yes | URL is the GitOps repository URL (HTTPS). |
+| `spec.git.writes` | string |  | Writes is how the approval: auto environments' changes reach the branch. perEnvironment (the default): each environment's step clones, commits and pushes its own, one at a time. batched: the environments of a Bundle that are ready together are written in one round of the Bundle's BranchWrite: one clone, one commit per environment, one push. Batched applies to directory-layout environments of image Bundles updated by kustomize, helm or yaml, without a fleet; it uses the compact Graph shape. One of: `perEnvironment`, `batched`. Default: `perEnvironment`. |
 | `spec.historyLimit` | integer |  | HistoryLimit is the number of completed Bundle promotions to retain. When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded) beyond this limit are deleted oldest-first on each new Bundle creation. Default: `50`. |
 | `spec.holds` | []object |  | Holds pin environments to a rollback (kardinal rollback --hold): while an environment has a hold, no Bundle but the hold's own promotes into it, the hold's Bundle is never superseded or garbage-collected, and, when the controller can verify it restores artifacts Verified in the environment, it passes that environment's PolicyGates, each pass recorded (GateExempted). kardinal unhold removes it, and so does the controller at expiresAt. At most one hold per environment. Changing spec.holds needs update on the virtual subresource pipelines/hold (chart: &lt;release&gt;-hold-writes ValidatingAdmissionPolicy). |
 | `spec.holds[].actor` | object |  | Actor is CreatedBy's actor stamp (docs/actors.md), checked by the chart's actor admission policy; the HoldCreated AuditEvent names it. |
@@ -1655,6 +1691,18 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.live.renders[].result.noChanges` | boolean |  | NoChanges is true when the render matched the rendered branch and nothing was pushed. |
 | `spec.live.renders[].result.objects` | integer |  | Objects is how many objects were rendered. |
 | `spec.live.renders[].result.renderer` | string |  | Renderer is kustomize or helm. |
+| `spec.live.writes` | []object |  | Writes is the BranchWrite's result for the step's environment (spec.write), at most one. |
+| `spec.live.writes[].name` | string | yes | Name is the BranchWrite's name. |
+| `spec.live.writes[].result` | object |  | Result is the BranchWrite's status.environments entry for the step's environment. |
+| `spec.live.writes[].result.cancelled` | boolean |  | Cancelled is true when the round did not write it because the Bundle was superseded, rejected or deleted (Error says which), or a newer Bundle had already pushed to the environment (NewerBundle). |
+| `spec.live.writes[].result.commitSHA` | string |  | CommitSHA is the environment's commit on the branch: its own commit, or the branch head the round started from when the environment already had the Bundle's version (NoChanges). |
+| `spec.live.writes[].result.error` | string |  | Error says why the environment was not written; the step retries on its own budget. |
+| `spec.live.writes[].result.newerBundle` | string |  | NewerBundle is the Bundle that had already pushed to the environment, when that cancelled the write. |
+| `spec.live.writes[].result.noChanges` | boolean |  | NoChanges is true when the environment needed no change. |
+| `spec.live.writes[].result.request` | integer (int64) | yes |  |
+| `spec.live.writes[].result.round` | integer (int64) | yes | Round is the round that wrote it. |
+| `spec.live.writes[].result.step` | string | yes | Step, UID and Request are the request answered. |
+| `spec.live.writes[].result.uid` | string |  |  |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.postHooks` | []string |  | PostHooks names the HookRuns of the environment's post-deploy hooks, in order. A step with post hooks goes from HealthChecking to Verifying, and is Verified only when every one of them Succeeded in spec.live.hooks; a Failed one applies onHealthFailure. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, so the reconcile hot path makes no SCM call. |
@@ -1666,6 +1714,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.scmProvider.uid` | string | yes | UID is the provider's metadata.uid when the Graph was built. |
 | `spec.stepType` | string | yes | StepType names the built-in step that writes this promotion's change, as the environment's update strategy and layout select it: kustomize-set-image, yaml-update, helm-set-image, argocd-set-image or render. It is informational; no step is executed from it. |
 | `spec.upstreamStates` | []string |  | UpstreamStates holds the resolved state of all upstream PromotionSteps. Each entry is a string like "Verified", set by the kro Graph controller via CEL expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2 pattern (issue 625) -- a single list scales to any number of upstream environments. kro scans list items for CEL references, so each entry creates a DAG edge. |
+| `spec.write` | string |  | Write names the Bundle's BranchWrite that writes this environment's change (spec.git.writes: batched): the step runs await-write instead of cloning, committing and pushing itself. Empty: the step writes its change. Set by the Graph. |
 | `status` | object |  | PromotionStepStatus defines the observed state of a PromotionStep. |
 | `status.bakeElapsedMinutes` | integer (int64) |  | BakeElapsedMinutes is the number of contiguous healthy minutes accumulated so far in the current bake window. Resets to 0 on health failure when policy=reset-on-alarm. When this reaches env.bake.minutes, the step transitions to Verified. |
 | `status.bakeFirstStartedAt` | string (date-time) |  | BakeFirstStartedAt is when the first bake window of this step began: the first healthy check with env.bake configured. It is never reset. With bake.policy reset-on-alarm, the step must complete one full window by BakeFirstStartedAt + bake.minutes + health.timeout, so a release that keeps flapping ends. |
@@ -1885,6 +1934,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.verificationStartedAt` | string (date-time) |  | VerificationStartedAt is when the step entered Verifying (its health check passed and its post-deploy hooks may start). Set once; the Graph creates the post-deploy HookRuns once it is set. |
 | `status.waitForMergeExpiry` | string (date-time) |  | WaitForMergeExpiry is the deadline for the PR merge, computed as (time step entered WaitingForMerge) + env.waitForMergeTimeout. Set once on the first reconcile in WaitingForMerge state when the environment configures a non-zero waitForMergeTimeout. Nil when no timeout is configured. Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when writing to CRD status. |
 | `status.workDir` | string |  | WorkDir is the working directory on the controller node used for git operations (clone, commit, push) and kustomize builds. Persisted to etcd so that a restarted controller can re-use the same directory and resume in-flight git work. The path is in CRD status, so crash recovery does not clone again. |
+| `status.writeRequest` | integer (int64) |  | WriteRequest is the number of the step's latest request to have its environment written by its BranchWrite (spec.write), counted from 1: await-write asks once, and again on each retry after a failed write. |
 
 ## RenderRun
 

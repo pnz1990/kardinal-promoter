@@ -56,6 +56,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - notificationhooks
     - hookruns
     - renderruns
+    - branchwrites
     - imageverifications
     - agentruns
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -99,6 +100,7 @@ rules exist for. A new client call needs a row there and a rule here.
     - notificationhooks/status
     - hookruns/status
     - renderruns/status
+    - branchwrites/status
     - imageverifications/status
     - agentruns/status
   verbs: ["get", "update", "patch"]

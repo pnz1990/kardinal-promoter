@@ -20,7 +20,7 @@ func SetHistoryTimeout(d time.Duration) (restore func()) {
 // the release.
 func HoldBranchTurn(r *Reconciler, repoURL, branch, step string) (release func()) {
 	key, _ := basePushBranch([]string{"git-clone", "git-push"}, 0, repoURL, branch)
-	rel, _, ok := r.pushTurns.tryTurn(key, step, time.Now())
+	rel, _, ok := r.turns().tryTurn(key, step, time.Now())
 	if !ok {
 		panic("branch turn already held")
 	}

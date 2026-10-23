@@ -308,7 +308,7 @@ func NewWorld(t testing.TB, opts Options) *World {
 		&v1alpha1.PRStatus{}, &v1alpha1.ChangeWindow{}, &v1alpha1.MetricCheck{}, &v1alpha1.RollbackPolicy{},
 		&v1alpha1.RenderRun{}, &v1alpha1.HookRun{}, &v1alpha1.ScheduleClock{}, &appsv1.Deployment{}, &batchv1.Job{},
 		&corev1.Pod{}, &v1alpha1.AuditEvent{}, &v1alpha1.AgentIdentity{}, &v1alpha1.AgentIndex{},
-		&v1alpha1.AgentRun{}, &v1alpha1.StepTemplate{}, &v1alpha1.Verdict{},
+		&v1alpha1.AgentRun{}, &v1alpha1.StepTemplate{}, &v1alpha1.Verdict{}, &v1alpha1.BranchWrite{},
 	}
 	for _, gvk := range []schema.GroupVersionKind{GraphGVK, ApplicationGVK, RolloutGVK, KustomizationGVK, GitRepositoryGVK, CanaryGVK} {
 		u := &unstructured.Unstructured{}
