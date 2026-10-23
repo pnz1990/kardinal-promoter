@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"regexp"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -95,6 +94,15 @@ type OCISink struct {
 	// write into a repository the tenant cannot. Another image gets no
 	// referrer: the receipt's Stored condition is False, RepositoryNotAllowed.
 	AllowedRepositories []string
+	// PerNamespace (PerNamespaceOff, PerNamespaceNarrow or
+	// PerNamespaceRequired; empty is off), when Repository is not set, holds
+	// a receipt's referrers to its namespace's entries too:
+	// NamespaceRepositories[namespace] and, with NamespaceAnnotation, the
+	// Namespace's AnnotationOCIRepositories (#2285). AllowedRepositories
+	// stays the outer bound: a namespace narrows it, never widens it.
+	PerNamespace          string
+	NamespaceRepositories map[string][]string
+	NamespaceAnnotation   bool
 	// SecretNamespace and SecretName name a kubernetes.io/dockerconfigjson
 	// Secret with push credentials; empty is anonymous.
 	SecretNamespace, SecretName string
@@ -120,30 +128,6 @@ func parseRepository(repo string) (string, []string, bool) {
 		}
 	}
 	return strings.ToLower(r.RegistryStr()), comps, true
-}
-
-// allowed reports whether the sink may push a referrer of an image in repo:
-// a fixed Repository is the admin's own; otherwise, with
-// AllowedRepositories, repo's parsed registry must be an entry's and its
-// path must start with the entry's path components.
-func (o *OCISink) allowed(repo string) bool {
-	if o.Repository != "" || len(o.AllowedRepositories) == 0 {
-		return true
-	}
-	reg, path, ok := parseRepository(repo)
-	if !ok {
-		return false
-	}
-	for _, p := range o.AllowedRepositories {
-		ereg, epath, ok := parseAllowed(p)
-		if !ok || ereg != reg || len(epath) > len(path) {
-			continue
-		}
-		if slices.Equal(epath, path[:len(epath)]) {
-			return true
-		}
-	}
-	return false
 }
 
 // parseAllowed is an allowedRepositories entry: a registry and an optional
@@ -280,20 +264,29 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrlruntime.Request) (ct
 		return ctrlruntime.Result{RequeueAfter: t.Sub(now)}, nil
 	}
 	base := rc.DeepCopy()
+	// Where the OCI sink may push this namespace's referrers. A Namespace
+	// that cannot be read pushes nothing and is tried again (fail closed).
+	var scope *ociScope
+	if r.OCI != nil && rc.Status.Bundle != "" {
+		s, err := r.ociScopeFor(ctx, rc.Namespace)
+		if err != nil {
+			return r.sinkFailed(ctx, base, &rc, "NamespaceUnreadable", err, now)
+		}
+		scope = s
+	}
 	switch {
 	case rc.Status.Bundle == "":
 		return r.sign(ctx, base, &rc, now)
-	case r.OCI != nil && !r.ociStored(&rc):
-		return r.storeOCI(ctx, base, &rc, now)
+	case scope != nil && !r.ociStored(&rc, scope):
+		return r.storeOCI(ctx, base, &rc, scope, now)
 	case rc.Status.Phase != v1alpha1.ReceiptStored:
 		rc.Status.Phase = v1alpha1.ReceiptStored
-		if refused := r.notAllowed(&rc); len(refused) > 0 {
-			// Not retried: the allowlist decides the same next time.
+		if refused := notAllowed(&rc, scope); len(refused) > 0 {
+			// Not retried: the allowlists decide the same next time.
 			zerolog.Ctx(ctx).Warn().Str("receipt", rc.Name).Strs("repositories", refused).
-				Msg("receipt referrers not pushed: repositories outside sinks.oci.allowedRepositories")
+				Msg("receipt referrers not pushed: repositories the OCI sink may not push to")
 			setCondition(&rc, ConditionStored, metav1.ConditionFalse, "RepositoryNotAllowed",
-				"stored in "+sinks(&rc)+"; no referrer in "+strings.Join(refused, ", ")+
-					": not in the controller's allowed repositories (sinks.oci.allowedRepositories)", now)
+				"stored in "+sinks(&rc)+"; no referrer in "+strings.Join(refused, "; "), now)
 		} else {
 			setCondition(&rc, ConditionStored, metav1.ConditionTrue, "AllSinks", "stored in "+sinks(&rc), now)
 		}
@@ -360,9 +353,10 @@ func (r *Reconciler) sign(ctx context.Context, base, rc *v1alpha1.PromotionRecei
 	return ctrlruntime.Result{}, nil
 }
 
-// ociStored reports whether every image subject of rc has its referrer.
-func (r *Reconciler) ociStored(rc *v1alpha1.PromotionReceipt) bool {
-	return len(r.pendingImages(rc)) == 0
+// ociStored reports whether every image subject of rc the sink may push
+// (scope) has its referrer.
+func (r *Reconciler) ociStored(rc *v1alpha1.PromotionReceipt, scope *ociScope) bool {
+	return len(r.pendingImages(rc, scope)) == 0
 }
 
 // imageSubjects are the image subjects of rc. A config version has none:
@@ -381,26 +375,27 @@ func imageSubjects(rc *v1alpha1.PromotionReceipt) []receipt.Subject {
 	return out
 }
 
-// notAllowed are the image repositories of rc the OCI sink may not push to.
-func (r *Reconciler) notAllowed(rc *v1alpha1.PromotionReceipt) []string {
-	if r.OCI == nil {
+// notAllowed are the image repositories of rc the OCI sink may not push
+// to (scope), each with why: "<repository>: <reason>".
+func notAllowed(rc *v1alpha1.PromotionReceipt, scope *ociScope) []string {
+	if scope == nil {
 		return nil
 	}
 	var out []string
 	for _, s := range imageSubjects(rc) {
-		if !r.OCI.allowed(s.Name) {
-			out = append(out, s.Name)
+		if ok, why := scope.allowed(s.Name); !ok {
+			out = append(out, s.Name+": "+why)
 		}
 	}
 	return out
 }
 
 // pendingImages are the image subjects of rc without a stored referrer
-// that the OCI sink may push.
-func (r *Reconciler) pendingImages(rc *v1alpha1.PromotionReceipt) []receipt.Subject {
+// that the OCI sink may push (scope).
+func (r *Reconciler) pendingImages(rc *v1alpha1.PromotionReceipt, scope *ociScope) []receipt.Subject {
 	var out []receipt.Subject
 	for _, s := range imageSubjects(rc) {
-		if r.OCI != nil && !r.OCI.allowed(s.Name) {
+		if ok, _ := scope.allowed(s.Name); !ok {
 			continue
 		}
 		repo := s.Name
@@ -421,7 +416,7 @@ func (r *Reconciler) pendingImages(rc *v1alpha1.PromotionReceipt) []receipt.Subj
 }
 
 // storeOCI pushes the receipt as a referrer of each image not yet stored.
-func (r *Reconciler) storeOCI(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, now time.Time) (ctrlruntime.Result, error) {
+func (r *Reconciler) storeOCI(ctx context.Context, base, rc *v1alpha1.PromotionReceipt, scope *ociScope, now time.Time) (ctrlruntime.Result, error) {
 	reg := r.OCI.Registry
 	if r.OCI.SecretName != "" {
 		kc, err := r.keychain(ctx)
@@ -436,7 +431,7 @@ func (r *Reconciler) storeOCI(ctx context.Context, base, rc *v1alpha1.PromotionR
 	if st, err := receipt.Parse([]byte(rc.Spec.Statement)); err == nil {
 		resource = st.Predicate.ResourceURI
 	}
-	for _, s := range r.pendingImages(rc) {
+	for _, s := range r.pendingImages(rc, scope) {
 		sctx, cancel := context.WithTimeout(ctx, sinkTimeout)
 		repo := s.Name
 		if r.OCI.Repository != "" {

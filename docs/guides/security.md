@@ -315,6 +315,12 @@ The namespace is kardinal's tenancy unit. There is no Project CRD.
   Namespace's labels: where tenants have that right, use the chart list only, or limit the label
   with an admission policy
   ([Sharing gates with other namespaces](../policy-gates.md#sharing-gates-with-other-namespaces)).
+- Receipts pushed as OCI referrers use the release's push Secret, into repositories a Bundle's
+  author chooses. Bound them with `receipts.sinks.oci.allowedRepositories`, and per namespace with
+  `receipts.sinks.oci.perNamespace: "required"`, `namespaceRepositories` and
+  `namespaceAnnotation: false` (new in v0.14.0, unreleased; `off`, the default, keeps v0.13's
+  controller-wide list alone), so one team's version never writes into another team's repository
+  ([Per namespace](../receipts.md#per-namespace)).
 
 #### The shared SCM token and `scm.allowedRepositories`
 

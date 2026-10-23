@@ -736,6 +736,22 @@ receipts:
       # repository the Secret reaches. Other images get no referrer (the
       # receipt's Stored condition is False, RepositoryNotAllowed).
       allowedRepositories: []
+      # -- Whether a receipt's namespace bounds the repositories its
+      # referrers go to, within allowedRepositories (#2285): "off" (that list
+      # alone, as in v0.13), "narrow" (a namespace with repositories is held
+      # to them) or "required" (a namespace without any gets no referrer).
+      # A multi-tenant install sets required, lists namespaceRepositories and
+      # sets namespaceAnnotation false. No effect with repository set.
+      perNamespace: "off"
+      # -- Per namespace, the repositories (or path prefixes) its receipts'
+      # referrers may go to, for perNamespace: {team-a: [ghcr.io/team-a/]}.
+      # A bad entry stops the controller at start.
+      namespaceRepositories: {}
+      # -- For perNamespace, also read a Namespace's
+      # kardinal.io/receipt-oci-repositories annotation (comma-separated
+      # repositories), as strong as the right to edit that Namespace. Set
+      # false where tenants may edit their Namespace's metadata.
+      namespaceAnnotation: true
       # -- Push over plain HTTP (an in-cluster registry).
       insecure: false
     rekor:
