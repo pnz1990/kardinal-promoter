@@ -77,8 +77,8 @@ Azure DevOps) and every git clone and push is measured (`pkg/scm/metrics.go`):
 | `kardinal_scm_rate_limit_limit` | Gauge | `provider`, `owner` | The window's size (`X-RateLimit-Limit` / `RateLimit-Limit`) |
 | `kardinal_scm_rate_limit_reset_timestamp_seconds` | Gauge | `provider`, `owner` | When the window resets, as a Unix time (`X-RateLimit-Reset` / `RateLimit-Reset`) |
 | `kardinal_scm_circuit_state` | Gauge | `provider`, `owner` | Circuit breaker state: `0` closed, `1` half-open (one probe allowed), `2` open (calls refused). `owner="_quota"` is the circuit that opens when the token's rate limit is used up |
-| `kardinal_git_operations_total` | Counter | `operation` (`clone`, `push`), `result` (`ok`, `error`, `non_fast_forward`) | Git clones and pushes. `non_fast_forward` is a push that lost to another writer of the branch (it is rebased and retried) |
-| `kardinal_git_operation_duration_seconds` | Histogram | `operation` | Duration of git clones and pushes |
+| `kardinal_git_operations_total` | Counter | `operation` (`clone`, `push`, `rebase`), `result` (`ok`, `error`, `non_fast_forward`; for a rebase also `conflict`, `base_missing`, `not_moved`) | Git clones, pushes and rebases. `non_fast_forward` is a push that lost to another writer of the branch (it is rebased and retried). A rebase replays a promotion onto the moved branch; `conflict` (the other writer changed the same files) and `base_missing` send the step to a fresh clone |
+| `kardinal_git_operation_duration_seconds` | Histogram | `operation` | Duration of git clones, pushes and rebases (a rebase includes its fetch) |
 | `kardinal_git_transfer_bytes_total` | Counter | `git_service` (`fetch`, `push`), `direction` (`sent`, `received`) | Bytes git transferred over HTTP(S). `fetch` covers clones and fetches (git-upload-pack), `push` covers git-receive-pack. Git over ssh is not counted |
 
 **Cardinality is bounded.** The `owner` label is the repository owner (organization, user,

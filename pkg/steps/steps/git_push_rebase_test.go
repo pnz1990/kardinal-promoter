@@ -59,20 +59,27 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 		wantPushes  int
 		wantRebases int
 		wantMsg     string
+		// The step's totals (#2366): refused pushes, rebases made, fresh
+		// clones asked for ("" when absent).
+		wantRefusals, wantRebasesTotal, wantRestarts string
 	}{
 		{name: "lands after one rebase", approval: "auto", pushErrs: []error{nonFF},
-			wantStatus: parentsteps.StepSuccess, wantPushes: 2, wantRebases: 1, wantMsg: "after rebasing onto 1 newer commit"},
+			wantStatus: parentsteps.StepSuccess, wantPushes: 2, wantRebases: 1, wantMsg: "after rebasing onto 1 newer commit",
+			wantRefusals: "1", wantRebasesTotal: "1"},
 		{name: "lands after three rebases", approval: "auto", pushErrs: []error{nonFF, nonFF, nonFF},
-			wantStatus: parentsteps.StepSuccess, wantPushes: 4, wantRebases: 3},
+			wantStatus: parentsteps.StepSuccess, wantPushes: 4, wantRebases: 3, wantRefusals: "3", wantRebasesTotal: "3"},
 		{name: "same files: fresh clone", approval: "auto", pushErrs: []error{nonFF},
 			rebaseErrs: []error{fmt.Errorf("%w: environments/prod/kustomization.yaml", scm.ErrRebaseConflict)},
-			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantRebases: 1, wantMsg: "redoing the change from a fresh clone"},
+			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantRebases: 1, wantMsg: "redoing the change from a fresh clone",
+			wantRefusals: "1", wantRestarts: "1"},
 		{name: "base commit missing: fresh clone (#1606)", approval: "auto", pushErrs: []error{nonFF},
 			rebaseErrs: []error{fmt.Errorf("rebase: commit abc: %w", scm.ErrRebaseBaseMissing)},
-			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantRebases: 1, wantMsg: "lacks the commit to rebase from"},
+			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantRebases: 1, wantMsg: "lacks the commit to rebase from",
+			wantRefusals: "1", wantRestarts: "1"},
 		{name: "keeps moving: fresh clone", approval: "auto", pushErrs: many,
 			wantStatus: parentsteps.StepRestart, wantPushes: steps.MaxRebaseAttempts + 1, wantRebases: steps.MaxRebaseAttempts,
-			wantMsg: "kept moving"},
+			wantMsg: "kept moving", wantRefusals: fmt.Sprint(steps.MaxRebaseAttempts + 1),
+			wantRebasesTotal: fmt.Sprint(steps.MaxRebaseAttempts), wantRestarts: "1"},
 		{name: "fetch fails", approval: "auto", pushErrs: []error{nonFF}, rebaseErrs: []error{errors.New("git fetch: boom")},
 			wantStatus: parentsteps.StepFailed, wantErr: true, wantPushes: 1, wantRebases: 1},
 		{name: "not moved: the server's refusal is named (#2351)", approval: "auto",
@@ -107,8 +114,32 @@ func TestGitPushStep_RebasesOntoMovedBranch(t *testing.T) {
 				assert.Empty(t, res.Outputs["rebases"])
 			}
 			assert.False(t, git.pushForce && tc.approval == "auto", "the base branch is never force-pushed")
+			assert.Equal(t, tc.wantRefusals, res.Outputs[steps.OutputPushRefusals], "refused pushes")
+			assert.Equal(t, tc.wantRebasesTotal, res.Outputs[steps.OutputRebasesTotal], "rebases made")
+			assert.Equal(t, tc.wantRestarts, res.Outputs[steps.OutputPushRestarts], "fresh clones asked for")
 		})
 	}
+}
+
+// TestGitPushStep_ContentionTotals (#2366): the refused pushes, rebases and
+// fresh clones are added to the totals the step already has in status, so
+// they count its whole life: every fresh clone and reconcile.
+func TestGitPushStep_ContentionTotals(t *testing.T) {
+	nonFF := fmt.Errorf("push: %w", scm.ErrNonFastForward)
+	git := &rebasingGitClient{mockGitClient: mockGitClient{pushErrs: []error{nonFF, nonFF}}}
+	state := makeState(t, &git.mockGitClient, nil)
+	state.GitClient = git
+	state.Sequence = parentsteps.DefaultSequenceForBundle("auto", "image", "", "")
+	state.Outputs[steps.OutputPushRefusals] = "7"
+	state.Outputs[steps.OutputRebasesTotal] = "6"
+	state.Outputs[steps.OutputPushRestarts] = "1"
+	res, err := runStep(t, "git-push", state)
+	require.NoError(t, err)
+	require.Equal(t, parentsteps.StepSuccess, res.Status, res.Message)
+	assert.Equal(t, "9", res.Outputs[steps.OutputPushRefusals], "7 before, 2 now")
+	assert.Equal(t, "8", res.Outputs[steps.OutputRebasesTotal], "6 before, 2 now")
+	assert.Empty(t, res.Outputs[steps.OutputPushRestarts], "no fresh clone this time: the total in status stays as it is")
+	assert.Equal(t, "2", res.Outputs["rebases"], "the landing push's rebases")
 }
 
 // TestGitPushStep_BaseMissingRestartsBounded (#1606): every fresh clone asked

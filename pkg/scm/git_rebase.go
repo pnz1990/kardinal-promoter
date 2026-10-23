@@ -87,7 +87,11 @@ var _ Rebaser = (*GoGitClient)(nil)
 // rebase without a merge: it refuses (ErrRebaseConflict) when the remote
 // commits since the clone touched any of those paths. Nothing is lost:
 // neither the other writer's files nor this commit's.
-func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch string, auth GitAuth) ([]string, error) {
+func (c *GoGitClient) RebaseOnRemote(ctx context.Context, dir, remote, branch string, auth GitAuth) (_ []string, err error) {
+	// Counted and timed as a git operation (rebase): what a shared branch's
+	// writers spend on one another (#2366), beside clone and push.
+	start := time.Now()
+	defer func() { observeGit("rebase", start, err) }()
 	repo, closeRepo, err := openRepo(dir)
 	if err != nil {
 		return nil, err
