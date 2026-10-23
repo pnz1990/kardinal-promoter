@@ -26,8 +26,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -382,9 +384,43 @@ func equalIndex(a, b v1alpha1.AgentIndexStatus) bool {
 	return reflect.DeepEqual(norm(a), norm(b))
 }
 
-// SetupWithManager rebuilds the index on any AgentIdentity change and on any
-// change to the index itself (a deleted index is recreated), and once at
-// start on every replica.
+// IdentityChanged passes the AgentIdentity events the index depends on:
+// a create or a delete, a spec change (its generation: Evaluate reads the
+// spec, the name and the creation time), and a change of the status fields
+// this reconciler writes (writeStatuses: ready, reason, observedGeneration,
+// the Ready condition), so a status another writer changed is put back. A
+// write that changes nothing else, such as a label or another reconciler's
+// own status fields (v0.14's agent budget usage,
+// docs/design/24-agent-budgets.md section 14, W0), does not rebuild the
+// whole index.
+var IdentityChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		o, ok := e.ObjectOld.(*v1alpha1.AgentIdentity)
+		n, ok2 := e.ObjectNew.(*v1alpha1.AgentIdentity)
+		if !ok || !ok2 {
+			return true
+		}
+		return o.Generation != n.Generation || !ownedStatusEqual(o.Status, n.Status)
+	},
+}
+
+// ownedStatusEqual reports whether a and b agree on the status fields
+// writeStatuses writes.
+func ownedStatusEqual(a, b v1alpha1.AgentIdentityStatus) bool {
+	if a.Ready != b.Ready || a.Reason != b.Reason || a.ObservedGeneration != b.ObservedGeneration {
+		return false
+	}
+	ca, cb := meta.FindStatusCondition(a.Conditions, ConditionReady), meta.FindStatusCondition(b.Conditions, ConditionReady)
+	if ca == nil || cb == nil {
+		return ca == cb
+	}
+	return ca.Status == cb.Status && ca.Reason == cb.Reason && ca.Message == cb.Message &&
+		ca.ObservedGeneration == cb.ObservedGeneration
+}
+
+// SetupWithManager rebuilds the index on the AgentIdentity changes it
+// depends on (IdentityChanged) and on any change to the index itself (a
+// deleted index is recreated), and once at start on every replica.
 func (r *IndexReconciler) SetupWithManager(mgr manager.Manager) error {
 	one := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: client.ObjectKey{Name: r.Name}}}
@@ -394,7 +430,7 @@ func (r *IndexReconciler) SetupWithManager(mgr manager.Manager) error {
 		return fmt.Errorf("add agent index start-up build: %w", err)
 	}
 	return ctrl.ControllerManagedBy(mgr).Named("agentindex").
-		Watches(&v1alpha1.AgentIdentity{}, one).
+		Watches(&v1alpha1.AgentIdentity{}, one, ctrl.WithPredicates(IdentityChanged)).
 		Watches(&v1alpha1.AgentIndex{}, one).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)

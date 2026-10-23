@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -347,4 +348,53 @@ func TestReconcile_AgentIndexNearFull(t *testing.T) {
 			assert.Equal(t, float64(-1), testutil.ToFloat64(observability.AgentIndexBytes))
 		})
 	}
+}
+
+// TestIdentityChanged covers the index reconciler's AgentIdentity watch
+// (docs/design/24-agent-budgets.md W0): creates, deletes, spec changes and
+// changes of the status fields writeStatuses owns rebuild the index; a label,
+// an annotation or another writer's status field (v0.14's budget usage) does
+// not.
+// Covers ACTOR-INDEX-06.
+func TestIdentityChanged(t *testing.T) {
+	base := id("fixer", 0, "alice", sa("ci", "fixer"))
+	base.Status = v1alpha1.AgentIdentityStatus{Ready: true, ObservedGeneration: 1,
+		Conditions: []metav1.Condition{{Type: agentidentity.ConditionReady, Status: metav1.ConditionTrue, Reason: "Valid",
+			ObservedGeneration: 1, LastTransitionTime: metav1.Now()}}}
+	edit := func(f func(*v1alpha1.AgentIdentity)) *v1alpha1.AgentIdentity {
+		c := base.DeepCopy()
+		f(c)
+		return c
+	}
+	for _, tc := range []struct {
+		name string
+		new  *v1alpha1.AgentIdentity
+		want bool
+	}{
+		{"nothing changed", edit(func(*v1alpha1.AgentIdentity) {}), false},
+		{"a spec change (generation)", edit(func(a *v1alpha1.AgentIdentity) { a.Generation = 2; a.Spec.Suspended = true }), true},
+		{"a label", edit(func(a *v1alpha1.AgentIdentity) { a.Labels = map[string]string{"team": "a"} }), false},
+		{"an annotation", edit(func(a *v1alpha1.AgentIdentity) { a.Annotations = map[string]string{"note": "x"} }), false},
+		{"another writer's condition", edit(func(a *v1alpha1.AgentIdentity) {
+			a.Status.Conditions = append(a.Status.Conditions, metav1.Condition{Type: "BudgetCurrent", Status: metav1.ConditionTrue, Reason: "Evaluated"})
+		}), false},
+		{"status.ready", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Ready = false }), true},
+		{"status.reason", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Reason = "tampered" }), true},
+		{"status.observedGeneration", edit(func(a *v1alpha1.AgentIdentity) { a.Status.ObservedGeneration = 0 }), true},
+		{"the Ready condition", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].Status = metav1.ConditionFalse }), true},
+		{"the Ready condition's reason alone", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].Reason = "Tampered" }), true},
+		{"the Ready condition's message alone", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].Message = "tampered" }), true},
+		{"the Ready condition's observedGeneration alone", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions[0].ObservedGeneration = 0 }), true},
+		{"the Ready condition removed", edit(func(a *v1alpha1.AgentIdentity) { a.Status.Conditions = nil }), true},
+		{"the Ready condition's transition time alone", edit(func(a *v1alpha1.AgentIdentity) {
+			a.Status.Conditions[0].LastTransitionTime = metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+		}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, agentidentity.IdentityChanged.Update(event.UpdateEvent{ObjectOld: base, ObjectNew: tc.new}))
+		})
+	}
+	assert.True(t, agentidentity.IdentityChanged.Create(event.CreateEvent{Object: base}), "a create")
+	assert.True(t, agentidentity.IdentityChanged.Delete(event.DeleteEvent{Object: base}), "a delete")
+	assert.True(t, agentidentity.IdentityChanged.Generic(event.GenericEvent{Object: base}), "a generic event")
 }
