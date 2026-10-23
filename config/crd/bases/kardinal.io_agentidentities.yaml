@@ -76,6 +76,269 @@ spec:
                 - approve
                 - deny
                 type: string
+              budgetExemptions:
+                description: |-
+                  BudgetExemptions are break-glass exceptions to the budgets. Kept, not
+                  enforced yet. Planned: added with kardinal override --budget (W7,
+                  #2438) by someone the cluster lets exempt the agent, never of the
+                  agent's own party and never an agent (W6, #2437; W2, #2433).
+                items:
+                  description: |-
+                    AgentBudgetExemption is a break-glass exception to an agent's budgets: one
+                    Pipeline environment, optionally one version, until it expires. Kept, not
+                    enforced yet. Planned (W6, #2437): admission verifies createdBy and the
+                    actor stamp, and that its maker is not of the agent's party
+                    (docs/design/24-agent-budgets.md section 12).
+                  properties:
+                    actor:
+                      description: |-
+                        Actor is who made the exception, stamped as on freeze exemptions.
+                        Planned: the chart's actor admission policy verifies it from the
+                        requester's username and groups (W6, #2437), and an exemption whose
+                        actor is an agent is never honoured (W2, #2433): break-glass is for
+                        people (docs/design/24-agent-budgets.md section 11.3).
+                      properties:
+                        agent:
+                          description: Agent is the AgentIdentity name, when kind
+                            is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        asserted:
+                          description: |-
+                            Asserted holds what the client says about itself. It is recorded as
+                            written and never used for a security decision.
+                          properties:
+                            client:
+                              description: Client is the tool that wrote the record
+                                (for example kardinal/0.12.0).
+                              maxLength: 128
+                              type: string
+                            model:
+                              description: Model is the AI model the client says it
+                                runs.
+                              maxLength: 128
+                              type: string
+                            session:
+                              description: Session is the client's session or run
+                                identifier.
+                              maxLength: 128
+                              type: string
+                          type: object
+                        kind:
+                          description: Kind is human, agent, bot or controller (docs/actors.md).
+                          enum:
+                          - human
+                          - agent
+                          - bot
+                          - controller
+                          maxLength: 16
+                          type: string
+                        principal:
+                          description: Principal is the username the API server authenticated.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        sponsor:
+                          description: |-
+                            Sponsor is the agent's sponsor (AgentIdentity spec.sponsor.user) when
+                            the record was written, when kind is agent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        via:
+                          description: |-
+                            Via says how the controller came to write the record: ui and api for a
+                            caller it authenticated, subscription and auto-rollback for its own
+                            Bundles. Only the controller may set it.
+                          enum:
+                          - ui
+                          - api
+                          - subscription
+                          - auto-rollback
+                          maxLength: 16
+                          type: string
+                      required:
+                      - kind
+                      - principal
+                      type: object
+                      x-kubernetes-validations:
+                      - message: actor.agent and actor.sponsor are set exactly when
+                          actor.kind is agent
+                        rule: 'self.kind == ''agent'' ? (has(self.agent) && has(self.sponsor))
+                          : (!has(self.agent) && !has(self.sponsor))'
+                      - message: a controller actor says why it acted (actor.via)
+                        rule: self.kind != 'controller' || has(self.via)
+                    bundle:
+                      description: Bundle, when set, limits the exemption to that
+                        version.
+                      maxLength: 253
+                      type: string
+                    createdBy:
+                      description: |-
+                        CreatedBy is who made the exception. Planned (W6, #2437): admission
+                        verifies it is the requester's username.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    environment:
+                      description: Environment is the environment, or the fleet environment,
+                        let through.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    expiresAt:
+                      description: |-
+                        ExpiresAt ends the exemption. Planned (W2, #2433): the controller
+                        also ends it 24 hours after it first sees it.
+                      format: date-time
+                      type: string
+                    name:
+                      description: Name identifies the exemption (a DNS label), unique
+                        in the list.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    namespace:
+                      description: Namespace and Pipeline are the Pipeline let through.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    pipeline:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    reason:
+                      description: Reason says why (recorded in the BudgetExempted
+                        audit record).
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - createdBy
+                  - environment
+                  - expiresAt
+                  - name
+                  - namespace
+                  - pipeline
+                  - reason
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              budgets:
+                description: |-
+                  Budgets limit how much the agent promotes before a person looks:
+                  versions a day, promotions at once, fleet targets an hour, failures
+                  left in place, and a share of a fleet. Every rule that matches a step
+                  applies. The four counted limits of all rules sum to at most 1,500,
+                  which bounds the ledger in status.usage. Kept, not enforced yet:
+                  enforcement is W2 (#2433) and W3 (#2434), where a step beyond a limit
+                  waits rather than fails, behind a release switch that is off by
+                  default (W6, #2437). See docs/design/24-agent-budgets.md.
+                items:
+                  description: |-
+                    AgentBudgetRule limits an agent's promotions into the environments it
+                    matches. Every rule that matches a step applies. A limit that is not set
+                    does not apply; a rule sets at least one.
+                  properties:
+                    environments:
+                      description: |-
+                        Environments the rule applies to: exact names, or a prefix ending in
+                        "*". A fleet target matches through its own name or its fleet's.
+                      items:
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[^*]*\*?$
+                        type: string
+                      maxItems: 64
+                      minItems: 1
+                      type: array
+                    fleetShare:
+                      description: |-
+                        FleetShare (L5) is the share of one fleet's targets one version of the
+                        agent may have under way or failed at once, "1%" to "100%", rounded up
+                        and at least one target. It applies to fleet targets only.
+                      maxLength: 4
+                      pattern: ^([1-9][0-9]?|100)%$
+                      type: string
+                    fleetTargetsPerHour:
+                      description: |-
+                        FleetTargetsPerHour (L3) is how many fleet targets the agent may start
+                        promoting in any hour. Plain environments do not count.
+                      format: int32
+                      maximum: 1000
+                      minimum: 1
+                      type: integer
+                    maxConcurrent:
+                      description: |-
+                        MaxConcurrent (L2) is how many of the agent's promotions into these
+                        environments may be under way at once.
+                      format: int32
+                      maximum: 100
+                      minimum: 1
+                      type: integer
+                    maxUnavailable:
+                      description: |-
+                        MaxUnavailable (L4) is how many of the agent's promotions may have
+                        failed while their environment still runs the failed version.
+                      format: int32
+                      maximum: 100
+                      minimum: 1
+                      type: integer
+                    name:
+                      description: Name identifies the rule (a DNS label), unique
+                        in the list.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    namespaces:
+                      default:
+                      - '*'
+                      description: |-
+                        Namespaces the rule applies to, in the same form. Default: every
+                        namespace.
+                      items:
+                        maxLength: 64
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9*])?$|^\*$
+                        type: string
+                      maxItems: 64
+                      minItems: 1
+                      type: array
+                    versionsPerDay:
+                      description: |-
+                        VersionsPerDay (L1) is how many versions the agent may start into
+                        these environments in any 24 hours. A version counts once per
+                        environment; a fleet's targets are one environment.
+                      format: int32
+                      maximum: 500
+                      minimum: 1
+                      type: integer
+                  required:
+                  - environments
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: 'a budget rule sets at least one limit: versionsPerDay,
+                      maxConcurrent, fleetTargetsPerHour, maxUnavailable or fleetShare'
+                    rule: has(self.versionsPerDay) || has(self.maxConcurrent) || has(self.fleetTargetsPerHour)
+                      || has(self.maxUnavailable) || has(self.fleetShare)
+                maxItems: 16
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: the budgets' versionsPerDay, maxConcurrent, fleetTargetsPerHour
+                    and maxUnavailable sum to at most 1500 over all rules
+                  rule: 'self.map(r, (has(r.versionsPerDay) ? r.versionsPerDay : 0)
+                    + (has(r.maxConcurrent) ? r.maxConcurrent : 0) + (has(r.fleetTargetsPerHour)
+                    ? r.fleetTargetsPerHour : 0) + (has(r.maxUnavailable) ? r.maxUnavailable
+                    : 0)).sum() <= 1500'
               description:
                 description: Description says what the agent does.
                 maxLength: 1024
@@ -304,6 +567,366 @@ spec:
               reason:
                 description: Reason says why the AgentIdentity is not ready.
                 type: string
+              usage:
+                additionalProperties:
+                  description: |-
+                    AgentUsage is one ledger: an installation's count of an agent's
+                    promotions against its budgets. Planned (W2, #2433): written by that
+                    installation's budget reconciler only; nothing writes it yet.
+                  properties:
+                    conditions:
+                      description: |-
+                        Conditions of the ledger: Current, LedgerFull. Budget conditions are
+                        kept here, never in the AgentIdentity's status.conditions.
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      maxItems: 8
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - type
+                      x-kubernetes-list-type: map
+                    evaluatedAt:
+                      description: EvaluatedAt is the writer's clock when it wrote
+                        the entry.
+                      format: date-time
+                      type: string
+                    exemptions:
+                      description: Exemptions are the exemptions in effect.
+                      items:
+                        description: |-
+                          AgentBudgetExemptionState is an exemption in effect, as the ledger's
+                          writer decided it.
+                        properties:
+                          expiresAt:
+                            description: |-
+                              ExpiresAt is when it stops counting: its expiresAt, or earlier with
+                              the controller's 24-hour cap.
+                            format: date-time
+                            type: string
+                          firstSeenAt:
+                            description: FirstSeenAt is when the controller first
+                              saw it.
+                            format: date-time
+                            type: string
+                          name:
+                            description: Name is the exemption's name.
+                            maxLength: 63
+                            type: string
+                        required:
+                        - expiresAt
+                        - firstSeenAt
+                        - name
+                        type: object
+                      maxItems: 32
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
+                    grants:
+                      description: |-
+                        Grants are the ledger: the promotions some window or state still
+                        counts, at most 2,000.
+                      items:
+                        description: |-
+                          AgentBudgetGrant is one promotion the ledger let through: a version into
+                          an environment. It names the Bundle by UID only, not its namespace,
+                          Pipeline or name (docs/design/24-agent-budgets.md section 15.1).
+                        properties:
+                          bundleUID:
+                            description: BundleUID is the Bundle's UID.
+                            maxLength: 64
+                            type: string
+                          environment:
+                            description: Environment is the step's environment (a
+                              fleet target's own name).
+                            maxLength: 63
+                            type: string
+                          exemption:
+                            description: Exemption is the exemption the grant used,
+                              if any.
+                            maxLength: 63
+                            type: string
+                          fleet:
+                            description: Fleet is the fleet environment of a fleet
+                              target.
+                            maxLength: 63
+                            type: string
+                          grantedAt:
+                            description: GrantedAt is when the ledger granted it.
+                            format: date-time
+                            type: string
+                          rules:
+                            description: Rules are the rules the grant counts against.
+                            items:
+                              maxLength: 63
+                              type: string
+                            maxItems: 16
+                            type: array
+                          seeded:
+                            description: |-
+                              Seeded is true for a grant recorded from a promotion that started
+                              before the ledger did.
+                            type: boolean
+                          settled:
+                            description: Settled is true once the promotion no longer
+                              counts as under way.
+                            type: boolean
+                          unavailable:
+                            description: Unavailable is true while it counts in maxUnavailable.
+                            type: boolean
+                          version:
+                            description: |-
+                              Version is true when the grant counts in versionsPerDay: the first of
+                              its Bundle into its environment (a fleet's targets are one).
+                            type: boolean
+                        required:
+                        - bundleUID
+                        - environment
+                        - grantedAt
+                        type: object
+                      maxItems: 2000
+                      type: array
+                    nextEvaluationAt:
+                      description: |-
+                        NextEvaluationAt is when the writer evaluates the entry again: when a
+                        count next drops.
+                      format: date-time
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the spec generation this
+                        entry was computed for.
+                      format: int64
+                      type: integer
+                    rules:
+                      description: Rules are the usage of each budget rule.
+                      items:
+                        description: |-
+                          AgentBudgetRuleUsage is one rule's usage, with the rule's matching copied
+                          from the spec so a reader needs only the status. A count is absent when
+                          its limit is not set.
+                        properties:
+                          concurrent:
+                            description: Concurrent counts maxConcurrent.
+                            properties:
+                              freesAt:
+                                description: FreesAt is when Used next drops (rate
+                                  limits only).
+                                format: date-time
+                                type: string
+                              limit:
+                                description: Limit is the spec's limit.
+                                format: int32
+                                type: integer
+                              used:
+                                description: Used is what counts against it now.
+                                format: int32
+                                type: integer
+                              windowStart:
+                                description: WindowStart is the start of the rolling
+                                  window (rate limits only).
+                                format: date-time
+                                type: string
+                            required:
+                            - limit
+                            - used
+                            type: object
+                          environments:
+                            description: Environments and Namespaces are the rule's,
+                              as the usage was counted.
+                            items:
+                              maxLength: 63
+                              type: string
+                            maxItems: 64
+                            type: array
+                          exhausted:
+                            description: Exhausted are the limits with no room left.
+                            items:
+                              enum:
+                              - versionsPerDay
+                              - maxConcurrent
+                              - fleetTargetsPerHour
+                              - maxUnavailable
+                              - fleetShare
+                              type: string
+                            maxItems: 5
+                            type: array
+                          fleetShare:
+                            description: |-
+                              FleetShare is the rule's fleetShare: it is counted per fleet when a
+                              target is granted.
+                            maxLength: 4
+                            type: string
+                          fleetTargets:
+                            description: FleetTargets counts fleetTargetsPerHour.
+                            properties:
+                              freesAt:
+                                description: FreesAt is when Used next drops (rate
+                                  limits only).
+                                format: date-time
+                                type: string
+                              limit:
+                                description: Limit is the spec's limit.
+                                format: int32
+                                type: integer
+                              used:
+                                description: Used is what counts against it now.
+                                format: int32
+                                type: integer
+                              windowStart:
+                                description: WindowStart is the start of the rolling
+                                  window (rate limits only).
+                                format: date-time
+                                type: string
+                            required:
+                            - limit
+                            - used
+                            type: object
+                          name:
+                            description: Name is the rule's name.
+                            maxLength: 63
+                            type: string
+                          namespaces:
+                            items:
+                              maxLength: 64
+                              type: string
+                            maxItems: 64
+                            type: array
+                          unavailable:
+                            description: Unavailable counts maxUnavailable.
+                            properties:
+                              freesAt:
+                                description: FreesAt is when Used next drops (rate
+                                  limits only).
+                                format: date-time
+                                type: string
+                              limit:
+                                description: Limit is the spec's limit.
+                                format: int32
+                                type: integer
+                              used:
+                                description: Used is what counts against it now.
+                                format: int32
+                                type: integer
+                              windowStart:
+                                description: WindowStart is the start of the rolling
+                                  window (rate limits only).
+                                format: date-time
+                                type: string
+                            required:
+                            - limit
+                            - used
+                            type: object
+                          versions:
+                            description: Versions counts versionsPerDay.
+                            properties:
+                              freesAt:
+                                description: FreesAt is when Used next drops (rate
+                                  limits only).
+                                format: date-time
+                                type: string
+                              limit:
+                                description: Limit is the spec's limit.
+                                format: int32
+                                type: integer
+                              used:
+                                description: Used is what counts against it now.
+                                format: int32
+                                type: integer
+                              windowStart:
+                                description: WindowStart is the start of the rolling
+                                  window (rate limits only).
+                                format: date-time
+                                type: string
+                            required:
+                            - limit
+                            - used
+                            type: object
+                          waiting:
+                            description: Waiting is how many requests the rule holds.
+                            format: int32
+                            type: integer
+                        required:
+                        - name
+                        type: object
+                      maxItems: 16
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
+                  type: object
+                description: |-
+                  Usage is the agent's budget ledgers, one per installation that sees
+                  the agent, keyed by the ledger name. Planned (W2, #2433): each is
+                  written by its installation's budget reconciler only, keyed by
+                  --agent-budget-ledger (by default the release name); nothing writes
+                  them yet. An agent without budgets has none.
+
+                  At most 16 ledgers, holding at most 3,000 grants between them (each
+                  at most 2,000): the cap keeps one AgentIdentity under etcd's object
+                  size limit (docs/design/24-agent-budgets.md section 14). Sixteen is
+                  more installations than one agent should span, each counting the
+                  agent separately (section 15.2); a 17th installation's status write
+                  is refused, so it cannot grant, and its agent steps hold (fail
+                  closed) until a ledger is removed.
+                maxProperties: 16
+                type: object
+                x-kubernetes-validations:
+                - message: the ledgers hold at most 3000 grants between them
+                  rule: 'self.map(k, has(self[k].grants) ? size(self[k].grants) :
+                    0).sum() <= 3000'
             type: object
         required:
         - spec
