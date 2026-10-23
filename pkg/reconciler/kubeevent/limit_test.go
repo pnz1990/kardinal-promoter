@@ -120,8 +120,12 @@ func TestLimited_WarningsPerNamespace(t *testing.T) {
 // whose resourceVersion changes (a status write between them, the usual
 // case) is a new Event to client-go's broadcaster, which keys on the
 // object reference including resourceVersion, so it must pay a token like
-// any other: through the real broadcaster, 500 such repeats write at most
-// the burst.
+// any other: of 500 such repeats exactly each bucket's burst reaches the
+// broadcaster, and through the real broadcaster each is one write, none
+// merged into another's series. It counts what reaches the broadcaster and
+// what the sink writes, not how many writes are in flight at once:
+// client-go v0.38 records Events one at a time, v0.37 each in a goroutine
+// of its own (#1819).
 //
 // Covers PERF-EVENTS-01.
 func TestLimited_RepeatsPayTokens(t *testing.T) {
@@ -131,18 +135,71 @@ func TestLimited_RepeatsPayTokens(t *testing.T) {
 	defer cancel()
 	require.NoError(t, b.StartRecordingToSinkWithContext(ctx))
 	defer b.Shutdown()
-	rec := kubeevent.LimitedAt(b.NewRecorder(scheme.Scheme, "kardinal-test"), "test-repeats",
+	broadcast := &counting{EventRecorder: b.NewRecorder(scheme.Scheme, "kardinal-test")}
+	rec := kubeevent.LimitedAt(broadcast, "test-repeats",
 		kubeevent.Limit{QPS: 1, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 5}, frozen)
 	for i := 0; i < 500; i++ {
 		obj := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "gate", UID: "u", ResourceVersion: fmt.Sprint(i + 1)}}
 		rec.Eventf(obj, nil, corev1.EventTypeWarning, "Blocked", "Evaluate", "gate %s blocking", "weekend")
 		rec.Eventf(obj, nil, corev1.EventTypeNormal, "Evaluated", "Evaluate", "gate evaluated")
 	}
-	// The clock does not move, so exactly each bucket's burst is written.
-	require.Eventually(t, func() bool { return sink.inFlight.Load() >= 5+5 }, 30*time.Second, time.Millisecond)
+	// The clock does not move, so exactly each bucket's burst gets through.
+	assert.EqualValues(t, 5+5, broadcast.n.Load(), "each bucket's burst reaches the broadcaster, the repeats included")
 	sink.settle(t)
-	assert.EqualValues(t, 5+5, sink.writes.Load(), "each bucket's burst, the repeats included")
-	assert.EqualValues(t, 5+5, sink.peak.Load())
+	// At least: an overshoot fails at once, on the Equal below.
+	require.Eventually(t, func() bool { return sink.writes.Load() >= 5+5 }, 30*time.Second, time.Millisecond)
+	assert.EqualValues(t, 5+5, sink.writes.Load(), "each is one write, none merged into a series")
+	assert.LessOrEqual(t, sink.peak.Load(), int64(5+5))
+}
+
+// counting is an events.EventRecorder that counts the Events it passes on.
+// The recorder is embedded, so it keeps compiling when client-go adds a
+// method to the interface.
+type counting struct {
+	events.EventRecorder
+	n atomic.Int64
+}
+
+func (c *counting) Eventf(regarding, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
+	c.n.Add(1)
+	c.EventRecorder.Eventf(regarding, related, eventtype, reason, action, note, args...)
+}
+
+// TestLimited_Refill (QA-3 on #2402): on a clock the test steps, once a
+// bucket's burst is spent, exactly QPS more Events pass per second the clock
+// moves, a long wait refills at most the burst, and the clock is the
+// limiter's, not the wall's. The other tests freeze the clock, so a limiter
+// refilling 100 times too fast, or by the wall clock, passed them.
+//
+// Covers PERF-EVENTS-01.
+func TestLimited_Refill(t *testing.T) {
+	var clock atomic.Int64 // seconds after frozen()
+	now := func() time.Time { return frozen().Add(time.Duration(clock.Load()) * time.Second) }
+	next := &countingRecorder{}
+	rec := kubeevent.LimitedAt(next, "test-refill", kubeevent.Limit{QPS: 2, Burst: 5}, kubeevent.Limit{QPS: 1, Burst: 3}, now)
+	emit := func(n int) (normal, warning int64) {
+		n0, w0 := next.normal.Load(), next.warning.Load()
+		for i := 0; i < n; i++ {
+			rec.Eventf(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns"}}, nil, corev1.EventTypeNormal, "R", "A", "n %d", i)
+			rec.Eventf(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns"}}, nil, corev1.EventTypeWarning, "W", "A", "w %d", i)
+		}
+		return next.normal.Load() - n0, next.warning.Load() - w0
+	}
+	normal, warning := emit(50)
+	assert.EqualValues(t, 5, normal, "the Normal burst")
+	assert.EqualValues(t, 3, warning, "the Warning burst")
+	normal, warning = emit(50)
+	assert.Zero(t, normal+warning, "nothing more while the clock stands still, however long the wall clock runs")
+	for step := 1; step <= 3; step++ {
+		clock.Add(1)
+		normal, warning = emit(50)
+		assert.EqualValues(t, 2, normal, "second %d: exactly the Normal QPS", step)
+		assert.EqualValues(t, 1, warning, "second %d: exactly the Warning QPS", step)
+	}
+	clock.Add(60)
+	normal, warning = emit(50)
+	assert.EqualValues(t, 5, normal, "a minute refills the Normal burst, no more")
+	assert.EqualValues(t, 3, warning, "and the Warning burst")
 }
 
 // TestLimitValidate: main refuses a negative or non-finite rate and a burst
@@ -235,23 +292,28 @@ func burst(rec events.EventRecorder) {
 
 // TestLimited_BurstShape (#1682): through client-go's real events.k8s.io
 // broadcaster and a sink that holds every write until the burst is over, an
-// unlimited recorder has hundreds of writes (and their goroutines) in flight
-// at once; the limited one (the defaults, on a clock that does not move, so
-// the buckets do not refill) lets exactly its two bursts through (the burst
-// sends a Normal and a Warning per Bundle, all in one namespace) and drops
-// the rest. The burst returns while every write is still held: no Eventf call
-// waits on a write. Counts, not wall-clock time, so host load cannot fail it.
+// unlimited recorder hands all 2,000 Events of the burst to the broadcaster,
+// which writes hundreds; the limited one (the defaults, on a clock that does
+// not move, so the buckets do not refill) passes exactly its two bursts on
+// (the burst sends a Normal and a Warning per Bundle, all in one namespace)
+// and drops the rest, and they are all the sink writes. The burst returns
+// while every write is still held: no Eventf call waits on a write. Counts,
+// not wall-clock time, so host load cannot fail it; and what reaches the
+// broadcaster and what is written, not how many writes are in flight at
+// once, which client-go v0.38 makes one (it records Events one at a time;
+// v0.37 starts a goroutine for each, #1819).
 //
 // Covers PERF-EVENTS-01.
 func TestLimited_BurstShape(t *testing.T) {
-	run := func(limit bool) (peak, writes int64) {
+	run := func(limit bool, wantWrites func(int64) bool) (forwarded, peak, writes int64) {
 		sink := &slowSink{gate: make(chan struct{})}
 		b := events.NewBroadcaster(sink)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		require.NoError(t, b.StartRecordingToSinkWithContext(ctx))
 		defer b.Shutdown()
-		var rec events.EventRecorder = b.NewRecorder(scheme.Scheme, "kardinal-test")
+		broadcast := &counting{EventRecorder: b.NewRecorder(scheme.Scheme, "kardinal-test")}
+		var rec events.EventRecorder = broadcast
 		if limit {
 			rec = kubeevent.LimitedAt(rec, "test-burst", kubeevent.Limit{QPS: kubeevent.DefaultQPS, Burst: kubeevent.DefaultBurst},
 				kubeevent.Limit{QPS: kubeevent.DefaultWarningQPS, Burst: kubeevent.DefaultWarningBurst}, frozen)
@@ -265,23 +327,22 @@ func TestLimited_BurstShape(t *testing.T) {
 			t.Fatal("the burst did not return while the writes were held: an Eventf call waits on a write")
 		}
 		assert.Zero(t, sink.writes.Load(), "every write is still held when the burst returns")
-		want := int64(300)
-		if limit {
-			want = kubeevent.DefaultBurst + kubeevent.DefaultWarningBurst
-		}
-		// The broadcaster hands Events to its sink goroutines asynchronously.
-		require.Eventually(t, func() bool { return sink.inFlight.Load() >= want }, 30*time.Second, time.Millisecond,
-			"in flight reaches %d", want)
+		forwarded = broadcast.n.Load()
 		sink.settle(t)
-		return sink.peak.Load(), sink.writes.Load()
+		// The broadcaster hands Events to its sink asynchronously.
+		require.Eventually(t, func() bool { return wantWrites(sink.writes.Load()) }, 30*time.Second, time.Millisecond,
+			"%d writes so far", sink.writes.Load())
+		return forwarded, sink.peak.Load(), sink.writes.Load()
 	}
-	peak, writes := run(false)
-	t.Logf("unlimited: %d writes, %d in flight at peak", writes, peak)
-	assert.Greater(t, peak, int64(300), "the unlimited broadcaster writes hundreds at once (the #1682 burst)")
+	forwarded, peak, writes := run(false, func(w int64) bool { return w > 300 })
+	t.Logf("unlimited: %d Events to the broadcaster, %d writes, %d in flight at peak", forwarded, writes, peak)
+	assert.EqualValues(t, 2000, forwarded, "the unlimited recorder hands the whole burst to the broadcaster")
+	assert.Greater(t, writes, int64(300), "which writes hundreds (the #1682 burst)")
 
-	peak, writes = run(true)
-	t.Logf("limited: %d writes, %d in flight at peak", writes, peak)
 	bursts := int64(kubeevent.DefaultBurst + kubeevent.DefaultWarningBurst)
-	assert.Equal(t, bursts, peak, "in flight is exactly the two bursts")
-	assert.Equal(t, bursts, writes, "the rest is dropped")
+	forwarded, peak, writes = run(true, func(w int64) bool { return w >= bursts })
+	t.Logf("limited: %d Events to the broadcaster, %d writes, %d in flight at peak", forwarded, writes, peak)
+	assert.Equal(t, bursts, forwarded, "exactly the two bursts reach the broadcaster, the rest is dropped")
+	assert.Equal(t, bursts, writes, "and are all it writes")
+	assert.LessOrEqual(t, peak, bursts)
 }
