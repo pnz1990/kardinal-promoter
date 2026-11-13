@@ -1,0 +1,44 @@
+# hack/e2e/durations-scale-full.txt
+#
+# How long each scale test takes in the full profile
+# (KARDINAL_E2E_SCALE_PROFILE=full), for hack/e2e/run.sh SHARD with
+# DURATIONS=hack/e2e/durations-scale-full.txt: the release gate splits the
+# full profile across two clusters by these (hack/release-gate plan.go
+# scaleSteps). Columns: test, seconds, serial or parallel, as in
+# hack/e2e/durations.txt. The chaos and load tests are serial: each owns its
+# cluster's controller while it runs.
+#
+# Measured in the v0.12.0 release gate (71e143550195, scale-full on
+# Kubernetes 1.37, one cluster: 1h56m; serial 1h43m).
+TestScale_ChaosAPIThrottle 719 serial
+TestScale_ChaosGitLatency 682 serial
+TestScale_ChaosGitOutage 745 serial
+TestScale_ChaosKroRestart 694 serial
+TestScale_ChaosLeaderKill 721 serial
+TestScale_ChaosTokenRotation 696 serial
+TestScale_LatencySLO 147 serial
+TestScale_LoadBurst 112 serial
+TestScale_LoadPipelines 143 serial
+TestScale_LoadSustained 660 serial
+TestScale_RaceChangeWindowFlip 79 parallel
+TestScale_RaceExternalPR 51 parallel
+TestScale_RaceForcePush 79 parallel
+TestScale_RaceGateFlap 125 parallel
+TestScale_RaceNamespaceDelete 52 parallel
+TestScale_RacePauseStorm 100 parallel
+TestScale_RacePipelineEdit 80 parallel
+TestScale_RaceRapidFire 69 parallel
+TestScale_RaceRollbackDuringPromotion 109 parallel
+TestScale_RaceWebhooks 84 parallel
+TestScale_TenantFairness 148 serial
+TestScale_TenantFairnessManyRepos 160 serial
+TestScale_TopologyArgoCD 340 serial
+TestScale_TopologyBigWaves 208 parallel
+TestScale_TopologyChain 182 parallel
+TestScale_TopologyFanIn 106 parallel
+TestScale_TopologyLattice 86 parallel
+TestScale_TopologyLongChain 227 parallel
+TestScale_TopologyMixedApproval 84 parallel
+TestScale_TopologySharedRepo 79 parallel
+TestScale_TopologyWaves 197 parallel
+TestScale_TwoTenants 187 serial
