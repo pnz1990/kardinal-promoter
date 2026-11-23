@@ -8,7 +8,7 @@
 
 # The Go of go.mod's toolchain line, by digest (hack/hygiene checks it): the
 # image builds with the Go the release binaries and govulncheck use.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
